@@ -1,0 +1,120 @@
+# Vula Takeoff — Dependencies & Quick Start
+
+# ── Core ────────────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+
+# ── PDF Reading ──────────────────────────────────────────────────────────────
+pdfplumber>=0.11.0            # Text-based PDFs (Revit exports, CAD-generated)
+pdf2image>=1.17.0             # Scanned PDFs → images for GLM-OCR
+pillow>=10.3.0                # Image processing
+
+# ── DXF/DWG Reading ──────────────────────────────────────────────────────────
+ezdxf>=1.3.0                  # Native DXF parsing — pip install ezdxf
+
+# ── Email (RFQ sending) ──────────────────────────────────────────────────────
+# Resend Python SDK — pip install resend
+
+# ── Already in vula/requirements.txt ────────────────────────────────────────
+# httpx, fastapi, sqlite3 (builtin), pydantic
+
+# =============================================================================
+# QUICK START — Vula Takeoff
+# =============================================================================
+
+# 1. Install dependencies
+#    pip install pdfplumber ezdxf pdf2image pillow
+
+# 2. Pull required Ollama models
+#    ollama pull glm-ocr           # OCR for scanned plans
+#    ollama pull deepseek-r1:14b   # Plan reasoning
+#    ollama pull deepseek-r1:7b    # Schedule extraction
+
+# 3. Start the API (adds /takeoff routes to main server)
+#    Add to vula/api/server.py:
+#
+#    from vula.takeoff.api import router as takeoff_router
+#    app.include_router(takeoff_router, prefix="/takeoff")
+
+# 4. Test with a PDF
+#    python -c "
+#    import asyncio
+#    from pathlib import Path
+#    from vula.takeoff.plan_reader import PlanReader
+#    from vula.takeoff.boq_generator import BOQGenerator
+#    from vula.takeoff.order_manager import OrderManager
+#
+#    async def test():
+#        project = await PlanReader('digg_001').read(Path('your_plans.pdf'))
+#        print(f'Rooms: {len(project.rooms)}')
+#        print(f'GFA: {project.gross_floor_area}m²')
+#        boq = await BOQGenerator(project, markup=15).generate()
+#        print(f'BOQ items: {len(boq.items)}')
+#        print(f'Net total: R{boq.net_total:,.0f}')
+#        print(f'Grand total: R{boq.grand_total:,.0f}')
+#        orders = OrderManager(boq).build_orders()
+#        print(orders.order_summary_text(orders))
+#
+#    asyncio.run(test())
+#    "
+
+# =============================================================================
+# WHAT VULA READS FROM YOUR PLANS
+# =============================================================================
+#
+# From architectural sheets (A-prefix):
+#   ✓ Room schedule — names, areas, finishes
+#   ✓ Door & window schedule — type, size, count, fire rating
+#   ✓ Gross floor area and net floor area
+#   ✓ Number of storeys
+#   ✓ Ceiling types per room
+#   ✓ Wet area identification
+#   ✓ Title block — project name, client, date, revision
+#
+# From mechanical/HVAC sheets (M-prefix):
+#   ✓ HVAC unit schedule (kW capacity)
+#   ✓ Extract fan locations
+#   ✓ Duct runs (linear metres)
+#
+# From electrical sheets (E-prefix):
+#   ✓ DB board count and type
+#   ✓ Lighting point count
+#   ✓ Power outlet count
+#   ✓ Data/comms point count
+#   ✓ Emergency light count
+#
+# From plumbing sheets (P-prefix):
+#   ✓ WC count
+#   ✓ WHB count
+#   ✓ Urinal count
+#   ✓ Floor drain count
+#   ✓ Kitchen fixtures
+#
+# From DXF files (most accurate):
+#   ✓ Room areas (from closed polylines)
+#   ✓ Room perimeters (for wall length)
+#   ✓ Door block counts
+#   ✓ Window block counts
+#   ✓ Wall lengths
+#
+# =============================================================================
+# CONFIDENCE SCORING
+# =============================================================================
+#
+# ≥90%: High confidence — auto-include in BOQ
+#  75–89%: Review — Vula flags for Judy to verify
+# <75%: Low — marked as requires_specialist, not auto-ordered
+#
+# Confidence is higher when:
+#   - Plans are vector (DXF) rather than scanned
+#   - Text is readable and unambiguous
+#   - Schedules are present and formatted consistently
+#   - Scale is legible in title block
+#
+# Confidence is lower when:
+#   - Plans are scanned at low resolution
+#   - Dimensions are missing
+#   - Specialist systems (broadcast studio, acoustic, data centre)
+#   - Non-standard symbols or SA-specific notations not in training data

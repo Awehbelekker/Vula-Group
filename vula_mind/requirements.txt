@@ -1,0 +1,46 @@
+# ── Vula Mind — Python Backend
+# Install: pip install -r requirements.txt
+
+# ── API Server ──────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+pydantic>=2.7.0
+
+# ── HTTP Client ─────────────────────────────────────────────────────────────
+httpx>=0.27.0
+
+# ── Document Parsing ────────────────────────────────────────────────────────
+pdfplumber>=0.11.0
+python-docx>=1.1.0
+pandas>=2.2.0
+openpyxl>=3.1.0
+pillow>=10.3.0
+
+# ── OCR Fallback ────────────────────────────────────────────────────────────
+pytesseract>=0.3.10       # requires: apt install tesseract-ocr / brew install tesseract
+
+# ── Web Scraping ────────────────────────────────────────────────────────────
+crawl4ai>=0.3.0
+html2text>=2024.2.26
+
+# ── Mesh Discovery ──────────────────────────────────────────────────────────
+zeroconf>=0.131.0
+psutil>=5.9.0
+
+# ── Takeoff (Architecture BOQ) ──────────────────────────────────────────────
+ezdxf>=1.3.0
+pdf2image>=1.17.0
+
+# ── Utilities ───────────────────────────────────────────────────────────────
+python-dateutil>=2.9.0
+
+# ── Models pulled via Ollama (not pip) ──────────────────────────────────────
+# ollama pull deepseek-r1:1.5b   # Edge routing
+# ollama pull deepseek-r1:7b     # Standard tasks
+# ollama pull deepseek-r1:14b    # Complex reasoning
+# ollama pull bge-m3             # Embeddings
+# ollama pull glm-ocr            # OCR (when available)
+
+# ── Vector Store — run separately ───────────────────────────────────────────
+# docker run -p 6333:6333 qdrant/qdrant

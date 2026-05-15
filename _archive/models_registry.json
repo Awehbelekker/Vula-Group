@@ -1,0 +1,78 @@
+{
+  "version": "1.0.0",
+  "description": "Universal Soul AI model registry. Maps tiers to Ollama model names.",
+  "default_backend": "ollama",
+  "ollama_base": "http://localhost:11434",
+
+  "tiers": {
+    "1.5b": {
+      "name": "Edge / Mobile",
+      "ollama_model": "deepseek-r1:1.5b",
+      "fallback_model": "qwen2.5:1.5b",
+      "vram_required_gb": 2,
+      "ram_required_gb": 4,
+      "use_cases": ["routing", "triage", "memory_recall", "mobile_edge"],
+      "think_traces": true,
+      "notes": "Runs on any device including older phones. Ideal for HRM routing decisions."
+    },
+    "7b": {
+      "name": "Standard",
+      "ollama_model": "deepseek-r1:7b",
+      "fallback_model": "qwen2.5:7b",
+      "vram_required_gb": 6,
+      "ram_required_gb": 8,
+      "use_cases": ["reasoning", "web_search", "file_parse", "general_qa"],
+      "think_traces": true,
+      "notes": "Everyday workhorse. Fits comfortably in 8GB VRAM with headroom."
+    },
+    "14b": {
+      "name": "Advanced",
+      "ollama_model": "deepseek-r1:14b",
+      "fallback_model": "qwen2.5:14b",
+      "vram_required_gb": 10,
+      "ram_required_gb": 16,
+      "use_cases": ["code_execution", "financial_reasoning", "architecture_planning", "complex_analysis"],
+      "think_traces": true,
+      "notes": "Complex reasoning and code. Primary tier for RTX 3090 builds."
+    },
+    "32b": {
+      "name": "Ceiling",
+      "ollama_model": "deepseek-r1:32b",
+      "fallback_model": "qwen2.5:32b",
+      "vram_required_gb": 22,
+      "ram_required_gb": 32,
+      "use_cases": ["hardest_reasoning", "research", "synthesis"],
+      "think_traces": true,
+      "notes": "Maximum capability on RTX 3090 24GB. Use for highest complexity tasks only."
+    }
+  },
+
+  "upcoming": {
+    "deepseek-v4-flash": {
+      "status": "watch_huggingface",
+      "total_params": "284B",
+      "active_params_moe": "13B",
+      "estimated_vram_q4_km": "~16GB",
+      "license": "MIT",
+      "notes": "When GGUF drops, this replaces 14b as the primary tier on RTX 3090."
+    }
+  },
+
+  "pull_commands": {
+    "minimal": [
+      "ollama pull deepseek-r1:1.5b",
+      "ollama pull deepseek-r1:7b"
+    ],
+    "recommended": [
+      "ollama pull deepseek-r1:1.5b",
+      "ollama pull deepseek-r1:7b",
+      "ollama pull deepseek-r1:14b"
+    ],
+    "full_rtx3090": [
+      "ollama pull deepseek-r1:1.5b",
+      "ollama pull deepseek-r1:7b",
+      "ollama pull deepseek-r1:14b",
+      "ollama pull deepseek-r1:32b"
+    ]
+  }
+}

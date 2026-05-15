@@ -1,0 +1,104 @@
+{
+  "version": "1.0.0",
+  "description": "Universal Soul AI Skill Registry — drop a file, add an entry, submit a PR.",
+  "skills": [
+    {
+      "name": "reasoning",
+      "description": "General-purpose reasoning and analysis",
+      "trigger_keywords": [
+        "think", "reason", "analyse", "analyze", "explain", "understand",
+        "what", "why", "how", "should", "would", "could"
+      ],
+      "model_tier": "7b",
+      "device_pref": "any",
+      "timeout_ms": 30000,
+      "module": "core.skills.reasoning"
+    },
+    {
+      "name": "web_search",
+      "description": "Search the web for current information",
+      "trigger_keywords": [
+        "search", "find", "look up", "latest", "news", "current",
+        "today", "recent", "what happened", "who is", "where is"
+      ],
+      "model_tier": "7b",
+      "device_pref": "any",
+      "timeout_ms": 15000,
+      "module": "core.skills.web_search"
+    },
+    {
+      "name": "code_execution",
+      "description": "Write, debug, review and execute code",
+      "trigger_keywords": [
+        "write code", "build", "script", "debug", "fix", "error",
+        "function", "class", "python", "javascript", "api", "implement",
+        "program", "develop", "refactor", "test"
+      ],
+      "model_tier": "14b",
+      "device_pref": "desktop",
+      "timeout_ms": 60000,
+      "module": "core.skills.code_execution"
+    },
+    {
+      "name": "memory_recall",
+      "description": "Query past conversations and learned context",
+      "trigger_keywords": [
+        "remember", "last time", "previously", "earlier", "we discussed",
+        "you said", "i told you", "recall", "history", "before"
+      ],
+      "model_tier": "1.5b",
+      "device_pref": "any",
+      "timeout_ms": 5000,
+      "module": "core.skills.memory_recall"
+    },
+    {
+      "name": "file_parse",
+      "description": "Read, extract and analyse documents and files",
+      "trigger_keywords": [
+        "read", "parse", "document", "file", "pdf", "extract",
+        "summarise", "summarize", "from this", "in this document"
+      ],
+      "model_tier": "7b",
+      "device_pref": "desktop",
+      "timeout_ms": 30000,
+      "module": "core.skills.file_parse"
+    },
+    {
+      "name": "image_analysis",
+      "description": "Analyse images, screenshots and visual content",
+      "trigger_keywords": [
+        "image", "photo", "picture", "screenshot", "look at",
+        "what do you see", "describe", "ocr", "read this image"
+      ],
+      "model_tier": "7b",
+      "device_pref": "desktop",
+      "timeout_ms": 30000,
+      "module": "core.skills.image_analysis",
+      "requires_vision": true
+    },
+    {
+      "name": "financial_reasoning",
+      "description": "Financial analysis, trading logic, investment reasoning",
+      "trigger_keywords": [
+        "trade", "invest", "portfolio", "price", "market", "stock",
+        "profit", "loss", "revenue", "cost", "budget", "financial", "money"
+      ],
+      "model_tier": "14b",
+      "device_pref": "desktop",
+      "timeout_ms": 45000,
+      "module": "core.skills.financial_reasoning"
+    },
+    {
+      "name": "architecture_planning",
+      "description": "System design, software architecture, technical planning",
+      "trigger_keywords": [
+        "architect", "design system", "plan", "structure", "schema",
+        "database", "api design", "microservice", "infrastructure"
+      ],
+      "model_tier": "14b",
+      "device_pref": "desktop",
+      "timeout_ms": 60000,
+      "module": "core.skills.architecture_planning"
+    }
+  ]
+}
