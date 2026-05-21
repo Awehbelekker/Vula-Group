@@ -46,10 +46,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_BASE  = "http://localhost:11434"
-OCR_MODEL    = "glm-ocr"            # 0.9B, MIT, #1 OmniDocBench
-REASON_MODEL = "deepseek-r1:14b"    # complex geometry reasoning
-FAST_MODEL   = "deepseek-r1:7b"     # schedule extraction
+from config import settings
+
+OLLAMA_BASE  = settings.ollama_base
+OCR_MODEL    = settings.model_ocr
+REASON_MODEL = settings.model_reasoner
+FAST_MODEL   = settings.model_worker
 
 # ─── Core data structures ─────────────────────────────────────────────────────
 

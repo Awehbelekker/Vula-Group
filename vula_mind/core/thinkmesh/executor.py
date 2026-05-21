@@ -8,15 +8,16 @@ import time
 
 import httpx
 
+from config import settings
 from core.thinkmesh.graph import BranchStatus, GraphStatus, ModelTier, TaskBranch, TaskGraph
 
 log = logging.getLogger(__name__)
 
 MODEL_MAP: dict[ModelTier, str] = {
-    ModelTier.EDGE: "deepseek-r1:1.5b",
-    ModelTier.WORKER: "deepseek-r1:7b",
-    ModelTier.REASONER: "deepseek-r1:14b",
-    ModelTier.CEILING: "deepseek-r1:32b",
+    ModelTier.EDGE: settings.model_edge,
+    ModelTier.WORKER: settings.model_worker,
+    ModelTier.REASONER: settings.model_reasoner,
+    ModelTier.CEILING: settings.model_reasoner,  # fallback — no 32b by default
 }
 
 THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -78,8 +79,8 @@ async def _run_branch(branch: TaskBranch, ollama_url: str) -> TaskBranch:
 
 
 class ThinKMeshExecutor:
-    def __init__(self, ollama_url: str = "http://localhost:11434"):
-        self.ollama_url = ollama_url
+    def __init__(self, ollama_url: str = ""):
+        self.ollama_url = ollama_url or settings.ollama_base
 
     async def execute(self, graph: TaskGraph) -> TaskGraph:
         graph.status = GraphStatus.EXECUTING

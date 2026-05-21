@@ -321,3 +321,33 @@ async def tenant_status(tenant_id: str) -> dict:
         "trial_ends": (t.get("trial_ends") or "")[:10],
         "plan": t.get("plan"),
     }
+
+
+@router.get("/admin/signups")
+async def list_signups(limit: int = 20) -> dict:
+    """
+    Internal admin endpoint — list recent signups for Richard/Judy follow-up.
+    Protect with API_KEY middleware in production (already enforced by server.py
+    when API_KEY is set in .env).
+    """
+    if not settings.supabase_url or not settings.supabase_service_key:
+        return {"signups": [], "note": "Supabase not configured"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{settings.supabase_url}/rest/v1/vula_tenants"
+                f"?order=created_at.desc&limit={limit}"
+                f"&select=company_name,contact_name,email,whatsapp,plan,industry,status,trial_ends,created_at",
+                headers={
+                    "apikey": settings.supabase_service_key,
+                    "Authorization": f"Bearer {settings.supabase_service_key}",
+                },
+            )
+            resp.raise_for_status()
+            signups = resp.json()
+    except Exception as exc:
+        logger.error("Admin signups fetch failed: %s", exc)
+        return {"signups": [], "error": "Database unavailable"}
+
+    return {"signups": signups, "count": len(signups)}
