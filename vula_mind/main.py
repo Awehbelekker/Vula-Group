@@ -1,5 +1,5 @@
 """
-main.py — Universal Soul AI Unlimited
+main.py — Vula Group AI
 
 Single entry point. Wires HRM + ThinKMesh + Memory + Mesh together
 into a clean async pipeline.
@@ -25,7 +25,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("universal-soul")
+logger = logging.getLogger("vula")
 
 # Suppress noisy sub-loggers
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -53,7 +53,7 @@ async def run_task(goal: str, enable_mesh: bool = False) -> str:
         await discovery.start()
         graph_hints = {"mesh_state": discovery.mesh_state}
 
-    print(f"\n🧠 Universal Soul — processing: {goal[:80]}")
+    print(f"\nVula — processing: {goal[:80]}")
     print("─" * 60)
 
     # Step 1: HRM plans the task graph
@@ -95,8 +95,8 @@ async def run_task(goal: str, enable_mesh: bool = False) -> str:
 async def interactive_mode(enable_mesh: bool = False) -> None:
     """REPL-style interactive session."""
     print("\n" + "═" * 60)
-    print("  🌌 Universal Soul AI — Unlimited")
-    print("  Privacy-first | Mesh-native | Open source")
+    print("  Vula Group AI")
+    print("  Privacy-first | Mesh-native | Built in Cape Town")
     print("  Type 'quit' to exit | 'stats' for reflection stats")
     print("═" * 60 + "\n")
 
@@ -149,7 +149,7 @@ async def run_demo() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Universal Soul AI — Privacy-first mesh-native AI"
+        description="Vula Group AI — Privacy-first mesh-native AI"
     )
     parser.add_argument("--demo", action="store_true", help="Run demo tasks")
     parser.add_argument("--mesh", action="store_true", help="Enable mesh discovery")

@@ -43,10 +43,12 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ─── Config ──────────────────────────────────────────────────────────────────
-OLLAMA_BASE = "http://localhost:11434"
-LLM_MODEL   = "deepseek-r1:7b"
+from config import settings
+
+OLLAMA_BASE = settings.ollama_base
+LLM_MODEL   = settings.model_worker
 DB_PATH     = Path.home() / ".vula" / "construction_rates.db"
-QDRANT_BASE = "http://localhost:6333"
+QDRANT_BASE = settings.qdrant_base
 COLLECTION  = "vula_digg_rates"
 
 # ─── Data structures ─────────────────────────────────────────────────────────

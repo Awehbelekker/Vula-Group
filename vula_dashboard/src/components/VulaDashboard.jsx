@@ -6,7 +6,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 // Fonts: Cormorant Garamond (display) + Source Code Pro (mono data)
 // Feeling: a well-built SA product — confident, warm, locally grounded
 
-const VULA_API = "http://localhost:7438";
+const VULA_API = import.meta.env.VITE_API_URL ?? "/api";
 
 const COLORS = {
   bg: "#F7F4EE",

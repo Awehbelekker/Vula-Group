@@ -6,6 +6,7 @@ from collections import Counter
 
 import httpx
 
+from config import settings
 from core.thinkmesh.graph import GraphStatus, MergeStrategy, TaskBranch, TaskGraph
 
 log = logging.getLogger(__name__)
@@ -57,7 +58,9 @@ def _synthesize(branches: list[TaskBranch], ollama_url: str, model: str) -> str:
 
 
 class ThinKMeshMerger:
-    def __init__(self, ollama_url: str = "http://localhost:11434", synthesis_model: str = "deepseek-r1:7b"):
+    def __init__(self, ollama_url: str = "", synthesis_model: str = ""):
+        synthesis_model = synthesis_model or settings.model_worker
+        ollama_url = ollama_url or settings.ollama_base
         self.ollama_url = ollama_url
         self.synthesis_model = synthesis_model
 
