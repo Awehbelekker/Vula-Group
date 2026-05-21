@@ -34,6 +34,7 @@ from config import settings
 from vula.ingestion.pipeline import VulaIngestionPipeline
 from vula.skills.web_scraper import VulaWebScraper
 from vula.takeoff.api import router as takeoff_router
+from vula.api.onboarding import router as onboarding_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,7 @@ app.add_middleware(
 )
 
 app.include_router(takeoff_router, prefix="/takeoff")
+app.include_router(onboarding_router, prefix="/v1")
 
 UPLOAD_DIR = settings.upload_dir
 

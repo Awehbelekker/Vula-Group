@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     # ── Reflection ──────────────────────────────────────────────────────────
     reflection_model: str = "deepseek-r1:1.5b"
 
+    # ── Onboarding / Tenant provisioning ────────────────────────────────────
+    supabase_url: str = ""
+    supabase_service_key: str = ""
+    whatsapp_api_url: str = "https://graph.facebook.com/v19.0"
+    whatsapp_phone_id: str = ""
+    whatsapp_token: str = ""
+    team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
+    vula_base_url: str = "https://app.vula.ai"
+
+    # ── PayFast ─────────────────────────────────────────────────────────────
+    payfast_merchant_id: str = ""
+    payfast_merchant_key: str = ""
+
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
