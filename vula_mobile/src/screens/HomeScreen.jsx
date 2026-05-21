@@ -14,7 +14,7 @@ const C = {
   muted: "#8A8680",
 };
 
-export default function HomeScreen() {
+export default function HomeScreen({ headerRight } = {}) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -52,6 +52,7 @@ export default function HomeScreen() {
         <Text style={styles.logo}>Vula</Text>
         <View style={[styles.dot, { backgroundColor: status === "ok" ? "#22C55E" : status === "offline" ? "#EF4444" : "#F59E0B" }]} />
         <Text style={styles.statusText}>{status === "ok" ? "Connected" : status === "offline" ? "Offline" : "..."}</Text>
+        {headerRight && <View style={{ marginLeft: "auto" }}>{headerRight}</View>}
       </View>
 
       <Text style={styles.tagline}>Ask your business AI</Text>
