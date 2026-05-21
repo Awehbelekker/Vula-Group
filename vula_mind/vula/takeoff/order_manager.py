@@ -38,11 +38,11 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import httpx
 
-from vula.takeoff.boq_generator import BOQ, BOQItem
+from vula.takeoff.boq_generator import BOQ
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class PurchaseOrder:
 
     @property
     def estimated_total(self) -> float:
-        return sum(l.estimated_total for l in self.lines)
+        return sum(ln.estimated_total for ln in self.lines)
 
     @property
     def net_after_discount(self) -> float:
@@ -240,7 +240,7 @@ class SupplierDatabase:
             INSERT OR REPLACE INTO purchase_orders VALUES (?,?,?,?,?,?,?,?,?)
         """, (po.po_number, project_name, po.supplier.id, po.status,
               po.estimated_total, po.quote_received, po.sent_at,
-              json.dumps([{"desc": l.description, "qty": l.qty, "unit": l.unit, "total": l.estimated_total} for l in po.lines]),
+              json.dumps([{"desc": ln.description, "qty": ln.qty, "unit": ln.unit, "total": ln.estimated_total} for ln in po.lines]),
               datetime.now().isoformat()))
         conn.commit()
         conn.close()
@@ -357,8 +357,8 @@ class OrderManager:
             return False
 
         lines_text = "\n".join(
-            f"  {i+1}. {l.description} — {l.qty} {l.unit} (est. R{l.estimated_total:,.0f})"
-            for i, l in enumerate(po.lines)
+            f"  {i+1}. {ln.description} — {ln.qty} {ln.unit} (est. R{ln.estimated_total:,.0f})"
+            for i, ln in enumerate(po.lines)
         )
 
         body = f"""Dear {po.supplier.contact_name or po.supplier.name},
@@ -408,8 +408,8 @@ Professional Architectural Technologist — PAT44740093
             return False
 
         lines_text = "\n".join(
-            f"  • {l.description} — {l.qty} {l.unit}"
-            for l in po.lines[:8]  # Cap at 8 for WhatsApp readability
+            f"  • {ln.description} — {ln.qty} {ln.unit}"
+            for ln in po.lines[:8]  # Cap at 8 for WhatsApp readability
         )
         if len(po.lines) > 8:
             lines_text += f"\n  ... and {len(po.lines)-8} more items"
@@ -458,8 +458,8 @@ Professional Architectural Technologist — PAT44740093
             if po.supplier.discount_pct:
                 lines.append(f"Discount: {po.supplier.discount_pct}%")
             lines.append(f"Items: {len(po.lines)}")
-            for l in po.lines:
-                lines.append(f"  • {l.description} — {l.qty} {l.unit} — R{l.estimated_total:,.0f}")
+            for ln in po.lines:
+                lines.append(f"  • {ln.description} — {ln.qty} {ln.unit} — R{ln.estimated_total:,.0f}")
             lines.append(f"  Subtotal: R{po.estimated_total:,.0f}")
             if po.supplier.discount_pct:
                 lines.append(f"  Net after {po.supplier.discount_pct}% discount: R{po.net_after_discount:,.0f}")

@@ -34,7 +34,7 @@ SERVICE_TYPE = "_universal-soul._tcp.local."
 SERVICE_PORT = 7437   # US-AI = 7437 — chosen as a memorable port
 
 try:
-    from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf
+    from zeroconf import ServiceInfo
     from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
     ZEROCONF_AVAILABLE = True
 except ImportError:

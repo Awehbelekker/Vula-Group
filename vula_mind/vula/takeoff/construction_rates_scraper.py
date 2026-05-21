@@ -36,14 +36,13 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 
-logger = logging.getLogger(__name__)
-
-# ─── Config ──────────────────────────────────────────────────────────────────
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 OLLAMA_BASE = settings.ollama_base
 LLM_MODEL   = settings.model_worker

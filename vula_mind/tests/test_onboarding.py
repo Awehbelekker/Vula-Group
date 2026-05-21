@@ -1,5 +1,4 @@
 """Tests for the onboarding API — no Supabase or WhatsApp needed."""
-import pytest
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 

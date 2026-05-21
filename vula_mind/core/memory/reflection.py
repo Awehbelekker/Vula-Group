@@ -18,14 +18,13 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import httpx
 
 from config import settings
-from core.thinkmesh.graph import TaskGraph, ReflectionLog, MergeStrategy, BranchStatus
+from core.thinkmesh.graph import TaskGraph, ReflectionLog
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +118,7 @@ class ReflectionAgent:
             if not keywords:
                 return []
 
-            placeholders = " OR ".join([f"goal LIKE ?" for _ in keywords])
+            placeholders = " OR ".join(["goal LIKE ?" for _ in keywords])
             params = [f"%{kw}%" for kw in keywords] + [limit]
 
             rows = conn.execute(

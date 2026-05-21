@@ -40,13 +40,13 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
-logger = logging.getLogger(__name__)
-
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 OLLAMA_BASE  = settings.ollama_base
 OCR_MODEL    = settings.model_ocr
@@ -381,9 +381,8 @@ class DrawingIntelligence:
         project = ExtractedProject()
 
         # Group sheets by discipline
-        arch_sheets  = [s for s in sheets if s.discipline == "arch"]
-        mep_sheets   = [s for s in sheets if s.discipline == "mep"]
-        struct_sheets = [s for s in sheets if s.discipline == "structural"]
+        arch_sheets = [s for s in sheets if s.discipline == "arch"]
+        mep_sheets  = [s for s in sheets if s.discipline == "mep"]
 
         # Run in parallel
         results = await asyncio.gather(

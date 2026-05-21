@@ -26,14 +26,14 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from vula.takeoff.plan_reader import ExtractedProject, Room, DoorWindow, MEPSchedule
+from vula.takeoff.plan_reader import ExtractedProject
 
 logger = logging.getLogger(__name__)
 
@@ -371,14 +371,12 @@ class BOQGenerator:
                 boq.items.append(self._item("plumbing", "Kitchen plumbing — sink, dishwasher, connections", "item", 1, "plumbing_drain_point", 80))
 
         # ── ELECTRICAL ───────────────────────────────────────────────────────
-        elec_items = [m for m in p.mep_schedules if m.trade == "electrical"]
         boq.items.append(self._item("electrical", "DB board — 3-phase main distribution", "no", 1, "electrical_db", 88))
         boq.items.append(self._item("electrical", "Electrical fitout — lighting, power, data (office areas)", "m²", round(gfa), "electrical_fitout", 85))
         boq.items.append(self._item("electrical", "Emergency lighting & exit signage", "no", max(6, int(gfa / 20)), "electrical_emerg_light", 88))
         boq.items.append(self._item("electrical", "Structured cabling cat6A — data points", "point", max(8, int(gfa / 9)), "data_point_cat6a", 82))
 
         # ── HVAC ─────────────────────────────────────────────────────────────
-        hvac_items = [m for m in p.mep_schedules if m.trade == "hvac"]
         hvac_kw = round(gfa * 0.08, 1)  # 80W/m² rule of thumb
         boq.items.append(self._item("hvac", f"VRF HVAC system — {hvac_kw}kW capacity (installed)", "kW", hvac_kw, "hvac_vrf", 85, "Confirm with HVAC engineer"))
 
@@ -394,6 +392,3 @@ class BOQGenerator:
 
         logger.info(f"BOQ generated: {len(boq.items)} items, net total R{boq.net_total:,.0f}")
         return boq
-
-
-import math

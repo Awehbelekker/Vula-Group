@@ -24,13 +24,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
-import mimetypes
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, List, Optional
+from typing import List, Optional
 
 import httpx
 
@@ -144,7 +142,6 @@ class DocumentParser:
         Page numbers are 1-indexed.
         """
         suffix = file_path.suffix.lower()
-        mime = mimetypes.guess_type(str(file_path))[0] or ""
 
         if suffix == ".pdf":
             return await self._parse_pdf(file_path)
@@ -593,9 +590,9 @@ class VulaIngestionPipeline:
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                f"http://localhost:11434/api/generate",
+                f"{OLLAMA_BASE}/api/generate",
                 json={
-                    "model": "deepseek-r1:7b",
+                    "model": settings.model_worker,
                     "prompt": prompt,
                     "stream": False,
                     "options": {"temperature": 0.3, "num_predict": 1024},
@@ -629,7 +626,7 @@ if __name__ == "__main__":
             print(f"File not found: {file_path}")
             return
 
-        print(f"\n🌿 Vula Ingestion Pipeline")
+        print("\n🌿 Vula Ingestion Pipeline")
         print(f"   Tenant: {tenant_id}")
         print(f"   File:   {file_path.name}")
         print(f"   Size:   {file_path.stat().st_size // 1024} KB\n")
@@ -643,7 +640,7 @@ if __name__ == "__main__":
         print(f"✓ Time:    {result.processing_time_s}s")
 
         if result.status == "success":
-            print(f"\n💬 Test query...")
+            print("\n💬 Test query...")
             answer = await pipeline.answer("What is this document about?")
             print(f"Answer: {answer[:300]}...")
 

@@ -19,7 +19,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -31,7 +30,7 @@ from pydantic import BaseModel
 from config import settings
 from vula.takeoff.plan_reader import PlanReader
 from vula.takeoff.boq_generator import BOQGenerator
-from vula.takeoff.order_manager import OrderManager, SupplierDatabase, Supplier
+from vula.takeoff.order_manager import OrderManager, SupplierDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -240,13 +239,20 @@ async def update_supplier(supplier_id: str, update: SupplierUpdate, tenant_id: s
     if not supplier:
         raise HTTPException(404, "Supplier not found")
 
-    if update.name is not None: supplier.name = update.name
-    if update.email is not None: supplier.email = update.email
-    if update.whatsapp is not None: supplier.whatsapp = update.whatsapp
-    if update.contact_name is not None: supplier.contact_name = update.contact_name
-    if update.discount_pct is not None: supplier.discount_pct = update.discount_pct
-    if update.preferred is not None: supplier.preferred = update.preferred
-    if update.notes is not None: supplier.notes = update.notes
+    if update.name is not None:
+        supplier.name = update.name
+    if update.email is not None:
+        supplier.email = update.email
+    if update.whatsapp is not None:
+        supplier.whatsapp = update.whatsapp
+    if update.contact_name is not None:
+        supplier.contact_name = update.contact_name
+    if update.discount_pct is not None:
+        supplier.discount_pct = update.discount_pct
+    if update.preferred is not None:
+        supplier.preferred = update.preferred
+    if update.notes is not None:
+        supplier.notes = update.notes
 
     db.upsert_supplier(supplier, tenant_id)
     return {"status": "updated", "supplier_id": supplier_id}

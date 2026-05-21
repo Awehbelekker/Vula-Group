@@ -34,7 +34,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -254,8 +254,6 @@ class VulaWebScraper:
         Perfect for DIGG client research or ITEC lead qualification.
         """
         logger.info(f"Researching company: {url}")
-        started = time.time()
-
         title, markdown = await self.fetcher.fetch_markdown(url)
 
         schema = """{

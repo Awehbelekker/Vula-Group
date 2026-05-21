@@ -1,9 +1,8 @@
 """Tests for TaskGraph — the central data contract."""
 import time
-import pytest
 from core.thinkmesh.graph import (
-    TaskGraph, TaskBranch, ReflectionLog,
-    BranchStatus, GraphStatus, MergeStrategy, ModelTier, DeviceRole,
+    TaskGraph, ReflectionLog,
+    BranchStatus, GraphStatus, MergeStrategy,
 )
 
 

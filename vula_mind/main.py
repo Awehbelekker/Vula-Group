@@ -16,8 +16,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import sys
-from pathlib import Path
 
 # Setup logging
 logging.basicConfig(
@@ -51,7 +49,6 @@ async def run_task(goal: str, enable_mesh: bool = False) -> str:
         from mesh.discovery import MeshDiscovery
         discovery = MeshDiscovery(role="desktop", model_tiers=["7b", "14b"])
         await discovery.start()
-        graph_hints = {"mesh_state": discovery.mesh_state}
 
     print(f"\nVula — processing: {goal[:80]}")
     print("─" * 60)
@@ -117,7 +114,7 @@ async def interactive_mode(enable_mesh: bool = False) -> None:
             break
         if goal.lower() == "stats":
             stats = reflector.get_stats()
-            print(f"\n📊 Reflection Stats:")
+            print("\n📊 Reflection Stats:")
             for k, v in stats.items():
                 print(f"  {k}: {v}")
             print()
