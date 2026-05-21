@@ -479,7 +479,7 @@ export default function VulaDashboard() {
       .then(d => setApiStatus(d.status))
       .catch(() => setApiStatus("offline"));
 
-    fetch(`${VULA_API}/docs/${tenantId}`)
+    fetch(`${VULA_API}/documents/${tenantId}`)
       .then(r => r.json())
       .then(d => setDocCount(d.count || 0))
       .catch(() => {});
@@ -576,7 +576,7 @@ export default function VulaDashboard() {
           {/* Grid */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
             <UploadZone tenantId={tenantId} onUploaded={() => {
-              fetch(`${VULA_API}/docs/${tenantId}`).then(r => r.json()).then(d => setDocCount(d.count || 0)).catch(() => {});
+              fetch(`${VULA_API}/documents/${tenantId}`).then(r => r.json()).then(d => setDocCount(d.count || 0)).catch(() => {});
             }} />
             <QueryPanel tenantId={tenantId} />
             <div style={{ gridColumn: "1 / -1" }}>

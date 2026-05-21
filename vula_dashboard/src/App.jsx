@@ -4,6 +4,7 @@ import VulaQS from "./components/VulaQS";
 import VulaQSPro from "./components/VulaQSPro";
 import VulaTakeoff from "./components/VulaTakeoff";
 import VulaOnboarding from "./components/VulaOnboarding";
+import VulaAdmin from "./components/VulaAdmin";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -20,6 +21,7 @@ const TABS = [
   { id: "qspro", label: "QS Pro", component: VulaQSPro },
   { id: "takeoff", label: "Takeoff", component: VulaTakeoff },
   { id: "onboard", label: "Onboard Client", component: VulaOnboarding },
+  { id: "admin", label: "Signups", component: VulaAdmin },
 ];
 
 export default function App() {

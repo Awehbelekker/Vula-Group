@@ -22,13 +22,17 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import uuid
 from typing import List, Optional
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Security, UploadFile, File, Form, BackgroundTasks, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Security, UploadFile, File, Form, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, field_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from config import settings
 from vula.ingestion.pipeline import VulaIngestionPipeline
@@ -45,6 +49,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("vula.api")
 
+# ─── Rate limiter ─────────────────────────────────────────────────────────────
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+
 # ─── App ─────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -55,6 +63,9 @@ app = FastAPI(
     redoc_url="/redoc" if settings.debug else None,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list(),
@@ -62,6 +73,16 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    """Stamp every request and response with a correlation ID."""
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 app.include_router(takeoff_router, prefix="/takeoff")
 app.include_router(onboarding_router, prefix="/v1")
@@ -154,7 +175,9 @@ class ScrapeRequest(BaseModel):
 # ─── Document Ingestion ───────────────────────────────────────────────────────
 
 @app.post("/ingest", dependencies=[Depends(require_auth)])
+@limiter.limit("20/minute")
 async def ingest_document(
+    request: Request,
     background_tasks: BackgroundTasks,
     tenant_id: str = Form(...),
     file: UploadFile = File(...),
@@ -217,35 +240,37 @@ async def ingest_document_sync(
 # ─── Query / RAG ─────────────────────────────────────────────────────────────
 
 @app.post("/query", response_model=QueryResponse, dependencies=[Depends(require_auth)])
-async def query_knowledge_base(request: QueryRequest):
+@limiter.limit("30/minute")
+async def query_knowledge_base(request: Request, body: QueryRequest):
     """Ask a question against the tenant's ingested documents."""
-    pipeline = VulaIngestionPipeline(tenant_id=request.tenant_id)
-    sources = await pipeline.query(request.question, top_k=request.top_k)
+    pipeline = VulaIngestionPipeline(tenant_id=body.tenant_id)
+    sources = await pipeline.query(body.question, top_k=body.top_k)
 
     if not sources:
         return QueryResponse(
             answer="I don't have enough information in your documents yet. Try uploading more.",
             sources=[],
-            tenant_id=request.tenant_id,
+            tenant_id=body.tenant_id,
         )
 
-    answer = await pipeline.answer(request.question)
+    answer = await pipeline.answer(body.question)
     return QueryResponse(
         answer=answer,
         sources=[
             {"filename": s.get("filename"), "page": s.get("page_num"), "excerpt": s.get("text", "")[:200]}
             for s in sources
         ],
-        tenant_id=request.tenant_id,
+        tenant_id=body.tenant_id,
     )
 
 
 # ─── Web Scraper Endpoints ────────────────────────────────────────────────────
 
 @app.post("/scrape/company", dependencies=[Depends(require_auth)])
-async def research_company(request: CompanyResearchRequest):
-    scraper = VulaWebScraper(tenant_id=request.tenant_id)
-    profile = await scraper.research_company(request.url)
+@limiter.limit("10/minute")
+async def research_company(request: Request, body: CompanyResearchRequest):
+    scraper = VulaWebScraper(tenant_id=body.tenant_id)
+    profile = await scraper.research_company(body.url)
     return {
         "url": profile.url, "name": profile.name, "description": profile.description,
         "services": profile.services, "contact_info": profile.contact_info,
@@ -255,9 +280,10 @@ async def research_company(request: CompanyResearchRequest):
 
 
 @app.post("/scrape/prices", dependencies=[Depends(require_auth)])
-async def monitor_prices(request: PriceMonitorRequest):
-    scraper = VulaWebScraper(tenant_id=request.tenant_id)
-    results = await scraper.monitor_prices(request.urls)
+@limiter.limit("10/minute")
+async def monitor_prices(request: Request, body: PriceMonitorRequest):
+    scraper = VulaWebScraper(tenant_id=body.tenant_id)
+    results = await scraper.monitor_prices(body.urls)
     return {
         "monitored": len(results),
         "results": [{"url": r.url, "products": r.products, "scraped_at": r.scraped_at, "changes": r.changes_detected} for r in results],
@@ -265,23 +291,26 @@ async def monitor_prices(request: PriceMonitorRequest):
 
 
 @app.post("/scrape/digest", dependencies=[Depends(require_auth)])
-async def news_digest(request: DigestRequest):
-    scraper = VulaWebScraper(tenant_id=request.tenant_id)
-    digest = await scraper.industry_digest(request.topic, request.sources)
+@limiter.limit("10/minute")
+async def news_digest(request: Request, body: DigestRequest):
+    scraper = VulaWebScraper(tenant_id=body.tenant_id)
+    digest = await scraper.industry_digest(body.topic, body.sources)
     return {"topic": digest.topic, "generated_at": digest.generated_at, "key_trends": digest.key_trends, "articles": digest.articles}
 
 
 @app.post("/scrape/tenders", dependencies=[Depends(require_auth)])
-async def monitor_tenders(request: TenderRequest):
-    scraper = VulaWebScraper(tenant_id=request.tenant_id)
-    tenders = await scraper.monitor_tenders(request.keywords)
-    return {"keywords": request.keywords, "tenders_found": len(tenders), "tenders": tenders}
+@limiter.limit("10/minute")
+async def monitor_tenders(request: Request, body: TenderRequest):
+    scraper = VulaWebScraper(tenant_id=body.tenant_id)
+    tenders = await scraper.monitor_tenders(body.keywords)
+    return {"keywords": body.keywords, "tenders_found": len(tenders), "tenders": tenders}
 
 
 @app.post("/scrape/custom", dependencies=[Depends(require_auth)])
-async def custom_scrape(request: ScrapeRequest):
-    scraper = VulaWebScraper(tenant_id=request.tenant_id)
-    results = await scraper.scrape_urls(request.urls, request.extract_prompt)
+@limiter.limit("10/minute")
+async def custom_scrape(request: Request, body: ScrapeRequest):
+    scraper = VulaWebScraper(tenant_id=body.tenant_id)
+    results = await scraper.scrape_urls(body.urls, body.extract_prompt)
     return {
         "scraped": len(results),
         "results": [{"url": r.url, "title": r.title, "status": r.status, "data": r.extracted_data, "time_s": r.scrape_time_s} for r in results],
