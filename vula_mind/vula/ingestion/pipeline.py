@@ -34,16 +34,18 @@ from typing import AsyncIterator, List, Optional
 
 import httpx
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
-# ─── Config ──────────────────────────────────────────────────────────────────
-OLLAMA_BASE = "http://localhost:11434"
-QDRANT_BASE = "http://localhost:6333"
-GLM_OCR_MODEL = "glm-ocr"           # via Ollama when available; fallback below
-EMBED_MODEL = "bge-m3"              # pulled via: ollama pull bge-m3
-CHUNK_SIZE = 512                    # tokens per chunk
-CHUNK_OVERLAP = 64                  # overlap for context continuity
-MAX_FILE_SIZE_MB = 50
+# ─── Config (from settings / .env) ───────────────────────────────────────────
+OLLAMA_BASE = settings.ollama_base
+QDRANT_BASE = settings.qdrant_base
+GLM_OCR_MODEL = settings.model_ocr
+EMBED_MODEL = settings.model_embed
+CHUNK_SIZE = settings.chunk_size
+CHUNK_OVERLAP = settings.chunk_overlap
+MAX_FILE_SIZE_MB = settings.max_file_mb
 
 
 # ─── Data Classes ─────────────────────────────────────────────────────────────

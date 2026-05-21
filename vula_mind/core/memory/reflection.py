@@ -24,13 +24,14 @@ from typing import List, Dict, Any, Optional
 
 import httpx
 
+from config import settings
 from core.thinkmesh.graph import TaskGraph, ReflectionLog, MergeStrategy, BranchStatus
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_BASE = "http://localhost:11434"
-REFLECTION_MODEL = "deepseek-r1:1.5b"   # Lightweight — reflection is cheap
-DB_PATH = Path.home() / ".universal-soul" / "reflection.db"
+OLLAMA_BASE = settings.ollama_base
+REFLECTION_MODEL = settings.reflection_model
+DB_PATH = settings.reflection_db
 
 
 class ReflectionAgent:

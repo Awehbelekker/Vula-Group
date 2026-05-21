@@ -1,0 +1,85 @@
+version: "3.9"
+
+# Vula Group — Full Stack
+# Start everything: docker compose up -d
+# Stop everything:  docker compose down
+
+services:
+
+  # ── Qdrant (vector store) ──────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: vula-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"     # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+
+  # ── Ollama (local inference) ───────────────────────────────────────────────
+  # NOTE: GPU passthrough requires NVIDIA Container Toolkit on the host.
+  # Without GPU, Ollama falls back to CPU (slower but functional).
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vula-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Uncomment for GPU support (requires nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ── Vula API (Python backend) ──────────────────────────────────────────────
+  vula-api:
+    build:
+      context: ./vula_mind
+      dockerfile: Dockerfile
+    container_name: vula-api
+    restart: unless-stopped
+    ports:
+      - "7438:7438"
+    env_file:
+      - ./vula_mind/.env
+    environment:
+      OLLAMA_BASE: http://ollama:11434
+      QDRANT_BASE: http://qdrant:6333
+      DEBUG: "false"
+    volumes:
+      - vula_uploads:/tmp/vula_uploads
+      - vula_takeoff:/tmp/vula_takeoff
+      - vula_data:/root/.vula
+    depends_on:
+      - qdrant
+      - ollama
+
+  # ── Vula Dashboard (React) ─────────────────────────────────────────────────
+  vula-dashboard:
+    image: node:20-alpine
+    container_name: vula-dashboard
+    working_dir: /app
+    command: sh -c "npm install && npm run build && npx serve dist -l 3000"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./vula_dashboard:/app
+    environment:
+      VITE_API_URL: http://localhost:7438
+    depends_on:
+      - vula-api
+
+volumes:
+  qdrant_data:
+  ollama_data:
+  vula_uploads:
+  vula_takeoff:
+  vula_data:

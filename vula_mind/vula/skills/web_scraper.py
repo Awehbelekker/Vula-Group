@@ -40,10 +40,12 @@ from urllib.parse import urlparse
 
 import httpx
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
-OLLAMA_BASE = "http://localhost:11434"
-LLM_MODEL = "deepseek-r1:7b"
+OLLAMA_BASE = settings.ollama_base
+LLM_MODEL = settings.model_worker
 DEFAULT_TIMEOUT = 30.0
 
 

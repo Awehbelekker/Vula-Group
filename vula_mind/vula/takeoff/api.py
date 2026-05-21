@@ -28,6 +28,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from config import settings
 from vula.takeoff.plan_reader import PlanReader
 from vula.takeoff.boq_generator import BOQGenerator
 from vula.takeoff.order_manager import OrderManager, SupplierDatabase, Supplier
@@ -36,8 +37,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["takeoff"])
 
-UPLOAD_DIR = Path("/tmp/vula_takeoff")
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR = settings.takeoff_upload_dir
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # In-memory job store (replace with Redis in production)
 _jobs: Dict[str, dict] = {}
