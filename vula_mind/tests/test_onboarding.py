@@ -134,3 +134,59 @@ def test_valid_plans():
     for tier_id, tier in TIERS.items():
         assert "price_cents" in tier
         assert tier["price_cents"] > 0
+
+
+# ── PayFast ───────────────────────────────────────────────────────────────────
+
+def test_payfast_url_returns_none_when_not_configured():
+    from vula.api.onboarding import _payfast_url
+    with patch("vula.api.onboarding.settings") as mock_settings:
+        mock_settings.payfast_merchant_id = ""
+        mock_settings.payfast_merchant_key = ""
+        url = _payfast_url("tid-123", "growth", "test@test.co.za", "Jane Smith")
+    assert url is None
+
+
+def test_payfast_url_returns_sandbox_url_when_debug():
+    from vula.api.onboarding import _payfast_url
+    with patch("vula.api.onboarding.settings") as mock_settings:
+        mock_settings.payfast_merchant_id = "10012345"
+        mock_settings.payfast_merchant_key = "testkey"
+        mock_settings.debug = True
+        mock_settings.vula_base_url = "https://app.vula.ai"
+        url = _payfast_url("tid-123", "growth", "test@test.co.za", "Jane Smith")
+    assert url is not None
+    assert "sandbox.payfast.co.za" in url
+    assert "10012345" in url
+
+
+def test_payfast_url_contains_required_params():
+    from vula.api.onboarding import _payfast_url
+    with patch("vula.api.onboarding.settings") as mock_settings:
+        mock_settings.payfast_merchant_id = "10012345"
+        mock_settings.payfast_merchant_key = "testkey"
+        mock_settings.debug = True
+        mock_settings.vula_base_url = "https://app.vula.ai"
+        url = _payfast_url("tid-abc", "business", "ceo@bigco.co.za", "John Doe")
+    assert "subscription_type" in url
+    assert "frequency=3" in url   # monthly
+    assert "cycles=0" in url      # until cancelled
+
+
+# ── Admin auth ────────────────────────────────────────────────────────────────
+
+def test_admin_signups_open_when_no_api_key_set():
+    """Without API_KEY configured, admin endpoint is accessible (dev mode)."""
+    with patch("vula.api.onboarding.settings") as mock_settings:
+        mock_settings.api_key = ""
+        mock_settings.supabase_url = ""
+        mock_settings.supabase_service_key = ""
+        resp = client.get("/v1/admin/signups")
+    assert resp.status_code == 200
+
+
+def test_admin_signups_requires_key_when_configured():
+    with patch("vula.api.onboarding.settings") as mock_settings:
+        mock_settings.api_key = "secret123"
+        resp = client.get("/v1/admin/signups")
+    assert resp.status_code == 401

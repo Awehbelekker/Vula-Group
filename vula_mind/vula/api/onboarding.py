@@ -24,7 +24,8 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Security, UploadFile, File, Form
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, EmailStr, field_validator
 
 from config import settings
@@ -32,6 +33,17 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["onboarding"])
+
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def _require_admin(api_key: str | None = Security(_api_key_header)) -> None:
+    """Admin endpoints require API key even when the main API is open."""
+    import secrets as _secrets
+    if not settings.api_key:
+        return
+    if not api_key or not _secrets.compare_digest(api_key, settings.api_key):
+        raise HTTPException(status_code=401, detail="Admin access requires X-API-Key header.")
 
 # ─── Tier definitions ─────────────────────────────────────────────────────────
 
@@ -127,13 +139,25 @@ def _payfast_url(tenant_id: str, plan: str, email: str, name: str) -> Optional[s
     return f"https://{host}/eng/process?{qs}"
 
 
+_PAYFAST_VALID_IPS = {
+    "197.97.145.144", "197.97.145.145", "197.97.145.146", "197.97.145.147",
+    "41.74.179.194", "41.74.179.195", "41.74.179.196", "41.74.179.197",
+}
+
+
 @router.post("/payfast/notify")
-async def payfast_notify(request_body: dict) -> dict:
+async def payfast_notify(request: Request, request_body: dict) -> dict:
     """PayFast ITN (Instant Transaction Notification) webhook.
 
     Called by PayFast after a successful payment.
     Marks the tenant as paid and extends their subscription.
     """
+    # Validate source IP (PayFast publishes their IP ranges)
+    client_ip = request.client.host if request.client else ""
+    if not settings.debug and client_ip not in _PAYFAST_VALID_IPS:
+        logger.warning("PayFast ITN from unexpected IP: %s", client_ip)
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     tenant_id = request_body.get("m_payment_id", "")
     payment_status = request_body.get("payment_status", "")
 
@@ -409,7 +433,7 @@ async def tenant_status(tenant_id: str) -> dict:
     }
 
 
-@router.get("/admin/signups")
+@router.get("/admin/signups", dependencies=[Depends(_require_admin)])
 async def list_signups(limit: int = 20) -> dict:
     """
     Internal admin endpoint — list recent signups for Richard/Judy follow-up.
