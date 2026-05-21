@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import secrets
+import urllib.parse
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -74,6 +75,80 @@ class OnboardingResponse(BaseModel):
     temp_password: str
     trial_ends: str
     message: str
+    payment_url: Optional[str] = None
+
+
+# ─── PayFast payment link ─────────────────────────────────────────────────────
+
+def _payfast_url(tenant_id: str, plan: str, email: str, name: str) -> Optional[str]:
+    """Generate a PayFast payment URL for the given plan.
+
+    Returns None if PayFast is not configured.
+    Uses sandbox endpoint when DEBUG=True.
+    """
+    if not settings.payfast_merchant_id or not settings.payfast_merchant_key:
+        return None
+
+    tier = TIERS.get(plan, {})
+    amount = tier.get("price_cents", 0) / 100
+
+    host = "sandbox.payfast.co.za" if settings.debug else "www.payfast.co.za"
+    notify_url = f"{settings.vula_base_url}/api/v1/payfast/notify"
+    return_url = f"{settings.vula_base_url}/welcome?tenant={tenant_id}"
+    cancel_url = f"{settings.vula_base_url}/signup?cancelled=1"
+
+    params = {
+        "merchant_id": settings.payfast_merchant_id,
+        "merchant_key": settings.payfast_merchant_key,
+        "return_url": return_url,
+        "cancel_url": cancel_url,
+        "notify_url": notify_url,
+        "name_first": name.split()[0],
+        "name_last": name.split()[-1] if len(name.split()) > 1 else "",
+        "email_address": email,
+        "m_payment_id": tenant_id[:20],
+        "amount": f"{amount:.2f}",
+        "item_name": f"Vula {plan.title()} — Monthly Subscription",
+        "item_description": tier.get("label", plan),
+        "subscription_type": "1",          # recurring subscription
+        "billing_date": datetime.utcnow().strftime("%Y-%m-%d"),
+        "recurring_amount": f"{amount:.2f}",
+        "frequency": "3",                  # monthly
+        "cycles": "0",                     # until cancelled
+    }
+
+    # Build signature
+    sig_str = "&".join(f"{k}={urllib.parse.quote_plus(str(v))}" for k, v in params.items() if v != "")
+    sig_str += f"&passphrase={urllib.parse.quote_plus(settings.payfast_merchant_key)}"
+    signature = hashlib.md5(sig_str.encode()).hexdigest()
+    params["signature"] = signature
+
+    qs = urllib.parse.urlencode({k: v for k, v in params.items() if v != ""})
+    return f"https://{host}/eng/process?{qs}"
+
+
+@router.post("/payfast/notify")
+async def payfast_notify(request_body: dict) -> dict:
+    """PayFast ITN (Instant Transaction Notification) webhook.
+
+    Called by PayFast after a successful payment.
+    Marks the tenant as paid and extends their subscription.
+    """
+    tenant_id = request_body.get("m_payment_id", "")
+    payment_status = request_body.get("payment_status", "")
+
+    if payment_status == "COMPLETE" and tenant_id:
+        try:
+            await _supabase.update(
+                "vula_tenants",
+                {"tenant_id": tenant_id},
+                {"status": "active", "paid": True},
+            )
+            logger.info("Payment confirmed for tenant %s", tenant_id)
+        except Exception as exc:
+            logger.error("Failed to update payment status: %s", exc)
+
+    return {"status": "ok"}
 
 
 # ─── Supabase client ─────────────────────────────────────────────────────────
@@ -271,12 +346,24 @@ async def onboard_client(
     record, temp_password = await _provision(req)
     background_tasks.add_task(_background_tasks, record, temp_password, req)
 
+    payment_url = _payfast_url(
+        tenant_id=record["tenant_id"],
+        plan=req.plan,
+        email=str(req.email),
+        name=req.contact_name,
+    )
+
     return OnboardingResponse(
         tenant_id=record["tenant_id"],
         workspace_url=record["workspace_url"],
         temp_password=temp_password,
         trial_ends=record["trial_ends"][:10],
-        message="Workspace ready — check your WhatsApp for the login link.",
+        payment_url=payment_url,
+        message=(
+            "Workspace ready — check your WhatsApp for the login link."
+            if not payment_url
+            else "Workspace ready — complete your subscription below."
+        ),
     )
 
 

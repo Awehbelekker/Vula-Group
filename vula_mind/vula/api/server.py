@@ -23,6 +23,7 @@ import logging
 import re
 import secrets
 import uuid
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 import httpx
@@ -53,6 +54,14 @@ log = logging.getLogger("vula.api")
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
+# ─── Lifespan ─────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings.warn_missing()
+    yield
+
+
 # ─── App ─────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -61,6 +70,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs" if settings.debug else None,   # hide Swagger in production
     redoc_url="/redoc" if settings.debug else None,
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter

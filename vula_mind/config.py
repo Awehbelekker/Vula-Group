@@ -24,11 +24,11 @@ class Settings(BaseSettings):
 
     # ── Ollama ──────────────────────────────────────────────────────────────
     ollama_base: str = "http://localhost:11434"
-    model_edge: str = "deepseek-r1:1.5b"
-    model_worker: str = "deepseek-r1:7b"
+    model_edge: str = "llama3.1:8b"
+    model_worker: str = "deepseek-r1:8b"
     model_reasoner: str = "deepseek-r1:14b"
     model_embed: str = "bge-m3"
-    model_ocr: str = "glm-ocr"
+    model_ocr: str = "llava:7b"
 
     # ── Qdrant ──────────────────────────────────────────────────────────────
     qdrant_base: str = "http://localhost:6333"
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     vram_total_gb: float = 24.0
 
     # ── Reflection ──────────────────────────────────────────────────────────
-    reflection_model: str = "deepseek-r1:1.5b"
+    reflection_model: str = "deepseek-r1:8b"
 
     # ── Onboarding / Tenant provisioning ────────────────────────────────────
     supabase_url: str = ""
@@ -79,6 +79,25 @@ class Settings(BaseSettings):
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.takeoff_upload_dir.mkdir(parents=True, exist_ok=True)
         self.reflection_db.parent.mkdir(parents=True, exist_ok=True)
+
+    def warn_missing(self) -> list[str]:
+        """Return list of warnings about missing production config."""
+        import logging
+        log = logging.getLogger("vula.config")
+        warnings = []
+        if not self.api_key:
+            warnings.append("API_KEY not set — API is unauthenticated (dev mode only)")
+        if not self.supabase_url or "your-project" in self.supabase_url:
+            warnings.append("SUPABASE_URL not configured — tenant provisioning disabled")
+        if not self.supabase_service_key or "your-service" in self.supabase_service_key:
+            warnings.append("SUPABASE_SERVICE_KEY not configured — tenant provisioning disabled")
+        if not self.whatsapp_token or "your-permanent" in self.whatsapp_token:
+            warnings.append("WHATSAPP_TOKEN not configured — signup notifications disabled")
+        if not self.payfast_merchant_id:
+            warnings.append("PAYFAST_MERCHANT_ID not configured — payment links disabled")
+        for w in warnings:
+            log.warning("Config: %s", w)
+        return warnings
 
 
 @lru_cache(maxsize=1)

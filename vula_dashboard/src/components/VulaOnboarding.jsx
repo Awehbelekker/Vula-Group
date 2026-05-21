@@ -413,7 +413,7 @@ function StepConfirm({ data, plan, onSubmit, onBack, loading, error }) {
   );
 }
 
-function StepSuccess({ data, plan, workspaceUrl }) {
+function StepSuccess({ data, plan, workspaceUrl, paymentUrl }) {
   const tier = TIERS.find(t => t.id === plan);
   const [count, setCount] = useState(0);
   useEffect(() => {
@@ -454,6 +454,28 @@ function StepSuccess({ data, plan, workspaceUrl }) {
           </div>
         ))}
       </div>
+      {paymentUrl && (
+        <div style={{ marginBottom: 28 }}>
+          <a
+            href={paymentUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "block", padding: "16px 32px",
+              background: "#C4922A", color: "#fff",
+              borderRadius: 10, textDecoration: "none",
+              fontSize: 15, fontWeight: 700, letterSpacing: "0.03em",
+              textAlign: "center", transition: "opacity 0.15s",
+            }}
+          >
+            Complete Subscription via PayFast →
+          </a>
+          <p style={{ fontSize: 11, color: "#444", fontFamily: "monospace", marginTop: 8 }}>
+            Secure monthly billing · Cancel anytime · No lock-in
+          </p>
+        </div>
+      )}
+
       <p style={{ fontSize: 12, color: "#444", fontFamily: "monospace" }}>
         Questions? WhatsApp us: <span style={{ color: "#C4922A" }}>{import.meta.env.VITE_TEAM_WHATSAPP || "+27 82 000 0000"}</span>
       </p>
@@ -469,6 +491,7 @@ export default function VulaOnboarding() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [workspaceUrl, setWorkspaceUrl] = useState("");
+  const [paymentUrl, setPaymentUrl] = useState("");
   const [business, setBusiness] = useState({
     companyName: "", industry: "", staffCount: "",
     contactName: "", email: "", whatsapp: "", painPoints: [],
@@ -500,6 +523,7 @@ export default function VulaOnboarding() {
       }
       const data = await resp.json();
       setWorkspaceUrl(data.workspace_url);
+      if (data.payment_url) setPaymentUrl(data.payment_url);
       setStep(5);
     } catch (e) {
       setError(e.message);
@@ -535,7 +559,7 @@ export default function VulaOnboarding() {
             {step === 2 && <StepBusiness data={business} onChange={updateBusiness} onNext={() => setStep(3)} onBack={() => setStep(1)} />}
             {step === 3 && <StepTraining data={business} onChange={updateBusiness} onNext={() => setStep(4)} onBack={() => setStep(2)} />}
             {step === 4 && <StepConfirm data={business} plan={plan} onSubmit={handleSubmit} onBack={() => setStep(3)} loading={loading} error={error} />}
-            {step === 5 && <StepSuccess data={business} plan={plan} workspaceUrl={workspaceUrl} />}
+            {step === 5 && <StepSuccess data={business} plan={plan} workspaceUrl={workspaceUrl} paymentUrl={paymentUrl} />}
           </div>
 
           {step < 5 && (
