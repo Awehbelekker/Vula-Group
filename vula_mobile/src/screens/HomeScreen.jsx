@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
+import { useRouter } from "expo-router";
 import { askQuestion, checkStatus } from "../api/vula";
 
 const TENANT_ID = "mobile_user";
@@ -15,6 +16,7 @@ const C = {
 };
 
 export default function HomeScreen({ headerRight } = {}) {
+  const router = useRouter();
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -65,6 +67,16 @@ export default function HomeScreen({ headerRight } = {}) {
           </TouchableOpacity>
         ))}
       </ScrollView>
+
+      {/* Quick actions */}
+      <TouchableOpacity onPress={() => router.push("/documents")} style={styles.docBtn}>
+        <Text style={styles.docBtnIcon}>📂</Text>
+        <View>
+          <Text style={styles.docBtnTitle}>My Documents</Text>
+          <Text style={styles.docBtnSub}>Upload files for your AI to learn from</Text>
+        </View>
+        <Text style={[styles.docBtnSub, { marginLeft: "auto" }]}>→</Text>
+      </TouchableOpacity>
 
       {/* Input */}
       <View style={styles.inputRow}>
@@ -120,6 +132,10 @@ const styles = StyleSheet.create({
   sendBtn: { backgroundColor: C.green, borderRadius: 10, paddingHorizontal: 20, justifyContent: "center" },
   sendBtnDisabled: { backgroundColor: C.border },
   sendBtnText: { color: "#fff", fontSize: 20, fontWeight: "600" },
+  docBtn: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: C.surface, borderColor: C.border, borderWidth: 1, borderRadius: 10, padding: 14, marginBottom: 20 },
+  docBtnIcon: { fontSize: 22 },
+  docBtnTitle: { fontSize: 13, fontWeight: "700", color: C.text },
+  docBtnSub: { fontSize: 11, color: C.muted, marginTop: 2 },
   answerCard: { backgroundColor: C.surface, borderColor: C.border, borderWidth: 1, borderRadius: 12, padding: 16, marginTop: 8 },
   answerLabel: { fontSize: 10, color: C.green, letterSpacing: 1, marginBottom: 10, textTransform: "uppercase" },
   answerText: { fontSize: 15, color: C.text, lineHeight: 24 },
