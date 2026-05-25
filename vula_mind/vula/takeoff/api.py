@@ -31,6 +31,7 @@ from config import settings
 from vula.takeoff.plan_reader import PlanReader
 from vula.takeoff.boq_generator import BOQGenerator
 from vula.takeoff.order_manager import OrderManager, SupplierDatabase
+from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper, RatesDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,49 @@ async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: f
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
+
+# ─── Construction rates (must come before /{job_id} to avoid shadowing) ──────
+
+@router.get("/rates")
+async def get_rates(changed_only: bool = False, threshold_pct: float = 5.0):
+    """Return current construction rates from the local DB.
+
+    Pass ?changed_only=true to see only rates that moved significantly
+    since the last scrape.
+    """
+    db = RatesDatabase()
+    if changed_only:
+        rates = db.get_changes(threshold_pct=threshold_pct)
+    else:
+        rates = db.get_all()
+    return {"count": len(rates), "rates": rates}
+
+
+@router.post("/rates/update")
+async def trigger_rates_update(background_tasks: BackgroundTasks):
+    """Trigger an immediate construction rates scrape.
+
+    Runs asynchronously — returns immediately. Check /takeoff/rates
+    after 2-5 minutes for updated data.
+
+    In production this endpoint is called by a weekly cron / n8n workflow.
+    Protect with API_KEY when not using the default open-dev mode.
+    """
+    async def _run():
+        try:
+            scraper = ConstructionRatesScraper()
+            result = await scraper.run_full_update()
+            logger.info("Rates update complete: %s new, %s updated in %.1fs",
+                        result.new, result.updated, result.duration_s)
+        except Exception as exc:
+            logger.error("Rates update failed: %s", exc)
+
+    background_tasks.add_task(_run)
+    return {
+        "status": "started",
+        "message": "Construction rates scrape running in background. Check /takeoff/rates in 2-5 minutes.",
+    }
+
 
 @router.post("/upload")
 async def upload_plans(

@@ -57,9 +57,27 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 
+async def _weekly_rates_loop() -> None:
+    """Run construction rates scrape weekly. Starts 10 min after boot."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(600)  # Let the server settle first
+    while True:
+        try:
+            from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper
+            scraper = ConstructionRatesScraper()
+            result = await scraper.run_full_update()
+            log.info("Weekly rates update: %d new, %d updated in %.1fs",
+                     result.new, result.updated, result.duration_s)
+        except Exception as exc:
+            log.warning("Weekly rates update failed: %s", exc)
+        await _asyncio.sleep(7 * 24 * 3600)  # sleep one week
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio as _asyncio
     settings.warn_missing()
+    _asyncio.create_task(_weekly_rates_loop())
     yield
 
 
