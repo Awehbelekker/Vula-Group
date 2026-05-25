@@ -507,6 +507,7 @@ async def tenant_status(tenant_id: str) -> dict:
     return {
         "tenant_id": tenant_id,
         "status": t.get("status"),
+        "paid": t.get("paid", False),
         "workspace_url": t.get("workspace_url"),
         "trial_ends": (t.get("trial_ends") or "")[:10],
         "plan": t.get("plan"),
@@ -528,7 +529,7 @@ async def list_signups(limit: int = 20) -> dict:
             resp = await client.get(
                 f"{settings.supabase_url}/rest/v1/vula_tenants"
                 f"?order=created_at.desc&limit={limit}"
-                f"&select=company_name,contact_name,email,whatsapp,plan,industry,status,trial_ends,created_at",
+                f"&select=company_name,contact_name,email,whatsapp,plan,industry,status,paid,trial_ends,created_at",
                 headers={
                     "apikey": settings.supabase_service_key,
                     "Authorization": f"Bearer {settings.supabase_service_key}",

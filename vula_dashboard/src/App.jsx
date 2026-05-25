@@ -6,6 +6,7 @@ import VulaTakeoff from "./components/VulaTakeoff";
 import VulaOnboarding from "./components/VulaOnboarding";
 import VulaAdmin from "./components/VulaAdmin";
 import VulaDocuments from "./components/VulaDocuments";
+import VulaSubscriptions from "./components/VulaSubscriptions";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -23,6 +24,7 @@ const TABS = [
   { id: "takeoff", label: "Takeoff", component: VulaTakeoff },
   { id: "onboard", label: "Onboard Client", component: VulaOnboarding },
   { id: "docs", label: "Documents", component: VulaDocuments },
+  { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
   { id: "admin", label: "Signups", component: VulaAdmin },
 ];
 

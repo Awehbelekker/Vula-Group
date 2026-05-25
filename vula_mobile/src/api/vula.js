@@ -95,6 +95,16 @@ export async function clearSession() {
   await AsyncStorage.removeItem("vula_session");
 }
 
+export async function getTenantStatus(tenantId) {
+  const host = await getHost();
+  const resp = await fetch(`${host}/v1/tenant/${encodeURIComponent(tenantId)}/status`, {
+    headers: await headers(),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function setHost(host) {
   await AsyncStorage.setItem("vula_host", host);
 }
