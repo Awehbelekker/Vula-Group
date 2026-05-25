@@ -29,6 +29,7 @@ from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, EmailStr, field_validator
 
 from config import settings
+from vula.api.email import send_welcome_email, send_team_alert_email
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +329,24 @@ async def _background_tasks(record: dict, temp_password: str, req: OnboardingReq
             f"Questions? Reply to this message. Vula Group.",
         )
 
+    payment_url = _payfast_url(
+        tenant_id=record["tenant_id"],
+        plan=req.plan,
+        email=str(req.email),
+        name=req.contact_name,
+    )
+
+    await send_welcome_email(
+        to=str(req.email),
+        first_name=first_name,
+        company_name=req.company_name,
+        workspace_url=record["workspace_url"],
+        temp_password=temp_password,
+        plan=req.plan,
+        trial_ends=record["trial_ends"][:10],
+        payment_url=payment_url,
+    )
+
     tier_label = TIERS.get(req.plan, {}).get("label", req.plan)
     await _send_whatsapp(
         settings.team_whatsapp,
@@ -341,6 +360,17 @@ async def _background_tasks(record: dict, temp_password: str, req: OnboardingReq
         f"Pain points: {', '.join(req.pain_points[:3]) if req.pain_points else 'None selected'}\n\n"
         f"Workspace: {record['workspace_url']}\n"
         f"Action: Call {req.contact_name} within 24 hours.",
+    )
+
+    await send_team_alert_email(
+        company_name=req.company_name,
+        contact_name=req.contact_name,
+        email=str(req.email),
+        whatsapp=req.whatsapp,
+        plan=req.plan,
+        industry=req.industry,
+        pain_points=req.pain_points,
+        workspace_url=record["workspace_url"],
     )
 
     try:

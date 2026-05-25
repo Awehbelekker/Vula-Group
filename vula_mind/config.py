@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""
 
+    # ── Email (Resend) ────────────────────────────────────────────────────────
+    resend_api_key: str = ""
+    from_email: str = "Vula Group <hello@vula.ai>"
+    team_email: str = ""                # team notifications (Richard/Judy)
+
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
@@ -95,6 +100,8 @@ class Settings(BaseSettings):
             warnings.append("WHATSAPP_TOKEN not configured — signup notifications disabled")
         if not self.payfast_merchant_id:
             warnings.append("PAYFAST_MERCHANT_ID not configured — payment links disabled")
+        if not self.resend_api_key:
+            warnings.append("RESEND_API_KEY not configured — email notifications disabled")
         for w in warnings:
             log.warning("Config: %s", w)
         return warnings
