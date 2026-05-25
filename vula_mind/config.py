@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     whatsapp_phone_id: str = ""
     whatsapp_token: str = ""
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
+    whatsapp_verify_token: str = ""       # Meta webhook verification token
     vula_base_url: str = "https://app.vula.ai"
 
     # ── PayFast ─────────────────────────────────────────────────────────────

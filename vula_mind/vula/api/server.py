@@ -40,6 +40,7 @@ from vula.ingestion.pipeline import VulaIngestionPipeline
 from vula.skills.web_scraper import VulaWebScraper
 from vula.takeoff.api import router as takeoff_router
 from vula.api.onboarding import router as onboarding_router
+from vula.api.whatsapp import router as whatsapp_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -96,6 +97,7 @@ async def add_request_id(request: Request, call_next):
 
 app.include_router(takeoff_router, prefix="/takeoff")
 app.include_router(onboarding_router, prefix="/v1")
+app.include_router(whatsapp_router, prefix="/v1/whatsapp")
 
 UPLOAD_DIR = settings.upload_dir
 
