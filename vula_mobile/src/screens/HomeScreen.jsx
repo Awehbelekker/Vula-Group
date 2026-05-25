@@ -1,9 +1,7 @@
 import { useState, useEffect } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
-import { askQuestion, checkStatus } from "../api/vula";
-
-const TENANT_ID = "mobile_user";
+import { askQuestion, checkStatus, getSession } from "../api/vula";
 
 const C = {
   bg: "#F7F4EE",
@@ -17,23 +15,27 @@ const C = {
 
 export default function HomeScreen({ headerRight } = {}) {
   const router = useRouter();
+  const [session, setSession] = useState(null);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("checking");
 
   useEffect(() => {
+    getSession().then(setSession);
     checkStatus()
       .then((d) => setStatus(d.status))
       .catch(() => setStatus("offline"));
   }, []);
+
+  const tenantId = session?.tenant_id ?? "default";
 
   const ask = async () => {
     if (!question.trim()) return;
     setLoading(true);
     setAnswer(null);
     try {
-      const data = await askQuestion(TENANT_ID, question);
+      const data = await askQuestion(tenantId, question);
       setAnswer(data);
     } catch (e) {
       setAnswer({ answer: `Connection error: ${e.message}`, sources: [] });
@@ -57,6 +59,9 @@ export default function HomeScreen({ headerRight } = {}) {
         {headerRight && <View style={{ marginLeft: "auto" }}>{headerRight}</View>}
       </View>
 
+      {session?.company_name ? (
+        <Text style={styles.companyName}>{session.company_name}</Text>
+      ) : null}
       <Text style={styles.tagline}>Ask your business AI</Text>
 
       {/* Suggested */}
@@ -123,6 +128,7 @@ const styles = StyleSheet.create({
   logo: { fontSize: 28, fontWeight: "700", color: C.text, marginRight: 12 },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
   statusText: { fontSize: 12, color: C.muted },
+  companyName: { fontSize: 13, fontWeight: "700", color: C.green, marginBottom: 2 },
   tagline: { fontSize: 14, color: C.muted, marginBottom: 20 },
   chips: { marginBottom: 20 },
   chip: { backgroundColor: C.surface, borderColor: C.border, borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, marginRight: 8 },

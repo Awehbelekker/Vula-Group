@@ -1,4 +1,5 @@
 """Tests for the onboarding API — no Supabase or WhatsApp needed."""
+import hashlib as _hashlib
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
@@ -190,3 +191,83 @@ def test_admin_signups_requires_key_when_configured():
         mock_settings.api_key = "secret123"
         resp = client.get("/v1/admin/signups")
     assert resp.status_code == 401
+
+
+# ── Auth / Login ──────────────────────────────────────────────────────────────
+
+def _pw_hash(pw: str) -> str:
+    return _hashlib.sha256(pw.encode()).hexdigest()
+
+
+def test_login_success():
+    fake_tenant = {
+        "tenant_id": "abc-123",
+        "company_name": "DIGG Interiors",
+        "contact_name": "Judy Smith",
+        "email": "judy@digg.co.za",
+        "plan": "growth",
+        "status": "active",
+        "trial_ends": "2026-06-21T00:00:00",
+        "workspace_url": "https://app.vula.ai/digg-interiors",
+        "temp_password_hash": _pw_hash("correct-password"),
+    }
+    with patch("vula.api.onboarding._supabase") as mock_sb:
+        mock_sb.select = AsyncMock(return_value=[fake_tenant])
+        resp = client.post("/v1/auth/login", json={"email": "judy@digg.co.za", "password": "correct-password"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tenant_id"] == "abc-123"
+    assert data["company_name"] == "DIGG Interiors"
+    assert data["plan"] == "growth"
+    assert data["trial_ends"] == "2026-06-21"
+
+
+def test_login_wrong_password():
+    fake_tenant = {
+        "tenant_id": "abc-123",
+        "email": "judy@digg.co.za",
+        "temp_password_hash": _pw_hash("correct-password"),
+    }
+    with patch("vula.api.onboarding._supabase") as mock_sb:
+        mock_sb.select = AsyncMock(return_value=[fake_tenant])
+        resp = client.post("/v1/auth/login", json={"email": "judy@digg.co.za", "password": "wrong-password"})
+
+    assert resp.status_code == 401
+
+
+def test_login_unknown_email():
+    with patch("vula.api.onboarding._supabase") as mock_sb:
+        mock_sb.select = AsyncMock(return_value=[])
+        with patch("vula.api.onboarding.settings") as mock_settings:
+            mock_settings.supabase_url = "https://project.supabase.co"
+            resp = client.post("/v1/auth/login", json={"email": "nobody@example.com", "password": "pw"})
+
+    assert resp.status_code == 401
+
+
+def test_login_rejects_invalid_email():
+    resp = client.post("/v1/auth/login", json={"email": "not-an-email", "password": "pw"})
+    assert resp.status_code == 422
+
+
+def test_login_returns_no_password_hash():
+    """Ensure the temp_password_hash is never returned to the client."""
+    fake_tenant = {
+        "tenant_id": "abc-123",
+        "company_name": "DIGG",
+        "contact_name": "Judy",
+        "email": "judy@digg.co.za",
+        "plan": "starter",
+        "status": "active",
+        "trial_ends": "2026-06-21T00:00:00",
+        "workspace_url": "https://app.vula.ai/digg",
+        "temp_password_hash": _pw_hash("pw"),
+    }
+    with patch("vula.api.onboarding._supabase") as mock_sb:
+        mock_sb.select = AsyncMock(return_value=[fake_tenant])
+        resp = client.post("/v1/auth/login", json={"email": "judy@digg.co.za", "password": "pw"})
+
+    assert resp.status_code == 200
+    assert "temp_password_hash" not in resp.json()
+    assert "password" not in resp.json()

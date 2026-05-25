@@ -448,6 +448,48 @@ async def upload_onboarding_documents(
     }
 
 
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+@router.post("/auth/login")
+async def login(req: LoginRequest) -> dict:
+    """Authenticate a tenant with their email + temp password.
+
+    Returns tenant info on success. Used by the mobile app on first launch.
+    In-memory fallback when Supabase is not configured (dev mode).
+    """
+    rows = await _supabase.select("vula_tenants", {"email": str(req.email)})
+
+    if not rows:
+        # Dev mode: Supabase not configured — reject unknown credentials
+        if not settings.supabase_url:
+            raise HTTPException(
+                status_code=401,
+                detail="No tenant found. Configure Supabase or use a provisioned account.",
+            )
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    tenant = rows[0]
+    pw_hash = hashlib.sha256(req.password.encode()).hexdigest()
+    stored_hash = tenant.get("temp_password_hash", "")
+
+    if not secrets.compare_digest(pw_hash, stored_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    return {
+        "tenant_id": tenant["tenant_id"],
+        "company_name": tenant.get("company_name", ""),
+        "contact_name": tenant.get("contact_name", ""),
+        "email": tenant.get("email", ""),
+        "plan": tenant.get("plan", ""),
+        "status": tenant.get("status", ""),
+        "trial_ends": (tenant.get("trial_ends") or "")[:10],
+        "workspace_url": tenant.get("workspace_url", ""),
+    }
+
+
 @router.get("/tenant/{tenant_id}/status")
 async def tenant_status(tenant_id: str) -> dict:
     rows = await _supabase.select("vula_tenants", {"tenant_id": tenant_id})

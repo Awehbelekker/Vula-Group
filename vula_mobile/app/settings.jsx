@@ -1,25 +1,30 @@
 import { useState, useEffect } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { setHost, setApiKey } from "../src/api/vula";
+import { useRouter } from "expo-router";
+import { setHost, setApiKey, getSession, clearSession } from "../src/api/vula";
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", green: "#2C5545",
-  border: "#DDD8CE", text: "#2A2A2A", muted: "#8A8680",
+  border: "#DDD8CE", text: "#2A2A2A", muted: "#8A8680", red: "#C0392B",
 };
 
 export default function Settings() {
+  const router = useRouter();
   const [host, setHostInput] = useState("");
   const [apiKey, setApiKeyInput] = useState("");
+  const [session, setSession] = useState(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     Promise.all([
       AsyncStorage.getItem("vula_host"),
       AsyncStorage.getItem("vula_api_key"),
-    ]).then(([h, k]) => {
+      getSession(),
+    ]).then(([h, k, s]) => {
       if (h) setHostInput(h);
       if (k) setApiKeyInput(k);
+      setSession(s);
     });
   }, []);
 
@@ -35,8 +40,39 @@ export default function Settings() {
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const logout = () => {
+    Alert.alert("Sign out", "You will need to sign in again.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Sign out", style: "destructive",
+        onPress: async () => {
+          await clearSession();
+          router.replace("/login");
+        },
+      },
+    ]);
+  };
+
   return (
     <View style={styles.container}>
+      {/* Account section */}
+      {session && (
+        <>
+          <Text style={styles.sectionLabel}>Account</Text>
+          <View style={styles.accountCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.accountName}>{session.company_name}</Text>
+              <Text style={styles.accountEmail}>{session.email}</Text>
+              <Text style={styles.accountPlan}>{session.plan} · trial ends {session.trial_ends}</Text>
+            </View>
+          </View>
+          <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
+            <Text style={styles.logoutText}>Sign out</Text>
+          </TouchableOpacity>
+          <View style={styles.divider} />
+        </>
+      )}
+
       <Text style={styles.sectionLabel}>Backend host</Text>
       <Text style={styles.hint}>Your desktop or Vula Box IP on the same WiFi.</Text>
       <TextInput
@@ -88,4 +124,10 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: C.border, marginVertical: 28 },
   preset: { padding: 12, backgroundColor: C.surface, borderColor: C.border, borderWidth: 1, borderRadius: 8, marginBottom: 8 },
   presetText: { fontSize: 13, color: C.text, fontFamily: "monospace" },
+  accountCard: { backgroundColor: C.surface, borderRadius: 10, padding: 16, borderWidth: 1, borderColor: C.border, marginBottom: 12, flexDirection: "row" },
+  accountName: { fontSize: 15, fontWeight: "700", color: C.text },
+  accountEmail: { fontSize: 13, color: C.muted, marginTop: 2 },
+  accountPlan: { fontSize: 11, color: C.green, marginTop: 4, textTransform: "capitalize" },
+  logoutBtn: { backgroundColor: `${C.red}12`, borderRadius: 10, padding: 14, alignItems: "center", borderWidth: 1, borderColor: `${C.red}30` },
+  logoutText: { color: C.red, fontSize: 14, fontWeight: "600" },
 });

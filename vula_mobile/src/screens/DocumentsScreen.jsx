@@ -1,12 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   Alert, StyleSheet,
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
-import { uploadDocument } from "../api/vula";
-
-const TENANT_ID = "mobile_user";
+import { uploadDocument, getSession } from "../api/vula";
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", green: "#2C5545",
@@ -40,8 +38,13 @@ function StatusDot({ status }) {
 }
 
 export default function DocumentsScreen() {
+  const [tenantId, setTenantId] = useState("default");
   const [queue, setQueue] = useState([]);
   const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    getSession().then((s) => { if (s?.tenant_id) setTenantId(s.tenant_id); });
+  }, []);
 
   const pick = useCallback(async () => {
     try {
@@ -81,7 +84,7 @@ export default function DocumentsScreen() {
     for (const item of pending) {
       setQueue((q) => q.map((x) => x.uri === item.uri ? { ...x, status: "uploading" } : x));
       try {
-        await uploadDocument(TENANT_ID, item);
+        await uploadDocument(tenantId, item);
         setQueue((q) => q.map((x) => x.uri === item.uri ? { ...x, status: "done" } : x));
       } catch {
         setQueue((q) => q.map((x) => x.uri === item.uri ? { ...x, status: "error" } : x));

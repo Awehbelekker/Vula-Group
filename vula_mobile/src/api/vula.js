@@ -67,6 +67,34 @@ export async function researchCompany(tenantId, url) {
   return resp.json();
 }
 
+export async function login(email, password) {
+  const host = await getHost();
+  const resp = await fetch(`${host}/v1/auth/login`, {
+    method: "POST",
+    headers: await headers(),
+    body: JSON.stringify({ email, password }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function getSession() {
+  const raw = await AsyncStorage.getItem("vula_session");
+  return raw ? JSON.parse(raw) : null;
+}
+
+export async function saveSession(session) {
+  await AsyncStorage.setItem("vula_session", JSON.stringify(session));
+}
+
+export async function clearSession() {
+  await AsyncStorage.removeItem("vula_session");
+}
+
 export async function setHost(host) {
   await AsyncStorage.setItem("vula_host", host);
 }
