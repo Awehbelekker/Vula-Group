@@ -307,6 +307,9 @@ CREATE INDEX IF NOT EXISTS idx_vula_tenants_email ON vula_tenants(email);
 -- Index for tenant_id lookups (status checks)
 CREATE INDEX IF NOT EXISTS idx_vula_tenants_tenant_id ON vula_tenants(tenant_id);
 
+-- Index for WhatsApp inbound routing (AI reply per-tenant lookup)
+CREATE INDEX IF NOT EXISTS idx_vula_tenants_whatsapp ON vula_tenants(whatsapp);
+
 -- Row Level Security — service role bypasses, anon cannot read
 ALTER TABLE vula_tenants ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Service role full access" ON vula_tenants

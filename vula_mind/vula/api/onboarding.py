@@ -285,6 +285,14 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
     workspace_url = f"{settings.vula_base_url}/{slug}"
     trial_ends = (datetime.utcnow() + timedelta(days=30)).isoformat()
 
+    # Normalise WhatsApp to E.164 without leading + so lookup always matches
+    whatsapp_normalised: str | None = None
+    if req.whatsapp:
+        w = re.sub(r"[\s\-+]", "", req.whatsapp)
+        if w.startswith("0") and len(w) == 10:
+            w = "27" + w[1:]
+        whatsapp_normalised = w
+
     record = {
         "tenant_id": tenant_id,
         "company_name": req.company_name,
@@ -292,7 +300,7 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
         "staff_count": req.staff_count,
         "contact_name": req.contact_name,
         "email": req.email,
-        "whatsapp": req.whatsapp,
+        "whatsapp": whatsapp_normalised,
         "plan": req.plan,
         "pain_points": json.dumps(req.pain_points),
         "status": "provisioning",
