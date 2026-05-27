@@ -266,6 +266,83 @@ async def send_welcome_email(
     return await _send(to, subject, html, text)
 
 
+async def send_payment_receipt_email(
+    to: str,
+    first_name: str,
+    company_name: str,
+    amount: str,
+    plan: str,
+    ref: str,
+) -> bool:
+    subject = f"Payment confirmed — Vula {plan.title()} subscription"
+    html = (
+        _HEADER
+        + '<tr><td style="padding:0 0 20px">'
+        + f'<p style="margin:0;font-size:20px;font-weight:700;color:#2A2A2A;">Payment received, {first_name}!</p>'
+        + '<p style="margin:8px 0 0;font-size:14px;color:#5A5A5A;line-height:1.6;">'
+        + f"Your Vula <strong>{plan.title()}</strong> subscription for <strong>{company_name}</strong> is now active."
+        + "</p></td></tr>"
+        + '<tr><td style="padding:0 0 24px">'
+        + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#F7F4EE;border-radius:8px;">'
+        + '<tr><td style="padding:20px 24px;">'
+        + '<p style="margin:0 0 8px;font-size:11px;font-weight:700;color:#8A8680;text-transform:uppercase;letter-spacing:0.5px;">Payment summary</p>'
+        + f'<p style="margin:0 0 6px;font-size:13px;color:#2A2A2A;"><strong>Amount:</strong> R{float(amount):.2f}</p>'
+        + f'<p style="margin:0 0 6px;font-size:13px;color:#2A2A2A;"><strong>Plan:</strong> {plan.title()}</p>'
+        + f'<p style="margin:0;font-size:13px;color:#2A2A2A;"><strong>Reference:</strong> <code style="background:#E8E4DE;padding:2px 6px;border-radius:3px;">{ref}</code></p>'
+        + "</td></tr></table></td></tr>"
+        + '<tr><td><p style="font-size:13px;color:#5A5A5A;line-height:1.6;">Thank you for choosing Vula. Your subscription renews monthly. To manage your subscription, reply to this email.</p></td></tr>'
+        + _FOOTER
+    )
+    text = (
+        f"Hi {first_name},\n\nPayment confirmed for {company_name}.\n\n"
+        f"Amount: R{float(amount):.2f}\nPlan: {plan.title()}\nReference: {ref}\n\n"
+        "Thank you for choosing Vula.\n\nVula Group"
+    )
+    return await _send(to, subject, html, text)
+
+
+async def send_trial_expiry_email(
+    to: str,
+    first_name: str,
+    company_name: str,
+    days_left: int,
+    payment_url: Optional[str] = None,
+) -> bool:
+    urgent = days_left <= 2
+    day_word = "today" if days_left == 0 else f"in {days_left} day{'s' if days_left != 1 else ''}"
+    subject = f"Your Vula trial expires {day_word}, {first_name}"
+    cta = (
+        '<tr><td style="padding:0 0 20px">'
+        + (
+            f'<a href="{payment_url}" style="display:inline-block;background:#D4A017;color:#fff;font-weight:600;font-size:14px;padding:14px 28px;border-radius:8px;text-decoration:none;">Keep Your Vula Access →</a>'
+            if payment_url
+            else '<p style="font-size:13px;color:#5A5A5A;">Reply to this email to set up your subscription.</p>'
+        )
+        + "</td></tr>"
+    )
+    urgency_color = "#C0392B" if urgent else "#D4A017"
+    urgency_label = "TODAY" if days_left == 0 else f"IN {days_left} DAY{'S' if days_left != 1 else ''}"
+    html = (
+        _HEADER
+        + '<tr><td style="padding:0 0 16px">'
+        + f'<p style="margin:0;font-size:20px;font-weight:700;color:#2A2A2A;">Your trial ends {urgency_label.lower()}, {first_name}</p>'
+        + "</td></tr>"
+        + '<tr><td style="padding:0 0 20px">'
+        + f'<div style="background:{urgency_color}15;border-left:3px solid {urgency_color};padding:14px 18px;border-radius:4px;">'
+        + f'<p style="margin:0;font-size:13px;color:{urgency_color};font-weight:600;">Trial expires {urgency_label}</p>'
+        + f'<p style="margin:6px 0 0;font-size:13px;color:#5A5A5A;">Your Vula workspace for <strong>{company_name}</strong> will be suspended. Subscribe now to keep your AI and all your uploaded documents.</p>'
+        + "</div></td></tr>"
+        + cta
+        + _FOOTER
+    )
+    text = (
+        f"Hi {first_name},\n\nYour Vula trial for {company_name} expires {urgency_label.lower()}.\n\n"
+        + (f"Subscribe: {payment_url}\n\n" if payment_url else "")
+        + "Reply to this email if you have questions.\n\nVula Group"
+    )
+    return await _send(to, subject, html, text)
+
+
 async def send_team_alert_email(
     company_name: str,
     contact_name: str,

@@ -92,12 +92,53 @@ async def _weekly_rates_loop() -> None:
         await _asyncio.sleep(7 * 24 * 3600)  # sleep one week
 
 
+async def _daily_trial_expiry_loop() -> None:
+    """Warn tenants whose free trial is expiring soon. Runs daily, starts 2h after boot."""
+    import asyncio as _asyncio
+    from datetime import datetime, timezone
+    await _asyncio.sleep(7200)
+    while True:
+        try:
+            from vula.api.onboarding import _supabase, _payfast_url
+            from vula.api.email import send_trial_expiry_email
+            today = datetime.now(timezone.utc).date()
+            rows = await _supabase.select("vula_tenants", {"paid": "false", "status": "active"}) or []
+            warned = 0
+            for t in rows:
+                trial_end_str = (t.get("trial_ends") or "")[:10]
+                if not trial_end_str:
+                    continue
+                try:
+                    days_left = (datetime.fromisoformat(trial_end_str).date() - today).days
+                    if days_left in (7, 3, 1, 0):
+                        payment_url = _payfast_url(
+                            t["tenant_id"], t.get("plan", "starter"),
+                            t.get("email", ""), t.get("contact_name", ""),
+                        )
+                        await send_trial_expiry_email(
+                            to=t.get("email", ""),
+                            first_name=(t.get("contact_name") or "there").split()[0],
+                            company_name=t.get("company_name", ""),
+                            days_left=days_left,
+                            payment_url=payment_url,
+                        )
+                        warned += 1
+                except Exception:
+                    pass
+            if warned:
+                log.info("Trial expiry warnings sent: %d tenants", warned)
+        except Exception as exc:
+            log.warning("Trial expiry loop failed: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     settings.warn_missing()
     _asyncio.create_task(_seed_training_on_boot())
     _asyncio.create_task(_weekly_rates_loop())
+    _asyncio.create_task(_daily_trial_expiry_loop())
     yield
 
 

@@ -29,7 +29,7 @@ from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, EmailStr, field_validator
 
 from config import settings
-from vula.api.email import send_welcome_email, send_team_alert_email
+from vula.api.email import send_welcome_email, send_team_alert_email, send_payment_receipt_email
 
 logger = logging.getLogger(__name__)
 
@@ -147,31 +147,71 @@ _PAYFAST_VALID_IPS = {
 
 
 @router.post("/payfast/notify")
-async def payfast_notify(request: Request, request_body: dict) -> dict:
+async def payfast_notify(request: Request) -> dict:
     """PayFast ITN (Instant Transaction Notification) webhook.
 
-    Called by PayFast after a successful payment.
-    Marks the tenant as paid and extends their subscription.
+    PayFast sends application/x-www-form-urlencoded POST data.
+    Validates source IP, confirms with PayFast, marks tenant paid, sends receipt.
     """
-    # Validate source IP (PayFast publishes their IP ranges)
     client_ip = request.client.host if request.client else ""
     if not settings.debug and client_ip not in _PAYFAST_VALID_IPS:
         logger.warning("PayFast ITN from unexpected IP: %s", client_ip)
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    tenant_id = request_body.get("m_payment_id", "")
-    payment_status = request_body.get("payment_status", "")
+    form = await request.form()
+    data = dict(form)
 
-    if payment_status == "COMPLETE" and tenant_id:
-        try:
-            await _supabase.update(
-                "vula_tenants",
-                {"tenant_id": tenant_id},
-                {"status": "active", "paid": True},
+    tenant_id = data.get("m_payment_id", "")
+    payment_status = data.get("payment_status", "")
+    amount_gross = data.get("amount_gross", "0")
+    pf_ref = data.get("pf_payment_id", tenant_id)
+
+    if payment_status != "COMPLETE" or not tenant_id:
+        return {"status": "ignored"}
+
+    # Confirm with PayFast validation endpoint
+    try:
+        pf_host = "sandbox.payfast.co.za" if settings.debug else "www.payfast.co.za"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            val = await client.post(
+                f"https://{pf_host}/eng/query/validate",
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
-            logger.info("Payment confirmed for tenant %s", tenant_id)
-        except Exception as exc:
-            logger.error("Failed to update payment status: %s", exc)
+            if val.text.strip() != "VALID":
+                logger.warning("PayFast ITN validation rejected for tenant %s: %s", tenant_id, val.text)
+                return {"status": "invalid"}
+    except Exception as exc:
+        logger.warning("PayFast validation request failed: %s", exc)
+        if not settings.debug:
+            return {"status": "error"}
+
+    try:
+        await _supabase.update(
+            "vula_tenants",
+            {"tenant_id": tenant_id},
+            {"status": "active", "paid": True},
+        )
+        logger.info("Payment confirmed for tenant %s: R%s (ref=%s)", tenant_id, amount_gross, pf_ref)
+    except Exception as exc:
+        logger.error("Supabase payment update failed for %s: %s", tenant_id, exc)
+
+    # Send payment receipt email
+    try:
+        rows = await _supabase.select("vula_tenants", {"tenant_id": tenant_id})
+        if rows:
+            t = rows[0]
+            first_name = (t.get("contact_name") or "there").split()[0]
+            await send_payment_receipt_email(
+                to=t.get("email", ""),
+                first_name=first_name,
+                company_name=t.get("company_name", ""),
+                amount=amount_gross,
+                plan=t.get("plan", "starter"),
+                ref=pf_ref,
+            )
+    except Exception as exc:
+        logger.warning("Payment receipt email failed for %s: %s", tenant_id, exc)
 
     return {"status": "ok"}
 
