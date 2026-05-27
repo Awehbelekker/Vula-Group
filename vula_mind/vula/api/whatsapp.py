@@ -139,18 +139,32 @@ async def _tenant_for_phone(phone: str) -> str | None:
 
 
 async def _rag_reply(tenant_id: str, question: str) -> str:
-    """Run the question through the tenant's RAG pipeline and return a reply."""
+    """Run the question through the tenant's RAG pipeline and return a reply.
+
+    Falls back to the shared Vula construction KB when the tenant's own
+    documents have no relevant answer.
+    """
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
+        from vula.training.content import TRAINING_TENANT_ID
+
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
         sources = await pipeline.query(question, top_k=5)
-        if not sources:
-            return (
-                "I don't have enough information in your documents to answer that yet. "
-                "Try uploading more files at app.vula.ai or ask your Vula rep."
-            )
-        answer = await pipeline.answer(question)
-        return answer
+
+        if sources:
+            return await pipeline.answer(question, context_label="business documents")
+
+        # Nothing in the tenant's own KB — try shared construction training KB
+        training = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
+        training_sources = await training.query(question, top_k=3)
+        if training_sources:
+            logger.info("Falling back to training KB for tenant %s", tenant_id)
+            return await training.answer(question, context_label="construction knowledge base")
+
+        return (
+            "I don't have enough information in your documents to answer that yet. "
+            "Try uploading more files at app.vula.ai or ask your Vula rep."
+        )
     except Exception as exc:
         logger.error("RAG pipeline error for tenant %s: %s", tenant_id, exc)
         return "I'm having trouble accessing your knowledge base right now. Please try again in a few minutes."

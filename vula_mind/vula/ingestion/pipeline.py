@@ -546,6 +546,45 @@ class VulaIngestionPipeline:
                 status="failed", error=str(e),
             )
 
+    async def ingest_text(self, content: str, filename: str, doc_id: str | None = None) -> IngestionResult:
+        """Ingest raw text directly — no file needed. Used to seed the training KB."""
+        started = time.time()
+        if doc_id is None:
+            doc_id = hashlib.md5(f"{self.tenant_id}:{filename}".encode()).hexdigest()[:16]
+        try:
+            raw_chunks = self.chunker.chunk(content)
+            all_chunks = [
+                DocumentChunk(
+                    chunk_id=f"{doc_id}_{i}",
+                    tenant_id=self.tenant_id,
+                    doc_id=doc_id,
+                    filename=filename,
+                    page_num=1,
+                    chunk_index=i,
+                    text=chunk,
+                    metadata={"source": "training_kb"},
+                )
+                for i, chunk in enumerate(raw_chunks)
+            ]
+            texts = [c.text for c in all_chunks]
+            embeddings = await self.embedder.embed_batch(texts)
+            for chunk, emb in zip(all_chunks, embeddings):
+                chunk.embedding = emb
+            await self.store.ensure_collection(self.tenant_id, self.embedder.dimension)
+            stored = await self.store.upsert_chunks(self.tenant_id, all_chunks)
+            return IngestionResult(
+                doc_id=doc_id, filename=filename, tenant_id=self.tenant_id,
+                pages_processed=1, chunks_stored=stored, file_type=".md",
+                processing_time_s=round(time.time() - started, 2), status="success",
+            )
+        except Exception as e:
+            logger.error(f"[{self.tenant_id}] ingest_text failed for {filename}: {e}")
+            return IngestionResult(
+                doc_id=doc_id or "", filename=filename, tenant_id=self.tenant_id,
+                pages_processed=0, chunks_stored=0, file_type=".md",
+                processing_time_s=time.time() - started, status="failed", error=str(e),
+            )
+
     async def ingest_directory(self, dir_path: Path) -> List[IngestionResult]:
         """Ingest all supported files in a directory."""
         supported = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".txt", ".md", ".png", ".jpg", ".jpeg"}
@@ -564,9 +603,10 @@ class VulaIngestionPipeline:
         query_embedding = await self.embedder.embed(question)
         return await self.store.search(self.tenant_id, query_embedding, limit=top_k)
 
-    async def answer(self, question: str) -> str:
+    async def answer(self, question: str, context_label: str = "business documents") -> str:
         """
         Full RAG answer — retrieves context then generates answer via DeepSeek.
+        context_label: describes the source in the prompt (e.g. "construction knowledge base")
         """
         # 1. Retrieve relevant chunks
         chunks = await self.query(question)
@@ -580,11 +620,11 @@ class VulaIngestionPipeline:
 
         # 2. Generate answer via DeepSeek R1
         prompt = (
-            f"You are an AI assistant for a South African business. "
-            f"Answer the question using ONLY the information from the business documents below. "
-            f"If the answer isn't in the documents, say so clearly. "
+            f"You are Vula, an AI assistant specialising in South African construction and business. "
+            f"Answer the question using ONLY the information from the {context_label} below. "
+            f"If the answer isn't in the {context_label}, say so clearly. "
             f"Be concise and practical.\n\n"
-            f"Business documents:\n{context}\n\n"
+            f"{context_label.title()}:\n{context}\n\n"
             f"Question: {question}\n\nAnswer:"
         )
 

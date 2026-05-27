@@ -41,6 +41,7 @@ from vula.skills.web_scraper import VulaWebScraper
 from vula.takeoff.api import router as takeoff_router
 from vula.api.onboarding import router as onboarding_router
 from vula.api.whatsapp import router as whatsapp_router
+from vula.api.training import router as training_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,23 @@ log = logging.getLogger("vula.api")
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
+
+async def _seed_training_on_boot() -> None:
+    """Seed the shared construction KB once at startup if not already populated."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(30)  # Wait for Qdrant to be ready
+    try:
+        from vula.training.seeder import training_kb_status, seed_training_kb
+        status = await training_kb_status()
+        if not status.get("seeded"):
+            log.info("Training KB empty — seeding on boot...")
+            result = await seed_training_kb()
+            log.info("Training KB ready: %d chunks from %d docs", result.total_chunks, result.total_documents)
+        else:
+            log.info("Training KB already seeded: %d chunks", status.get("chunks", 0))
+    except Exception as exc:
+        log.warning("Training KB seed on boot failed: %s", exc)
+
 
 async def _weekly_rates_loop() -> None:
     """Run construction rates scrape weekly. Starts 10 min after boot."""
@@ -77,6 +95,7 @@ async def _weekly_rates_loop() -> None:
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     settings.warn_missing()
+    _asyncio.create_task(_seed_training_on_boot())
     _asyncio.create_task(_weekly_rates_loop())
     yield
 
@@ -116,6 +135,7 @@ async def add_request_id(request: Request, call_next):
 app.include_router(takeoff_router, prefix="/takeoff")
 app.include_router(onboarding_router, prefix="/v1")
 app.include_router(whatsapp_router, prefix="/v1/whatsapp")
+app.include_router(training_router, prefix="/v1")
 
 UPLOAD_DIR = settings.upload_dir
 
