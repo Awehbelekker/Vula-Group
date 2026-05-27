@@ -42,6 +42,7 @@ from vula.takeoff.api import router as takeoff_router
 from vula.api.onboarding import router as onboarding_router
 from vula.api.whatsapp import router as whatsapp_router
 from vula.api.training import router as training_router
+from vula.api.chat import router as chat_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -136,6 +137,7 @@ app.include_router(takeoff_router, prefix="/takeoff")
 app.include_router(onboarding_router, prefix="/v1")
 app.include_router(whatsapp_router, prefix="/v1/whatsapp")
 app.include_router(training_router, prefix="/v1")
+app.include_router(chat_router, prefix="/v1")
 
 UPLOAD_DIR = settings.upload_dir
 
@@ -391,6 +393,15 @@ async def health_check():
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {"status": overall, "service": "vula-api", "version": "1.0.0", "checks": checks}
+
+
+@app.get("/ingest/status/{tenant_id}", dependencies=[Depends(require_auth)])
+async def ingestion_status(tenant_id: str):
+    """Return document ingestion status for a tenant."""
+    validate_tenant(tenant_id)
+    from vula.ingestion.pipeline import get_tracker
+    docs = get_tracker().get_all(tenant_id)
+    return {"tenant_id": tenant_id, "documents": docs, "count": len(docs)}
 
 
 @app.get("/documents/{tenant_id}", dependencies=[Depends(require_auth)])

@@ -32,9 +32,87 @@ from typing import List, Optional
 
 import httpx
 
+import sqlite3
+
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Ingestion status tracker ─────────────────────────────────────────────────
+
+class IngestionTracker:
+    """SQLite log of per-tenant document ingestion status."""
+
+    def __init__(self) -> None:
+        self._db = settings.data_dir / "ingestion_log.db"
+        self._db.parent.mkdir(parents=True, exist_ok=True)
+        self._init()
+
+    def _init(self) -> None:
+        with sqlite3.connect(self._db) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_log (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tenant_id    TEXT NOT NULL,
+                    doc_id       TEXT NOT NULL,
+                    filename     TEXT NOT NULL,
+                    status       TEXT NOT NULL DEFAULT 'queued',
+                    chunks       INTEGER DEFAULT 0,
+                    error        TEXT,
+                    started_at   TEXT,
+                    completed_at TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_tenant ON ingestion_log(tenant_id)")
+            conn.commit()
+
+    def start(self, tenant_id: str, doc_id: str, filename: str) -> None:
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO ingestion_log (tenant_id, doc_id, filename, status, started_at) VALUES (?,?,?,'processing',datetime('now'))",
+                (tenant_id, doc_id, filename),
+            )
+            conn.commit()
+
+    def complete(self, tenant_id: str, doc_id: str, chunks: int) -> None:
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "UPDATE ingestion_log SET status='done', chunks=?, completed_at=datetime('now') WHERE tenant_id=? AND doc_id=?",
+                (chunks, tenant_id, doc_id),
+            )
+            conn.commit()
+
+    def fail(self, tenant_id: str, doc_id: str, error: str) -> None:
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "UPDATE ingestion_log SET status='failed', error=?, completed_at=datetime('now') WHERE tenant_id=? AND doc_id=?",
+                (error[:500], tenant_id, doc_id),
+            )
+            conn.commit()
+
+    def get_all(self, tenant_id: str) -> list:
+        with sqlite3.connect(self._db) as conn:
+            rows = conn.execute(
+                "SELECT doc_id, filename, status, chunks, error, started_at, completed_at FROM ingestion_log WHERE tenant_id=? ORDER BY id DESC",
+                (tenant_id,),
+            ).fetchall()
+        return [
+            {"doc_id": r[0], "filename": r[1], "status": r[2], "chunks": r[3],
+             "error": r[4], "started_at": r[5], "completed_at": r[6]}
+            for r in rows
+        ]
+
+
+_tracker: Optional[IngestionTracker] = None
+
+
+def get_tracker() -> IngestionTracker:
+    global _tracker
+    if _tracker is None:
+        _tracker = IngestionTracker()
+    return _tracker
+
 
 # ─── Config (from settings / .env) ───────────────────────────────────────────
 OLLAMA_BASE = settings.ollama_base
@@ -471,11 +549,14 @@ class VulaIngestionPipeline:
         started = time.time()
         doc_id = self._doc_id(file_path)
         logger.info(f"[{self.tenant_id}] Ingesting: {file_path.name}")
+        tracker = get_tracker()
+        tracker.start(self.tenant_id, doc_id, file_path.name)
 
         try:
             # 1. Parse to text pages
             pages = await self.parser.parse(file_path)
             if not pages:
+                tracker.fail(self.tenant_id, doc_id, "No text extracted from document")
                 return IngestionResult(
                     doc_id=doc_id, filename=file_path.name,
                     tenant_id=self.tenant_id, pages_processed=0,
@@ -524,6 +605,7 @@ class VulaIngestionPipeline:
 
             elapsed = round(time.time() - started, 2)
             logger.info(f"[{self.tenant_id}] Stored {stored} chunks in {elapsed}s")
+            tracker.complete(self.tenant_id, doc_id, stored)
 
             return IngestionResult(
                 doc_id=doc_id,
@@ -538,6 +620,7 @@ class VulaIngestionPipeline:
 
         except Exception as e:
             logger.error(f"[{self.tenant_id}] Ingestion failed for {file_path.name}: {e}")
+            tracker.fail(self.tenant_id, doc_id, str(e))
             return IngestionResult(
                 doc_id=doc_id, filename=file_path.name,
                 tenant_id=self.tenant_id, pages_processed=0,
@@ -603,10 +686,16 @@ class VulaIngestionPipeline:
         query_embedding = await self.embedder.embed(question)
         return await self.store.search(self.tenant_id, query_embedding, limit=top_k)
 
-    async def answer(self, question: str, context_label: str = "business documents") -> str:
+    async def answer(
+        self,
+        question: str,
+        context_label: str = "business documents",
+        conversation_history: str = "",
+    ) -> str:
         """
         Full RAG answer — retrieves context then generates answer via DeepSeek.
-        context_label: describes the source in the prompt (e.g. "construction knowledge base")
+        context_label: describes the source in the prompt
+        conversation_history: formatted prior exchanges to inject for memory
         """
         # 1. Retrieve relevant chunks
         chunks = await self.query(question)
@@ -618,12 +707,18 @@ class VulaIngestionPipeline:
             for c in chunks
         )
 
-        # 2. Generate answer via DeepSeek R1
+        # 2. Build prompt with optional conversation history
+        history_block = (
+            f"\nConversation so far:\n{conversation_history}\n"
+            if conversation_history else ""
+        )
+
+        # 3. Generate answer via DeepSeek R1
         prompt = (
             f"You are Vula, an AI assistant specialising in South African construction and business. "
-            f"Answer the question using ONLY the information from the {context_label} below. "
+            f"Answer the question using the {context_label} below. "
             f"If the answer isn't in the {context_label}, say so clearly. "
-            f"Be concise and practical.\n\n"
+            f"Be concise and practical.{history_block}\n\n"
             f"{context_label.title()}:\n{context}\n\n"
             f"Question: {question}\n\nAnswer:"
         )

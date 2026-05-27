@@ -74,14 +74,18 @@ export default function HomeScreen({ headerRight } = {}) {
       </ScrollView>
 
       {/* Quick actions */}
-      <TouchableOpacity onPress={() => router.push("/documents")} style={styles.docBtn}>
-        <Text style={styles.docBtnIcon}>📂</Text>
-        <View>
-          <Text style={styles.docBtnTitle}>My Documents</Text>
-          <Text style={styles.docBtnSub}>Upload files for your AI to learn from</Text>
-        </View>
-        <Text style={[styles.docBtnSub, { marginLeft: "auto" }]}>→</Text>
-      </TouchableOpacity>
+      <View style={styles.quickRow}>
+        <TouchableOpacity onPress={() => router.push("/documents")} style={[styles.quickBtn, { flex: 1 }]}>
+          <Text style={styles.quickIcon}>📂</Text>
+          <Text style={styles.quickTitle}>Documents</Text>
+          <Text style={styles.quickSub}>Upload & manage</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push("/chat")} style={[styles.quickBtn, { flex: 1 }]}>
+          <Text style={styles.quickIcon}>💬</Text>
+          <Text style={styles.quickTitle}>AI Chat</Text>
+          <Text style={styles.quickSub}>Full conversation</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Input */}
       <View style={styles.inputRow}>
@@ -138,10 +142,11 @@ const styles = StyleSheet.create({
   sendBtn: { backgroundColor: C.green, borderRadius: 10, paddingHorizontal: 20, justifyContent: "center" },
   sendBtnDisabled: { backgroundColor: C.border },
   sendBtnText: { color: "#fff", fontSize: 20, fontWeight: "600" },
-  docBtn: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: C.surface, borderColor: C.border, borderWidth: 1, borderRadius: 10, padding: 14, marginBottom: 20 },
-  docBtnIcon: { fontSize: 22 },
-  docBtnTitle: { fontSize: 13, fontWeight: "700", color: C.text },
-  docBtnSub: { fontSize: 11, color: C.muted, marginTop: 2 },
+  quickRow: { flexDirection: "row", gap: 12, marginBottom: 20 },
+  quickBtn: { backgroundColor: C.surface, borderColor: C.border, borderWidth: 1, borderRadius: 10, padding: 14, alignItems: "center" },
+  quickIcon: { fontSize: 24, marginBottom: 4 },
+  quickTitle: { fontSize: 13, fontWeight: "700", color: C.text },
+  quickSub: { fontSize: 11, color: C.muted, marginTop: 2 },
   answerCard: { backgroundColor: C.surface, borderColor: C.border, borderWidth: 1, borderRadius: 12, padding: 16, marginTop: 8 },
   answerLabel: { fontSize: 10, color: C.green, letterSpacing: 1, marginBottom: 10, textTransform: "uppercase" },
   answerText: { fontSize: 15, color: C.text, lineHeight: 24 },

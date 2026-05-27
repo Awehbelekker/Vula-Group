@@ -88,7 +88,12 @@ async def _handle_message(phone: str, text: str, msg_id: str) -> None:
 
     tenant_id = await _tenant_for_phone(phone)
     if tenant_id:
-        reply = await _rag_reply(tenant_id, text)
+        from vula.chat.history import get_db
+        db = get_db()
+        db.save(tenant_id, phone, "user", text)
+        history = db.format_for_prompt(tenant_id, phone, limit=5)
+        reply = await _rag_reply(tenant_id, text, conversation_history=history)
+        db.save(tenant_id, phone, "assistant", reply)
     else:
         reply = (
             "Hi! I'm Vula, your business AI assistant. "
@@ -138,7 +143,7 @@ async def _tenant_for_phone(phone: str) -> str | None:
     return None
 
 
-async def _rag_reply(tenant_id: str, question: str) -> str:
+async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "") -> str:
     """Run the question through the tenant's RAG pipeline and return a reply.
 
     Falls back to the shared Vula construction KB when the tenant's own
@@ -152,14 +157,22 @@ async def _rag_reply(tenant_id: str, question: str) -> str:
         sources = await pipeline.query(question, top_k=5)
 
         if sources:
-            return await pipeline.answer(question, context_label="business documents")
+            return await pipeline.answer(
+                question,
+                context_label="business documents",
+                conversation_history=conversation_history,
+            )
 
         # Nothing in the tenant's own KB — try shared construction training KB
         training = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
         training_sources = await training.query(question, top_k=3)
         if training_sources:
             logger.info("Falling back to training KB for tenant %s", tenant_id)
-            return await training.answer(question, context_label="construction knowledge base")
+            return await training.answer(
+                question,
+                context_label="construction knowledge base",
+                conversation_history=conversation_history,
+            )
 
         return (
             "I don't have enough information in your documents to answer that yet. "

@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # ── Storage ─────────────────────────────────────────────────────────────
     upload_dir: Path = Path(tempfile.gettempdir()) / "vula_uploads"
     takeoff_upload_dir: Path = Path(tempfile.gettempdir()) / "vula_takeoff"
+    data_dir: Path = Path.home() / ".vula" / "data"
     reflection_db: Path = Path.home() / ".vula" / "reflection.db"
 
     # ── Chunking ────────────────────────────────────────────────────────────
@@ -84,6 +85,7 @@ class Settings(BaseSettings):
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.takeoff_upload_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.reflection_db.parent.mkdir(parents=True, exist_ok=True)
 
     def warn_missing(self) -> list[str]:

@@ -39,6 +39,7 @@ export default function RootLayout() {
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="index" options={{ title: "Vula" }} />
         <Stack.Screen name="documents" options={{ title: "My Documents" }} />
+        <Stack.Screen name="chat" options={{ title: "AI Chat" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
       </Stack>
     </>

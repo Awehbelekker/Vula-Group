@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import settings
@@ -32,6 +33,7 @@ from vula.takeoff.plan_reader import PlanReader
 from vula.takeoff.boq_generator import BOQGenerator
 from vula.takeoff.order_manager import OrderManager, SupplierDatabase
 from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper, RatesDatabase
+from vula.takeoff.boq_export import generate_boq_excel, HAS_OPENPYXL
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +238,25 @@ async def get_orders(job_id: str):
         "orders": job.get("orders"),
         "summary": job.get("order_summary"),
     }
+
+
+@router.get("/{job_id}/boq/excel")
+async def download_boq_excel(job_id: str):
+    """Download the BOQ as a formatted Excel workbook (.xlsx)."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] != "complete":
+        raise HTTPException(202, detail=f"BOQ not ready yet — status: {job['status']}")
+    if not HAS_OPENPYXL:
+        raise HTTPException(501, "openpyxl not installed on this server")
+    boq = job.get("boq", {})
+    buf = generate_boq_excel(boq, boq.get("project_name", job_id))
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="BOQ_{job_id}.xlsx"'},
+    )
 
 
 @router.post("/{job_id}/send")

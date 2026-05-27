@@ -4,7 +4,7 @@ import {
   Alert, StyleSheet,
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
-import { uploadDocument, getSession } from "../api/vula";
+import { uploadDocument, getSession, getIngestionStatus } from "../api/vula";
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", green: "#2C5545",
@@ -37,14 +37,49 @@ function StatusDot({ status }) {
   );
 }
 
+const INGEST_STATUS_COLORS = {
+  queued: "#F59E0B",
+  processing: "#3B82F6",
+  done: "#22C55E",
+  failed: C.red,
+};
+
+function IngestStatusBadge({ status }) {
+  const color = INGEST_STATUS_COLORS[status] || C.muted;
+  return (
+    <View style={[styles.ingestBadge, { backgroundColor: `${color}22`, borderColor: `${color}55` }]}>
+      <Text style={[styles.ingestBadgeText, { color }]}>{status.toUpperCase()}</Text>
+    </View>
+  );
+}
+
 export default function DocumentsScreen() {
   const [tenantId, setTenantId] = useState("default");
   const [queue, setQueue] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [serverDocs, setServerDocs] = useState([]);
+  const [loadingServer, setLoadingServer] = useState(false);
 
   useEffect(() => {
     getSession().then((s) => { if (s?.tenant_id) setTenantId(s.tenant_id); });
   }, []);
+
+  const refreshServerStatus = useCallback(async (tid) => {
+    const id = tid || tenantId;
+    setLoadingServer(true);
+    try {
+      const data = await getIngestionStatus(id);
+      setServerDocs(data.documents || []);
+    } catch {
+      // Silent fail
+    } finally {
+      setLoadingServer(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (tenantId !== "default") refreshServerStatus(tenantId);
+  }, [tenantId]);
 
   const pick = useCallback(async () => {
     try {
@@ -96,7 +131,8 @@ export default function DocumentsScreen() {
     if (failed === 0) {
       Alert.alert("Upload complete", "Your documents are queued for processing. Your AI will have them ready in 2–5 minutes.");
     }
-  }, [queue, uploading]);
+    await refreshServerStatus();
+  }, [queue, uploading, refreshServerStatus]);
 
   const clearDone = () => setQueue((q) => q.filter((x) => x.status !== "done"));
   const pendingCount = queue.filter((q) => q.status === "pending").length;
@@ -160,6 +196,27 @@ export default function DocumentsScreen() {
           <TouchableOpacity onPress={clearDone} style={styles.clearBtn}>
             <Text style={styles.clearBtnText}>Clear completed</Text>
           </TouchableOpacity>
+        )}
+
+        {/* Server ingestion status */}
+        {serverDocs.length > 0 && (
+          <View style={styles.serverSection}>
+            <View style={styles.serverHeader}>
+              <Text style={styles.serverTitle}>Processing Status</Text>
+              <TouchableOpacity onPress={() => refreshServerStatus()} disabled={loadingServer}>
+                <Text style={styles.refreshBtn}>{loadingServer ? "…" : "Refresh"}</Text>
+              </TouchableOpacity>
+            </View>
+            {serverDocs.map((doc, i) => (
+              <View key={i} style={styles.serverRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.serverDocName} numberOfLines={1}>{doc.filename}</Text>
+                  {doc.chunks > 0 && <Text style={styles.serverDocMeta}>{doc.chunks} chunks indexed</Text>}
+                </View>
+                <IngestStatusBadge status={doc.status} />
+              </View>
+            ))}
+          </View>
         )}
 
         {/* Supported formats */}
@@ -226,4 +283,22 @@ const styles = StyleSheet.create({
   clearBtn: { alignItems: "center", paddingVertical: 10 },
   clearBtnText: { fontSize: 13, color: C.muted },
   hint: { fontSize: 12, color: C.muted, textAlign: "center", marginTop: 20 },
+  serverSection: {
+    backgroundColor: C.surface, borderRadius: 10, borderWidth: 1,
+    borderColor: C.border, overflow: "hidden", marginBottom: 16,
+  },
+  serverHeader: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    padding: 12, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  serverTitle: { fontSize: 11, fontWeight: "700", color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 },
+  refreshBtn: { fontSize: 13, color: C.green },
+  serverRow: {
+    flexDirection: "row", alignItems: "center", padding: 12,
+    borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  serverDocName: { fontSize: 13, color: C.text },
+  serverDocMeta: { fontSize: 11, color: C.muted, marginTop: 2 },
+  ingestBadge: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  ingestBadgeText: { fontSize: 10, fontWeight: "700" },
 });

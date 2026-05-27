@@ -105,6 +105,48 @@ export async function getTenantStatus(tenantId) {
   return resp.json();
 }
 
+export async function sendChatMessage(tenantId, message, phone = "") {
+  const host = await getHost();
+  const resp = await fetch(`${host}/v1/chat/${encodeURIComponent(tenantId)}/message`, {
+    method: "POST",
+    headers: await headers(),
+    body: JSON.stringify({ message, phone }),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function getChatHistory(tenantId, phone = "") {
+  const host = await getHost();
+  const resp = await fetch(
+    `${host}/v1/chat/${encodeURIComponent(tenantId)}/history?phone=${encodeURIComponent(phone)}`,
+    { headers: await headers(), signal: AbortSignal.timeout(10000) },
+  );
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function clearChatHistory(tenantId, phone = "") {
+  const host = await getHost();
+  const resp = await fetch(
+    `${host}/v1/chat/${encodeURIComponent(tenantId)}/history?phone=${encodeURIComponent(phone)}`,
+    { method: "DELETE", headers: await headers(), signal: AbortSignal.timeout(10000) },
+  );
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function getIngestionStatus(tenantId) {
+  const host = await getHost();
+  const resp = await fetch(`${host}/ingest/status/${encodeURIComponent(tenantId)}`, {
+    headers: await headers(),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function setHost(host) {
   await AsyncStorage.setItem("vula_host", host);
 }
