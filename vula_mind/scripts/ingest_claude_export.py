@@ -285,9 +285,9 @@ async def ingest_bucket(items: list[ScoredConv], project_docs: list[dict],
         fp.write_text(s.formatted_text, encoding='utf-8')
         try:
             result = await pipeline.ingest_file(fp)
-            status = 'OK' if result.status == 'done' else 'FAIL'
+            status = 'OK' if result.status in ('done', 'success') else 'FAIL'
             _p(f"  [{status}]  {s.title[:58]:<58} {result.chunks_stored} chunks")
-            if result.status == 'done':
+            if result.status in ('done', 'success'):
                 ok += 1
         except Exception as exc:
             _p(f"  [ERR]  {s.title[:58]} -- {exc}")
@@ -299,9 +299,9 @@ async def ingest_bucket(items: list[ScoredConv], project_docs: list[dict],
         fp.write_text(d['content'], encoding='utf-8')
         try:
             result = await pipeline.ingest_file(fp)
-            status = 'OK' if result.status == 'done' else 'FAIL'
+            status = 'OK' if result.status in ('done', 'success') else 'FAIL'
             _p(f"  [{status}]  [DOC] {d['filename'][:55]:<55} {result.chunks_stored} chunks")
-            if result.status == 'done':
+            if result.status in ('done', 'success'):
                 ok += 1
         except Exception as exc:
             _p(f"  [ERR]  [DOC] {d['filename']} -- {exc}")

@@ -79,7 +79,15 @@ async def receive_message(request: Request) -> dict:
                     if phone and text:
                         await _handle_message(phone, text, msg_id)
 
-                elif msg_type in ("image", "document", "video"):
+                elif msg_type == "document":
+                    doc = msg.get("document") or {}
+                    media_id = doc.get("id", "")
+                    filename = doc.get("filename", "")
+                    mime_type = doc.get("mime_type", "")
+                    if phone and media_id:
+                        await _handle_document_ingest(phone, media_id, filename, mime_type)
+
+                elif msg_type in ("image", "video"):
                     media_id = (msg.get(msg_type) or {}).get("id", "")
                     caption = (msg.get(msg_type) or {}).get("caption", "")
                     if phone and media_id:
@@ -131,6 +139,130 @@ async def _handle_message(phone: str, text: str, msg_id: str) -> None:
     reply = await _rag_reply(tenant_id, text, conversation_history=history)
     db.save(tenant_id, thread_key, "assistant", reply)
     await _send_reply(phone, reply)
+
+
+async def _handle_document_ingest(phone: str, media_id: str, filename: str, mime_type: str) -> None:
+    """Ingest a document sent by a tenant into their knowledge base.
+
+    Any registered tenant can WhatsApp a PDF, Word, or Excel file and it
+    will be automatically ingested.  No dashboard needed.
+    """
+    logger.info("WhatsApp document from %s: %s (%s)", phone, filename, mime_type)
+
+    tenant_id = await _tenant_for_phone(phone)
+    if not tenant_id:
+        await _send_reply(
+            phone,
+            "I couldn't find a Vula account linked to this number. "
+            "Contact your Vula representative to get set up."
+        )
+        return
+
+    # Only ingest known document types
+    _INGESTABLE_MIMES = {
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/plain",
+        "text/csv",
+    }
+    if mime_type and mime_type not in _INGESTABLE_MIMES:
+        await _send_reply(
+            phone,
+            f"I can't ingest '{filename or 'that file'}' yet. "
+            f"Send PDFs, Word docs, Excel files, or plain text."
+        )
+        return
+
+    await _send_reply(
+        phone,
+        f"Got it! Ingesting '{filename or 'your document'}' into your knowledge base. "
+        f"This takes 1-3 minutes. I'll confirm when it's ready."
+    )
+
+    try:
+        # Download from Meta
+        local_path = await _download_document(media_id, tenant_id, filename, mime_type)
+        if not local_path:
+            await _send_reply(phone, f"Sorry, I couldn't download '{filename}'. Please try again.")
+            return
+
+        # Ingest via pipeline
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        result = await pipeline.ingest_file(local_path)
+
+        if result.status == "done":
+            await _send_reply(
+                phone,
+                f"✅ '{result.filename}' ingested — {result.chunks_stored} knowledge chunks added. "
+                f"I can now answer questions about this document."
+            )
+        else:
+            await _send_reply(
+                phone,
+                f"There was a problem ingesting '{result.filename}': {result.error or 'unknown error'}. "
+                f"Please try again or contact your Vula rep."
+            )
+    except Exception as exc:
+        logger.error("Document ingest failed for %s: %s", phone, exc)
+        await _send_reply(phone, f"Something went wrong ingesting '{filename}'. Please try again.")
+
+
+async def _download_document(media_id: str, tenant_id: str, filename: str, mime_type: str):
+    """Download a document from Meta Graph API and save to the upload directory."""
+    if not settings.whatsapp_token:
+        logger.warning("WHATSAPP_TOKEN not set — cannot download media")
+        return None
+
+    # Determine file extension from mime type
+    _MIME_EXT = {
+        "application/pdf": ".pdf",
+        "application/msword": ".doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.ms-excel": ".xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "text/plain": ".txt",
+        "text/csv": ".csv",
+    }
+    ext = _MIME_EXT.get(mime_type, "")
+    if filename and not ext:
+        ext = "." + filename.rsplit(".", 1)[-1] if "." in filename else ""
+    safe_name = (filename or f"whatsapp_{media_id}").replace("/", "_").replace("\\", "_")
+    if ext and not safe_name.endswith(ext):
+        safe_name += ext
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Step 1: get download URL
+            info = await client.get(
+                f"{settings.whatsapp_api_url}/{media_id}",
+                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+            )
+            info.raise_for_status()
+            download_url = info.json().get("url", "")
+            if not download_url:
+                return None
+
+            # Step 2: download content
+            dl = await client.get(
+                download_url,
+                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+            )
+            dl.raise_for_status()
+
+        dest_dir = settings.upload_dir / tenant_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / safe_name
+        dest.write_bytes(dl.content)
+        logger.info("Document saved: %s (%d bytes)", dest, len(dl.content))
+        return dest
+
+    except Exception as exc:
+        logger.error("Document download failed for media_id=%s: %s", media_id, exc)
+        return None
 
 
 async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) -> None:
