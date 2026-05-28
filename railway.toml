@@ -1,0 +1,14 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "vula_mind/Dockerfile"
+buildContext = "vula_mind"
+
+[deploy]
+startCommand = "uvicorn vula.api.server:app --host 0.0.0.0 --port $PORT --workers 2"
+healthcheckPath = "/status"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+[[volumes]]
+mountPath = "/data"
