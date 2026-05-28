@@ -43,6 +43,7 @@ from vula.api.onboarding import router as onboarding_router
 from vula.api.whatsapp import router as whatsapp_router
 from vula.api.training import router as training_router
 from vula.api.chat import router as chat_router
+from vula.api.field_ops import router as field_ops_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -179,6 +180,7 @@ app.include_router(onboarding_router, prefix="/v1")
 app.include_router(whatsapp_router, prefix="/v1/whatsapp")
 app.include_router(training_router, prefix="/v1")
 app.include_router(chat_router, prefix="/v1")
+app.include_router(field_ops_router, prefix="/v1/field")
 
 UPLOAD_DIR = settings.upload_dir
 
