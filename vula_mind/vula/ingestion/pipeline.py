@@ -417,13 +417,20 @@ class EmbeddingEngine:
 class QdrantStore:
     """
     Per-tenant Qdrant collections for isolated knowledge bases.
-    
+
     Collection naming: vula_{tenant_id}
     Each client's data is completely isolated.
+    Works with local Qdrant and Qdrant Cloud (set QDRANT_API_KEY for cloud).
     """
 
     def __init__(self, base_url: str = QDRANT_BASE):
         self.base = base_url.rstrip("/")
+        self._api_key = settings.qdrant_api_key
+
+    def _headers(self) -> dict:
+        if self._api_key:
+            return {"api-key": self._api_key}
+        return {}
 
     def _collection_name(self, tenant_id: str) -> str:
         return f"vula_{tenant_id.replace('-', '_')}"
@@ -431,26 +438,20 @@ class QdrantStore:
     async def ensure_collection(self, tenant_id: str, vector_size: int = 1024) -> None:
         """Create collection if it doesn't exist."""
         name = self._collection_name(tenant_id)
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Check existence
+        async with httpx.AsyncClient(timeout=10.0, headers=self._headers()) as client:
             resp = await client.get(f"{self.base}/collections/{name}")
             if resp.status_code == 200:
                 return
-
-            # Create
             resp = await client.put(
                 f"{self.base}/collections/{name}",
                 json={
-                    "vectors": {
-                        "size": vector_size,
-                        "distance": "Cosine",
-                    },
+                    "vectors": {"size": vector_size, "distance": "Cosine"},
                     "optimizers_config": {"default_segment_number": 2},
                 },
             )
             if resp.status_code not in (200, 201):
                 raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
-            logger.info(f"Created Qdrant collection: {name}")
+            logger.info("Created Qdrant collection: %s", name)
 
     async def upsert_chunks(self, tenant_id: str, chunks: List[DocumentChunk]) -> int:
         """Store document chunks with embeddings."""
@@ -477,7 +478,7 @@ class QdrantStore:
             if c.embedding
         ]
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=self._headers()) as client:
             resp = await client.put(
                 f"{self.base}/collections/{name}/points",
                 json={"points": points},
@@ -495,7 +496,7 @@ class QdrantStore:
     ) -> List[dict]:
         """Semantic search across tenant's knowledge base."""
         name = self._collection_name(tenant_id)
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             resp = await client.post(
                 f"{self.base}/collections/{name}/points/search",
                 json={
@@ -506,11 +507,10 @@ class QdrantStore:
                 },
             )
             if resp.status_code == 404:
-                return []  # No collection yet — client has no documents
+                return []
             resp.raise_for_status()
             hits = resp.json().get("result", [])
             results = [hit["payload"] for hit in hits]
-            # Attach score so callers can inspect relevance
             for i, hit in enumerate(hits):
                 results[i]["score"] = hit.get("score", 0.0)
             return results
@@ -518,7 +518,7 @@ class QdrantStore:
     async def delete_document(self, tenant_id: str, doc_id: str) -> None:
         """Remove all chunks for a specific document."""
         name = self._collection_name(tenant_id)
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             await client.post(
                 f"{self.base}/collections/{name}/points/delete",
                 json={"filter": {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}},
