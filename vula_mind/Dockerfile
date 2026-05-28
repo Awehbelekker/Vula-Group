@@ -28,4 +28,4 @@ EXPOSE 7438
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:7438/status || exit 1
 
-CMD ["sh", "-c", "uvicorn vula.api.server:app --host 0.0.0.0 --port ${PORT:-7438} --workers 2"]
+CMD ["python", "start.py"]
