@@ -478,35 +478,51 @@ async def _download_media(media_id: str, contractor_id: str, task_id: str) -> st
 # ─── Tenant lookup ────────────────────────────────────────────────────────────
 
 async def _tenant_for_phone(phone: str) -> Optional[str]:
-    """Look up a tenant by their WhatsApp number via Supabase."""
-    if not settings.supabase_url or not settings.supabase_service_key:
-        return None
+    """Look up a tenant by their WhatsApp number.
 
-    normalised = phone.lstrip("+").replace(" ", "").replace("-", "")
-    variants = {normalised}
-    if normalised.startswith("27") and len(normalised) == 11:
-        variants.add("0" + normalised[2:])
-    elif normalised.startswith("0") and len(normalised) == 10:
-        variants.add("27" + normalised[1:])
+    Tries Supabase first (when configured with a real URL).
+    Falls back to the local SQLite tenant registry — this lets the full
+    stack run locally without any cloud dependency.
+    """
+    from vula.models.tenants import get_tenant_db
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for variant in variants:
-                resp = await client.get(
-                    f"{settings.supabase_url}/rest/v1/vula_tenants"
-                    f"?whatsapp=eq.{variant}&select=tenant_id&limit=1",
-                    headers={
-                        "apikey": settings.supabase_service_key,
-                        "Authorization": f"Bearer {settings.supabase_service_key}",
-                    },
-                )
-                rows = resp.json() if resp.is_success else []
-                if rows:
-                    return rows[0]["tenant_id"]
-    except Exception as exc:
-        logger.error("Tenant lookup failed for %s: %s", phone, exc)
+    _PLACEHOLDER = "your-project.supabase.co"
+    supabase_live = (
+        settings.supabase_url
+        and settings.supabase_service_key
+        and _PLACEHOLDER not in settings.supabase_url
+    )
 
-    return None
+    if supabase_live:
+        normalised = phone.lstrip("+").replace(" ", "").replace("-", "")
+        variants = {normalised}
+        if normalised.startswith("27") and len(normalised) == 11:
+            variants.add("0" + normalised[2:])
+        elif normalised.startswith("0") and len(normalised) == 10:
+            variants.add("27" + normalised[1:])
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for variant in variants:
+                    resp = await client.get(
+                        f"{settings.supabase_url}/rest/v1/vula_tenants"
+                        f"?whatsapp=eq.{variant}&select=tenant_id&limit=1",
+                        headers={
+                            "apikey": settings.supabase_service_key,
+                            "Authorization": f"Bearer {settings.supabase_service_key}",
+                        },
+                    )
+                    rows = resp.json() if resp.is_success else []
+                    if rows:
+                        return rows[0]["tenant_id"]
+        except Exception as exc:
+            logger.error("Supabase tenant lookup failed for %s: %s — falling back to local", phone, exc)
+
+    # Local SQLite fallback (always active)
+    tenant_id = get_tenant_db().lookup_by_phone(phone)
+    if tenant_id:
+        logger.debug("Tenant resolved from local registry: %s → %s", phone, tenant_id)
+    return tenant_id
 
 
 # ─── RAG reply ────────────────────────────────────────────────────────────────

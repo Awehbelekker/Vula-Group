@@ -1,0 +1,97 @@
+# Vula Group — LiteLLM Gateway
+# Unified OpenAI-compatible endpoint for all Vula products.
+# All model calls go through http://localhost:4000
+#
+# Start: litellm --config config.yaml --port 4000
+# Or via docker compose: docker compose up -d litellm
+
+model_list:
+
+  # ── Local models via Ollama ────────────────────────────────────────────────
+
+  - model_name: vula-standard
+    litellm_params:
+      model: ollama/deepseek-r1:8b
+      api_base: http://host.docker.internal:11434
+    model_info:
+      description: "Standard reasoning — 80% of tasks"
+      max_tokens: 8192
+
+  - model_name: vula-advanced
+    litellm_params:
+      model: ollama/deepseek-r1:14b
+      api_base: http://host.docker.internal:11434
+    model_info:
+      description: "Advanced reasoning — complex analysis, BOQ generation"
+      max_tokens: 8192
+
+  - model_name: vula-edge
+    litellm_params:
+      model: ollama/deepseek-r1:1.5b
+      api_base: http://host.docker.internal:11434
+    model_info:
+      description: "Fast edge — routing, classification, intent detection"
+      max_tokens: 4096
+
+  - model_name: vula-embed
+    litellm_params:
+      model: ollama/bge-m3
+      api_base: http://host.docker.internal:11434
+    model_info:
+      description: "Multilingual embeddings (Afrikaans + English)"
+      mode: embedding
+
+  - model_name: vula-ocr
+    litellm_params:
+      model: ollama/llava:7b
+      api_base: http://host.docker.internal:11434
+    model_info:
+      description: "Vision OCR — scanned plans, site photos"
+
+  # ── Cloud fallback (OpenRouter → Kimi K2 / Claude Sonnet) ─────────────────
+  # Only used when local Ollama is unavailable or overloaded.
+
+  - model_name: vula-fallback
+    litellm_params:
+      model: openai/moonshotai/kimi-k2
+      api_base: https://openrouter.ai/api/v1
+      api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      description: "Cloud fallback — used only when local models are unavailable"
+
+  - model_name: vula-fallback-strong
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Strong cloud fallback — Sonnet 4.6 for critical tasks"
+
+# ── Router settings ────────────────────────────────────────────────────────
+
+router_settings:
+  routing_strategy: least-busy
+  num_retries: 2
+  timeout: 60
+  fallbacks:
+    - vula-standard:
+        - vula-fallback
+    - vula-advanced:
+        - vula-fallback-strong
+    - vula-edge:
+        - vula-standard
+
+# ── General settings ───────────────────────────────────────────────────────
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Logs all requests for debugging — turn off in production
+  set_verbose: false
+  # Drop unsupported params rather than error
+  drop_params: true
+
+# ── Proxy budget (cost guardrails) ────────────────────────────────────────
+
+litellm_settings:
+  # Budget per day in USD — alert if cloud fallback usage spikes
+  max_budget: 5.0
+  budget_duration: 1d

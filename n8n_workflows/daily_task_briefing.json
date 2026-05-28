@@ -1,0 +1,64 @@
+{
+  "name": "Vula — Daily Task Briefing (06:30)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "30 6 * * 1-6" }]
+        }
+      },
+      "name": "Every weekday at 06:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:7438/v1/field/daily-tasks/={{ $json.tenant_id }}",
+        "authentication": "headerAuth",
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "={{ $credentials.vula_api_key }}" }]
+        },
+        "options": {}
+      },
+      "name": "Get today's tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "notes": "Fetches all tasks due today grouped by contractor. Set tenant_id in the Set node before this."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:7438/v1/field/daily-tasks/={{ $json.tenant_id }}/dispatch",
+        "authentication": "headerAuth",
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "={{ $credentials.vula_api_key }}" }]
+        },
+        "options": {}
+      },
+      "name": "Dispatch WhatsApp briefings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 0],
+      "notes": "Sends morning WhatsApp messages to every contractor with tasks due today."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log the result\nconst result = $input.first().json;\nconsole.log(`Briefings sent to ${result.contractors_briefed} contractors`);\nreturn $input.all();"
+      },
+      "name": "Log result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 0]
+    }
+  ],
+  "connections": {
+    "Every weekday at 06:30": { "main": [[{ "node": "Get today's tasks", "type": "main", "index": 0 }]] },
+    "Get today's tasks": { "main": [[{ "node": "Dispatch WhatsApp briefings", "type": "main", "index": 0 }]] },
+    "Dispatch WhatsApp briefings": { "main": [[{ "node": "Log result", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["vula", "field-ops", "whatsapp"],
+  "notes": "Run manually first to test. Set TENANT_ID in environment or as a workflow variable. Requires X-API-Key credential named 'vula_api_key' in n8n credentials."
+}

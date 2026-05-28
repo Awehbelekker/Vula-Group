@@ -1,0 +1,71 @@
+{
+  "name": "Vula — Afternoon Follow-up (15:00)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 15 * * 1-6" }]
+        }
+      },
+      "name": "Every weekday at 15:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:7438/v1/field/daily-tasks/={{ $vars.TENANT_ID }}",
+        "authentication": "headerAuth",
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "={{ $credentials.vula_api_key }}" }]
+        },
+        "options": {}
+      },
+      "name": "Get today's tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter to tasks that still have a contractor and are presumably in-progress\nconst data = $input.first().json;\nconst pendingTasks = (data.tasks || []).filter(t => t.contractor_id && t.contractor_phone);\nreturn pendingTasks.map(t => ({ json: t }));"
+      },
+      "name": "Filter incomplete tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:7438/v1/field/task/={{ $json.task_id }}/complete-request",
+        "authentication": "headerAuth",
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "={{ $credentials.vula_api_key }}" }]
+        },
+        "body": {
+          "parameters": [
+            {
+              "name": "custom_message",
+              "value": "Hi {{ $json.contractor_name }}, just a quick check-in — how is *{{ $json.title }}* going? Reply DONE if complete."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Send follow-up per task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 0],
+      "notes": "Sends one follow-up WhatsApp per incomplete task. Runs for each item from the previous node."
+    }
+  ],
+  "connections": {
+    "Every weekday at 15:00": { "main": [[{ "node": "Get today's tasks", "type": "main", "index": 0 }]] },
+    "Get today's tasks": { "main": [[{ "node": "Filter incomplete tasks", "type": "main", "index": 0 }]] },
+    "Filter incomplete tasks": { "main": [[{ "node": "Send follow-up per task", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["vula", "field-ops", "whatsapp"],
+  "notes": "Set TENANT_ID as an n8n workflow variable. Requires 'vula_api_key' credential."
+}

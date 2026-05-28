@@ -6,16 +6,51 @@ Run:
     uvicorn vula.api.server:app --host 0.0.0.0 --port 7438 --reload
 
 Endpoints:
-    POST /ingest            — upload + ingest a document (async)
-    POST /ingest/sync       — upload + ingest (sync, for testing)
-    POST /query             — RAG question against tenant knowledge base
+    POST /ingest                        — upload + ingest a document (async)
+    POST /ingest/sync                   — upload + ingest (sync, for testing)
+    GET  /ingest/status/{tenant_id}     — list ingested docs + processing state
+    POST /query                         — RAG question against tenant KB
+    GET  /status                        — health check (Ollama + Qdrant)
+    GET  /documents/{tenant_id}         — list tenant documents
+
+    POST /v1/whatsapp/webhook           — inbound WhatsApp messages (Meta)
+    GET  /v1/whatsapp/webhook           — Meta webhook verification
+
+    POST /v1/onboard                    — register new tenant
+    POST /v1/payfast/notify             — PayFast ITN payment callback
+
+    POST /v1/chat/{tenant_id}/message   — chat with tenant KB
+    GET  /v1/chat/{tenant_id}/history   — conversation history
+    DELETE /v1/chat/{tenant_id}/history — clear history
+
+    GET  /v1/training/status            — shared construction KB status
+    POST /v1/training/seed              — (re)seed shared KB
+
+    POST /v1/field/contractors                      — register/update contractor
+    GET  /v1/field/contractors/{tenant_id}          — list contractors
+    POST /v1/field/project/assign                   — assign contractor to project
+    GET  /v1/field/project/{project_id}/team        — project team
+    GET  /v1/field/project/{project_id}/status      — project status + task board
+    POST /v1/field/task                             — create task
+    POST /v1/field/task/assign                      — assign task + WhatsApp briefing
+    POST /v1/field/task/{task_id}/complete-request  — chase contractor via WhatsApp
+    GET  /v1/field/task/{task_id}                   — task detail + evidence
+    POST /v1/field/walkthrough/start                — send photo checklist via WhatsApp
+    POST /v1/field/walkthrough/{id}/approve         — architect sign-off
+    GET  /v1/field/daily-tasks/{tenant_id}          — tasks due today (n8n cron)
+    POST /v1/field/daily-tasks/{tenant_id}/dispatch — send morning briefings
+
+    GET  /takeoff/rates                 — construction market rates
+    POST /takeoff/upload                — upload drawing for BOQ takeoff
+    GET  /takeoff/{job_id}/status       — job status
+    GET  /takeoff/{job_id}/boq          — BOQ JSON
+    GET  /takeoff/{job_id}/boq/excel    — BOQ Excel download
+
     POST /scrape/company    — company research
     POST /scrape/prices     — competitor price monitoring
     POST /scrape/digest     — industry news digest
     POST /scrape/tenders    — SA government tender monitoring
     POST /scrape/custom     — custom bulk scraper
-    GET  /status            — health check (Ollama + Qdrant)
-    GET  /documents/{tenant_id} — list tenant documents
 """
 from __future__ import annotations
 

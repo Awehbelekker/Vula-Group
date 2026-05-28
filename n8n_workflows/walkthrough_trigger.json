@@ -1,0 +1,60 @@
+{
+  "name": "Vula — Architect Walkthrough Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vula-walkthrough",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook — trigger walkthrough",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "notes": "POST to http://localhost:5678/webhook/vula-walkthrough with body: { tenant_id, project_id, title, items[], contractor_id }"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:7438/v1/field/walkthrough/start",
+        "authentication": "headerAuth",
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "={{ $credentials.vula_api_key }}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "tenant_id", "value": "={{ $json.tenant_id }}" },
+            { "name": "project_id", "value": "={{ $json.project_id }}" },
+            { "name": "title", "value": "={{ $json.title }}" },
+            { "name": "items", "value": "={{ $json.items }}" },
+            { "name": "contractor_id", "value": "={{ $json.contractor_id }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Start walkthrough",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [480, 0]
+    }
+  ],
+  "connections": {
+    "Webhook — trigger walkthrough": { "main": [[{ "node": "Start walkthrough", "type": "main", "index": 0 }]] },
+    "Start walkthrough": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["vula", "field-ops", "walkthrough"],
+  "notes": "The dashboard 'Start Walkthrough' button POSTs to the n8n webhook URL. n8n calls Vula, which WhatsApps the contractor."
+}
