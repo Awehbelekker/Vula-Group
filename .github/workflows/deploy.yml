@@ -1,0 +1,21 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "vula_mind/**"
+      - "railway.toml"
+      - "Dockerfile"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Railway
+        uses: railway-app/railway-github-action@v1
+        with:
+          railway-token: ${{ secrets.RAILWAY_TOKEN }}
+          service: vula-mind
