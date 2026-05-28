@@ -42,10 +42,11 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # ── Storage ─────────────────────────────────────────────────────────────
-    upload_dir: Path = Path(tempfile.gettempdir()) / "vula_uploads"
-    takeoff_upload_dir: Path = Path(tempfile.gettempdir()) / "vula_takeoff"
-    data_dir: Path = Path.home() / ".vula" / "data"
-    reflection_db: Path = Path.home() / ".vula" / "reflection.db"
+    # Railway sets DATA_DIR=/data (volume mount). Locally falls back to home dir.
+    upload_dir: Path = Path("/data/uploads") if Path("/data").exists() else Path(tempfile.gettempdir()) / "vula_uploads"
+    takeoff_upload_dir: Path = Path("/data/takeoff") if Path("/data").exists() else Path(tempfile.gettempdir()) / "vula_takeoff"
+    data_dir: Path = Path("/data") if Path("/data").exists() else Path.home() / ".vula" / "data"
+    reflection_db: Path = Path("/data/reflection.db") if Path("/data").exists() else Path.home() / ".vula" / "reflection.db"
 
     # ── Chunking ────────────────────────────────────────────────────────────
     chunk_size: int = 512
@@ -69,6 +70,11 @@ class Settings(BaseSettings):
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     vula_base_url: str = "https://app.vula.ai"
+
+    # ── Cloud LLM fallback (used on Railway where local Ollama is unavailable) ──
+    # Set OPENROUTER_API_KEY to enable cloud inference via OpenRouter.
+    # When set, the server uses OpenRouter for generation and embeddings.
+    openrouter_api_key: str = ""
 
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""

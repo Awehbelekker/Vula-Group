@@ -373,25 +373,29 @@ async def ingest_document_sync(
 @limiter.limit("30/minute")
 async def query_knowledge_base(request: Request, body: QueryRequest):
     """Ask a question against the tenant's ingested documents."""
-    pipeline = VulaIngestionPipeline(tenant_id=body.tenant_id)
-    sources = await pipeline.query(body.question, top_k=body.top_k)
+    try:
+        pipeline = VulaIngestionPipeline(tenant_id=body.tenant_id)
+        sources = await pipeline.query(body.question, top_k=body.top_k)
 
-    if not sources:
+        if not sources:
+            return QueryResponse(
+                answer="I don't have enough information in your documents yet. Try uploading more.",
+                sources=[],
+                tenant_id=body.tenant_id,
+            )
+
+        answer = await pipeline.answer(body.question)
         return QueryResponse(
-            answer="I don't have enough information in your documents yet. Try uploading more.",
-            sources=[],
+            answer=answer,
+            sources=[
+                {"filename": s.get("filename"), "page": s.get("page_num"), "excerpt": s.get("text", "")[:200]}
+                for s in sources
+            ],
             tenant_id=body.tenant_id,
         )
-
-    answer = await pipeline.answer(body.question)
-    return QueryResponse(
-        answer=answer,
-        sources=[
-            {"filename": s.get("filename"), "page": s.get("page_num"), "excerpt": s.get("text", "")[:200]}
-            for s in sources
-        ],
-        tenant_id=body.tenant_id,
-    )
+    except Exception as exc:
+        logger.exception("Query failed for tenant %s: %s", body.tenant_id, exc)
+        raise HTTPException(status_code=500, detail=f"Query failed: {type(exc).__name__}: {exc}")
 
 
 # ─── Web Scraper Endpoints ────────────────────────────────────────────────────

@@ -491,7 +491,7 @@ class QdrantStore:
         tenant_id: str,
         query_embedding: List[float],
         limit: int = 5,
-        score_threshold: float = 0.6,
+        score_threshold: float = 0.3,
     ) -> List[dict]:
         """Semantic search across tenant's knowledge base."""
         name = self._collection_name(tenant_id)
@@ -508,7 +508,12 @@ class QdrantStore:
             if resp.status_code == 404:
                 return []  # No collection yet — client has no documents
             resp.raise_for_status()
-            return [hit["payload"] for hit in resp.json().get("result", [])]
+            hits = resp.json().get("result", [])
+            results = [hit["payload"] for hit in hits]
+            # Attach score so callers can inspect relevance
+            for i, hit in enumerate(hits):
+                results[i]["score"] = hit.get("score", 0.0)
+            return results
 
     async def delete_document(self, tenant_id: str, doc_id: str) -> None:
         """Remove all chunks for a specific document."""

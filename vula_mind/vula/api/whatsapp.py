@@ -99,19 +99,41 @@ async def receive_message(request: Request) -> dict:
 # ─── Message routing ─────────────────────────────────────────────────────────
 
 async def _handle_message(phone: str, text: str, msg_id: str) -> None:
-    """Route an inbound text message — field-ops intent or RAG fallback."""
+    """Route an inbound text message.
+
+    Routing priority:
+      1. Field-ops intents (DONE / APPROVE / REJECT) — any registered phone
+         including contractors in the field_ops DB.
+      2. KB / RAG — only staff/admin phones registered in tenant_phones.
+         Contractors who are not staff get a polite redirect.
+    """
     logger.info("WhatsApp inbound from %s: %s", phone, text[:80])
 
-    tenant_id = await _tenant_for_phone(phone)
-    if not tenant_id:
+    # Resolve tenant + role from the tenant_phones table
+    from vula.models.tenants import get_tenant_db
+    lookup = get_tenant_db().lookup_by_phone_with_role(phone)
+    tenant_id = lookup["tenant_id"] if lookup else None
+    role = lookup["role"] if lookup else None  # admin | staff | viewer | None
+
+    # Also check field_ops contractors table (they won't be in tenant_phones)
+    from vula.models.field_ops import get_field_ops_db
+    field_db = get_field_ops_db()
+    contractor = field_db.get_contractor_by_phone(phone) if not tenant_id else None
+
+    # If phone is completely unknown, reply once and stop
+    if not tenant_id and not contractor:
         await _send_reply(phone, (
             "Hi! I'm Vula, your construction AI. "
             "I couldn't find an account linked to this number. "
-            "Contact your Vula representative to get set up."
+            "Contact your site manager to get set up."
         ))
         return
 
-    # Check for field-ops intents first
+    # Resolve tenant_id from contractor if needed
+    if not tenant_id and contractor:
+        tenant_id = contractor.tenant_id
+
+    # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
         await _handle_task_complete(phone, tenant_id)
         return
@@ -128,7 +150,24 @@ async def _handle_message(phone: str, text: str, msg_id: str) -> None:
         await _handle_sign_off_reply(phone, tenant_id, "rejected", notes)
         return
 
-    # Regular RAG conversation — per-project thread if contractor is known
+    # ── KB / RAG — staff and admin only ─────────────────────────────────────
+    # Contractors who didn't trigger a field-ops intent get a gentle redirect
+    # rather than full KB access.
+    if role is None:
+        # Phone came from contractors table only — no KB access
+        await _send_reply(
+            phone,
+            "Hi! I can only help you with your tasks. "
+            "Reply DONE when you've finished a task, or send a photo as evidence. "
+            "For anything else, contact your site manager."
+        )
+        return
+
+    if role == "viewer":
+        await _send_reply(phone, "You have read-only access. Contact your admin to upgrade.")
+        return
+
+    # admin and staff get full RAG
     project_id = _active_project_for_phone(phone)
     thread_key = f"{phone}:{project_id}" if project_id else phone
 
@@ -149,12 +188,24 @@ async def _handle_document_ingest(phone: str, media_id: str, filename: str, mime
     """
     logger.info("WhatsApp document from %s: %s (%s)", phone, filename, mime_type)
 
-    tenant_id = await _tenant_for_phone(phone)
-    if not tenant_id:
+    from vula.models.tenants import get_tenant_db
+    lookup = get_tenant_db().lookup_by_phone_with_role(phone)
+    if not lookup:
         await _send_reply(
             phone,
             "I couldn't find a Vula account linked to this number. "
             "Contact your Vula representative to get set up."
+        )
+        return
+
+    tenant_id = lookup["tenant_id"]
+    role = lookup["role"]
+
+    if role != "admin":
+        await _send_reply(
+            phone,
+            "Only admins can upload documents. "
+            "Ask your Vula admin to upload this for you."
         )
         return
 

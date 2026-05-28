@@ -339,7 +339,7 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
         "industry": req.industry,
         "staff_count": req.staff_count,
         "contact_name": req.contact_name,
-        "email": req.email,
+        "email": str(req.email),
         "whatsapp": whatsapp_normalised,
         "plan": req.plan,
         "pain_points": json.dumps(req.pain_points),
@@ -351,13 +351,26 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
         "created_at": datetime.utcnow().isoformat(),
     }
 
-    try:
-        await _supabase.insert("vula_tenants", record)
-        logger.info("Tenant provisioned: %s (%s)", tenant_id, req.company_name)
-    except Exception as exc:
-        logger.error("Supabase insert failed: %s", exc)
-        if settings.supabase_url:
-            raise HTTPException(status_code=500, detail="Tenant provisioning failed")
+    # 1. Always write to local SQLite tenant registry (works with no cloud deps)
+    from vula.models.tenants import get_tenant_db
+    local_db = get_tenant_db()
+    local_db.upsert(
+        tenant_id=tenant_id,
+        company_name=req.company_name,
+        whatsapp=whatsapp_normalised,
+        email=str(req.email),
+        plan=req.plan,
+    )
+    logger.info("Tenant provisioned locally: %s (%s)", tenant_id, req.company_name)
+
+    # 2. Sync to Supabase when configured (optional — degrades gracefully)
+    _PLACEHOLDER = "your-project.supabase.co"
+    if settings.supabase_url and _PLACEHOLDER not in settings.supabase_url:
+        try:
+            await _supabase.insert("vula_tenants", record)
+            logger.info("Tenant synced to Supabase: %s", tenant_id)
+        except Exception as exc:
+            logger.warning("Supabase sync failed (non-fatal): %s", exc)
 
     return record, temp_password
 
