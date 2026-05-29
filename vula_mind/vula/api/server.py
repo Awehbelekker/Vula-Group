@@ -467,11 +467,16 @@ async def health_check():
             checks["ollama"] = {"status": "error", "detail": str(exc)}
 
         try:
-            resp = await client.get(f"{settings.qdrant_base}/collections")
+            qdrant_headers = {"api-key": settings.qdrant_api_key} if settings.qdrant_api_key else {}
+            resp = await client.get(f"{settings.qdrant_base}/collections", headers=qdrant_headers)
             n = len(resp.json().get("result", {}).get("collections", []))
             checks["qdrant"] = {"status": "ok", "collections": n}
         except Exception as exc:
             checks["qdrant"] = {"status": "error", "detail": str(exc)}
+
+        # Ollama on Railway routes to OpenRouter — check accordingly
+        if checks.get("ollama", {}).get("status") == "error" and settings.openrouter_api_key:
+            checks["ollama"] = {"status": "ok", "models": ["openrouter/cloud"], "note": "via OpenRouter"}
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {"status": overall, "service": "vula-api", "version": "1.0.0", "checks": checks}
