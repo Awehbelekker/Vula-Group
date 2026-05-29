@@ -385,14 +385,34 @@ class EmbeddingEngine:
         self._dim: Optional[int] = None
 
     async def embed(self, text: str) -> List[float]:
-        """Generate embedding vector for a text chunk."""
-        payload = {"model": self.model, "prompt": text}
+        """Generate embedding — uses OpenRouter when OPENROUTER_API_KEY is set, Ollama otherwise."""
+        if settings.openrouter_api_key:
+            return await self._embed_openai(text)
+        return await self._embed_ollama(text)
+
+    async def _embed_ollama(self, text: str) -> List[float]:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{self.ollama_base}/api/embeddings", json=payload
+                f"{self.ollama_base}/api/embeddings",
+                json={"model": self.model, "prompt": text},
             )
             resp.raise_for_status()
             embedding = resp.json().get("embedding", [])
+            if not self._dim and embedding:
+                self._dim = len(embedding)
+            return embedding
+
+    async def _embed_openai(self, text: str) -> List[float]:
+        """OpenAI-compatible embeddings via OpenRouter."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/embeddings",
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                json={"model": self.model, "input": text},
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", [{}])
+            embedding = data[0].get("embedding", []) if data else []
             if not self._dim and embedding:
                 self._dim = len(embedding)
             return embedding
@@ -718,31 +738,59 @@ class VulaIngestionPipeline:
             if conversation_history else ""
         )
 
-        # 3. Generate answer via DeepSeek R1
-        prompt = (
+        # 3. Build system + user messages
+        system_msg = (
             f"You are Vula, an AI assistant specialising in South African construction and business. "
-            f"Answer the question using the {context_label} below. "
+            f"Answer questions using the {context_label} provided. "
             f"If the answer isn't in the {context_label}, say so clearly. "
-            f"Be concise and practical.{history_block}\n\n"
+            f"Be concise and practical."
+        )
+        user_msg = (
             f"{context_label.title()}:\n{context}\n\n"
+            f"{history_block}"
             f"Question: {question}\n\nAnswer:"
         )
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{OLLAMA_BASE}/api/generate",
-                json={
-                    "model": settings.model_worker,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"temperature": 0.3, "num_predict": 1024},
-                },
+        # 4. Generate — use litellm which handles Ollama, OpenRouter, and OpenAI uniformly
+        import re
+        try:
+            import litellm
+            litellm.drop_params = True
+
+            # Route to correct provider
+            if settings.openrouter_api_key:
+                model = f"openrouter/{settings.model_worker}"
+                api_key = settings.openrouter_api_key
+                api_base = "https://openrouter.ai/api/v1"
+            else:
+                model = f"ollama/{settings.model_worker}"
+                api_key = None
+                api_base = OLLAMA_BASE
+
+            resp = await litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.3,
+                max_tokens=1024,
+                api_key=api_key,
+                api_base=api_base,
             )
-            resp.raise_for_status()
-            raw = resp.json().get("response", "")
-            # Strip DeepSeek think tags
-            import re
-            return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            raw = resp.choices[0].message.content or ""
+        except Exception:
+            # Fallback to direct Ollama HTTP if litellm fails
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    f"{OLLAMA_BASE}/api/generate",
+                    json={"model": settings.model_worker, "prompt": f"{system_msg}\n\n{user_msg}",
+                          "stream": False, "options": {"temperature": 0.3, "num_predict": 1024}},
+                )
+                r.raise_for_status()
+                raw = r.json().get("response", "")
+
+        return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
     def _doc_id(self, file_path: Path) -> str:
         content = f"{self.tenant_id}:{file_path.name}:{file_path.stat().st_mtime}"
