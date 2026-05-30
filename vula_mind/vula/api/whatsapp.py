@@ -40,9 +40,9 @@ _APPROVE_RE = re.compile(r"^\s*approve[d]?\s*(.*)$", re.IGNORECASE)
 _REJECT_RE = re.compile(r"^\s*reject\s*(.*)$", re.IGNORECASE)
 
 # Commerce tenant WhatsApp number IDs — maps Meta phone_number_id → tenant_id
-# Add each commerce tenant's Meta phone number ID here after Meta Business setup
+# Off the Hook: +27 73 781 5979 — Phone Number ID confirmed 2026-05-30
 _COMMERCE_PHONE_IDS: dict[str, str] = {
-    # "123456789012345": "off-the-hook",   # fill in after Meta BM setup
+    "251439416636328": "off-the-hook",
 }
 
 # Commerce order keywords — triggers seafood ordering flow
@@ -739,9 +739,11 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     if not settings.whatsapp_token:
         return
 
-    # Check which tenant and use appropriate phone_number_id
-    # For now, use the primary whatsapp config — production will have per-tenant phone IDs
-    phone_number_id = settings.whatsapp_phone_number_id
+    # Per-tenant phone number IDs — Off the Hook uses its own dedicated number
+    _TENANT_PHONE_IDS: dict[str, str] = {
+        "off-the-hook": "251439416636328",
+    }
+    phone_number_id = _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_number_id
     if not phone_number_id:
         await _send_reply(phone, (
             "Welcome to Off the Hook! 🐟\n\n"
