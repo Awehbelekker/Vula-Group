@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     yoco_public_key: str = ""
     yoco_webhook_secret: str = ""
 
+    # ── Vula Facebook App (for WhatsApp Embedded Signup) ────────────────────
+    # Create at developers.facebook.com — one app for all Vula Commerce clients
+    vula_fb_app_id: str = ""       # Facebook App ID
+    vula_fb_app_secret: str = ""   # Facebook App Secret
+    vula_fb_config_id: str = ""    # Embedded Signup configuration ID
+
     # ── Vula Commerce ────────────────────────────────────────────────────────
     # Supabase service role key alias (commerce service uses this name)
     supabase_service_role_key: str = ""

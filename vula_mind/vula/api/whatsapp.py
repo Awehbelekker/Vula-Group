@@ -651,11 +651,62 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
 
 # ─── Outbound send (reused by field_ops API too) ──────────────────────────────
 
-async def _send_reply(to: str, message: str) -> bool:
-    """Send a WhatsApp text message via the Meta Graph API."""
-    if not settings.whatsapp_token or not settings.whatsapp_phone_id:
-        logger.info("WhatsApp not configured — skipping reply to %s", to)
-        return False
+_wa_creds_cache: dict[str, dict] = {}
+
+
+async def _get_tenant_wa_creds(tenant_id: str) -> dict | None:
+    """
+    Fetch WhatsApp credentials for a tenant from Supabase.
+    Falls back to env vars for backwards compatibility.
+    Results cached in-process (invalidated on next startup).
+    """
+    if tenant_id in _wa_creds_cache:
+        return _wa_creds_cache[tenant_id]
+
+    try:
+        from supabase import create_client
+        client = create_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key or settings.supabase_service_key,
+        )
+        result = (
+            client.table("vula_whatsapp_accounts")
+            .select("phone_number_id,access_token,status")
+            .eq("tenant_id", tenant_id)
+            .eq("status", "connected")
+            .maybe_single()
+            .execute()
+        )
+        if result.data and result.data.get("access_token"):
+            creds = {
+                "token": result.data["access_token"],
+                "phone_id": result.data["phone_number_id"],
+            }
+            _wa_creds_cache[tenant_id] = creds
+            return creds
+    except Exception as exc:
+        logger.debug("Supabase WA creds lookup failed for %s: %s", tenant_id, exc)
+
+    # Fallback: env vars (used during initial setup before Embedded Signup is configured)
+    if settings.whatsapp_token and settings.whatsapp_phone_id:
+        return {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+
+    return None
+
+
+async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
+    """
+    Send a WhatsApp text message via the Meta Graph API.
+    Credentials resolved per-tenant from Supabase, falling back to env vars.
+    """
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds:
+        # Try global env var fallback
+        if settings.whatsapp_token and settings.whatsapp_phone_id:
+            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+        else:
+            logger.info("WhatsApp not configured — skipping reply to %s", to)
+            return False
 
     number = to.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
@@ -664,9 +715,9 @@ async def _send_reply(to: str, message: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"{settings.whatsapp_api_url}/{settings.whatsapp_phone_id}/messages",
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
                 headers={
-                    "Authorization": f"Bearer {settings.whatsapp_token}",
+                    "Authorization": f"Bearer {creds['token']}",
                     "Content-Type": "application/json",
                 },
                 json={
