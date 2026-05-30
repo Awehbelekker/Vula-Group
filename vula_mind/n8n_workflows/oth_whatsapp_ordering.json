@@ -1,0 +1,257 @@
+{
+  "name": "OTH — WhatsApp Inbound Ordering Flow",
+  "description": "Handles all inbound WhatsApp messages to Off the Hook (+27737815979). Routes greetings to the product menu, handles product selection, builds draft orders, sends Yoco payment link.",
+  "nodes": [
+    {
+      "id": "webhook-receive",
+      "name": "WhatsApp Inbound",
+      "type": "n8n-nodes-base.webhook",
+      "position": [200, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-inbound",
+        "responseMode": "lastNode"
+      }
+    },
+    {
+      "id": "detect-intent",
+      "name": "Detect Intent",
+      "type": "n8n-nodes-base.switch",
+      "position": [420, 300],
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.text ? $json.text.toLowerCase() : $json.reply_title ? $json.reply_title.toLowerCase() : '' }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "cat_fresh_fish",
+              "operation": "contains",
+              "output": 1
+            },
+            {
+              "value2": "cat_fresh_chicken",
+              "operation": "contains",
+              "output": 2
+            },
+            {
+              "value2": "cat_frozen",
+              "operation": "contains",
+              "output": 3
+            },
+            {
+              "value2": "prod_",
+              "operation": "startsWith",
+              "output": 4
+            },
+            {
+              "value2": "checkout",
+              "operation": "contains",
+              "output": 5
+            },
+            {
+              "value2": "done",
+              "operation": "contains",
+              "output": 5
+            }
+          ],
+          "fallbackOutput": 0
+        }
+      }
+    },
+    {
+      "id": "send-welcome-menu",
+      "name": "Send Welcome + Menu",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [640, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.WHATSAPP_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=",
+              "value": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $json.phone, type: 'interactive', interactive: { type: 'list', header: { type: 'text', text: '🐟 Off the Hook' }, body: { text: 'Hi ' + ($json.customerName || 'there') + '! Welcome to Off the Hook.\\n\\nQuality food delivered to your door. What would you like today?' }, footer: { text: '073 781 5979 | info@offthehook.capetown' }, action: { button: 'View menu', sections: [ { title: 'This week', rows: [ { id: 'cat_fresh_fish', title: '🐟 Fresh Fish', description: 'Weekly catch — per kg' }, { id: 'cat_fresh_chicken', title: '🐓 Fresh Chicken', description: 'Pasture-raised, GMO-free' }, { id: 'cat_frozen_chicken', title: '❄️ Frozen Chicken', description: 'Convenient quality' }, { id: 'cat_frozen_seafood', title: '🦐 Frozen Seafood', description: 'Fixed pack prices' }, { id: 'cat_extras', title: '🍲 Extras', description: 'Bone broth, collagen' } ] } ] } } }) }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetch-fresh-fish",
+      "name": "Fetch Fresh Fish Products",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [640, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "https://vula-group-production.up.railway.app/v1/commerce/off-the-hook/products?category=fresh_fish",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.VULA_API_KEY }}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send-fish-list",
+      "name": "Send Fish List",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [860, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.WHATSAPP_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=",
+              "value": "={{ (function() { const products = $json.products || []; const rows = products.slice(0,10).map(p => ({ id: 'prod_' + p.id, title: p.name.slice(0,24), description: 'R' + (p.price_cents/100).toFixed(0) + '/kg' })); return JSON.stringify({ messaging_product: 'whatsapp', to: $node['webhook-receive'].json.phone, type: 'interactive', interactive: { type: 'list', header: { type: 'text', text: '🐟 Fresh Fish This Week' }, body: { text: 'All sold per kg. Tell us how many kg you want after selecting.' }, action: { button: 'Choose fish', sections: [{ title: 'Available now', rows }] } } }) })() }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "save-draft-order",
+      "name": "Save Draft Order to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [640, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/whatsapp_draft_orders",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "Bearer {{ $env.SUPABASE_SERVICE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=",
+              "value": "={{ JSON.stringify({ tenant_id: 'off-the-hook', customer_phone: $node['webhook-receive'].json.phone, items: [{ product_id: $json.reply_title, name: $json.reply_title }], status: 'building' }) }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ask-quantity",
+      "name": "Ask for Quantity / Weight",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [860, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.WHATSAPP_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=",
+              "value": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $node['webhook-receive'].json.phone, type: 'text', text: { body: 'Great choice! 🐟\\n\\nHow many kg would you like?\\n\\n(e.g. reply \"1kg\" or \"500g\")\\n\\nWant to add something else? Reply \"MORE\" to see the menu again, or \"DONE\" to checkout.' } }) }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "build-checkout",
+      "name": "Build Checkout via Vula API",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [640, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "https://vula-group-production.up.railway.app/v1/commerce/off-the-hook/checkout",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.VULA_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=",
+              "value": "={{ JSON.stringify({ session_id: $node['webhook-receive'].json.phone, customer_name: $node['webhook-receive'].json.customerName || 'WhatsApp Customer', customer_phone: $node['webhook-receive'].json.phone, delivery_address: 'To be confirmed', delivery_slot: 'morning', channel: 'whatsapp' }) }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send-payment-link",
+      "name": "Send Yoco Payment Link",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [860, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.WHATSAPP_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=",
+              "value": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $node['webhook-receive'].json.phone, type: 'text', text: { body: '✅ Order summary:\\n\\nOrder #' + $json.display_id + '\\nTotal: ' + $json.total_rands + '\\n\\n💳 Pay securely here:\\n' + $json.redirect_url + '\\n\\nOnce paid, we will confirm and arrange delivery. 🐟' } }) }}"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp Inbound": { "main": [[{ "node": "Detect Intent", "type": "main", "index": 0 }]] },
+    "Detect Intent": {
+      "main": [
+        [{ "node": "Send Welcome + Menu", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Fresh Fish Products", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Fresh Fish Products", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Fresh Fish Products", "type": "main", "index": 0 }],
+        [{ "node": "Save Draft Order to Supabase", "type": "main", "index": 0 }],
+        [{ "node": "Build Checkout via Vula API", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Fresh Fish Products": { "main": [[{ "node": "Send Fish List", "type": "main", "index": 0 }]] },
+    "Save Draft Order to Supabase": { "main": [[{ "node": "Ask for Quantity / Weight", "type": "main", "index": 0 }]] },
+    "Build Checkout via Vula API": { "main": [[{ "node": "Send Yoco Payment Link", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
