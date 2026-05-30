@@ -1,0 +1,202 @@
+{
+  "tenant": "off-the-hook",
+  "whatsapp_number": "+27737815979",
+  "workflows": [
+    {
+      "id": "oth-01",
+      "name": "Order Confirmation + Ops Alert",
+      "trigger": "POST /webhook/yoco-payment-success",
+      "description": "Fires after Yoco confirms payment. Sends WhatsApp confirmation to customer and ops team alert.",
+      "steps": [
+        "Receive Yoco webhook payload",
+        "Fetch order from Supabase (order_id from metadata)",
+        "Send WhatsApp template 'order_confirmation' to customer",
+        "Send ops alert to +27737815979 with order summary",
+        "Update order status to 'confirmed' in Supabase",
+        "Create packing slip entry in Supabase"
+      ],
+      "whatsapp_template": "order_confirmation",
+      "n8n_nodes": ["Webhook", "Supabase", "HTTP Request (WhatsApp Cloud API)", "HTTP Request (WhatsApp Cloud API)", "Supabase Update"]
+    },
+    {
+      "id": "oth-02",
+      "name": "WhatsApp Inbound Order Flow",
+      "trigger": "POST /webhook/whatsapp-inbound",
+      "description": "Receives inbound WhatsApp messages from customers. Detects order intent, shows product menu, builds draft order, sends Yoco payment link.",
+      "steps": [
+        "Receive inbound message from Vula WhatsApp webhook",
+        "Detect intent: greeting / order / track / help",
+        "If greeting: send welcome + product category list (interactive list)",
+        "If category selected: send products in that category (interactive list)",
+        "If product selected: add to draft order in Supabase (whatsapp_draft_orders)",
+        "Ask 'Want to add anything else? Or reply DONE to checkout'",
+        "If DONE: ask for delivery address",
+        "Create cart + order in Vula API",
+        "Send Yoco checkout link via WhatsApp",
+        "Confirm order placed once Yoco webhook fires"
+      ],
+      "whatsapp_template": null,
+      "n8n_nodes": ["Webhook", "Switch (intent)", "Supabase", "HTTP Request (WhatsApp Cloud API x4)", "HTTP Request (Vula API checkout)"]
+    },
+    {
+      "id": "oth-03",
+      "name": "Abandoned Cart Recovery",
+      "trigger": "Schedule: every 1 hour",
+      "description": "Finds carts older than 1hr with status 'active' and no order. Sends WhatsApp recovery message with 10% discount.",
+      "steps": [
+        "Query Supabase: commerce_carts WHERE status='active' AND updated_at < now()-1hr",
+        "For each cart: check no commerce_order exists for that cart_id",
+        "Generate 10% discount code (insert into discounts table)",
+        "Send WhatsApp text: 'Hey [name], you left [items] in your cart. Here's 10% off: [code]'",
+        "Mark cart as 'recovery_sent' in metadata",
+        "If no response after 24hr: mark cart 'abandoned'"
+      ],
+      "whatsapp_template": "reorder_reminder",
+      "n8n_nodes": ["Schedule Trigger", "Supabase Query", "IF (no order)", "Code (generate discount)", "Supabase Insert", "HTTP Request (WhatsApp)"]
+    },
+    {
+      "id": "oth-04",
+      "name": "Order Dispatch Notification",
+      "trigger": "POST /webhook/order-dispatched (manual trigger from ops)",
+      "description": "Ops team triggers this when driver picks up. Sends dispatch WhatsApp to customer with ETA.",
+      "steps": [
+        "Receive order_id + eta from ops trigger",
+        "Fetch customer phone from Supabase",
+        "Send WhatsApp template 'order_dispatched' with ETA",
+        "Update order status to 'dispatched'",
+        "Schedule delivery confirmation check in 3hrs"
+      ],
+      "whatsapp_template": "order_dispatched",
+      "n8n_nodes": ["Webhook", "Supabase", "HTTP Request (WhatsApp)", "Supabase Update", "Schedule (3hr follow-up)"]
+    },
+    {
+      "id": "oth-05",
+      "name": "Weekly Specials Broadcast",
+      "trigger": "Schedule: Monday 07:00 SAST",
+      "description": "Sends weekly catch specials to opted-in customers. Drives repeat orders.",
+      "steps": [
+        "Fetch this week's is_daily_catch=TRUE products from Supabase",
+        "Build specials text (product name + price + catch source)",
+        "Fetch opted-in customer phones from Supabase (whatsapp_conversations WHERE status='active')",
+        "Send WhatsApp template 'weekly_specials' to each customer (batch, max 1000/day free tier)",
+        "Log broadcast stats to Supabase"
+      ],
+      "whatsapp_template": "weekly_specials",
+      "n8n_nodes": ["Schedule Trigger", "Supabase Query (products)", "Supabase Query (customers)", "Loop", "HTTP Request (WhatsApp)"]
+    },
+    {
+      "id": "oth-06",
+      "name": "Reorder Reminder (7 days)",
+      "trigger": "Schedule: daily 09:00 SAST",
+      "description": "Finds customers whose last order was exactly 7 days ago. Sends personalised reorder prompt.",
+      "steps": [
+        "Query Supabase: commerce_orders WHERE created_at BETWEEN now()-8d AND now()-7d AND status='delivered'",
+        "For each order: get customer_phone + most recent product name",
+        "Send WhatsApp template 'reorder_reminder'",
+        "Log to whatsapp_conversations"
+      ],
+      "whatsapp_template": "reorder_reminder",
+      "n8n_nodes": ["Schedule Trigger", "Supabase Query", "Loop", "HTTP Request (WhatsApp)"]
+    },
+    {
+      "id": "oth-07",
+      "name": "Fisherman Supplier Intake",
+      "trigger": "Inbound WhatsApp: supplier keyword detection",
+      "description": "When a new supplier messages, captures their details and sends an intake form link.",
+      "steps": [
+        "Detect supplier intent (keywords: 'supply', 'sell', 'catch', 'supplier', 'verskaf')",
+        "Reply: 'Thanks for reaching out! We'd love to hear more. Please complete our supplier form: [link]'",
+        "Insert lead into Supabase (supplier_leads table)",
+        "Alert ops team on WhatsApp"
+      ],
+      "whatsapp_template": null,
+      "n8n_nodes": ["Webhook (WhatsApp inbound)", "IF (supplier keyword)", "HTTP Request (WhatsApp reply)", "Supabase Insert", "HTTP Request (ops alert)"]
+    },
+    {
+      "id": "oth-08",
+      "name": "Review Solicitation",
+      "trigger": "Schedule: daily 14:00 SAST (check deliveries from prior day)",
+      "description": "Sends HelloPeter + Google review links 24hrs after delivery confirmation.",
+      "steps": [
+        "Query Supabase: commerce_orders WHERE status='delivered' AND updated_at BETWEEN now()-25h AND now()-23h",
+        "For each order: send WhatsApp text with HelloPeter + Google review links",
+        "Mark review_requested=TRUE on order",
+        "Log send to Supabase"
+      ],
+      "whatsapp_template": null,
+      "n8n_nodes": ["Schedule Trigger", "Supabase Query", "Loop", "HTTP Request (WhatsApp)", "Supabase Update"]
+    },
+    {
+      "id": "oth-09",
+      "name": "Stock Alert",
+      "trigger": "Schedule: every 4 hours",
+      "description": "Checks product stock levels. Alerts ops when any product drops below threshold.",
+      "steps": [
+        "Query Supabase: commerce_products WHERE tenant_id='off-the-hook' AND stock_quantity < 5 AND in_stock=TRUE",
+        "For each low-stock product: send WhatsApp alert to ops (+27737815979)",
+        "If stock_quantity = 0: auto-set in_stock=FALSE"
+      ],
+      "whatsapp_template": null,
+      "n8n_nodes": ["Schedule Trigger", "Supabase Query", "IF (low stock)", "HTTP Request (WhatsApp ops)", "Supabase Update"]
+    },
+    {
+      "id": "oth-10",
+      "name": "Cold Chain Alert",
+      "trigger": "POST /webhook/cold-chain-alert",
+      "description": "Temperature sensor webhook. Fires if cold chain is breached. Alerts ops and logs incident.",
+      "steps": [
+        "Receive temperature payload from sensor",
+        "IF temperature > 8°C: send urgent WhatsApp to ops",
+        "Log incident to Supabase (cold_chain_incidents table)",
+        "If sustained breach (>30min): notify delivery team to cancel affected orders"
+      ],
+      "whatsapp_template": null,
+      "n8n_nodes": ["Webhook", "IF (temp > 8°C)", "HTTP Request (WhatsApp urgent)", "Supabase Insert"]
+    }
+  ],
+  "meta_message_templates": [
+    {
+      "name": "order_confirmation",
+      "category": "UTILITY",
+      "language": "en_ZA",
+      "body": "Hi {{1}}! Your Off the Hook order #{{2}} is confirmed. Total: {{3}}. Items: {{4}}. We'll message you when it's on its way. 🐟",
+      "status": "submit_for_approval"
+    },
+    {
+      "name": "order_dispatched",
+      "category": "UTILITY",
+      "language": "en_ZA",
+      "body": "Hi {{1}}! Order #{{2}} is on its way. Estimated arrival: {{3}}. 🚚",
+      "button": { "type": "URL", "text": "Track order", "url": "https://offthehook.co.za/track/{{4}}" },
+      "status": "submit_for_approval"
+    },
+    {
+      "name": "weekly_specials",
+      "category": "MARKETING",
+      "language": "en_ZA",
+      "body": "🐟 This week's catch from Off the Hook:\n\n{{1}}\n\nOrder now: {{2}}",
+      "status": "submit_for_approval"
+    },
+    {
+      "name": "reorder_reminder",
+      "category": "MARKETING",
+      "language": "en_ZA",
+      "body": "Hey {{1}}! It's been a week since your {{2}} order. Ready for another? {{3}}",
+      "status": "submit_for_approval"
+    },
+    {
+      "name": "optin_rescue",
+      "category": "MARKETING",
+      "language": "en_ZA",
+      "body": "Hi {{1}}! {{2}} Reply YES to get weekly catch specials and special offers from Off the Hook. {{3}}",
+      "status": "submit_for_approval"
+    },
+    {
+      "name": "payment_received",
+      "category": "UTILITY",
+      "language": "en_ZA",
+      "body": "Payment received! ✅ Thanks {{1}}, your order #{{2}} for {{3}} is confirmed and being prepared.",
+      "status": "submit_for_approval"
+    }
+  ]
+}

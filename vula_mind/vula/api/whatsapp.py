@@ -39,6 +39,18 @@ _DONE_RE = re.compile(r"^\s*(done|yes|complete|completed|finish|finished|klaar)\
 _APPROVE_RE = re.compile(r"^\s*approve[d]?\s*(.*)$", re.IGNORECASE)
 _REJECT_RE = re.compile(r"^\s*reject\s*(.*)$", re.IGNORECASE)
 
+# Commerce tenant WhatsApp number IDs — maps Meta phone_number_id → tenant_id
+# Add each commerce tenant's Meta phone number ID here after Meta Business setup
+_COMMERCE_PHONE_IDS: dict[str, str] = {
+    # "123456789012345": "off-the-hook",   # fill in after Meta BM setup
+}
+
+# Commerce order keywords — triggers seafood ordering flow
+_ORDER_RE = re.compile(
+    r"(order|buy|get|want|fish|snoek|yellowtail|kabeljou|kob|crayfish|prawn|mussel|calamari|box|catch|fresh|seafood|voel|vis)",
+    re.IGNORECASE,
+)
+
 
 # ─── Meta verification handshake ─────────────────────────────────────────────
 
@@ -74,10 +86,34 @@ async def receive_message(request: Request) -> dict:
                 msg_id = msg.get("id", "")
                 msg_type = msg.get("type", "")
 
+                # Detect commerce tenants by the Meta phone_number_id
+                phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
+                commerce_tenant = _COMMERCE_PHONE_IDS.get(phone_number_id)
+
                 if msg_type == "text":
                     text = msg.get("text", {}).get("body", "").strip()
                     if phone and text:
-                        await _handle_message(phone, text, msg_id)
+                        if commerce_tenant:
+                            # Route to commerce ordering flow
+                            await _handle_commerce_message(phone, text, msg_id, commerce_tenant)
+                        else:
+                            await _handle_message(phone, text, msg_id)
+
+                elif msg_type == "interactive" and commerce_tenant:
+                    # Handle list/button replies from WhatsApp catalog menu
+                    interactive = msg.get("interactive", {})
+                    reply_id = (
+                        interactive.get("list_reply", {}).get("id")
+                        or interactive.get("button_reply", {}).get("id")
+                        or ""
+                    )
+                    reply_title = (
+                        interactive.get("list_reply", {}).get("title")
+                        or interactive.get("button_reply", {}).get("title")
+                        or ""
+                    )
+                    if phone and reply_id:
+                        await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
 
                 elif msg_type == "document":
                     doc = msg.get("document") or {}
@@ -646,3 +682,134 @@ async def _send_reply(to: str, message: str) -> bool:
     except Exception as exc:
         logger.error("WhatsApp reply failed to %s: %s", to, exc)
         return False
+
+
+# ─── Commerce ordering flow ───────────────────────────────────────────────────
+
+async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id: str) -> None:
+    """Route inbound messages for commerce tenants (e.g. Off the Hook customers).
+
+    Simple intents handled here. Complex multi-turn ordering is delegated to n8n.
+    """
+    text_lower = text.lower().strip()
+
+    # Greeting — send welcome + menu
+    greeting_words = {"hi", "hello", "hallo", "hey", "howzit", "good morning", "goeie dag"}
+    if any(text_lower.startswith(w) for w in greeting_words):
+        await _send_commerce_welcome(phone, tenant_id)
+        return
+
+    # DONE / checkout intent
+    if _DONE_RE.match(text) or "checkout" in text_lower or "pay" in text_lower:
+        await _send_reply(
+            phone,
+            "Great! To checkout, visit: https://offthehook.co.za/cart\n\n"
+            "Or reply with your delivery address and we'll send you a payment link directly. 🐟"
+        )
+        return
+
+    # Order / product intent — forward to n8n for AI handling
+    if _ORDER_RE.search(text):
+        await _forward_to_n8n_commerce(phone, text, msg_id, tenant_id)
+        return
+
+    # Track order
+    if "track" in text_lower or "where" in text_lower or "order" in text_lower:
+        await _send_reply(
+            phone,
+            "To track your order, reply with your order number (e.g. OTH-00042) "
+            "and we'll send you an update. 🚚"
+        )
+        return
+
+    # Help / default
+    await _send_commerce_welcome(phone, tenant_id)
+
+
+async def _handle_commerce_interactive(
+    phone: str, reply_id: str, reply_title: str, msg_id: str, tenant_id: str
+) -> None:
+    """Handle interactive list/button replies from the WhatsApp product catalog."""
+    # Forward to n8n — it maintains the conversation state and draft order
+    await _forward_to_n8n_commerce(phone, reply_id, msg_id, tenant_id, reply_title=reply_title)
+
+
+async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
+    """Send the Off the Hook welcome message with interactive category list."""
+    if not settings.whatsapp_token:
+        return
+
+    # Check which tenant and use appropriate phone_number_id
+    # For now, use the primary whatsapp config — production will have per-tenant phone IDs
+    phone_number_id = settings.whatsapp_phone_number_id
+    if not phone_number_id:
+        await _send_reply(phone, (
+            "Welcome to Off the Hook! 🐟\n\n"
+            "Cape Town's freshest daily catch, door to door.\n\n"
+            "What are you looking for?\n"
+            "1. Linefish (yellowtail, snoek, kob)\n"
+            "2. Shellfish & prawns\n"
+            "3. Crayfish\n"
+            "4. Box deals\n"
+            "5. Smoked fish\n\n"
+            "Reply with a number or product name, or visit offthehook.co.za"
+        ))
+        return
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        await client.post(
+            f"https://graph.facebook.com/v19.0/{phone_number_id}/messages",
+            headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "interactive",
+                "interactive": {
+                    "type": "list",
+                    "header": {"type": "text", "text": "Off the Hook 🐟"},
+                    "body": {"text": "Cape Town's freshest catch, door to door.\n\nWhat are you after today?"},
+                    "footer": {"text": "Free delivery on orders over R500"},
+                    "action": {
+                        "button": "View menu",
+                        "sections": [
+                            {
+                                "title": "Today's catch",
+                                "rows": [
+                                    {"id": "cat_linefish", "title": "Linefish", "description": "Yellowtail, snoek, kob, red roman"},
+                                    {"id": "cat_shellfish", "title": "Shellfish & prawns", "description": "Tiger prawns, mussels, calamari"},
+                                    {"id": "cat_crayfish", "title": "Crayfish", "description": "West Coast rock lobster"},
+                                    {"id": "cat_box_deal", "title": "Box deals", "description": "Braai box, weekly catch box"},
+                                    {"id": "cat_smoked", "title": "Smoked fish", "description": "Hot-smoked yellowtail, snoek pâté"},
+                                ],
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+
+async def _forward_to_n8n_commerce(
+    phone: str, text: str, msg_id: str, tenant_id: str, reply_title: str = ""
+) -> None:
+    """Forward message to n8n for AI-powered order processing."""
+    n8n_base = getattr(settings, "n8n_webhook_base", None)
+    if not n8n_base:
+        await _send_reply(phone, "On it! Our team will be in touch shortly. 🐟")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{n8n_base}/whatsapp-inbound",
+                json={
+                    "phone": phone,
+                    "text": text,
+                    "reply_title": reply_title,
+                    "msg_id": msg_id,
+                    "tenant_id": tenant_id,
+                },
+            )
+    except Exception as exc:
+        logger.warning("n8n commerce forward failed (non-fatal): %s", exc)
+        await _send_reply(phone, "Got it! We'll be in touch in a few minutes. 🐟")

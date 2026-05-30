@@ -80,6 +80,28 @@ class Settings(BaseSettings):
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""
 
+    # ── Yoco (commerce payments) ─────────────────────────────────────────────
+    yoco_secret_key: str = ""
+    yoco_public_key: str = ""
+    yoco_webhook_secret: str = ""
+
+    # ── Vula Commerce ────────────────────────────────────────────────────────
+    # Supabase service role key alias (commerce service uses this name)
+    supabase_service_role_key: str = ""
+    n8n_webhook_base: str = ""           # e.g. https://n8n.vula.co.za/webhook
+    # Per-tenant store URLs for Yoco redirect URLs (JSON string)
+    # e.g. '{"off-the-hook": "https://offthehook.co.za"}'
+    store_urls_json: str = '{"off-the-hook": "https://offthehook.co.za", "awake-sa": "https://awakesa.co.za"}'
+    whatsapp_phone_number_id: str = ""   # Meta phone_number_id for primary WhatsApp
+
+    @property
+    def store_urls(self) -> dict[str, str]:
+        import json
+        try:
+            return json.loads(self.store_urls_json)
+        except Exception:
+            return {}
+
     # ── Email (Resend) ────────────────────────────────────────────────────────
     resend_api_key: str = ""
     from_email: str = "Vula Group <hello@vula.ai>"
