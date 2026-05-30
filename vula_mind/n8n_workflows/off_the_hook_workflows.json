@@ -1,6 +1,16 @@
 {
   "tenant": "off-the-hook",
   "whatsapp_number": "+27737815979",
+  "email": "info@offthehook.capetown",
+  "business": "Quality food delivered to your door — fresh fish, pasture-raised chicken, frozen seafood",
+  "product_categories": {
+    "fresh_fish": "Weekly rotation — sold per kg. Ask what's available this week.",
+    "fresh_chicken": "Pasture-raised, GMO-free, no hormones, no brine — sold per kg",
+    "frozen_chicken": "Same quality, frozen for convenience — sold per kg",
+    "frozen_seafood": "Fixed pack prices — calamari, prawns, mussels, salmon, etc.",
+    "extras": "Bone broth, collagen packs"
+  },
+  "pricing_note": "All fresh items sold by weight. Frozen seafood sold per pack at fixed prices.",
   "workflows": [
     {
       "id": "oth-01",

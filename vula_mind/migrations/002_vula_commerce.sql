@@ -13,16 +13,26 @@ CREATE TABLE IF NOT EXISTS commerce_products (
     slug            TEXT NOT NULL,
     description     TEXT,
     category        TEXT NOT NULL
-                        CHECK (category IN ('linefish','shellfish','crayfish','box_deal','smoked','frozen')),
+                        CHECK (category IN (
+                            'fresh_fish',       -- fresh fish, sold per kg
+                            'fresh_chicken',    -- fresh pasture-raised chicken, sold per kg
+                            'frozen_chicken',   -- frozen pasture-raised chicken, sold per kg
+                            'frozen_seafood',   -- frozen seafood, fixed pack price
+                            'extras'            -- broths, collagen packs, other add-ons
+                        )),
+    sold_by         TEXT NOT NULL DEFAULT 'pack'
+                        CHECK (sold_by IN ('kg', 'pack')),
     price_cents     INTEGER NOT NULL CHECK (price_cents > 0),
-    weight_grams    INTEGER,
+                    -- For sold_by='kg': price per kg in cents
+                    -- For sold_by='pack': fixed pack price in cents
+    pack_size       TEXT,           -- e.g. "1kg", "800g", "6 per pack"
+    weight_grams    INTEGER,        -- typical/representative pack weight
     serves          TEXT,
     in_stock        BOOLEAN NOT NULL DEFAULT TRUE,
     stock_quantity  INTEGER,
     image_url       TEXT,
-    catch_source    TEXT,          -- "Hout Bay" / "Kalk Bay"
-    fisherman_name  TEXT,
-    is_daily_catch  BOOLEAN NOT NULL DEFAULT FALSE,
+    is_weekly_special BOOLEAN NOT NULL DEFAULT FALSE,  -- rotates weekly for fresh fish
+    notes           TEXT,           -- e.g. "skin-on only", "subject to availability"
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, slug)
