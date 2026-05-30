@@ -9,6 +9,7 @@ import VulaDocuments from "./components/VulaDocuments";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
+import VulaCommerce from "./components/VulaCommerce";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -30,6 +31,7 @@ const TABS = [
   { id: "training", label: "Training KB", component: VulaTraining },
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },
+  { id: "commerce", label: "Commerce", component: VulaCommerce },
 ];
 
 export default function App() {
