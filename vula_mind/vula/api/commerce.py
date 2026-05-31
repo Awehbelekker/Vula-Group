@@ -96,10 +96,16 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     # Create order in Supabase
     order = await service.create_order(tenant_id, cart, body.model_dump())
 
-    # Create Yoco checkout
-    yoco_secret = settings.yoco_secret_key
-    if not yoco_secret:
-        raise HTTPException(status_code=503, detail="Payment gateway not configured")
+    # Resolve Yoco credentials — per-tenant from Supabase, env var fallback
+    from vula.api.yoco import _get_tenant_yoco_creds
+    yoco_creds = await _get_tenant_yoco_creds(tenant_id)
+    if not yoco_creds or not yoco_creds.get("secret_key"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Payment gateway not configured for {tenant_id}. "
+                   f"Connect Yoco in Vula Admin.",
+        )
+    yoco_secret = yoco_creds["secret_key"]
 
     store_url = settings.store_urls.get(tenant_id, "https://offthehook.co.za")
 

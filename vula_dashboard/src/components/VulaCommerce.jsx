@@ -10,6 +10,7 @@
 
 import { useState, useEffect } from 'react'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
+import VulaYocoConnect from './VulaYocoConnect'
 
 const VULA_API = import.meta.env.VITE_API_URL ?? '/api'
 
@@ -122,6 +123,12 @@ export default function VulaCommerce() {
               </p>
 
               <VulaWhatsAppConnect
+                tenantId={selectedTenant.id}
+                tenantName={selectedTenant.name}
+                adminEmail="ian@vula.co.za"
+              />
+
+              <VulaYocoConnect
                 tenantId={selectedTenant.id}
                 tenantName={selectedTenant.name}
                 adminEmail="ian@vula.co.za"

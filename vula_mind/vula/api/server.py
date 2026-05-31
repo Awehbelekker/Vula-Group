@@ -82,6 +82,7 @@ from vula.api.field_ops import router as field_ops_router
 from vula.api.commerce import router as commerce_router
 from vula.api.yoco import router as yoco_router
 from vula.api.whatsapp_connect import router as whatsapp_connect_router
+from vula.api.yoco_connect import router as yoco_connect_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -221,6 +222,7 @@ app.include_router(chat_router, prefix="/v1")
 app.include_router(field_ops_router, prefix="/v1/field")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(yoco_router, prefix="/v1/yoco")
+app.include_router(yoco_connect_router, prefix="/v1/yoco")
 app.include_router(whatsapp_connect_router, prefix="/v1/whatsapp")
 
 UPLOAD_DIR = settings.upload_dir
