@@ -15,7 +15,15 @@ from supabase import create_client, Client
 
 
 def _client() -> Client:
-    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+    # Accept either env var name — Railway has SUPABASE_SERVICE_KEY,
+    # newer code uses SUPABASE_SERVICE_ROLE_KEY. Use whichever is set.
+    key = settings.supabase_service_role_key or settings.supabase_service_key
+    if not key:
+        raise RuntimeError(
+            "Supabase service key not set. "
+            "Set SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY in Railway."
+        )
+    return create_client(settings.supabase_url, key)
 
 
 def _now() -> str:
