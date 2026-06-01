@@ -10,6 +10,8 @@ import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
 import VulaCommerce from "./components/VulaCommerce";
+import VulaDraft from "./components/VulaDraft";
+import VulaAgent from "./components/VulaAgent";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -22,6 +24,8 @@ const COLORS = {
 
 const TABS = [
   { id: "dashboard", label: "Dashboard", component: VulaDashboard },
+  { id: "agent", label: "Agent", component: VulaAgent },
+  { id: "draft", label: "Draft", component: VulaDraft },
   { id: "qs", label: "Quick Cost", component: VulaQS },
   { id: "qspro", label: "QS Pro", component: VulaQSPro },
   { id: "takeoff", label: "Takeoff", component: VulaTakeoff },
