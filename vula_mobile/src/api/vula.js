@@ -5,14 +5,20 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const DEFAULT_HOST = "http://192.168.1.100:7438"; // update to your desktop IP
+// Production cloud backend (Railway). Override in Settings to point at a
+// local desktop on the same WiFi mesh (e.g. http://192.168.1.100:7438).
+const DEFAULT_HOST = "https://vula-group-production.up.railway.app";
+
+// Default API key — baked in so the app works out of the box. Users can
+// override per-tenant in Settings.
+const DEFAULT_API_KEY = "0d409e634bd4e81a0d7dd0764264db6cac20721e2ce43915a43cd1997a019ca5";
 
 async function getHost() {
   return (await AsyncStorage.getItem("vula_host")) || DEFAULT_HOST;
 }
 
 async function getApiKey() {
-  return (await AsyncStorage.getItem("vula_api_key")) || "";
+  return (await AsyncStorage.getItem("vula_api_key")) || DEFAULT_API_KEY;
 }
 
 async function headers(extra = {}) {
@@ -144,6 +150,58 @@ export async function getIngestionStatus(tenantId) {
     signal: AbortSignal.timeout(10000),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// ── Vula Agent (multi-skill reasoning) ───────────────────────────────────────
+
+export async function runAgent(tenantId, question, conversationHistory = "") {
+  const host = await getHost();
+  const resp = await fetch(`${host}/v1/agent/run`, {
+    method: "POST",
+    headers: await headers(),
+    body: JSON.stringify({
+      tenant_id: tenantId,
+      question,
+      conversation_history: conversationHistory,
+    }),
+    signal: AbortSignal.timeout(90000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// ── Vula Draft (document generation) ─────────────────────────────────────────
+
+export async function listDraftTypes() {
+  const host = await getHost();
+  const resp = await fetch(`${host}/v1/draft/types`, {
+    headers: await headers(),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function generateDraft(tenantId, documentType, brief, opts = {}) {
+  const host = await getHost();
+  const resp = await fetch(`${host}/v1/draft/generate`, {
+    method: "POST",
+    headers: await headers(),
+    body: JSON.stringify({
+      tenant_id: tenantId,
+      document_type: documentType,
+      brief,
+      project_name: opts.projectName,
+      client_name: opts.clientName,
+      project_value: opts.projectValue,
+    }),
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || `HTTP ${resp.status}`);
+  }
   return resp.json();
 }
 
