@@ -1,4 +1,6 @@
 import { useState } from "react";
+import VulaLogin from "./components/VulaLogin";
+import { useAuthStore } from "./store/auth";
 import VulaDashboard from "./components/VulaDashboard";
 import VulaQS from "./components/VulaQS";
 import VulaQSPro from "./components/VulaQSPro";
@@ -40,7 +42,13 @@ const TABS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
+  const { user, role, logout } = useAuthStore();
   const ActiveComponent = TABS.find((t) => t.id === activeTab)?.component ?? VulaDashboard;
+
+  // Show login if not authenticated
+  if (!user) {
+    return <VulaLogin onSuccess={() => {}} />;
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.bg }}>
@@ -78,6 +86,24 @@ export default function App() {
             {t.label}
           </button>
         ))}
+
+        {/* User + logout */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12, paddingRight: 8 }}>
+          <span style={{ fontSize: 12, color: COLORS.muted, fontFamily: "system-ui" }}>
+            {user.email} {role === "master" ? "· master" : ""}
+          </span>
+          <button
+            onClick={() => { logout(); }}
+            style={{
+              padding: "6px 14px", border: `1px solid ${COLORS.border}`,
+              borderRadius: 6, background: "transparent",
+              color: COLORS.muted, fontSize: 12, cursor: "pointer",
+              fontFamily: "system-ui",
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </nav>
 
       {/* Active view */}

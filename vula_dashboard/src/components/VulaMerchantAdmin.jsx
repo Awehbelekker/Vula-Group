@@ -11,6 +11,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import VulaImageUpload from './VulaImageUpload'
 
 const VULA_API = import.meta.env.VITE_API_URL ?? '/api'
 
@@ -241,6 +242,7 @@ function ProductsTab({ tenantId }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(null)
   const [editPrice, setEditPrice] = useState({}) // id → string
+  const [expandedId, setExpandedId] = useState(null) // id of expanded product card
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -332,7 +334,54 @@ function ProductsTab({ tenantId }) {
                   >
                     {p.is_weekly_special ? 'Remove special' : 'Mark special'}
                   </button>
+
+                  {/* Expand for image upload */}
+                  <button
+                    onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
+                    style={styles.btnGhost}
+                  >
+                    {expandedId === p.id ? '▲ Less' : '📷 Photos'}
+                  </button>
                 </div>
+
+                {/* Expanded: image upload + description */}
+                {expandedId === p.id && (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #EDE9DF' }}>
+                    <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' }}>
+                      Product photos
+                    </p>
+                    <VulaImageUpload
+                      tenantId={tenantId}
+                      existingUrls={p.image_url ? [p.image_url] : []}
+                      maxFiles={3}
+                      onUploaded={(urls) => {
+                        if (urls.length > 0) patch(p.id, { image_url: urls[0] })
+                      }}
+                    />
+                    <div style={{ marginTop: 12 }}>
+                      <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 6px' }}>
+                        Description / notes
+                      </p>
+                      <textarea
+                        defaultValue={p.description || p.notes || ''}
+                        rows={3}
+                        onBlur={e => {
+                          const val = e.target.value.trim()
+                          if (val !== (p.description || p.notes || '')) {
+                            patch(p.id, { description: val })
+                          }
+                        }}
+                        style={{
+                          width: '100%', padding: '8px 10px',
+                          border: '1px solid #DDD8CE', borderRadius: 6,
+                          fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E',
+                          resize: 'vertical', boxSizing: 'border-box',
+                        }}
+                        placeholder="e.g. Skin-on, boneless, great for braaing"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
