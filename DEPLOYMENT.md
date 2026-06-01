@@ -277,44 +277,23 @@ Fill in `vula_mind/.env` with each of these:
 
 ## 9. Supabase database migrations
 
-Run this SQL in your Supabase project's SQL Editor (Dashboard → SQL Editor → New query):
+The canonical migrations live in `vula_mind/migrations/`. Run them in order in your Supabase project's SQL Editor (Dashboard → SQL Editor → New query → paste the file contents):
+
+| Order | File | Purpose |
+|---|---|---|
+| 1 | `vula_mind/migrations/001_vula_tenants.sql` | Core tenants + documents tables, RLS, admin view |
+| 2 | `vula_mind/migrations/002_vula_commerce.sql` | Vula Commerce products/carts/orders (run if you're onboarding a commerce tenant; safe to skip otherwise) |
+
+To verify after running:
 
 ```sql
-CREATE TABLE IF NOT EXISTS vula_tenants (
-    id            SERIAL PRIMARY KEY,
-    tenant_id     UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-    company_name  TEXT NOT NULL,
-    industry      TEXT,
-    staff_count   INTEGER,
-    contact_name  TEXT NOT NULL,
-    email         TEXT NOT NULL UNIQUE,
-    whatsapp      TEXT,
-    plan          TEXT NOT NULL CHECK (plan IN ('starter', 'growth', 'business')),
-    pain_points   JSONB DEFAULT '[]',
-    status        TEXT NOT NULL DEFAULT 'provisioning',
-    paid          BOOLEAN DEFAULT FALSE,
-    workspace_url TEXT,
-    workspace_slug TEXT,
-    temp_password_hash TEXT,
-    trial_ends    TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ DEFAULT now(),
-    updated_at    TIMESTAMPTZ DEFAULT now()
-);
-
--- Index for email lookups (duplicate check on signup)
-CREATE INDEX IF NOT EXISTS idx_vula_tenants_email ON vula_tenants(email);
-
--- Index for tenant_id lookups (status checks)
-CREATE INDEX IF NOT EXISTS idx_vula_tenants_tenant_id ON vula_tenants(tenant_id);
-
--- Index for WhatsApp inbound routing (AI reply per-tenant lookup)
-CREATE INDEX IF NOT EXISTS idx_vula_tenants_whatsapp ON vula_tenants(whatsapp);
-
--- Row Level Security — service role bypasses, anon cannot read
-ALTER TABLE vula_tenants ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Service role full access" ON vula_tenants
-    FOR ALL TO service_role USING (true) WITH CHECK (true);
+SELECT table_name FROM information_schema.tables
+ WHERE table_schema = 'public' AND table_name LIKE 'vula_%' OR table_name LIKE 'commerce_%';
 ```
+
+You should see `vula_tenants`, `vula_documents`, `commerce_products`, `commerce_carts`, `commerce_orders`, etc.
+
+If you're upgrading from an earlier deploy that predates the `paid` column on `vula_tenants`, re-running `001_vula_tenants.sql` is idempotent — it includes an `ALTER TABLE … ADD COLUMN IF NOT EXISTS paid` to fill in the gap.
 
 ---
 

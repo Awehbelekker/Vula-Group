@@ -24,9 +24,13 @@ CREATE TABLE IF NOT EXISTS vula_tenants (
     workspace_slug          TEXT UNIQUE,
     temp_password_hash      TEXT,
     payfast_subscription_id TEXT,
+    paid                    BOOLEAN NOT NULL DEFAULT FALSE,
     created_at              TIMESTAMPTZ DEFAULT NOW(),
     updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- If you are upgrading from an earlier schema, add the column in place:
+ALTER TABLE vula_tenants ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Row-level security — each tenant only sees their own record
 ALTER TABLE vula_tenants ENABLE ROW LEVEL SECURITY;
