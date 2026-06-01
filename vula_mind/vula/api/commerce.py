@@ -153,3 +153,75 @@ async def get_order(tenant_id: str, order_id: str):
     if not order or order.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+
+# ── Admin endpoints ───────────────────────────────────────────────────────────
+
+@router.get("/{tenant_id}/admin/orders")
+async def admin_list_orders(
+    tenant_id: str,
+    status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """List all orders for a tenant — for the merchant admin dashboard."""
+    orders = await service.list_orders(tenant_id, status=status, limit=limit, offset=offset)
+    return {"orders": orders, "count": len(orders)}
+
+
+@router.patch("/{tenant_id}/admin/orders/{order_id}/status")
+async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
+    """Update order status — confirmed, packing, dispatched, delivered, cancelled."""
+    valid = {"confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
+    new_status = body.get("status")
+    if new_status not in valid:
+        raise HTTPException(status_code=400, detail=f"status must be one of {valid}")
+    order = await service.get_order(order_id)
+    if not order or order.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    await service.update_order_status(order_id, new_status)
+    return {"order_id": order_id, "status": new_status}
+
+
+@router.get("/{tenant_id}/admin/products")
+async def admin_list_products(tenant_id: str):
+    """List all products including out-of-stock — for merchant product management."""
+    products = await service.list_products(tenant_id, in_stock_only=False)
+    return {"products": products, "count": len(products)}
+
+
+@router.patch("/{tenant_id}/admin/products/{product_id}")
+async def admin_update_product(tenant_id: str, product_id: str, body: dict):
+    """Patch product — toggle stock, update price, edit name/description."""
+    allowed = {"in_stock", "price_cents", "name", "description", "notes", "is_weekly_special", "stock_quantity"}
+    update = {k: v for k, v in body.items() if k in allowed}
+    if not update:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    result = await service.update_product(tenant_id, product_id, update)
+    return result
+
+
+@router.get("/{tenant_id}/admin/stats")
+async def admin_stats(tenant_id: str):
+    """Basic revenue/order stats for the merchant dashboard."""
+    from datetime import datetime, timezone, timedelta
+    db = service._client()
+
+    # Today
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    all_orders = db.table("commerce_orders").select(
+        "id,total_cents,status,created_at"
+    ).eq("tenant_id", tenant_id).execute().data or []
+
+    paid = [o for o in all_orders if o["status"] not in ("pending_payment", "cancelled", "refunded")]
+    today_paid = [o for o in paid if o["created_at"][:10] == today]
+
+    return {
+        "total_orders": len(paid),
+        "total_revenue_cents": sum(o["total_cents"] for o in paid),
+        "today_orders": len(today_paid),
+        "today_revenue_cents": sum(o["total_cents"] for o in today_paid),
+        "pending_payment": len([o for o in all_orders if o["status"] == "pending_payment"]),
+        "to_dispatch": len([o for o in all_orders if o["status"] in ("paid", "confirmed", "packing")]),
+    }

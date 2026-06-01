@@ -216,6 +216,38 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     return result.data[0]
 
 
+async def list_orders(
+    tenant_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[dict]:
+    q = (
+        _client()
+        .table("commerce_orders")
+        .select("id,display_id,customer_name,customer_phone,total_cents,status,channel,delivery_slot,created_at")
+        .eq("tenant_id", tenant_id)
+    )
+    if status:
+        q = q.eq("status", status)
+    result = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+    return result.data or []
+
+
+async def update_product(tenant_id: str, product_id: str, data: dict) -> dict:
+    """Patch any product fields — stock, price, in_stock toggle, etc."""
+    data["updated_at"] = _now()
+    result = (
+        _client()
+        .table("commerce_products")
+        .update(data)
+        .eq("tenant_id", tenant_id)
+        .eq("id", product_id)
+        .execute()
+    )
+    return result.data[0] if result.data else {}
+
+
 async def update_order_status(order_id: str, status: str, yoco_checkout_id: Optional[str] = None) -> None:
     update = {"status": status, "updated_at": _now()}
     if yoco_checkout_id:

@@ -11,6 +11,7 @@
 import { useState, useEffect } from 'react'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaYocoConnect from './VulaYocoConnect'
+import VulaMerchantAdmin from './VulaMerchantAdmin'
 
 const VULA_API = import.meta.env.VITE_API_URL ?? '/api'
 
@@ -86,14 +87,24 @@ export default function VulaCommerce() {
                 key={t.id}
                 tenant={t}
                 account={accountFor(t.id)}
-                onManage={() => setSelectedTenant(t)}
+                onManage={() => setSelectedTenant({ ...t, _view: 'admin' })}
+                onConnect={() => setSelectedTenant({ ...t, _view: 'connect' })}
               />
             ))}
           </div>
         )}
 
-        {/* Detail drawer */}
-        {selectedTenant && (
+        {/* Full merchant admin — orders, products, stats */}
+        {selectedTenant && selectedTenant._view === 'admin' && (
+          <VulaMerchantAdmin
+            tenantId={selectedTenant.id}
+            tenantName={selectedTenant.name}
+            onClose={() => setSelectedTenant(null)}
+          />
+        )}
+
+        {/* Connection drawer — WhatsApp + Yoco */}
+        {selectedTenant && selectedTenant._view !== 'admin' && (
           <div
             onClick={() => setSelectedTenant(null)}
             style={{
@@ -141,7 +152,7 @@ export default function VulaCommerce() {
   )
 }
 
-function TenantCard({ tenant, account, onManage }) {
+function TenantCard({ tenant, account, onManage, onConnect }) {
   const waStatus = account?.status || 'not_connected'
   const waColor = waStatus === 'connected' ? '#22c55e' : waStatus === 'error' ? '#ef4444' : COLORS.muted
 
@@ -180,17 +191,31 @@ function TenantCard({ tenant, account, onManage }) {
         </div>
       )}
 
-      <button
-        onClick={onManage}
-        style={{
-          width: '100%', padding: '10px 16px', borderRadius: 6,
-          background: COLORS.green, color: '#fff', border: 'none',
-          fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          fontFamily: "'Source Code Pro', monospace",
-        }}
-      >
-        Manage tenant →
-      </button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          onClick={onManage}
+          style={{
+            flex: 1, padding: '10px 16px', borderRadius: 6,
+            background: COLORS.green, color: '#fff', border: 'none',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            fontFamily: "'Source Code Pro', monospace",
+          }}
+        >
+          📦 Orders & Products
+        </button>
+        <button
+          onClick={onConnect}
+          style={{
+            padding: '10px 14px', borderRadius: 6,
+            background: 'transparent', color: COLORS.green,
+            border: `1px solid ${COLORS.green}`,
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            fontFamily: "'Source Code Pro', monospace",
+          }}
+        >
+          ⚙ Connect
+        </button>
+      </div>
     </div>
   )
 }
