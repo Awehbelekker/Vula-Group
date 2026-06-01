@@ -190,8 +190,8 @@ app = FastAPI(
     title="Vula AI API",
     description="Unlock your business intelligence — by Vula Group",
     version="1.0.0",
-    docs_url="/docs" if settings.debug else None,   # hide Swagger in production
-    redoc_url="/redoc" if settings.debug else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
 )
 
@@ -207,13 +207,42 @@ app.add_middleware(
 )
 
 
+import time as _time
+_request_stats: dict = {"total": 0, "errors": 0, "latencies_ms": []}
+
+
 @app.middleware("http")
-async def add_request_id(request: Request, call_next):
-    """Stamp every request and response with a correlation ID."""
+async def request_middleware(request: Request, call_next):
+    """Structured request logging with correlation ID, timing, and error tracking."""
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
     request.state.request_id = request_id
-    response = await call_next(request)
+    started = _time.monotonic()
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        _request_stats["errors"] += 1
+        log.error("[%s] UNHANDLED %s %s — %s", request_id, request.method, request.url.path, exc)
+        raise
+
+    latency_ms = int((_time.monotonic() - started) * 1000)
+    _request_stats["total"] += 1
+    _request_stats["latencies_ms"].append(latency_ms)
+    # Keep only last 1000 for rolling average
+    if len(_request_stats["latencies_ms"]) > 1000:
+        _request_stats["latencies_ms"] = _request_stats["latencies_ms"][-1000:]
+    if response.status_code >= 500:
+        _request_stats["errors"] += 1
+
+    # Structured log line — parseable by log aggregators (Railway, Datadog, etc.)
+    log.info(
+        "req=%s method=%s path=%s status=%d latency_ms=%d",
+        request_id, request.method, request.url.path,
+        response.status_code, latency_ms,
+    )
+
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Latency-Ms"] = str(latency_ms)
     return response
 
 app.include_router(takeoff_router, prefix="/takeoff")
@@ -492,6 +521,30 @@ async def health_check():
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {"status": overall, "service": "vula-api", "version": "1.0.0", "checks": checks}
+
+
+@app.get("/metrics", dependencies=[Depends(require_auth)])
+async def metrics():
+    """Request performance metrics — total, errors, rolling average latency."""
+    lats = _request_stats["latencies_ms"]
+    avg_lat = int(sum(lats) / len(lats)) if lats else 0
+    p95_lat = sorted(lats)[int(len(lats) * 0.95)] if lats else 0
+    try:
+        from core.memory.reflection import ReflectionAgent
+        reflection_stats = ReflectionAgent().get_stats()
+    except Exception:
+        reflection_stats = {}
+    return {
+        "requests": {
+            "total": _request_stats["total"],
+            "errors": _request_stats["errors"],
+            "error_rate": round(_request_stats["errors"] / max(_request_stats["total"], 1), 3),
+            "avg_latency_ms": avg_lat,
+            "p95_latency_ms": p95_lat,
+        },
+        "agent": reflection_stats,
+        "service": "vula-api",
+    }
 
 
 @app.get("/ingest/status/{tenant_id}", dependencies=[Depends(require_auth)])
