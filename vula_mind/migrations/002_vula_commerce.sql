@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS commerce_products (
     in_stock        BOOLEAN NOT NULL DEFAULT TRUE,
     stock_quantity  INTEGER,
     image_url       TEXT,
-    is_weekly_special BOOLEAN NOT NULL DEFAULT FALSE,  -- rotates weekly for fresh fish
+    is_daily_catch  BOOLEAN NOT NULL DEFAULT FALSE,  -- today's fresh catch highlight
     notes           TEXT,           -- e.g. "skin-on only", "subject to availability"
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
