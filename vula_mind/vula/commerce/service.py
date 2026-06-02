@@ -284,3 +284,255 @@ async def _next_order_display_id(tenant_id: str) -> str:
     else:
         num = 1
     return f"{prefix}-{num:05d}"
+
+
+# ── Conversation sessions (multi-turn memory) ─────────────────────────────────
+
+async def get_or_create_session(
+    tenant_id: str,
+    session_key: str,
+    channel: str = "whatsapp",
+    customer_phone: Optional[str] = None,
+) -> dict:
+    """Return the conversation session for (tenant_id, session_key), creating it if absent."""
+    existing = (
+        _client()
+        .table("commerce_conversation_sessions")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .eq("session_key", session_key)
+        .maybe_single()
+        .execute()
+    )
+    if existing and existing.data:
+        return existing.data
+
+    session = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "session_key": session_key,
+        "channel": channel,
+        "customer_phone": customer_phone,
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    result = _client().table("commerce_conversation_sessions").insert(session).execute()
+    return result.data[0]
+
+
+async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> None:
+    """Persist a single conversation turn."""
+    _client().table("commerce_conversation_messages").insert(
+        {
+            "id": str(uuid.uuid4()),
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "created_at": _now(),
+        }
+    ).execute()
+
+
+async def get_recent_messages(session_id: str, limit: int = 12) -> List[dict]:
+    """Return the most recent messages for a session, oldest first."""
+    result = (
+        _client()
+        .table("commerce_conversation_messages")
+        .select("role,content,created_at")
+        .eq("session_id", session_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    rows = result.data or []
+    return list(reversed(rows))
+
+
+def format_history(messages: List[dict]) -> str:
+    """Render messages into a compact transcript for the skill's conversation_history."""
+    label = {"user": "Customer", "assistant": "Assistant"}
+    return "\n".join(
+        f"{label.get(m['role'], m['role'].title())}: {m['content']}"
+        for m in messages
+        if m.get("role") in ("user", "assistant") and m.get("content")
+    )
+
+
+# ── Invoices & Quotes ─────────────────────────────────────────────────────────
+# One table (commerce_invoices) serves invoices, quotes, and proformas via
+# doc_type. All money is integer cents (ZAR). Every query is tenant-scoped.
+
+_DOC_TYPE_CODE = {"invoice": "INV", "quote": "QTE", "proforma": "PRO"}
+
+
+def _compute_totals(line_items: List[dict], vat_rate: float) -> tuple[int, int, int, List[dict]]:
+    """Return (subtotal_cents, vat_cents, total_cents, normalised_items).
+
+    Each line's total_cents is recomputed from quantity * unit_price_cents so the
+    server is the source of truth. VAT is computed on the subtotal and rounded to
+    the nearest cent. All values are integer cents.
+    """
+    normalised: List[dict] = []
+    subtotal = 0
+    for item in line_items:
+        qty = int(item["quantity"])
+        unit = int(item["unit_price_cents"])
+        line_total = qty * unit
+        subtotal += line_total
+        normalised.append(
+            {
+                "description": item["description"],
+                "quantity": qty,
+                "unit_price_cents": unit,
+                "total_cents": line_total,
+                "product_id": str(item["product_id"]) if item.get("product_id") else None,
+            }
+        )
+    vat_cents = round(subtotal * (vat_rate / 100.0))
+    total = subtotal + vat_cents
+    return subtotal, vat_cents, total, normalised
+
+
+async def _next_invoice_number(tenant_id: str, doc_type: str) -> str:
+    """Sequential, tenant-scoped, doc-type-scoped number e.g. OTH-INV-00001."""
+    code = _DOC_TYPE_CODE.get(doc_type, "INV")
+    result = (
+        _client()
+        .table("commerce_invoices")
+        .select("invoice_number")
+        .eq("tenant_id", tenant_id)
+        .eq("doc_type", doc_type)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    last = result.data[0]["invoice_number"] if result.data else None
+    num = int(last.split("-")[-1]) + 1 if last else 1
+    prefix = tenant_id.upper()[:3]
+    return f"{prefix}-{code}-{num:05d}"
+
+
+async def create_invoice(tenant_id: str, data: dict) -> dict:
+    """Create an invoice, quote, or proforma. Totals are computed server-side."""
+    doc_type = data.get("doc_type", "invoice")
+    vat_rate = float(data.get("vat_rate", 15.0))
+    subtotal, vat_cents, total, items = _compute_totals(data["line_items"], vat_rate)
+    invoice = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "doc_type": doc_type,
+        "invoice_number": await _next_invoice_number(tenant_id, doc_type),
+        "customer_name": data["customer_name"],
+        "customer_email": data.get("customer_email"),
+        "customer_phone": data.get("customer_phone"),
+        "customer_address": data.get("customer_address"),
+        "line_items": items,
+        "subtotal_cents": subtotal,
+        "vat_rate": vat_rate,
+        "vat_cents": vat_cents,
+        "total_cents": total,
+        "status": "draft",
+        "due_date": data.get("due_date"),
+        "valid_until": data.get("valid_until"),
+        "order_id": str(data["order_id"]) if data.get("order_id") else None,
+        "notes": data.get("notes"),
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    result = _client().table("commerce_invoices").insert(invoice).execute()
+    return result.data[0]
+
+
+async def get_invoice(tenant_id: str, invoice_id: str) -> Optional[dict]:
+    result = (
+        _client()
+        .table("commerce_invoices")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .eq("id", invoice_id)
+        .maybe_single()
+        .execute()
+    )
+    return result.data if result else None
+
+
+async def list_invoices(
+    tenant_id: str,
+    doc_type: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[dict]:
+    q = (
+        _client()
+        .table("commerce_invoices")
+        .select(
+            "id,doc_type,invoice_number,customer_name,customer_phone,"
+            "total_cents,status,issue_date,due_date,valid_until,created_at"
+        )
+        .eq("tenant_id", tenant_id)
+    )
+    if doc_type:
+        q = q.eq("doc_type", doc_type)
+    if status:
+        q = q.eq("status", status)
+    result = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+    return result.data or []
+
+
+async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) -> dict:
+    """Transition an invoice/quote status. Stamps paid_at when marked paid."""
+    patch: dict = {"status": status, "updated_at": _now()}
+    if status == "paid":
+        patch["paid_at"] = _now()
+    result = (
+        _client()
+        .table("commerce_invoices")
+        .update(patch)
+        .eq("tenant_id", tenant_id)
+        .eq("id", invoice_id)
+        .execute()
+    )
+    return result.data[0] if result.data else {}
+
+
+async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
+    """Create an invoice from an accepted quote, linking both directions.
+
+    The quote is marked 'accepted' and stamped with converted_invoice_id; the new
+    invoice carries source_quote_id back to the quote. Totals are copied as-is.
+    """
+    quote = await get_invoice(tenant_id, quote_id)
+    if not quote:
+        raise ValueError("quote not found")
+    if quote.get("doc_type") not in ("quote", "proforma"):
+        raise ValueError("source document is not a quote or proforma")
+
+    invoice = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "doc_type": "invoice",
+        "invoice_number": await _next_invoice_number(tenant_id, "invoice"),
+        "customer_name": quote["customer_name"],
+        "customer_email": quote.get("customer_email"),
+        "customer_phone": quote.get("customer_phone"),
+        "customer_address": quote.get("customer_address"),
+        "line_items": quote.get("line_items", []),
+        "subtotal_cents": quote["subtotal_cents"],
+        "vat_rate": quote["vat_rate"],
+        "vat_cents": quote["vat_cents"],
+        "total_cents": quote["total_cents"],
+        "status": "draft",
+        "source_quote_id": quote_id,
+        "notes": quote.get("notes"),
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    created = _client().table("commerce_invoices").insert(invoice).execute().data[0]
+
+    _client().table("commerce_invoices").update(
+        {"status": "accepted", "converted_invoice_id": created["id"], "updated_at": _now()}
+    ).eq("tenant_id", tenant_id).eq("id", quote_id).execute()
+
+    return created

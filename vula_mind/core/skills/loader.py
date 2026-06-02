@@ -18,6 +18,7 @@ from core.skills.memory_recall import MemoryRecallSkill
 from core.skills.web_search import WebSearchSkill
 from core.skills.file_parse import FileParseSkill
 from core.skills.architecture_planning import ArchitecturePlanningSkill
+from core.skills.commerce_assistant import CommerceAssistantSkill
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ _SKILLS: Dict[str, BaseSkill] = {
     "web_search": WebSearchSkill(),
     "file_parse": FileParseSkill(),
     "architecture_planning": ArchitecturePlanningSkill(),
+    "commerce_assistant": CommerceAssistantSkill(),
 }
 
 # Skills declared in registry.json but not yet implemented — route to reasoning

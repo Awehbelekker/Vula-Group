@@ -559,16 +559,39 @@ async def ingestion_status(tenant_id: str):
 @app.get("/documents/{tenant_id}", dependencies=[Depends(require_auth)])
 async def list_documents(tenant_id: str):
     validate_tenant(tenant_id)
-    tenant_dir = UPLOAD_DIR / tenant_id
-    if not tenant_dir.exists():
-        return {"tenant_id": tenant_id, "documents": [], "count": 0}
 
-    docs = [
-        {"filename": f.name, "size_kb": f.stat().st_size // 1024, "type": f.suffix}
-        for f in sorted(tenant_dir.iterdir())
-        if f.is_file()
-    ]
-    return {"tenant_id": tenant_id, "documents": docs, "count": len(docs)}
+    # Files physically uploaded to this Railway instance
+    docs = []
+    tenant_dir = UPLOAD_DIR / tenant_id
+    if tenant_dir.exists():
+        docs = [
+            {"filename": f.name, "size_kb": f.stat().st_size // 1024, "type": f.suffix}
+            for f in sorted(tenant_dir.iterdir())
+            if f.is_file()
+        ]
+
+    # True KB size = vector count in the tenant's Qdrant collection.
+    # This reflects all ingested knowledge even if files were ingested elsewhere.
+    kb_chunks = 0
+    try:
+        collection = f"vula_{tenant_id.replace('-', '_')}"
+        qdrant_headers = {"api-key": settings.qdrant_api_key} if settings.qdrant_api_key else {}
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{settings.qdrant_base}/collections/{collection}",
+                headers=qdrant_headers,
+            )
+            if resp.status_code == 200:
+                kb_chunks = resp.json().get("result", {}).get("points_count", 0) or 0
+    except Exception as exc:
+        log.debug("Qdrant chunk count failed for %s: %s", tenant_id, exc)
+
+    return {
+        "tenant_id": tenant_id,
+        "documents": docs,
+        "count": len(docs),
+        "kb_chunks": kb_chunks,
+    }
 
 
 # ─── Entry Point ─────────────────────────────────────────────────────────────

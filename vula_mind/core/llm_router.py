@@ -1,0 +1,107 @@
+"""
+core/llm_router.py — Local-first LLM routing with cloud fallback.
+
+Decides which provider to use for *generation*:
+  1. If local Ollama is reachable → use Ollama (local-first).
+  2. Else if OPENROUTER_API_KEY is set → fall back to OpenRouter (hybrid).
+  3. Else → return the Ollama route anyway so the caller fails loudly.
+
+A cheap health probe (short timeout, cached) gives true automatic
+failover without probing on every request.
+
+Embeddings are deliberately NOT routed here: a Qdrant collection has a
+fixed vector size, and local bge-m3 (1024-dim) and OpenRouter
+text-embedding-3-small (1536-dim) are incompatible. Embeddings stay
+pinned per-collection in the ingestion pipeline.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from typing import Optional, Tuple
+
+import httpx
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+
+# Health-probe cache: base_url -> (checked_at_monotonic, is_up)
+_HEALTH_TTL_S = 30.0
+_PROBE_TIMEOUT_S = 1.5
+_cache: dict[str, tuple[float, bool]] = {}
+
+
+async def ollama_available(base: Optional[str] = None) -> bool:
+    """Return True if the local Ollama endpoint answers within the timeout.
+
+    The result is cached for _HEALTH_TTL_S so we don't probe on every request.
+    """
+    base = (base or settings.ollama_base).rstrip("/")
+    now = time.monotonic()
+    cached = _cache.get(base)
+    if cached and (now - cached[0]) < _HEALTH_TTL_S:
+        return cached[1]
+
+    up = False
+    try:
+        async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S) as client:
+            resp = await client.get(f"{base}/api/tags")
+            up = resp.status_code == 200
+    except Exception as exc:
+        logger.debug("Ollama health probe failed for %s: %s", base, exc)
+        up = False
+
+    _cache[base] = (now, up)
+    return up
+
+
+def reset_health_cache() -> None:
+    """Clear the health-probe cache (primarily for tests)."""
+    _cache.clear()
+
+
+async def resolve_generation_route(
+    model: Optional[str] = None,
+) -> Tuple[str, Optional[str], str]:
+    """Local-first generation route with OpenRouter fallback.
+
+    Returns (litellm_model, api_key, api_base).
+    """
+    worker = model or settings.model_worker
+
+    if await ollama_available():
+        return f"ollama/{worker}", None, settings.ollama_base
+
+    if settings.openrouter_api_key:
+        logger.info("Ollama unreachable — falling back to OpenRouter for generation")
+        return f"openrouter/{worker}", settings.openrouter_api_key, OPENROUTER_BASE
+
+    logger.warning(
+        "Ollama unreachable and no OPENROUTER_API_KEY set — generation will likely fail"
+    )
+    return f"ollama/{worker}", None, settings.ollama_base
+
+
+async def resolve_vision_route() -> Tuple[str, Optional[str], str]:
+    """Local-first vision route with OpenRouter fallback (for the Smart Scanner).
+
+    Unlike generation, the local and cloud tiers use *different* models: local
+    vision is settings.model_ocr (e.g. llava), while the OpenRouter fallback uses
+    settings.model_vision (e.g. a Claude vision model).
+
+    Returns (litellm_model, api_key, api_base).
+    """
+    if await ollama_available():
+        return f"ollama/{settings.model_ocr}", None, settings.ollama_base
+
+    if settings.openrouter_api_key:
+        logger.info("Ollama unreachable — falling back to OpenRouter for vision")
+        return f"openrouter/{settings.model_vision}", settings.openrouter_api_key, OPENROUTER_BASE
+
+    logger.warning(
+        "Ollama unreachable and no OPENROUTER_API_KEY set — vision scan will likely fail"
+    )
+    return f"ollama/{settings.model_ocr}", None, settings.ollama_base

@@ -11,6 +11,7 @@ import logging
 import re
 
 from config import settings
+from core.llm_router import resolve_generation_route
 from core.skills.base import BaseSkill, SkillInput, SkillOutput
 
 logger = logging.getLogger(__name__)
@@ -61,14 +62,7 @@ class ReasoningSkill(BaseSkill):
             import litellm
             litellm.drop_params = True
 
-            if settings.openrouter_api_key:
-                model = f"openrouter/{settings.model_worker}"
-                api_key = settings.openrouter_api_key
-                api_base = "https://openrouter.ai/api/v1"
-            else:
-                model = f"ollama/{settings.model_worker}"
-                api_key = None
-                api_base = settings.ollama_base
+            model, api_key, api_base = await resolve_generation_route()
 
             resp = await litellm.acompletion(
                 model=model,

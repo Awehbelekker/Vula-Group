@@ -99,6 +99,19 @@
       "device_pref": "desktop",
       "timeout_ms": 60000,
       "module": "core.skills.architecture_planning"
+    },
+    {
+      "name": "commerce_assistant",
+      "description": "Conversational shopping assistant — browse products, build a cart, checkout, track orders",
+      "trigger_keywords": [
+        "order", "buy", "cart", "checkout", "stock", "menu", "catalog",
+        "catalogue", "delivery", "track order", "add to cart", "product",
+        "fish", "seafood", "catch"
+      ],
+      "model_tier": "7b",
+      "device_pref": "any",
+      "timeout_ms": 45000,
+      "module": "core.skills.commerce_assistant"
     }
   ]
 }

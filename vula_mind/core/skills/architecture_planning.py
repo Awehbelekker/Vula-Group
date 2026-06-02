@@ -14,6 +14,7 @@ import logging
 import re
 
 from config import settings
+from core.llm_router import resolve_generation_route
 from core.skills.base import BaseSkill, SkillInput, SkillOutput
 
 logger = logging.getLogger(__name__)
@@ -88,14 +89,7 @@ class ArchitecturePlanningSkill(BaseSkill):
 
             # Architecture planning is complex — use the reasoner tier when possible
             target_model = settings.model_reasoner or settings.model_worker
-            if settings.openrouter_api_key:
-                model = f"openrouter/{target_model}"
-                api_key = settings.openrouter_api_key
-                api_base = "https://openrouter.ai/api/v1"
-            else:
-                model = f"ollama/{target_model}"
-                api_key = None
-                api_base = settings.ollama_base
+            model, api_key, api_base = await resolve_generation_route(model=target_model)
 
             resp = await litellm.acompletion(
                 model=model,

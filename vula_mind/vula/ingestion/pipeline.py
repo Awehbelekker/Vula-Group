@@ -385,7 +385,14 @@ class EmbeddingEngine:
         self._dim: Optional[int] = None
 
     async def embed(self, text: str) -> List[float]:
-        """Generate embedding — uses OpenRouter when OPENROUTER_API_KEY is set, Ollama otherwise."""
+        """Generate embedding — uses OpenRouter when OPENROUTER_API_KEY is set, Ollama otherwise.
+
+        NOTE: embeddings are deliberately NOT subject to the generation
+        local-first failover. A Qdrant collection has a fixed vector size, and
+        local bge-m3 (1024-dim) and OpenRouter text-embedding-3-small (1536-dim)
+        are incompatible — switching providers mid-collection corrupts search.
+        Embeddings therefore stay pinned to one provider per environment.
+        """
         if settings.openrouter_api_key:
             return await self._embed_openai(text)
         return await self._embed_ollama(text)
@@ -755,17 +762,11 @@ class VulaIngestionPipeline:
         import re
         try:
             import litellm
+            from core.llm_router import resolve_generation_route
             litellm.drop_params = True
 
-            # Route to correct provider
-            if settings.openrouter_api_key:
-                model = f"openrouter/{settings.model_worker}"
-                api_key = settings.openrouter_api_key
-                api_base = "https://openrouter.ai/api/v1"
-            else:
-                model = f"ollama/{settings.model_worker}"
-                api_key = None
-                api_base = OLLAMA_BASE
+            # Local-first route (Ollama) with OpenRouter fallback when local is down
+            model, api_key, api_base = await resolve_generation_route()
 
             resp = await litellm.acompletion(
                 model=model,

@@ -740,7 +740,10 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
 async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id: str) -> None:
     """Route inbound messages for commerce tenants (e.g. Off the Hook customers).
 
-    Simple intents handled here. Complex multi-turn ordering is delegated to n8n.
+    Greetings get the interactive welcome menu. Everything else is handled by the
+    commerce_assistant AI skill (tool-calling agent over products/cart/orders,
+    grounded with the tenant knowledge base and persisted multi-turn memory).
+    n8n remains a last-resort fallback if the skill is unavailable.
     """
     text_lower = text.lower().strip()
 
@@ -750,31 +753,64 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
         await _send_commerce_welcome(phone, tenant_id)
         return
 
-    # DONE / checkout intent
-    if _DONE_RE.match(text) or "checkout" in text_lower or "pay" in text_lower:
-        await _send_reply(
-            phone,
-            "Great! To checkout, visit: https://offthehook.co.za/cart\n\n"
-            "Or reply with your delivery address and we'll send you a payment link directly. 🐟"
-        )
-        return
-
-    # Order / product intent — forward to n8n for AI handling
-    if _ORDER_RE.search(text):
+    handled = await _run_commerce_assistant(phone, text, tenant_id)
+    if not handled:
+        # Skill unavailable/failed — fall back to n8n, then a holding reply.
         await _forward_to_n8n_commerce(phone, text, msg_id, tenant_id)
-        return
 
-    # Track order
-    if "track" in text_lower or "where" in text_lower or "order" in text_lower:
-        await _send_reply(
-            phone,
-            "To track your order, reply with your order number (e.g. OTH-00042) "
-            "and we'll send you an update. 🚚"
+
+async def _run_commerce_assistant(phone: str, text: str, tenant_id: str) -> bool:
+    """Drive the commerce_assistant skill with persisted conversation memory.
+
+    Returns True if a reply was sent, False if the skill could not produce one.
+    """
+    try:
+        from core.skills.base import SkillInput
+        from core.skills.loader import get_skill
+        from vula.commerce import service as commerce_service
+    except Exception as exc:  # pragma: no cover — import guard
+        logger.warning("commerce_assistant unavailable: %s", exc)
+        return False
+
+    # Load (or create) the session and recent history for multi-turn memory.
+    history = ""
+    session_id: Optional[str] = None
+    try:
+        session = await commerce_service.get_or_create_session(
+            tenant_id, session_key=phone, channel="whatsapp", customer_phone=phone
         )
-        return
+        session_id = session["id"]
+        history = commerce_service.format_history(
+            await commerce_service.get_recent_messages(session_id, limit=12)
+        )
+    except Exception as exc:
+        logger.debug("Commerce session/history load failed (non-fatal): %s", exc)
 
-    # Help / default
-    await _send_commerce_welcome(phone, tenant_id)
+    skill = get_skill("commerce_assistant")
+    output = await skill(
+        SkillInput(
+            question=text,
+            tenant_id=tenant_id,
+            conversation_history=history,
+            metadata={"session_id": phone, "customer_phone": phone},
+        )
+    )
+
+    if not output.success:
+        logger.warning("commerce_assistant returned no answer: %s", output.error)
+        return False
+
+    await _send_reply(phone, output.answer, tenant_id)
+
+    # Persist this turn so the next message has context.
+    if session_id:
+        try:
+            await commerce_service.append_message(tenant_id, session_id, "user", text)
+            await commerce_service.append_message(tenant_id, session_id, "assistant", output.answer)
+        except Exception as exc:
+            logger.debug("Commerce message persistence failed (non-fatal): %s", exc)
+
+    return True
 
 
 async def _handle_commerce_interactive(

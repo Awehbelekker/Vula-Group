@@ -187,6 +187,98 @@ class CreateOrderRequest(BaseModel):
     channel: str = "web"
 
 
+# ── Invoices & Quotes ─────────────────────────────────────────────────────────
+
+class DocType(str, Enum):
+    invoice = "invoice"
+    quote = "quote"
+    proforma = "proforma"
+
+
+class InvoiceStatus(str, Enum):
+    draft = "draft"
+    sent = "sent"
+    paid = "paid"
+    overdue = "overdue"
+    cancelled = "cancelled"
+    accepted = "accepted"     # quote accepted by customer
+    declined = "declined"     # quote declined by customer
+    expired = "expired"       # quote past its valid_until date
+
+
+class InvoiceLineItem(BaseModel):
+    description: str
+    quantity: int = 1
+    unit_price_cents: int                  # ZAR cents — never floats
+    total_cents: Optional[int] = None      # computed = quantity * unit_price_cents
+    product_id: Optional[UUID] = None
+
+    @field_validator("quantity")
+    @classmethod
+    def _qty_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("quantity must be at least 1")
+        return v
+
+    @field_validator("unit_price_cents")
+    @classmethod
+    def _price_nonneg(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("unit_price_cents must be >= 0")
+        return v
+
+
+class InvoiceCreate(BaseModel):
+    doc_type: DocType = DocType.invoice
+    customer_name: str
+    customer_email: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    line_items: List[InvoiceLineItem]
+    vat_rate: float = 15.0
+    due_date: Optional[str] = None         # ISO date — invoices
+    valid_until: Optional[str] = None      # ISO date — quotes/proformas
+    notes: Optional[str] = None
+    order_id: Optional[UUID] = None
+
+    @field_validator("line_items")
+    @classmethod
+    def _at_least_one_item(cls, v: List[InvoiceLineItem]) -> List[InvoiceLineItem]:
+        if not v:
+            raise ValueError("at least one line item is required")
+        return v
+
+
+class Invoice(BaseModel):
+    id: UUID
+    tenant_id: str
+    doc_type: DocType = DocType.invoice
+    invoice_number: str
+    customer_name: str
+    customer_email: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    line_items: List[InvoiceLineItem] = []
+    subtotal_cents: int = 0
+    vat_rate: float = 15.0
+    vat_cents: int = 0
+    total_cents: int = 0
+    status: InvoiceStatus = InvoiceStatus.draft
+    issue_date: Optional[str] = None
+    due_date: Optional[str] = None
+    valid_until: Optional[str] = None
+    order_id: Optional[UUID] = None
+    source_quote_id: Optional[UUID] = None
+    converted_invoice_id: Optional[UUID] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @property
+    def total_rands(self) -> str:
+        return f"R{self.total_cents / 100:.2f}"
+
+
 # ── Yoco ─────────────────────────────────────────────────────────────────────
 
 class YocoCheckoutResponse(BaseModel):

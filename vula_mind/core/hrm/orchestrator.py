@@ -28,6 +28,9 @@ COMPLEXITY_KEYWORDS = {
 }
 
 SKILL_KEYWORDS: dict[str, list[str]] = {
+    "commerce_assistant":   ["order", "buy", "cart", "checkout", "stock", "in stock", "menu",
+                             "catalog", "catalogue", "delivery", "track order", "add to cart",
+                             "product", "fish", "seafood", "catch"],
     "web_search":           ["search", "find online", "latest", "current", "news", "tender", "price"],
     "code_execution":       ["run", "execute", "compute", "calculate", "code", "script"],
     "memory_recall":        ["remember", "previous", "history", "last time", "before"],

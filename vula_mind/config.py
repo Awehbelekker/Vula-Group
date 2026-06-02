@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     model_reasoner: str = "deepseek-r1:14b"
     model_embed: str = "bge-m3"
     model_ocr: str = "llava:7b"
+    model_vision: str = "anthropic/claude-3.5-sonnet"  # OpenRouter vision model for Smart Scanner
 
     # ── Qdrant ──────────────────────────────────────────────────────────────
     qdrant_base: str = "http://localhost:6333"
