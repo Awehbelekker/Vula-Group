@@ -85,6 +85,61 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_recipe",
+            "description": (
+                "Suggest a South African recipe when the customer asks what to cook, "
+                "mentions a fish or ingredient, or wants meal ideas. Returns a short "
+                "recipe and lists which ingredients Off the Hook has in stock so they "
+                "can be added to the cart."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dish": {
+                        "type": "string",
+                        "description": "The dish, ingredient, or meal type the customer mentioned (e.g. 'yellowtail', 'fish braai', 'snoek pâté', 'something quick for dinner').",
+                    },
+                    "serves": {
+                        "type": "integer",
+                        "description": "Number of people to serve, default 4.",
+                    },
+                },
+                "required": ["dish"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_quote",
+            "description": (
+                "Generate a formal price quote for the customer. Use the items the customer "
+                "asks to be quoted, or leave items empty to quote everything currently in their "
+                "cart. Returns a quote number and total — quotes do not take payment."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "description": "Optional explicit items to quote. Omit to quote the current cart.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "product": {"type": "string", "description": "Product name or slug."},
+                                "quantity": {"type": "integer", "description": "Quantity, default 1."},
+                            },
+                            "required": ["product"],
+                        },
+                    },
+                    "customer_name": {"type": "string", "description": "Customer name for the quote, if known."},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -127,13 +182,19 @@ class CommerceAssistantSkill(BaseSkill):
     def _system_prompt(self, tenant_id: str, kb_context: str) -> str:
         kb_block = f"\n\nBusiness knowledge (use this to answer accurately):\n{kb_context}" if kb_context else ""
         return (
-            "You are a friendly, concise WhatsApp shopping assistant for a South African "
-            "business. Help the customer find products, build their cart, check out, and "
-            "track orders. Use the provided tools to look up real product, cart and order "
-            "data — never invent prices or stock. Always show money in ZAR (e.g. R185.00) "
-            "and use South African conventions for dates and phone numbers. Keep replies "
-            "short and WhatsApp-friendly. When the customer is ready to pay, call "
-            "start_checkout and share the link." + kb_block
+            "You are a friendly, knowledgeable WhatsApp assistant for a South African fresh "
+            "fish and chicken delivery business. Your goals: help customers find great products, "
+            "inspire them with recipes, build their cart, and check out.\n\n"
+            "Guidelines:\n"
+            "- Use real tools for products, cart and orders — never invent prices or stock.\n"
+            "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly.\n"
+            "- When a customer mentions a dish, ingredient, or asks what to cook, call "
+            "suggest_recipe — it returns a recipe AND shows which ingredients are in stock.\n"
+            "- After suggesting a recipe, offer to add the available ingredients to their cart.\n"
+            "- Be proactive: if a customer buys yellowtail, you can suggest a recipe for it.\n"
+            "- When the customer is ready to pay, call start_checkout and share the link.\n"
+            "- For quotes, call create_quote and share the quote number and total."
+            + kb_block
         )
 
     async def _retrieve_kb(self, inp: SkillInput) -> Tuple[str, List[Dict[str, Any]]]:
@@ -239,6 +300,10 @@ class CommerceAssistantSkill(BaseSkill):
             return self._exec_start_checkout(tid)
         if name == "track_order":
             return await self._exec_track_order(tid, args)
+        if name == "suggest_recipe":
+            return await self._exec_suggest_recipe(tid, args)
+        if name == "create_quote":
+            return await self._exec_create_quote(tid, sid, phone, args)
         return {"error": f"unknown tool {name}"}
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -322,6 +387,142 @@ class CommerceAssistantSkill(BaseSkill):
             "order_id": match["display_id"],
             "status": match["status"],
             "total": f"R{match['total_cents'] / 100:.2f}",
+        }
+
+    async def _exec_suggest_recipe(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a South African recipe and match ingredients to in-stock products."""
+        import litellm
+
+        dish = (args.get("dish") or "fish").strip()
+        serves = max(1, int(args.get("serves") or 4))
+
+        # Fetch catalog so we know what's actually available
+        try:
+            products = await service.list_products(tenant_id, in_stock_only=True)
+            catalog_names = [p["name"] for p in products]
+            catalog_str = ", ".join(catalog_names[:40])
+        except Exception:
+            products, catalog_names, catalog_str = [], [], ""
+
+        prompt = (
+            f"You are a South African recipe assistant for a fresh fish and chicken delivery business.\n"
+            f"A customer wants to cook: {dish} (serves {serves}).\n\n"
+            f"These ingredients are currently in stock and available to order:\n{catalog_str}\n\n"
+            f"Write a SHORT, practical South African recipe (max 180 words):\n"
+            f"- Recipe name\n"
+            f"- Ingredients list (highlight which ones are available to order)\n"
+            f"- Quick method (4–6 steps)\n"
+            f"- A 'From Off the Hook' section listing ONLY the in-stock items needed, "
+            f"with their exact names from the catalog so they can be added to the cart.\n\n"
+            f"Keep it warm, South African, and appetising. "
+            f"If the dish doesn't need any fish/chicken, suggest a protein that works well."
+        )
+
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+        try:
+            resp = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=500,
+                api_key=api_key,
+                api_base=api_base,
+            )
+            recipe_text = re.sub(
+                r"<think>.*?</think>", "", resp.choices[0].message.content or "", flags=re.DOTALL
+            ).strip()
+        except Exception as exc:
+            logger.warning("Recipe generation failed: %s", exc)
+            return {"error": "Could not generate recipe right now — try asking again."}
+
+        # Extract which in-stock products the recipe mentions
+        recipe_lower = recipe_text.lower()
+        matched = [p for p in products if p["name"].lower() in recipe_lower]
+        # Fuzzy: also catch partial matches (e.g. "hake" matches "Hake Fillets")
+        for p in products:
+            first_word = p["name"].split()[0].lower()
+            if len(first_word) > 3 and first_word in recipe_lower and p not in matched:
+                matched.append(p)
+
+        available = [
+            {"name": p["name"], "slug": p["slug"], "price": f"R{p['price_cents'] / 100:.2f}"}
+            for p in matched[:6]
+        ]
+
+        return {
+            "recipe": recipe_text,
+            "available_to_order": available,
+            "tip": (
+                f"I can add any of these to your cart — just say which ones you want!"
+                if available else
+                "Let me know what else I can help you with."
+            ),
+        }
+
+    async def _resolve_product(self, tenant_id: str, name: str) -> Optional[Dict[str, Any]]:
+        """Find an in-stock product by slug or fuzzy name match."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        if re.match(r"^[a-z0-9-]+$", name):
+            product = await service.get_product_by_slug(tenant_id, name)
+            if product:
+                return product
+        candidates = await service.list_products(tenant_id, in_stock_only=True)
+        return next((p for p in candidates if name.lower() in p["name"].lower()), None)
+
+    async def _exec_create_quote(
+        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        line_items: List[Dict[str, Any]] = []
+        items_arg = args.get("items") or []
+        if items_arg:
+            for it in items_arg:
+                product = await self._resolve_product(tenant_id, it.get("product", ""))
+                if not product:
+                    continue
+                try:
+                    qty = max(1, int(it.get("quantity", 1) or 1))
+                except (TypeError, ValueError):
+                    qty = 1
+                line_items.append(
+                    {
+                        "description": product["name"],
+                        "quantity": qty,
+                        "unit_price_cents": product["price_cents"],
+                        "product_id": product["id"],
+                    }
+                )
+        else:
+            cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+            for it in cart.get("commerce_cart_items", []) or []:
+                prod = it.get("commerce_products") or {}
+                line_items.append(
+                    {
+                        "description": prod.get("name", "Item"),
+                        "quantity": it["quantity"],
+                        "unit_price_cents": it["unit_price_cents"],
+                        "product_id": it.get("product_id"),
+                    }
+                )
+
+        if not line_items:
+            return {"error": "Nothing to quote — add items to the cart or list the products to quote."}
+
+        quote = await service.create_invoice(
+            tenant_id,
+            {
+                "doc_type": "quote",
+                "customer_name": (args.get("customer_name") or "Customer").strip(),
+                "customer_phone": phone,
+                "line_items": line_items,
+            },
+        )
+        return {
+            "quote_number": quote["invoice_number"],
+            "items": len(line_items),
+            "total": f"R{quote['total_cents'] / 100:.2f}",
         }
 
     # ── Fallback (no tool-calling support) ───────────────────────────────────
