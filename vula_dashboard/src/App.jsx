@@ -14,6 +14,10 @@ import VulaFieldOps from "./components/VulaFieldOps";
 import VulaCommerce from "./components/VulaCommerce";
 import VulaDraft from "./components/VulaDraft";
 import VulaAgent from "./components/VulaAgent";
+import VulaInvoices from "./components/VulaInvoices";
+import VulaBudget from "./components/VulaBudget";
+import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
+import VulaSmartScanner from "./components/VulaSmartScanner";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -38,11 +42,19 @@ const TABS = [
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },
   { id: "commerce", label: "Commerce", component: VulaCommerce },
+  { id: "merchant", label: "Merchant", component: VulaMerchantAdmin },
+  { id: "invoices", label: "Invoices", component: VulaInvoices },
+  { id: "budget", label: "Budget", component: VulaBudget },
+  { id: "scanner", label: "Smart Scanner", component: VulaSmartScanner },
 ];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
-  const { user, role, logout } = useAuthStore();
+  const { user, role, tenantId, logout } = useAuthStore();
+
+  // Resolve effective tenant — master sees digg-demo as default, owners see their own
+  const effectiveTenantId = tenantId && tenantId !== "master" ? tenantId : "digg-demo";
+
   const ActiveComponent = TABS.find((t) => t.id === activeTab)?.component ?? VulaDashboard;
 
   // Show login if not authenticated
@@ -106,8 +118,8 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Active view */}
-      <ActiveComponent />
+      {/* Active view — pass tenantId to every component that needs it */}
+      <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} />
     </div>
   );
 }

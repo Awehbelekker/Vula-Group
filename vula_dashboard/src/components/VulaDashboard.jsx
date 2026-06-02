@@ -492,7 +492,7 @@ export default function VulaDashboard() {
 
     fetch(`${VULA_API}/documents/${tenantId}`, { headers: authHeaders })
       .then(r => r.json())
-      .then(d => setDocCount(d.count || 0))
+      .then(d => setDocCount(d.kb_chunks || d.count || 0))
       .catch(() => {});
   }, [tenantId]);
 
@@ -545,7 +545,7 @@ export default function VulaDashboard() {
               </span>
             </div>
 
-            {docCount > 0 && <Badge color={COLORS.green}>{docCount} doc{docCount !== 1 ? "s" : ""} trained</Badge>}
+            {docCount > 0 && <Badge color={COLORS.green}>{docCount.toLocaleString()} knowledge chunks</Badge>}
 
             <div style={{ fontSize: 11, color: COLORS.muted, fontFamily: "'Source Code Pro', monospace" }}>
               {tenantId}
@@ -587,7 +587,8 @@ export default function VulaDashboard() {
           {/* Grid */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
             <UploadZone tenantId={tenantId} onUploaded={() => {
-              fetch(`${VULA_API}/documents/${tenantId}`).then(r => r.json()).then(d => setDocCount(d.count || 0)).catch(() => {});
+              const h = VULA_API_KEY ? { "X-API-Key": VULA_API_KEY } : {};
+              fetch(`${VULA_API}/documents/${tenantId}`, { headers: h }).then(r => r.json()).then(d => setDocCount(d.kb_chunks || d.count || 0)).catch(() => {});
             }} />
             <QueryPanel tenantId={tenantId} />
             <div style={{ gridColumn: "1 / -1" }}>

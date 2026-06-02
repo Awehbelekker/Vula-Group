@@ -10,10 +10,14 @@
  *   🐟 Products — toggle stock on/off, edit price, mark weekly special
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import VulaImageUpload from './VulaImageUpload'
+import VulaSmartScanner from './VulaSmartScanner'
+import VulaInvoices from './VulaInvoices'
+import VulaBudget from './VulaBudget'
+import VulaBroadcast from './VulaBroadcast'
 
-const VULA_API = import.meta.env.VITE_API_URL ?? '/api'
+const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const STATUS_LABELS = {
   pending_payment: { label: 'Awaiting payment', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
@@ -45,6 +49,13 @@ const CATEGORY_LABELS = {
 
 export default function VulaMerchantAdmin({ tenantId, tenantName, onClose }) {
   const [tab, setTab] = useState('orders')
+  const [products, setProducts] = useState([])
+
+  // Load products once — shared by scanner + invoices
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`)
+      .then(r => r.json()).then(d => setProducts(d.products || [])).catch(() => {})
+  }, [tenantId])
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -61,9 +72,13 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose }) {
         {/* Tabs */}
         <div style={styles.tabs}>
           {[
-            { id: 'overview', label: '📊 Overview' },
-            { id: 'orders',   label: '📦 Orders' },
-            { id: 'products', label: '🐟 Products' },
+            { id: 'overview',  label: '📊 Overview' },
+            { id: 'orders',    label: '📦 Orders' },
+            { id: 'products',  label: '🐟 Products' },
+            { id: 'scanner',   label: '📷 Scanner' },
+            { id: 'invoices',  label: '🧾 Invoices' },
+            { id: 'budget',    label: '💰 Budget' },
+            { id: 'broadcast', label: '📢 Broadcast' },
           ].map(t => (
             <button
               key={t.id}
@@ -77,9 +92,13 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose }) {
 
         {/* Content */}
         <div style={styles.content}>
-          {tab === 'overview' && <OverviewTab tenantId={tenantId} />}
-          {tab === 'orders'   && <OrdersTab   tenantId={tenantId} />}
-          {tab === 'products' && <ProductsTab tenantId={tenantId} />}
+          {tab === 'overview'  && <OverviewTab tenantId={tenantId} />}
+          {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
+          {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
+          {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
+          {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} />}
+          {tab === 'budget'    && <VulaBudget        tenantId={tenantId} />}
+          {tab === 'broadcast' && <VulaBroadcast     tenantId={tenantId} />}
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-const VULA_API = import.meta.env.VITE_API_URL ?? "/api";
+const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
 const COLORS = {
   bg: "#F7F4EE",
