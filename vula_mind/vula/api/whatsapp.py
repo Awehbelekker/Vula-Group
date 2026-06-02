@@ -276,23 +276,59 @@ async def _handle_document_ingest(phone: str, media_id: str, filename: str, mime
             await _send_reply(phone, f"Sorry, I couldn't download '{filename}'. Please try again.")
             return
 
-        # Ingest via pipeline
+        # Ingest via pipeline — always adds to KB so Vula learns from every doc
         from vula.ingestion.pipeline import VulaIngestionPipeline
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
         result = await pipeline.ingest_file(local_path)
 
-        if result.status == "done":
-            await _send_reply(
-                phone,
-                f"✅ '{result.filename}' ingested — {result.chunks_stored} knowledge chunks added. "
-                f"I can now answer questions about this document."
-            )
-        else:
+        if result.status not in ("success", "done"):
             await _send_reply(
                 phone,
                 f"There was a problem ingesting '{result.filename}': {result.error or 'unknown error'}. "
                 f"Please try again or contact your Vula rep."
             )
+            return
+
+        # For PDFs/images that look like invoices or receipts, also attempt
+        # auto-scan → commit to books. Only for admin role.
+        scan_msg = ""
+        if role == "admin" and local_path.suffix.lower() in (".pdf", ".jpg", ".jpeg", ".png"):
+            try:
+                import base64, httpx as _httpx
+                from config import settings as _s
+
+                # Read file as base64 for the vision scanner
+                img_b64 = base64.b64encode(local_path.read_bytes()).decode()
+
+                async with _httpx.AsyncClient(timeout=60.0) as client:
+                    scan_resp = await client.post(
+                        f"http://localhost:{_s.api_port}/v1/commerce/{tenant_id}/admin/scan",
+                        headers={"X-API-Key": _s.api_key, "Content-Type": "application/json"},
+                        json={"image_base64": img_b64, "doc_type": "auto"},
+                    )
+                    if scan_resp.status_code == 200:
+                        scan_data = scan_resp.json().get("extracted", {})
+                        doc_type = scan_data.get("doc_type", "")
+                        total = scan_data.get("total_cents", 0) or 0
+
+                        if doc_type in ("receipt", "invoice", "delivery_note") and total > 0:
+                            # Auto-commit to books
+                            commit_resp = await client.post(
+                                f"http://localhost:{_s.api_port}/v1/commerce/{tenant_id}/admin/scan/commit",
+                                headers={"X-API-Key": _s.api_key, "Content-Type": "application/json"},
+                                json={"extracted": scan_data, "auto_commit": True},
+                            )
+                            if commit_resp.status_code == 200:
+                                commit_data = commit_resp.json()
+                                scan_msg = f"\n\n📊 {commit_data.get('message', '')}"
+            except Exception as scan_exc:
+                logger.debug("Auto-scan skipped for %s: %s", filename, scan_exc)
+
+        await _send_reply(
+            phone,
+            f"✅ '{result.filename}' ingested — {result.chunks_stored} knowledge chunks added. "
+            f"I can now answer questions about this document.{scan_msg}"
+        )
     except Exception as exc:
         logger.error("Document ingest failed for %s: %s", phone, exc)
         await _send_reply(phone, f"Something went wrong ingesting '{filename}'. Please try again.")

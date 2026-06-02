@@ -382,6 +382,60 @@ async def ingest_document(
     }
 
 
+@app.post("/ingest/batch", dependencies=[Depends(require_auth)])
+async def ingest_documents_batch(
+    background_tasks: BackgroundTasks,
+    tenant_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+):
+    """Upload multiple documents at once — all queued for KB ingestion.
+
+    Portal multi-upload: send up to 20 files in a single multipart request.
+    Each file is saved and queued independently so partial failures don't block.
+    Returns a per-file status list.
+    """
+    validate_tenant(tenant_id)
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 files per batch.")
+
+    tenant_dir = UPLOAD_DIR / tenant_id
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+
+    for file in files:
+        try:
+            content = await file.read()
+            size_mb = len(content) / (1024 * 1024)
+            if size_mb > settings.max_file_mb:
+                results.append({"filename": file.filename, "status": "skipped",
+                                 "reason": f"exceeds {settings.max_file_mb}MB limit"})
+                continue
+
+            file_path = tenant_dir / file.filename
+            file_path.write_bytes(content)
+
+            async def _ingest_one(path=file_path, name=file.filename) -> None:
+                pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+                result = await pipeline.ingest_file(path)
+                log.info("Batch ingest: %s → %d chunks (%s)", name, result.chunks_stored, result.status)
+
+            background_tasks.add_task(_ingest_one)
+            results.append({"filename": file.filename, "status": "queued", "size_mb": round(size_mb, 2)})
+
+        except Exception as exc:
+            log.error("Batch ingest error for %s: %s", file.filename, exc)
+            results.append({"filename": file.filename, "status": "error", "reason": str(exc)})
+
+    queued = sum(1 for r in results if r["status"] == "queued")
+    return {
+        "tenant_id": tenant_id,
+        "total": len(files),
+        "queued": queued,
+        "files": results,
+        "message": f"{queued}/{len(files)} files queued for KB ingestion.",
+    }
+
+
 @app.post("/ingest/sync", dependencies=[Depends(require_auth)])
 async def ingest_document_sync(
     tenant_id: str = Form(...),

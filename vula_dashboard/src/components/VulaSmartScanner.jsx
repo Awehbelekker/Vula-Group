@@ -13,9 +13,11 @@
  * confirm → POST to the relevant endpoint (expense / product stock / invoice).
  */
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+const API_KEY  = import.meta.env.VITE_API_KEY  || ''
+const H = { 'Content-Type': 'application/json', ...(API_KEY ? { 'X-API-Key': API_KEY } : {}) }
 
 const DOC_TYPES = [
   { id: 'auto',          label: '✨ Auto-detect',     hint: 'Let AI figure it out' },
@@ -29,10 +31,20 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
   const [preview, setPreview] = useState(null)
   const [scanning, setScanning] = useState(false)
   const [result, setResult] = useState(null)
+  const [commitPreview, setCommitPreview] = useState(null)   // preview from /scan/commit
+  const [committed, setCommitted] = useState(null)           // committed record
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [suppliers, setSuppliers] = useState([])
   const fileRef = useRef(null)
+
+  // Load known suppliers for payment-terms hints
+  useEffect(() => {
+    if (!tenantId) return
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`, { headers: H })
+      .then(r => r.json()).then(d => setSuppliers(d.suppliers || [])).catch(() => {})
+  }, [tenantId])
 
   async function handleImage(e) {
     const file = e.target.files?.[0]
@@ -52,15 +64,25 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
   async function runScan(dataUrl) {
     setScanning(true)
     setError(null)
+    setCommitPreview(null)
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/scan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: H,
         body: JSON.stringify({ image_base64: dataUrl, doc_type: docType, tenant_id: tenantId }),
       })
       const d = await r.json()
       if (!d.ok) throw new Error(d.detail || 'Scan failed')
       setResult(d.extracted)
+
+      // Auto-preview the payment terms / due date from commit endpoint
+      if (d.extracted?.total_cents > 0) {
+        const prevR = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/scan/commit`, {
+          method: 'POST', headers: H,
+          body: JSON.stringify({ extracted: d.extracted, auto_commit: false }),
+        })
+        if (prevR.ok) setCommitPreview((await prevR.json()).preview)
+      }
     } catch (err) {
       setError(err.message || 'Could not scan document')
     } finally {
@@ -68,29 +90,31 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
     }
   }
 
-  // ── Confirm actions ──────────────────────────────────────────────────────────
+  // ── Commit to books (smart: supplier match → payment terms → due date) ────────
 
-  async function saveAsExpense() {
+  async function commitToBooks() {
     setSaving(true)
     try {
-      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: result.date || new Date().toISOString().slice(0, 10),
-          category: result.category || 'stock',
-          description: result.supplier ? `${result.supplier}` : 'Scanned receipt',
-          amount_cents: result.total_cents || 0,
-          supplier: result.supplier,
-        }),
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/scan/commit`, {
+        method: 'POST', headers: H,
+        body: JSON.stringify({ extracted: result, auto_commit: true }),
       })
+      const d = await r.json()
+      if (!d.ok) throw new Error(d.detail || 'Commit failed')
+      setCommitted(d)
       setSaved(true)
       onExpenseCreated?.()
-    } catch {
-      setError('Could not save expense')
+    } catch (err) {
+      setError(err.message || 'Could not save to books')
     } finally {
       setSaving(false)
     }
+  }
+
+  // ── Legacy: manual expense save (fallback) ────────────────────────────────────
+
+  async function saveAsExpense() {
+    return commitToBooks()  // redirect to smart commit
   }
 
   async function applyStockUpdates() {
@@ -215,16 +239,44 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
             </div>
           )}
 
+          {/* Payment terms + due date preview from scan/commit */}
+          {commitPreview && !saved && (
+            <div style={{
+              margin: '12px 0', padding: '12px 16px',
+              background: commitPreview.days_until_due < 0 ? '#FEF2F2'
+                        : commitPreview.days_until_due <= 7 ? '#FFFBEB' : '#F0FDF4',
+              border: `1px solid ${commitPreview.days_until_due < 0 ? '#FCA5A5'
+                        : commitPreview.days_until_due <= 7 ? '#FCD34D' : '#86EFAC'}`,
+              borderRadius: 8, fontSize: 13,
+            }}>
+              <strong>
+                {commitPreview.days_until_due < 0 ? '⚠️ Overdue' :
+                 commitPreview.days_until_due === 0 ? '🔴 Due today' :
+                 commitPreview.days_until_due <= 7  ? '🟡 Due soon' : '✅ Payment terms'}
+              </strong>
+              <br />
+              {commitPreview.supplier_known
+                ? `Supplier "${commitPreview.supplier}" — ${commitPreview.payment_terms_days} day terms`
+                : `New supplier — defaulting to ${commitPreview.payment_terms_days} day terms`}
+              {commitPreview.due_date && (
+                <span style={{ fontWeight: 600 }}>
+                  {' '}· Due {commitPreview.due_date}
+                  {commitPreview.days_until_due != null && ` (${Math.abs(commitPreview.days_until_due)} days${commitPreview.days_until_due < 0 ? ' overdue' : ''})`}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Action buttons by detected type */}
           <div style={s.actions}>
-            {(detectedType === 'receipt' || detectedType === 'invoice' || result.total_cents != null) && (
-              <button onClick={saveAsExpense} disabled={saving} style={s.btnPrimary}>
-                {saving ? 'Saving…' : `💸 Save as expense (${fmt(result.total_cents)})`}
+            {(detectedType === 'receipt' || detectedType === 'invoice' || detectedType === 'delivery_note' || result.total_cents != null) && (
+              <button onClick={commitToBooks} disabled={saving} style={s.btnPrimary}>
+                {saving ? 'Saving to books…' : `📊 Commit to books${result.total_cents ? ` (${fmt(result.total_cents)})` : ''}`}
               </button>
             )}
-            {(detectedType === 'delivery_note' || result.line_items?.length > 0) && (
+            {(result.line_items?.length > 0) && (
               <button onClick={applyStockUpdates} disabled={saving} style={s.btnSecondary}>
-                {saving ? 'Updating…' : '📦 Update stock from this'}
+                {saving ? 'Updating…' : '📦 Also update stock'}
               </button>
             )}
           </div>
@@ -232,7 +284,17 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
       )}
 
       {/* Saved confirmation */}
-      {saved && (
+      {saved && committed && (
+        <div style={s.savedCard}>
+          <p style={{ ...s.savedText, fontSize: 14 }}>{committed.message}</p>
+          <p style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+            {committed.kb_chunks_added > 0 && `📚 ${committed.kb_chunks_added} knowledge chunks added · `}
+            Saved as {committed.record_type}
+          </p>
+          <button onClick={reset} style={{ ...s.btnPrimary, marginTop: 12 }}>Scan another</button>
+        </div>
+      )}
+      {saved && !committed && (
         <div style={s.savedCard}>
           <p style={s.savedText}>✓ Saved successfully</p>
           <button onClick={reset} style={s.btnPrimary}>Scan another</button>

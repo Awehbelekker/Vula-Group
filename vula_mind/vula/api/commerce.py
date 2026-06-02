@@ -610,3 +610,303 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
     except Exception as exc:
         log.error("Smart scan failed for %s: %s", tenant_id, exc)
         raise HTTPException(status_code=502, detail=f"Scan failed: {exc}")
+
+
+# ── Scan → Commit (scan result → expense/invoice + KB ingest) ────────────────
+
+@router.post("/{tenant_id}/admin/scan/commit")
+async def admin_scan_commit(tenant_id: str, body: dict):
+    """
+    Commit a smart-scan result into the books:
+
+    1. Match supplier name against commerce_suppliers → get payment_terms_days
+    2. Calculate due_date = date + payment_terms_days
+    3. For receipts / petty cash → create commerce_expense
+       For invoices / delivery_notes → create commerce_invoice (direction=inbound)
+    4. Ingest the document image into the tenant KB so the AI learns from it
+    5. Return the created record + a "due in X days" message
+
+    Body:
+        extracted:    the JSON from /admin/scan
+        image_base64: optional — if provided, ingests into KB as text
+        auto_commit:  bool (default true) — if false, returns preview only
+    """
+    import json as _j
+    from uuid import uuid4
+    from datetime import date, timedelta
+
+    extracted = body.get("extracted", {})
+    auto_commit = body.get("auto_commit", True)
+    image_b64 = body.get("image_base64", "")
+
+    if not extracted:
+        raise HTTPException(status_code=400, detail="No extracted data provided.")
+
+    db = service._client()
+    today = date.today()
+
+    # ── 1. Supplier lookup & payment terms ──────────────────────────────────
+    supplier_name = extracted.get("supplier") or ""
+    payment_terms_days = 30  # default
+    supplier_row = None
+
+    if supplier_name:
+        # Try exact match first, then alias match
+        result = db.table("commerce_suppliers") \
+            .select("*") \
+            .eq("tenant_id", tenant_id) \
+            .ilike("name", supplier_name) \
+            .limit(1).execute()
+
+        if not result.data:
+            # Search aliases array
+            result = db.table("commerce_suppliers") \
+                .select("*") \
+                .eq("tenant_id", tenant_id) \
+                .contains("aliases", [supplier_name]) \
+                .limit(1).execute()
+
+        if result.data:
+            supplier_row = result.data[0]
+            payment_terms_days = supplier_row.get("payment_terms_days", 30)
+
+    # ── 2. Resolve dates ────────────────────────────────────────────────────
+    doc_date = today
+    if extracted.get("date"):
+        try:
+            doc_date = date.fromisoformat(extracted["date"])
+        except ValueError:
+            pass
+
+    due_date = None
+    if extracted.get("due_date"):
+        try:
+            due_date = date.fromisoformat(extracted["due_date"])
+        except ValueError:
+            pass
+
+    if not due_date and payment_terms_days is not None:
+        due_date = doc_date + timedelta(days=payment_terms_days)
+
+    days_until_due = (due_date - today).days if due_date else None
+
+    # ── 3. Determine record type ────────────────────────────────────────────
+    doc_type = extracted.get("doc_type", "receipt")
+    is_invoice = doc_type in ("invoice", "delivery_note")
+    total_cents = int(extracted.get("total_cents") or 0)
+    vat_cents = int(extracted.get("vat_cents") or 0)
+
+    # ── 4. Preview mode ─────────────────────────────────────────────────────
+    preview = {
+        "supplier": supplier_name,
+        "supplier_known": supplier_row is not None,
+        "payment_terms_days": payment_terms_days,
+        "doc_date": str(doc_date),
+        "due_date": str(due_date) if due_date else None,
+        "days_until_due": days_until_due,
+        "total_cents": total_cents,
+        "doc_type": doc_type,
+        "record_type": "invoice" if is_invoice else "expense",
+    }
+
+    if not auto_commit:
+        return {"ok": True, "preview": preview, "committed": False}
+
+    # ── 5. Write to books ───────────────────────────────────────────────────
+    record_id = str(uuid4())
+    committed_record = None
+
+    if is_invoice:
+        row = {
+            "id": record_id,
+            "tenant_id": tenant_id,
+            "direction": "inbound",
+            "doc_type": doc_type,
+            "status": "draft",
+            "supplier": supplier_name,
+            "date": str(doc_date),
+            "due_date": str(due_date) if due_date else None,
+            "payment_terms_days": payment_terms_days,
+            "subtotal_cents": total_cents - vat_cents,
+            "vat_cents": vat_cents,
+            "total_cents": total_cents,
+            "line_items": _j.dumps(extracted.get("line_items", [])),
+            "notes": extracted.get("notes"),
+            "source": "scanner",
+            "scan_confidence": extracted.get("confidence"),
+        }
+        result = db.table("commerce_invoices").insert(row).execute()
+        committed_record = result.data[0] if result.data else row
+    else:
+        row = {
+            "id": record_id,
+            "tenant_id": tenant_id,
+            "date": str(doc_date),
+            "due_date": str(due_date) if due_date else None,
+            "category": extracted.get("category") or "supplies",
+            "description": f"{supplier_name or 'Unknown'} — {doc_type}",
+            "amount_cents": total_cents,
+            "supplier": supplier_name,
+            "payment_terms_days": payment_terms_days,
+            "status": "pending",
+            "source": "scanner",
+            "doc_type": doc_type,
+            "line_items": _j.dumps(extracted.get("line_items", [])),
+            "scan_confidence": extracted.get("confidence"),
+        }
+        result = db.table("commerce_expenses").insert(row).execute()
+        committed_record = result.data[0] if result.data else row
+
+    # ── 6. Ingest into KB so the AI learns from it ──────────────────────────
+    kb_chunks = 0
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+
+        # Convert extracted data to readable text for KB
+        lines = [f"Document type: {doc_type}", f"Supplier: {supplier_name}", f"Date: {doc_date}"]
+        if due_date:
+            lines.append(f"Due date: {due_date} ({payment_terms_days} day terms)")
+        lines.append(f"Total: R{total_cents/100:.2f} (incl VAT R{vat_cents/100:.2f})")
+        if extracted.get("line_items"):
+            lines.append("Line items:")
+            for item in extracted["line_items"][:20]:
+                lines.append(f"  - {item.get('description','')} {item.get('quantity','')} {item.get('unit','')} @ R{(item.get('unit_price_cents',0) or 0)/100:.2f}")
+        if extracted.get("notes"):
+            lines.append(f"Notes: {extracted['notes']}")
+
+        doc_text = "\n".join(lines)
+        ingest_result = await pipeline.ingest_text(
+            text=doc_text,
+            filename=f"{doc_type}_{supplier_name.replace(' ','_')}_{doc_date}.txt",
+        )
+        kb_chunks = getattr(ingest_result, "chunks_stored", 0)
+    except Exception as kb_exc:
+        log.warning("KB ingest failed for scan commit %s: %s", record_id, kb_exc)
+
+    # ── 7. Build human-readable message ────────────────────────────────────
+    if due_date:
+        if days_until_due < 0:
+            msg = f"⚠️ OVERDUE by {abs(days_until_due)} days — R{total_cents/100:.0f} to {supplier_name or 'supplier'}"
+        elif days_until_due == 0:
+            msg = f"🔴 DUE TODAY — R{total_cents/100:.0f} to {supplier_name or 'supplier'}"
+        elif days_until_due <= 7:
+            msg = f"🟡 Due in {days_until_due} days (by {due_date}) — R{total_cents/100:.0f}"
+        else:
+            msg = f"✅ Captured — R{total_cents/100:.0f} due {due_date} ({days_until_due} days)"
+    else:
+        msg = f"✅ Captured — R{total_cents/100:.0f} (no due date)"
+
+    return {
+        "ok": True,
+        "committed": True,
+        "record_type": "invoice" if is_invoice else "expense",
+        "record_id": record_id,
+        "record": committed_record,
+        "preview": preview,
+        "kb_chunks_added": kb_chunks,
+        "message": msg,
+    }
+
+
+@router.get("/{tenant_id}/admin/expenses/due")
+async def admin_expenses_due(
+    tenant_id: str,
+    days_ahead: int = Query(30, ge=0, le=365),
+):
+    """Return all pending payments due within the next N days — for the Budget 'Due' tab."""
+    from datetime import date, timedelta
+    db = service._client()
+    cutoff = str(date.today() + timedelta(days=days_ahead))
+    today = str(date.today())
+
+    # Overdue expenses
+    overdue = db.table("commerce_expenses").select("*") \
+        .eq("tenant_id", tenant_id) \
+        .eq("status", "pending") \
+        .lt("due_date", today) \
+        .not_.is_("due_date", "null") \
+        .order("due_date").execute()
+
+    # Due soon
+    upcoming = db.table("commerce_expenses").select("*") \
+        .eq("tenant_id", tenant_id) \
+        .eq("status", "pending") \
+        .gte("due_date", today) \
+        .lte("due_date", cutoff) \
+        .not_.is_("due_date", "null") \
+        .order("due_date").execute()
+
+    # Inbound invoices due
+    inv_due = db.table("commerce_invoices").select("*") \
+        .eq("tenant_id", tenant_id) \
+        .eq("direction", "inbound") \
+        .in_("status", ["draft", "sent"]) \
+        .lte("due_date", cutoff) \
+        .not_.is_("due_date", "null") \
+        .order("due_date").execute()
+
+    overdue_list = overdue.data or []
+    upcoming_list = upcoming.data or []
+    inv_list = inv_due.data or []
+
+    total_overdue = sum(r["amount_cents"] for r in overdue_list)
+    total_upcoming = sum(r["amount_cents"] for r in upcoming_list)
+    total_inv = sum(r.get("total_cents", 0) for r in inv_list)
+
+    return {
+        "tenant_id": tenant_id,
+        "days_ahead": days_ahead,
+        "overdue": overdue_list,
+        "overdue_total_cents": total_overdue,
+        "upcoming": upcoming_list,
+        "upcoming_total_cents": total_upcoming,
+        "invoices_due": inv_list,
+        "invoices_total_cents": total_inv,
+        "grand_total_cents": total_overdue + total_upcoming + total_inv,
+    }
+
+
+@router.get("/{tenant_id}/admin/suppliers")
+async def admin_list_suppliers(tenant_id: str):
+    """List known suppliers for this tenant — used by Smart Scanner for payment-term lookup."""
+    db = service._client()
+    result = db.table("commerce_suppliers").select("*") \
+        .eq("tenant_id", tenant_id).order("name").execute()
+    return {"suppliers": result.data or [], "count": len(result.data or [])}
+
+
+@router.post("/{tenant_id}/admin/suppliers")
+async def admin_upsert_supplier(tenant_id: str, body: dict):
+    """Add or update a supplier with payment terms."""
+    from uuid import uuid4
+    db = service._client()
+    row = {
+        "id": body.get("id") or str(uuid4()),
+        "tenant_id": tenant_id,
+        "name": body["name"],
+        "aliases": body.get("aliases", []),
+        "payment_terms_days": int(body.get("payment_terms_days", 30)),
+        "category": body.get("category", "general"),
+        "contact_phone": body.get("contact_phone"),
+        "contact_email": body.get("contact_email"),
+        "account_number": body.get("account_number"),
+        "notes": body.get("notes"),
+    }
+    result = db.table("commerce_suppliers") \
+        .upsert(row, on_conflict="tenant_id,name").execute()
+    return result.data[0] if result.data else row
+
+
+@router.patch("/{tenant_id}/admin/expenses/{expense_id}/pay")
+async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
+    """Mark an expense as paid — removes it from the Due view."""
+    from datetime import datetime
+    db = service._client()
+    result = db.table("commerce_expenses").update({
+        "status": "paid",
+        "paid_at": datetime.utcnow().isoformat(),
+    }).eq("tenant_id", tenant_id).eq("id", expense_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    return result.data[0]

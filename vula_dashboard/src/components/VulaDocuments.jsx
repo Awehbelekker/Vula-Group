@@ -174,26 +174,52 @@ export default function VulaDocuments() {
     if (!tenantId.trim() || uploading) return;
     setUploading(true);
     const pending = queue.filter((q) => q.status === "pending");
+    if (!pending.length) { setUploading(false); return; }
 
-    for (let i = 0; i < pending.length; i++) {
-      const item = pending[i];
-      setQueue((q) => q.map((x) => x.name === item.name ? { ...x, status: "uploading" } : x));
+    // Mark all as uploading immediately
+    setQueue((q) => q.map((x) => x.status === "pending" ? { ...x, status: "uploading" } : x));
 
-      try {
-        const fd = new FormData();
-        fd.append("tenant_id", tenantId.trim());
-        fd.append("file", item.file);
-        const headers = apiKey ? { "X-API-Key": apiKey } : {};
-        const resp = await fetch(`${VULA_API}/ingest`, { method: "POST", headers, body: fd });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        setQueue((q) => q.map((x) => x.name === item.name ? { ...x, status: "queued" } : x));
-      } catch {
-        setQueue((q) => q.map((x) => x.name === item.name ? { ...x, status: "error" } : x));
+    try {
+      // Batch upload — all files in one request, KB ingest runs in parallel on server
+      const fd = new FormData();
+      fd.append("tenant_id", tenantId.trim());
+      pending.forEach((item) => fd.append("files", item.file));
+      const headers = apiKey ? { "X-API-Key": apiKey } : {};
+      const resp = await fetch(`${VULA_API}/ingest/batch`, { method: "POST", headers, body: fd });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        // Map per-file statuses from batch response
+        const fileStatuses = {};
+        (data.files || []).forEach((f) => { fileStatuses[f.filename] = f.status; });
+        setQueue((q) => q.map((x) => ({
+          ...x,
+          status: fileStatuses[x.name] === "queued" ? "queued"
+                : fileStatuses[x.name] === "error"  ? "error"
+                : fileStatuses[x.name] === "skipped" ? "error"
+                : x.status,
+        })));
+      } else {
+        // Fallback: upload individually
+        for (const item of pending) {
+          try {
+            const fd2 = new FormData();
+            fd2.append("tenant_id", tenantId.trim());
+            fd2.append("file", item.file);
+            const r = await fetch(`${VULA_API}/ingest`, { method: "POST", headers, body: fd2 });
+            setQueue((q) => q.map((x) => x.name === item.name
+              ? { ...x, status: r.ok ? "queued" : "error" } : x));
+          } catch {
+            setQueue((q) => q.map((x) => x.name === item.name ? { ...x, status: "error" } : x));
+          }
+        }
       }
+    } catch {
+      setQueue((q) => q.map((x) => x.status === "uploading" ? { ...x, status: "error" } : x));
     }
 
     setUploading(false);
-    setTimeout(load, 1500);
+    setTimeout(load, 2000);
   };
 
   const pendingCount = queue.filter((q) => q.status === "pending").length;
