@@ -45,6 +45,9 @@ vula_takeoff_uploads/
 # Ollama model cache
 .ollama/
 
+# Supabase CLI cache
+vula_mind/supabase/.temp/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -251,67 +251,22 @@ async def admin_list_invoices(
     tenant_id: str,
     status: Optional[str] = Query(None),
     doc_type: Optional[str] = Query(None),  # invoice | quote | proforma
+    direction: str = Query("outbound"),     # outbound | inbound
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    db = service._client()
-    q = db.table("commerce_invoices").select("*").eq("tenant_id", tenant_id)
-    if status:
-        q = q.eq("status", status)
-    if doc_type:
-        q = q.eq("doc_type", doc_type)
-    result = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
-    rows = result.data or []
+    """List all invoices/quotes for a tenant."""
+    rows = await service.list_invoices(
+        tenant_id, status=status, doc_type=doc_type, direction=direction, limit=limit, offset=offset
+    )
     return {"invoices": rows, "count": len(rows)}
 
 
 @router.post("/{tenant_id}/admin/invoices")
-async def admin_create_invoice(tenant_id: str, body: dict):
-    from uuid import uuid4
-    db = service._client()
-
-    # Auto-generate invoice number
-    last = db.table("commerce_invoices").select("invoice_number") \
-        .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(1).execute()
-    prefix = tenant_id.upper()[:3]
-    if last.data:
-        try:
-            num = int(last.data[0]["invoice_number"].split("-")[-1]) + 1
-        except Exception:
-            num = 1
-    else:
-        num = 1
-    invoice_number = f"{prefix}-{num:04d}"
-
-    # Calculate totals
-    line_items = body.get("line_items", [])
-    subtotal = sum(int(i.get("total_cents", 0)) for i in line_items)
-    vat_rate = float(body.get("vat_rate", 15.0))
-    vat_cents = round(subtotal * vat_rate / 100)
-    total_cents = subtotal + vat_cents
-
-    row = {
-        "id": str(uuid4()),
-        "tenant_id": tenant_id,
-        "invoice_number": invoice_number,
-        "customer_name": body.get("customer_name", ""),
-        "customer_email": body.get("customer_email"),
-        "customer_phone": body.get("customer_phone"),
-        "customer_address": body.get("customer_address"),
-        "line_items": line_items,
-        "subtotal_cents": subtotal,
-        "vat_rate": vat_rate,
-        "vat_cents": vat_cents,
-        "total_cents": total_cents,
-        "status": body.get("status", "draft"),
-        "issue_date": body.get("issue_date"),
-        "due_date": body.get("due_date"),
-        "order_id": body.get("order_id"),
-        "notes": body.get("notes"),
-        "payment_method": body.get("payment_method"),
-    }
-    result = db.table("commerce_invoices").insert(row).execute()
-    return result.data[0] if result.data else row
+async def admin_create_invoice(tenant_id: str, body: InvoiceCreate):
+    """Create an invoice, quote, or proforma. Totals computed server-side."""
+    created = await service.create_invoice(tenant_id, body.model_dump(mode="json"))
+    return created
 
 
 @router.patch("/{tenant_id}/admin/invoices/{invoice_id}")
@@ -525,6 +480,45 @@ _SCAN_PROMPTS = {
 }
 
 
+def _scan_quality_ok(ex: dict) -> bool:
+    """Heuristic: did the vision model produce a usable financial extraction?
+
+    Used to decide whether to escalate a weak local read to the cloud model.
+    Fails on the common local-model failure modes:
+      - parse error / self-reported low confidence
+      - missing money total or no line items (llava)
+      - line-item totals that don't reconcile with the stated total (qwen often
+        reads the structure correctly but grabs the wrong number as the total,
+        while still reporting "high" confidence — so we can't trust confidence
+        alone; we cross-check the arithmetic instead).
+    """
+    if not ex or ex.get("raw"):
+        return False
+    if str(ex.get("confidence") or "").lower() == "low":
+        return False
+    total = ex.get("total_cents") or 0
+    items = ex.get("line_items") or []
+    if not total or not items:
+        return False
+
+    # Reconciliation: sum of line totals should be within ~30% of the stated
+    # total (allowing for VAT, delivery, rounding). A gross mismatch means the
+    # model misread at least one money figure → escalate.
+    line_sum = 0
+    for it in items:
+        lt = it.get("total_cents")
+        if lt is None:  # fall back to qty × unit price
+            q = it.get("quantity") or 0
+            up = it.get("unit_price_cents") or 0
+            lt = q * up
+        line_sum += int(lt or 0)
+    if line_sum > 0:
+        ratio = line_sum / total
+        if ratio > 1.3 or ratio < 0.7:
+            return False
+    return True
+
+
 @router.post("/{tenant_id}/admin/scan")
 async def admin_smart_scan(tenant_id: str, body: ScanRequest):
     """
@@ -569,43 +563,62 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
 
     try:
         import litellm
-        from core.llm_router import resolve_vision_route
+        from core.llm_router import resolve_vision_route, resolve_cloud_vision_route
         litellm.drop_params = True
 
-        # Local-first vision: local llava via Ollama when reachable, else the
-        # OpenRouter vision model. Mirrors the generation routing policy.
+        async def _extract(model, api_key, api_base):
+            """One vision pass → parsed dict (with 'raw' on parse failure)."""
+            response = await litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": instruction},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}},
+                        ],
+                    },
+                ],
+                temperature=0.1,
+                max_tokens=2000,
+                api_key=api_key,
+                api_base=api_base,
+            )
+            content = response.choices[0].message.content or "{}"
+            content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
+            content = _re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=_re.MULTILINE).strip()
+            try:
+                return _json.loads(content)
+            except Exception:
+                m = _re.search(r"\{.*\}", content, _re.DOTALL)
+                return _json.loads(m.group(0)) if m else {"raw": content, "confidence": "low"}
+
+        # ── Local-first: try the on-device vision model (free, private) ──────
         model, api_key, api_base = await resolve_vision_route()
+        extracted = await _extract(model, api_key, api_base)
+        used_model = model
+        escalated = False
 
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": instruction},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}},
-                    ],
-                },
-            ],
-            temperature=0.1,
-            max_tokens=2000,
-            api_key=api_key,
-            api_base=api_base,
-        )
-        content = response.choices[0].message.content or "{}"
-        # Strip markdown fences / think tags
-        content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
-        content = _re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=_re.MULTILINE).strip()
+        # ── Escalate to cloud if the local read looks unreliable ─────────────
+        # Triggers: explicit low confidence, missing/zero total, no line items,
+        # or an unparseable response. Only escalates when the primary was local
+        # and a cloud route is actually configured.
+        if model.startswith("ollama/") and not _scan_quality_ok(extracted):
+            cloud = resolve_cloud_vision_route()
+            if cloud:
+                log.info("Smart scan: local read weak (%s) — escalating to cloud %s",
+                         extracted.get("confidence"), cloud[0])
+                try:
+                    cloud_extracted = await _extract(*cloud)
+                    if _scan_quality_ok(cloud_extracted) or cloud_extracted.get("total_cents"):
+                        extracted = cloud_extracted
+                        used_model = cloud[0]
+                        escalated = True
+                except Exception as cloud_exc:
+                    log.warning("Cloud vision escalation failed: %s", cloud_exc)
 
-        try:
-            extracted = _json.loads(content)
-        except Exception:
-            # Try to find a JSON object in the text
-            m = _re.search(r"\{.*\}", content, _re.DOTALL)
-            extracted = _json.loads(m.group(0)) if m else {"raw": content, "confidence": "low"}
-
-        return {"ok": True, "extracted": extracted, "model": model}
+        return {"ok": True, "extracted": extracted, "model": used_model, "escalated": escalated}
 
     except Exception as exc:
         log.error("Smart scan failed for %s: %s", tenant_id, exc)
@@ -777,7 +790,7 @@ async def admin_scan_commit(tenant_id: str, body: dict):
 
         doc_text = "\n".join(lines)
         ingest_result = await pipeline.ingest_text(
-            text=doc_text,
+            content=doc_text,
             filename=f"{doc_type}_{supplier_name.replace(' ','_')}_{doc_date}.txt",
         )
         kb_chunks = getattr(ingest_result, "chunks_stored", 0)

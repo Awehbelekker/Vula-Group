@@ -63,6 +63,63 @@ async def test_dispatch_track_order_found():
     assert out == {"order_id": "OTH-00042", "status": "dispatched", "total": "R250.00"}
 
 
+@pytest.mark.asyncio
+async def test_dispatch_create_quote_from_explicit_items():
+    skill = CommerceAssistantSkill()
+    product = {"id": "p1", "name": "Fresh Snoek", "price_cents": 18500}
+    created = {"invoice_number": "OFF-QTE-00001", "total_cents": 37000}
+    with (
+        patch("core.skills.commerce_assistant.service.get_product_by_slug", new=AsyncMock(return_value=product)),
+        patch("core.skills.commerce_assistant.service.create_invoice", new=AsyncMock(return_value=created)) as mock_create,
+    ):
+        out = await skill._dispatch_tool(
+            "create_quote", {"items": [{"product": "snoek", "quantity": 2}]}, CTX
+        )
+    assert out == {"quote_number": "OFF-QTE-00001", "items": 1, "total": "R370.00"}
+    payload = mock_create.await_args.args[1]
+    assert payload["doc_type"] == "quote"
+    assert payload["customer_phone"] == CTX["customer_phone"]
+    assert payload["line_items"][0] == {
+        "description": "Fresh Snoek",
+        "quantity": 2,
+        "unit_price_cents": 18500,
+        "product_id": "p1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_quote_from_cart_when_no_items():
+    skill = CommerceAssistantSkill()
+    cart = {
+        "id": "c1",
+        "commerce_cart_items": [
+            {"product_id": "p1", "quantity": 3, "unit_price_cents": 18500,
+             "commerce_products": {"name": "Fresh Snoek"}},
+        ],
+    }
+    created = {"invoice_number": "OFF-QTE-00002", "total_cents": 55500}
+    with (
+        patch("core.skills.commerce_assistant.service.get_or_create_cart", new=AsyncMock(return_value=cart)),
+        patch("core.skills.commerce_assistant.service.create_invoice", new=AsyncMock(return_value=created)) as mock_create,
+    ):
+        out = await skill._dispatch_tool("create_quote", {}, CTX)
+    assert out["quote_number"] == "OFF-QTE-00002"
+    assert out["items"] == 1
+    assert mock_create.await_args.args[1]["line_items"][0]["quantity"] == 3
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_quote_empty_returns_error():
+    skill = CommerceAssistantSkill()
+    with (
+        patch("core.skills.commerce_assistant.service.get_or_create_cart", new=AsyncMock(return_value={"id": "c1", "commerce_cart_items": []})),
+        patch("core.skills.commerce_assistant.service.create_invoice", new=AsyncMock()) as mock_create,
+    ):
+        out = await skill._dispatch_tool("create_quote", {}, CTX)
+    assert "error" in out
+    mock_create.assert_not_awaited()
+
+
 def test_start_checkout_uses_store_url():
     skill = CommerceAssistantSkill()
     with patch("core.skills.commerce_assistant.settings") as mock_settings:

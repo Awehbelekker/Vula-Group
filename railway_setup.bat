@@ -11,16 +11,28 @@ echo.
 cd /d "%~dp0"
 railway link --environment production
 
+:: ── Secrets ──────────────────────────────────────────────────────────────────
+:: Secrets are NOT stored in this committed file. Set them in your shell session
+:: before running this script (they are read from the environment below), e.g.:
+::    set SUPABASE_SERVICE_KEY=...
+::    set QDRANT_API_KEY=...
+::    set API_KEY=...
+:: Or paste them straight into the Railway dashboard. If any are empty this
+:: script aborts so you never deploy with missing credentials.
+if "%SUPABASE_SERVICE_KEY%"=="" goto :missing_secret
+if "%QDRANT_API_KEY%"=="" goto :missing_secret
+if "%API_KEY%"=="" goto :missing_secret
+
 echo Setting environment variables...
 
 railway variables set SUPABASE_URL=https://jzccetzmahpcoiqwlljm.supabase.co
-railway variables set SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp6Y2NldHptYWhwY29pcXdsbGptIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTk3MDk0MCwiZXhwIjoyMDk1NTQ2OTQwfQ.aLeOawwaXSklUxqdkPhShfb2KRibhm-aGgtuCwMnGjU
+railway variables set SUPABASE_SERVICE_KEY=%SUPABASE_SERVICE_KEY%
 railway variables set QDRANT_BASE=https://b184d619-61db-4633-95fc-32e7761d7105.sa-east-1-0.aws.cloud.qdrant.io
-railway variables set QDRANT_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6OTBhODZlM2YtMmQwZi00YmJkLWFjMDgtZjlhYjQ1MDM2NTQ3In0.65mLi8zFvVZUfxXGae_X9PmntVJQjQKbScJamADbTNY
+railway variables set QDRANT_API_KEY=%QDRANT_API_KEY%
 railway variables set OLLAMA_BASE=https://openrouter.ai/api/v1
 railway variables set MODEL_WORKER=deepseek/deepseek-r1-distill-llama-70b
 railway variables set MODEL_EMBED=text-embedding-3-small
-railway variables set API_KEY=0d409e634bd4e81a0d7dd0764264db6cac20721e2ce43915a43cd1997a019ca5
+railway variables set API_KEY=%API_KEY%
 railway variables set WHATSAPP_VERIFY_TOKEN=vula-webhook-2026
 railway variables set TEAM_WHATSAPP=27827077080
 railway variables set DATA_DIR=/data
@@ -41,4 +53,16 @@ railway up --detach
 echo.
 echo Done! Check Railway dashboard for the deployment URL.
 echo Set VULA_BASE_URL to your Railway URL once it is live.
+goto :end
+
+:missing_secret
+echo.
+echo ERROR: One or more secrets are not set in this shell session.
+echo Set them first, then re-run, e.g.:
+echo   set SUPABASE_SERVICE_KEY=your-key-here
+echo   set QDRANT_API_KEY=your-key-here
+echo   set API_KEY=your-key-here
+echo.
+
+:end
 pause

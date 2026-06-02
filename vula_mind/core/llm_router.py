@@ -105,3 +105,14 @@ async def resolve_vision_route() -> Tuple[str, Optional[str], str]:
         "Ollama unreachable and no OPENROUTER_API_KEY set — vision scan will likely fail"
     )
     return f"ollama/{settings.model_ocr}", None, settings.ollama_base
+
+
+def resolve_cloud_vision_route() -> Optional[Tuple[str, Optional[str], str]]:
+    """Force the cloud vision route regardless of Ollama availability.
+
+    Used by the Smart Scanner to escalate a weak local read to the stronger
+    cloud model (settings.model_vision). Returns None if no cloud key is set.
+    """
+    if settings.openrouter_api_key:
+        return f"openrouter/{settings.model_vision}", settings.openrouter_api_key, OPENROUTER_BASE
+    return None

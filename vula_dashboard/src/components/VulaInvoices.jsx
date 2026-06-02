@@ -22,17 +22,29 @@ const STATUS = {
 export default function VulaInvoices({ tenantId, products = [] }) {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showCreate, setShowCreate] = useState(false)
+  const [showCreate, setShowCreate] = useState(null) // null | 'invoice' | 'quote'
+  const [docType, setDocType] = useState('invoice')
 
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices`)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?doc_type=${docType}`)
     const d = await r.json()
     setInvoices(d.invoices || [])
     setLoading(false)
-  }, [tenantId])
+  }, [tenantId, docType])
 
   useEffect(() => { load() }, [load])
+
+  async function convertToInvoice(quote) {
+    if (!confirm(`Convert ${quote.invoice_number} to a tax invoice?`)) return
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${quote.id}/convert`, {
+      method: 'POST'
+    })
+    if (r.ok) {
+      setDocType('invoice')
+      load()
+    }
+  }
 
   async function setStatus(inv, status) {
     const body = { status }
@@ -60,18 +72,29 @@ export default function VulaInvoices({ tenantId, products = [] }) {
   const fmt = c => `R${(c / 100).toFixed(2)}`
 
   if (showCreate) {
-    return <InvoiceCreate tenantId={tenantId} products={products} onDone={() => { setShowCreate(false); load() }} onCancel={() => setShowCreate(false)} />
+    return <InvoiceCreate
+      tenantId={tenantId}
+      products={products}
+      docType={showCreate}
+      onDone={() => { setShowCreate(null); load() }}
+      onCancel={() => setShowCreate(null)}
+    />
   }
 
   return (
     <div>
+      <div style={s.tabs}>
+        <button onClick={() => setDocType('invoice')} style={{...s.tab, ...(docType === 'invoice' ? s.tabActive : {})}}>Invoices</button>
+        <button onClick={() => setDocType('quote')} style={{...s.tab, ...(docType === 'quote' ? s.tabActive : {})}}>Quotes</button>
+      </div>
+
       <div style={s.topBar}>
-        <p style={s.count}>{invoices.length} invoice{invoices.length !== 1 ? 's' : ''}</p>
-        <button onClick={() => setShowCreate(true)} style={s.newBtn}>+ New invoice</button>
+        <p style={s.count}>{invoices.length} {docType}{invoices.length !== 1 ? 's' : ''}</p>
+        <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>
       </div>
 
       {loading ? <p style={s.muted}>Loading…</p> : invoices.length === 0 ? (
-        <p style={s.muted}>No invoices yet. Create one, or scan an existing invoice with the Smart Scanner.</p>
+        <p style={s.muted}>No {docType}s yet. Create one, or scan an existing document with the Smart Scanner.</p>
       ) : (
         <div style={s.list}>
           {invoices.map(inv => {
@@ -87,11 +110,18 @@ export default function VulaInvoices({ tenantId, products = [] }) {
                 </div>
                 <p style={s.cust}>{inv.customer_name}{inv.customer_phone ? ` · ${inv.customer_phone}` : ''}</p>
                 <p style={s.dates}>
-                  Issued {inv.issue_date}{inv.due_date ? ` · Due ${inv.due_date}` : ''}
+                  {inv.doc_type === 'quote' ? 'Quoted' : 'Issued'} {inv.issue_date}
+                  {inv.due_date ? ` · Due ${inv.due_date}` : ''}
+                  {inv.valid_until ? ` · Valid until ${inv.valid_until}` : ''}
                 </p>
                 <div style={s.cardActions}>
                   {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
-                  {inv.status !== 'paid' && <button onClick={() => setStatus(inv, 'paid')} style={s.actPaid}>✓ Mark paid</button>}
+                  {inv.doc_type === 'quote' && inv.status !== 'accepted' && (
+                    <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
+                  )}
+                  {inv.doc_type === 'invoice' && inv.status !== 'paid' && (
+                    <button onClick={() => setStatus(inv, 'paid')} style={s.actPaid}>✓ Mark paid</button>
+                  )}
                   <button onClick={() => del(inv.id)} style={s.actDel}>Delete</button>
                 </div>
               </div>
@@ -105,10 +135,11 @@ export default function VulaInvoices({ tenantId, products = [] }) {
 
 // ── Create invoice form ─────────────────────────────────────────────────────
 
-function InvoiceCreate({ tenantId, products, onDone, onCancel }) {
+function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   const [customer, setCustomer] = useState({ name: '', phone: '', email: '', address: '' })
   const [items, setItems] = useState([{ description: '', quantity: 1, unit_price: '' }])
   const [dueDate, setDueDate] = useState('')
+  const [validUntil, setValidUntil] = useState('')
   const [vatRate, setVatRate] = useState(15)
   const [saving, setSaving] = useState(false)
 
@@ -137,11 +168,14 @@ function InvoiceCreate({ tenantId, products, onDone, onCancel }) {
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        doc_type: docType,
         customer_name: customer.name, customer_phone: customer.phone,
         customer_email: customer.email, customer_address: customer.address,
         line_items: lineItems, vat_rate: vatRate,
         issue_date: new Date().toISOString().slice(0, 10),
-        due_date: dueDate || null, status: 'draft',
+        due_date: dueDate || null,
+        valid_until: validUntil || null,
+        status: 'draft',
       }),
     })
     setSaving(false)
@@ -152,7 +186,7 @@ function InvoiceCreate({ tenantId, products, onDone, onCancel }) {
     <div>
       <div style={s.topBar}>
         <button onClick={onCancel} style={s.backBtn}>← Back</button>
-        <h3 style={s.formTitle}>New invoice</h3>
+        <h3 style={s.formTitle}>New {docType}</h3>
       </div>
 
       <div style={s.formSection}>
@@ -178,7 +212,11 @@ function InvoiceCreate({ tenantId, products, onDone, onCancel }) {
       <button onClick={addItem} style={s.addItemBtn}>+ Add line</button>
 
       <div style={s.fRow}>
-        <label style={s.dueLabel}>Due date <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} style={s.fInput} /></label>
+        {docType === 'invoice' ? (
+          <label style={s.dueLabel}>Due date <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} style={s.fInput} /></label>
+        ) : (
+          <label style={s.dueLabel}>Valid until <input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)} style={s.fInput} /></label>
+        )}
         <label style={s.dueLabel}>VAT % <input type="number" value={vatRate} onChange={e => setVatRate(parseFloat(e.target.value) || 0)} style={{ ...s.fInput, width: 60 }} /></label>
       </div>
 
@@ -189,13 +227,16 @@ function InvoiceCreate({ tenantId, products, onDone, onCancel }) {
       </div>
 
       <button onClick={save} disabled={saving || !customer.name} style={s.saveInvBtn}>
-        {saving ? 'Saving…' : 'Create invoice'}
+        {saving ? 'Saving…' : `Create ${docType}`}
       </button>
     </div>
   )
 }
 
 const s = {
+  tabs:       { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #DDD8CE', paddingBottom: 8 },
+  tab:        { padding: '6px 16px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
+  tabActive:  { background: 'rgba(44,85,69,0.1)', color: '#2C5545' },
   topBar:     { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 },
   count:      { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
   newBtn:     { marginLeft: 'auto', padding: '8px 16px', background: '#2C5545', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },

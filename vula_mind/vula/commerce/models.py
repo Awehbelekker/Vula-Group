@@ -236,9 +236,12 @@ class InvoiceCreate(BaseModel):
     customer_address: Optional[str] = None
     line_items: List[InvoiceLineItem]
     vat_rate: float = 15.0
+    status: InvoiceStatus = InvoiceStatus.draft
+    issue_date: Optional[str] = None       # ISO date
     due_date: Optional[str] = None         # ISO date — invoices
     valid_until: Optional[str] = None      # ISO date — quotes/proformas
     notes: Optional[str] = None
+    payment_method: Optional[str] = None
     order_id: Optional[UUID] = None
 
     @field_validator("line_items")
@@ -253,11 +256,13 @@ class Invoice(BaseModel):
     id: UUID
     tenant_id: str
     doc_type: DocType = DocType.invoice
+    direction: str = "outbound"           # outbound (to customer) | inbound (from supplier)
     invoice_number: str
     customer_name: str
     customer_email: Optional[str] = None
     customer_phone: Optional[str] = None
     customer_address: Optional[str] = None
+    supplier: Optional[str] = None         # for inbound
     line_items: List[InvoiceLineItem] = []
     subtotal_cents: int = 0
     vat_rate: float = 15.0
@@ -271,12 +276,61 @@ class Invoice(BaseModel):
     source_quote_id: Optional[UUID] = None
     converted_invoice_id: Optional[UUID] = None
     notes: Optional[str] = None
+    source: str = "manual"                 # manual | scanner
+    scan_confidence: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
     @property
     def total_rands(self) -> str:
         return f"R{self.total_cents / 100:.2f}"
+
+
+# ── Expenses & Suppliers ──────────────────────────────────────────────────────
+
+class ExpenseStatus(str, Enum):
+    pending = "pending"
+    paid = "paid"
+    cancelled = "cancelled"
+
+
+class Expense(BaseModel):
+    id: UUID
+    tenant_id: str
+    date: str
+    due_date: Optional[str] = None
+    category: str = "other"
+    description: str
+    amount_cents: int
+    supplier: Optional[str] = None
+    payment_terms_days: int = 30
+    status: ExpenseStatus = ExpenseStatus.pending
+    source: str = "manual"
+    doc_type: Optional[str] = None
+    line_items: List[InvoiceLineItem] = []
+    receipt_url: Optional[str] = None
+    scan_confidence: Optional[str] = None
+    paid_at: Optional[datetime] = None
+    created_at: datetime
+
+    @property
+    def amount_rands(self) -> str:
+        return f"R{self.amount_cents / 100:.2f}"
+
+
+class Supplier(BaseModel):
+    id: UUID
+    tenant_id: str
+    name: str
+    aliases: List[str] = []
+    payment_terms_days: int = 30
+    category: str = "general"
+    contact_phone: Optional[str] = None
+    contact_email: Optional[str] = None
+    account_number: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 # ── Yoco ─────────────────────────────────────────────────────────────────────

@@ -88,6 +88,18 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_daily_catch",
+            "description": (
+                "Return today's fresh catch highlights and any specials. Call this when a "
+                "customer asks what's fresh, what's good today, what the special is, or "
+                "when greeting and you want to proactively inspire them."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "suggest_recipe",
             "description": (
                 "Suggest a South African recipe when the customer asks what to cook, "
@@ -188,10 +200,12 @@ class CommerceAssistantSkill(BaseSkill):
             "Guidelines:\n"
             "- Use real tools for products, cart and orders — never invent prices or stock.\n"
             "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly.\n"
+            "- On first contact or when asked what's good/fresh/special, call get_daily_catch "
+            "to show today's highlights before anything else.\n"
             "- When a customer mentions a dish, ingredient, or asks what to cook, call "
             "suggest_recipe — it returns a recipe AND shows which ingredients are in stock.\n"
             "- After suggesting a recipe, offer to add the available ingredients to their cart.\n"
-            "- Be proactive: if a customer buys yellowtail, you can suggest a recipe for it.\n"
+            "- Be proactive: if a customer buys yellowtail, suggest a recipe for it unprompted.\n"
             "- When the customer is ready to pay, call start_checkout and share the link.\n"
             "- For quotes, call create_quote and share the quote number and total."
             + kb_block
@@ -300,6 +314,8 @@ class CommerceAssistantSkill(BaseSkill):
             return self._exec_start_checkout(tid)
         if name == "track_order":
             return await self._exec_track_order(tid, args)
+        if name == "get_daily_catch":
+            return await self._exec_get_daily_catch(tid)
         if name == "suggest_recipe":
             return await self._exec_suggest_recipe(tid, args)
         if name == "create_quote":
@@ -387,6 +403,36 @@ class CommerceAssistantSkill(BaseSkill):
             "order_id": match["display_id"],
             "status": match["status"],
             "total": f"R{match['total_cents'] / 100:.2f}",
+        }
+
+    async def _exec_get_daily_catch(self, tenant_id: str) -> Dict[str, Any]:
+        """Return products flagged as today's catch + any fresh fish in stock."""
+        try:
+            all_products = await service.list_products(tenant_id, in_stock_only=True)
+        except Exception as exc:
+            return {"error": f"Could not load products: {exc}"}
+
+        specials = [p for p in all_products if p.get("is_daily_catch")]
+        fresh_fish = [p for p in all_products if p.get("category") == "fresh_fish"]
+
+        highlights = specials or fresh_fish[:5]
+        if not highlights:
+            return {"message": "No specials today — check back tomorrow or browse our full range."}
+
+        header = "🎣 Today's catch highlights:" if specials else "🐟 Fresh in stock today:"
+        names = ", ".join(p["name"] for p in highlights[:3])
+        return {
+            "daily_catch": [
+                {
+                    "name": p["name"],
+                    "slug": p["slug"],
+                    "price": f"R{p['price_cents'] / 100:.2f}/kg" if p.get("sold_by") == "kg" else f"R{p['price_cents'] / 100:.2f}",
+                    "description": (p.get("description") or "")[:120],
+                    "is_highlight": p.get("is_daily_catch", False),
+                }
+                for p in highlights[:6]
+            ],
+            "message": f"{header} {names}.",
         }
 
     async def _exec_suggest_recipe(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:

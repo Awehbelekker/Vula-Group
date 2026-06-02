@@ -29,7 +29,9 @@ from vula.models.tenants import get_tenant_db
 from supabase import create_client
 
 TENANT_ID = "off-the-hook"
-WHATSAPP_NUMBER = "0737815979"
+WHATSAPP_NUMBER = "0737815979"     # Off the Hook orders number
+STACY_WHATSAPP  = "0737815979"    # Stacy — owner (update with her personal number)
+ROLAND_WHATSAPP = "0737815979"    # Roland — operations (update with his number)
 
 # ── All products from the Off the Hook price list ──────────────────────────────
 #
@@ -49,7 +51,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 29000,   # R290/kg
         "pack_size": "per kg",
-        "is_weekly_special": True,
+        "is_daily_catch": True,
         "notes": "Subject to availability — ask us on WhatsApp for this week's stock.",
     },
     {
@@ -60,7 +62,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 16000,   # R160/kg
         "pack_size": "per kg",
-        "is_weekly_special": True,
+        "is_daily_catch": True,
     },
     {
         "name": "Hake Centre Cuts",
@@ -70,7 +72,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 22000,   # R220/kg
         "pack_size": "per kg",
-        "is_weekly_special": True,
+        "is_daily_catch": True,
     },
     {
         "name": "Kingklip Fillets",
@@ -80,7 +82,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 24000,   # R240/kg
         "pack_size": "per kg",
-        "is_weekly_special": False,
+        "is_daily_catch": False,
         "notes": "Subject to availability.",
     },
     {
@@ -91,7 +93,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 29000,   # R290/kg
         "pack_size": "per kg",
-        "is_weekly_special": False,
+        "is_daily_catch": False,
         "notes": "Subject to availability.",
     },
     {
@@ -102,7 +104,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 7500,    # R75/kg
         "pack_size": "per kg",
-        "is_weekly_special": True,
+        "is_daily_catch": True,
     },
     {
         "name": "Atlantic Mackerel Fillets",
@@ -112,7 +114,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 8000,    # R80/kg
         "pack_size": "per kg",
-        "is_weekly_special": True,
+        "is_daily_catch": True,
     },
     {
         "name": "Whole Octopus (unclean)",
@@ -122,7 +124,7 @@ PRODUCTS = [
         "sold_by": "kg",
         "price_cents": 9500,    # R95/kg
         "pack_size": "per kg",
-        "is_weekly_special": True,
+        "is_daily_catch": True,
         "notes": "Sold unclean. Cleaning instructions available on request.",
     },
 
@@ -452,6 +454,13 @@ def seed_tenant() -> None:
     db.add_phone(TENANT_ID, WHATSAPP_NUMBER, label="orders", role="admin")
     print(f"✓ Tenant '{TENANT_ID}' registered — WhatsApp {WHATSAPP_NUMBER}")
 
+    # Also register Stacy and Roland's numbers so they can manage the store via WhatsApp
+    # Stacy: owner — receives order alerts and can approve sign-offs
+    # Roland: operations — receives delivery and stock alerts
+    db.add_phone(TENANT_ID, STACY_WHATSAPP, label="owner", role="admin")
+    db.add_phone(TENANT_ID, ROLAND_WHATSAPP, label="operations", role="manager")
+    print(f"✓ Team registered — Stacy {STACY_WHATSAPP} (owner), Roland {ROLAND_WHATSAPP} (operations)")
+
 
 def seed_products() -> None:
     client = create_client(settings.supabase_url, settings.supabase_service_role_key or settings.supabase_service_key)
@@ -463,7 +472,7 @@ def seed_products() -> None:
             "id": str(uuid.uuid4()),
             "tenant_id": TENANT_ID,
             "in_stock": True,
-            "is_weekly_special": False,
+            "is_daily_catch": False,
             "sold_by": "pack",
             "created_at": now,
             "updated_at": now,

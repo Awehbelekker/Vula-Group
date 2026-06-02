@@ -433,10 +433,12 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
         "vat_rate": vat_rate,
         "vat_cents": vat_cents,
         "total_cents": total,
-        "status": "draft",
+        "status": data.get("status", "draft"),
+        "issue_date": data.get("issue_date") or _now()[:10],
         "due_date": data.get("due_date"),
         "valid_until": data.get("valid_until"),
         "order_id": str(data["order_id"]) if data.get("order_id") else None,
+        "payment_method": data.get("payment_method"),
         "notes": data.get("notes"),
         "created_at": _now(),
         "updated_at": _now(),
@@ -462,22 +464,22 @@ async def list_invoices(
     tenant_id: str,
     doc_type: Optional[str] = None,
     status: Optional[str] = None,
+    direction: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> List[dict]:
     q = (
         _client()
         .table("commerce_invoices")
-        .select(
-            "id,doc_type,invoice_number,customer_name,customer_phone,"
-            "total_cents,status,issue_date,due_date,valid_until,created_at"
-        )
+        .select("*")
         .eq("tenant_id", tenant_id)
     )
     if doc_type:
         q = q.eq("doc_type", doc_type)
     if status:
         q = q.eq("status", status)
+    if direction:
+        q = q.eq("direction", direction)
     result = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
     return result.data or []
 
