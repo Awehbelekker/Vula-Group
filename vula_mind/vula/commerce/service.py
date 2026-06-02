@@ -98,11 +98,11 @@ async def get_or_create_cart(tenant_id: str, session_id: str, customer_phone: Op
         .eq("tenant_id", tenant_id)
         .eq("session_id", session_id)
         .eq("status", "active")
-        .maybe_single()
+        .limit(1)
         .execute()
     )
     if result.data:
-        return result.data
+        return result.data[0]
 
     cart_id = str(uuid.uuid4())
     new_cart = {
@@ -127,16 +127,17 @@ async def add_to_cart(cart_id: str, product_id: str, quantity: int) -> dict:
         .select("*")
         .eq("cart_id", cart_id)
         .eq("product_id", product_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
 
     if existing.data:
+        row = existing.data[0]
         result = (
             _client()
             .table("commerce_cart_items")
-            .update({"quantity": existing.data["quantity"] + quantity, "updated_at": _now()})
-            .eq("id", existing.data["id"])
+            .update({"quantity": row["quantity"] + quantity, "updated_at": _now()})
+            .eq("id", row["id"])
             .execute()
         )
         return result.data[0]
@@ -301,11 +302,11 @@ async def get_or_create_session(
         .select("*")
         .eq("tenant_id", tenant_id)
         .eq("session_key", session_key)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
     if existing and existing.data:
-        return existing.data
+        return existing.data[0]
 
     session = {
         "id": str(uuid.uuid4()),
@@ -451,10 +452,10 @@ async def get_invoice(tenant_id: str, invoice_id: str) -> Optional[dict]:
         .select("*")
         .eq("tenant_id", tenant_id)
         .eq("id", invoice_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    return result.data if result else None
+    return result.data[0] if (result and result.data) else None
 
 
 async def list_invoices(
