@@ -6,7 +6,10 @@ import { useState, useRef, useEffect, useCallback } from "react";
 // Fonts: Cormorant Garamond (display) + Source Code Pro (mono data)
 // Feeling: a well-built SA product — confident, warm, locally grounded
 
-const VULA_API = import.meta.env.VITE_API_URL ?? "/api";
+// Default to the production Railway API so the dashboard works everywhere,
+// including local dev without a local API running. Override with VITE_API_URL.
+const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+const VULA_API_KEY = import.meta.env.VITE_API_KEY || "";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -469,17 +472,25 @@ const labelStyle = {
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function VulaDashboard() {
-  const [tenantId] = useState("demo_tenant");
+  // Use the logged-in user's tenant; fall back to DIGG demo
+  const authTenant = (() => {
+    try {
+      const raw = localStorage.getItem("vula-auth");
+      return raw ? JSON.parse(raw)?.state?.tenantId : null;
+    } catch { return null; }
+  })();
+  const [tenantId] = useState(authTenant || "digg-demo");
   const [apiStatus, setApiStatus] = useState("checking");
   const [docCount, setDocCount] = useState(0);
 
   useEffect(() => {
+    const authHeaders = VULA_API_KEY ? { "X-API-Key": VULA_API_KEY } : {};
     fetch(`${VULA_API}/status`)
       .then(r => r.json())
       .then(d => setApiStatus(d.status))
       .catch(() => setApiStatus("offline"));
 
-    fetch(`${VULA_API}/documents/${tenantId}`)
+    fetch(`${VULA_API}/documents/${tenantId}`, { headers: authHeaders })
       .then(r => r.json())
       .then(d => setDocCount(d.count || 0))
       .catch(() => {});
