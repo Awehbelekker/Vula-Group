@@ -47,11 +47,12 @@ async def _get_tenant_yoco_creds(tenant_id: str) -> Optional[dict]:
             .select("secret_key,webhook_secret,public_key,mode,status")
             .eq("tenant_id", tenant_id)
             .eq("status", "connected")
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        if result.data and result.data.get("secret_key"):
-            creds = result.data
+        rows = result.data or []
+        if rows and rows[0].get("secret_key"):
+            creds = rows[0]
             _yoco_creds_cache[tenant_id] = creds
             return creds
     except Exception as exc:

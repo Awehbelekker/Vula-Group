@@ -183,13 +183,21 @@ async def yoco_status(tenant_id: str):
         db.table("vula_yoco_accounts")
         .select("tenant_id,mode,status,webhook_registered,connected_at,last_test_at,secret_key,public_key")
         .eq("tenant_id", tenant_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    if not result.data:
-        return {"tenant_id": tenant_id, "status": "not_connected"}
+    rows = result.data or []
+    if not rows:
+        # No per-tenant record — payments may still work via the YOCO_SECRET_KEY
+        # env fallback used at checkout. Report that so admin sees the true state.
+        env_fallback = bool(getattr(settings, "yoco_secret_key", ""))
+        return {
+            "tenant_id": tenant_id,
+            "status": "env_fallback" if env_fallback else "not_connected",
+            "env_fallback": env_fallback,
+        }
 
-    data = result.data
+    data = rows[0]
     return {
         "tenant_id": tenant_id,
         "mode": data.get("mode"),
@@ -210,13 +218,14 @@ async def yoco_test(tenant_id: str):
         db.table("vula_yoco_accounts")
         .select("secret_key")
         .eq("tenant_id", tenant_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    if not result.data:
+    rows = result.data or []
+    if not rows:
         raise HTTPException(status_code=404, detail="No Yoco account for this tenant")
 
-    secret = result.data["secret_key"]
+    secret = rows[0]["secret_key"]
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{YOCO_BASE}/checkouts",
