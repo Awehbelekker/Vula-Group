@@ -49,6 +49,12 @@ const TABS = [
   { id: "scanner", label: "Smart Scanner", component: VulaSmartScanner },
 ];
 
+// Tenant display names for the scoped merchant header.
+const TENANT_NAMES = {
+  "off-the-hook": "Off the Hook",
+  "awake-sa": "Awake South Africa",
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [route, setRoute] = useState(window.location.hash);
@@ -74,6 +80,44 @@ export default function App() {
   // Show login if not authenticated
   if (!user) {
     return <VulaLogin onSuccess={() => {}} />;
+  }
+
+  // ── Merchant owners/staff get a scoped, single-store admin ───────────────────
+  // No construction tools, no master Commerce view — just their shop.
+  if (role === "owner" || role === "staff") {
+    const tenantName = TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
+    return (
+      <div style={{ minHeight: "100vh", background: COLORS.bg }}>
+        <nav style={{
+          background: COLORS.surface, borderBottom: `1px solid ${COLORS.border}`,
+          padding: "0 24px", display: "flex", alignItems: "center",
+          position: "sticky", top: 0, zIndex: 200, height: 56, boxSizing: "border-box",
+        }}>
+          <div style={{
+            fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700,
+            color: COLORS.charcoal,
+          }}>
+            {tenantName}
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 12, color: COLORS.muted, fontFamily: "system-ui" }}>
+              {user.email}
+            </span>
+            <button
+              onClick={() => { logout(); }}
+              style={{
+                padding: "6px 14px", border: `1px solid ${COLORS.border}`,
+                borderRadius: 6, background: "transparent",
+                color: COLORS.muted, fontSize: 12, cursor: "pointer", fontFamily: "system-ui",
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </nav>
+        <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} fullPage />
+      </div>
+    );
   }
 
   return (

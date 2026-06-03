@@ -47,7 +47,7 @@ const CATEGORY_LABELS = {
   extras:         'Extras',
 }
 
-export default function VulaMerchantAdmin({ tenantId, tenantName, onClose }) {
+export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullPage = false }) {
   const [tab, setTab] = useState('orders')
   const [products, setProducts] = useState([])
 
@@ -57,16 +57,16 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose }) {
       .then(r => r.json()).then(d => setProducts(d.products || [])).catch(() => {})
   }, [tenantId])
 
-  return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.panel} onClick={e => e.stopPropagation()}>
+  // Inner content shared by modal + full-page modes.
+  const inner = (
+    <>
         {/* Header */}
         <div style={styles.header}>
           <div>
             <h2 style={styles.title}>{tenantName}</h2>
             <p style={styles.subtitle}>Merchant admin</p>
           </div>
-          <button onClick={onClose} style={styles.closeBtn}>×</button>
+          {!fullPage && <button onClick={onClose} style={styles.closeBtn}>×</button>}
         </div>
 
         {/* Tabs */}
@@ -100,6 +100,19 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose }) {
           {tab === 'budget'    && <VulaBudget        tenantId={tenantId} />}
           {tab === 'broadcast' && <VulaBroadcast     tenantId={tenantId} />}
         </div>
+    </>
+  )
+
+  // Full-page mode (owner/staff dedicated admin) — no modal overlay.
+  if (fullPage) {
+    return <div style={styles.fullPage}>{inner}</div>
+  }
+
+  // Modal mode (master clicking "Manage tenant" from the Commerce list).
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={styles.panel} onClick={e => e.stopPropagation()}>
+        {inner}
       </div>
     </div>
   )
@@ -415,6 +428,7 @@ function ProductsTab({ tenantId }) {
 const styles = {
   overlay:      { position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200, display:'flex', justifyContent:'flex-end' },
   panel:        { width:'100%', maxWidth:680, background:'#F7F4EE', overflowY:'auto', display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.15)' },
+  fullPage:     { maxWidth:980, margin:'0 auto', background:'#F7F4EE', minHeight:'calc(100vh - 56px)', display:'flex', flexDirection:'column' },
   header:       { display:'flex', alignItems:'flex-start', justifyContent:'space-between', padding:'24px 28px 0', borderBottom:'1px solid #DDD8CE', paddingBottom:16 },
   title:        { fontFamily:"'Cormorant Garamond', serif", fontSize:26, fontWeight:700, color:'#1E1E1E', margin:0 },
   subtitle:     { fontFamily:'system-ui', fontSize:12, color:'#8A8680', margin:'2px 0 0' },
