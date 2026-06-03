@@ -402,7 +402,7 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
     if not tenant_id:
         return
 
-    from vula.models.field_ops import get_field_ops_db, _normalise_phone
+    from vula.models.field_ops import get_field_ops_db
     db = get_field_ops_db()
     contractor = db.get_contractor_by_phone(phone)
     if not contractor:
@@ -422,7 +422,7 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
 
     # Download media from Meta and save locally
     photo_url = await _download_media(media_id, contractor.id, task.id)
-    evidence = db.save_evidence(task.id, contractor.id, photo_url, caption)
+    db.save_evidence(task.id, contractor.id, photo_url, caption)
 
     photo_count = db.count_evidence(task.id)
     db.update_task_status(task.id, "awaiting_sign_off")

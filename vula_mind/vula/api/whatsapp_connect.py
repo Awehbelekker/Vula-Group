@@ -29,7 +29,7 @@ import logging
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from config import settings
@@ -150,7 +150,6 @@ async def connect_whatsapp(body: ConnectRequest):
 
         # Step 3 — register Vula's webhook with Meta for this WABA
         webhook_registered = False
-        backend_url = settings.vula_base_url or "https://vula-group-production.up.railway.app"
         webhook_resp = await client.post(
             f"{GRAPH_BASE}/{waba_id}/subscribed_apps",
             headers=auth_headers,

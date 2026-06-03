@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import re
 
-from config import settings
 from core.llm_router import resolve_generation_route
 from core.skills.base import BaseSkill, SkillInput, SkillOutput
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -26,7 +25,6 @@ from config import settings
 from vula.commerce import service
 from vula.commerce.models import (
     AddToCartRequest,
-    CreateOrderRequest,
     DeliverySlot,
     InvoiceCreate,
 )
@@ -650,7 +648,6 @@ async def admin_scan_commit(tenant_id: str, body: dict):
 
     extracted = body.get("extracted", {})
     auto_commit = body.get("auto_commit", True)
-    image_b64 = body.get("image_base64", "")
 
     if not extracted:
         raise HTTPException(status_code=400, detail="No extracted data provided.")
