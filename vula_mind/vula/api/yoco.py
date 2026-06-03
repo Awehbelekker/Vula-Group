@@ -27,6 +27,91 @@ router = APIRouter(tags=["yoco"])
 
 _yoco_creds_cache: dict[str, dict] = {}
 
+# Per-tenant team phones — receive order alerts when a payment lands.
+# Format: tenant_id → list of (name, phone_e164, role)
+_TENANT_TEAM: dict[str, list[tuple[str, str, str]]] = {
+    "off-the-hook": [
+        ("Stacy", "27722684085", "owner"),
+        ("Roland", "27721822828", "operations"),
+    ],
+}
+
+# Per-tenant WhatsApp Business phone number IDs (Meta phone number ID)
+_TENANT_PHONE_IDS: dict[str, str] = {
+    "off-the-hook": "251439416636328",
+}
+
+
+async def _notify_order_paid(
+    tenant_id: str,
+    display_id: str,
+    order_id: str,
+    customer_phone: Optional[str],
+    customer_name: str,
+    amount_cents: int,
+) -> None:
+    """Send WhatsApp order confirmation to customer and alert the team."""
+    if not settings.whatsapp_token:
+        return
+
+    phone_id = _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_id
+    amount = f"R{amount_cents / 100:.2f}"
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        headers = {
+            "Authorization": f"Bearer {settings.whatsapp_token}",
+            "Content-Type": "application/json",
+        }
+
+        async def _send(to: str, body: str) -> None:
+            number = to.lstrip("+").replace(" ", "").replace("-", "")
+            if number.startswith("0"):
+                number = "27" + number[1:]
+            try:
+                await client.post(
+                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                    headers=headers,
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": number,
+                        "type": "text",
+                        "text": {"body": body[:4096]},
+                    },
+                )
+            except Exception as exc:
+                log.warning("WhatsApp notify failed to %s: %s", to, exc)
+
+        # Customer confirmation
+        if customer_phone:
+            store_url = settings.store_urls.get(tenant_id, "offthehook.co.za")
+            await _send(
+                customer_phone,
+                f"Hi {customer_name or 'there'}! Your Off the Hook order *{display_id}* "
+                f"is confirmed ({amount}). We'll be in touch with your delivery time. "
+                f"Track at {store_url} or reply here with any questions. "
+                f"Thank you!"
+            )
+
+        # Team alerts
+        for name, phone, role in _TENANT_TEAM.get(tenant_id, []):
+            try:
+                order = await commerce.get_order(order_id)
+                items = order.get("commerce_order_items") or []
+                item_lines = "\n".join(
+                    f"  • {i.get('product_name','?')} x{i.get('quantity',1)}"
+                    for i in items[:8]
+                ) or "  (items not loaded)"
+            except Exception:
+                item_lines = "  (see dashboard)"
+
+            await _send(
+                phone,
+                f"New order {display_id} — {amount}\n"
+                f"Customer: {customer_name or 'Unknown'} ({customer_phone or 'no phone'})\n"
+                f"{item_lines}\n\n"
+                f"Vula dashboard → Off the Hook → Orders"
+            )
+
 
 async def _get_tenant_yoco_creds(tenant_id: str) -> Optional[dict]:
     """
@@ -122,21 +207,27 @@ async def yoco_webhook(request: Request) -> dict:
         await commerce.update_order_status(order_id, "paid")
         log.info("Order %s paid via Yoco", display_id)
 
-        # Fire n8n workflow — sends WhatsApp confirmation + ops alert
+        # Send WhatsApp confirmation to customer + team alerts
+        await _notify_order_paid(
+            tenant_id=tenant_id,
+            display_id=display_id,
+            order_id=order_id,
+            customer_phone=customer_phone,
+            customer_name=customer_name,
+            amount_cents=amount_cents,
+        )
+
+        # Also fire n8n if configured (for advanced automation)
         n8n_base = settings.n8n_webhook_base
-        if n8n_base and customer_phone:
+        if n8n_base:
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     await client.post(
                         f"{n8n_base}/yoco-payment-success",
                         json={
-                            "order_id": order_id,
-                            "display_id": display_id,
-                            "tenant_id": tenant_id,
-                            "customer_phone": customer_phone,
-                            "customer_name": customer_name,
-                            "amount_cents": amount_cents,
-                            "amount_rands": f"R{amount_cents / 100:.2f}",
+                            "order_id": order_id, "display_id": display_id,
+                            "tenant_id": tenant_id, "customer_phone": customer_phone,
+                            "customer_name": customer_name, "amount_cents": amount_cents,
                         },
                     )
             except Exception as exc:

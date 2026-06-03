@@ -30,8 +30,8 @@ from supabase import create_client
 
 TENANT_ID = "off-the-hook"
 WHATSAPP_NUMBER = "0737815979"     # Off the Hook orders number
-STACY_WHATSAPP  = "0737815979"    # Stacy — owner (update with her personal number)
-ROLAND_WHATSAPP = "0737815979"    # Roland — operations (update with his number)
+STACY_WHATSAPP  = "0722684085"    # Stacy — owner
+ROLAND_WHATSAPP = "0721822828"    # Roland — operations
 
 # ── All products from the Off the Hook price list ──────────────────────────────
 #
