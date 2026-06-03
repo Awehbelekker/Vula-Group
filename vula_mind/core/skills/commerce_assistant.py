@@ -500,7 +500,7 @@ class CommerceAssistantSkill(BaseSkill):
             "recipe": recipe_text,
             "available_to_order": available,
             "tip": (
-                f"I can add any of these to your cart — just say which ones you want!"
+                "I can add any of these to your cart — just say which ones you want!"
                 if available else
                 "Let me know what else I can help you with."
             ),
