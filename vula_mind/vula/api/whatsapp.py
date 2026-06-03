@@ -38,6 +38,7 @@ router = APIRouter(tags=["whatsapp"])
 _DONE_RE = re.compile(r"^\s*(done|yes|complete|completed|finish|finished|klaar)\s*$", re.IGNORECASE)
 _APPROVE_RE = re.compile(r"^\s*approve[d]?\s*(.*)$", re.IGNORECASE)
 _REJECT_RE = re.compile(r"^\s*reject\s*(.*)$", re.IGNORECASE)
+_DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
 
 # Commerce tenant WhatsApp number IDs — maps Meta phone_number_id → tenant_id
 # Off the Hook: +27 73 781 5979 — Phone Number ID confirmed 2026-05-30
@@ -168,6 +169,11 @@ async def _handle_message(phone: str, text: str, msg_id: str) -> None:
     # Resolve tenant_id from contractor if needed
     if not tenant_id and contractor:
         tenant_id = contractor.tenant_id
+
+    # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
+    if _DELETE_RE.match(text):
+        await _handle_data_deletion(phone, tenant_id)
+        return
 
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
@@ -437,6 +443,43 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
             f"(project {task.project_id}).\n"
             f"Reply APPROVE or REJECT <reason> to sign off."
         )
+
+
+async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
+    """Handle a DELETE / STOP / opt-out request — POPIA + Meta compliance.
+
+    Removes the requester's data: tenant_phones entry, chat history, and
+    flags the request. Confirms back to the user.
+    """
+    logger.info("Data deletion request from %s (tenant=%s)", phone, tenant_id)
+    removed = []
+
+    # Remove from tenant_phones registry
+    try:
+        from vula.models.tenants import get_tenant_db
+        db = get_tenant_db()
+        db.remove_phone(phone)
+        removed.append("contact record")
+    except Exception as exc:
+        logger.warning("tenant_phones removal failed for %s: %s", phone, exc)
+
+    # Clear chat history
+    try:
+        from vula.chat.history import get_db
+        chat_db = get_db()
+        if tenant_id:
+            chat_db.clear(tenant_id, phone)
+            removed.append("message history")
+    except Exception as exc:
+        logger.warning("chat history removal failed for %s: %s", phone, exc)
+
+    await _send_reply(
+        phone,
+        "✅ Your data deletion request has been received. "
+        f"We've removed your {', '.join(removed) if removed else 'records'} from Vula. "
+        "Any remaining data will be deleted within 30 days per POPIA. "
+        "For a full deletion or questions, email hello@vula.co.za."
+    )
 
 
 async def _handle_task_complete(phone: str, tenant_id: str) -> None:

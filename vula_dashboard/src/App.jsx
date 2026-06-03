@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import VulaLogin from "./components/VulaLogin";
+import VulaPrivacy from "./components/VulaPrivacy";
 import { useAuthStore } from "./store/auth";
 import VulaDashboard from "./components/VulaDashboard";
 import VulaQS from "./components/VulaQS";
@@ -50,7 +51,20 @@ const TABS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [route, setRoute] = useState(window.location.hash);
   const { user, role, tenantId, logout } = useAuthStore();
+
+  // Track hash changes for public legal routes
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Public legal pages — no auth required (needed for Meta app publishing)
+  if (route === "#/privacy") return <VulaPrivacy view="privacy" />;
+  if (route === "#/terms") return <VulaPrivacy view="terms" />;
+  if (route === "#/data-deletion") return <VulaPrivacy view="data-deletion" />;
 
   // Resolve effective tenant — master sees digg-demo as default, owners see their own
   const effectiveTenantId = tenantId && tenantId !== "master" ? tenantId : "digg-demo";
