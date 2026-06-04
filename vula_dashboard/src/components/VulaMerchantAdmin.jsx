@@ -16,6 +16,7 @@ import VulaSmartScanner from './VulaSmartScanner'
 import VulaInvoices from './VulaInvoices'
 import VulaBudget from './VulaBudget'
 import VulaBroadcast from './VulaBroadcast'
+import VulaCustomers from './VulaCustomers'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -78,6 +79,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
             { id: 'scanner',   label: '📷 Scanner' },
             { id: 'invoices',  label: '🧾 Invoices' },
             { id: 'budget',    label: '💰 Budget' },
+            { id: 'customers', label: '👥 Customers' },
             { id: 'broadcast', label: '📢 Broadcast' },
           ].map(t => (
             <button
@@ -98,6 +100,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
           {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} />}
           {tab === 'budget'    && <VulaBudget        tenantId={tenantId} />}
+          {tab === 'customers' && <VulaCustomers     tenantId={tenantId} />}
           {tab === 'broadcast' && <VulaBroadcast     tenantId={tenantId} />}
         </div>
     </>

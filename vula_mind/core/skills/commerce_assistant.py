@@ -359,7 +359,7 @@ class CommerceAssistantSkill(BaseSkill):
         if not product:
             return {"error": f"No in-stock product matching '{name}'."}
         cart = await service.get_or_create_cart(tenant_id, session_id, phone)
-        await service.add_to_cart(cart["id"], product["id"], qty)
+        await service.add_to_cart(tenant_id, cart["id"], product["id"], qty)
         return {
             "added": product["name"],
             "quantity": qty,

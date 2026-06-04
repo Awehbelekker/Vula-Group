@@ -174,6 +174,102 @@ async def _daily_trial_expiry_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+async def _daily_delivery_briefing_loop() -> None:
+    """Send morning delivery list to Off the Hook team at 06:30 SAST daily."""
+    import asyncio as _asyncio
+    from datetime import datetime, timezone, timedelta
+
+    # Wait until next 06:30 SAST (UTC+2) before first run
+    async def _seconds_until_next_630() -> float:
+        now = datetime.now(timezone.utc)
+        sast = now + timedelta(hours=2)
+        target = sast.replace(hour=6, minute=30, second=0, microsecond=0)
+        if sast >= target:
+            target += timedelta(days=1)
+        return (target - sast).total_seconds()
+
+    await _asyncio.sleep(await _seconds_until_next_630())
+
+    while True:
+        try:
+            await _send_oth_delivery_briefing()
+        except Exception as exc:
+            log.warning("OTH delivery briefing failed: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
+async def _send_oth_delivery_briefing() -> None:
+    """Build and WhatsApp the day's delivery list to Stacy and Roland."""
+    if not settings.whatsapp_token:
+        return
+
+    from datetime import date
+    from vula.commerce import service as _commerce
+
+    tenant_id = "off-the-hook"
+    today = date.today().isoformat()
+
+    try:
+        orders = await _commerce.get_delivery_list(tenant_id, date_str=today)
+    except Exception as exc:
+        log.warning("OTH delivery list fetch failed: %s", exc)
+        return
+
+    if not orders:
+        msg = f"Good morning! No orders to deliver today ({today}). Have a great day!"
+    else:
+        _PAID = {"paid", "confirmed", "packing", "dispatched", "delivered"}
+        paid_orders   = [o for o in orders if o["status"] in _PAID]
+        unpaid_orders = [o for o in orders if o["status"] == "pending_payment"]
+
+        lines = [f"Good morning! Delivery list for {today}\n"]
+        for i, o in enumerate(orders, 1):
+            slot = (o.get("delivery_slot") or "?").upper()
+            paid_tag = "PAID" if o["status"] in _PAID else "NOT PAID - collect before delivery"
+            items = o.get("commerce_order_items") or []
+            item_lines = ", ".join(
+                f"{it['product_name']} x{it['quantity']}" for it in items[:5]
+            ) or "no items"
+            lines.append(
+                f"{i}. {o['display_id']} — {slot}\n"
+                f"   {o['customer_name']} | {o['customer_phone']}\n"
+                f"   {o['delivery_address']}\n"
+                f"   {item_lines}\n"
+                f"   R{o['total_cents'] / 100:.2f} — {paid_tag}"
+            )
+
+        paid_rev   = sum(o["total_cents"] for o in paid_orders)
+        unpaid_rev = sum(o["total_cents"] for o in unpaid_orders)
+        lines.append(
+            f"\nTotal: {len(orders)} order{'s' if len(orders) != 1 else ''} | "
+            f"{len(paid_orders)} paid (R{paid_rev / 100:.2f}) | "
+            f"{len(unpaid_orders)} unpaid (R{unpaid_rev / 100:.2f})"
+        )
+        msg = "\n".join(lines)
+
+    # Send to Stacy and Roland via OTH business number
+    phone_id = "251439416636328"
+    team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
+
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=10.0) as client:
+        for name, number in team:
+            try:
+                await client.post(
+                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                    headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": number,
+                        "type": "text",
+                        "text": {"body": msg[:4096]},
+                    },
+                )
+                log.info("OTH delivery briefing sent to %s (%s)", name, number)
+            except Exception as exc:
+                log.warning("OTH briefing to %s failed: %s", name, exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
@@ -181,6 +277,7 @@ async def lifespan(app: FastAPI):
     _asyncio.create_task(_seed_training_on_boot())
     _asyncio.create_task(_weekly_rates_loop())
     _asyncio.create_task(_daily_trial_expiry_loop())
+    _asyncio.create_task(_daily_delivery_briefing_loop())
     yield
 
 

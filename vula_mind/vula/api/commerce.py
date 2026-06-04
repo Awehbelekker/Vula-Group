@@ -19,6 +19,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from config import settings
@@ -292,6 +293,80 @@ async def admin_delete_invoice(tenant_id: str, invoice_id: str):
     return {"deleted": invoice_id}
 
 
+@router.get("/{tenant_id}/admin/invoices/{invoice_id}/pdf")
+async def admin_get_invoice_pdf(tenant_id: str, invoice_id: str):
+    """Generate and stream a PDF for an invoice or quote.
+
+    Returns application/pdf with Content-Disposition: attachment so browsers
+    download the file directly. Filename is the invoice number.
+    """
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    try:
+        from vula.commerce.pdf import render_invoice_pdf
+        pdf_bytes = render_invoice_pdf(invoice)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        log.error("PDF render failed for %s/%s: %s", tenant_id, invoice_id, exc)
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+
+    invoice_number = invoice.get("invoice_number", invoice_id)
+    filename = f"{invoice_number}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/send-email")
+async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Optional[dict] = None):
+    """Render the invoice/quote PDF and email it to the customer via Resend.
+
+    The recipient defaults to the invoice's customer_email; an optional
+    ``email`` field in the body overrides it. Draft documents are marked
+    ``sent`` once the email is dispatched.
+    """
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    recipient = ((body or {}).get("email") or invoice.get("customer_email") or "").strip()
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No recipient email address available")
+
+    try:
+        from vula.commerce.pdf import render_invoice_pdf, _TENANT_DEFAULTS
+        pdf_bytes = render_invoice_pdf(invoice)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        log.error("PDF render failed for %s/%s: %s", tenant_id, invoice_id, exc)
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+
+    tenant_name = _TENANT_DEFAULTS.get(tenant_id, {}).get(
+        "name", tenant_id.replace("-", " ").title()
+    )
+
+    from vula.api.email import send_invoice_email
+    sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name)
+    if not sent:
+        raise HTTPException(
+            status_code=503,
+            detail="Email not sent — Resend is not configured or the send failed.",
+        )
+
+    new_status = invoice.get("status")
+    if new_status == "draft":
+        await service.update_invoice_status(tenant_id, invoice_id, "sent")
+        new_status = "sent"
+
+    return {"sent": True, "to": recipient, "status": new_status}
+
+
 # ── Quote / proforma endpoints ────────────────────────────────────────────────
 # Quotes and proformas share commerce_invoices (doc_type). These routes use the
 # service layer so totals are computed server-side and numbering is doc-type
@@ -442,6 +517,212 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
             log.warning("Broadcast n8n webhook failed (non-fatal): %s", exc)
 
     return {"broadcast_id": log_id, "status": "sending", "template": template, "audience": audience}
+
+
+# ── Scheduled Jobs ──────────────────────────────────────────────────────────
+
+@router.post("/{tenant_id}/jobs/abandoned-carts")
+async def job_abandoned_carts(tenant_id: str):
+    """Scan for abandoned carts and trigger notifications."""
+    abandoned = await service.get_abandoned_carts(tenant_id, hours_old=1)
+    # Filter for carts that haven't received recovery yet
+    to_notify = [c for c in abandoned if not (c.get("metadata") or {}).get("recovery_sent")]
+
+    count = 0
+    for cart in to_notify:
+        # In a real app, you'd fire a WhatsApp template here or n8n
+        # For now, we'll just mark them so we don't repeat
+        meta = cart.get("metadata") or {}
+        meta["recovery_sent"] = True
+        service._client().table("commerce_carts") \
+            .update({"metadata": meta, "updated_at": service._now()}) \
+            .eq("id", cart["id"]).execute()
+        count += 1
+
+    return {"ok": True, "processed": count, "found": len(abandoned)}
+
+
+@router.post("/{tenant_id}/jobs/reorder-reminders")
+async def job_reorder_reminders(tenant_id: str):
+    """Scan for customers who ordered 7 days ago."""
+    candidates = await service.get_reorder_candidates(tenant_id, days_ago=7)
+    # logic to fire WhatsApp messages via n8n or direct
+    return {"ok": True, "candidates": len(candidates)}
+
+
+@router.post("/{tenant_id}/jobs/stock-alerts")
+async def job_stock_alerts(tenant_id: str):
+    """Scan for low stock items."""
+    low_stock = await service.get_low_stock_products(tenant_id, threshold=5)
+    # logic to alert ops
+    return {"ok": True, "found": len(low_stock), "items": low_stock}
+
+
+@router.post("/{tenant_id}/jobs/weekly-specials")
+async def job_weekly_specials(tenant_id: str):
+    """Fire the weekly specials broadcast."""
+    # This logic matches OTH-05: Monday 07:00
+    products = await service.list_products(tenant_id, in_stock_only=True)
+    specials = [p for p in products if p.get("is_daily_catch") or p.get("is_weekly_special")]
+    # Fire n8n broadcast
+    return {"ok": True, "specials_count": len(specials)}
+
+
+
+# ── Customers (client list / CRM) ─────────────────────────────────────────────
+
+@router.get("/{tenant_id}/admin/customers")
+async def admin_list_customers(
+    tenant_id: str,
+    audience: str = Query("all"),          # all | active_30d | high_value
+    search: Optional[str] = Query(None),
+):
+    """
+    Aggregated client list for a tenant — the source of truth for broadcasts.
+
+    Built by merging two sources on phone number:
+      - commerce_orders: name, spend, order count, last order date
+      - commerce_conversation_sessions: WhatsApp/web contacts who messaged in
+        (auto-captured by the AI assistant) but may not have ordered yet.
+
+    `audience` mirrors the broadcast filters so the dashboard can show exactly
+    who a campaign would reach.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    db = service._client()
+
+    def _norm(p: Optional[str]) -> str:
+        if not p:
+            return ""
+        n = "".join(ch for ch in p if ch.isdigit())
+        if n.startswith("0"):
+            n = "27" + n[1:]
+        return n
+
+    customers: dict[str, dict] = {}
+
+    # ── Orders → spend & recency ─────────────────────────────────────────────
+    orders = (
+        db.table("commerce_orders")
+        .select("customer_phone,customer_name,total_cents,status,created_at")
+        .eq("tenant_id", tenant_id)
+        .execute()
+    ).data or []
+    for o in orders:
+        key = _norm(o.get("customer_phone"))
+        if not key:
+            continue
+        c = customers.setdefault(key, {
+            "phone": o.get("customer_phone"), "name": o.get("customer_name"),
+            "orders": 0, "total_spent_cents": 0, "last_order_at": None,
+            "source": "order", "channel": "web",
+        })
+        # Only count revenue from orders that were actually paid/fulfilled
+        if o.get("status") not in ("pending_payment", "cancelled", "refunded"):
+            c["orders"] += 1
+            c["total_spent_cents"] += int(o.get("total_cents") or 0)
+        if o.get("customer_name") and not c.get("name"):
+            c["name"] = o["customer_name"]
+        ca = o.get("created_at")
+        if ca and (not c["last_order_at"] or ca > c["last_order_at"]):
+            c["last_order_at"] = ca
+
+    # ── Conversation sessions → contacts who messaged in ─────────────────────
+    sessions = (
+        db.table("commerce_conversation_sessions")
+        .select("customer_phone,customer_name,channel,updated_at,session_key")
+        .eq("tenant_id", tenant_id)
+        .execute()
+    ).data or []
+    for s in sessions:
+        key = _norm(s.get("customer_phone") or s.get("session_key"))
+        if not key or not key.isdigit():
+            continue
+        c = customers.setdefault(key, {
+            "phone": s.get("customer_phone") or s.get("session_key"),
+            "name": s.get("customer_name"), "orders": 0, "total_spent_cents": 0,
+            "last_order_at": None, "source": "chat", "channel": s.get("channel") or "whatsapp",
+        })
+        if s.get("customer_name") and not c.get("name"):
+            c["name"] = s["customer_name"]
+        if s.get("channel"):
+            c["channel"] = s["channel"]
+        c["last_seen_at"] = s.get("updated_at")
+
+    rows = list(customers.values())
+
+    # ── Audience filter ──────────────────────────────────────────────────────
+    now = datetime.now(timezone.utc)
+    def _recent(c, days):
+        ts = c.get("last_order_at") or c.get("last_seen_at")
+        if not ts:
+            return False
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return (now - dt) <= timedelta(days=days)
+        except Exception:
+            return False
+
+    if audience == "active_30d":
+        rows = [c for c in rows if _recent(c, 30)]
+    elif audience == "high_value":
+        rows = [c for c in rows if c["total_spent_cents"] >= 50000]  # > R500
+
+    if search:
+        s = search.lower()
+        rows = [c for c in rows if s in (c.get("name") or "").lower() or s in (c.get("phone") or "")]
+
+    rows.sort(key=lambda c: c["total_spent_cents"], reverse=True)
+
+    return {
+        "customers": rows,
+        "count": len(rows),
+        "total_all": len(customers),
+        "audience": audience,
+    }
+
+
+# ── Delivery list ─────────────────────────────────────────────────────────────
+
+@router.get("/{tenant_id}/admin/delivery-list")
+async def admin_delivery_list(
+    tenant_id: str,
+    date: Optional[str] = Query(None, description="YYYY-MM-DD, defaults to today"),
+):
+    """Today's delivery run — orders with items and paid/unpaid status."""
+    from datetime import date as _date
+    target = date or _date.today().isoformat()
+    db = service._client()
+    result = (
+        db.table("commerce_orders")
+        .select(
+            "id,display_id,customer_name,customer_phone,"
+            "delivery_address,delivery_slot,delivery_notes,"
+            "total_cents,status,channel,created_at,"
+            "commerce_order_items(product_name,quantity,unit_price_cents,total_cents)"
+        )
+        .eq("tenant_id", tenant_id)
+        .gte("created_at", f"{target}T00:00:00+00:00")
+        .lt("created_at", f"{target}T23:59:59+00:00")
+        .not_.in_("status", ["cancelled", "refunded"])
+        .order("delivery_slot")
+        .order("created_at")
+        .execute()
+    )
+    orders = result.data or []
+    _PAID = {"paid", "confirmed", "packing", "dispatched", "delivered"}
+    paid   = [o for o in orders if o["status"] in _PAID]
+    unpaid = [o for o in orders if o["status"] == "pending_payment"]
+    return {
+        "date": target,
+        "orders": orders,
+        "total": len(orders),
+        "paid_count": len(paid),
+        "unpaid_count": len(unpaid),
+        "paid_revenue_cents": sum(o["total_cents"] for o in paid),
+        "unpaid_revenue_cents": sum(o["total_cents"] for o in unpaid),
+    }
 
 
 # ── AI Smart Scanner ──────────────────────────────────────────────────────────

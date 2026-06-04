@@ -6,6 +6,7 @@ Falls back gracefully when RESEND_API_KEY is not configured.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Optional
 
@@ -18,25 +19,34 @@ logger = logging.getLogger(__name__)
 _RESEND_URL = "https://api.resend.com/emails"
 
 
-async def _send(to: str, subject: str, html: str, text: str) -> bool:
+async def _send(
+    to: str,
+    subject: str,
+    html: str,
+    text: str,
+    attachments: Optional[list[dict]] = None,
+) -> bool:
     if not settings.resend_api_key:
         logger.info("Resend not configured — skipping email to %s", to)
         return False
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        payload: dict = {
+            "from": settings.from_email,
+            "to": [to],
+            "subject": subject,
+            "html": html,
+            "text": text,
+        }
+        if attachments:
+            payload["attachments"] = attachments
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 _RESEND_URL,
                 headers={
                     "Authorization": f"Bearer {settings.resend_api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "from": settings.from_email,
-                    "to": [to],
-                    "subject": subject,
-                    "html": html,
-                    "text": text,
-                },
+                json=payload,
             )
             resp.raise_for_status()
             logger.info("Email sent to %s (id=%s)", to, resp.json().get("id"))
@@ -366,3 +376,70 @@ async def send_team_alert_email(
         f"Action: Call {contact_name} within 24 hours."
     )
     return await _send(settings.team_email, subject, html, text)
+
+
+_INVOICE_DOC_LABELS = {
+    "invoice": "Tax Invoice",
+    "quote": "Quotation",
+    "proforma": "Pro Forma Invoice",
+}
+
+
+async def send_invoice_email(
+    to: str,
+    invoice: dict,
+    pdf_bytes: bytes,
+    tenant_name: str = "Vula Group",
+) -> bool:
+    """Email an invoice/quote PDF to a customer as an attachment.
+
+    Args:
+        to: Recipient email address.
+        invoice: The invoice row (for number, totals, customer name).
+        pdf_bytes: Rendered PDF bytes (from render_invoice_pdf).
+        tenant_name: Display name of the merchant, used in copy.
+
+    Returns:
+        True if the email was dispatched, False otherwise.
+    """
+    doc_type = invoice.get("doc_type", "invoice")
+    doc_label = _INVOICE_DOC_LABELS.get(doc_type, "Document")
+    number = invoice.get("invoice_number", "")
+    customer = invoice.get("customer_name", "there")
+    total = f"R{(int(invoice.get('total_cents') or 0) / 100):.2f}"
+    due_date = (invoice.get("due_date") or "")[:10]
+    valid_until = (invoice.get("valid_until") or "")[:10]
+
+    subject = f"{tenant_name} — {doc_label} {number}"
+    when = (
+        f"It is due on {due_date}." if (doc_type == "invoice" and due_date)
+        else (f"It is valid until {valid_until}." if valid_until else "")
+    )
+    body_line = (
+        f"Please find attached your {doc_label.lower()} <strong>{number}</strong> "
+        f"for <strong>{total}</strong>. {when}"
+    )
+    html = (
+        _HEADER
+        + '<tr><td style="padding:0 0 16px">'
+        + f'<p style="margin:0;font-size:20px;font-weight:700;color:#2A2A2A;">Hi {customer},</p>'
+        + '<p style="margin:8px 0 0;font-size:14px;color:#5A5A5A;line-height:1.6;">'
+        + body_line
+        + "</p></td></tr>"
+        + '<tr><td style="padding:0 0 8px">'
+        + '<p style="font-size:13px;color:#5A5A5A;line-height:1.6;">'
+        + f"Thank you for your business.<br>{tenant_name}"
+        + "</p></td></tr>"
+        + _FOOTER
+    )
+    text = (
+        f"Hi {customer},\n\n"
+        f"Please find attached your {doc_label.lower()} {number} for {total}. "
+        f"{when}\n\nThank you for your business.\n{tenant_name}"
+    )
+
+    attachments = [{
+        "filename": f"{number or doc_type}.pdf",
+        "content": base64.b64encode(pdf_bytes).decode("ascii"),
+    }]
+    return await _send(to, subject, html, text, attachments=attachments)

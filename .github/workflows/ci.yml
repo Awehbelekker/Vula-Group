@@ -30,6 +30,9 @@ jobs:
       - name: Lint app code
         run: ruff check vula/ core/ --select=F --exclude scripts,tests
 
+      - name: Install test dependencies
+        run: pip install pytest pytest-asyncio
+
       # Confirm the app imports cleanly (catches syntax/import errors that
       # would crash the server) without needing live Ollama/Qdrant.
       - name: Import check
@@ -41,6 +44,14 @@ jobs:
         run: |
           pip install -r requirements.txt
           python -c "import vula.api.server; print('Server imports OK')"
+
+      - name: Run tests
+        env:
+          OLLAMA_BASE: http://localhost:11434
+          QDRANT_BASE: http://localhost:6333
+          API_KEY: "ci-test"
+          DEBUG: "true"
+        run: pytest tests/
 
   # ── React dashboard — build must pass ─────────────────────────────────────────
   dashboard:

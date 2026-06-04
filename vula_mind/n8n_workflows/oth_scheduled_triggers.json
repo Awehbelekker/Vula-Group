@@ -1,0 +1,52 @@
+{
+  "name": "Vula — OTH Scheduled Triggers",
+  "nodes": [
+    {
+      "id": "trigger-abandoned-carts",
+      "name": "Every Hour — Abandoned Carts",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [100, 100],
+      "parameters": {
+        "rule": { "interval": [ { "field": "hours" } ] }
+      }
+    },
+    {
+      "id": "trigger-daily-jobs",
+      "name": "Daily 09:00 — Reorders & Reviews",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [100, 300],
+      "parameters": {
+        "rule": { "interval": [ { "field": "days", "hours": 9 } ] }
+      }
+    },
+    {
+      "id": "trigger-weekly-specials",
+      "name": "Monday 07:00 — Weekly Specials",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [100, 500],
+      "parameters": {
+        "rule": { "interval": [ { "field": "weeks", "weekday": 1, "hours": 7 } ] }
+      }
+    },
+    {
+      "id": "call-vula-api",
+      "name": "Call Vula API Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [400, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://vula-group-production.up.railway.app/v1/commerce/off-the-hook/jobs/{{ $node[\"Detect Job Type\"].json.job }}",
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.VULA_API_KEY }}" }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Hour — Abandoned Carts": { "main": [[{ "node": "Detect Job Type", "type": "main", "index": 0 }]] },
+    "Daily 09:00 — Reorders & Reviews": { "main": [[{ "node": "Detect Job Type", "type": "main", "index": 0 }]] },
+    "Monday 07:00 — Weekly Specials": { "main": [[{ "node": "Detect Job Type", "type": "main", "index": 0 }]] }
+  }
+}

@@ -119,8 +119,8 @@ async def get_or_create_cart(tenant_id: str, session_id: str, customer_phone: Op
     return result.data[0]
 
 
-async def add_to_cart(cart_id: str, product_id: str, quantity: int) -> dict:
-    # Upsert — increment quantity if already in cart
+async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: int) -> dict:
+    # Check existing
     existing = (
         _client()
         .table("commerce_cart_items")
@@ -142,7 +142,18 @@ async def add_to_cart(cart_id: str, product_id: str, quantity: int) -> dict:
         )
         return result.data[0]
 
-    product = _client().table("commerce_products").select("price_cents").eq("id", product_id).single().execute()
+    # Fetch product to verify it belongs to tenant and get price
+    product = (
+        _client()
+        .table("commerce_products")
+        .select("price_cents")
+        .eq("tenant_id", tenant_id)
+        .eq("id", product_id)
+        .single()
+        .execute()
+    )
+    if not product.data:
+        raise ValueError(f"Product {product_id} not found for tenant {tenant_id}")
     unit_price = product.data["price_cents"]
 
     item = {
@@ -233,6 +244,85 @@ async def list_orders(
         q = q.eq("status", status)
     result = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
     return result.data or []
+
+
+async def get_delivery_list(tenant_id: str, date_str: Optional[str] = None) -> List[dict]:
+    """Return all orders for a given date (default today) with items, paid/unpaid status."""
+    from datetime import date as _date
+    target = date_str or _date.today().isoformat()
+    result = (
+        _client()
+        .table("commerce_orders")
+        .select("id,display_id,customer_name,customer_phone,customer_email,"
+                "delivery_address,delivery_slot,delivery_notes,"
+                "total_cents,status,channel,created_at,"
+                "commerce_order_items(product_name,quantity,unit_price_cents,total_cents)")
+        .eq("tenant_id", tenant_id)
+        .gte("created_at", f"{target}T00:00:00")
+        .lt("created_at", f"{target}T23:59:59")
+        .not_.in_("status", ["cancelled", "refunded"])
+        .order("delivery_slot")
+        .order("created_at")
+        .execute()
+    )
+    return result.data or []
+
+
+async def get_customers(
+    tenant_id: str,
+    audience: str = "all",
+    search: str = "",
+    limit: int = 100,
+) -> dict:
+    """Aggregate customers from orders + WhatsApp conversations."""
+    q = (
+        _client()
+        .table("commerce_orders")
+        .select("customer_name,customer_phone,total_cents,status,created_at")
+        .eq("tenant_id", tenant_id)
+        .not_.in_("status", ["cancelled", "refunded"])
+    )
+    result = q.order("created_at", desc=True).limit(500).execute()
+    rows = result.data or []
+
+    # Aggregate per phone
+    from collections import defaultdict
+    from datetime import datetime, timezone, timedelta
+    cust: dict[str, dict] = {}
+    for r in rows:
+        phone = r.get("customer_phone") or ""
+        if not phone:
+            continue
+        if phone not in cust:
+            cust[phone] = {
+                "name": r.get("customer_name") or "",
+                "phone": phone,
+                "order_count": 0,
+                "total_spent_cents": 0,
+                "last_order_at": r.get("created_at"),
+            }
+        cust[phone]["order_count"] += 1
+        cust[phone]["total_spent_cents"] += r.get("total_cents") or 0
+        if r.get("created_at", "") > cust[phone]["last_order_at"]:
+            cust[phone]["last_order_at"] = r["created_at"]
+
+    customers = list(cust.values())
+
+    # Audience filter
+    now = datetime.now(timezone.utc)
+    if audience == "active_30d":
+        cutoff = (now - timedelta(days=30)).isoformat()
+        customers = [c for c in customers if (c.get("last_order_at") or "") >= cutoff]
+    elif audience == "high_value":
+        customers = [c for c in customers if c["total_spent_cents"] >= 50000]
+
+    # Search filter
+    if search:
+        sl = search.lower()
+        customers = [c for c in customers if sl in c["name"].lower() or sl in c["phone"]]
+
+    customers.sort(key=lambda c: c.get("last_order_at") or "", reverse=True)
+    return {"customers": customers[:limit], "count": len(customers), "total_all": len(cust)}
 
 
 async def update_product(tenant_id: str, product_id: str, data: dict) -> dict:
@@ -335,12 +425,13 @@ async def append_message(tenant_id: str, session_id: str, role: str, content: st
     ).execute()
 
 
-async def get_recent_messages(session_id: str, limit: int = 12) -> List[dict]:
+async def get_recent_messages(tenant_id: str, session_id: str, limit: int = 12) -> List[dict]:
     """Return the most recent messages for a session, oldest first."""
     result = (
         _client()
         .table("commerce_conversation_messages")
         .select("role,content,created_at")
+        .eq("tenant_id", tenant_id)
         .eq("session_id", session_id)
         .order("created_at", desc=True)
         .limit(limit)
@@ -538,4 +629,57 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
         {"status": "accepted", "converted_invoice_id": created["id"], "updated_at": _now()}
     ).eq("tenant_id", tenant_id).eq("id", quote_id).execute()
 
-    return created
+
+# ── Scheduled Jobs Logic ─────────────────────────────────────────────────────
+
+async def get_abandoned_carts(tenant_id: str, hours_old: int = 1) -> List[dict]:
+    """Find carts older than hours_old with no associated order."""
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours_old)).isoformat()
+
+    # Get active carts updated before cutoff
+    carts = _client().table("commerce_carts") \
+        .select("*, commerce_cart_items(*, commerce_products(name))") \
+        .eq("tenant_id", tenant_id) \
+        .eq("status", "active") \
+        .lt("updated_at", cutoff) \
+        .execute().data or []
+
+    # Filter for carts that don't have an order
+    abandoned = []
+    for cart in carts:
+        order_check = _client().table("commerce_orders") \
+            .select("id") \
+            .eq("cart_id", cart["id"]) \
+            .limit(1).execute()
+        if not order_check.data:
+            abandoned.append(cart)
+
+    return abandoned
+
+
+async def get_reorder_candidates(tenant_id: str, days_ago: int = 7) -> List[dict]:
+    """Find customers whose last delivered order was exactly days_ago."""
+    from datetime import datetime, timedelta, timezone
+    start = (datetime.now(timezone.utc) - timedelta(days=days_ago + 1)).date().isoformat()
+    end = (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()
+
+    result = _client().table("commerce_orders") \
+        .select("customer_phone, customer_name, commerce_order_items(product_name)") \
+        .eq("tenant_id", tenant_id) \
+        .eq("status", "delivered") \
+        .gte("created_at", start) \
+        .lt("created_at", end) \
+        .execute()
+    return result.data or []
+
+
+async def get_low_stock_products(tenant_id: str, threshold: int = 5) -> List[dict]:
+    """Find products below stock threshold."""
+    result = _client().table("commerce_products") \
+        .select("id, name, stock_quantity") \
+        .eq("tenant_id", tenant_id) \
+        .eq("in_stock", True) \
+        .lt("stock_quantity", threshold) \
+        .execute()
+    return result.data or []

@@ -39,7 +39,7 @@ async def test_dispatch_add_to_cart_by_slug():
         patch("core.skills.commerce_assistant.service.add_to_cart", new=AsyncMock()) as mock_add,
     ):
         out = await skill._dispatch_tool("add_to_cart", {"product": "snoek", "quantity": 2}, CTX)
-    mock_add.assert_awaited_once_with("c1", "p1", 2)
+    mock_add.assert_awaited_once_with(TENANT, "c1", "p1", 2)
     assert out == {"added": "Fresh Snoek", "quantity": 2, "unit_price": "R185.00"}
 
 
@@ -190,3 +190,89 @@ async def test_run_commerce_assistant_returns_false_on_empty_answer():
 
     assert handled is False
     mock_send.assert_not_awaited()
+
+
+
+# ── PDF renderer unit tests ────────────────────────────────────────────────────
+
+_SAMPLE_INVOICE = {
+    "id": "inv-001",
+    "tenant_id": "off-the-hook",
+    "doc_type": "invoice",
+    "invoice_number": "OTH-INV-00001",
+    "customer_name": "Cape Fish Market",
+    "customer_email": "orders@capefishmarket.co.za",
+    "customer_phone": "+27211234567",
+    "customer_address": "12 Harbour Rd, Cape Town",
+    "line_items": [
+        {"description": "Fresh Snoek (per kg)", "quantity": 5, "unit_price_cents": 18500, "total_cents": 92500},
+        {"description": "Yellowtail (per kg)", "quantity": 3, "unit_price_cents": 22000, "total_cents": 66000},
+    ],
+    "subtotal_cents": 158500,
+    "vat_rate": 15.0,
+    "vat_cents": 23775,
+    "total_cents": 182275,
+    "status": "draft",
+    "issue_date": "2026-06-03",
+    "due_date": "2026-06-17",
+    "notes": "Please EFT before delivery.",
+}
+
+
+def test_render_invoice_pdf_returns_bytes():
+    """render_invoice_pdf should produce a non-empty bytes object."""
+    try:
+        from weasyprint import HTML  # noqa: F401  — skip if not installed
+    except ImportError:
+        pytest.skip("weasyprint not installed in test environment")
+
+    from vula.commerce.pdf import render_invoice_pdf
+    pdf = render_invoice_pdf(_SAMPLE_INVOICE)
+    assert isinstance(pdf, bytes)
+    assert len(pdf) > 1024, "PDF is unexpectedly small"
+    assert pdf[:4] == b"%PDF", "Output is not a valid PDF"
+
+
+def test_render_quote_pdf_label():
+    """Quote doc_type should produce a 'Quotation' title in the HTML."""
+    from vula.commerce.pdf import _TEMPLATE_HTML, _DOC_LABELS
+    assert _DOC_LABELS["quote"] == "Quotation"
+    assert _DOC_LABELS["invoice"] == "Tax Invoice"
+    assert _DOC_LABELS["proforma"] == "Pro Forma Invoice"
+
+
+def test_render_invoice_pdf_integer_cents():
+    """Totals in the invoice must all be integers — never floats."""
+    invoice = dict(_SAMPLE_INVOICE)
+    # Verify the renderer doesn't mutate types to floats
+    from vula.commerce.pdf import render_invoice_pdf
+    try:
+        from weasyprint import HTML  # noqa: F401
+    except ImportError:
+        pytest.skip("weasyprint not installed in test environment")
+
+    render_invoice_pdf(invoice)
+    # The original dict should be untouched (we work on a copy of line_items)
+    assert isinstance(invoice["total_cents"], int)
+    assert isinstance(invoice["subtotal_cents"], int)
+    assert isinstance(invoice["vat_cents"], int)
+
+
+def test_line_items_total_cents_auto_computed():
+    """Items missing total_cents should have it computed during render."""
+    try:
+        from weasyprint import HTML  # noqa: F401
+    except ImportError:
+        pytest.skip("weasyprint not installed in test environment")
+
+    from vula.commerce.pdf import render_invoice_pdf
+    invoice = dict(_SAMPLE_INVOICE)
+    # Strip total_cents from line items to test auto-computation
+    invoice["line_items"] = [
+        {"description": "Snoek", "quantity": 2, "unit_price_cents": 18500},
+    ]
+    invoice["subtotal_cents"] = 37000
+    invoice["vat_cents"] = 5550
+    invoice["total_cents"] = 42550
+    pdf = render_invoice_pdf(invoice)
+    assert isinstance(pdf, bytes) and len(pdf) > 1024

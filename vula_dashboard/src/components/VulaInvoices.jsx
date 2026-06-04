@@ -69,6 +69,28 @@ export default function VulaInvoices({ tenantId, products = [] }) {
     if (inv.status === 'draft') setStatus(inv, 'sent')
   }
 
+  function downloadPdf(inv) {
+    window.open(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`, '_blank')
+  }
+
+  async function emailInvoice(inv) {
+    if (!confirm(`Email ${inv.invoice_number} to ${inv.customer_email}?`)) return
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/send-email`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok) {
+        alert(`Sent to ${d.to}`)
+        load()
+      } else {
+        alert(d.detail || 'Could not send email.')
+      }
+    } catch {
+      alert('Could not send email.')
+    }
+  }
+
   const fmt = c => `R${(c / 100).toFixed(2)}`
 
   if (showCreate) {
@@ -116,6 +138,8 @@ export default function VulaInvoices({ tenantId, products = [] }) {
                 </p>
                 <div style={s.cardActions}>
                   {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
+                  <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
+                  {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
                   {inv.doc_type === 'quote' && inv.status !== 'accepted' && (
                     <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
                   )}
@@ -253,6 +277,8 @@ const s = {
   dates:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '0 0 8px' },
   cardActions:{ display: 'flex', gap: 6 },
   actWa:      { padding: '5px 10px', background: 'rgba(37,211,102,0.1)', color: '#1da851', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
+  actPdf:     { padding: '5px 10px', background: 'rgba(0,119,182,0.08)', color: '#0077b6', border: '1px solid rgba(0,119,182,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
+  actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: '#a8780a', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actPaid:    { padding: '5px 10px', background: '#2C5545', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
   actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   formSection:{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },

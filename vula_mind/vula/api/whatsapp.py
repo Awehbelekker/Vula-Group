@@ -21,12 +21,14 @@ Threading:
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import re
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 from config import settings
 
@@ -52,6 +54,10 @@ _ORDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Idempotency cache for inbound message IDs
+_processed_msg_ids: list[str] = []
+_MAX_PROCESSED_IDS = 1000
+
 
 # ─── Meta verification handshake ─────────────────────────────────────────────
 
@@ -71,10 +77,38 @@ async def verify_webhook(
 # ─── Inbound message handler ─────────────────────────────────────────────────
 
 @router.post("/webhook")
-async def receive_message(request: Request) -> dict:
+async def receive_message(
+    request: Request,
+    x_hub_signature_256: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
+) -> dict:
     """Receive inbound WhatsApp messages from Meta."""
+    # 1. Verify signature if app secret is configured
+    raw_body = await request.body()
+    if settings.vula_fb_app_secret:
+        if not x_hub_signature_256:
+            logger.warning("Rejecting WhatsApp POST: missing X-Hub-Signature-256")
+            raise HTTPException(status_code=403, detail="Missing signature")
+
+        # Signature is "sha256=HEX_DIGEST"
+        try:
+            expected_sig = x_hub_signature_256.split("=")[1]
+        except IndexError:
+            raise HTTPException(status_code=403, detail="Malformed signature")
+
+        actual_sig = hmac.new(
+            settings.vula_fb_app_secret.encode(),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+
+        if not hmac.compare_digest(actual_sig, expected_sig):
+            logger.warning("Rejecting WhatsApp POST: HMAC mismatch")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+    # 2. Parse JSON
     try:
-        body = await request.json()
+        import json
+        body = json.loads(raw_body)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
@@ -86,6 +120,15 @@ async def receive_message(request: Request) -> dict:
                 phone = msg.get("from", "")
                 msg_id = msg.get("id", "")
                 msg_type = msg.get("type", "")
+
+                # 3. Idempotency check
+                if msg_id:
+                    if msg_id in _processed_msg_ids:
+                        logger.debug("Skipping duplicate WhatsApp message: %s", msg_id)
+                        continue
+                    _processed_msg_ids.append(msg_id)
+                    if len(_processed_msg_ids) > _MAX_PROCESSED_IDS:
+                        _processed_msg_ids.pop(0)
 
                 # Detect commerce tenants by the Meta phone_number_id
                 phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
@@ -826,10 +869,32 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     """
     text_lower = text.lower().strip()
 
-    # Greeting — send welcome + menu
+    # 1. Greeting — send welcome + menu
     greeting_words = {"hi", "hello", "hallo", "hey", "howzit", "good morning", "goeie dag"}
     if any(text_lower.startswith(w) for w in greeting_words):
         await _send_commerce_welcome(phone, tenant_id)
+        return
+
+    # 2. Supplier Intake — OTH-07 logic
+    supplier_keywords = {"supply", "sell", "catch", "supplier", "verskaf", "fish for you"}
+    if any(k in text_lower for k in supplier_keywords):
+        reply = (
+            "Thanks for reaching out! 🐟 We're always looking for quality suppliers. "
+            "Please complete our intake form here: https://offthehook.co.za/suppliers "
+            "Our team will review it and get back to you."
+        )
+        await _send_reply(phone, reply, tenant_id)
+        # Log lead to Supabase (assuming table exists or using a generic log)
+        try:
+            from vula.commerce import service as commerce_service
+            commerce_service._client().table("supplier_leads").insert({
+                "tenant_id": tenant_id,
+                "phone": phone,
+                "raw_text": text,
+                "source": "whatsapp"
+            }).execute()
+        except Exception:
+            pass
         return
 
     handled = await _run_commerce_assistant(phone, text, tenant_id)
@@ -860,7 +925,7 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str) -> bool
         )
         session_id = session["id"]
         history = commerce_service.format_history(
-            await commerce_service.get_recent_messages(session_id, limit=12)
+            await commerce_service.get_recent_messages(tenant_id, session_id, limit=12)
         )
     except Exception as exc:
         logger.debug("Commerce session/history load failed (non-fatal): %s", exc)

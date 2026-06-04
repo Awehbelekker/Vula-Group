@@ -2,12 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps for document parsing and OCR
+# System deps for document parsing, OCR, and PDF generation (WeasyPrint)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     poppler-utils \
     libmagic1 \
     curl \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    shared-mime-info \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first — cached layer, only rebuilds when requirements.txt changes
