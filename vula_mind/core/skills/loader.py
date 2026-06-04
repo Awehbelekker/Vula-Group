@@ -19,6 +19,7 @@ from core.skills.web_search import WebSearchSkill
 from core.skills.file_parse import FileParseSkill
 from core.skills.architecture_planning import ArchitecturePlanningSkill
 from core.skills.commerce_assistant import CommerceAssistantSkill
+from core.skills.commerce_admin import CommerceAdminSkill
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ _SKILLS: Dict[str, BaseSkill] = {
     "file_parse": FileParseSkill(),
     "architecture_planning": ArchitecturePlanningSkill(),
     "commerce_assistant": CommerceAssistantSkill(),
+    "commerce_admin": CommerceAdminSkill(),
 }
 
 # Skills declared in registry.json but not yet implemented — route to reasoning

@@ -857,6 +857,73 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
         return False
 
 
+async def _send_invoice_document(
+    to: str,
+    pdf_bytes: bytes,
+    filename: str,
+    caption: str = "",
+    tenant_id: str = "",
+) -> bool:
+    """Send a PDF as a WhatsApp document via the Meta Graph API.
+
+    The PDF is first uploaded to Meta's media endpoint, then delivered as a
+    ``document`` message referencing the returned media id — this avoids needing
+    a publicly reachable URL. Credentials are resolved per-tenant from Supabase,
+    falling back to env vars, exactly like ``_send_reply``.
+    """
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds:
+        if settings.whatsapp_token and settings.whatsapp_phone_id:
+            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+        else:
+            logger.info("WhatsApp not configured — skipping document to %s", to)
+            return False
+
+    number = to.lstrip("+").replace(" ", "").replace("-", "")
+    if number.startswith("0"):
+        number = "27" + number[1:]
+
+    base = f"https://graph.facebook.com/v19.0/{creds['phone_id']}"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # 1. Upload the PDF to Meta and obtain a media id
+            upload = await client.post(
+                f"{base}/media",
+                headers={"Authorization": f"Bearer {creds['token']}"},
+                data={"messaging_product": "whatsapp", "type": "application/pdf"},
+                files={"file": (filename, pdf_bytes, "application/pdf")},
+            )
+            upload.raise_for_status()
+            media_id = upload.json().get("id")
+            if not media_id:
+                logger.error("WhatsApp media upload returned no id for %s", to)
+                return False
+
+            # 2. Send the document message referencing the uploaded media
+            document: dict = {"id": media_id, "filename": filename}
+            if caption:
+                document["caption"] = caption[:1024]
+            resp = await client.post(
+                f"{base}/messages",
+                headers={
+                    "Authorization": f"Bearer {creds['token']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": number,
+                    "type": "document",
+                    "document": document,
+                },
+            )
+            resp.raise_for_status()
+            logger.info("WhatsApp document sent to %s", to)
+            return True
+    except Exception as exc:
+        logger.error("WhatsApp document send failed to %s: %s", to, exc)
+        return False
+
+
 # ─── Commerce ordering flow ───────────────────────────────────────────────────
 
 async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id: str) -> None:
@@ -897,10 +964,83 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
             pass
         return
 
+    # Owner/staff → admin agent (run the shop); customers → shopping agent.
+    if _is_tenant_owner(tenant_id, phone):
+        if await _run_commerce_admin(phone, text, tenant_id):
+            return
+        # Admin agent failed → fall through to the customer assistant.
+
     handled = await _run_commerce_assistant(phone, text, tenant_id)
     if not handled:
         # Skill unavailable/failed — fall back to n8n, then a holding reply.
         await _forward_to_n8n_commerce(phone, text, msg_id, tenant_id)
+
+
+def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
+    """Is this phone an owner/staff of the tenant (→ admin agent)?
+
+    Source of truth is the per-tenant team registry in vula.api.yoco
+    (_TENANT_TEAM). Adding a tenant's owner/staff there enables the admin agent
+    for them automatically — the same mechanism for every tenant.
+    """
+    try:
+        from vula.api.yoco import _TENANT_TEAM
+    except Exception:
+        return False
+
+    def _digits(p: str) -> str:
+        n = "".join(ch for ch in (p or "") if ch.isdigit())
+        return "27" + n[1:] if n.startswith("0") else n
+
+    target = _digits(phone)
+    for _name, team_phone, role in _TENANT_TEAM.get(tenant_id, []):
+        if _digits(team_phone) == target and role in ("owner", "operations", "staff", "admin"):
+            return True
+    return False
+
+
+async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
+    """Drive the commerce_admin skill (owner running the shop) with memory."""
+    try:
+        from core.skills.base import SkillInput
+        from core.skills.loader import get_skill
+        from vula.commerce import service as commerce_service
+    except Exception as exc:  # pragma: no cover — import guard
+        logger.warning("commerce_admin unavailable: %s", exc)
+        return False
+
+    history = ""
+    session_id: Optional[str] = None
+    try:
+        session = await commerce_service.get_or_create_session(
+            tenant_id, session_key=f"admin:{phone}", channel="whatsapp", customer_phone=phone
+        )
+        session_id = session["id"]
+        history = commerce_service.format_history(
+            await commerce_service.get_recent_messages(tenant_id, session_id, limit=12)
+        )
+    except Exception as exc:
+        logger.debug("Admin session/history load failed (non-fatal): %s", exc)
+
+    skill = get_skill("commerce_admin")
+    output = await skill(
+        SkillInput(
+            question=text, tenant_id=tenant_id, conversation_history=history,
+            metadata={"session_id": f"admin:{phone}", "customer_phone": phone},
+        )
+    )
+    if not output.success or not output.answer:
+        logger.warning("commerce_admin returned no answer: %s", output.error)
+        return False
+
+    await _send_reply(phone, output.answer, tenant_id)
+    if session_id:
+        try:
+            await commerce_service.append_message(tenant_id, session_id, "user", text)
+            await commerce_service.append_message(tenant_id, session_id, "assistant", output.answer)
+        except Exception:
+            pass
+    return True
 
 
 async def _run_commerce_assistant(phone: str, text: str, tenant_id: str) -> bool:
