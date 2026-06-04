@@ -61,12 +61,35 @@ export default function VulaInvoices({ tenantId, products = [] }) {
     load()
   }
 
-  function sendWhatsApp(inv) {
+  // Open the customer's WhatsApp with a prefilled message + PDF download link.
+  // Used as a fallback when the server-side document send is unavailable.
+  function whatsAppLinkFallback(inv) {
     const phone = (inv.customer_phone || '').replace(/[^\d]/g, '').replace(/^0/, '27')
+    const pdfUrl = `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`
     const msg = `Hi ${inv.customer_name}, here's your invoice ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
-      (inv.due_date ? `Due ${inv.due_date}. ` : '') + `Thank you!`
+      (inv.due_date ? `Due ${inv.due_date}. ` : '') + `Download: ${pdfUrl}`
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank')
     if (inv.status === 'draft') setStatus(inv, 'sent')
+  }
+
+  async function sendWhatsApp(inv) {
+    if (!confirm(`Send ${inv.invoice_number} to ${inv.customer_phone} on WhatsApp?`)) return
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/send-whatsapp`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok) {
+        alert(`Sent to ${d.to}`)
+        load()
+        return
+      }
+      // Server can't deliver the document (e.g. WhatsApp not configured) — fall
+      // back to opening WhatsApp with a PDF download link.
+      whatsAppLinkFallback(inv)
+    } catch {
+      whatsAppLinkFallback(inv)
+    }
   }
 
   function downloadPdf(inv) {
@@ -260,10 +283,10 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
 const s = {
   tabs:       { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #DDD8CE', paddingBottom: 8 },
   tab:        { padding: '6px 16px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
-  tabActive:  { background: 'rgba(44,85,69,0.1)', color: '#2C5545' },
+  tabActive:  { background: 'rgba(44,85,69,0.1)', color: 'var(--accent, #2C5545)' },
   topBar:     { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 },
   count:      { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
-  newBtn:     { marginLeft: 'auto', padding: '8px 16px', background: '#2C5545', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  newBtn:     { marginLeft: 'auto', padding: '8px 16px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
   backBtn:    { padding: '6px 12px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
   formTitle:  { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: 0 },
   muted:      { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '24px 0' },
@@ -271,7 +294,7 @@ const s = {
   card:       { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '14px 16px' },
   cardTop:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   invNum:     { fontFamily: "'Source Code Pro', monospace", fontSize: 13, fontWeight: 600, color: '#1E1E1E', marginRight: 8 },
-  amount:     { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: '#2C5545' },
+  amount:     { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: 'var(--accent, #2C5545)' },
   badge:      { padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600 },
   cust:       { fontFamily: 'system-ui', fontSize: 13, color: '#444', margin: '2px 0' },
   dates:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '0 0 8px' },
@@ -279,7 +302,7 @@ const s = {
   actWa:      { padding: '5px 10px', background: 'rgba(37,211,102,0.1)', color: '#1da851', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actPdf:     { padding: '5px 10px', background: 'rgba(0,119,182,0.08)', color: '#0077b6', border: '1px solid rgba(0,119,182,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: '#a8780a', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  actPaid:    { padding: '5px 10px', background: '#2C5545', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
+  actPaid:    { padding: '5px 10px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
   actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   formSection:{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   fInput:     { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, boxSizing: 'border-box', flex: 1 },
@@ -291,6 +314,6 @@ const s = {
   dueLabel:   { fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 },
   totals:     { background: '#F7F4EE', borderRadius: 8, padding: 14, margin: '12px 0' },
   totRow:     { display: 'flex', justifyContent: 'space-between', fontFamily: 'system-ui', fontSize: 13, color: '#444', padding: '3px 0' },
-  totFinal:   { borderTop: '1px solid #DDD8CE', marginTop: 6, paddingTop: 8, fontWeight: 700, fontSize: 15, color: '#2C5545' },
-  saveInvBtn: { width: '100%', padding: '12px', background: '#2C5545', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  totFinal:   { borderTop: '1px solid #DDD8CE', marginTop: 6, paddingTop: 8, fontWeight: 700, fontSize: 15, color: 'var(--accent, #2C5545)' },
+  saveInvBtn: { width: '100%', padding: '12px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
 }

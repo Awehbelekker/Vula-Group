@@ -6,6 +6,9 @@ Prices always stored as integer cents (ZAR). Never floats.
 """
 from __future__ import annotations
 
+import difflib
+import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -339,6 +342,18 @@ async def update_product(tenant_id: str, product_id: str, data: dict) -> dict:
     return result.data[0] if result.data else {}
 
 
+async def delete_product(tenant_id: str, product_id: str) -> None:
+    """Delete a product (scoped to the tenant)."""
+    (
+        _client()
+        .table("commerce_products")
+        .delete()
+        .eq("tenant_id", tenant_id)
+        .eq("id", product_id)
+        .execute()
+    )
+
+
 async def update_order_status(order_id: str, status: str, yoco_checkout_id: Optional[str] = None) -> None:
     update = {"status": status, "updated_at": _now()}
     if yoco_checkout_id:
@@ -629,6 +644,8 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
         {"status": "accepted", "converted_invoice_id": created["id"], "updated_at": _now()}
     ).eq("tenant_id", tenant_id).eq("id", quote_id).execute()
 
+    return created
+
 
 # ── Scheduled Jobs Logic ─────────────────────────────────────────────────────
 
@@ -683,3 +700,159 @@ async def get_low_stock_products(tenant_id: str, threshold: int = 5) -> List[dic
         .lt("stock_quantity", threshold) \
         .execute()
     return result.data or []
+
+
+# ── Suppliers (tiered intake auto-detection) ──────────────────────────────────
+
+# Auto-apply a fuzzy match at/above FUZZY_AUTO; surface for confirmation down to
+# FUZZY_MIN; below FUZZY_MIN is treated as no match.
+FUZZY_AUTO = 0.90
+FUZZY_MIN = 0.75
+
+_NAME_NOISE = re.compile(r"\b(pty|ltd|cc|inc|limited|proprietary|the)\b")
+
+
+def _norm_name(s: str) -> str:
+    """Lowercase, strip company suffixes and punctuation for stable comparison."""
+    s = re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())
+    s = _NAME_NOISE.sub(" ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _norm_tax(s: str) -> str:
+    """Reduce a tax/VAT number to comparable alphanumerics only."""
+    return re.sub(r"[^0-9a-z]", "", (s or "").lower())
+
+
+def compute_layout_signature(extracted: dict) -> Optional[str]:
+    """Deterministic fingerprint of a supplier document from its line-item
+    catalogue. Stable across scans of the same supplier's invoices; used as a
+    Tier-4 signal when name/tax-id are missing or unreliable. Returns None when
+    there are no usable line items.
+    """
+    items = extracted.get("line_items") or []
+    tokens = sorted({_norm_name(i.get("description", "")) for i in items if i.get("description")})
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return None
+    return hashlib.sha256("|".join(tokens).encode("utf-8")).hexdigest()[:32]
+
+
+async def list_suppliers(tenant_id: str) -> List[dict]:
+    """All known suppliers for a tenant, ordered by name."""
+    result = (
+        _client().table("commerce_suppliers").select("*")
+        .eq("tenant_id", tenant_id).order("name").execute()
+    )
+    return result.data or []
+
+
+async def upsert_supplier(tenant_id: str, data: dict) -> dict:
+    """Insert or update a supplier (conflict on tenant_id,name)."""
+    row = {
+        "id": data.get("id") or str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "name": data["name"],
+        "aliases": data.get("aliases", []),
+        "payment_terms_days": int(data.get("payment_terms_days", 30)),
+        "category": data.get("category", "general"),
+        "contact_phone": data.get("contact_phone"),
+        "contact_email": data.get("contact_email"),
+        "account_number": data.get("account_number"),
+        "tax_id": data.get("tax_id"),
+        "layout_signature": data.get("layout_signature"),
+        "notes": data.get("notes"),
+    }
+    result = (
+        _client().table("commerce_suppliers")
+        .upsert(row, on_conflict="tenant_id,name").execute()
+    )
+    return result.data[0] if result.data else row
+
+
+async def match_supplier(
+    tenant_id: str,
+    *,
+    name: Optional[str] = None,
+    tax_id: Optional[str] = None,
+    layout_signature: Optional[str] = None,
+) -> Optional[dict]:
+    """Tiered supplier auto-detection, tenant-scoped.
+
+    Returns ``{"supplier", "tier", "confidence", "auto_apply"}`` or ``None``.
+    Tiers, highest confidence first:
+      1. ``tax_id`` exact          → confidence 1.0, auto_apply
+      2. exact name / alias        → confidence 1.0, auto_apply
+      3. fuzzy name / alias        → difflib ratio; auto_apply >= FUZZY_AUTO
+      4. layout signature exact    → confidence 0.85, surfaced (not auto)
+    """
+    suppliers = await list_suppliers(tenant_id)
+    if not suppliers:
+        return None
+
+    # Tier 1 — tax id exact (strongest identity signal)
+    nt = _norm_tax(tax_id) if tax_id else ""
+    if nt:
+        for s in suppliers:
+            if s.get("tax_id") and _norm_tax(s["tax_id"]) == nt:
+                return {"supplier": s, "tier": "tax_id", "confidence": 1.0, "auto_apply": True}
+
+    nn = _norm_name(name) if name else ""
+
+    # Tier 2 — exact name / alias
+    if nn:
+        for s in suppliers:
+            candidates = [s.get("name", "")] + list(s.get("aliases") or [])
+            if any(_norm_name(c) == nn for c in candidates):
+                return {"supplier": s, "tier": "exact_name", "confidence": 1.0, "auto_apply": True}
+
+    # Tier 3 — fuzzy name / alias
+    if nn:
+        best, best_score = None, 0.0
+        for s in suppliers:
+            candidates = [s.get("name", "")] + list(s.get("aliases") or [])
+            score = max(
+                (difflib.SequenceMatcher(None, nn, _norm_name(c)).ratio() for c in candidates if c),
+                default=0.0,
+            )
+            if score > best_score:
+                best, best_score = s, score
+        if best and best_score >= FUZZY_MIN:
+            return {
+                "supplier": best,
+                "tier": "fuzzy_name",
+                "confidence": round(best_score, 3),
+                "auto_apply": best_score >= FUZZY_AUTO,
+            }
+
+    # Tier 4 — layout signature exact
+    if layout_signature:
+        for s in suppliers:
+            if s.get("layout_signature") and s["layout_signature"] == layout_signature:
+                return {"supplier": s, "tier": "layout", "confidence": 0.85, "auto_apply": False}
+
+    return None
+
+
+async def learn_supplier_signature(tenant_id: str, supplier_id: str, layout_signature: str) -> None:
+    """Record a layout signature on a supplier the first time we confidently see
+    it, so future scans can match on layout alone. No-op without both ids."""
+    if not (supplier_id and layout_signature):
+        return
+    (
+        _client().table("commerce_suppliers")
+        .update({"layout_signature": layout_signature})
+        .eq("tenant_id", tenant_id).eq("id", supplier_id).execute()
+    )
+
+
+async def delete_supplier(tenant_id: str, supplier_id: str) -> None:
+    """Delete a supplier (scoped to the tenant)."""
+    (
+        _client()
+        .table("commerce_suppliers")
+        .delete()
+        .eq("tenant_id", tenant_id)
+        .eq("id", supplier_id)
+        .execute()
+    )

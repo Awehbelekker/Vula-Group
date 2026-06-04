@@ -17,6 +17,8 @@ import VulaInvoices from './VulaInvoices'
 import VulaBudget from './VulaBudget'
 import VulaBroadcast from './VulaBroadcast'
 import VulaCustomers from './VulaCustomers'
+import VulaAssistant from './VulaAssistant'
+import VulaSettings from './VulaSettings'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -74,13 +76,16 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
         <div style={styles.tabs}>
           {[
             { id: 'overview',  label: '📊 Overview' },
+            { id: 'assistant', label: '💬 Assistant' },
             { id: 'orders',    label: '📦 Orders' },
             { id: 'products',  label: '🐟 Products' },
+            { id: 'suppliers', label: '🚚 Suppliers' },
             { id: 'scanner',   label: '📷 Scanner' },
             { id: 'invoices',  label: '🧾 Invoices' },
             { id: 'budget',    label: '💰 Budget' },
             { id: 'customers', label: '👥 Customers' },
             { id: 'broadcast', label: '📢 Broadcast' },
+            { id: 'settings',  label: '⚙️ Settings' },
           ].map(t => (
             <button
               key={t.id}
@@ -95,13 +100,16 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
         {/* Content */}
         <div style={styles.content}>
           {tab === 'overview'  && <OverviewTab tenantId={tenantId} />}
+          {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
           {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
           {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
+          {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} />}
           {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
           {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} />}
           {tab === 'budget'    && <VulaBudget        tenantId={tenantId} />}
           {tab === 'customers' && <VulaCustomers     tenantId={tenantId} />}
           {tab === 'broadcast' && <VulaBroadcast     tenantId={tenantId} />}
+          {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail="" />}
         </div>
     </>
   )
@@ -143,7 +151,7 @@ function OverviewTab({ tenantId }) {
   return (
     <div>
       <div style={styles.statGrid}>
-        <StatCard label="Today's revenue"    value={fmt(stats.today_revenue_cents)}  sub={`${stats.today_orders} orders`} accent="#2DAAB5" />
+        <StatCard label="Today's revenue"    value={fmt(stats.today_revenue_cents)}  sub={`${stats.today_orders} orders`} accent="var(--accent, #2C5545)" />
         <StatCard label="Total revenue"      value={fmt(stats.total_revenue_cents)}  sub={`${stats.total_orders} orders`} />
         <StatCard label="To dispatch"        value={stats.to_dispatch}               sub="paid / confirmed / packing" accent="#8b5cf6" />
         <StatCard label="Pending payment"    value={stats.pending_payment}           sub="awaiting checkout" accent="#f59e0b" />
@@ -169,6 +177,7 @@ function OrdersTab({ tenantId }) {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
   const [updating, setUpdating] = useState(null)
+  const [detailId, setDetailId] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -248,23 +257,110 @@ function OrdersTab({ tenantId }) {
               </div>
               <p style={styles.orderDate}>{new Date(o.created_at).toLocaleString('en-ZA')}</p>
 
-              {nextStatuses.length > 0 && (
-                <div style={styles.actions}>
-                  {nextStatuses.map(ns => (
-                    <button
-                      key={ns}
-                      disabled={updating === o.id}
-                      onClick={() => advance(o.id, ns)}
-                      style={ns === 'cancelled' ? styles.btnDanger : styles.btnAction}
-                    >
-                      {updating === o.id ? '…' : `→ ${STATUS_LABELS[ns]?.label || ns}`}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div style={styles.actions}>
+                <button onClick={() => setDetailId(o.id)} style={styles.btnGhost}>📋 Details / pack</button>
+                {nextStatuses.map(ns => (
+                  <button
+                    key={ns}
+                    disabled={updating === o.id}
+                    onClick={() => advance(o.id, ns)}
+                    style={ns === 'cancelled' ? styles.btnDanger : styles.btnAction}
+                  >
+                    {updating === o.id ? '…' : `→ ${STATUS_LABELS[ns]?.label || ns}`}
+                  </button>
+                ))}
+              </div>
             </div>
           )
         })}
+      </div>
+
+      {detailId && (
+        <OrderDetailDrawer tenantId={tenantId} orderId={detailId} onClose={() => setDetailId(null)} />
+      )}
+    </div>
+  )
+}
+
+// ── Order detail + packing slip ─────────────────────────────────────────────
+
+function OrderDetailDrawer({ tenantId, orderId, onClose }) {
+  const [order, setOrder] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/orders/${orderId}`)
+      .then(r => r.json()).then(setOrder).catch(() => {}).finally(() => setLoading(false))
+  }, [tenantId, orderId])
+
+  const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
+  const items = order?.commerce_order_items || []
+
+  function printSlip() {
+    const w = window.open('', '_blank')
+    if (!w) return
+    const rows = items.map(i =>
+      `<tr><td>${i.product_name || i.name || 'Item'}</td><td style="text-align:right">${i.quantity}</td><td style="text-align:right">${fmt(i.unit_price_cents || i.price_cents)}</td></tr>`
+    ).join('')
+    w.document.write(`
+      <html><head><title>Packing slip ${order.display_id}</title>
+      <style>body{font-family:system-ui;padding:24px;color:#1E1E1E}h1{font-size:20px}
+      table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 4px;border-bottom:1px solid #ddd;text-align:left}</style>
+      </head><body>
+      <h1>Packing slip — ${order.display_id}</h1>
+      <p><strong>${order.customer_name || ''}</strong> · ${order.customer_phone || ''}</p>
+      <p>${order.delivery_address || 'No address'} · ${order.delivery_slot || ''}</p>
+      ${order.delivery_notes ? `<p>Notes: ${order.delivery_notes}</p>` : ''}
+      <table><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th></tr>${rows}</table>
+      <h3 style="text-align:right">Total: ${fmt(order.total_cents)}</h3>
+      </body></html>`)
+    w.document.close(); w.print()
+  }
+
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={{ ...styles.panel, maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+        <div style={styles.header}>
+          <div>
+            <h2 style={styles.title}>{order?.display_id || 'Order'}</h2>
+            <p style={styles.subtitle}>Order detail & packing</p>
+          </div>
+          <button onClick={onClose} style={styles.closeBtn}>×</button>
+        </div>
+        <div style={styles.content}>
+          {loading ? <p style={styles.loading}>Loading…</p> : !order ? (
+            <p style={styles.empty}>Could not load order.</p>
+          ) : (
+            <>
+              <div style={styles.detailBlock}>
+                <p style={styles.detailName}>{order.customer_name}</p>
+                <p style={styles.detailMeta}>{order.customer_phone}{order.customer_email ? ` · ${order.customer_email}` : ''}</p>
+                <p style={styles.detailMeta}>📍 {order.delivery_address || 'No delivery address'}</p>
+                <p style={styles.detailMeta}>🕐 {order.delivery_slot || '—'}{order.channel ? ` · ${order.channel}` : ''}</p>
+                {order.delivery_notes && <p style={styles.detailNotes}>Note: {order.delivery_notes}</p>}
+              </div>
+
+              <p style={styles.detailSection}>Items to pack</p>
+              <div style={styles.list}>
+                {items.length === 0 ? <p style={styles.detailMeta}>No line items recorded.</p> : items.map((it, i) => (
+                  <div key={i} style={styles.packRow}>
+                    <span style={{ flex: 1 }}>{it.product_name || it.name || 'Item'}</span>
+                    <span style={styles.packQty}>×{it.quantity}</span>
+                    <span style={styles.packPrice}>{fmt(it.unit_price_cents || it.price_cents)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={styles.detailTotal}>
+                <span>Total</span><span>{fmt(order.total_cents)}</span>
+              </div>
+
+              <button onClick={printSlip} style={{ ...styles.btnAction, width: '100%', marginTop: 14, padding: '12px' }}>
+                🖨 Print packing slip
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -278,6 +374,9 @@ function ProductsTab({ tenantId }) {
   const [saving, setSaving] = useState(null)
   const [editPrice, setEditPrice] = useState({}) // id → string
   const [expandedId, setExpandedId] = useState(null) // id of expanded product card
+  const [showAdd, setShowAdd] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState({ name: '', price: '', category: 'extras', sold_by: 'pack', description: '' })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -296,6 +395,32 @@ function ProductsTab({ tenantId }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
+    await load()
+    setSaving(null)
+  }
+
+  async function createProduct(e) {
+    e.preventDefault()
+    const cents = Math.round(parseFloat(form.price) * 100)
+    if (!form.name.trim() || isNaN(cents) || cents <= 0) return
+    setAdding(true)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: form.name.trim(), price_cents: cents, category: form.category,
+        sold_by: form.sold_by, description: form.description.trim(), in_stock: true,
+      }),
+    })
+    setForm({ name: '', price: '', category: 'extras', sold_by: 'pack', description: '' })
+    setShowAdd(false)
+    setAdding(false)
+    await load()
+  }
+
+  async function deleteProduct(p) {
+    if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return
+    setSaving(p.id)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${p.id}`, { method: 'DELETE' })
     await load()
     setSaving(null)
   }
@@ -321,6 +446,38 @@ function ProductsTab({ tenantId }) {
 
   return (
     <div>
+      {/* Add product */}
+      <div style={{ marginBottom: 16 }}>
+        {!showAdd ? (
+          <button onClick={() => setShowAdd(true)} style={styles.btnAction}>+ Add product</button>
+        ) : (
+          <form onSubmit={createProduct} style={styles.addProductForm}>
+            <input placeholder="Product name" value={form.name} required
+                   onChange={e => setForm({ ...form, name: e.target.value })} style={styles.apInput} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input placeholder="Price (R)" type="number" step="0.01" value={form.price} required
+                     onChange={e => setForm({ ...form, price: e.target.value })} style={styles.apInput} />
+              <select value={form.sold_by} onChange={e => setForm({ ...form, sold_by: e.target.value })} style={styles.apInput}>
+                <option value="pack">per pack / item</option>
+                <option value="kg">per kg</option>
+              </select>
+              <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={styles.apInput}>
+                {Object.keys(CATEGORY_LABELS).map(c => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+              </select>
+            </div>
+            <textarea placeholder="Description (optional)" rows={2} value={form.description}
+                      onChange={e => setForm({ ...form, description: e.target.value })} style={styles.apInput} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="submit" disabled={adding} style={styles.btnAction}>{adding ? 'Adding…' : 'Add product'}</button>
+              <button type="button" onClick={() => setShowAdd(false)} style={styles.btnGhost}>Cancel</button>
+            </div>
+            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: 0 }}>
+              You can add a photo after creating, via the 📷 Photos button.
+            </p>
+          </form>
+        )}
+      </div>
+
       {Object.entries(grouped).map(([cat, items]) => (
         <div key={cat} style={{ marginBottom: 24 }}>
           <h3 style={styles.catHeader}>{CATEGORY_LABELS[cat] || cat}</h3>
@@ -330,9 +487,9 @@ function ProductsTab({ tenantId }) {
                 <div style={styles.productTop}>
                   <div style={{ flex: 1 }}>
                     <span style={styles.productName}>{p.name}</span>
-                    {p.is_weekly_special && (
+                    {p.is_daily_catch && (
                       <span style={{ ...styles.badge, color: '#f59e0b', background: 'rgba(245,158,11,0.12)', marginLeft: 6 }}>
-                        ⭐ Special
+                        ⭐ Catch of the day
                       </span>
                     )}
                   </div>
@@ -361,13 +518,13 @@ function ProductsTab({ tenantId }) {
                     <span style={styles.priceUnit}>/{p.sold_by === 'kg' ? 'kg' : 'pack'}</span>
                   </div>
 
-                  {/* Weekly special toggle */}
+                  {/* Catch of the day toggle */}
                   <button
                     disabled={saving === p.id}
-                    onClick={() => patch(p.id, { is_weekly_special: !p.is_weekly_special })}
+                    onClick={() => patch(p.id, { is_daily_catch: !p.is_daily_catch })}
                     style={styles.btnGhost}
                   >
-                    {p.is_weekly_special ? 'Remove special' : 'Mark special'}
+                    {p.is_daily_catch ? 'Remove catch' : 'Mark catch of day'}
                   </button>
 
                   {/* Expand for image upload */}
@@ -415,6 +572,13 @@ function ProductsTab({ tenantId }) {
                         placeholder="e.g. Skin-on, boneless, great for braaing"
                       />
                     </div>
+                    <button
+                      onClick={() => deleteProduct(p)}
+                      disabled={saving === p.id}
+                      style={styles.btnDeleteProduct}
+                    >
+                      🗑 Delete product
+                    </button>
                   </div>
                 )}
               </div>
@@ -422,6 +586,142 @@ function ProductsTab({ tenantId }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+// ── Suppliers ───────────────────────────────────────────────────────────────────
+
+const BLANK_SUPPLIER = {
+  name: '', aliases: '', payment_terms_days: 30, category: 'general',
+  contact_phone: '', contact_email: '', account_number: '', tax_id: '', notes: '',
+}
+
+function SuppliersTab({ tenantId }) {
+  const [suppliers, setSuppliers] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [editing, setEditing] = useState(null) // null | {} (new) | supplier
+  const [form, setForm] = useState(BLANK_SUPPLIER)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`)
+    const d = await r.json()
+    setSuppliers(d.suppliers || [])
+    setLoading(false)
+  }, [tenantId])
+
+  useEffect(() => { load() }, [load])
+
+  function startEdit(s) {
+    setForm({
+      ...BLANK_SUPPLIER, ...s,
+      aliases: Array.isArray(s.aliases) ? s.aliases.join(', ') : (s.aliases || ''),
+      payment_terms_days: s.payment_terms_days ?? 30,
+    })
+    setEditing(s)
+  }
+  function startNew() { setForm(BLANK_SUPPLIER); setEditing({}) }
+  function cancel() { setEditing(null); setForm(BLANK_SUPPLIER) }
+
+  async function save(e) {
+    e.preventDefault()
+    if (!form.name.trim()) return
+    setSaving(true)
+    const payload = {
+      ...form,
+      name: form.name.trim(),
+      payment_terms_days: parseInt(form.payment_terms_days, 10) || 30,
+      aliases: String(form.aliases).split(',').map(a => a.trim()).filter(Boolean),
+    }
+    if (editing && editing.id) payload.id = editing.id
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    cancel()
+    setSaving(false)
+    await load()
+  }
+
+  async function remove(s) {
+    if (!confirm(`Delete supplier "${s.name}"?`)) return
+    setSaving(true)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers/${s.id}`, { method: 'DELETE' })
+    await load()
+    setSaving(false)
+  }
+
+  if (loading) return <p style={styles.loading}>Loading suppliers…</p>
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        {!editing ? (
+          <button onClick={startNew} style={styles.btnAction}>+ Add supplier</button>
+        ) : (
+          <form onSubmit={save} style={styles.addProductForm}>
+            <input placeholder="Supplier name" value={form.name} required
+                   onChange={e => setForm({ ...form, name: e.target.value })} style={styles.apInput} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input placeholder="Payment terms (days)" type="number" value={form.payment_terms_days}
+                     onChange={e => setForm({ ...form, payment_terms_days: e.target.value })} style={styles.apInput} />
+              <input placeholder="Tax / VAT no." value={form.tax_id || ''}
+                     onChange={e => setForm({ ...form, tax_id: e.target.value })} style={styles.apInput} />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input placeholder="Phone" value={form.contact_phone || ''}
+                     onChange={e => setForm({ ...form, contact_phone: e.target.value })} style={styles.apInput} />
+              <input placeholder="Email" value={form.contact_email || ''}
+                     onChange={e => setForm({ ...form, contact_email: e.target.value })} style={styles.apInput} />
+            </div>
+            <input placeholder="Aliases (comma-separated)" value={form.aliases}
+                   onChange={e => setForm({ ...form, aliases: e.target.value })} style={styles.apInput} />
+            <textarea placeholder="Notes (optional)" rows={2} value={form.notes || ''}
+                      onChange={e => setForm({ ...form, notes: e.target.value })} style={styles.apInput} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="submit" disabled={saving} style={styles.btnAction}>
+                {saving ? 'Saving…' : (editing.id ? 'Save changes' : 'Add supplier')}
+              </button>
+              <button type="button" onClick={cancel} style={styles.btnGhost}>Cancel</button>
+            </div>
+            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: 0 }}>
+              Tax number & aliases improve auto-matching when you scan this supplier's bills.
+            </p>
+          </form>
+        )}
+      </div>
+
+      {suppliers.length === 0 ? (
+        <p style={styles.empty}>No suppliers yet. Add one so scanned bills auto-fill payment terms.</p>
+      ) : (
+        <div style={styles.list}>
+          {suppliers.map(s => (
+            <div key={s.id} style={styles.productCard}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <div>
+                  <span style={styles.productName}>{s.name}</span>
+                  <span style={{ ...styles.statSub, marginLeft: 8 }}>{s.payment_terms_days ?? 30} day terms</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => startEdit(s)} style={styles.btnGhost}>Edit</button>
+                  <button onClick={() => remove(s)} disabled={saving} style={styles.btnDanger}>Delete</button>
+                </div>
+              </div>
+              <div style={{ ...styles.statSub, marginTop: 4 }}>
+                {[
+                  s.tax_id ? `VAT ${s.tax_id}` : null,
+                  s.contact_phone || null,
+                  s.contact_email || null,
+                  (s.aliases && s.aliases.length)
+                    ? `aka ${Array.isArray(s.aliases) ? s.aliases.join(', ') : s.aliases}` : null,
+                ].filter(Boolean).join(' · ') || '—'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -438,7 +738,7 @@ const styles = {
   closeBtn:     { background:'transparent', border:'none', fontSize:28, cursor:'pointer', color:'#8A8680', lineHeight:1 },
   tabs:         { display:'flex', borderBottom:'1px solid #DDD8CE', padding:'0 28px' },
   tab:          { padding:'12px 16px', border:'none', background:'transparent', cursor:'pointer', fontFamily:'system-ui', fontSize:13, color:'#8A8680', borderBottom:'2px solid transparent' },
-  tabActive:    { color:'#2C5545', borderBottom:'2px solid #2C5545', fontWeight:600 },
+  tabActive:    { color:'var(--accent, #2C5545)', borderBottom:'2px solid var(--accent, #2C5545)', fontWeight:600 },
   content:      { padding:'20px 28px', flex:1, overflowY:'auto' },
   loading:      { color:'#8A8680', fontSize:13, fontFamily:'system-ui' },
   empty:        { color:'#8A8680', fontSize:13, fontFamily:'system-ui', padding:'24px 0', textAlign:'center' },
@@ -446,24 +746,24 @@ const styles = {
 
   statGrid:     { display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:12, marginBottom:20 },
   statCard:     { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'16px 18px' },
-  statValue:    { fontFamily:"'Cormorant Garamond', serif", fontSize:28, fontWeight:700, margin:'0 0 4px', color:'#2C5545' },
+  statValue:    { fontFamily:"'Cormorant Garamond', serif", fontSize:28, fontWeight:700, margin:'0 0 4px', color:'var(--accent, #2C5545)' },
   statLabel:    { fontFamily:'system-ui', fontSize:12, fontWeight:600, color:'#1E1E1E', margin:'0 0 2px' },
   statSub:      { fontFamily:'system-ui', fontSize:11, color:'#8A8680', margin:0 },
 
   chips:        { display:'flex', gap:6, flexWrap:'wrap', marginBottom:16 },
   chip:         { padding:'5px 12px', borderRadius:20, border:'1px solid #DDD8CE', background:'#fff', cursor:'pointer', fontSize:12, fontFamily:'system-ui', color:'#8A8680' },
-  chipActive:   { background:'#2C5545', color:'#fff', border:'1px solid #2C5545' },
+  chipActive:   { background:'var(--accent, #2C5545)', color:'#fff', border:'1px solid var(--accent, #2C5545)' },
 
   list:         { display:'flex', flexDirection:'column', gap:8 },
   orderCard:    { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'14px 16px' },
   orderTop:     { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 },
   orderId:      { fontFamily:"'Source Code Pro', monospace", fontSize:13, fontWeight:600, color:'#1E1E1E', marginRight:8 },
-  orderAmount:  { fontFamily:'system-ui', fontSize:15, fontWeight:700, color:'#2C5545' },
+  orderAmount:  { fontFamily:'system-ui', fontSize:15, fontWeight:700, color:'var(--accent, #2C5545)' },
   orderMeta:    { fontFamily:'system-ui', fontSize:12, color:'#8A8680', display:'flex', gap:6, marginBottom:4, flexWrap:'wrap' },
   orderDate:    { fontFamily:'system-ui', fontSize:11, color:'#B5B0A8', margin:'2px 0 8px' },
   badge:        { padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600 },
   actions:      { display:'flex', gap:6, flexWrap:'wrap' },
-  btnAction:    { padding:'5px 12px', background:'#2C5545', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600 },
+  btnAction:    { padding:'5px 12px', background:'var(--accent, #2C5545)', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600 },
   btnDanger:    { padding:'5px 12px', background:'transparent', color:'#ef4444', border:'1px solid rgba(239,68,68,0.3)', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui' },
 
   catHeader:    { fontFamily:"'Cormorant Garamond', serif", fontSize:18, fontWeight:700, color:'#1E1E1E', margin:'0 0 8px' },
@@ -478,4 +778,16 @@ const styles = {
   btnStock:     { padding:'4px 10px', background:'rgba(34,197,94,0.12)', color:'#16a34a', border:'1px solid rgba(34,197,94,0.3)', borderRadius:20, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600, whiteSpace:'nowrap' },
   btnStockOff:  { padding:'4px 10px', background:'rgba(239,68,68,0.1)', color:'#ef4444', border:'1px solid rgba(239,68,68,0.3)', borderRadius:20, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600, whiteSpace:'nowrap' },
   btnGhost:     { padding:'4px 10px', background:'transparent', color:'#8A8680', border:'1px solid #DDD8CE', borderRadius:20, cursor:'pointer', fontSize:11, fontFamily:'system-ui' },
+  addProductForm:{ display:'flex', flexDirection:'column', gap:8, background:'#fff', border:'1px solid #DDD8CE', borderRadius:10, padding:14 },
+  apInput:      { flex:1, padding:'9px 11px', border:'1px solid #DDD8CE', borderRadius:6, fontFamily:'system-ui', fontSize:13, boxSizing:'border-box' },
+  btnDeleteProduct:{ marginTop:12, padding:'7px 12px', background:'transparent', color:'#ef4444', border:'1px solid rgba(239,68,68,0.3)', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui' },
+  detailBlock:  { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:14, marginBottom:14 },
+  detailName:   { fontFamily:'system-ui', fontSize:15, fontWeight:700, color:'#1E1E1E', margin:'0 0 4px' },
+  detailMeta:   { fontFamily:'system-ui', fontSize:13, color:'#6B7280', margin:'2px 0' },
+  detailNotes:  { fontFamily:'system-ui', fontSize:13, color:'#1E1E1E', margin:'6px 0 0', fontStyle:'italic' },
+  detailSection:{ fontFamily:'system-ui', fontSize:12, fontWeight:600, color:'#1E1E1E', margin:'0 0 8px' },
+  packRow:      { display:'flex', alignItems:'center', gap:10, background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'10px 12px', fontFamily:'system-ui', fontSize:14, color:'#1E1E1E' },
+  packQty:      { fontWeight:700, color:'var(--accent, #2C5545)' },
+  packPrice:    { color:'#6B7280', fontSize:13, minWidth:70, textAlign:'right' },
+  detailTotal:  { display:'flex', justifyContent:'space-between', fontFamily:'system-ui', fontWeight:700, fontSize:16, color:'var(--accent, #2C5545)', marginTop:12, paddingTop:10, borderTop:'1px solid #DDD8CE' },
 }

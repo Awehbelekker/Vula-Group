@@ -197,12 +197,107 @@ async def admin_list_products(tenant_id: str):
 @router.patch("/{tenant_id}/admin/products/{product_id}")
 async def admin_update_product(tenant_id: str, product_id: str, body: dict):
     """Patch product — toggle stock, update price, edit name/description."""
-    allowed = {"in_stock", "price_cents", "name", "description", "notes", "is_weekly_special", "stock_quantity"}
+    allowed = {"in_stock", "price_cents", "name", "description", "notes",
+               "is_daily_catch", "stock_quantity", "image_url", "category", "sold_by"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
     result = await service.update_product(tenant_id, product_id, update)
     return result
+
+
+@router.post("/{tenant_id}/admin/products")
+async def admin_create_product(tenant_id: str, body: dict):
+    """Create a new product. Auto-generates a slug from the name."""
+    import re as _re
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        price_cents = int(body.get("price_cents") or 0)
+    except (TypeError, ValueError):
+        price_cents = 0
+    if price_cents <= 0:
+        raise HTTPException(status_code=400, detail="price_cents must be a positive integer")
+
+    slug = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "product"
+    # Ensure slug uniqueness within the tenant
+    existing = {p.get("slug") for p in await service.list_products(tenant_id, in_stock_only=False)}
+    base, n = slug, 2
+    while slug in existing:
+        slug = f"{base}-{n}"; n += 1
+
+    # Enforce the DB CHECK constraints.
+    VALID_CATEGORIES = {"fresh_fish", "fresh_chicken", "frozen_chicken", "frozen_seafood", "extras"}
+    category = body.get("category") if body.get("category") in VALID_CATEGORIES else "extras"
+    sold_by = body.get("sold_by") if body.get("sold_by") in ("kg", "pack") else "pack"
+
+    payload = {
+        "name": name,
+        "slug": slug,
+        "price_cents": price_cents,
+        "category": category,
+        "sold_by": sold_by,
+        "description": body.get("description") or "",
+        "image_url": body.get("image_url"),
+        "in_stock": body.get("in_stock", True),
+        "stock_quantity": body.get("stock_quantity"),
+    }
+    return await service.create_product(tenant_id, payload)
+
+
+@router.delete("/{tenant_id}/admin/products/{product_id}")
+async def admin_delete_product(tenant_id: str, product_id: str):
+    """Delete a product."""
+    await service.delete_product(tenant_id, product_id)
+    return {"deleted": product_id}
+
+
+# ── In-portal admin assistant (chat to Vula from the dashboard) ───────────────
+
+class AssistantRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None     # web chat session key (per browser/user)
+
+
+@router.post("/{tenant_id}/admin/assistant")
+async def admin_assistant(tenant_id: str, body: AssistantRequest):
+    """Chat to the Vula admin agent from inside the web portal.
+
+    Same commerce_admin skill that powers the WhatsApp owner agent — so the
+    tenant can run the shop (sales, orders, stock, invoices, expenses,
+    broadcast previews) by chatting here instead of WhatsApp.
+    """
+    from core.skills.base import SkillInput
+    from core.skills.loader import get_skill
+
+    if not (body.message or "").strip():
+        raise HTTPException(status_code=400, detail="message is required")
+
+    session_key = f"webadmin:{body.session_id or 'default'}"
+    history, sid = "", None
+    try:
+        session = await service.get_or_create_session(tenant_id, session_key=session_key, channel="web")
+        sid = session["id"]
+        history = service.format_history(await service.get_recent_messages(tenant_id, sid, limit=12))
+    except Exception as exc:
+        log.debug("Assistant session/history load failed (non-fatal): %s", exc)
+
+    skill = get_skill("commerce_admin")
+    out = await skill(SkillInput(
+        question=body.message, tenant_id=tenant_id,
+        conversation_history=history, metadata={"session_id": session_key},
+    ))
+    answer = out.answer if (out.success and out.answer) else (out.error or "Sorry, I couldn't process that just now.")
+
+    if sid:
+        try:
+            await service.append_message(tenant_id, sid, "user", body.message)
+            await service.append_message(tenant_id, sid, "assistant", answer)
+        except Exception:
+            pass
+
+    return {"answer": answer, "ok": bool(out.success and out.answer)}
 
 
 @router.get("/{tenant_id}/admin/stats")
@@ -357,6 +452,62 @@ async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Option
         raise HTTPException(
             status_code=503,
             detail="Email not sent — Resend is not configured or the send failed.",
+        )
+
+    new_status = invoice.get("status")
+    if new_status == "draft":
+        await service.update_invoice_status(tenant_id, invoice_id, "sent")
+        new_status = "sent"
+
+    return {"sent": True, "to": recipient, "status": new_status}
+
+
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/send-whatsapp")
+async def admin_send_invoice_whatsapp(tenant_id: str, invoice_id: str, body: Optional[dict] = None):
+    """Render the invoice/quote PDF and deliver it to the customer over WhatsApp.
+
+    The recipient defaults to the invoice's customer_phone; an optional
+    ``phone`` field in the body overrides it. The PDF is sent as a WhatsApp
+    document with a short caption. Draft documents are marked ``sent`` once the
+    message is dispatched.
+    """
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    recipient = ((body or {}).get("phone") or invoice.get("customer_phone") or "").strip()
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No recipient phone number available")
+
+    try:
+        from vula.commerce.pdf import render_invoice_pdf, _TENANT_DEFAULTS
+        pdf_bytes = render_invoice_pdf(invoice)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        log.error("PDF render failed for %s/%s: %s", tenant_id, invoice_id, exc)
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+
+    tenant_name = _TENANT_DEFAULTS.get(tenant_id, {}).get(
+        "name", tenant_id.replace("-", " ").title()
+    )
+    doc_label = {"invoice": "invoice", "quote": "quotation", "proforma": "pro forma invoice"}.get(
+        invoice.get("doc_type", "invoice"), "document"
+    )
+    number = invoice.get("invoice_number", invoice_id)
+    total = f"R{(int(invoice.get('total_cents') or 0) / 100):.2f}"
+    caption = (
+        f"Hi {invoice.get('customer_name', 'there')}, here is your {doc_label} "
+        f"{number} for {total} from {tenant_name}. Thank you for your business!"
+    )
+    filename = f"{number}.pdf"
+
+    from vula.api.whatsapp import _send_invoice_document
+    sent = await _send_invoice_document(recipient, pdf_bytes, filename, caption, tenant_id)
+    if not sent:
+        raise HTTPException(
+            status_code=503,
+            detail="WhatsApp not sent — WhatsApp is not configured or the send failed.",
         )
 
     new_status = invoice.get("status")
@@ -887,6 +1038,7 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
         "{\n"
         '  "doc_type": "receipt|delivery_note|invoice|order",\n'
         '  "supplier": string|null,\n'
+        '  "tax_id": string|null,  // supplier VAT / tax registration number if shown\n'
         '  "customer": string|null,\n'
         '  "date": "YYYY-MM-DD"|null,\n'
         '  "due_date": "YYYY-MM-DD"|null,\n'
@@ -996,30 +1148,24 @@ async def admin_scan_commit(tenant_id: str, body: dict):
     db = service._client()
     today = date.today()
 
-    # ── 1. Supplier lookup & payment terms ──────────────────────────────────
+    # ── 1. Supplier lookup & payment terms (tiered auto-detection) ───────────
     supplier_name = extracted.get("supplier") or ""
+    tax_id = extracted.get("tax_id") or ""
+    layout_signature = service.compute_layout_signature(extracted)
     payment_terms_days = 30  # default
     supplier_row = None
 
-    if supplier_name:
-        # Try exact match first, then alias match
-        result = db.table("commerce_suppliers") \
-            .select("*") \
-            .eq("tenant_id", tenant_id) \
-            .ilike("name", supplier_name) \
-            .limit(1).execute()
-
-        if not result.data:
-            # Search aliases array
-            result = db.table("commerce_suppliers") \
-                .select("*") \
-                .eq("tenant_id", tenant_id) \
-                .contains("aliases", [supplier_name]) \
-                .limit(1).execute()
-
-        if result.data:
-            supplier_row = result.data[0]
-            payment_terms_days = supplier_row.get("payment_terms_days", 30)
+    supplier_match = await service.match_supplier(
+        tenant_id,
+        name=supplier_name or None,
+        tax_id=tax_id or None,
+        layout_signature=layout_signature,
+    )
+    # Only auto-apply payment terms for a high-confidence match; weaker matches
+    # are surfaced (supplier_match in the preview) for the owner to confirm.
+    if supplier_match and supplier_match["auto_apply"]:
+        supplier_row = supplier_match["supplier"]
+        payment_terms_days = supplier_row.get("payment_terms_days", 30)
 
     # ── 2. Resolve dates ────────────────────────────────────────────────────
     doc_date = today
@@ -1051,6 +1197,16 @@ async def admin_scan_commit(tenant_id: str, body: dict):
     preview = {
         "supplier": supplier_name,
         "supplier_known": supplier_row is not None,
+        "supplier_match": (
+            {
+                "tier": supplier_match["tier"],
+                "confidence": supplier_match["confidence"],
+                "auto_applied": supplier_match["auto_apply"],
+                "supplier_id": supplier_match["supplier"].get("id"),
+                "supplier_name": supplier_match["supplier"].get("name"),
+            }
+            if supplier_match else None
+        ),
         "payment_terms_days": payment_terms_days,
         "doc_date": str(doc_date),
         "due_date": str(due_date) if due_date else None,
@@ -1108,6 +1264,13 @@ async def admin_scan_commit(tenant_id: str, body: dict):
         result = db.table("commerce_expenses").insert(row).execute()
         committed_record = result.data[0] if result.data else row
 
+    # ── 5b. Learn this supplier's layout signature on a confident match ──────
+    if supplier_row and layout_signature and not supplier_row.get("layout_signature"):
+        try:
+            await service.learn_supplier_signature(tenant_id, supplier_row.get("id"), layout_signature)
+        except Exception as sig_exc:
+            log.warning("Failed to learn supplier signature for %s: %s", record_id, sig_exc)
+
     # ── 6. Ingest into KB so the AI learns from it ──────────────────────────
     kb_chunks = 0
     try:
@@ -1154,6 +1317,7 @@ async def admin_scan_commit(tenant_id: str, body: dict):
         "record_type": "invoice" if is_invoice else "expense",
         "record_id": record_id,
         "record": committed_record,
+        "supplier_match": preview["supplier_match"],
         "preview": preview,
         "kb_chunks_added": kb_chunks,
         "message": msg,
@@ -1221,32 +1385,61 @@ async def admin_expenses_due(
 @router.get("/{tenant_id}/admin/suppliers")
 async def admin_list_suppliers(tenant_id: str):
     """List known suppliers for this tenant — used by Smart Scanner for payment-term lookup."""
-    db = service._client()
-    result = db.table("commerce_suppliers").select("*") \
-        .eq("tenant_id", tenant_id).order("name").execute()
-    return {"suppliers": result.data or [], "count": len(result.data or [])}
+    suppliers = await service.list_suppliers(tenant_id)
+    return {"suppliers": suppliers, "count": len(suppliers)}
 
 
 @router.post("/{tenant_id}/admin/suppliers")
 async def admin_upsert_supplier(tenant_id: str, body: dict):
     """Add or update a supplier with payment terms."""
-    from uuid import uuid4
-    db = service._client()
-    row = {
-        "id": body.get("id") or str(uuid4()),
-        "tenant_id": tenant_id,
-        "name": body["name"],
-        "aliases": body.get("aliases", []),
-        "payment_terms_days": int(body.get("payment_terms_days", 30)),
-        "category": body.get("category", "general"),
-        "contact_phone": body.get("contact_phone"),
-        "contact_email": body.get("contact_email"),
-        "account_number": body.get("account_number"),
-        "notes": body.get("notes"),
+    if not body.get("name"):
+        raise HTTPException(status_code=400, detail="Supplier name is required.")
+    return await service.upsert_supplier(tenant_id, body)
+
+
+@router.delete("/{tenant_id}/admin/suppliers/{supplier_id}")
+async def admin_delete_supplier(tenant_id: str, supplier_id: str):
+    """Delete a supplier."""
+    await service.delete_supplier(tenant_id, supplier_id)
+    return {"ok": True, "deleted": supplier_id}
+
+
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/match-supplier")
+async def admin_match_invoice_supplier(tenant_id: str, invoice_id: str):
+    """Run tiered supplier auto-detection against a stored inbound invoice.
+
+    Returns the matched supplier with the tier and confidence, or no_match.
+    Does not mutate the invoice — the dashboard decides whether to apply.
+    """
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    raw_items = invoice.get("line_items")
+    if isinstance(raw_items, str):
+        import json as _j
+        try:
+            raw_items = _j.loads(raw_items)
+        except (ValueError, TypeError):
+            raw_items = []
+    layout_signature = service.compute_layout_signature({"line_items": raw_items or []})
+
+    result = await service.match_supplier(
+        tenant_id,
+        name=invoice.get("supplier") or None,
+        tax_id=invoice.get("tax_id") or None,
+        layout_signature=layout_signature,
+    )
+    if not result:
+        return {"ok": True, "matched": False, "supplier": None}
+    return {
+        "ok": True,
+        "matched": True,
+        "tier": result["tier"],
+        "confidence": result["confidence"],
+        "auto_apply": result["auto_apply"],
+        "supplier": result["supplier"],
     }
-    result = db.table("commerce_suppliers") \
-        .upsert(row, on_conflict="tenant_id,name").execute()
-    return result.data[0] if result.data else row
 
 
 @router.patch("/{tenant_id}/admin/expenses/{expense_id}/pay")

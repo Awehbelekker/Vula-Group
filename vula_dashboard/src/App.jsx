@@ -19,6 +19,7 @@ import VulaInvoices from "./components/VulaInvoices";
 import VulaBudget from "./components/VulaBudget";
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 import VulaSmartScanner from "./components/VulaSmartScanner";
+import { getTenantTheme, themeVars } from "./theme/tenantThemes";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -67,6 +68,20 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // Match browser/PWA chrome (theme-color) to the tenant accent for owners/staff.
+  useEffect(() => {
+    if (role !== "owner" && role !== "staff") return;
+    const tid = tenantId && tenantId !== "master" ? tenantId : "digg-demo";
+    const accent = getTenantTheme(tid).accent;
+    let meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.name = "theme-color";
+      document.head.appendChild(meta);
+    }
+    meta.content = accent;
+  }, [role, tenantId]);
+
   // Public legal pages — no auth required (needed for Meta app publishing)
   if (route === "#/privacy") return <VulaPrivacy view="privacy" />;
   if (route === "#/terms") return <VulaPrivacy view="terms" />;
@@ -83,22 +98,35 @@ export default function App() {
   }
 
   // ── Merchant owners/staff get a scoped, single-store admin ───────────────────
-  // No construction tools, no master Commerce view — just their shop.
+  // No construction tools, no master Commerce view — just their shop, themed
+  // as their own brand (logo + accent), "Powered by Vula".
   if (role === "owner" || role === "staff") {
-    const tenantName = TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
+    const theme = getTenantTheme(effectiveTenantId);
+    const tenantName = theme.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
     return (
-      <div style={{ minHeight: "100vh", background: COLORS.bg }}>
+      <div style={{ minHeight: "100vh", background: COLORS.bg, ...themeVars(theme) }}>
         <nav style={{
           background: COLORS.surface, borderBottom: `1px solid ${COLORS.border}`,
-          padding: "0 24px", display: "flex", alignItems: "center",
+          padding: "0 20px", display: "flex", alignItems: "center", gap: 12,
           position: "sticky", top: 0, zIndex: 200, height: 56, boxSizing: "border-box",
         }}>
-          <div style={{
-            fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700,
-            color: COLORS.charcoal,
+          {theme.logoUrl ? (
+            <img src={theme.logoUrl} alt={tenantName}
+                 style={{ height: 30, width: "auto", objectFit: "contain" }} />
+          ) : (
+            <div style={{
+              fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700,
+              color: "var(--ink)",
+            }}>
+              {tenantName}
+            </div>
+          )}
+          <span style={{
+            fontSize: 10, color: COLORS.muted, fontFamily: "system-ui",
+            border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "2px 8px",
           }}>
-            {tenantName}
-          </div>
+            Powered by Vula
+          </span>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontSize: 12, color: COLORS.muted, fontFamily: "system-ui" }}>
               {user.email}

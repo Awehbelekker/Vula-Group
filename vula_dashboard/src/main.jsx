@@ -7,3 +7,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <App />
   </React.StrictMode>
 );
+
+// Register the PWA service worker (installable home-screen app, offline shell).
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

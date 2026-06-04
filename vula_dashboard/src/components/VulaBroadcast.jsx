@@ -186,7 +186,7 @@ export default function VulaBroadcast({ tenantId }) {
               <div style={s.histStats}>
                 {b.sent_count > 0 && <span style={s.statChip}>✉ {b.sent_count}</span>}
                 {b.delivered_count > 0 && <span style={s.statChip}>✓ {b.delivered_count}</span>}
-                {b.read_count > 0 && <span style={{ ...s.statChip, color: '#2C5545' }}>👁 {b.read_count}</span>}
+                {b.read_count > 0 && <span style={{ ...s.statChip, color: 'var(--accent, #2C5545)' }}>👁 {b.read_count}</span>}
               </div>
             </div>
           ))}
@@ -204,12 +204,12 @@ const s = {
   sectionLabel: { fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' },
   tplList:      { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 },
   tplBtn:       { background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2 },
-  tplBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid #2C5545' },
+  tplBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid var(--accent, #2C5545)' },
   tplLabel:     { fontFamily: 'system-ui', fontSize: 13, fontWeight: 600, color: '#1E1E1E' },
   tplHint:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
   audRow:       { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 },
   audBtn:       { background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center' },
-  audBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid #2C5545' },
+  audBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid var(--accent, #2C5545)' },
   audLabel:     { fontFamily: 'system-ui', fontSize: 13, fontWeight: 600, color: '#1E1E1E', minWidth: 140 },
   audHint:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
   preview:      { background: '#F7F4EE', borderRadius: 6, padding: '10px 14px', marginBottom: 14 },
@@ -217,7 +217,7 @@ const s = {
   previewText:  { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', margin: 0 },
   error:        { color: '#ef4444', fontSize: 13, fontFamily: 'system-ui', margin: '0 0 10px' },
   success:      { color: '#16a34a', fontSize: 13, fontFamily: 'system-ui', margin: '0 0 10px', fontWeight: 600 },
-  sendBtn:      { width: '100%', padding: '12px', background: '#2C5545', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  sendBtn:      { width: '100%', padding: '12px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
   btnDisabled:  { width: '100%', padding: '12px', background: '#DDD8CE', color: '#8A8680', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'not-allowed', fontFamily: 'system-ui' },
   confirmBox:   { background: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 8, padding: 14 },
   confirmText:  { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', margin: '0 0 10px', lineHeight: 1.5 },
