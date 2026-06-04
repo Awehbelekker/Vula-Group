@@ -474,49 +474,105 @@ async def admin_list_broadcasts(tenant_id: str, limit: int = Query(50)):
 @router.post("/{tenant_id}/admin/broadcasts/send")
 async def admin_send_broadcast(tenant_id: str, body: dict):
     """
-    Fire a WhatsApp broadcast via n8n webhook.
-    n8n fetches the audience, sends Meta template messages, updates delivery counts.
+    WhatsApp broadcast — sent directly via the Meta Graph API (no n8n).
+
+    Resolves the audience from the tenant's client list, then sends a
+    pre-approved WhatsApp template to each recipient using the tenant's own
+    Meta credentials. Delivery counts are tracked in commerce_broadcast_logs.
+
+    Body:
+        template_name:   Meta-approved template name (required)
+        audience_filter: all | active_30d | high_value
+        language:        template language code (default 'en')
+        dry_run:         bool, DEFAULT TRUE — preview the audience without
+                         sending. Must pass dry_run=false to actually send.
+        name:            campaign label
     """
     from uuid import uuid4
-    import httpx as _httpx
 
     db = service._client()
     template = body.get("template_name", "")
     audience = body.get("audience_filter", "all")
+    language = body.get("language", "en")
+    dry_run = body.get("dry_run", True)
     name = body.get("name", template)
 
     if not template:
         raise HTTPException(status_code=400, detail="template_name required")
 
-    # Insert broadcast log
+    # Resolve the exact audience (same source as the Customers tab)
+    customers = await _aggregate_customers(tenant_id)
+    rows = _filter_audience(customers, audience)
+    # Only WhatsApp-reachable contacts with a usable number
+    recipients = [c for c in rows if _norm_phone(c.get("phone")).isdigit()]
+
+    # ── Dry-run / preview — DEFAULT. Nothing is sent. ────────────────────────
+    if dry_run:
+        return {
+            "dry_run": True,
+            "template": template,
+            "audience": audience,
+            "recipient_count": len(recipients),
+            "sample": [
+                {"name": c.get("name") or "Unknown", "phone": c.get("phone")}
+                for c in recipients[:10]
+            ],
+            "note": "Preview only — no messages sent. Send with dry_run=false to go live.",
+        }
+
+    # ── Live send ────────────────────────────────────────────────────────────
+    from vula.api.whatsapp import _get_tenant_wa_creds
+    creds = await _get_tenant_wa_creds(tenant_id)
+    if not creds:
+        raise HTTPException(status_code=503, detail="WhatsApp not connected for this tenant.")
+
     log_id = str(uuid4())
     db.table("commerce_broadcast_logs").insert({
-        "id": log_id,
-        "tenant_id": tenant_id,
-        "name": name,
-        "template_name": template,
-        "audience_filter": audience,
-        "status": "sending",
+        "id": log_id, "tenant_id": tenant_id, "name": name,
+        "template_name": template, "audience_filter": audience,
+        "status": "sending", "recipient_count": len(recipients),
     }).execute()
 
-    # Fire n8n webhook (non-blocking)
-    n8n_base = settings.n8n_webhook_base
-    if n8n_base:
-        try:
-            async with _httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(
-                    f"{n8n_base}/whatsapp-broadcast",
+    sent = failed = 0
+    errors: list[str] = []
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for c in recipients:
+            number = _norm_phone(c.get("phone"))
+            try:
+                resp = await client.post(
+                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                    headers={"Authorization": f"Bearer {creds['token']}",
+                             "Content-Type": "application/json"},
                     json={
-                        "tenant_id": tenant_id,
-                        "broadcast_id": log_id,
-                        "template_name": template,
-                        "audience_filter": audience,
+                        "messaging_product": "whatsapp",
+                        "to": number,
+                        "type": "template",
+                        "template": {"name": template, "language": {"code": language}},
                     },
                 )
-        except Exception as exc:
-            log.warning("Broadcast n8n webhook failed (non-fatal): %s", exc)
+                if resp.is_success:
+                    sent += 1
+                else:
+                    failed += 1
+                    if len(errors) < 3:
+                        errors.append(resp.text[:200])
+            except Exception as exc:
+                failed += 1
+                if len(errors) < 3:
+                    errors.append(str(exc)[:200])
 
-    return {"broadcast_id": log_id, "status": "sending", "template": template, "audience": audience}
+    db.table("commerce_broadcast_logs").update({
+        "status": "sent" if sent else "failed",
+        "sent_count": sent,
+        "last_error": errors[0] if errors else None,
+    }).eq("id", log_id).execute()
+
+    return {
+        "broadcast_id": log_id, "dry_run": False, "template": template,
+        "audience": audience, "recipient_count": len(recipients),
+        "sent": sent, "failed": failed,
+        "errors": errors or None,
+    }
 
 
 # ── Scheduled Jobs ──────────────────────────────────────────────────────────
@@ -571,38 +627,26 @@ async def job_weekly_specials(tenant_id: str):
 
 # ── Customers (client list / CRM) ─────────────────────────────────────────────
 
-@router.get("/{tenant_id}/admin/customers")
-async def admin_list_customers(
-    tenant_id: str,
-    audience: str = Query("all"),          # all | active_30d | high_value
-    search: Optional[str] = Query(None),
-):
+def _norm_phone(p: Optional[str]) -> str:
+    """Normalise a phone number to digits-only E.164-ish (SA: 0xx → 27xx)."""
+    if not p:
+        return ""
+    n = "".join(ch for ch in p if ch.isdigit())
+    if n.startswith("0"):
+        n = "27" + n[1:]
+    return n
+
+
+async def _aggregate_customers(tenant_id: str) -> dict[str, dict]:
+    """Merge orders + conversation sessions into one contact per phone number.
+
+    Shared by the Customers tab and the broadcast sender so the audience shown
+    in the dashboard is exactly the audience a broadcast reaches.
     """
-    Aggregated client list for a tenant — the source of truth for broadcasts.
-
-    Built by merging two sources on phone number:
-      - commerce_orders: name, spend, order count, last order date
-      - commerce_conversation_sessions: WhatsApp/web contacts who messaged in
-        (auto-captured by the AI assistant) but may not have ordered yet.
-
-    `audience` mirrors the broadcast filters so the dashboard can show exactly
-    who a campaign would reach.
-    """
-    from datetime import datetime, timezone, timedelta
-
     db = service._client()
-
-    def _norm(p: Optional[str]) -> str:
-        if not p:
-            return ""
-        n = "".join(ch for ch in p if ch.isdigit())
-        if n.startswith("0"):
-            n = "27" + n[1:]
-        return n
-
     customers: dict[str, dict] = {}
 
-    # ── Orders → spend & recency ─────────────────────────────────────────────
+    # Orders → spend & recency
     orders = (
         db.table("commerce_orders")
         .select("customer_phone,customer_name,total_cents,status,created_at")
@@ -610,7 +654,7 @@ async def admin_list_customers(
         .execute()
     ).data or []
     for o in orders:
-        key = _norm(o.get("customer_phone"))
+        key = _norm_phone(o.get("customer_phone"))
         if not key:
             continue
         c = customers.setdefault(key, {
@@ -618,7 +662,6 @@ async def admin_list_customers(
             "orders": 0, "total_spent_cents": 0, "last_order_at": None,
             "source": "order", "channel": "web",
         })
-        # Only count revenue from orders that were actually paid/fulfilled
         if o.get("status") not in ("pending_payment", "cancelled", "refunded"):
             c["orders"] += 1
             c["total_spent_cents"] += int(o.get("total_cents") or 0)
@@ -628,7 +671,7 @@ async def admin_list_customers(
         if ca and (not c["last_order_at"] or ca > c["last_order_at"]):
             c["last_order_at"] = ca
 
-    # ── Conversation sessions → contacts who messaged in ─────────────────────
+    # Conversation sessions → contacts who messaged in
     sessions = (
         db.table("commerce_conversation_sessions")
         .select("customer_phone,customer_name,channel,updated_at,session_key")
@@ -636,7 +679,7 @@ async def admin_list_customers(
         .execute()
     ).data or []
     for s in sessions:
-        key = _norm(s.get("customer_phone") or s.get("session_key"))
+        key = _norm_phone(s.get("customer_phone") or s.get("session_key"))
         if not key or not key.isdigit():
             continue
         c = customers.setdefault(key, {
@@ -650,10 +693,16 @@ async def admin_list_customers(
             c["channel"] = s["channel"]
         c["last_seen_at"] = s.get("updated_at")
 
-    rows = list(customers.values())
+    return customers
 
-    # ── Audience filter ──────────────────────────────────────────────────────
+
+def _filter_audience(customers: dict[str, dict], audience: str) -> list[dict]:
+    """Apply a broadcast audience filter (all | active_30d | high_value)."""
+    from datetime import datetime, timezone, timedelta
+
+    rows = list(customers.values())
     now = datetime.now(timezone.utc)
+
     def _recent(c, days):
         ts = c.get("last_order_at") or c.get("last_seen_at")
         if not ts:
@@ -668,13 +717,24 @@ async def admin_list_customers(
         rows = [c for c in rows if _recent(c, 30)]
     elif audience == "high_value":
         rows = [c for c in rows if c["total_spent_cents"] >= 50000]  # > R500
+    return rows
+
+
+@router.get("/{tenant_id}/admin/customers")
+async def admin_list_customers(
+    tenant_id: str,
+    audience: str = Query("all"),          # all | active_30d | high_value
+    search: Optional[str] = Query(None),
+):
+    """Aggregated client list for a tenant — the source of truth for broadcasts."""
+    customers = await _aggregate_customers(tenant_id)
+    rows = _filter_audience(customers, audience)
 
     if search:
         s = search.lower()
         rows = [c for c in rows if s in (c.get("name") or "").lower() or s in (c.get("phone") or "")]
 
     rows.sort(key=lambda c: c["total_spent_cents"], reverse=True)
-
     return {
         "customers": rows,
         "count": len(rows),
