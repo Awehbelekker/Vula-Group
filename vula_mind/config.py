@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # When set, the server uses OpenRouter for generation and embeddings.
     openrouter_api_key: str = ""
 
+    # ── Twilio WhatsApp (alternative to Meta — test via Twilio Sandbox) ─────────
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_whatsapp_from: str = ""   # e.g. "whatsapp:+14155238886" (sandbox number)
+
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""

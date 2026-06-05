@@ -85,6 +85,7 @@ from vula.api.whatsapp_connect import router as whatsapp_connect_router
 from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.draft import router as draft_router
 from vula.api.agent import router as agent_router
+from vula.api.twilio_whatsapp import router as twilio_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -354,6 +355,7 @@ app.include_router(yoco_connect_router, prefix="/v1/yoco")
 app.include_router(whatsapp_connect_router, prefix="/v1/whatsapp")
 app.include_router(draft_router, prefix="/v1")
 app.include_router(agent_router, prefix="/v1")
+app.include_router(twilio_router, prefix="/v1/twilio")
 
 UPLOAD_DIR = settings.upload_dir
 
