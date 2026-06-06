@@ -196,6 +196,88 @@ async def test_send_reply_truncates_long_message():
     assert len(payload["text"]["body"]) <= 4096
 
 
+# ── _send_invoice_document ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_invoice_document_skips_when_not_configured():
+    with patch("vula.api.whatsapp.settings") as mock_settings:
+        mock_settings.whatsapp_token = ""
+        mock_settings.whatsapp_phone_id = ""
+        from vula.api.whatsapp import _send_invoice_document
+        result = await _send_invoice_document(
+            "+27821234567", b"%PDF-1.4 fake", "OTH-INV-00001.pdf", "Your invoice"
+        )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_send_invoice_document_uploads_then_sends():
+    upload_resp = MagicMock()
+    upload_resp.raise_for_status = MagicMock()
+    upload_resp.json.return_value = {"id": "media-789"}
+
+    send_resp = MagicMock()
+    send_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.post = AsyncMock(side_effect=[upload_resp, send_resp])
+
+    with (
+        patch("vula.api.whatsapp.settings") as mock_settings,
+        patch("vula.api.whatsapp.httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.whatsapp_token = "token"
+        mock_settings.whatsapp_phone_id = "12345"
+        from vula.api.whatsapp import _send_invoice_document
+        result = await _send_invoice_document(
+            "0821234567", b"%PDF-1.4 fake", "OTH-INV-00001.pdf", "Your invoice", ""
+        )
+
+    assert result is True
+    # First call uploads the PDF as multipart media
+    upload_call = mock_client.post.call_args_list[0]
+    assert upload_call.args[0].endswith("/12345/media")
+    assert upload_call.kwargs["data"]["type"] == "application/pdf"
+    assert upload_call.kwargs["files"]["file"][0] == "OTH-INV-00001.pdf"
+    # Second call sends a document message referencing the media id
+    send_call = mock_client.post.call_args_list[1]
+    payload = send_call.kwargs["json"]
+    assert payload["type"] == "document"
+    assert payload["to"] == "27821234567"  # 0 → 27 normalisation
+    assert payload["document"]["id"] == "media-789"
+    assert payload["document"]["filename"] == "OTH-INV-00001.pdf"
+    assert payload["document"]["caption"] == "Your invoice"
+
+
+@pytest.mark.asyncio
+async def test_send_invoice_document_returns_false_without_media_id():
+    upload_resp = MagicMock()
+    upload_resp.raise_for_status = MagicMock()
+    upload_resp.json.return_value = {}  # no media id returned
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.post = AsyncMock(return_value=upload_resp)
+
+    with (
+        patch("vula.api.whatsapp.settings") as mock_settings,
+        patch("vula.api.whatsapp.httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.whatsapp_token = "token"
+        mock_settings.whatsapp_phone_id = "12345"
+        from vula.api.whatsapp import _send_invoice_document
+        result = await _send_invoice_document(
+            "27821234567", b"%PDF", "OTH-INV-00002.pdf", "", ""
+        )
+
+    assert result is False
+    # Only the upload was attempted; no document message sent
+    assert mock_client.post.await_count == 1
+
+
 # ── _rag_reply ────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

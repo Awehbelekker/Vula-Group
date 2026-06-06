@@ -24,6 +24,8 @@ export default function VulaInvoices({ tenantId, products = [] }) {
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(null) // null | 'invoice' | 'quote'
   const [docType, setDocType] = useState('invoice')
+  const [matchResults, setMatchResults] = useState({})  // { [invId]: result }
+  const [matchingId, setMatchingId] = useState(null)     // id currently matching
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -89,6 +91,23 @@ export default function VulaInvoices({ tenantId, products = [] }) {
       whatsAppLinkFallback(inv)
     } catch {
       whatsAppLinkFallback(inv)
+    }
+  }
+
+  async function matchSupplier(inv) {
+    setMatchingId(inv.id)
+    try {
+      const r = await fetch(
+        `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/match-supplier`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+      )
+      const d = await r.json().catch(() => ({}))
+      setMatchResults(prev => ({ ...prev, [inv.id]: d }))
+      if (!d.matched) alert('No supplier match found for this invoice.')
+    } catch {
+      alert('Could not reach the matching service.')
+    } finally {
+      setMatchingId(null)
     }
   }
 
@@ -163,6 +182,15 @@ export default function VulaInvoices({ tenantId, products = [] }) {
                   {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
                   <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
                   {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
+                  {inv.doc_type === 'invoice' && (
+                    <button
+                      onClick={() => matchSupplier(inv)}
+                      disabled={matchingId === inv.id}
+                      style={s.actMatch}
+                    >
+                      {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
+                    </button>
+                  )}
                   {inv.doc_type === 'quote' && inv.status !== 'accepted' && (
                     <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
                   )}
@@ -171,6 +199,17 @@ export default function VulaInvoices({ tenantId, products = [] }) {
                   )}
                   <button onClick={() => del(inv.id)} style={s.actDel}>Delete</button>
                 </div>
+                {matchResults[inv.id]?.matched && (
+                  <div style={s.matchBanner}>
+                    🔗 Matched <strong>{matchResults[inv.id].supplier?.name}</strong>
+                    {' · '}{matchResults[inv.id].supplier?.payment_terms_days ?? 30} day terms
+                    {' · '}via {matchResults[inv.id].tier}
+                    {' ('}{Math.round((matchResults[inv.id].confidence || 0) * 100)}%{')'}
+                    {matchResults[inv.id].auto_apply
+                      ? ' — applied automatically'
+                      : ' — confirm to apply'}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -304,6 +343,8 @@ const s = {
   actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: '#a8780a', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actPaid:    { padding: '5px 10px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
   actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
+  actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, #2C5545)', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
+  matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: '#2C5545' },
   formSection:{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   fInput:     { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, boxSizing: 'border-box', flex: 1 },
   fRow:       { display: 'flex', gap: 8 },

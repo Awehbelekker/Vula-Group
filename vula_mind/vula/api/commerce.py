@@ -770,7 +770,7 @@ async def job_weekly_specials(tenant_id: str):
     """Fire the weekly specials broadcast."""
     # This logic matches OTH-05: Monday 07:00
     products = await service.list_products(tenant_id, in_stock_only=True)
-    specials = [p for p in products if p.get("is_daily_catch") or p.get("is_weekly_special")]
+    specials = [p for p in products if p.get("is_daily_catch")]
     # Fire n8n broadcast
     return {"ok": True, "specials_count": len(specials)}
 

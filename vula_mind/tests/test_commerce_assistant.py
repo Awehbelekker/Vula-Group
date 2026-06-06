@@ -276,3 +276,42 @@ def test_line_items_total_cents_auto_computed():
     invoice["total_cents"] = 42550
     pdf = render_invoice_pdf(invoice)
     assert isinstance(pdf, bytes) and len(pdf) > 1024
+
+
+# ── Invoice email delivery ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_invoice_email_base64_encodes_attachment():
+    """send_invoice_email should base64-encode the PDF and pass it to _send."""
+    import base64
+
+    from vula.api import email as email_mod
+
+    pdf_bytes = b"%PDF-1.4 fake pdf bytes"
+    with patch.object(email_mod, "_send", new=AsyncMock(return_value=True)) as mock_send:
+        ok = await email_mod.send_invoice_email(
+            "orders@capefishmarket.co.za", _SAMPLE_INVOICE, pdf_bytes, "Off the Hook"
+        )
+    assert ok is True
+    kwargs = mock_send.await_args.kwargs
+    attachments = kwargs["attachments"]
+    assert len(attachments) == 1
+    assert attachments[0]["filename"] == "OTH-INV-00001.pdf"
+    assert base64.b64decode(attachments[0]["content"]) == pdf_bytes
+    # Recipient + tenant-branded subject
+    assert mock_send.await_args.args[0] == "orders@capefishmarket.co.za"
+    assert "Off the Hook" in mock_send.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_send_invoice_email_quote_label_in_subject():
+    """A quote doc_type should be labelled 'Quotation' in the subject line."""
+    from vula.api import email as email_mod
+
+    quote = dict(_SAMPLE_INVOICE)
+    quote["doc_type"] = "quote"
+    quote["invoice_number"] = "OTH-QTE-00007"
+    with patch.object(email_mod, "_send", new=AsyncMock(return_value=True)) as mock_send:
+        await email_mod.send_invoice_email("a@b.co.za", quote, b"%PDF", "Off the Hook")
+    assert "Quotation" in mock_send.await_args.args[1]
+    assert "OTH-QTE-00007" in mock_send.await_args.args[1]
