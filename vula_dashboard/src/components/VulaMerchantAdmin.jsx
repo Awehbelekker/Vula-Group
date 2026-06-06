@@ -78,6 +78,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
             { id: 'overview',  label: '📊 Overview' },
             { id: 'assistant', label: '💬 Assistant' },
             { id: 'orders',    label: '📦 Orders' },
+            { id: 'delivery',  label: '🛵 Delivery' },
             { id: 'products',  label: '🐟 Products' },
             { id: 'suppliers', label: '🚚 Suppliers' },
             { id: 'scanner',   label: '📷 Scanner' },
@@ -102,6 +103,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'overview'  && <OverviewTab tenantId={tenantId} />}
           {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
           {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
+          {tab === 'delivery'  && <DeliveryTab tenantId={tenantId} />}
           {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
           {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} />}
           {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
@@ -362,6 +364,125 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Delivery list ───────────────────────────────────────────────────────────
+
+const SLOT_LABELS = {
+  morning:   '🌅 Morning',
+  afternoon: '☀️ Afternoon',
+  evening:   '🌆 Evening',
+}
+const DEL_PAID = new Set(['paid', 'confirmed', 'packing', 'dispatched', 'delivered'])
+
+function DeliveryTab({ tenantId }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [date, setDate] = useState(today)
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/delivery-list?date=${date}`)
+    const d = await r.json().catch(() => null)
+    setData(d)
+    setLoading(false)
+  }, [tenantId, date])
+
+  useEffect(() => { load() }, [load])
+
+  const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
+  const orders = data?.orders || []
+
+  // Group by delivery slot, preserving the backend's slot ordering.
+  const bySlot = {}
+  for (const o of orders) {
+    const k = o.delivery_slot || 'unscheduled'
+    ;(bySlot[k] = bySlot[k] || []).push(o)
+  }
+  const slots = Object.keys(bySlot)
+
+  function printRun() {
+    const w = window.open('', '_blank')
+    if (!w) return
+    const blocks = slots.map(slot => {
+      const rows = bySlot[slot].map(o => {
+        const items = (o.commerce_order_items || [])
+          .map(i => `${i.product_name || 'Item'} ×${i.quantity}`).join(', ')
+        return `<tr><td>${o.display_id}</td><td>${o.customer_name || ''}<br>${o.customer_phone || ''}</td>`
+          + `<td>${o.delivery_address || '—'}</td><td>${items}</td>`
+          + `<td style="text-align:right">${fmt(o.total_cents)}${DEL_PAID.has(o.status) ? '' : ' (UNPAID)'}</td></tr>`
+      }).join('')
+      return `<h2>${SLOT_LABELS[slot] || slot}</h2><table>`
+        + `<tr><th>#</th><th>Customer</th><th>Address</th><th>Items</th><th style="text-align:right">Total</th></tr>${rows}</table>`
+    }).join('')
+    w.document.write(`<html><head><title>Delivery run — ${date}</title>
+      <style>body{font-family:system-ui;padding:24px;color:#1E1E1E}h1{font-size:20px}h2{font-size:15px;margin-top:18px}
+      table{width:100%;border-collapse:collapse;margin-top:6px}td,th{padding:6px 4px;border-bottom:1px solid #ddd;text-align:left;font-size:12px;vertical-align:top}</style>
+      </head><body><h1>Delivery run — ${date}</h1>${blocks || '<p>No deliveries.</p>'}</body></html>`)
+    w.document.close(); w.print()
+  }
+
+  return (
+    <div>
+      <div style={styles.delBar}>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={styles.dateInput} />
+        <button onClick={() => setDate(today)} style={styles.btnGhost}>Today</button>
+        {orders.length > 0 && (
+          <button onClick={printRun} style={{ ...styles.btnAction, marginLeft: 'auto' }}>🖨 Print run sheet</button>
+        )}
+      </div>
+
+      {!loading && data && (
+        <div style={styles.statGrid}>
+          <StatCard label="Deliveries" value={data.total} sub={`${slots.length} slot${slots.length !== 1 ? 's' : ''}`} accent="var(--accent, #2C5545)" />
+          <StatCard label="Paid"   value={data.paid_count}   sub={fmt(data.paid_revenue_cents)}   accent="#16a34a" />
+          <StatCard label="Unpaid" value={data.unpaid_count} sub={fmt(data.unpaid_revenue_cents)} accent="#f59e0b" />
+          <StatCard label="To collect" value={fmt((data.paid_revenue_cents || 0) + (data.unpaid_revenue_cents || 0))} sub="total value" />
+        </div>
+      )}
+
+      {loading && <p style={styles.loading}>Loading delivery list…</p>}
+      {!loading && orders.length === 0 && <p style={styles.empty}>No deliveries scheduled for {date}.</p>}
+
+      {slots.map(slot => (
+        <div key={slot} style={{ marginBottom: 18 }}>
+          <p style={styles.slotHeader}>
+            {SLOT_LABELS[slot] || slot}<span style={styles.slotCount}> · {bySlot[slot].length}</span>
+          </p>
+          <div style={styles.list}>
+            {bySlot[slot].map(o => {
+              const paid = DEL_PAID.has(o.status)
+              const items = o.commerce_order_items || []
+              return (
+                <div key={o.id} style={styles.orderCard}>
+                  <div style={styles.orderTop}>
+                    <div>
+                      <span style={styles.orderId}>{o.display_id}</span>
+                      <span style={{ ...styles.badge, color: paid ? '#16a34a' : '#f59e0b', background: paid ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)' }}>
+                        {paid ? 'Paid' : 'Unpaid'}
+                      </span>
+                    </div>
+                    <span style={styles.orderAmount}>{fmt(o.total_cents)}</span>
+                  </div>
+                  <div style={styles.orderMeta}>
+                    <span>{o.customer_name}</span><span>·</span><span>{o.customer_phone}</span>
+                  </div>
+                  <p style={styles.delAddress}>📍 {o.delivery_address || 'No address'}</p>
+                  {o.delivery_notes && <p style={styles.detailNotes}>Note: {o.delivery_notes}</p>}
+                  {items.length > 0 && (
+                    <p style={styles.delItems}>
+                      {items.map((i, idx) => `${i.product_name || 'Item'} ×${i.quantity}`).join(' · ')}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -749,6 +870,13 @@ const styles = {
   statValue:    { fontFamily:"'Cormorant Garamond', serif", fontSize:28, fontWeight:700, margin:'0 0 4px', color:'var(--accent, #2C5545)' },
   statLabel:    { fontFamily:'system-ui', fontSize:12, fontWeight:600, color:'#1E1E1E', margin:'0 0 2px' },
   statSub:      { fontFamily:'system-ui', fontSize:11, color:'#8A8680', margin:0 },
+
+  delBar:       { display:'flex', alignItems:'center', gap:8, marginBottom:16 },
+  dateInput:    { padding:'7px 10px', border:'1px solid #DDD8CE', borderRadius:6, fontFamily:'system-ui', fontSize:13, color:'#1E1E1E' },
+  slotHeader:   { fontFamily:"'Cormorant Garamond', serif", fontSize:18, fontWeight:700, color:'#1E1E1E', margin:'0 0 8px' },
+  slotCount:    { fontFamily:'system-ui', fontSize:12, fontWeight:400, color:'#8A8680' },
+  delAddress:   { fontFamily:'system-ui', fontSize:12, color:'#6B7280', margin:'2px 0' },
+  delItems:     { fontFamily:'system-ui', fontSize:12, color:'#1E1E1E', margin:'6px 0 0' },
 
   chips:        { display:'flex', gap:6, flexWrap:'wrap', marginBottom:16 },
   chip:         { padding:'5px 12px', borderRadius:20, border:'1px solid #DDD8CE', background:'#fff', cursor:'pointer', fontSize:12, fontFamily:'system-ui', color:'#8A8680' },
