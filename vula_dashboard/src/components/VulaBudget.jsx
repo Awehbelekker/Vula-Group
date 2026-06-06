@@ -24,17 +24,26 @@ export default function VulaBudget({ tenantId, stats }) {
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10) })
+  const [due, setDue] = useState(null) // { overdue, upcoming, *_total_cents }
 
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses?month=${month}`)
-    const d = await r.json()
-    setExpenses(d.expenses || [])
-    setTotal(d.total_cents || 0)
+    const [exp, dueResp] = await Promise.all([
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses?month=${month}`).then(r => r.json()),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/due?days_ahead=30`).then(r => r.json()).catch(() => null),
+    ])
+    setExpenses(exp.expenses || [])
+    setTotal(exp.total_cents || 0)
+    setDue(dueResp)
     setLoading(false)
   }, [tenantId, month])
 
   useEffect(() => { load() }, [load])
+
+  async function markPaid(id) {
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/${id}/pay`, { method: 'PATCH' })
+    load()
+  }
 
   async function addExpense(e) {
     e.preventDefault()
@@ -93,6 +102,28 @@ export default function VulaBudget({ tenantId, stats }) {
           <p style={s.sumLabel}>Gross profit</p>
         </div>
       </div>
+
+      {/* Payments due — overdue + upcoming supplier payments */}
+      {due && (due.overdue?.length > 0 || due.upcoming?.length > 0) && (
+        <div style={s.duePanel}>
+          <div style={s.dueHead}>
+            <span style={s.dueTitle}>💸 Payments due</span>
+            <span style={s.dueTotal}>{fmt(due.grand_total_cents)}</span>
+          </div>
+          {[...(due.overdue || []).map(e => ({ ...e, _over: true })), ...(due.upcoming || [])].map(e => (
+            <div key={e.id} style={s.dueRow}>
+              <div style={{ flex: 1 }}>
+                <span style={s.dueDesc}>{e.description || e.supplier || 'Expense'}</span>
+                <span style={{ ...s.dueMeta, color: e._over ? '#ef4444' : '#8A8680' }}>
+                  {e._over ? '⚠ overdue' : 'due'} {e.due_date}{e.supplier ? ` · ${e.supplier}` : ''}
+                </span>
+              </div>
+              <span style={s.dueAmt}>{fmt(e.amount_cents)}</span>
+              <button onClick={() => markPaid(e.id)} style={s.payBtn}>Mark paid</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Category bar */}
       {Object.keys(byCat).length > 0 && (
@@ -156,6 +187,15 @@ const s = {
   sumValue:   { fontFamily: "'Cormorant Garamond', serif", fontSize: 22, fontWeight: 700, margin: '0 0 2px' },
   sumLabel:   { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: 0 },
   catBar:     { display: 'flex', borderRadius: 4, overflow: 'hidden', marginBottom: 16, gap: 1 },
+  duePanel:   { background: '#fff', border: '1px solid #F0D6A8', borderRadius: 10, padding: 14, marginBottom: 16 },
+  dueHead:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  dueTitle:   { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: '#1E1E1E' },
+  dueTotal:   { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: '#E8B86E' },
+  dueRow:     { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #F5F0E6' },
+  dueDesc:    { display: 'block', fontFamily: 'system-ui', fontSize: 13, fontWeight: 500, color: '#1E1E1E' },
+  dueMeta:    { display: 'block', fontFamily: 'system-ui', fontSize: 11 },
+  dueAmt:     { fontFamily: 'system-ui', fontSize: 14, fontWeight: 700, color: '#1E1E1E' },
+  payBtn:     { padding: '5px 10px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
   controls:   { display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' },
   monthInput: { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13 },
   addBtn:     { padding: '7px 14px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
