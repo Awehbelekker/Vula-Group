@@ -177,12 +177,17 @@ class LocalTenantDB:
         return result["tenant_id"] if result else None
 
     def lookup_by_phone_with_role(self, phone: str) -> Optional[dict]:
-        """Return {tenant_id, role} for any registered number, or None."""
+        """Return {tenant_id, role} for any registered number, or None.
+
+        Checks local SQLite first (fast), then Supabase vula_tenant_phones
+        (shared cloud state — works across Railway containers).
+        """
         normalised = _normalise(phone)
         variants = {normalised}
         if normalised.startswith("27") and len(normalised) == 11:
             variants.add("0" + normalised[2:])
 
+        # 1. Local SQLite
         with sqlite3.connect(self.db_path) as conn:
             for v in variants:
                 row = conn.execute(
@@ -193,6 +198,37 @@ class LocalTenantDB:
                 ).fetchone()
                 if row:
                     return {"tenant_id": row[0], "role": row[1]}
+
+        # 2. Supabase fallback (cloud state — required on Railway)
+        result = self._supabase_lookup(variants)
+        if result:
+            return result
+        return None
+
+    def _supabase_lookup(self, variants: set[str]) -> Optional[dict]:
+        """Look up phone in Supabase vula_tenant_phones. Returns None if unavailable."""
+        _PLACEHOLDER = "your-project.supabase.co"
+        if (not settings.supabase_url or _PLACEHOLDER in settings.supabase_url
+                or not settings.supabase_service_key):
+            return None
+        try:
+            import httpx
+            for v in variants:
+                resp = httpx.get(
+                    f"{settings.supabase_url}/rest/v1/vula_tenant_phones",
+                    params={"phone": f"eq.{v}", "select": "tenant_id,role", "limit": "1"},
+                    headers={
+                        "apikey": settings.supabase_service_key,
+                        "Authorization": f"Bearer {settings.supabase_service_key}",
+                    },
+                    timeout=5.0,
+                )
+                if resp.is_success:
+                    rows = resp.json()
+                    if rows:
+                        return {"tenant_id": rows[0]["tenant_id"], "role": rows[0]["role"]}
+        except Exception:
+            pass
         return None
 
 
