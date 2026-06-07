@@ -103,7 +103,15 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 
 async def _seed_training_on_boot() -> None:
-    """Seed the shared construction KB once at startup if not already populated."""
+    """Seed the shared construction KB once at startup if not already populated.
+
+    Gated behind SEED_TRAINING_ON_BOOT (default off) — re-embedding on every
+    deploy burns embedding-API credits. Run once manually via POST /v1/training/seed.
+    """
+    import os
+    if os.environ.get("SEED_TRAINING_ON_BOOT", "false").lower() != "true":
+        log.info("Training KB boot-seed disabled (set SEED_TRAINING_ON_BOOT=true to enable)")
+        return
     import asyncio as _asyncio
     await _asyncio.sleep(30)  # Wait for Qdrant to be ready
     try:
