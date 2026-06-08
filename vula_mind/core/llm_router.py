@@ -70,19 +70,23 @@ async def resolve_generation_route(
 
     Returns (litellm_model, api_key, api_base).
     """
-    worker = model or settings.model_worker
+    # Local model name (Ollama) and cloud fallback model name (OpenRouter) may
+    # differ — e.g. "deepseek-r1:8b" locally vs "meta-llama/llama-3.3-70b" on
+    # OpenRouter. A caller-supplied `model` overrides the local name only.
+    local_model = model or settings.model_worker
+    cloud_model = settings.model_worker_cloud or settings.model_worker
 
     if await ollama_available():
-        return f"ollama/{worker}", None, settings.ollama_base
+        return f"ollama/{local_model}", None, settings.ollama_base
 
     if settings.openrouter_api_key:
-        logger.info("Ollama unreachable — falling back to OpenRouter for generation")
-        return f"openrouter/{worker}", settings.openrouter_api_key, OPENROUTER_BASE
+        logger.info("Ollama unreachable — falling back to OpenRouter (%s)", cloud_model)
+        return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
 
     logger.warning(
         "Ollama unreachable and no OPENROUTER_API_KEY set — generation will likely fail"
     )
-    return f"ollama/{worker}", None, settings.ollama_base
+    return f"ollama/{local_model}", None, settings.ollama_base
 
 
 async def resolve_vision_route() -> Tuple[str, Optional[str], str]:

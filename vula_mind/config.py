@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_whatsapp_from: str = ""   # e.g. "whatsapp:+14155238886" (sandbox number)
 
+    # ── Hybrid LLM: local model (Ollama) + cloud fallback model (OpenRouter) ────
+    # model_worker = local Ollama model name (used via the vula-ai.com tunnel).
+    # model_worker_cloud = the OpenRouter model used when local Ollama is down.
+    model_worker_cloud: str = "meta-llama/llama-3.3-70b-instruct"
+
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""

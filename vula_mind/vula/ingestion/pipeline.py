@@ -385,15 +385,17 @@ class EmbeddingEngine:
         self._dim: Optional[int] = None
 
     async def embed(self, text: str) -> List[float]:
-        """Generate embedding — uses OpenRouter when OPENROUTER_API_KEY is set, Ollama otherwise.
+        """Generate embedding — routed by MODEL_EMBED name, not by provider keys.
 
-        NOTE: embeddings are deliberately NOT subject to the generation
-        local-first failover. A Qdrant collection has a fixed vector size, and
-        local bge-m3 (1024-dim) and OpenRouter text-embedding-3-small (1536-dim)
-        are incompatible — switching providers mid-collection corrupts search.
-        Embeddings therefore stay pinned to one provider per environment.
+        - "text-embedding-*"  → OpenRouter/OpenAI (1536-dim, cloud, always-on)
+        - anything else (bge-m3) → Ollama (1024-dim, local/tunnel, free)
+
+        A Qdrant collection has a fixed vector size, so the embed model must
+        stay consistent for a given collection. Pick one per environment:
+          Cloud-reliable: MODEL_EMBED=text-embedding-3-small
+          Free/local:     MODEL_EMBED=bge-m3  (via the vula-ai.com tunnel)
         """
-        if settings.openrouter_api_key:
+        if self.model.startswith("text-embedding"):
             return await self._embed_openai(text)
         return await self._embed_ollama(text)
 
