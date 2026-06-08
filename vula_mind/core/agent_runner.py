@@ -120,13 +120,23 @@ class AgentRunner:
 
         latency_ms = int((time.monotonic() - started) * 1000)
 
-        # 5. Reflect on the completed graph for future routing improvement
+        # 5. Reflect on the completed graph — fire-and-forget so it NEVER
+        #    blocks the user's reply. Reflection makes its own LLM call which
+        #    can take many seconds; we run it in the background and move on.
+        graph.completed_at = time.time()
+
+        def _reflect_bg(g) -> None:
+            try:
+                from core.memory.reflection import ReflectionAgent
+                ReflectionAgent().reflect(g)
+            except Exception as exc:
+                logger.debug("Background reflection skipped: %s", exc)
+
         try:
-            from core.memory.reflection import ReflectionAgent
-            graph.completed_at = time.time()
-            ReflectionAgent().reflect(graph)
-        except Exception as exc:
-            logger.debug("Reflection logging skipped: %s", exc)
+            import asyncio as _asyncio
+            _asyncio.get_event_loop().run_in_executor(None, _reflect_bg, graph)
+        except Exception:
+            pass
 
         return AgentResult(
             final_answer=graph.final_answer,
