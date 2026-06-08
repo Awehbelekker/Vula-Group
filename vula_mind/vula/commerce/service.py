@@ -261,8 +261,8 @@ async def get_delivery_list(tenant_id: str, date_str: Optional[str] = None) -> L
                 "total_cents,status,channel,created_at,"
                 "commerce_order_items(product_name,quantity,unit_price_cents,total_cents)")
         .eq("tenant_id", tenant_id)
-        .gte("created_at", f"{target}T00:00:00")
-        .lt("created_at", f"{target}T23:59:59")
+        .gte("created_at", f"{target}T00:00:00+00:00")
+        .lt("created_at", f"{target}T23:59:59+00:00")
         .not_.in_("status", ["cancelled", "refunded"])
         .order("delivery_slot")
         .order("created_at")

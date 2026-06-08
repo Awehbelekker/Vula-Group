@@ -904,24 +904,7 @@ async def admin_delivery_list(
     """Today's delivery run — orders with items and paid/unpaid status."""
     from datetime import date as _date
     target = date or _date.today().isoformat()
-    db = service._client()
-    result = (
-        db.table("commerce_orders")
-        .select(
-            "id,display_id,customer_name,customer_phone,"
-            "delivery_address,delivery_slot,delivery_notes,"
-            "total_cents,status,channel,created_at,"
-            "commerce_order_items(product_name,quantity,unit_price_cents,total_cents)"
-        )
-        .eq("tenant_id", tenant_id)
-        .gte("created_at", f"{target}T00:00:00+00:00")
-        .lt("created_at", f"{target}T23:59:59+00:00")
-        .not_.in_("status", ["cancelled", "refunded"])
-        .order("delivery_slot")
-        .order("created_at")
-        .execute()
-    )
-    orders = result.data or []
+    orders = await service.get_delivery_list(tenant_id, target)
     _PAID = {"paid", "confirmed", "packing", "dispatched", "delivered"}
     paid   = [o for o in orders if o["status"] in _PAID]
     unpaid = [o for o in orders if o["status"] == "pending_payment"]
