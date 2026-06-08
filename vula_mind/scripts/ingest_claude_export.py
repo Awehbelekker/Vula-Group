@@ -147,6 +147,11 @@ def _format_conv(conv: dict) -> str:
 
 def score_all(conversations: list[dict]) -> list[ScoredConv]:
     results = []
+    import os
+    _THRESH = int(os.environ.get("INGEST_THRESHOLD", "60"))
+    # When set, ALL work-related convs (arch OR tech above threshold) go to 'arch'
+    _MERGE_TO_ARCH = os.environ.get("INGEST_MERGE_TO_ARCH", "false").lower() == "true"
+
     for c in conversations:
         title = c.get('name', '')
         human_text = _extract_human_text(c)
@@ -155,10 +160,12 @@ def score_all(conversations: list[dict]) -> list[ScoredConv]:
         arch = _score(full, _ARCH_KEYWORDS)
         tech = _score(full, _TECH_KEYWORDS)
 
-        # Determine bucket: need at least 60 in winning category
-        if arch >= 60 and arch >= tech:
+        if _MERGE_TO_ARCH:
+            # Single-tenant mode: any work-relevant conversation → arch bucket
+            bucket = 'arch' if max(arch, tech) >= _THRESH else 'skip'
+        elif arch >= _THRESH and arch >= tech:
             bucket = 'arch'
-        elif tech >= 60 and tech > arch:
+        elif tech >= _THRESH and tech > arch:
             bucket = 'tech'
         else:
             bucket = 'skip'

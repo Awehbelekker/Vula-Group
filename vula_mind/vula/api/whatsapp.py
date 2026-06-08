@@ -264,9 +264,11 @@ async def _handle_message(phone: str, text: str, msg_id: str) -> None:
     db.save(tenant_id, thread_key, "assistant", reply)
     await _send_reply(phone, reply)
 
-    # Auto-learn: feed substantive Q&A back into the KB so Vula gets smarter
-    # with every conversation. Only when admin asks and the answer is real.
-    if role == "admin":
+    # Auto-learn: feed substantive Q&A back into the KB so Vula gets smarter.
+    # Gated behind AUTO_LEARN_FROM_CHATS (default off) — each learned exchange
+    # costs an embedding call. Enable when budget allows.
+    import os as _os
+    if role == "admin" and _os.environ.get("AUTO_LEARN_FROM_CHATS", "false").lower() == "true":
         await _maybe_learn_from_exchange(tenant_id, text, reply)
 
 
@@ -789,6 +791,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
             question=question,
             tenant_id=tenant_id,
             conversation_history=conversation_history,
+            max_branches=1,   # cost cap: 1 LLM call per WhatsApp reply
         )
         if result.final_answer and result.final_answer.strip():
             logger.info(

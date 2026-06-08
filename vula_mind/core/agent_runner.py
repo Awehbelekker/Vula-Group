@@ -57,6 +57,7 @@ class AgentRunner:
         conversation_history: str = "",
         metadata: dict[str, Any] | None = None,
         use_llm_scoring: bool = False,
+        max_branches: int = 0,   # 0 = no cap; set 1 for cost-bounded (WhatsApp)
     ) -> AgentResult:
         started = time.monotonic()
 
@@ -74,6 +75,11 @@ class AgentRunner:
             pass
 
         self._hrm.plan(graph, use_llm_scoring=use_llm_scoring)
+
+        # Cost cap: keep only the first N branches (1 branch = 1 LLM call)
+        if max_branches and len(graph.branches) > max_branches:
+            graph.branches = graph.branches[:max_branches]
+
         graph.status = GraphStatus.EXECUTING
 
         # 2. Run all branches in parallel using real skill implementations

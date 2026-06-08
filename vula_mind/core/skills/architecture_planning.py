@@ -87,9 +87,10 @@ class ArchitecturePlanningSkill(BaseSkill):
             import litellm
             litellm.drop_params = True
 
-            # Architecture planning is complex — use the reasoner tier when possible
-            target_model = settings.model_reasoner or settings.model_worker
-            model, api_key, api_base = await resolve_generation_route(model=target_model)
+            # Use the worker model — on cloud (OpenRouter) the reasoner tier is
+            # far more expensive and generates wasteful think-tokens. The worker
+            # (llama-3.3-70b) is plenty capable for SA construction Q&A.
+            model, api_key, api_base = await resolve_generation_route(model=settings.model_worker)
 
             resp = await litellm.acompletion(
                 model=model,
