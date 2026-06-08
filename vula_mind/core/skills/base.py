@@ -23,6 +23,8 @@ class SkillInput:
     context: str = ""
     conversation_history: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    max_tokens: int = 1024      # generation cap — keep tight for WhatsApp (~500)
+    top_k: int = 4              # KB chunks to retrieve
 
 
 @dataclass

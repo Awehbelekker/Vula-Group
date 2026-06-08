@@ -58,6 +58,8 @@ class AgentRunner:
         metadata: dict[str, Any] | None = None,
         use_llm_scoring: bool = False,
         max_branches: int = 0,   # 0 = no cap; set 1 for cost-bounded (WhatsApp)
+        max_tokens: int = 1024,  # generation cap — tight for WhatsApp (~500)
+        top_k: int = 4,          # KB chunks retrieved per skill
     ) -> AgentResult:
         started = time.monotonic()
 
@@ -88,6 +90,8 @@ class AgentRunner:
             tenant_id=tenant_id,
             conversation_history=conversation_history,
             metadata=metadata or {},
+            max_tokens=max_tokens,
+            top_k=top_k,
         )
 
         async def _run_branch(branch) -> None:

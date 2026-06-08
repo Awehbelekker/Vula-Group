@@ -27,7 +27,7 @@ class ReasoningSkill(BaseSkill):
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            chunks = await pipeline.query(inp.question, top_k=4)
+            chunks = await pipeline.query(inp.question, top_k=inp.top_k)
             if chunks:
                 kb_context = "\n\n".join(
                     f"[{c.get('filename','doc')}]: {c.get('text','')[:400]}"
@@ -44,7 +44,8 @@ class ReasoningSkill(BaseSkill):
         # Build prompt
         system_msg = (
             "You are Vula, an AI assistant for South African business and construction. "
-            "Reason carefully, be concise, and prioritise practical answers. "
+            "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
+            "Lead with the answer, skip preamble. "
             "Always work in ZAR for money, use SA conventions for dates and phone numbers."
         )
         history = (
@@ -70,7 +71,7 @@ class ReasoningSkill(BaseSkill):
                     {"role": "user", "content": user_msg},
                 ],
                 temperature=0.3,
-                max_tokens=1200,
+                max_tokens=inp.max_tokens,
                 api_key=api_key,
                 api_base=api_base,
             )

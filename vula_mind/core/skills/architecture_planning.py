@@ -35,7 +35,8 @@ class ArchitecturePlanningSkill(BaseSkill):
 
             # Tenant's own context — past projects, fee schedules
             tenant_pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            tenant_chunks = await tenant_pipeline.query(inp.question, top_k=4)
+            tenant_chunks = await tenant_pipeline.query(inp.question, top_k=inp.top_k)
+            strong_tenant_hit = bool(tenant_chunks and tenant_chunks[0].get("score", 0) > 0.55)
             if tenant_chunks:
                 contexts.append("## Your practice's knowledge\n" + "\n\n".join(
                     f"[{c.get('filename','doc')}]: {c.get('text','')[:500]}"
@@ -47,10 +48,14 @@ class ArchitecturePlanningSkill(BaseSkill):
                     for c in tenant_chunks
                 ])
 
-            # Shared SA construction standards
+            # Shared SA construction standards — only query when the tenant KB
+            # didn't already give a strong hit (saves a tunnel round-trip).
             try:
-                training_pipeline = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
-                training_chunks = await training_pipeline.query(inp.question, top_k=4)
+                if not strong_tenant_hit:
+                    training_pipeline = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
+                    training_chunks = await training_pipeline.query(inp.question, top_k=inp.top_k)
+                else:
+                    training_chunks = []
                 if training_chunks:
                     contexts.append("## SA construction standards & rates\n" + "\n\n".join(
                         f"[{c.get('filename','standard')}]: {c.get('text','')[:400]}"
@@ -99,7 +104,7 @@ class ArchitecturePlanningSkill(BaseSkill):
                     {"role": "user", "content": user_msg},
                 ],
                 temperature=0.2,
-                max_tokens=1800,
+                max_tokens=inp.max_tokens,
                 api_key=api_key,
                 api_base=api_base,
             )

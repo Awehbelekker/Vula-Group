@@ -791,7 +791,9 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
             question=question,
             tenant_id=tenant_id,
             conversation_history=conversation_history,
-            max_branches=1,   # cost cap: 1 LLM call per WhatsApp reply
+            max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
+            max_tokens=500,    # speed cap: concise WhatsApp answers generate faster
+            top_k=3,           # speed cap: fewer KB chunks = faster retrieval
         )
         if result.final_answer and result.final_answer.strip():
             logger.info(
