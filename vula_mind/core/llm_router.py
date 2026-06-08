@@ -76,6 +76,10 @@ async def resolve_generation_route(
     local_model = model or settings.model_worker
     cloud_model = settings.model_worker_cloud or settings.model_worker
 
+    # Accuracy-first: force the smart cloud model regardless of local availability.
+    if settings.prefer_cloud_llm and settings.openrouter_api_key:
+        return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
+
     if await ollama_available():
         return f"ollama/{local_model}", None, settings.ollama_base
 

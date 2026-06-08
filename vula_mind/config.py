@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     # model_worker = local Ollama model name (used via the vula-ai.com tunnel).
     # model_worker_cloud = the OpenRouter model used when local Ollama is down.
     model_worker_cloud: str = "meta-llama/llama-3.3-70b-instruct"
+    # When true, generation always uses the cloud model (smart 70B) regardless of
+    # local Ollama availability. Embeddings are unaffected (routed separately by
+    # MODEL_EMBED). Use for accuracy-first production; the local GPU stays free
+    # for embeddings.
+    prefer_cloud_llm: bool = False
 
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""
