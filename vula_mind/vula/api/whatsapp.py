@@ -264,6 +264,43 @@ async def _handle_message(phone: str, text: str, msg_id: str) -> None:
     db.save(tenant_id, thread_key, "assistant", reply)
     await _send_reply(phone, reply)
 
+    # Auto-learn: feed substantive Q&A back into the KB so Vula gets smarter
+    # with every conversation. Only when admin asks and the answer is real.
+    if role == "admin":
+        await _maybe_learn_from_exchange(tenant_id, text, reply)
+
+
+async def _maybe_learn_from_exchange(tenant_id: str, question: str, answer: str) -> None:
+    """Ingest a valuable Q&A exchange into the tenant KB as a learned fact.
+
+    Filters out greetings, errors, and trivial exchanges. Only durable,
+    information-rich answers become permanent knowledge.
+    """
+    # Skip if the answer is an error/fallback or too short to be useful
+    _SKIP = ("having trouble", "couldn't find", "don't have enough",
+             "i can only help", "read-only access")
+    low = answer.lower()
+    if any(s in low for s in _SKIP) or len(answer) < 120 or len(question) < 15:
+        return
+    # Skip pure greetings/commands
+    if question.strip().lower() in ("hi", "hello", "hey", "thanks", "thank you", "ok", "okay"):
+        return
+
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        import hashlib
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        learned = f"Q: {question}\n\nA: {answer}"
+        doc_id = "learned_" + hashlib.md5(question.lower().encode()).hexdigest()[:12]
+        await pipeline.ingest_text(
+            content=learned,
+            filename=f"{doc_id}.txt",
+            doc_id=doc_id,
+        )
+        logger.info("Learned from exchange for tenant %s (%s)", tenant_id, doc_id)
+    except Exception as exc:
+        logger.debug("Auto-learn skipped for %s: %s", tenant_id, exc)
+
 
 async def _handle_document_ingest(phone: str, media_id: str, filename: str, mime_type: str) -> None:
     """Ingest a document sent by a tenant into their knowledge base.
@@ -737,14 +774,38 @@ async def _tenant_for_phone(phone: str) -> Optional[str]:
 # ─── RAG reply ────────────────────────────────────────────────────────────────
 
 async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "") -> str:
-    """Run the question through the tenant's RAG pipeline."""
+    """Answer a question — routes through the multi-agent runner.
+
+    The agent uses HRM to pick the right skill(s): KB recall, web research
+    (SA tenders, company info, live prices), architecture planning, etc.,
+    runs them in parallel, and merges. Falls back to plain RAG if the agent
+    errors, then to the shared construction KB.
+    """
+    # 1. Try the full multi-agent runner (research + memory + all skills)
+    try:
+        from core.agent_runner import get_agent_runner
+        runner = get_agent_runner()
+        result = await runner.run(
+            question=question,
+            tenant_id=tenant_id,
+            conversation_history=conversation_history,
+        )
+        if result.final_answer and result.final_answer.strip():
+            logger.info(
+                "Agent answered tenant=%s skill=%s confidence=%.2f",
+                tenant_id, result.skill_used, result.confidence,
+            )
+            return result.final_answer
+    except Exception as exc:
+        logger.warning("Agent runner failed for %s, falling back to RAG: %s", tenant_id, exc)
+
+    # 2. Fallback: plain tenant RAG, then shared construction KB
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
         from vula.training.content import TRAINING_TENANT_ID
 
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
         sources = await pipeline.query(question, top_k=5)
-
         if sources:
             return await pipeline.answer(
                 question,
@@ -763,8 +824,8 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
             )
 
         return (
-            "I don't have enough information in your documents to answer that yet. "
-            "Try uploading more files at app.vula.ai or ask your Vula rep."
+            "I don't have enough information to answer that yet. "
+            "Try uploading more files in your Vula dashboard or rephrase the question."
         )
     except Exception as exc:
         logger.error("RAG pipeline error for tenant %s: %s", tenant_id, exc)

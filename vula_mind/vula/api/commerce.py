@@ -672,15 +672,27 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         }
 
     # ── Live send ────────────────────────────────────────────────────────────
+    # Channel resolution: Meta (templates) preferred; Twilio fallback for
+    # free-text broadcasts (works within the 24h customer session window).
+    body_text = body.get("body", "")  # free-text alternative to a Meta template
     from vula.api.whatsapp import _get_tenant_wa_creds
     creds = await _get_tenant_wa_creds(tenant_id)
-    if not creds:
-        raise HTTPException(status_code=503, detail="WhatsApp not connected for this tenant.")
+    use_twilio = (not creds) and bool(
+        getattr(settings, "twilio_account_sid", "")
+        and getattr(settings, "twilio_auth_token", "")
+        and getattr(settings, "twilio_whatsapp_from", "")
+    )
+
+    if not creds and not use_twilio:
+        raise HTTPException(
+            status_code=503,
+            detail="No WhatsApp channel configured (connect Meta or set Twilio creds).",
+        )
 
     log_id = str(uuid4())
     db.table("commerce_broadcast_logs").insert({
         "id": log_id, "tenant_id": tenant_id, "name": name,
-        "template_name": template, "audience_filter": audience,
+        "template_name": template or "(free-text)", "audience_filter": audience,
         "status": "sending", "recipient_count": len(recipients),
     }).execute()
 
@@ -690,17 +702,30 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         for c in recipients:
             number = _norm_phone(c.get("phone"))
             try:
-                resp = await client.post(
-                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
-                    headers={"Authorization": f"Bearer {creds['token']}",
-                             "Content-Type": "application/json"},
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": number,
-                        "type": "template",
-                        "template": {"name": template, "language": {"code": language}},
-                    },
-                )
+                if use_twilio:
+                    # Twilio free-text broadcast
+                    from_addr = settings.twilio_whatsapp_from
+                    if not from_addr.startswith("whatsapp:"):
+                        from_addr = f"whatsapp:{from_addr}"
+                    msg = body_text or f"Hi from {name}!"
+                    resp = await client.post(
+                        f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json",
+                        auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                        data={"From": from_addr, "To": f"whatsapp:+{number}", "Body": msg[:1600]},
+                    )
+                else:
+                    # Meta template broadcast (compliant for proactive sends)
+                    resp = await client.post(
+                        f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                        headers={"Authorization": f"Bearer {creds['token']}",
+                                 "Content-Type": "application/json"},
+                        json={
+                            "messaging_product": "whatsapp",
+                            "to": number,
+                            "type": "template",
+                            "template": {"name": template, "language": {"code": language}},
+                        },
+                    )
                 if resp.is_success:
                     sent += 1
                 else:
@@ -719,7 +744,9 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     }).eq("id", log_id).execute()
 
     return {
-        "broadcast_id": log_id, "dry_run": False, "template": template,
+        "broadcast_id": log_id, "dry_run": False,
+        "channel": "twilio" if use_twilio else "meta",
+        "template": template or "(free-text)",
         "audience": audience, "recipient_count": len(recipients),
         "sent": sent, "failed": failed,
         "errors": errors or None,
