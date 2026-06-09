@@ -227,36 +227,24 @@ class ReflectionAgent:
         graph: TaskGraph,
         score: float,
     ) -> tuple[str, str]:
-        """Generate what_worked and what_to_try_next using the reflection model."""
+        """Summarise the outcome WITHOUT an LLM call.
 
-        # Build a brief summary for the model
-        branch_summary = "\n".join([
-            f"- Branch {b.branch_id[:6]}: tier={b.model_tier.value} "
-            f"confidence={b.confidence:.0%} latency={b.latency_ms}ms "
-            f"status={b.status.value}"
-            for b in graph.branches
-        ])
-
-        prompt = (
-            f"A task was completed with outcome score {score:.0%}.\n"
-            f"Goal: {graph.goal[:150]}\n"
-            f"Skill used: {graph.primary_skill}\n"
-            f"Merge strategy: {graph.merge_strategy.value}\n"
-            f"Branches:\n{branch_summary}\n\n"
-            f"In 1-2 sentences each, answer:\n"
-            f"1. What worked well?\n"
-            f"2. What should be tried differently next time?\n"
-            f"Format as:\nWORKED: ...\nNEXT: ..."
-        )
-
-        try:
-            response = self._ollama_generate(prompt, max_tokens=200)
-            worked_match = response.split("NEXT:")[0].replace("WORKED:", "").strip()
-            next_match = response.split("NEXT:")[-1].strip() if "NEXT:" in response else ""
-            return worked_match or "Branches executed successfully.", next_match or "No changes needed."
-        except Exception as e:
-            logger.warning(f"Reflection text generation failed: {e}")
-            return "Task completed.", "Monitor for similar patterns."
+        The reflection store only needs a short note for the routing-hint
+        history. Making a separate LLM call here (after every single query)
+        doubled inference cost for zero user benefit. We now derive the note
+        cheaply from the graph metrics.
+        """
+        skill = graph.primary_skill
+        if score >= 0.75:
+            worked = f"{skill} answered well (score {score:.0%}, {graph.merge_strategy.value})."
+            nxt = "Keep routing similar questions to this skill."
+        elif score >= 0.5:
+            worked = f"{skill} produced a usable answer (score {score:.0%})."
+            nxt = "Consider richer KB context for this question type."
+        else:
+            worked = f"{skill} struggled (score {score:.0%})."
+            nxt = "Try a different skill or improve the knowledge base."
+        return worked, nxt
 
     # -------------------------------------------------------------------------
     # Persistence

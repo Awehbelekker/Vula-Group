@@ -105,24 +105,27 @@ class FileParseSkill(BaseSkill):
             )
 
     async def _search_kb(self, inp: SkillInput) -> SkillOutput:
-        """No file provided — search tenant KB for relevant document content."""
+        """No file provided — search tenant KB and SYNTHESISE a clean answer."""
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            chunks = await pipeline.query(inp.question, top_k=6)
+            chunks = await pipeline.query(inp.question, top_k=inp.top_k)
             if not chunks:
                 return SkillOutput(
-                    answer="No relevant documents found. Upload documents first.",
+                    answer="I don't have anything on that in your documents yet.",
                     skill_name=self.name,
                     confidence=0.1,
                 )
-            context = "\n\n".join(
-                f"[{c.get('filename','doc')}]: {c.get('text','')[:500]}" for c in chunks
+            # Synthesise a real answer from the chunks (not raw text dump)
+            answer = await pipeline.answer(
+                inp.question,
+                context_label="business documents",
+                conversation_history=inp.conversation_history,
             )
             return SkillOutput(
-                answer=context,
+                answer=answer,
                 skill_name=self.name,
-                confidence=min(0.9, len(chunks) * 0.15),
+                confidence=min(0.9, len(chunks) * 0.18),
                 sources=[{"type": "kb", "filename": c.get("filename", "?"),
                            "score": round(c.get("score", 0.0), 3)} for c in chunks],
             )
