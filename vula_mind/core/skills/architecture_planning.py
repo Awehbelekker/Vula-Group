@@ -48,14 +48,11 @@ class ArchitecturePlanningSkill(BaseSkill):
                     for c in tenant_chunks
                 ])
 
-            # Shared SA construction standards — only query when the tenant KB
-            # didn't already give a strong hit (saves a tunnel round-trip).
+            # Shared SA construction standards — always consulted; they complement
+            # the tenant's own data (cloud embeddings make this ~0.5s).
             try:
-                if not strong_tenant_hit:
-                    training_pipeline = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
-                    training_chunks = await training_pipeline.query(inp.question, top_k=inp.top_k)
-                else:
-                    training_chunks = []
+                training_pipeline = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
+                training_chunks = await training_pipeline.query(inp.question, top_k=inp.top_k)
                 if training_chunks:
                     contexts.append("## SA construction standards & rates\n" + "\n\n".join(
                         f"[{c.get('filename','standard')}]: {c.get('text','')[:400]}"

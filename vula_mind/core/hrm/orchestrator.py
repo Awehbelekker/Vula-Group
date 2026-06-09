@@ -28,16 +28,28 @@ COMPLEXITY_KEYWORDS = {
 }
 
 SKILL_KEYWORDS: dict[str, list[str]] = {
+    # Commerce first — clear ordering intent
     "commerce_assistant":   ["order", "buy", "cart", "checkout", "stock", "in stock", "menu",
-                             "catalog", "catalogue", "delivery", "track order", "add to cart",
+                             "catalog", "catalogue", "track order", "add to cart",
                              "product", "fish", "seafood", "catch"],
-    "web_search":           ["search", "find online", "latest", "current", "news", "tender", "price"],
-    "code_execution":       ["run", "execute", "compute", "calculate", "code", "script"],
-    "memory_recall":        ["remember", "previous", "history", "last time", "before"],
-    "file_parse":           ["file", "document", "pdf", "read", "parse", "extract"],
+    # Architecture/construction BEFORE file_parse so "Stage 4 documentation",
+    # "fees", "SACAP" etc consult the SA construction KB (not just tenant docs).
+    "architecture_planning":["sacap", "nhbrc", "jbcc", "nec ", "sans", "cidb", "procsa",
+                             "bbbee", "b-bbee", "heritage", "sahra", "zoning", "town planning",
+                             "fee", "fees", "stage 1", "stage 2", "stage 3", "stage 4", "stage 5",
+                             "work stage", "documentation", "tender", "boq", "bill of quantities",
+                             "contractor", "subcontract", "municipal", "building plan", "occupation certificate",
+                             "residential", "commercial", "fitout", "construction", "architect",
+                             "design", "drawing", "elevation", "quantity surveyor", "preliminaries",
+                             "provisional sum", "retention", "practical completion", "snag",
+                             "structure", "infrastructure", "plan"],
+    "web_search":           ["search", "find online", "latest", "current", "news", "tender alert",
+                             "research", "look up", "google"],
+    "code_execution":       ["run", "execute", "compute", "code", "script"],
+    "memory_recall":        ["remember", "previous", "history", "last time", "before", "we discussed"],
+    "file_parse":           ["this file", "this document", "pdf", "parse", "extract from", "summarise this"],
     "image_analysis":       ["image", "photo", "picture", "screenshot", "diagram"],
-    "financial_reasoning":  ["cost", "price", "rand", "revenue", "profit", "budget", "boq", "rate"],
-    "architecture_planning":["design", "architect", "system", "infrastructure", "plan", "structure"],
+    "financial_reasoning":  ["revenue", "profit", "budget", "cashflow"],
     "reasoning":            [],  # fallback
 }
 
