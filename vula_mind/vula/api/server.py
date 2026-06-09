@@ -282,6 +282,221 @@ async def _send_oth_delivery_briefing() -> None:
                 log.warning("OTH briefing to %s failed: %s", name, exc)
 
 
+async def _unpaid_order_followup_loop() -> None:
+    """Every 30 min, WhatsApp customers whose orders are still pending_payment after 2h."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(120)  # Let server settle on boot
+    while True:
+        try:
+            await _chase_unpaid_orders()
+        except Exception as exc:
+            log.warning("Unpaid order chase failed: %s", exc)
+        await _asyncio.sleep(30 * 60)  # run every 30 minutes
+
+
+async def _chase_unpaid_orders() -> None:
+    """Find orders pending_payment for 2-4h and send a WhatsApp nudge (once per order)."""
+    if not settings.whatsapp_token:
+        return
+
+    from datetime import datetime, timezone, timedelta
+    from vula.commerce import service as _commerce
+
+    tenant_id = "off-the-hook"
+    phone_id = "251439416636328"
+
+    try:
+        from supabase import create_client as _sb_client
+        client = _sb_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key or settings.supabase_service_key,
+        )
+        now = datetime.now(timezone.utc)
+        two_hours_ago = (now - timedelta(hours=2)).isoformat()
+        four_hours_ago = (now - timedelta(hours=4)).isoformat()
+
+        result = (
+            client.table("commerce_orders")
+            .select("id,display_id,customer_name,customer_phone,total_cents")
+            .eq("tenant_id", tenant_id)
+            .eq("status", "pending_payment")
+            .gte("created_at", four_hours_ago)
+            .lte("created_at", two_hours_ago)
+            .is_("followup_sent_at", "null")
+            .execute()
+        )
+        orders = result.data or []
+    except Exception as exc:
+        log.warning("Unpaid order fetch failed: %s", exc)
+        return
+
+    if not orders:
+        return
+
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=10.0) as http:
+        for o in orders:
+            phone = (o.get("customer_phone") or "").strip().lstrip("+").replace(" ", "")
+            if phone.startswith("0"):
+                phone = "27" + phone[1:]
+            if not phone or len(phone) < 9:
+                continue
+            name = (o.get("customer_name") or "there").split()[0]
+            amount = f"R{o['total_cents'] / 100:.2f}"
+            try:
+                await http.post(
+                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                    headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": phone,
+                        "type": "text",
+                        "text": {
+                            "body": (
+                                f"Hi {name}! Just checking in — your Off the Hook order "
+                                f"{o['display_id']} ({amount}) is still waiting for payment. "
+                                f"Complete your payment to confirm your delivery slot. "
+                                f"Reply here if you need help or want to cancel."
+                            )
+                        },
+                    },
+                )
+                # Mark as followed-up so we don't chase again
+                try:
+                    client.table("commerce_orders") \
+                        .update({"followup_sent_at": datetime.now(timezone.utc).isoformat()}) \
+                        .eq("id", o["id"]) \
+                        .execute()
+                except Exception:
+                    pass
+                log.info("Unpaid follow-up sent: %s → %s", o["display_id"], phone)
+            except Exception as exc:
+                log.warning("Unpaid follow-up failed for %s: %s", o["display_id"], exc)
+
+
+async def _daily_low_stock_loop() -> None:
+    """Check stock levels at 07:00 SAST and alert Roland if anything is running low."""
+    import asyncio as _asyncio
+    from datetime import datetime, timezone, timedelta
+
+    async def _seconds_until_next_0700() -> float:
+        now = datetime.now(timezone.utc)
+        sast = now + timedelta(hours=2)
+        target = sast.replace(hour=7, minute=0, second=0, microsecond=0)
+        if sast >= target:
+            target += timedelta(days=1)
+        return (target - sast).total_seconds()
+
+    await _asyncio.sleep(await _seconds_until_next_0700())
+    while True:
+        try:
+            await _send_low_stock_alert()
+        except Exception as exc:
+            log.warning("Low stock alert failed: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
+async def _send_low_stock_alert() -> None:
+    """WhatsApp Roland if any product has stock_quantity below 5."""
+    if not settings.whatsapp_token:
+        return
+    from vula.commerce import service as _commerce
+
+    tenant_id = "off-the-hook"
+    phone_id = "251439416636328"
+    roland = "27721822828"
+
+    try:
+        low = await _commerce.get_low_stock_products(tenant_id, threshold=5)
+    except Exception as exc:
+        log.warning("Low stock query failed: %s", exc)
+        return
+
+    if not low:
+        return
+
+    lines = ["Low stock alert:"]
+    for p in low:
+        qty = p.get("stock_quantity")
+        qty_str = f"{qty} left" if qty is not None else "qty not set"
+        lines.append(f"  - {p['name']}: {qty_str}")
+    lines.append("\nUpdate stock in Vula Products tab.")
+    msg = "\n".join(lines)
+
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            await client.post(
+                f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": roland,
+                    "type": "text",
+                    "text": {"body": msg[:4096]},
+                },
+            )
+            log.info("Low stock alert sent to Roland: %d items", len(low))
+        except Exception as exc:
+            log.warning("Low stock WhatsApp failed: %s", exc)
+
+
+async def _weekly_friday_catch_reminder_loop() -> None:
+    """Every Friday at 08:00 SAST, remind Stacy to update the daily catch for the week."""
+    import asyncio as _asyncio
+    from datetime import datetime, timezone, timedelta
+
+    async def _seconds_until_next_friday_0800() -> float:
+        now = datetime.now(timezone.utc)
+        sast = now + timedelta(hours=2)
+        # weekday() 4 = Friday
+        days_ahead = (4 - sast.weekday()) % 7
+        target = (sast + timedelta(days=days_ahead)).replace(hour=8, minute=0, second=0, microsecond=0)
+        if target <= sast:
+            target += timedelta(weeks=1)
+        return (target - sast).total_seconds()
+
+    await _asyncio.sleep(await _seconds_until_next_friday_0800())
+    while True:
+        try:
+            await _send_friday_catch_reminder()
+        except Exception as exc:
+            log.warning("Friday catch reminder failed: %s", exc)
+        await _asyncio.sleep(7 * 24 * 3600)
+
+
+async def _send_friday_catch_reminder() -> None:
+    """Remind Stacy to update the weekly catch of the day specials."""
+    if not settings.whatsapp_token:
+        return
+
+    phone_id = "251439416636328"
+    stacy = "27722684085"
+    msg = (
+        "Happy Friday Stacy! Quick reminder to update this week's catch of the day "
+        "specials in Vula Products tab before the weekend. "
+        "Mark the fresh fish as 'Catch of the day' so the AI can recommend them to customers. "
+        "Have a great weekend!"
+    )
+
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            await client.post(
+                f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": stacy,
+                    "type": "text",
+                    "text": {"body": msg},
+                },
+            )
+            log.info("Friday catch reminder sent to Stacy")
+        except Exception as exc:
+            log.warning("Friday catch reminder WhatsApp failed: %s", exc)
+
+
 async def _daily_sales_summary_loop() -> None:
     """Send evening sales summary to Off the Hook team at 18:00 SAST daily."""
     import asyncio as _asyncio
@@ -390,6 +605,9 @@ async def lifespan(app: FastAPI):
     _asyncio.create_task(_daily_trial_expiry_loop())
     _asyncio.create_task(_daily_delivery_briefing_loop())
     _asyncio.create_task(_daily_sales_summary_loop())
+    _asyncio.create_task(_unpaid_order_followup_loop())
+    _asyncio.create_task(_daily_low_stock_loop())
+    _asyncio.create_task(_weekly_friday_catch_reminder_loop())
     yield
 
 
@@ -514,6 +732,27 @@ async def trigger_evening_summary():
     """Manually fire the 18:00 sales summary — for testing or on-demand sends."""
     await _send_oth_sales_summary()
     return {"sent": True, "briefing": "evening"}
+
+
+@app.post("/v1/oth/briefing/low-stock", tags=["oth"])
+async def trigger_low_stock_alert():
+    """Manually fire the low stock alert to Roland."""
+    await _send_low_stock_alert()
+    return {"sent": True, "briefing": "low_stock"}
+
+
+@app.post("/v1/oth/briefing/friday-catch", tags=["oth"])
+async def trigger_friday_catch_reminder():
+    """Manually fire the Friday catch reminder to Stacy."""
+    await _send_friday_catch_reminder()
+    return {"sent": True, "briefing": "friday_catch"}
+
+
+@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"])
+async def trigger_chase_unpaid():
+    """Manually fire the unpaid order follow-up chase."""
+    await _chase_unpaid_orders()
+    return {"sent": True, "briefing": "chase_unpaid"}
 
 
 # ─── Request / Response Models ────────────────────────────────────────────────
