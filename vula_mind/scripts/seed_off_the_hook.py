@@ -452,14 +452,14 @@ def seed_tenant() -> None:
         plan="growth",
     )
     db.add_phone(TENANT_ID, WHATSAPP_NUMBER, label="orders", role="admin")
-    print(f"✓ Tenant '{TENANT_ID}' registered — WhatsApp {WHATSAPP_NUMBER}")
+    print(f"[OK] Tenant '{TENANT_ID}' registered -- WhatsApp {WHATSAPP_NUMBER}")
 
     # Also register Stacy and Roland's numbers so they can manage the store via WhatsApp
     # Stacy: owner — receives order alerts and can approve sign-offs
     # Roland: operations — receives delivery and stock alerts
     db.add_phone(TENANT_ID, STACY_WHATSAPP, label="owner", role="admin")
-    db.add_phone(TENANT_ID, ROLAND_WHATSAPP, label="operations", role="manager")
-    print(f"✓ Team registered — Stacy {STACY_WHATSAPP} (owner), Roland {ROLAND_WHATSAPP} (operations)")
+    db.add_phone(TENANT_ID, ROLAND_WHATSAPP, label="operations", role="staff")
+    print(f"[OK] Team registered -- Stacy {STACY_WHATSAPP} (owner), Roland {ROLAND_WHATSAPP} (operations)")
 
 
 def seed_products() -> None:
@@ -487,7 +487,7 @@ def seed_products() -> None:
         rows.append(row)
 
     result = client.table("commerce_products").upsert(rows, on_conflict="tenant_id,slug").execute()
-    print(f"✓ {len(result.data)} products seeded for '{TENANT_ID}'")
+    print(f"[OK] {len(result.data)} products seeded for '{TENANT_ID}'")
 
     # Print summary by category
     cats: dict[str, int] = {}

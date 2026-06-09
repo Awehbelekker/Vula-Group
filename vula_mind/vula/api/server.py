@@ -51,6 +51,9 @@ Endpoints:
     POST /scrape/digest     — industry news digest
     POST /scrape/tenders    — SA government tender monitoring
     POST /scrape/custom     — custom bulk scraper
+
+    POST /v1/oth/briefing/morning — manually fire OTH morning delivery list
+    POST /v1/oth/briefing/evening — manually fire OTH 18:00 sales summary
 """
 from __future__ import annotations
 
@@ -279,6 +282,105 @@ async def _send_oth_delivery_briefing() -> None:
                 log.warning("OTH briefing to %s failed: %s", name, exc)
 
 
+async def _daily_sales_summary_loop() -> None:
+    """Send evening sales summary to Off the Hook team at 18:00 SAST daily."""
+    import asyncio as _asyncio
+    from datetime import datetime, timezone, timedelta
+
+    async def _seconds_until_next_1800() -> float:
+        now = datetime.now(timezone.utc)
+        sast = now + timedelta(hours=2)
+        target = sast.replace(hour=18, minute=0, second=0, microsecond=0)
+        if sast >= target:
+            target += timedelta(days=1)
+        return (target - sast).total_seconds()
+
+    await _asyncio.sleep(await _seconds_until_next_1800())
+
+    while True:
+        try:
+            await _send_oth_sales_summary()
+        except Exception as exc:
+            log.warning("OTH sales summary failed: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
+async def _send_oth_sales_summary() -> None:
+    """Build and WhatsApp the day's sales summary to Stacy and Roland at 18:00."""
+    if not settings.whatsapp_token:
+        return
+
+    from datetime import date
+    from vula.commerce import service as _commerce
+
+    tenant_id = "off-the-hook"
+    today = date.today().isoformat()
+
+    try:
+        orders = await _commerce.get_delivery_list(tenant_id, date_str=today)
+    except Exception as exc:
+        log.warning("OTH sales summary fetch failed: %s", exc)
+        return
+
+    _PAID = {"paid", "confirmed", "packing", "dispatched", "delivered"}
+
+    if not orders:
+        msg = f"End of day {today}: no orders today. See you tomorrow!"
+    else:
+        paid_orders   = [o for o in orders if o["status"] in _PAID]
+        unpaid_orders = [o for o in orders if o["status"] == "pending_payment"]
+        total_rev     = sum(o["total_cents"] for o in paid_orders)
+        unpaid_total  = sum(o["total_cents"] for o in unpaid_orders)
+
+        # Top products by quantity
+        product_counts: dict[str, int] = {}
+        for o in orders:
+            for it in (o.get("commerce_order_items") or []):
+                name = it.get("product_name", "Unknown")
+                product_counts[name] = product_counts.get(name, 0) + it.get("quantity", 1)
+        top = sorted(product_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        lines = [f"End of day summary — {today}\n"]
+        lines.append(f"Orders: {len(orders)} total | {len(paid_orders)} paid | {len(unpaid_orders)} unpaid")
+        lines.append(f"Revenue collected: R{total_rev / 100:.2f}")
+        if unpaid_total:
+            lines.append(f"Still to collect: R{unpaid_total / 100:.2f}")
+        if top:
+            lines.append("\nTop sellers today:")
+            for name, qty in top:
+                lines.append(f"  - {name} x{qty}")
+        if unpaid_orders:
+            lines.append(f"\nUnpaid orders:")
+            for o in unpaid_orders[:5]:
+                lines.append(
+                    f"  {o['display_id']} — {o['customer_name']} "
+                    f"R{o['total_cents'] / 100:.2f}"
+                )
+        lines.append("\nGreat work today!")
+        msg = "\n".join(lines)
+
+    phone_id = "251439416636328"
+    team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
+
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=10.0) as client:
+        for name, number in team:
+            try:
+                await client.post(
+                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                    headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": number,
+                        "type": "text",
+                        "text": {"body": msg[:4096]},
+                    },
+                )
+                log.info("OTH sales summary sent to %s (%s)", name, number)
+            except Exception as exc:
+                log.warning("OTH summary to %s failed: %s", name, exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
@@ -287,6 +389,7 @@ async def lifespan(app: FastAPI):
     _asyncio.create_task(_weekly_rates_loop())
     _asyncio.create_task(_daily_trial_expiry_loop())
     _asyncio.create_task(_daily_delivery_briefing_loop())
+    _asyncio.create_task(_daily_sales_summary_loop())
     yield
 
 
@@ -395,6 +498,22 @@ def validate_tenant(tenant_id: str) -> str:
             detail="tenant_id must be 1–64 alphanumeric characters, underscores, or hyphens.",
         )
     return tenant_id
+
+
+# ─── OTH manual briefing triggers (for testing / on-demand) ──────────────────
+
+@app.post("/v1/oth/briefing/morning", tags=["oth"])
+async def trigger_morning_briefing():
+    """Manually fire the morning delivery list — for testing or on-demand sends."""
+    await _send_oth_delivery_briefing()
+    return {"sent": True, "briefing": "morning"}
+
+
+@app.post("/v1/oth/briefing/evening", tags=["oth"])
+async def trigger_evening_summary():
+    """Manually fire the 18:00 sales summary — for testing or on-demand sends."""
+    await _send_oth_sales_summary()
+    return {"sent": True, "briefing": "evening"}
 
 
 # ─── Request / Response Models ────────────────────────────────────────────────
