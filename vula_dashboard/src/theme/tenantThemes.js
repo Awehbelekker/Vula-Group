@@ -51,25 +51,25 @@ export const TENANT_THEMES = {
 };
 
 /**
- * Map a login subdomain to a tenant id, e.g.
- *   offthehook.vula-ai.com → "off-the-hook"
- *   digg.vula-ai.com       → "digg-demo"
- * Falls back to null (generic Vula login) for the apex / vercel domain.
+ * Resolve a tenant id from the login hostname. Matches a known brand token
+ * anywhere in the host, so it works for BOTH the client's own domain and the
+ * vula-ai.com fallback:
+ *   admin.offthehook.co.za / offthehook.vula-ai.com → "off-the-hook"
+ *   admin.digg-ct.co.za     / digg.vula-ai.com       → "digg-demo"
+ * Returns null (generic Vula login) for the apex / master / vercel host.
  */
-const SUBDOMAIN_TENANTS = {
-  offthehook: "off-the-hook",
-  "off-the-hook": "off-the-hook",
-  digg: "digg-demo",
-  awake: "awake-sa",
-};
+const HOST_TENANT_MATCHERS = [
+  { tokens: ["offthehook", "off-the-hook"], tenant: "off-the-hook" },
+  { tokens: ["digg"], tenant: "digg-demo" },
+  { tokens: ["awake"], tenant: "awake-sa" },
+];
 
 export function resolveTenantFromHost(hostname = window.location.hostname) {
-  const sub = hostname.split(".")[0].toLowerCase();
-  // Ignore non-tenant hosts (apex, www, vercel preview, localhost)
-  if (["vula-ai", "www", "vuladashboard", "localhost", "127"].includes(sub)) {
-    return null;
+  const h = hostname.toLowerCase();
+  for (const m of HOST_TENANT_MATCHERS) {
+    if (m.tokens.some((tok) => h.includes(tok))) return m.tenant;
   }
-  return SUBDOMAIN_TENANTS[sub] || null;
+  return null; // vula-ai.com apex, vuladashboard.vercel.app, localhost → generic
 }
 
 /** Resolve a tenant's theme, falling back to the Vula default. */
