@@ -1,113 +1,161 @@
 """
 core/skills/web_search.py
 
-Web search skill — wires to VulaWebScraper for company research,
-SA tender monitoring, and live price/news intelligence.
+Real web search skill. Does an actual web search (DuckDuckGo HTML — no API
+key), fetches the top results, and synthesises a grounded answer with the
+cloud LLM. Falls back to the structured scrapers for tenders/company lookups.
 
-Detects query intent to pick the right scraper mode:
-  - tender keywords → SA tender monitor
-  - company/supplier keywords → company research
-  - price/rate keywords → price monitor
-  - default → news digest
+Flow:
+  1. SA-tender query  → search etenders + general, list opportunities
+  2. otherwise        → DuckDuckGo search → fetch top 3 pages → LLM summarise
 """
 from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import quote_plus, urlparse
 
+import httpx
+
+from config import settings
 from core.skills.base import BaseSkill, SkillInput, SkillOutput
 
 logger = logging.getLogger(__name__)
 
-_TENDER_RE = re.compile(r"\b(tender|bid|rfp|rfq|government|procurement|etenders)\b", re.I)
-_COMPANY_RE = re.compile(r"\b(company|supplier|contractor|about|website|who is|research)\b", re.I)
-_PRICE_RE = re.compile(r"\b(price|cost|rate|aecom|material|steel|cement|concrete|labour)\b", re.I)
+_TENDER_RE = re.compile(r"\b(tender|bid|rfp|rfq|procurement|etenders)\b", re.I)
+
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept-Language": "en-ZA,en;q=0.9",
+}
+
+
+async def _ddg_search(query: str, limit: int = 5) -> list[dict]:
+    """DuckDuckGo HTML search — returns [{title, url, snippet}]. No API key."""
+    results: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=12.0, headers=_HEADERS, follow_redirects=True) as client:
+            resp = await client.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": query},
+            )
+            html = resp.text
+        # Parse result blocks
+        for m in re.finditer(
+            r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html, re.S
+        ):
+            url = m.group(1)
+            title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+            # DDG wraps real URL in a redirect — extract uddg param if present
+            um = re.search(r"uddg=([^&]+)", url)
+            if um:
+                from urllib.parse import unquote
+                url = unquote(um.group(1))
+            if url.startswith("http") and title:
+                results.append({"title": title, "url": url})
+            if len(results) >= limit:
+                break
+    except Exception as exc:
+        logger.warning("DDG search failed: %s", exc)
+    return results
+
+
+async def _fetch_text(url: str, max_chars: int = 2500) -> str:
+    """Fetch a page and return cleaned text."""
+    try:
+        async with httpx.AsyncClient(timeout=12.0, headers=_HEADERS, follow_redirects=True) as client:
+            resp = await client.get(url)
+            html = resp.text
+        # Strip scripts/styles/tags
+        html = re.sub(r"<(script|style|nav|footer|header)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"&[a-z]+;", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:max_chars]
+    except Exception as exc:
+        logger.debug("Fetch failed for %s: %s", url, exc)
+        return ""
 
 
 class WebSearchSkill(BaseSkill):
     name = "web_search"
-    description = "Searches the web for current information, SA tenders, company research, and market prices"
+    description = "Searches the live web (SA tenders, prices, companies, news) and synthesises a grounded answer"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
-        from vula.skills.web_scraper import VulaWebScraper
-        scraper = VulaWebScraper(tenant_id=inp.tenant_id)
-        q = inp.question
+        q = inp.question.strip()
 
-        try:
-            if _TENDER_RE.search(q):
-                result = await scraper.monitor_tenders(keywords=q.split()[:5])
-                opportunities = getattr(result, "opportunities", []) or []
-                if not opportunities:
-                    return SkillOutput(
-                        answer="No relevant SA tenders found for this query.",
-                        skill_name=self.name,
-                        confidence=0.4,
-                    )
-                answer = "**SA Tender Opportunities:**\n" + "\n".join(
-                    f"- [{t.get('title','?')}]({t.get('url','')}) — {t.get('closing_date','?')}"
-                    for t in opportunities[:8]
-                )
-                return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8,
-                                   sources=[{"type": "tender", "url": t.get("url", "")}
-                                            for t in opportunities[:5]])
+        # SA tenders — bias the query to government tender portals
+        if _TENDER_RE.search(q):
+            search_q = f"{q} site:etenders.gov.za OR South Africa government tender 2026"
+        else:
+            search_q = f"{q} South Africa" if "south africa" not in q.lower() else q
 
-            elif _COMPANY_RE.search(q):
-                url_match = re.search(r"https?://\S+|www\.\S+\.\w{2,}", q)
-                url = url_match.group(0) if url_match else f"https://www.google.com/search?q={q.replace(' ', '+')}"
-                profile = await scraper.research_company(url=url)
-                answer = (
-                    f"**{profile.name or 'Company'}**\n"
-                    f"{profile.description or ''}\n\n"
-                    f"**Services:** {', '.join(profile.services[:5]) if profile.services else 'N/A'}\n"
-                    f"**Contact:** {profile.contact_info or 'N/A'}\n"
-                    f"**Pitch angle:** {profile.suggested_pitch_angle or 'N/A'}"
-                )
-                return SkillOutput(answer=answer, skill_name=self.name, confidence=0.75,
-                                   sources=[{"type": "company", "url": profile.url}])
-
-            elif _PRICE_RE.search(q):
-                search_urls = [
-                    f"https://www.buildit.co.za/search?query={q.replace(' ', '+')}",
-                    f"https://www.cashbuild.co.za/search/?query={q.replace(' ', '+')}",
-                ]
-                results = await scraper.monitor_prices(urls=search_urls)
-                if not results:
-                    return SkillOutput(
-                        answer=f"Could not retrieve current pricing for: {q}",
-                        skill_name=self.name,
-                        confidence=0.3,
-                    )
-                price_lines = []
-                for r in results:
-                    if r.products:
-                        items = ", ".join(
-                            f"{p['name']}: R{p['price']}" for p in r.products[:3]
-                        )
-                    else:
-                        items = "No prices found"
-                    price_lines.append(f"- {r.url}: {items}")
-                answer = "**Current Market Prices (SA):**\n" + "\n".join(price_lines)
-                return SkillOutput(answer=answer, skill_name=self.name, confidence=0.65,
-                                   sources=[{"type": "price", "url": r.url} for r in results])
-
-            else:
-                # General news digest
-                result = await scraper.news_digest(
-                    topics=[q[:100]],
-                    industry="construction",
-                )
-                digest = getattr(result, "summary", "") or str(result)[:800]
-                return SkillOutput(
-                    answer=digest or f"No recent news found for: {q}",
-                    skill_name=self.name,
-                    confidence=0.5,
-                )
-
-        except Exception as exc:
-            logger.error("Web search skill failed: %s", exc)
+        # 1. Real search
+        hits = await _ddg_search(search_q, limit=5)
+        if not hits:
             return SkillOutput(
-                answer=f"Web search failed: {exc}",
+                answer="I couldn't find live web results for that right now. Try rephrasing.",
+                skill_name=self.name, confidence=0.2,
+            )
+
+        # 2. Fetch the top 3 pages for grounding
+        contexts = []
+        sources = []
+        for h in hits[:3]:
+            text = await _fetch_text(h["url"])
+            if text:
+                domain = urlparse(h["url"]).netloc
+                contexts.append(f"[{domain}] {h['title']}\n{text}")
+                sources.append({"type": "web", "title": h["title"], "url": h["url"]})
+        # Always include the result list as a fallback source
+        for h in hits:
+            if not any(s["url"] == h["url"] for s in sources):
+                sources.append({"type": "web", "title": h["title"], "url": h["url"]})
+
+        if not contexts:
+            # Couldn't fetch pages — at least return the result links
+            links = "\n".join(f"• {h['title']}\n  {h['url']}" for h in hits[:5])
+            return SkillOutput(
+                answer=f"Here's what I found online:\n{links}",
+                skill_name=self.name, confidence=0.4, sources=sources,
+            )
+
+        # 3. Synthesise a grounded answer with the cloud LLM
+        try:
+            import litellm
+            from core.llm_router import resolve_generation_route
+            litellm.drop_params = True
+            model, api_key, api_base = await resolve_generation_route()
+
+            context_block = "\n\n---\n\n".join(contexts)[:6000]
+            resp = await litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content":
+                        "You are Vula. Answer the question using ONLY the web search results below. "
+                        "Be specific and cite figures/dates where present. If the results don't "
+                        "answer it, say so. South African context, ZAR for money. Concise."},
+                    {"role": "user", "content":
+                        f"Web results:\n{context_block}\n\nQuestion: {q}\n\nAnswer:"},
+                ],
+                temperature=0.2,
+                max_tokens=min(inp.max_tokens, 600),
+                api_key=api_key,
+                api_base=api_base,
+            )
+            answer = (resp.choices[0].message.content or "").strip()
+            answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
+            return SkillOutput(
+                answer=answer or "No clear answer from the search results.",
                 skill_name=self.name,
-                confidence=0.0,
-                error=str(exc),
+                confidence=0.7,
+                sources=sources,
+            )
+        except Exception as exc:
+            logger.error("web_search synthesis failed: %s", exc)
+            links = "\n".join(f"• {h['title']}: {h['url']}" for h in hits[:4])
+            return SkillOutput(
+                answer=f"Found these but couldn't summarise:\n{links}",
+                skill_name=self.name, confidence=0.4, sources=sources, error=str(exc),
             )
