@@ -15,6 +15,11 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../store/auth'
+import { resolveTenantFromHost, getTenantTheme } from '../theme/tenantThemes'
+
+// If reached via a tenant subdomain (offthehook.vula-ai.com), brand the login.
+const LOGIN_TENANT = resolveTenantFromHost()
+const LOGIN_THEME = LOGIN_TENANT ? getTenantTheme(LOGIN_TENANT) : null
 
 const COLORS = {
   bg: '#F7F4EE',
@@ -149,8 +154,22 @@ export default function VulaLogin({ onSuccess }) {
     <div style={s.outer}>
       <div style={s.card}>
         <div style={s.logoWrap}>
-          <span style={s.logoText}>Vula</span>
-          <span style={s.logoSub}>Business Dashboard</span>
+          {LOGIN_THEME ? (
+            <>
+              {LOGIN_THEME.logoUrl ? (
+                <img src={LOGIN_THEME.logoUrl} alt={LOGIN_THEME.name}
+                     style={{ height: 40, width: 'auto', objectFit: 'contain', marginBottom: 6 }} />
+              ) : (
+                <span style={{ ...s.logoText, color: LOGIN_THEME.accent }}>{LOGIN_THEME.name}</span>
+              )}
+              <span style={s.logoSub}>Powered by Vula</span>
+            </>
+          ) : (
+            <>
+              <span style={s.logoText}>Vula</span>
+              <span style={s.logoSub}>Business Dashboard</span>
+            </>
+          )}
         </div>
 
         {mode === 'login' && (
@@ -220,9 +239,12 @@ function Field({ label, type, value, onChange, placeholder }) {
 }
 
 function Btn({ children, disabled }) {
+  const activeStyle = LOGIN_THEME
+    ? { ...s.btn, background: LOGIN_THEME.accent }
+    : s.btn
   return (
     <button type="submit" disabled={disabled}
-      style={disabled ? s.btnDisabled : s.btn}>
+      style={disabled ? s.btnDisabled : activeStyle}>
       {children}
     </button>
   )

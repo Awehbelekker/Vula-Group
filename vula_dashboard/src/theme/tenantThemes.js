@@ -39,7 +39,38 @@ export const TENANT_THEMES = {
     logoUrl: null,
     tagline: "Premium eFoil distribution",
   },
+  "digg-demo": {
+    name: "DIGG Architecture",
+    accent: "#1E1E1E",                       // architectural charcoal (placeholder)
+    accentDark: "#000000",
+    accentSoft: "rgba(30,30,30,0.08)",
+    ink: "#1E1E1E",
+    logoUrl: null,                           // TODO: DIGG logo URL
+    tagline: "Architecture & spatial design",
+  },
 };
+
+/**
+ * Map a login subdomain to a tenant id, e.g.
+ *   offthehook.vula-ai.com → "off-the-hook"
+ *   digg.vula-ai.com       → "digg-demo"
+ * Falls back to null (generic Vula login) for the apex / vercel domain.
+ */
+const SUBDOMAIN_TENANTS = {
+  offthehook: "off-the-hook",
+  "off-the-hook": "off-the-hook",
+  digg: "digg-demo",
+  awake: "awake-sa",
+};
+
+export function resolveTenantFromHost(hostname = window.location.hostname) {
+  const sub = hostname.split(".")[0].toLowerCase();
+  // Ignore non-tenant hosts (apex, www, vercel preview, localhost)
+  if (["vula-ai", "www", "vuladashboard", "localhost", "127"].includes(sub)) {
+    return null;
+  }
+  return SUBDOMAIN_TENANTS[sub] || null;
+}
 
 /** Resolve a tenant's theme, falling back to the Vula default. */
 export function getTenantTheme(tenantId) {
