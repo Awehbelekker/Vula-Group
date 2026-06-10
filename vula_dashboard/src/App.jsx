@@ -56,9 +56,16 @@ const TENANT_NAMES = {
   "awake-sa": "Awake South Africa",
 };
 
+// Tenants the master account can switch between.
+const MASTER_TENANTS = [
+  { id: "digg-demo", label: "DIGG Architecture" },
+  { id: "off-the-hook", label: "Off the Hook" },
+];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [route, setRoute] = useState(window.location.hash);
+  const [masterTenant, setMasterTenant] = useState("digg-demo");
   const { user, role, tenantId, logout } = useAuthStore();
 
   // Track hash changes for public legal routes
@@ -87,8 +94,10 @@ export default function App() {
   if (route === "#/terms") return <VulaPrivacy view="terms" />;
   if (route === "#/data-deletion") return <VulaPrivacy view="data-deletion" />;
 
-  // Resolve effective tenant — master sees digg-demo as default, owners see their own
-  const effectiveTenantId = tenantId && tenantId !== "master" ? tenantId : "digg-demo";
+  // Resolve effective tenant — master picks via the switcher; owners see their own
+  const effectiveTenantId = (role === "master")
+    ? masterTenant
+    : (tenantId && tenantId !== "master" ? tenantId : "digg-demo");
 
   const ActiveComponent = TABS.find((t) => t.id === activeTab)?.component ?? VulaDashboard;
 
@@ -187,6 +196,22 @@ export default function App() {
 
         {/* User + logout */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12, paddingRight: 8 }}>
+          {role === "master" && (
+            <select
+              value={masterTenant}
+              onChange={(e) => setMasterTenant(e.target.value)}
+              title="Switch tenant"
+              style={{
+                padding: "6px 10px", border: `1px solid ${COLORS.border}`,
+                borderRadius: 6, background: COLORS.surface, color: COLORS.charcoal,
+                fontSize: 12, fontFamily: "system-ui", cursor: "pointer",
+              }}
+            >
+              {MASTER_TENANTS.map((t) => (
+                <option key={t.id} value={t.id}>{t.label}</option>
+              ))}
+            </select>
+          )}
           <span style={{ fontSize: 12, color: COLORS.muted, fontFamily: "system-ui" }}>
             {user.email} {role === "master" ? "· master" : ""}
           </span>

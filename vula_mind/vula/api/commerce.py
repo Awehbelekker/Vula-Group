@@ -622,6 +622,73 @@ async def admin_list_broadcasts(tenant_id: str, limit: int = Query(50)):
     return {"broadcasts": result.data or [], "count": len(result.data or [])}
 
 
+@router.post("/{tenant_id}/admin/broadcasts/draft")
+async def admin_draft_broadcast(tenant_id: str, body: dict):
+    """AI-write a WhatsApp broadcast from rough details the owner provides.
+
+    Body:
+        details:      raw info, e.g. "yellowtail 180, snoek 95, kob 220, free delivery over R500"
+        message_type: weekly_fish | new_stock | reorder | promo | delivery (optional)
+
+    Returns a polished, on-brand WhatsApp broadcast message the owner can
+    review, edit, and send.
+    """
+    details = (body.get("details") or "").strip()
+    msg_type = body.get("message_type", "weekly_fish")
+    if not details:
+        raise HTTPException(status_code=400, detail="Provide some details to write from.")
+
+    # Pull the tenant's brand voice from its KB for on-brand tone
+    brand_context = ""
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        kb = VulaIngestionPipeline(tenant_id=tenant_id)
+        chunks = await kb.query("brand voice tone about us what we sell", top_k=2)
+        brand_context = "\n".join(c.get("text", "")[:400] for c in chunks)
+    except Exception:
+        pass
+
+    type_hint = {
+        "weekly_fish": "this week's fresh catch with prices",
+        "new_stock":   "a new stock arrival announcement",
+        "reorder":     "a friendly reminder to reorder",
+        "promo":       "a special promotion or limited-time offer",
+        "delivery":    "a delivery-day reminder",
+    }.get(msg_type, "a customer update")
+
+    try:
+        import litellm
+        from core.llm_router import resolve_generation_route
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[
+                {"role": "system", "content":
+                    "You write short, warm WhatsApp broadcast messages for a South African "
+                    "food business. Rules: under 60 words, friendly but not cheesy, ZAR prices, "
+                    "1-2 relevant emoji max, end with a clear call to action to order on WhatsApp. "
+                    "Output ONLY the message text — no preamble, no quotes." +
+                    (f"\n\nBrand voice:\n{brand_context}" if brand_context else "")},
+                {"role": "user", "content":
+                    f"Write {type_hint}. Details from the owner: {details}"},
+            ],
+            temperature=0.6,
+            max_tokens=200,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        import re as _re
+        text = (resp.choices[0].message.content or "").strip()
+        text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.DOTALL).strip()
+        text = text.strip('"').strip()
+        return {"ok": True, "message": text, "message_type": msg_type}
+    except Exception as exc:
+        log.error("Broadcast draft failed for %s: %s", tenant_id, exc)
+        raise HTTPException(status_code=502, detail=f"Could not draft message: {exc}")
+
+
 @router.post("/{tenant_id}/admin/broadcasts/send")
 async def admin_send_broadcast(tenant_id: str, body: dict):
     """

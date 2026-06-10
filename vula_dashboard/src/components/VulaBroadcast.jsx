@@ -8,14 +8,16 @@
 
 import { useState, useEffect, useCallback } from 'react'
 
-const VULA_API = import.meta.env.VITE_API_URL ?? '/api'
+const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+const API_KEY  = import.meta.env.VITE_API_KEY  || ''
+const H = { 'Content-Type': 'application/json', ...(API_KEY ? { 'X-API-Key': API_KEY } : {}) }
 
 const TEMPLATES = [
-  { id: 'oth_weekly_fish',        label: '🐟 Weekly fish specials',         hint: 'This week\'s fresh catch + prices' },
-  { id: 'oth_new_stock',          label: '📦 New stock arrived',             hint: 'Fresh delivery announcement' },
-  { id: 'oth_reorder_reminder',   label: '🔔 Reorder reminder',             hint: 'Remind customers who haven\'t ordered in 2+ weeks' },
-  { id: 'oth_seasonal_promo',     label: '🎉 Seasonal promotion',            hint: 'Special discount or limited-time offer' },
-  { id: 'oth_delivery_update',    label: '🚚 Delivery slot reminder',        hint: 'Remind customers about delivery days' },
+  { id: 'weekly_fish',   label: '🐟 Weekly fish specials', hint: 'This week\'s fresh catch + prices' },
+  { id: 'new_stock',     label: '📦 New stock arrived',    hint: 'Fresh delivery announcement' },
+  { id: 'reorder',       label: '🔔 Reorder reminder',     hint: 'Customers who haven\'t ordered in 2+ weeks' },
+  { id: 'promo',         label: '🎉 Seasonal promotion',   hint: 'Special discount or limited-time offer' },
+  { id: 'delivery',      label: '🚚 Delivery reminder',    hint: 'Remind customers about delivery days' },
 ]
 
 const AUDIENCES = [
@@ -29,10 +31,32 @@ export default function VulaBroadcast({ tenantId }) {
   const [loading, setLoading] = useState(true)
   const [template, setTemplate] = useState(TEMPLATES[0].id)
   const [audience, setAudience] = useState('all')
+  const [details, setDetails] = useState('')    // raw details Stacy types for the AI
+  const [bodyText, setBodyText] = useState('')   // the actual message that gets sent
+  const [drafting, setDrafting] = useState(false)
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(null)       // live-send result {sent, failed, recipient_count}
   const [preview, setPreview] = useState(null)  // dry-run result {recipient_count, sample}
   const [error, setError] = useState(null)
+
+  // Ask the AI assistant to write the broadcast from rough details
+  async function writeWithAI() {
+    if (!details.trim()) { setError('Type a few details first (e.g. the catch + prices).'); return }
+    setDrafting(true); setError(null)
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/draft`, {
+        method: 'POST', headers: H,
+        body: JSON.stringify({ details, message_type: template }),
+      })
+      const d = await r.json()
+      if (r.ok && d.message) setBodyText(d.message)
+      else setError(d.detail || 'Could not write the message')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setDrafting(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -48,11 +72,12 @@ export default function VulaBroadcast({ tenantId }) {
 
   // Step 1 — preview (dry-run): who would this reach? No messages sent.
   async function previewBroadcast() {
+    if (!bodyText.trim()) { setError('Write the message first (type it or use ✨ Write with AI).'); return }
     setSending(true); setError(null); setSent(false); setPreview(null)
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_name: template, audience_filter: audience, dry_run: true }),
+        method: 'POST', headers: H,
+        body: JSON.stringify({ body: bodyText, audience_filter: audience, dry_run: true }),
       })
       const d = await r.json()
       if (r.ok) setPreview(d)
@@ -70,11 +95,11 @@ export default function VulaBroadcast({ tenantId }) {
     try {
       const tpl = TEMPLATES.find(t => t.id === template)
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_name: template, audience_filter: audience, name: tpl?.label, dry_run: false }),
+        method: 'POST', headers: H,
+        body: JSON.stringify({ body: bodyText, audience_filter: audience, name: tpl?.label, dry_run: false }),
       })
       const d = await r.json()
-      if (r.ok) { setSent(d); setPreview(null); load() }
+      if (r.ok) { setSent(d); setPreview(null); setDetails(''); load() }
       else setError(d.detail || 'Send failed')
     } catch (err) {
       setError(err.message)
@@ -108,6 +133,32 @@ export default function VulaBroadcast({ tenantId }) {
             </button>
           ))}
         </div>
+
+        {/* AI writer — type rough details, let Vula write the message */}
+        <p style={s.sectionLabel}>Your details (let AI write it for you)</p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <input
+            value={details}
+            onChange={e => setDetails(e.target.value)}
+            placeholder="e.g. yellowtail R180, snoek R95, kob R220, free delivery over R500"
+            style={{ ...s.input, flex: 1 }}
+            onKeyDown={e => { if (e.key === 'Enter') writeWithAI() }}
+          />
+          <button onClick={writeWithAI} disabled={drafting} style={drafting ? s.btnDisabled : s.aiBtn}>
+            {drafting ? 'Writing…' : '✨ Write with AI'}
+          </button>
+        </div>
+
+        {/* The actual message — editable, whether typed or AI-written */}
+        <p style={s.sectionLabel}>Message to send (edit anything)</p>
+        <textarea
+          value={bodyText}
+          onChange={e => setBodyText(e.target.value)}
+          placeholder="Type your message here, or use ✨ Write with AI above. This is exactly what customers receive."
+          style={s.textarea}
+          rows={4}
+        />
+        <p style={s.charCount}>{bodyText.length} characters</p>
 
         <p style={s.sectionLabel}>Audience</p>
         <div style={s.audRow}>
@@ -201,7 +252,11 @@ const s = {
   h3:           { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: '0 0 4px' },
   sub:          { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0, lineHeight: 1.5 },
   composeCard:  { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 18, marginBottom: 20 },
-  sectionLabel: { fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' },
+  sectionLabel: { fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, color: '#1E1E1E', margin: '16px 0 8px' },
+  input:        { padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, fontFamily: 'system-ui', outline: 'none', boxSizing: 'border-box' },
+  textarea:     { width: '100%', padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, fontFamily: 'system-ui', outline: 'none', boxSizing: 'border-box', resize: 'vertical' },
+  aiBtn:        { padding: '10px 16px', background: '#C4861A', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', whiteSpace: 'nowrap' },
+  charCount:    { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '4px 0 0', textAlign: 'right' },
   tplList:      { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 },
   tplBtn:       { background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2 },
   tplBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid var(--accent, #2C5545)' },
