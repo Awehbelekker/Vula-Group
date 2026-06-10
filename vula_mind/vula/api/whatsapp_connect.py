@@ -197,16 +197,19 @@ async def connect_whatsapp(body: ConnectRequest):
 async def whatsapp_status(tenant_id: str):
     """Check WhatsApp connection status for a tenant."""
     db = _supabase()
+    # .limit(1) (not .maybe_single) — maybe_single 406s on zero rows in this
+    # supabase-py version, which would show a fresh tenant as 'error'.
     result = (
         db.table("vula_whatsapp_accounts")
         .select("tenant_id,phone_number,phone_number_id,waba_id,verified_name,status,webhook_registered,connected_at")
         .eq("tenant_id", tenant_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    if not result.data:
+    rows = result.data or []
+    if not rows:
         return {"tenant_id": tenant_id, "status": "not_connected"}
-    return result.data
+    return rows[0]
 
 
 @router.get("/accounts")
