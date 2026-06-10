@@ -412,14 +412,52 @@ async def _handle_document_ingest(phone: str, media_id: str, filename: str, mime
             except Exception as scan_exc:
                 logger.debug("Auto-scan skipped for %s: %s", filename, scan_exc)
 
+        # Classify the document so it's "filed accordingly"
+        doc_category = _classify_document(result.filename, local_path)
+
         await _send_reply(
             phone,
-            f"✅ '{result.filename}' ingested — {result.chunks_stored} knowledge chunks added. "
-            f"I can now answer questions about this document.{scan_msg}"
+            f"✅ Filed '{result.filename}' as *{doc_category}* — "
+            f"{result.chunks_stored} knowledge chunks added. "
+            f"I can now answer questions about it.{scan_msg}"
         )
     except Exception as exc:
         logger.error("Document ingest failed for %s: %s", phone, exc)
         await _send_reply(phone, f"Something went wrong ingesting '{filename}'. Please try again.")
+
+
+def _classify_document(filename: str, path) -> str:
+    """Classify an uploaded document so it's filed under the right category.
+
+    Looks at the filename and the first part of the extracted text for
+    construction/business document signals.
+    """
+    name = (filename or "").lower()
+    sample = ""
+    try:
+        if path.suffix.lower() in (".txt", ".csv", ".md"):
+            sample = path.read_text(encoding="utf-8", errors="ignore")[:1500].lower()
+    except Exception:
+        pass
+    blob = name + " " + sample
+
+    rules = [
+        ("Fee Proposal / Schedule", ["fee proposal", "fee schedule", "fee estimate", "sacap fee", "professional fee"]),
+        ("Contract / Agreement",    ["jbcc", "agreement", "contract", "procsa", "appointment", "terms and conditions"]),
+        ("Bill of Quantities (BOQ)",["bill of quantities", "boq", "quantities", "measured"]),
+        ("Quote / Estimate",        ["quotation", "quote", "estimate", "pricing"]),
+        ("Invoice",                 ["invoice", "tax invoice", "vat no", "amount due"]),
+        ("Drawing / Plan",          ["drawing", "floor plan", "elevation", "section", "site plan", ".dwg"]),
+        ("Specification",           ["specification", "spec", "scope of works", "scope of work"]),
+        ("Meeting Minutes",         ["minutes", "site meeting", "progress meeting"]),
+        ("Programme / Schedule",    ["programme", "gantt", "construction schedule", "critical path"]),
+        ("Report",                  ["report", "assessment", "inspection"]),
+        ("Tender Document",         ["tender", "rfp", "rfq", "bid"]),
+    ]
+    for label, keywords in rules:
+        if any(k in blob for k in keywords):
+            return label
+    return "General Document"
 
 
 async def _download_document(media_id: str, tenant_id: str, filename: str, mime_type: str):
