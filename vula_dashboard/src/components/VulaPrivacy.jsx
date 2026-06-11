@@ -70,6 +70,10 @@ function DataDeletion() {
         <li>Your WhatsApp number, name, and message history with Vula</li>
         <li>Documents you uploaded and the knowledge base built from them</li>
         <li>Any business records (orders, expenses, tasks) stored on your behalf</li>
+        <li>
+          For connected businesses: your WhatsApp Business Account credentials — disconnect
+          in Settings → WhatsApp to revoke the access token immediately, or email us to remove it.
+        </li>
       </ul>
 
       <h2 style={style.h2}>Timeframe</h2>
@@ -116,12 +120,25 @@ function Privacy() {
         <li>To improve the accuracy of responses for your business over time</li>
       </ul>
 
-      <h2 style={style.h2}>3. WhatsApp messaging</h2>
+      <h2 style={style.h2}>3. WhatsApp Business Platform & connecting your account</h2>
       <p style={style.p}>
-        We use the WhatsApp Business Platform (Meta) to send and receive messages. Your
-        messages are processed to provide the service you requested. We do not send
-        unsolicited marketing without your opt-in. You can stop messages at any time by
-        replying STOP.
+        Vula is a technology provider on the WhatsApp Business Platform (Meta). Businesses
+        connect their own WhatsApp Business Account (WABA) to Vula through Meta's secure
+        Embedded Signup flow. With the business's authorisation, we access and store only
+        what is needed to operate their messaging: the WhatsApp Business Account ID, phone
+        number ID, display name, and an access token. We use this solely to send and
+        receive messages on that business's behalf and to register the message webhook.
+      </p>
+      <p style={style.p}>
+        For a connected business, Vula processes the messages between that business and its
+        customers to provide ordering, support, confirmations, and opt-in broadcasts. We act
+        as a processor on the business's behalf for its customers' data. We do not use
+        WhatsApp data for advertising, we do not sell it, and we do not share it with any
+        third party except the sub-processors listed in section 5. Our use of the WhatsApp
+        Business Platform complies with Meta's Platform Terms and the WhatsApp Business
+        Messaging Policy. We do not send unsolicited marketing without opt-in, and recipients
+        can stop messages at any time by replying STOP. A business can disconnect at any time
+        (Settings → WhatsApp), which revokes the token and stops all messaging immediately.
       </p>
 
       <h2 style={style.h2}>4. Data storage and security</h2>
@@ -132,11 +149,22 @@ function Privacy() {
         required by law.
       </p>
 
-      <h2 style={style.h2}>5. Sharing</h2>
+      <h2 style={style.h2}>5. Sharing & sub-processors</h2>
       <p style={style.p}>
-        We do not sell your personal information. We share data only with service
-        providers necessary to operate Vula (cloud hosting, AI inference, payment
-        processing) under strict confidentiality, and where required by South African law.
+        We do not sell your personal information. We share data only with the service
+        providers necessary to operate Vula, under strict confidentiality, and where
+        required by South African law:
+      </p>
+      <ul style={style.ul}>
+        <li><strong>Meta Platforms</strong> — WhatsApp Business Platform (message delivery)</li>
+        <li><strong>Supabase</strong> — encrypted database & file storage</li>
+        <li><strong>Railway</strong> — application hosting</li>
+        <li><strong>OpenRouter</strong> — AI model inference for assistant responses</li>
+        <li><strong>Yoco / PayFast</strong> — payment processing (when you transact)</li>
+      </ul>
+      <p style={style.p}>
+        Data obtained through the WhatsApp Business Platform is used only to provide the
+        Vula service to the connected business and is never used for advertising or sold.
       </p>
 
       <h2 style={style.h2}>6. Your rights (POPIA)</h2>
