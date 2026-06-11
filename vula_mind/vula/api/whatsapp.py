@@ -29,6 +29,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 
 from config import settings
 
@@ -66,11 +67,15 @@ async def verify_webhook(
     hub_mode: str = Query(alias="hub.mode", default=""),
     hub_verify_token: str = Query(alias="hub.verify_token", default=""),
     hub_challenge: str = Query(alias="hub.challenge", default=""),
-) -> int:
-    """Meta calls this once to verify your webhook URL."""
+) -> PlainTextResponse:
+    """Meta calls this once to verify your webhook URL.
+
+    Meta expects the challenge echoed back verbatim as plain text — it is an
+    opaque string, not always numeric, so don't cast it to int.
+    """
     if hub_mode == "subscribe" and hub_verify_token == settings.whatsapp_verify_token:
         logger.info("WhatsApp webhook verified")
-        return int(hub_challenge)
+        return PlainTextResponse(hub_challenge)
     raise HTTPException(status_code=403, detail="Webhook verification failed")
 
 
