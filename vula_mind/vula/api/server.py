@@ -581,7 +581,7 @@ async def _send_oth_sales_summary() -> None:
     async with _httpx.AsyncClient(timeout=10.0) as client:
         for name, number in team:
             try:
-                await client.post(
+                resp = await client.post(
                     f"https://graph.facebook.com/v19.0/{phone_id}/messages",
                     headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
                     json={
@@ -591,7 +591,16 @@ async def _send_oth_sales_summary() -> None:
                         "text": {"body": msg[:4096]},
                     },
                 )
-                log.info("OTH sales summary sent to %s (%s)", name, number)
+                if resp.is_success:
+                    log.info("OTH sales summary sent to %s (%s)", name, number)
+                else:
+                    # Free-text to an owner only delivers inside the 24h service
+                    # window. Outside it, Meta returns 400/131047 — this needs an
+                    # approved business-initiated TEMPLATE to deliver reliably.
+                    log.warning(
+                        "OTH summary to %s NOT delivered (HTTP %s): %s",
+                        name, resp.status_code, resp.text[:200],
+                    )
             except Exception as exc:
                 log.warning("OTH summary to %s failed: %s", name, exc)
 
