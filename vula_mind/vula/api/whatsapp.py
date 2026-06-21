@@ -46,7 +46,8 @@ _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IG
 # Commerce tenant WhatsApp number IDs — maps Meta phone_number_id → tenant_id
 # Off the Hook: +27 73 781 5979 — Phone Number ID confirmed 2026-05-30
 _COMMERCE_PHONE_IDS: dict[str, str] = {
-    "251439416636328": "off-the-hook",
+    "1270361586150560": "off-the-hook",  # +27 67 373 6081 — dedicated OTH orders bot line
+    "251439416636328":  "off-the-hook",  # +27 73 781 5979 (legacy; to be retired to Stacy's personal)
 }
 
 # Commerce order keywords — triggers seafood ordering flow
