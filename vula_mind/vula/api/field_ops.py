@@ -173,10 +173,7 @@ async def assign_task(body: TaskAssignIn) -> dict:
         raise HTTPException(status_code=404, detail="Contractor not found")
 
     db.update_task_status(task.id, "in_progress")
-    with __import__("sqlite3").connect(db.db_path) as conn:
-        conn.execute("UPDATE tasks SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
-                     (body.contractor_id, task.id))
-        conn.commit()
+    db.set_task_assignee(task.id, body.contractor_id)
 
     wa_sent = False
     if body.send_whatsapp:

@@ -969,11 +969,41 @@ async def _download_media(media_id: str, contractor_id: str, task_id: str) -> st
         ext = content_type.split("/")[-1].split(";")[0].strip() or "jpg"
         path = evidence_dir / f"{media_id}.{ext}"
         path.write_bytes(dl.content)
-        return str(path)
+
+        # Upload to Supabase Storage so the photo is durable (volume is ephemeral).
+        durable_url = _upload_evidence_to_storage(
+            dl.content, f"{task_id}/{media_id}.{ext}", content_type
+        )
+        return durable_url or str(path)
 
     except Exception as exc:
         logger.error("Media download failed for %s: %s", media_id, exc)
         return f"media://{media_id}"
+
+
+def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str) -> Optional[str]:
+    """Upload an evidence photo to the Supabase 'evidence' bucket. Returns a
+    public URL, or None on failure (caller falls back to the local path)."""
+    try:
+        from vula.models.field_ops import _client
+        sb = _client()
+        bucket = "evidence"
+        try:
+            sb.storage.create_bucket(bucket, options={"public": True})
+        except Exception:
+            pass  # already exists
+        try:
+            sb.storage.from_(bucket).upload(
+                object_path, data,
+                {"content-type": content_type, "upsert": "true"},
+            )
+        except Exception as up_exc:
+            if "exists" not in str(up_exc).lower():
+                raise
+        return sb.storage.from_(bucket).get_public_url(object_path)
+    except Exception as exc:
+        logger.warning("Evidence storage upload failed (%s) — using local path", exc)
+        return None
 
 
 async def _assess_evidence_photo(photo_path: str, task_title: str, task_desc: str) -> str:
