@@ -135,6 +135,14 @@ async def receive_message(
         for change in entry.get("changes", []):
             value = change.get("value", {})
             messages = value.get("messages", [])
+            # Diagnostic: log what each webhook event actually carries so we can
+            # tell real messages apart from status callbacks during testing.
+            _pnid = value.get("metadata", {}).get("phone_number_id", "")
+            logger.info(
+                "WA webhook: field=%s pnid=%s messages=%d statuses=%d",
+                change.get("field", ""), _pnid,
+                len(messages), len(value.get("statuses", [])),
+            )
             for msg in messages:
                 phone = msg.get("from", "")
                 msg_id = msg.get("id", "")
