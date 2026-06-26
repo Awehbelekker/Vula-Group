@@ -38,9 +38,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["whatsapp"])
 
 # Intent keywords (case-insensitive)
-_DONE_RE = re.compile(r"^\s*(done|yes|complete|completed|finish|finished|klaar)\s*$", re.IGNORECASE)
-_APPROVE_RE = re.compile(r"^\s*approve[d]?\s*(.*)$", re.IGNORECASE)
-_REJECT_RE = re.compile(r"^\s*reject\s*(.*)$", re.IGNORECASE)
+_DONE_RE = re.compile(r"^\s*(done|complete|completed|finish|finished|klaar)\s*$", re.IGNORECASE)
+# Note: 'yes' intentionally not a DONE trigger — too ambiguous with approvals/chat.
+# Tolerant of common misspellings: aprove, approve, approove, authorise, accept…
+_APPROVE_RE = re.compile(
+    r"^\s*(?:approv\w*|aprrov\w*|aprov\w*|aproov\w*|authoriz\w*|authoris\w*|accept\w*|goedgekeur)\b\s*(.*)$",
+    re.IGNORECASE,
+)
+_REJECT_RE = re.compile(
+    r"^\s*(?:reject\w*|rejct\w*|declin\w*|deny|denied|afgekeur)\b\s*(.*)$",
+    re.IGNORECASE,
+)
 _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
 
 # ── Number → tenant router ────────────────────────────────────────────────────
