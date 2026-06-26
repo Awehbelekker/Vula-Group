@@ -834,7 +834,8 @@ async def _handle_task_complete(phone: str, tenant_id: str) -> None:
         phone,
         f"Task '{task.title}' marked as complete. "
         f"Your site manager has been notified and will sign it off. "
-        f"Send photos of the finished work if required."
+        f"Send photos of the finished work if required.",
+        tenant_id,
     )
 
     # Notify managers
@@ -844,7 +845,8 @@ async def _handle_task_complete(phone: str, tenant_id: str) -> None:
         await _send_reply(
             manager["phone"],
             f"✅ {contractor.name} completed task '{task.title}' (project {task.project_id}).\n"
-            f"Reply APPROVE or REJECT <reason>."
+            f"Reply APPROVE or REJECT <reason>.",
+            tenant_id,
         )
 
 
@@ -866,12 +868,14 @@ async def _handle_sign_off_reply(phone: str, tenant_id: str, decision: str, note
             await _send_reply(
                 phone,
                 "Only site managers and architects can approve tasks. "
-                "Reply DONE to mark your own work complete."
+                "Reply DONE to mark your own work complete.",
+                tenant_id,
             )
         else:
             await _send_reply(
                 phone,
-                "I couldn't find your profile. Ask your site manager to add you to the project in Vula."
+                "I couldn't find your profile. Ask your site manager to add you to the project in Vula.",
+                tenant_id,
             )
         return
 
@@ -881,7 +885,8 @@ async def _handle_sign_off_reply(phone: str, tenant_id: str, decision: str, note
         await _send_reply(
             phone,
             "No tasks are currently awaiting your sign-off. "
-            "Check the Vula dashboard for the latest project status."
+            "Check the Vula dashboard for the latest project status.",
+            tenant_id,
         )
         return
 
@@ -894,21 +899,23 @@ async def _handle_sign_off_reply(phone: str, tenant_id: str, decision: str, note
     db.record_sign_off(task_id, phone, decision, notes)
 
     if decision == "approved":
-        await _send_reply(phone, f"Task '{task_title}' approved ✅. {contractor_name} has been notified.")
+        await _send_reply(phone, f"Task '{task_title}' approved ✅. {contractor_name} has been notified.", tenant_id)
         if contractor_phone:
             await _send_reply(
                 contractor_phone,
                 f"Your work on '{task_title}' has been approved by your site manager. "
-                f"Well done! Check the Vula app for your next task."
+                f"Well done! Check the Vula app for your next task.",
+                tenant_id,
             )
     else:
         reason = notes or "no reason given"
-        await _send_reply(phone, f"Task '{task_title}' rejected. {contractor_name} has been notified.")
+        await _send_reply(phone, f"Task '{task_title}' rejected. {contractor_name} has been notified.", tenant_id)
         if contractor_phone:
             await _send_reply(
                 contractor_phone,
                 f"Your work on '{task_title}' needs attention: {reason}. "
-                f"Please fix and reply DONE when ready for re-inspection."
+                f"Please fix and reply DONE when ready for re-inspection.",
+                tenant_id,
             )
 
 
