@@ -286,13 +286,18 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     approve_m = _APPROVE_RE.match(text)
     if approve_m:
         notes = approve_m.group(1).strip()
-        await _handle_sign_off_reply(phone, tenant_id, "approved", notes)
+        # Generic approval engine first (invoices, multi-approver), then field-ops.
+        from vula.commerce.approvals import record_decision
+        if not await record_decision(phone, "approved", notes):
+            await _handle_sign_off_reply(phone, tenant_id, "approved", notes)
         return
 
     reject_m = _REJECT_RE.match(text)
     if reject_m:
         notes = reject_m.group(1).strip()
-        await _handle_sign_off_reply(phone, tenant_id, "rejected", notes)
+        from vula.commerce.approvals import record_decision
+        if not await record_decision(phone, "rejected", notes):
+            await _handle_sign_off_reply(phone, tenant_id, "rejected", notes)
         return
 
     # ── KB / RAG — staff and admin only ─────────────────────────────────────

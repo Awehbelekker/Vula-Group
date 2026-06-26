@@ -388,6 +388,44 @@ async def admin_delete_invoice(tenant_id: str, invoice_id: str):
     return {"deleted": invoice_id}
 
 
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/request-approval")
+async def admin_request_invoice_approval(tenant_id: str, invoice_id: str, body: dict):
+    """Route an invoice for approval before it's sent to the client.
+
+    body: {
+      "approvers": [{"phone": "...", "name": "...", "role": "architect"}],
+      "deliver_via": "whatsapp" | "email" | "both",   # how to send once approved
+      "requested_by": "<owner phone>"                  # optional
+    }
+    Every approver must reply APPROVE on WhatsApp; once all do, the invoice is
+    delivered to the client automatically via the chosen channel(s).
+    """
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    approvers = body.get("approvers") or []
+    if not approvers:
+        raise HTTPException(status_code=400, detail="At least one approver is required")
+
+    from vula.commerce.approvals import create_approval
+    label = f"Invoice {invoice.get('invoice_number', invoice_id)} for {invoice.get('customer_name', 'client')} — R{(invoice.get('total_cents', 0) or 0) / 100:.2f}"
+    approval = await create_approval(
+        tenant_id=tenant_id, entity_type="invoice", entity_id=invoice_id,
+        title=label, approvers=approvers,
+        requested_by=body.get("requested_by", ""),
+        deliver_via=(body.get("deliver_via") or "whatsapp"),
+    )
+    # Mark the invoice as awaiting approval (kept distinct from 'sent').
+    try:
+        service._client().table("commerce_invoices").update(
+            {"status": "draft", "updated_at": service._now()}
+        ).eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+    except Exception:
+        pass
+    return {"approval_id": approval["id"], "status": "pending", "approvers": len(approvers)}
+
+
 @router.get("/{tenant_id}/admin/invoices/{invoice_id}/pdf")
 async def admin_get_invoice_pdf(tenant_id: str, invoice_id: str):
     """Generate and stream a PDF for an invoice or quote.
@@ -400,8 +438,9 @@ async def admin_get_invoice_pdf(tenant_id: str, invoice_id: str):
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     try:
-        from vula.commerce.pdf import render_invoice_pdf
-        pdf_bytes = render_invoice_pdf(invoice)
+        from vula.commerce.pdf import render_invoice_pdf, merge_branding
+        settings = await service.get_invoice_settings(tenant_id)
+        pdf_bytes = render_invoice_pdf(invoice, merge_branding(tenant_id, settings))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
@@ -434,17 +473,17 @@ async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Option
         raise HTTPException(status_code=400, detail="No recipient email address available")
 
     try:
-        from vula.commerce.pdf import render_invoice_pdf, _TENANT_DEFAULTS
-        pdf_bytes = render_invoice_pdf(invoice)
+        from vula.commerce.pdf import render_invoice_pdf, merge_branding
+        settings = await service.get_invoice_settings(tenant_id)
+        branding = merge_branding(tenant_id, settings)
+        pdf_bytes = render_invoice_pdf(invoice, branding)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         log.error("PDF render failed for %s/%s: %s", tenant_id, invoice_id, exc)
         raise HTTPException(status_code=500, detail="PDF generation failed")
 
-    tenant_name = _TENANT_DEFAULTS.get(tenant_id, {}).get(
-        "name", tenant_id.replace("-", " ").title()
-    )
+    tenant_name = branding.get("name") or tenant_id.replace("-", " ").title()
 
     from vula.api.email import send_invoice_email
     sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name)
@@ -480,17 +519,17 @@ async def admin_send_invoice_whatsapp(tenant_id: str, invoice_id: str, body: Opt
         raise HTTPException(status_code=400, detail="No recipient phone number available")
 
     try:
-        from vula.commerce.pdf import render_invoice_pdf, _TENANT_DEFAULTS
-        pdf_bytes = render_invoice_pdf(invoice)
+        from vula.commerce.pdf import render_invoice_pdf, merge_branding
+        settings = await service.get_invoice_settings(tenant_id)
+        branding = merge_branding(tenant_id, settings)
+        pdf_bytes = render_invoice_pdf(invoice, branding)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         log.error("PDF render failed for %s/%s: %s", tenant_id, invoice_id, exc)
         raise HTTPException(status_code=500, detail="PDF generation failed")
 
-    tenant_name = _TENANT_DEFAULTS.get(tenant_id, {}).get(
-        "name", tenant_id.replace("-", " ").title()
-    )
+    tenant_name = branding.get("name") or tenant_id.replace("-", " ").title()
     doc_label = {"invoice": "invoice", "quote": "quotation", "proforma": "pro forma invoice"}.get(
         invoice.get("doc_type", "invoice"), "document"
     )
@@ -516,6 +555,29 @@ async def admin_send_invoice_whatsapp(tenant_id: str, invoice_id: str, body: Opt
         new_status = "sent"
 
     return {"sent": True, "to": recipient, "status": new_status}
+
+
+# ── Invoice settings (onboarding + look-and-feel) ─────────────────────────────
+
+@router.get("/{tenant_id}/admin/invoice-settings")
+async def admin_get_invoice_settings(tenant_id: str):
+    """Return the tenant's invoice settings (VAT, address, banking, template).
+
+    ``onboarded`` is False when the tenant has never completed the first-run
+    wizard, so the dashboard knows to show it.
+    """
+    settings = await service.get_invoice_settings(tenant_id)
+    return {"settings": settings, "onboarded": bool(settings and settings.get("onboarded"))}
+
+
+@router.post("/{tenant_id}/admin/invoice-settings")
+async def admin_upsert_invoice_settings(tenant_id: str, body: dict):
+    """Create or update the tenant's invoice settings (one row per tenant)."""
+    try:
+        settings = await service.upsert_invoice_settings(tenant_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"settings": settings}
 
 
 # ── Quote / proforma endpoints ────────────────────────────────────────────────
