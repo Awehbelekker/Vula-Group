@@ -734,20 +734,25 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
     photo_count = db.count_evidence(task.id)
     db.update_task_status(task.id, "awaiting_sign_off")
 
+    # Vision: does the photo match the contractor's task for the day?
+    task_desc = getattr(task, "description", "") or ""
+    assessment = await _assess_evidence_photo(photo_url, task.title, task_desc)
+
     await _send_reply(
         phone,
         f"Photo received ({photo_count} total for '{task.title}'). "
         f"Sent to your site manager for review. Reply DONE when you've submitted all photos."
     )
 
-    # Notify the architect/site manager
+    # Notify the architect/site manager — with the AI's assessment
     team = db.get_project_team(task.project_id)
     managers = [m for m in team if m["role"] in ("architect", "site_manager")]
+    assess_line = f"\n\n🔍 AI check: {assessment}" if assessment else ""
     for manager in managers:
         await _send_reply(
             manager["phone"],
             f"📸 {contractor.name} submitted photo {photo_count} for task '{task.title}' "
-            f"(project {task.project_id}).\n"
+            f"(project {task.project_id}).{assess_line}\n"
             f"Reply APPROVE or REJECT <reason> to sign off."
         )
 
@@ -946,6 +951,56 @@ async def _download_media(media_id: str, contractor_id: str, task_id: str) -> st
     except Exception as exc:
         logger.error("Media download failed for %s: %s", media_id, exc)
         return f"media://{media_id}"
+
+
+async def _assess_evidence_photo(photo_path: str, task_title: str, task_desc: str) -> str:
+    """Vision-check a contractor's evidence photo against their task.
+
+    Returns a one-line assessment (starts with ✅ or ⚠️) or "" if vision is
+    unavailable. Best-effort — never blocks the evidence flow.
+    """
+    if not photo_path or photo_path.startswith("media://"):
+        return ""
+    try:
+        from pathlib import Path as _Path
+        p = _Path(photo_path)
+        if not p.exists() or p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            return ""
+
+        from core.llm_router import resolve_cloud_vision_route
+        route = resolve_cloud_vision_route()
+        if not route:
+            return ""
+        model, api_key, api_base = route
+
+        import base64
+        import litellm
+        litellm.drop_params = True
+        img_b64 = base64.b64encode(p.read_bytes()).decode()
+        desc = f"{task_title}. {task_desc}".strip(". ")
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text":
+                        "A construction site worker submitted this photo as proof of work for the "
+                        f"task: \"{desc}\". Does the photo plausibly show THAT work in progress or "
+                        "complete? Reply in ONE short line: start with ✅ if it looks consistent or "
+                        "⚠️ if it may not match, then a brief reason (what you see)."},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                ],
+            }],
+            temperature=0.1,
+            max_tokens=120,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.debug("Evidence photo assessment failed: %s", exc)
+        return ""
 
 
 # ─── Tenant lookup ────────────────────────────────────────────────────────────
