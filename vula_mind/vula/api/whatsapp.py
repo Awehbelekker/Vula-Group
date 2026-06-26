@@ -729,14 +729,20 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
 
     # Download media from Meta and save locally
     photo_url = await _download_media(media_id, contractor.id, task.id)
-    db.save_evidence(task.id, contractor.id, photo_url, caption)
-
-    photo_count = db.count_evidence(task.id)
-    db.update_task_status(task.id, "awaiting_sign_off")
 
     # Vision: does the photo match the contractor's task for the day?
     task_desc = getattr(task, "description", "") or ""
     assessment = await _assess_evidence_photo(photo_url, task.title, task_desc)
+
+    # Persist the photo + the AI assessment together so it's in the record
+    # for progress reporting (caption carries both).
+    evidence_caption = caption
+    if assessment:
+        evidence_caption = f"{caption} | AI: {assessment}".strip(" |")
+    db.save_evidence(task.id, contractor.id, photo_url, evidence_caption)
+
+    photo_count = db.count_evidence(task.id)
+    db.update_task_status(task.id, "awaiting_sign_off")
 
     await _send_reply(
         phone,
