@@ -196,13 +196,25 @@ async def receive_message(
                     filename = doc.get("filename", "")
                     mime_type = doc.get("mime_type", "")
                     if phone and media_id:
-                        await _handle_document_ingest(phone, media_id, filename, mime_type)
+                        await _handle_document_ingest(
+                            phone, media_id, filename, mime_type, route_tenant_id=route_tenant
+                        )
 
                 elif msg_type in ("image", "video"):
-                    media_id = (msg.get(msg_type) or {}).get("id", "")
-                    caption = (msg.get(msg_type) or {}).get("caption", "")
+                    media = msg.get(msg_type) or {}
+                    media_id = media.get("id", "")
+                    caption = media.get("caption", "")
+                    mime_type = media.get("mime_type", "image/jpeg")
                     if phone and media_id:
-                        await _handle_media(phone, media_id, caption, msg_id)
+                        if route_mode == "knowledge":
+                            # Dedicated knowledge line → ingest the image into the KB
+                            fname = caption or f"image-{msg_id}.jpg"
+                            await _handle_document_ingest(
+                                phone, media_id, fname, mime_type, route_tenant_id=route_tenant
+                            )
+                        else:
+                            # Shared line → treat as field-ops task evidence
+                            await _handle_media(phone, media_id, caption, msg_id)
 
     return {"status": "ok"}
 
@@ -349,36 +361,45 @@ async def _maybe_learn_from_exchange(tenant_id: str, question: str, answer: str)
         logger.debug("Auto-learn skipped for %s: %s", tenant_id, exc)
 
 
-async def _handle_document_ingest(phone: str, media_id: str, filename: str, mime_type: str) -> None:
-    """Ingest a document sent by a tenant into their knowledge base.
+async def _handle_document_ingest(
+    phone: str, media_id: str, filename: str, mime_type: str,
+    route_tenant_id: Optional[str] = None,
+) -> None:
+    """Ingest a document/image sent by a tenant into their knowledge base.
 
-    Any registered tenant can WhatsApp a PDF, Word, or Excel file and it
-    will be automatically ingested.  No dashboard needed.
+    On a tenant's dedicated line (route_tenant_id set) anyone may upload — the
+    number identifies the tenant. Otherwise the sender must be a registered
+    admin. PDFs, Word, Excel, plain text, and images are accepted.
     """
     logger.info("WhatsApp document from %s: %s (%s)", phone, filename, mime_type)
 
-    from vula.models.tenants import get_tenant_db
-    lookup = get_tenant_db().lookup_by_phone_with_role(phone)
-    if not lookup:
-        await _send_reply(
-            phone,
-            "I couldn't find a Vula account linked to this number. "
-            "Contact your Vula representative to get set up."
-        )
-        return
+    if route_tenant_id:
+        # Dedicated tenant line — the number is the tenant; treat as admin.
+        tenant_id = route_tenant_id
+        role = "admin"
+    else:
+        from vula.models.tenants import get_tenant_db
+        lookup = get_tenant_db().lookup_by_phone_with_role(phone)
+        if not lookup:
+            await _send_reply(
+                phone,
+                "I couldn't find a Vula account linked to this number. "
+                "Contact your Vula representative to get set up."
+            )
+            return
 
-    tenant_id = lookup["tenant_id"]
-    role = lookup["role"]
+        tenant_id = lookup["tenant_id"]
+        role = lookup["role"]
 
-    if role != "admin":
-        await _send_reply(
-            phone,
-            "Only admins can upload documents. "
-            "Ask your Vula admin to upload this for you."
-        )
-        return
+        if role != "admin":
+            await _send_reply(
+                phone,
+                "Only admins can upload documents. "
+                "Ask your Vula admin to upload this for you."
+            )
+            return
 
-    # Only ingest known document types
+    # Only ingest known document/image types
     _INGESTABLE_MIMES = {
         "application/pdf",
         "application/msword",
@@ -387,6 +408,9 @@ async def _handle_document_ingest(phone: str, media_id: str, filename: str, mime
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "text/plain",
         "text/csv",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
     }
     if mime_type and mime_type not in _INGESTABLE_MIMES:
         await _send_reply(

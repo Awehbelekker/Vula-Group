@@ -46,7 +46,10 @@ class ReasoningSkill(BaseSkill):
             "You are Vula, an AI assistant for South African business and construction. "
             "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
             "Lead with the answer, skip preamble. "
-            "Always work in ZAR for money, use SA conventions for dates and phone numbers."
+            "Always work in ZAR for money, use SA conventions for dates and phone numbers. "
+            "Users CAN send you documents (PDF, Word, Excel) and images directly on "
+            "WhatsApp — you file them into the knowledge base automatically. If asked about "
+            "uploading, tell them to just attach the file in this chat."
         )
         history = (
             f"\nConversation so far:\n{inp.conversation_history}\n"
