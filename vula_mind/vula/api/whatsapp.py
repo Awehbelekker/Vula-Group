@@ -268,7 +268,9 @@ async def _handle_message(phone: str, text: str, msg_id: str) -> None:
     history = db.format_for_prompt(tenant_id, thread_key, limit=5)
     reply = await _rag_reply(tenant_id, text, conversation_history=history)
     db.save(tenant_id, thread_key, "assistant", reply)
-    await _send_reply(phone, reply)
+    # Pass tenant_id so the reply is sent FROM the tenant's own number
+    # (per-tenant creds in vula_whatsapp_accounts), not the shared test line.
+    await _send_reply(phone, reply, tenant_id=tenant_id)
 
     # Auto-learn: feed substantive Q&A back into the KB so Vula gets smarter.
     # Gated behind AUTO_LEARN_FROM_CHATS (default off) — each learned exchange
