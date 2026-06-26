@@ -129,18 +129,37 @@ class WebSearchSkill(BaseSkill):
             model, api_key, api_base = await resolve_generation_route()
 
             context_block = "\n\n---\n\n".join(contexts)[:6000]
+            # Price/product research gets a fuller, structured breakdown.
+            is_research = bool(re.search(
+                r"\b(price|prices|cost|costs|rate|rates|quote|supplier|buy|compare|"
+                r"cheapest|how much|per (kg|m2|m3|unit|litre|bag|ton))\b", q, re.I))
+            if is_research:
+                system = (
+                    "You are Vula, a South African procurement researcher. Using ONLY the web "
+                    "results below, produce a clear PRICE BREAKDOWN. Format:\n"
+                    "- A one-line summary.\n"
+                    "- Then a list, one per option: *Item* — R<price> (unit) — Supplier — short note.\n"
+                    "- End with a 'Best value:' line and any caveats (stock, delivery, date).\n"
+                    "Cite real figures only; if a price isn't in the results, say 'price not listed'. "
+                    "ZAR for money, SA suppliers. Don't invent numbers."
+                )
+                cap = max(inp.max_tokens, 900)
+            else:
+                system = (
+                    "You are Vula. Answer the question using ONLY the web search results below. "
+                    "Be specific and cite figures/dates where present. If the results don't "
+                    "answer it, say so. South African context, ZAR for money. Concise."
+                )
+                cap = min(inp.max_tokens, 600)
             resp = await litellm.acompletion(
                 model=model,
                 messages=[
-                    {"role": "system", "content":
-                        "You are Vula. Answer the question using ONLY the web search results below. "
-                        "Be specific and cite figures/dates where present. If the results don't "
-                        "answer it, say so. South African context, ZAR for money. Concise."},
+                    {"role": "system", "content": system},
                     {"role": "user", "content":
                         f"Web results:\n{context_block}\n\nQuestion: {q}\n\nAnswer:"},
                 ],
                 temperature=0.2,
-                max_tokens=min(inp.max_tokens, 600),
+                max_tokens=cap,
                 api_key=api_key,
                 api_base=api_base,
             )

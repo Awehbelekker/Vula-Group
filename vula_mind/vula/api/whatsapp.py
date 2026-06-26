@@ -481,18 +481,136 @@ async def _handle_document_ingest(
             except Exception as scan_exc:
                 logger.debug("Auto-scan skipped for %s: %s", filename, scan_exc)
 
-        # Classify the document so it's "filed accordingly"
-        doc_category = _classify_document(result.filename, local_path)
-
-        await _send_reply(
-            phone,
-            f"✅ Filed '{result.filename}' as *{doc_category}* — "
-            f"{result.chunks_stored} knowledge chunks added. "
-            f"I can now answer questions about it.{scan_msg}"
-        )
+        # Deep analysis: classify by CONTENT + pull structured fields → backend.
+        analysis = await _analyze_document(tenant_id, result.filename, local_path)
+        if analysis:
+            doc_category = analysis["category"]
+            # Allocate the structured info into the Vula backend (best-effort).
+            try:
+                from vula.commerce import service as commerce_service
+                commerce_service._client().table("vula_document_extractions").insert({
+                    "tenant_id": tenant_id,
+                    "filename": result.filename,
+                    "category": doc_category,
+                    "summary": analysis.get("summary", ""),
+                    "fields": analysis.get("fields", {}),
+                    "doc_id": result.doc_id,
+                    "source": "whatsapp",
+                }).execute()
+            except Exception as exc:
+                logger.debug("Extraction store skipped (run migration 011?): %s", exc)
+            breakdown = _format_extraction(analysis)
+            summary = analysis.get("summary", "")
+            msg = (
+                f"✅ Filed '{result.filename}' as *{doc_category}* — "
+                f"{result.chunks_stored} chunks added."
+            )
+            if summary:
+                msg += f"\n\n📄 {summary}"
+            if breakdown:
+                msg += f"\n\n{breakdown}"
+            msg += f"\n\nAsk me anything about it.{scan_msg}"
+            await _send_reply(phone, msg, tenant_id)
+        else:
+            # Fallback to keyword classification if deep analysis was unavailable
+            doc_category = _classify_document(result.filename, local_path)
+            await _send_reply(
+                phone,
+                f"✅ Filed '{result.filename}' as *{doc_category}* — "
+                f"{result.chunks_stored} knowledge chunks added. "
+                f"I can now answer questions about it.{scan_msg}",
+                tenant_id,
+            )
     except Exception as exc:
         logger.error("Document ingest failed for %s: %s", phone, exc)
         await _send_reply(phone, f"Something went wrong ingesting '{filename}'. Please try again.")
+
+
+_DOC_CATEGORIES = [
+    "Fee Proposal / Schedule", "Contract / Agreement", "Bill of Quantities (BOQ)",
+    "Quote / Estimate", "Invoice", "Drawing / Plan", "Specification",
+    "Meeting Minutes", "Programme / Schedule", "Report", "Tender Document",
+    "General Document",
+]
+
+
+async def _analyze_document(tenant_id: str, filename: str, local_path) -> Optional[dict]:
+    """Deep-analyze an uploaded document: read its content, classify it, and
+    pull out the structured fields worth keeping in the backend.
+
+    Returns {"category", "summary", "fields"} or None if analysis fails.
+    Best-effort — the document is already in the KB regardless.
+    """
+    # 1. Extract text using the same parser the ingestion pipeline uses
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        pages = await pipeline.parser.parse(local_path)
+        text = "\n".join(t for _, t in pages).strip()[:6000]
+    except Exception as exc:
+        logger.debug("Doc analyze: parse failed for %s: %s", filename, exc)
+        return None
+    if not text:
+        return None
+
+    # 2. One LLM call → category + summary + structured fields
+    try:
+        import json as _json
+        import litellm
+        from core.llm_router import resolve_generation_route
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+
+        cats = ", ".join(_DOC_CATEGORIES)
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[
+                {"role": "system", "content":
+                    "You are Vula's document analyst for a South African construction/business. "
+                    "Read the document and return STRICT JSON only (no prose) with keys: "
+                    f"category (one of: {cats}), summary (1-2 sentences), and fields (an object of "
+                    "the key structured data for that category — e.g. invoice: vendor, invoice_no, "
+                    "date, subtotal, vat, total; BOQ/quote: client, total, and items as a list of "
+                    "{description, qty, unit, rate, amount}; fee proposal: client, stages, total; "
+                    "contract: parties, value, dates. Money as numbers in ZAR. Use null when unknown)."},
+                {"role": "user", "content": f"Filename: {filename}\n\nDocument:\n{text}\n\nJSON:"},
+            ],
+            temperature=0.1,
+            max_tokens=900,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+        data = _json.loads(raw)
+        cat = data.get("category") or "General Document"
+        if cat not in _DOC_CATEGORIES:
+            cat = "General Document"
+        return {
+            "category": cat,
+            "summary": (data.get("summary") or "").strip(),
+            "fields": data.get("fields") or {},
+        }
+    except Exception as exc:
+        logger.warning("Doc analyze LLM failed for %s: %s", filename, exc)
+        return None
+
+
+def _format_extraction(analysis: dict) -> str:
+    """Turn a structured analysis into a short WhatsApp breakdown."""
+    lines = []
+    fields = analysis.get("fields") or {}
+    for k, v in fields.items():
+        if v is None or v == "" or k == "items":
+            continue
+        if isinstance(v, (dict, list)):
+            continue
+        label = k.replace("_", " ").title()
+        lines.append(f"• {label}: {v}")
+    items = fields.get("items")
+    if isinstance(items, list) and items:
+        lines.append(f"• Line items: {len(items)}")
+    return "\n".join(lines[:8])
 
 
 def _classify_document(filename: str, path) -> str:
