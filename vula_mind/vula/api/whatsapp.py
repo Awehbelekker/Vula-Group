@@ -52,8 +52,7 @@ _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IG
 # Add a number here (or, later, in vula_whatsapp_accounts) to put it live.
 # This is the single source of truth — "add a number, point it at a tenant".
 _NUMBER_ROUTING: dict[str, tuple[str, str]] = {
-    "1270361586150560": ("off-the-hook", "commerce"),   # +27 67 373 6081 — OTH orders bot
-    "251439416636328":  ("off-the-hook", "commerce"),   # +27 73 781 5979 — OTH legacy line
+    "1124076000792176": ("off-the-hook", "commerce"),   # +27 67 363 6081 — OTH orders bot (live)
     "1180015145200511": ("digg-demo",    "knowledge"),  # +27 66 566 9387 — DIGG assistant
 }
 
@@ -1262,7 +1261,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
 
     # Per-tenant phone number IDs — Off the Hook uses its own dedicated number
     _TENANT_PHONE_IDS: dict[str, str] = {
-        "off-the-hook": "251439416636328",
+        "off-the-hook": "1124076000792176",  # +27 67 363 6081 (system-user WABA)
     }
     phone_number_id = _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_number_id
     if not phone_number_id:

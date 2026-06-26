@@ -38,7 +38,7 @@ _TENANT_TEAM: dict[str, list[tuple[str, str, str]]] = {
 
 # Per-tenant WhatsApp Business phone number IDs (Meta phone number ID)
 _TENANT_PHONE_IDS: dict[str, str] = {
-    "off-the-hook": "251439416636328",
+    "off-the-hook": "1124076000792176",  # +27 67 363 6081 (system-user WABA)
 }
 
 

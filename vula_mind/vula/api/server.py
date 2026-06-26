@@ -260,7 +260,7 @@ async def _send_oth_delivery_briefing() -> None:
         msg = "\n".join(lines)
 
     # Send to Stacy and Roland via OTH business number
-    phone_id = "251439416636328"
+    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
     team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
 
     import httpx as _httpx
@@ -303,7 +303,7 @@ async def _chase_unpaid_orders() -> None:
     from vula.commerce import service as _commerce
 
     tenant_id = "off-the-hook"
-    phone_id = "251439416636328"
+    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
 
     try:
         from supabase import create_client as _sb_client
@@ -403,7 +403,7 @@ async def _send_low_stock_alert() -> None:
     from vula.commerce import service as _commerce
 
     tenant_id = "off-the-hook"
-    phone_id = "251439416636328"
+    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
     roland = "27721822828"
 
     try:
@@ -470,7 +470,7 @@ async def _send_friday_catch_reminder() -> None:
     if not settings.whatsapp_token:
         return
 
-    phone_id = "251439416636328"
+    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
     stacy = "27722684085"
     msg = (
         "Happy Friday Stacy! Quick reminder to update this week's catch of the day "
@@ -574,7 +574,7 @@ async def _send_oth_sales_summary() -> None:
         lines.append("\nGreat work today!")
         msg = "\n".join(lines)
 
-    phone_id = "251439416636328"
+    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
     team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
 
     import httpx as _httpx
