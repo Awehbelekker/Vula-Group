@@ -206,15 +206,20 @@ async def receive_message(
                     caption = media.get("caption", "")
                     mime_type = media.get("mime_type", "image/jpeg")
                     if phone and media_id:
-                        if route_mode == "knowledge":
-                            # Dedicated knowledge line → ingest the image into the KB
-                            fname = caption or f"image-{msg_id}.jpg"
-                            await _handle_document_ingest(
-                                phone, media_id, fname, mime_type, route_tenant_id=route_tenant
-                            )
-                        else:
-                            # Shared line → treat as field-ops task evidence
-                            await _handle_media(phone, media_id, caption, msg_id)
+                        # A registered contractor's photo → task evidence first.
+                        handled = await _handle_media(phone, media_id, caption, msg_id)
+                        if not handled:
+                            if route_mode == "knowledge":
+                                # Anyone else on a tenant line → ingest into the KB
+                                fname = caption or f"image-{msg_id}.jpg"
+                                await _handle_document_ingest(
+                                    phone, media_id, fname, mime_type, route_tenant_id=route_tenant
+                                )
+                            else:
+                                await _send_reply(phone, (
+                                    "Thanks for the photo! Ask your site manager to register "
+                                    "you in Vula so it can be linked to your task."
+                                ))
 
     return {"status": "ok"}
 
@@ -701,29 +706,31 @@ async def _download_document(media_id: str, tenant_id: str, filename: str, mime_
         return None
 
 
-async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) -> None:
-    """Handle an inbound photo/document — save as task evidence."""
-    logger.info("WhatsApp media from %s, id=%s", phone, media_id)
+async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) -> bool:
+    """Handle an inbound photo as contractor task evidence.
 
-    tenant_id = await _tenant_for_phone(phone)
-    if not tenant_id:
-        return
+    Returns True if the sender is a registered contractor (the photo was handled
+    as field-ops evidence). Returns False if the sender is NOT a contractor, so
+    the caller can fall back (e.g. ingest into the tenant's knowledge base).
+    """
+    logger.info("WhatsApp media from %s, id=%s", phone, media_id)
 
     from vula.models.field_ops import get_field_ops_db
     db = get_field_ops_db()
     contractor = db.get_contractor_by_phone(phone)
     if not contractor:
-        await _send_reply(phone, "Thanks for the photo! Ask your site manager to register you in Vula so it can be linked to your task.")
-        return
+        return False  # not a contractor → let the caller decide (KB ingest, etc.)
 
     # Find the contractor's active task awaiting sign-off or in-progress
     active_tasks = db.get_tasks_for_contractor(
         contractor.id, status="in_progress"
     ) or db.get_tasks_for_contractor(contractor.id, status="awaiting_sign_off")
 
+    tid = contractor.tenant_id  # send field-ops replies from the tenant's number
+
     if not active_tasks:
-        await _send_reply(phone, "Thanks for the photo! I don't see an active task for you right now. Ask your site manager to assign you a task.")
-        return
+        await _send_reply(phone, "Thanks for the photo! I don't see an active task for you right now. Ask your site manager to assign you a task.", tid)
+        return True
 
     task = active_tasks[0]
 
@@ -747,7 +754,8 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
     await _send_reply(
         phone,
         f"Photo received ({photo_count} total for '{task.title}'). "
-        f"Sent to your site manager for review. Reply DONE when you've submitted all photos."
+        f"Sent to your site manager for review. Reply DONE when you've submitted all photos.",
+        tid,
     )
 
     # Notify the architect/site manager — with the AI's assessment
@@ -759,8 +767,10 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
             manager["phone"],
             f"📸 {contractor.name} submitted photo {photo_count} for task '{task.title}' "
             f"(project {task.project_id}).{assess_line}\n"
-            f"Reply APPROVE or REJECT <reason> to sign off."
+            f"Reply APPROVE or REJECT <reason> to sign off.",
+            tid,
         )
+    return True
 
 
 async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
