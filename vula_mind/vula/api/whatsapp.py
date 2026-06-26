@@ -43,12 +43,25 @@ _APPROVE_RE = re.compile(r"^\s*approve[d]?\s*(.*)$", re.IGNORECASE)
 _REJECT_RE = re.compile(r"^\s*reject\s*(.*)$", re.IGNORECASE)
 _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
 
-# Commerce tenant WhatsApp number IDs — maps Meta phone_number_id → tenant_id
-# Off the Hook: +27 73 781 5979 — Phone Number ID confirmed 2026-05-30
-_COMMERCE_PHONE_IDS: dict[str, str] = {
-    "1270361586150560": "off-the-hook",  # +27 67 373 6081 — dedicated OTH orders bot line
-    "251439416636328":  "off-the-hook",  # +27 73 781 5979 (legacy; to be retired to Stacy's personal)
+# ── Number → tenant router ────────────────────────────────────────────────────
+# Maps a Meta phone_number_id (the number a person messaged) to the tenant that
+# owns it, plus how that line behaves:
+#   "commerce"  → seafood/product ordering flow (open to the public)
+#   "knowledge" → the tenant's AI model answers questions (open to anyone on
+#                  this line — the number IS the tenant's dedicated line)
+# Add a number here (or, later, in vula_whatsapp_accounts) to put it live.
+# This is the single source of truth — "add a number, point it at a tenant".
+_NUMBER_ROUTING: dict[str, tuple[str, str]] = {
+    "1270361586150560": ("off-the-hook", "commerce"),   # +27 67 373 6081 — OTH orders bot
+    "251439416636328":  ("off-the-hook", "commerce"),   # +27 73 781 5979 — OTH legacy line
+    "1180015145200511": ("digg-demo",    "knowledge"),  # +27 66 566 9387 — DIGG assistant
 }
+
+
+def _resolve_number_route(phone_number_id: str) -> tuple[str | None, str | None]:
+    """Resolve (tenant_id, mode) for the number a message came in on."""
+    route = _NUMBER_ROUTING.get(phone_number_id)
+    return route if route else (None, None)
 
 # Commerce order keywords — triggers seafood ordering flow
 _ORDER_RE = re.compile(
@@ -136,17 +149,22 @@ async def receive_message(
                     if len(_processed_msg_ids) > _MAX_PROCESSED_IDS:
                         _processed_msg_ids.pop(0)
 
-                # Detect commerce tenants by the Meta phone_number_id
+                # Route by the number the person messaged → (tenant, mode)
                 phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
-                commerce_tenant = _COMMERCE_PHONE_IDS.get(phone_number_id)
+                route_tenant, route_mode = _resolve_number_route(phone_number_id)
+                commerce_tenant = route_tenant if route_mode == "commerce" else None
 
                 if msg_type == "text":
                     text = msg.get("text", {}).get("body", "").strip()
                     if phone and text:
-                        if commerce_tenant:
-                            # Route to commerce ordering flow
-                            await _handle_commerce_message(phone, text, msg_id, commerce_tenant)
+                        if route_mode == "commerce":
+                            # Number is a shop line → ordering flow
+                            await _handle_commerce_message(phone, text, msg_id, route_tenant)
+                        elif route_mode == "knowledge":
+                            # Number is a tenant's assistant line → that tenant's model
+                            await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
                         else:
+                            # Unmapped number → fall back to sender-based lookup
                             await _handle_message(phone, text, msg_id)
 
                 elif msg_type == "interactive" and commerce_tenant:
@@ -184,40 +202,52 @@ async def receive_message(
 
 # ─── Message routing ─────────────────────────────────────────────────────────
 
-async def _handle_message(phone: str, text: str, msg_id: str) -> None:
+async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: Optional[str] = None) -> None:
     """Route an inbound text message.
 
-    Routing priority:
-      1. Field-ops intents (DONE / APPROVE / REJECT) — any registered phone
-         including contractors in the field_ops DB.
-      2. KB / RAG — only staff/admin phones registered in tenant_phones.
-         Contractors who are not staff get a polite redirect.
+    Two ways the tenant is resolved:
+      • route_tenant_id set → the message came in on a tenant's *dedicated*
+        line (number→tenant router). Anyone messaging that line talks to that
+        tenant's model — no per-sender registration needed.
+      • route_tenant_id None → fall back to looking the *sender* up in
+        tenant_phones / field_ops (shared line).
+
+    Routing priority within a tenant:
+      1. Field-ops intents (DONE / APPROVE / REJECT).
+      2. KB / RAG.
     """
     logger.info("WhatsApp inbound from %s: %s", phone, text[:80])
 
-    # Resolve tenant + role from the tenant_phones table
-    from vula.models.tenants import get_tenant_db
-    lookup = get_tenant_db().lookup_by_phone_with_role(phone)
-    tenant_id = lookup["tenant_id"] if lookup else None
-    role = lookup["role"] if lookup else None  # admin | staff | viewer | None
+    if route_tenant_id:
+        # Dedicated tenant line — the number identifies the tenant, so grant
+        # this sender full assistant access on that tenant's model.
+        tenant_id = route_tenant_id
+        role = "admin"
+        contractor = None
+    else:
+        # Resolve tenant + role from the tenant_phones table
+        from vula.models.tenants import get_tenant_db
+        lookup = get_tenant_db().lookup_by_phone_with_role(phone)
+        tenant_id = lookup["tenant_id"] if lookup else None
+        role = lookup["role"] if lookup else None  # admin | staff | viewer | None
 
-    # Also check field_ops contractors table (they won't be in tenant_phones)
-    from vula.models.field_ops import get_field_ops_db
-    field_db = get_field_ops_db()
-    contractor = field_db.get_contractor_by_phone(phone) if not tenant_id else None
+        # Also check field_ops contractors table (they won't be in tenant_phones)
+        from vula.models.field_ops import get_field_ops_db
+        field_db = get_field_ops_db()
+        contractor = field_db.get_contractor_by_phone(phone) if not tenant_id else None
 
-    # If phone is completely unknown, reply once and stop
-    if not tenant_id and not contractor:
-        await _send_reply(phone, (
-            "Hi! I'm Vula, your construction AI. "
-            "I couldn't find an account linked to this number. "
-            "Contact your site manager to get set up."
-        ))
-        return
+        # If phone is completely unknown, reply once and stop
+        if not tenant_id and not contractor:
+            await _send_reply(phone, (
+                "Hi! I'm Vula, your construction AI. "
+                "I couldn't find an account linked to this number. "
+                "Contact your site manager to get set up."
+            ))
+            return
 
-    # Resolve tenant_id from contractor if needed
-    if not tenant_id and contractor:
-        tenant_id = contractor.tenant_id
+        # Resolve tenant_id from contractor if needed
+        if not tenant_id and contractor:
+            tenant_id = contractor.tenant_id
 
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _DELETE_RE.match(text):
