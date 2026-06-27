@@ -9,6 +9,7 @@ import VulaTakeoff from "./components/VulaTakeoff";
 import VulaOnboarding from "./components/VulaOnboarding";
 import VulaAdmin from "./components/VulaAdmin";
 import VulaDocuments from "./components/VulaDocuments";
+import VulaProjects from "./components/VulaProjects";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -38,6 +39,7 @@ const TABS = [
   { id: "qspro", label: "QS Pro", component: VulaQSPro },
   { id: "takeoff", label: "Takeoff", component: VulaTakeoff },
   { id: "onboard", label: "Onboard Client", component: VulaOnboarding },
+  { id: "projects", label: "Projects", component: VulaProjects },
   { id: "docs", label: "Documents", component: VulaDocuments },
   { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
   { id: "training", label: "Training KB", component: VulaTraining },
