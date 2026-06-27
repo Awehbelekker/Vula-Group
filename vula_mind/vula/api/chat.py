@@ -50,6 +50,15 @@ async def send_message(tenant_id: str, body: ChatMessageRequest) -> ChatMessageR
     # Build conversation history for prompt context
     history = db.format_for_prompt(tenant_id, phone, limit=12)
 
+    # Project-aware: inject the referenced project's context (codes, team, client).
+    try:
+        from vula.integrations.project_context import project_context_block
+        pc = project_context_block(tenant_id, body.message)
+        if pc:
+            history = f"{pc}\n\n{history}" if history else pc
+    except Exception:
+        pass
+
     # Get RAG reply (same logic as WhatsApp, reused here)
     try:
         from vula.api.whatsapp import _rag_reply

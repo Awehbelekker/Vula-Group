@@ -356,6 +356,18 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     db = get_db()
     db.save(tenant_id, thread_key, "user", text)
     history = db.format_for_prompt(tenant_id, thread_key, limit=12)
+
+    # Make the chat project-aware: if the message references a known project,
+    # prepend its context (client, applicable standards, team) so the answer scopes
+    # to that project and cites the right codes.
+    try:
+        from vula.integrations.project_context import project_context_block
+        pc = project_context_block(tenant_id, text)
+        if pc:
+            history = f"{pc}\n\n{history}" if history else pc
+    except Exception as exc:
+        logger.debug("project context skipped: %s", exc)
+
     reply = await _rag_reply(tenant_id, text, conversation_history=history)
     db.save(tenant_id, thread_key, "assistant", reply)
     # Pass tenant_id so the reply is sent FROM the tenant's own number
