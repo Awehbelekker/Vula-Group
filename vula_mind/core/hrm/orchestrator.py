@@ -37,6 +37,12 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     "commerce_assistant":   ["order", "buy", "cart", "checkout", "stock", "in stock", "menu",
                              "catalog", "catalogue", "track order", "add to cart",
                              "product", "fish", "seafood", "catch"],
+    # Calculation intent BEFORE architecture_planning so "how many seats / what
+    # width / occupancy" get deterministic arithmetic (computed, not guessed).
+    "calculations":         ["how many seats", "how many people", "how many can", "how many bays",
+                             "how many parking", "parking bays", "occupant load", "occupancy load",
+                             "maximum occupancy", "max occupancy", "what width", "minimum width",
+                             "how wide", "calculate", "floor area", "how many units"],
     # Architecture/construction BEFORE file_parse so "Stage 4 documentation",
     # "fees", "SACAP" etc consult the SA construction KB (not just tenant docs).
     "architecture_planning":["sacap", "nhbrc", "jbcc", "nec ", "sans", "cidb", "procsa",
