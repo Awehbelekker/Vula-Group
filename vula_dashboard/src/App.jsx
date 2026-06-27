@@ -170,6 +170,7 @@ export default function App() {
         padding: "0 24px",
         display: "flex", alignItems: "center", gap: 0,
         position: "sticky", top: 0, zIndex: 200,
+        overflowX: "auto", whiteSpace: "nowrap",
       }}>
         <div style={{
           fontFamily: "'Cormorant Garamond', serif",
@@ -179,24 +180,38 @@ export default function App() {
         }}>
           Vula
         </div>
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id)}
-            style={{
-              padding: "18px 20px",
-              border: "none", background: "none",
-              cursor: "pointer",
-              fontSize: 13, fontWeight: activeTab === t.id ? 600 : 400,
-              color: activeTab === t.id ? COLORS.green : COLORS.muted,
-              borderBottom: activeTab === t.id ? `2px solid ${COLORS.green}` : "2px solid transparent",
-              fontFamily: "system-ui",
-              transition: "all 0.15s",
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+        {(() => {
+          const GROUP = {
+            dashboard: 'AI', agent: 'AI', draft: 'AI',
+            qs: 'Estimating', qspro: 'Estimating', takeoff: 'Estimating',
+            projects: 'Knowledge', qsrates: 'Knowledge', docs: 'Knowledge', training: 'Knowledge',
+            commerce: 'Commerce', merchant: 'Commerce', invoices: 'Commerce', budget: 'Commerce', scanner: 'Commerce',
+            onboard: 'Clients', admin: 'Clients', subscriptions: 'Clients',
+            field: 'Field',
+          }
+          let prev = null
+          const out = []
+          TABS.forEach((t) => {
+            const g = GROUP[t.id]
+            if (prev !== null && g !== prev) {
+              out.push(<span key={`div-${t.id}`} style={{ width: 1, height: 18, background: COLORS.border, margin: "0 4px", flex: "0 0 auto" }} />)
+            }
+            prev = g
+            out.push(
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                style={{
+                  padding: "18px 16px", border: "none", background: "none", cursor: "pointer",
+                  fontSize: 13, fontWeight: activeTab === t.id ? 600 : 400,
+                  color: activeTab === t.id ? COLORS.green : COLORS.muted,
+                  borderBottom: activeTab === t.id ? `2px solid ${COLORS.green}` : "2px solid transparent",
+                  fontFamily: "system-ui", transition: "all 0.15s", flex: "0 0 auto",
+                }}>
+                {t.label}
+              </button>
+            )
+          })
+          return out
+        })()}
 
         {/* User + logout */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12, paddingRight: 8 }}>
