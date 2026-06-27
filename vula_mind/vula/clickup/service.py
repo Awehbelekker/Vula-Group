@@ -205,6 +205,45 @@ async def set_reminder(tenant_id: str, title: str, due_date: str,
     return await create_task(tenant_id, title=f"⏰ {title}", due_date=due_date, list_id=list_id)
 
 
+_DOCS_TASK_TITLE = "📎 Project Documents"
+
+
+async def attach_file_to_list(tenant_id: str, list_id: str, filename: str,
+                              data: bytes, content_type: str = "application/octet-stream") -> dict:
+    """File a document into a ClickUp list. ClickUp attachments are task-scoped,
+    so we find-or-create one "📎 Project Documents" task per list and attach the
+    file to it. Returns {task_id, attachment_id} or {error}.
+    """
+    creds = _creds_or_raise(tenant_id)
+    token = creds["token"]
+
+    # Find-or-create the per-list documents task.
+    existing = await find_task(tenant_id, _DOCS_TASK_TITLE, list_id=list_id)
+    if existing:
+        task_id = existing["id"]
+    else:
+        created = await create_task(
+            tenant_id, title=_DOCS_TASK_TITLE,
+            description="Documents filed here automatically by Vula from WhatsApp.",
+            list_id=list_id,
+        )
+        task_id = created.get("id")
+        if not task_id:
+            return {"error": created.get("error", "Could not create documents task.")}
+
+    # Attach the file (multipart). Note: no Content-Type header — httpx sets the
+    # multipart boundary; ClickUp auth header carries the token.
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(
+            f"{_BASE}/task/{task_id}/attachment",
+            headers={"Authorization": token},
+            files={"attachment": (filename, data, content_type)},
+        )
+        r.raise_for_status()
+        d = r.json()
+    return {"task_id": task_id, "attachment_id": d.get("id")}
+
+
 async def register_webhook(tenant_id: str, callback_url: str) -> dict:
     """Register a ClickUp webhook on the tenant's team for task status changes."""
     creds = _creds_or_raise(tenant_id)

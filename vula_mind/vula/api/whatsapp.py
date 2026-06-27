@@ -325,6 +325,29 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         await _send_reply(phone, "You have read-only access. Contact your admin to upgrade.")
         return
 
+    # ── Pending document filing: if a doc is awaiting a project, treat this
+    # message as the answer (file it + attach to ClickUp), else fall through.
+    try:
+        from vula.integrations.doc_filing import resolve_pending_document
+        pending = await resolve_pending_document(tenant_id, phone, text)
+    except Exception:
+        pending = None
+    if pending is not None:
+        if pending.get("filed"):
+            note = f"✅ Filed '{pending['filename']}' under *{pending['project']}*."
+            if pending.get("clickup"):
+                note += " Added to ClickUp."
+            await _send_reply(phone, note, tenant_id=tenant_id)
+        elif pending.get("skipped"):
+            await _send_reply(
+                phone, f"👍 Left '{pending['filename']}' unfiled — you can file it "
+                f"anytime from the dashboard.", tenant_id=tenant_id)
+        else:  # unmatched
+            await _send_reply(
+                phone, "I couldn't match that to a project. Reply with the exact "
+                "project name, or 'skip' to leave it unfiled.", tenant_id=tenant_id)
+        return
+
     # admin and staff get full RAG
     project_id = _active_project_for_phone(phone)
     thread_key = f"{phone}:{project_id}" if project_id else phone
@@ -503,45 +526,91 @@ async def _handle_document_ingest(
         analysis = await _analyze_document(tenant_id, result.filename, local_path)
         if analysis:
             doc_category = analysis["category"]
-            # Allocate the structured info into the Vula backend (best-effort).
+            summary = analysis.get("summary", "")
+            fields = analysis.get("fields", {})
+            # Keep the structured extraction (legacy table, best-effort).
             try:
                 from vula.commerce import service as commerce_service
                 commerce_service._client().table("vula_document_extractions").insert({
                     "tenant_id": tenant_id,
                     "filename": result.filename,
                     "category": doc_category,
-                    "summary": analysis.get("summary", ""),
-                    "fields": analysis.get("fields", {}),
+                    "summary": summary,
+                    "fields": fields,
                     "doc_id": result.doc_id,
                     "source": "whatsapp",
                 }).execute()
             except Exception as exc:
                 logger.debug("Extraction store skipped (run migration 011?): %s", exc)
             breakdown = _format_extraction(analysis)
-            summary = analysis.get("summary", "")
-            msg = (
-                f"✅ Filed '{result.filename}' as *{doc_category}* — "
-                f"{result.chunks_stored} chunks added."
-            )
-            if summary:
-                msg += f"\n\n📄 {summary}"
-            if breakdown:
-                msg += f"\n\n{breakdown}"
-            msg += f"\n\nAsk me anything about it.{scan_msg}"
-            await _send_reply(phone, msg, tenant_id)
         else:
             # Fallback to keyword classification if deep analysis was unavailable
             doc_category = _classify_document(result.filename, local_path)
-            await _send_reply(
-                phone,
-                f"✅ Filed '{result.filename}' as *{doc_category}* — "
-                f"{result.chunks_stored} knowledge chunks added. "
-                f"I can now answer questions about it.{scan_msg}",
-                tenant_id,
-            )
+            summary, fields, breakdown = "", {}, ""
+
+        # File the document: durable copy + project link + ClickUp attachment.
+        file_note = await _file_uploaded_document(
+            tenant_id, phone, result, local_path, mime_type,
+            doc_category, summary, fields,
+        )
+
+        msg = (
+            f"✅ Filed '{result.filename}' as *{doc_category}* — "
+            f"{result.chunks_stored} chunks added."
+        )
+        if summary:
+            msg += f"\n\n📄 {summary}"
+        if breakdown:
+            msg += f"\n\n{breakdown}"
+        if file_note:
+            msg += f"\n\n{file_note}"
+        else:
+            msg += "\n\nAsk me anything about it."
+        msg += scan_msg
+        await _send_reply(phone, msg, tenant_id)
     except Exception as exc:
         logger.error("Document ingest failed for %s: %s", phone, exc)
         await _send_reply(phone, f"Something went wrong ingesting '{filename}'. Please try again.")
+
+
+async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
+                                  category, summary, fields) -> str:
+    """Match the document to a project and file it (durable copy + record + ClickUp).
+    Returns a WhatsApp note: either 'Filed under X' or a 'which project?' question.
+    """
+    try:
+        from vula.integrations.doc_filing import match_project, file_document, project_examples
+        data = local_path.read_bytes()
+        ctype = mime_type or "application/octet-stream"
+        hint = " ".join([
+            result.filename or "", summary or "",
+            " ".join(str(v) for v in (fields or {}).values() if isinstance(v, (str, int, float))),
+        ])
+        match = match_project(tenant_id, hint)
+        if match:
+            row = await file_document(
+                tenant_id, filename=result.filename, data=data, content_type=ctype,
+                category=category, summary=summary, fields=fields, doc_id=result.doc_id,
+                source="whatsapp", filed_by=phone, project=match["project"],
+                clickup_list_id=match.get("clickup_list_id"), status="filed",
+            )
+            note = f"📂 Filed under *{match['project']}*."
+            if row.get("clickup_task_id"):
+                note += " Added to ClickUp."
+            return note
+        # No confident match — store as pending and ask which project.
+        await file_document(
+            tenant_id, filename=result.filename, data=data, content_type=ctype,
+            category=category, summary=summary, fields=fields, doc_id=result.doc_id,
+            source="whatsapp", filed_by=phone, status="pending_project",
+        )
+        ex = project_examples(tenant_id)
+        hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
+        return (f"📂 Which project is this for?{hint_txt} "
+                f"Reply with the project name and I'll file it (or 'skip').")
+    except Exception as exc:
+        logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
+        return ""
 
 
 _DOC_CATEGORIES = [
@@ -1001,13 +1070,12 @@ async def _download_media(media_id: str, contractor_id: str, task_id: str) -> st
         return f"media://{media_id}"
 
 
-def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str) -> Optional[str]:
-    """Upload an evidence photo to the Supabase 'evidence' bucket. Returns a
-    public URL, or None on failure (caller falls back to the local path)."""
+def _upload_to_storage(bucket: str, object_path: str, data: bytes, content_type: str) -> Optional[str]:
+    """Upload bytes to a public Supabase Storage bucket. Returns the public URL,
+    or None on failure. Used for evidence photos and filed documents."""
     try:
         from vula.models.field_ops import _client
         sb = _client()
-        bucket = "evidence"
         try:
             sb.storage.create_bucket(bucket, options={"public": True})
         except Exception:
@@ -1022,8 +1090,14 @@ def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str
                 raise
         return sb.storage.from_(bucket).get_public_url(object_path)
     except Exception as exc:
-        logger.warning("Evidence storage upload failed (%s) — using local path", exc)
+        logger.warning("Storage upload to '%s' failed (%s)", bucket, exc)
         return None
+
+
+def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str) -> Optional[str]:
+    """Upload an evidence photo to the 'evidence' bucket. Returns a public URL,
+    or None on failure (caller falls back to the local path)."""
+    return _upload_to_storage("evidence", object_path, data, content_type)
 
 
 async def _assess_evidence_photo(photo_path: str, task_title: str, task_desc: str) -> str:

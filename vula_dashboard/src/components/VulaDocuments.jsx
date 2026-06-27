@@ -131,8 +131,126 @@ function StatusChip({ status }) {
   );
 }
 
-export default function VulaDocuments() {
-  const [tenantId, setTenantId] = useState("default");
+function FieldsPreview({ fields }) {
+  const entries = Object.entries(fields || {})
+    .filter(([k, v]) => v != null && v !== "" && k !== "items" && typeof v !== "object")
+    .slice(0, 5);
+  if (!entries.length) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+      {entries.map(([k, v]) => (
+        <span key={k} style={{ fontSize: 11, color: C.muted, background: C.surfaceAlt, padding: "2px 8px", borderRadius: 4 }}>
+          {k.replace(/_/g, " ")}: <strong style={{ color: C.text }}>{String(v)}</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function FiledLibrary({ tenantId }) {
+  const [docs, setDocs] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!tenantId?.trim()) return;
+    setLoading(true);
+    try {
+      const [dr, pr] = await Promise.all([
+        fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/filed`).then((r) => r.json()),
+        fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/projects`).then((r) => r.json()),
+      ]);
+      setDocs(dr.documents || []);
+      setProjects(pr.projects || []);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const assign = async (docId, label) => {
+    const proj = projects.find((p) => p.label === label);
+    if (!proj) return;
+    await fetch(`${VULA_API}/v1/documents/${docId}/assign-project`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: proj.label, clickup_list_id: proj.clickup_list_id }),
+    });
+    load();
+  };
+
+  // Group by project (null → Unfiled), Unfiled first.
+  const groups = {};
+  docs.forEach((d) => {
+    const key = d.status === "pending_project" || !d.project ? "Unfiled" : d.project;
+    (groups[key] = groups[key] || []).push(d);
+  });
+  const groupNames = Object.keys(groups).sort((a, b) =>
+    a === "Unfiled" ? -1 : b === "Unfiled" ? 1 : a.localeCompare(b));
+
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 28 }}>
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>📂 Filed documents</span>
+        <span style={{ fontSize: 12, color: C.muted }}>
+          {loading ? "Loading…" : `${docs.length} ${docs.length === 1 ? "document" : "documents"}`}
+        </span>
+      </div>
+
+      {!loading && docs.length === 0 && (
+        <div style={{ padding: "28px 20px", textAlign: "center", color: C.muted, fontSize: 13 }}>
+          No filed documents yet. Send a doc or photo on WhatsApp and Vula will file it here by project.
+        </div>
+      )}
+
+      {groupNames.map((g) => (
+        <div key={g}>
+          <div style={{ padding: "8px 20px", background: C.surfaceAlt, fontSize: 12, fontWeight: 700, color: g === "Unfiled" ? C.amber : C.green }}>
+            {g} <span style={{ color: C.muted, fontWeight: 400 }}>· {groups[g].length}</span>
+          </div>
+          {groups[g].map((doc) => {
+            const ext = "." + (doc.filename || "").split(".").pop().toLowerCase();
+            const needsProject = doc.status === "pending_project" || !doc.project;
+            return (
+              <div key={doc.id} style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 14, alignItems: "flex-start" }}>
+                <FileBadge ext={ext} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {doc.file_url ? (
+                      <a href={doc.file_url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: C.green, fontWeight: 600, textDecoration: "none" }}>
+                        {doc.filename} ↓
+                      </a>
+                    ) : (
+                      <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{doc.filename}</span>
+                    )}
+                    {doc.category && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, background: C.surfaceAlt, padding: "2px 8px", borderRadius: 4 }}>{doc.category}</span>
+                    )}
+                    {doc.clickup_task_id && (
+                      <span style={{ fontSize: 10, color: "#7B68EE" }} title="Attached in ClickUp">🗂️ ClickUp</span>
+                    )}
+                  </div>
+                  {doc.summary && <p style={{ margin: "4px 0 0", fontSize: 12, color: C.muted }}>{doc.summary}</p>}
+                  <FieldsPreview fields={doc.fields} />
+                </div>
+                {needsProject && (
+                  <select defaultValue="" onChange={(e) => assign(doc.id, e.target.value)}
+                    style={{ fontSize: 12, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, background: C.surface, maxWidth: 160 }}>
+                    <option value="" disabled>File under…</option>
+                    {projects.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+                  </select>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function VulaDocuments({ tenantId: propTenantId }) {
+  const [tenantId, setTenantId] = useState(propTenantId || "default");
+  useEffect(() => { if (propTenantId) setTenantId(propTenantId); }, [propTenantId]);
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -270,7 +388,10 @@ export default function VulaDocuments() {
         </div>
       </div>
 
-      {/* Document list */}
+      {/* Filed documents — durable copies organised by project (WhatsApp + ClickUp) */}
+      <FiledLibrary tenantId={tenantId} />
+
+      {/* Raw KB-ingest status list */}
       <div style={{
         background: C.surface,
         border: `1px solid ${C.border}`,
@@ -284,7 +405,7 @@ export default function VulaDocuments() {
           display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-            Ingested documents
+            Knowledge base files
           </span>
           <span style={{ fontSize: 12, color: C.muted }}>
             {docs.length} {docs.length === 1 ? "file" : "files"}
