@@ -22,6 +22,7 @@ from core.skills.commerce_assistant import CommerceAssistantSkill
 from core.skills.commerce_admin import CommerceAdminSkill
 from core.skills.clickup_admin import ClickUpAdminSkill
 from core.skills.calculations import CalculationsSkill
+from core.skills.standards_lookup import StandardsLookupSkill
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ _SKILLS: Dict[str, BaseSkill] = {
     "commerce_admin": CommerceAdminSkill(),
     "clickup_admin": ClickUpAdminSkill(),
     "calculations": CalculationsSkill(),
+    "standards_lookup": StandardsLookupSkill(),
 }
 
 # Skills declared in registry.json but not yet implemented — route to reasoning

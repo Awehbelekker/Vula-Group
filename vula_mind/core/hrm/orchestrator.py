@@ -43,6 +43,10 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "how many parking", "parking bays", "occupant load", "occupancy load",
                              "maximum occupancy", "max occupancy", "what width", "minimum width",
                              "how wide", "calculate", "floor area", "how many units"],
+    # Explicit standard/code lookup → cited search of the code library.
+    "standards_lookup":     ["look up", "which standard", "which code", "what standard",
+                             "what does sans", "code library", "sans clause", "which sans",
+                             "standard cover", "applicable standard"],
     # Architecture/construction BEFORE file_parse so "Stage 4 documentation",
     # "fees", "SACAP" etc consult the SA construction KB (not just tenant docs).
     "architecture_planning":["sacap", "nhbrc", "jbcc", "nec ", "sans", "cidb", "procsa",

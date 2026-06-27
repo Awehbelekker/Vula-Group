@@ -102,7 +102,14 @@ class CalculationsSkill(BaseSkill):
             "given and not in context, do NOT invent it — ask for it or say which clause is needed.\n"
             "- Do every arithmetic step with the calculate tool (never compute in your head).\n"
             "- Round occupants/exits/bays UP (ceil) unless the standard says otherwise.\n"
-            "- Show the formula, the clause/source if from context, and the numbers used."
+            "- Show the formula and the numbers used. Cite a clause number or standard "
+            "value ONLY if it is in the provided context or the user gave it; otherwise say "
+            "the exact clause/value must be confirmed against the official standard.\n"
+            "- Universal QS/engineering formulas you MAY apply (these are standard, not code-"
+            "specific rules): area=L×W; volume=L×W×D; perimeter=2(L+W); VAT=amount×0.15; "
+            "retention/contingency = amount × percentage; gradient = rise/run. For material "
+            "quantities or code ratios that vary (bricks/m², occupancy ratios, parking bays), "
+            "use the rate from context or ask — do not assume a figure."
         )
 
     async def _agent_loop(self, history: str, question: str, context: str) -> str:
