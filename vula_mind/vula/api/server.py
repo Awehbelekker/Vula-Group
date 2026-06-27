@@ -84,6 +84,7 @@ from vula.api.chat import router as chat_router
 from vula.api.field_ops import router as field_ops_router
 from vula.api.clickup import router as clickup_router
 from vula.api.documents import router as documents_router
+from vula.api.projects import router as projects_router
 from vula.api.commerce import router as commerce_router
 from vula.api.yoco import router as yoco_router
 from vula.api.whatsapp_connect import router as whatsapp_connect_router
@@ -697,6 +698,7 @@ app.include_router(chat_router, prefix="/v1")
 app.include_router(field_ops_router, prefix="/v1/field")
 app.include_router(clickup_router, prefix="/v1/clickup")
 app.include_router(documents_router, prefix="/v1/documents")
+app.include_router(projects_router, prefix="/v1/projects")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(yoco_router, prefix="/v1/yoco")
 app.include_router(yoco_connect_router, prefix="/v1/yoco")
