@@ -849,9 +849,10 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     if not template and not body.get("body"):
         raise HTTPException(status_code=400, detail="template_name or body required")
 
-    # Resolve the exact audience (same source as the Customers tab)
+    # Resolve the exact audience (same source as the Customers tab); audience may be
+    # a built-in (all/active_30d/high_value) or a saved custom segment ('seg:<id>').
     customers = await _aggregate_customers(tenant_id)
-    rows = _filter_audience(customers, audience)
+    rows = _filter_audience(customers, _resolve_audience(tenant_id, audience))
     # Only WhatsApp-reachable contacts with a usable number
     recipients = [c for c in rows if _norm_phone(c.get("phone")).isdigit()]
 
@@ -1079,6 +1080,39 @@ async def cron_process_campaigns():
     return {"processed": await process_due_campaigns()}
 
 
+# ── Custom audience segments ──────────────────────────────────────────────────
+
+@router.get("/{tenant_id}/admin/segments")
+async def admin_list_segments(tenant_id: str):
+    try:
+        rows = (service._client().table("commerce_segments").select("*")
+                .eq("tenant_id", tenant_id).order("created_at").limit(200).execute().data or [])
+    except Exception as exc:
+        log.debug("segments list skipped (run migration 022?): %s", exc)
+        rows = []
+    return {"tenant_id": tenant_id, "segments": rows}
+
+
+@router.post("/{tenant_id}/admin/segments")
+async def admin_create_segment(tenant_id: str, body: dict):
+    name = (body.get("name") or "").strip()
+    criteria = body.get("criteria") or {}
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    if not isinstance(criteria, dict) or not criteria:
+        raise HTTPException(status_code=400, detail="at least one criterion required")
+    row = {"tenant_id": tenant_id, "name": name, "criteria": criteria,
+           "created_by": body.get("created_by")}
+    res = service._client().table("commerce_segments").insert(row).execute()
+    return res.data[0] if res.data else {"error": "insert failed"}
+
+
+@router.delete("/{tenant_id}/admin/segments/{segment_id}")
+async def admin_delete_segment(tenant_id: str, segment_id: str):
+    service._client().table("commerce_segments").delete().eq("id", segment_id).execute()
+    return {"id": segment_id, "deleted": True}
+
+
 # ── Scheduled Jobs ──────────────────────────────────────────────────────────
 
 @router.post("/{tenant_id}/jobs/abandoned-carts")
@@ -1200,11 +1234,53 @@ async def _aggregate_customers(tenant_id: str) -> dict[str, dict]:
     return customers
 
 
-def _filter_audience(customers: dict[str, dict], audience: str) -> list[dict]:
-    """Apply a broadcast audience filter (all | active_30d | high_value)."""
+def _days_since(c, now):
+    ts = c.get("last_order_at") or c.get("last_seen_at")
+    if not ts:
+        return None
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return (now - dt).days
+    except Exception:
+        return None
+
+
+def _apply_criteria(rows: list[dict], crit: dict) -> list[dict]:
+    """Filter customers by a custom segment's criteria (all ANDed). Keys: ordered_within_days,
+    not_ordered_within_days, min_spend, max_spend, min_orders, channel."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    out = []
+    for c in rows:
+        ds = _days_since(c, now)
+        spend = (c.get("total_spent_cents") or 0) / 100.0
+        if (v := crit.get("ordered_within_days")) is not None and (ds is None or ds > v):
+            continue
+        if (v := crit.get("not_ordered_within_days")) is not None and (ds is not None and ds <= v):
+            continue
+        if (v := crit.get("min_spend")) is not None and spend < v:
+            continue
+        if (v := crit.get("max_spend")) is not None and spend > v:
+            continue
+        if (v := crit.get("min_orders")) is not None and (c.get("orders") or 0) < v:
+            continue
+        if (v := crit.get("channel")) and c.get("channel") != v:
+            continue
+        out.append(c)
+    return out
+
+
+def _filter_audience(customers: dict[str, dict], audience) -> list[dict]:
+    """Apply a broadcast audience filter: a built-in (all | active_30d | high_value)
+    or a custom criteria dict (from a saved segment)."""
     from datetime import datetime, timezone, timedelta
 
     rows = list(customers.values())
+    if isinstance(audience, dict):
+        return _apply_criteria(rows, audience)
+
     now = datetime.now(timezone.utc)
 
     def _recent(c, days):
@@ -1224,6 +1300,19 @@ def _filter_audience(customers: dict[str, dict], audience: str) -> list[dict]:
     return rows
 
 
+def _resolve_audience(tenant_id: str, audience):
+    """Turn an audience_filter that's 'seg:<id>' into the saved segment's criteria dict."""
+    if isinstance(audience, str) and audience.startswith("seg:"):
+        try:
+            rows = (service._client().table("commerce_segments").select("criteria")
+                    .eq("id", audience[4:]).limit(1).execute().data or [])
+            if rows:
+                return rows[0].get("criteria") or {}
+        except Exception:
+            pass
+    return audience
+
+
 @router.get("/{tenant_id}/admin/customers")
 async def admin_list_customers(
     tenant_id: str,
@@ -1232,7 +1321,7 @@ async def admin_list_customers(
 ):
     """Aggregated client list for a tenant — the source of truth for broadcasts."""
     customers = await _aggregate_customers(tenant_id)
-    rows = _filter_audience(customers, audience)
+    rows = _filter_audience(customers, _resolve_audience(tenant_id, audience))
 
     if search:
         s = search.lower()

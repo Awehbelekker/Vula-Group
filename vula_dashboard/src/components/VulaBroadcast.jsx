@@ -41,6 +41,9 @@ export default function VulaBroadcast({ tenantId }) {
   const [scheduleAt, setScheduleAt] = useState('')   // datetime-local for a scheduled send
   const [recurrence, setRecurrence] = useState('once')
   const [campaigns, setCampaigns] = useState([])
+  const [segments, setSegments] = useState([])
+  const [showSeg, setShowSeg] = useState(false)
+  const [segForm, setSegForm] = useState({ name: '', not_ordered_within_days: '', min_spend: '', channel: '' })
 
   // Ask the AI assistant to write the broadcast from rough details
   async function writeWithAI() {
@@ -79,7 +82,40 @@ export default function VulaBroadcast({ tenantId }) {
     } catch {}
   }, [tenantId])
 
-  useEffect(() => { load(); loadCampaigns() }, [load, loadCampaigns])
+  const loadSegments = useCallback(async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/segments`)
+      const d = await r.json()
+      setSegments(d.segments || [])
+    } catch {}
+  }, [tenantId])
+
+  useEffect(() => { load(); loadCampaigns(); loadSegments() }, [load, loadCampaigns, loadSegments])
+
+  const segHint = (cr = {}) => [
+    cr.not_ordered_within_days != null && `no order in ${cr.not_ordered_within_days}d`,
+    cr.ordered_within_days != null && `ordered ≤ ${cr.ordered_within_days}d`,
+    cr.min_spend != null && `spend ≥ R${cr.min_spend}`,
+    cr.min_orders != null && `≥ ${cr.min_orders} orders`,
+    cr.channel && cr.channel,
+  ].filter(Boolean).join(' · ')
+
+  async function createSegment() {
+    const c = {}
+    if (segForm.not_ordered_within_days) c.not_ordered_within_days = Number(segForm.not_ordered_within_days)
+    if (segForm.min_spend) c.min_spend = Number(segForm.min_spend)
+    if (segForm.channel) c.channel = segForm.channel
+    if (!segForm.name.trim() || Object.keys(c).length === 0) { setError('Segment needs a name + at least one rule.'); return }
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/segments`, {
+      method: 'POST', headers: H, body: JSON.stringify({ name: segForm.name, criteria: c }),
+    })
+    setSegForm({ name: '', not_ordered_within_days: '', min_spend: '', channel: '' }); setShowSeg(false); loadSegments()
+  }
+  async function deleteSegment(id) {
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/segments/${id}`, { method: 'DELETE' })
+    if (audience === `seg:${id}`) setAudience('all')
+    loadSegments()
+  }
 
   // Schedule a broadcast for later (or recurring) instead of sending now.
   async function scheduleCampaign() {
@@ -146,6 +182,7 @@ export default function VulaBroadcast({ tenantId }) {
 
   const selectedTpl = TEMPLATES.find(t => t.id === template)
   const selectedAud = AUDIENCES.find(a => a.id === audience)
+    || { label: '🎯 ' + (segments.find(sg => `seg:${sg.id}` === audience)?.name || 'segment') }
 
   return (
     <div>
@@ -208,7 +245,38 @@ export default function VulaBroadcast({ tenantId }) {
               <span style={s.audHint}>{a.hint}</span>
             </button>
           ))}
+          {segments.map(seg => (
+            <button key={seg.id} onClick={() => setAudience(`seg:${seg.id}`)}
+              style={{ ...s.audBtn, ...(audience === `seg:${seg.id}` ? s.audBtnActive : {}) }}>
+              <span style={s.audLabel}>🎯 {seg.name}
+                <span onClick={(e) => { e.stopPropagation(); deleteSegment(seg.id) }}
+                  style={{ marginLeft: 6, color: '#C0392B', cursor: 'pointer' }}>×</span>
+              </span>
+              <span style={s.audHint}>{segHint(seg.criteria)}</span>
+            </button>
+          ))}
+          <button onClick={() => setShowSeg(v => !v)} style={{ ...s.audBtn, borderStyle: 'dashed' }}>
+            <span style={s.audLabel}>＋ New segment</span>
+            <span style={s.audHint}>custom rules</span>
+          </button>
         </div>
+        {showSeg && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', margin: '0 0 12px' }}>
+            <input placeholder="Segment name" value={segForm.name} onChange={e => setSegForm({ ...segForm, name: e.target.value })}
+              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12 }} />
+            <input type="number" placeholder="no order in … days" value={segForm.not_ordered_within_days}
+              onChange={e => setSegForm({ ...segForm, not_ordered_within_days: e.target.value })}
+              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 150 }} />
+            <input type="number" placeholder="min spend (R)" value={segForm.min_spend}
+              onChange={e => setSegForm({ ...segForm, min_spend: e.target.value })}
+              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 120 }} />
+            <select value={segForm.channel} onChange={e => setSegForm({ ...segForm, channel: e.target.value })}
+              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12 }}>
+              <option value="">any channel</option><option value="whatsapp">WhatsApp</option><option value="web">Web</option>
+            </select>
+            <button onClick={createSegment} style={s.sendBtn}>Save segment</button>
+          </div>
+        )}
 
         {error && <p style={s.error}>{error}</p>}
         {sent && (
