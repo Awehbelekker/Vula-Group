@@ -30,6 +30,7 @@ class ConnectIn(BaseModel):
     smtp_port: int = 465
     from_name: Optional[str] = None
     send_mode: str = "draft"          # draft | send
+    notify_phone: Optional[str] = None  # WhatsApp to ask when a doc can't be project-matched
     connected_by: Optional[str] = None
 
 
@@ -46,6 +47,7 @@ async def connect(body: ConnectIn) -> dict:
             "imap_host": body.imap_host, "imap_port": body.imap_port,
             "smtp_host": body.smtp_host, "smtp_port": body.smtp_port,
             "secret": encrypt_secret(body.password), "send_mode": body.send_mode,
+            "notify_phone": body.notify_phone,
             "status": "connected", "connected_by": body.connected_by,
             "connected_at": "now()", "updated_at": "now()",
         }, on_conflict="tenant_id").execute()

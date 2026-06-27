@@ -101,13 +101,14 @@ async def process_email_sync(tenant_id: str, max_emails: int = 20) -> dict:
         return {"synced": 0}
     db = _client()
     try:
-        row = (db.table("vula_email_accounts").select("last_sync_uid,auto_sync")
+        row = (db.table("vula_email_accounts").select("last_sync_uid,auto_sync,notify_phone")
                .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0]
     except Exception:
         return {"synced": 0}
     if row.get("auto_sync") is False:
         return {"synced": 0}
     last_uid = int(row.get("last_sync_uid") or 0)
+    notify_phone = row.get("notify_phone")
     own_domain = creds["email"].split("@")[-1].lower()
 
     try:
@@ -125,7 +126,7 @@ async def process_email_sync(tenant_id: str, max_emails: int = 20) -> dict:
             contacts_seen.add(addr.lower())
         for att in em["attachments"]:
             try:
-                await _file_attachment(tenant_id, em, att)
+                await _file_attachment(tenant_id, em, att, notify_phone)
                 filed += 1
             except Exception as exc:
                 logger.debug("attachment file failed: %s", exc)
@@ -139,7 +140,7 @@ async def process_email_sync(tenant_id: str, max_emails: int = 20) -> dict:
             "last_uid": result["max_uid"]}
 
 
-async def _file_attachment(tenant_id: str, em: dict, att: dict) -> None:
+async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: str = None) -> None:
     """Ingest an attachment into the KB + record it in the Documents library. The AI
     analyses the document (category/summary/fields) and project-matches on its CONTENT —
     so e.g. a 'payment notification' that is actually a wage payment for a project gets
@@ -178,16 +179,32 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict) -> None:
         logger.debug("attachment analysis skipped: %s", exc)
 
     try:
-        from vula.integrations.doc_filing import match_project
+        from vula.integrations.doc_filing import match_project, project_examples
         field_text = " ".join(str(v) for v in fields.values() if isinstance(v, (str, int, float)))
         hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
         match = match_project(tenant_id, hint)
+
+        # No confident project + someone to ask → file as pending and ask on WhatsApp.
+        ask = bool(not match and notify_phone)
         db.table("vula_filed_documents").insert({
             "tenant_id": tenant_id, "project": match["project"] if match else None,
             "category": category, "summary": summary, "fields": fields, "filename": att["name"],
             "mime": att.get("mime"), "doc_id": getattr(res, "doc_id", None),
-            "source": "email", "status": "filed", "filed_by": em.get("from"),
+            "source": "email", "status": "pending_project" if ask else "filed",
+            "filed_by": notify_phone if ask else em.get("from"),
         }).execute()
+
+        if ask:
+            try:
+                from vula.api.whatsapp import _send_reply
+                ex = project_examples(tenant_id)
+                hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
+                await _send_reply(notify_phone, (
+                    f"📎 A document came in by email — *{att['name']}* "
+                    f"from {em.get('from','')}. Which project should I file it under?{hint_txt} "
+                    f"Reply with the project name, or 'skip'."), tenant_id=tenant_id)
+            except Exception as exc:
+                logger.debug("notify ask failed: %s", exc)
     except Exception as exc:
         logger.debug("filed_documents record skipped: %s", exc)
 
