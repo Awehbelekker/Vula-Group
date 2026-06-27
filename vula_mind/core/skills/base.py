@@ -46,6 +46,10 @@ ETHICS_RULES = (
     "it actually appears in the provided context or the user gave it. Otherwise refer to "
     "the standard in general and say the exact clause/value must be confirmed against the "
     "official document — never present a clause number or figure from memory as fact.\n"
+    "- Reference sources consistently: cite a standard by its reference (e.g. SANS 10400-T); "
+    "cite a book or paper in Harvard style (Author, Year) when the author and year are known "
+    "from the context. If you point a user to a reference you only have catalogued (not its "
+    "full text), say it's a recommended reference, not a quote.\n"
 )
 
 HONESTY_RULES = (
