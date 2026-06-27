@@ -34,6 +34,21 @@ def _hdr(value) -> str:
         return str(value)
 
 
+def _is_real_attachment(part) -> bool:
+    """True for genuine attachments; skips inline signature images (image00X.jpg logos)."""
+    cd = str(part.get("Content-Disposition") or "").lower()
+    if "attachment" in cd:
+        return True
+    fn = part.get_filename()
+    if not fn:
+        return False
+    ctype = (part.get_content_type() or "").lower()
+    # Inline images (email-signature logos) carry 'inline' and/or a Content-ID — skip them.
+    if ctype.startswith("image/") and ("inline" in cd or part.get("Content-ID")):
+        return False
+    return True
+
+
 def _imap_login(creds: dict) -> imaplib.IMAP4_SSL:
     m = imaplib.IMAP4_SSL(creds["imap_host"], int(creds.get("imap_port") or 993))
     m.login(creds["email"], creds["password"])
@@ -117,7 +132,7 @@ def _read(creds: dict, uid: str) -> dict:
                     body = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "ignore")
                 except Exception:
                     body = ""
-            elif fn or "attachment" in cd:
+            elif _is_real_attachment(part):
                 attachments.append(_hdr(fn) or "attachment")
         return {"uid": uid, "from": _hdr(msg.get("From")), "to": _hdr(msg.get("To")),
                 "subject": _hdr(msg.get("Subject")) or "(no subject)", "date": _hdr(msg.get("Date")),
@@ -140,6 +155,8 @@ def _download_attachment(creds: dict, uid: str, filename: str) -> Optional[dict]
             return None
         msg = email.message_from_bytes(data[0][1])
         for part in msg.walk():
+            if not _is_real_attachment(part):
+                continue
             fn = _hdr(part.get_filename())
             if fn and (not filename or fn == filename or filename.lower() in fn.lower()):
                 payload = part.get_payload(decode=True)
