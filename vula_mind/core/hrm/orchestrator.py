@@ -42,7 +42,10 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     "calculations":         ["how many seats", "how many people", "how many can", "how many bays",
                              "how many parking", "parking bays", "occupant load", "occupancy load",
                              "maximum occupancy", "max occupancy", "what width", "minimum width",
-                             "how wide", "calculate", "floor area", "how many units"],
+                             "how wide", "calculate", "floor area", "how many units",
+                             "what does it cost", "what would it cost", "how much does", "how much will",
+                             "how much is", "using our rates", "cost of", "rate for", "what do we charge",
+                             "estimate the cost", "total cost", "what will it cost"],
     # Google Drive + Gmail (draft-only email). Defers if not connected.
     "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail",
                              "my email", "my emails", "check email", "draft an email",

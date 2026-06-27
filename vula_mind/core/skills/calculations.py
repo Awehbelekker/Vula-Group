@@ -119,9 +119,11 @@ class CalculationsSkill(BaseSkill):
             "retention/contingency = amount × percentage; gradient = rise/run. For material "
             "quantities or code ratios that vary (bricks/m², occupancy ratios, parking bays), "
             "use the rate from context or ask — do not assume a figure.\n"
-            "- For COSTS: call lookup_rate to get the tenant's own unit rate, then multiply by "
-            "the quantity with calculate. If lookup_rate finds nothing, ask for the rate or say "
-            "it isn't on file — never assume a market rate."
+            "- For COSTS: ALWAYS call lookup_rate first to get the tenant's own unit rate, then "
+            "multiply by the quantity with calculate. The rate library is the authoritative rate "
+            "— prefer it over any figure in a document, and if a document shows a different rate, "
+            "note the discrepancy. If lookup_rate finds nothing, ask for the rate or say it isn't "
+            "on file — never assume a market rate."
         )
 
     async def _agent_loop(self, history: str, question: str, context: str, tenant_id: str) -> str:
