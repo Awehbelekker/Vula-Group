@@ -66,6 +66,45 @@ async def status(tenant_id: str) -> dict:
     return rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
 
 
+@router.post("/sync/{tenant_id}")
+async def sync_now(tenant_id: str) -> dict:
+    """Manually run a mailbox sync (build contacts + file new attachments)."""
+    from vula.email_imap.sync import process_email_sync
+    return await process_email_sync(tenant_id)
+
+
+@router.get("/contacts/{tenant_id}")
+async def list_contacts(tenant_id: str, kind: Optional[str] = None) -> dict:
+    """The contact / supplier / co-worker directory built from email."""
+    try:
+        q = (_client().table("vula_email_contacts").select("*")
+             .eq("tenant_id", tenant_id).order("message_count", desc=True).limit(500))
+        if kind:
+            q = q.eq("kind", kind)
+        rows = q.execute().data or []
+    except Exception as exc:
+        log.debug("contacts list skipped (run migration 024?): %s", exc)
+        rows = []
+    internal = [c for c in rows if c["kind"] == "internal"]
+    external = [c for c in rows if c["kind"] != "internal"]
+    return {"tenant_id": tenant_id, "contacts": rows, "count": len(rows),
+            "co_workers": internal, "external": external}
+
+
+class ContactKindIn(BaseModel):
+    kind: str
+
+
+@router.patch("/contacts/{tenant_id}/{contact_id}")
+async def set_contact_kind(tenant_id: str, contact_id: str, body: ContactKindIn) -> dict:
+    """Re-tag a contact (e.g. mark as 'supplier' or 'client')."""
+    try:
+        _client().table("vula_email_contacts").update({"kind": body.kind}).eq("id", contact_id).execute()
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"id": contact_id, "kind": body.kind}
+
+
 @router.delete("/disconnect/{tenant_id}")
 async def disconnect(tenant_id: str) -> dict:
     try:

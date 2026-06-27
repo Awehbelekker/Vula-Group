@@ -627,12 +627,28 @@ async def _scheduled_campaigns_loop() -> None:
         await _asyncio.sleep(60)
 
 
+async def _email_sync_loop() -> None:
+    """Auto-sync connected mailboxes every 15 min: build contacts + file attachments."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(45)  # settle on boot
+    while True:
+        try:
+            from vula.email_imap.sync import process_all_email_sync
+            n = await process_all_email_sync()
+            if n:
+                log.info("Email sync processed %d new message(s)", n)
+        except Exception as exc:
+            log.warning("Email sync loop error: %s", exc)
+        await _asyncio.sleep(15 * 60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     settings.warn_missing()
     _asyncio.create_task(_seed_training_on_boot())
     _asyncio.create_task(_scheduled_campaigns_loop())
+    _asyncio.create_task(_email_sync_loop())
     _asyncio.create_task(_weekly_rates_loop())
     _asyncio.create_task(_daily_trial_expiry_loop())
     _asyncio.create_task(_daily_delivery_briefing_loop())
