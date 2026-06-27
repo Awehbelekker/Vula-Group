@@ -218,6 +218,16 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             "filed_by": notify_phone if ask else em.get("from"),
         }).execute()
 
+        # Post to the project finance ledger if it carries an amount.
+        if confident and match:
+            try:
+                from vula.integrations.finances import post_finance_from_doc
+                post_finance_from_doc(tenant_id, match["project"], fields,
+                                      getattr(res, "doc_id", None), att["name"],
+                                      summary or "", category, owner_names=[em.get("from", "")])
+            except Exception as exc:
+                logger.debug("finance post skipped: %s", exc)
+
         if ask:
             try:
                 from vula.api.whatsapp import _send_reply

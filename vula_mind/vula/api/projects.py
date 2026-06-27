@@ -28,6 +28,30 @@ def _client():
     return commerce_service._client()
 
 
+# ── Project finances (money in/out, budget-vs-actual) ─────────────────────────
+
+@router.get("/{tenant}/finances")
+async def get_finances(tenant: str, project: Optional[str] = None) -> dict:
+    from vula.integrations.finances import finance_summary
+    return finance_summary(tenant, project)
+
+
+class BudgetIn(BaseModel):
+    project: str
+    budget: float
+
+
+@router.post("/{tenant}/budget")
+async def set_budget(tenant: str, body: BudgetIn) -> dict:
+    try:
+        _client().table("vula_project_budgets").upsert(
+            {"tenant_id": tenant, "project": body.project, "budget": body.budget,
+             "updated_at": "now()"}, on_conflict="tenant_id,project").execute()
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 027?)"}
+    return {"project": body.project, "budget": body.budget}
+
+
 # ── Projects ──────────────────────────────────────────────────────────────────
 
 class ProjectIn(BaseModel):

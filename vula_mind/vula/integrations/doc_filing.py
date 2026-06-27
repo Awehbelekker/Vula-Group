@@ -385,5 +385,14 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     # Learn from this correction so similar docs auto-file next time.
     learned = learn_filing_rule(tenant_id, doc.get("fields") or {}, match["project"])
 
+    # Post to the project finance ledger (reconciles payment<->invoice if it can).
+    try:
+        from vula.integrations.finances import post_finance_from_doc
+        post_finance_from_doc(tenant_id, match["project"], doc.get("fields") or {},
+                              doc.get("doc_id"), doc.get("filename") or "",
+                              doc.get("summary") or "", doc.get("category") or "")
+    except Exception as exc:
+        logger.debug("finance post (resolve) skipped: %s", exc)
+
     return {"filed": True, "project": match["project"], "learned_signals": learned,
             "clickup": bool(clickup_task_id), "filename": doc.get("filename")}
