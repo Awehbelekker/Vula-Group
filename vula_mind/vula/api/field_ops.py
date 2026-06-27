@@ -157,6 +157,13 @@ async def create_task(body: TaskIn) -> dict:
         body.tenant_id, body.project_id, body.title, body.trade,
         body.assigned_to, body.due_date, body.notes,
     )
+    # Mirror into ClickUp if the tenant has it connected (best-effort).
+    try:
+        from vula.integrations.clickup_sync import mirror_task_create
+        await mirror_task_create(body.tenant_id, task.id, task.title,
+                                 description=task.notes, due_date=task.due_date)
+    except Exception:
+        pass
     return {"id": task.id, "title": task.title, "status": task.status, "project_id": task.project_id}
 
 

@@ -20,6 +20,7 @@ from core.skills.file_parse import FileParseSkill
 from core.skills.architecture_planning import ArchitecturePlanningSkill
 from core.skills.commerce_assistant import CommerceAssistantSkill
 from core.skills.commerce_admin import CommerceAdminSkill
+from core.skills.clickup_admin import ClickUpAdminSkill
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ _SKILLS: Dict[str, BaseSkill] = {
     "architecture_planning": ArchitecturePlanningSkill(),
     "commerce_assistant": CommerceAssistantSkill(),
     "commerce_admin": CommerceAdminSkill(),
+    "clickup_admin": ClickUpAdminSkill(),
 }
 
 # Skills declared in registry.json but not yet implemented — route to reasoning

@@ -28,7 +28,12 @@ COMPLEXITY_KEYWORDS = {
 }
 
 SKILL_KEYWORDS: dict[str, list[str]] = {
-    # Commerce first — clear ordering intent
+    # ClickUp first — explicit task-management phrasing only, so it never shadows
+    # construction/field-ops queries. The skill itself defers if ClickUp isn't connected.
+    "clickup_admin":        ["clickup", "click up", "add a task", "create a task", "new task",
+                             "my tasks", "list tasks", "task list", "to-do", "to do list",
+                             "remind me", "set a reminder", "reminder"],
+    # Commerce next — clear ordering intent
     "commerce_assistant":   ["order", "buy", "cart", "checkout", "stock", "in stock", "menu",
                              "catalog", "catalogue", "track order", "add to cart",
                              "product", "fish", "seafood", "catch"],

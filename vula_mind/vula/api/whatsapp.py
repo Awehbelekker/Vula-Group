@@ -911,6 +911,13 @@ async def _handle_sign_off_reply(phone: str, tenant_id: str, decision: str, note
 
     db.record_sign_off(task_id, phone, decision, notes)
 
+    # Mirror the sign-off to ClickUp if connected (best-effort).
+    try:
+        from vula.integrations.clickup_sync import mirror_signoff
+        await mirror_signoff(tenant_id, task_id, decision, notes)
+    except Exception:
+        pass
+
     if decision == "approved":
         await _send_reply(phone, f"Task '{task_title}' approved ✅. {contractor_name} has been notified.", tenant_id)
         if contractor_phone:
