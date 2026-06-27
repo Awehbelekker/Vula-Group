@@ -75,38 +75,36 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {!fullPage && <button onClick={onClose} style={styles.closeBtn}>×</button>}
         </div>
 
-        {/* Tabs */}
+        {/* Tabs — grouped for scannability, horizontally scrollable on mobile */}
         <div style={styles.tabs}>
-          {[
-            { id: 'overview',  label: '📊 Overview' },
-            { id: 'assistant', label: '💬 Assistant' },
-            { id: 'orders',    label: '📦 Orders' },
-            { id: 'delivery',  label: '🛵 Delivery' },
-            { id: 'products',  label: '🐟 Products' },
-            { id: 'suppliers', label: '🚚 Suppliers' },
-            { id: 'scanner',   label: '📷 Scanner' },
-            { id: 'invoices',  label: '🧾 Invoices' },
-            { id: 'budget',    label: '💰 Budget' },
-            { id: 'customers', label: '👥 Customers' },
-            { id: 'broadcast', label: '📢 Broadcast' },
-            { id: 'projects',  label: '🏗️ Projects' },
-            { id: 'qsrates',   label: '📐 QS Rates' },
-            { id: 'documents', label: '📂 Documents' },
-            { id: 'settings',  label: '⚙️ Settings' },
-          ].map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              style={{ ...styles.tab, ...(tab === t.id ? styles.tabActive : {}) }}
-            >
-              {t.label}
-            </button>
-          ))}
+          {(() => {
+            const GROUPS = [
+              [{ id: 'overview', label: '📊 Overview' }, { id: 'assistant', label: '💬 Assistant' }],
+              [{ id: 'orders', label: '📦 Orders' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
+              [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
+              [{ id: 'customers', label: '👥 Customers' }, { id: 'broadcast', label: '📢 Broadcast' }],
+              [{ id: 'projects', label: '🏗️ Projects' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'documents', label: '📂 Documents' }],
+              [{ id: 'settings', label: '⚙️ Settings' }],
+            ]
+            const items = []
+            GROUPS.forEach((g, gi) => {
+              if (gi > 0) items.push({ divider: true, key: `d${gi}` })
+              g.forEach(t => items.push(t))
+            })
+            return items.map(t => t.divider
+              ? <span key={t.key} style={styles.tabDivider} />
+              : (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  style={{ ...styles.tab, ...(tab === t.id ? styles.tabActive : {}) }}>
+                  {t.label}
+                </button>
+              ))
+          })()}
         </div>
 
         {/* Content */}
         <div style={styles.content}>
-          {tab === 'overview'  && <OverviewTab tenantId={tenantId} />}
+          {tab === 'overview'  && <OverviewTab tenantId={tenantId} setTab={setTab} />}
           {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
           {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
           {tab === 'delivery'  && <DeliveryTab tenantId={tenantId} />}
@@ -142,7 +140,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 
-function OverviewTab({ tenantId }) {
+function OverviewTab({ tenantId, setTab }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -157,18 +155,84 @@ function OverviewTab({ tenantId }) {
   if (loading) return <p style={styles.loading}>Loading…</p>
   if (!stats) return <p style={styles.error}>Could not load stats.</p>
 
-  const fmt = cents => `R${(cents / 100).toFixed(2)}`
+  const fmt = cents => `R${(Number(cents || 0) / 100).toLocaleString('en-ZA', { maximumFractionDigits: 0 })}`
+  const series = stats.daily_revenue || []
+  const weekOrders = series.reduce((s, d) => s + (d.orders || 0), 0)
+  const aov = stats.total_orders ? stats.total_revenue_cents / stats.total_orders : 0
+  const alerts = [
+    { show: stats.to_dispatch > 0,          label: 'To dispatch',      value: stats.to_dispatch,                hint: 'orders ready to send', tab: 'orders',   color: '#8b5cf6' },
+    { show: stats.pending_payment > 0,      label: 'Awaiting payment', value: stats.pending_payment,            hint: 'unpaid orders',        tab: 'orders',   color: '#f59e0b' },
+    { show: stats.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(stats.invoice_overdue_cents), hint: 'chase these',          tab: 'invoices', color: '#C0392B' },
+    { show: stats.low_stock_count > 0,      label: 'Low stock',        value: stats.low_stock_count,            hint: 'items running out',    tab: 'products', color: '#C0392B' },
+  ].filter(a => a.show)
 
   return (
     <div>
       <div style={styles.statGrid}>
-        <StatCard label="Today's revenue"    value={fmt(stats.today_revenue_cents)}  sub={`${stats.today_orders} orders`} accent="var(--accent, #2C5545)" />
-        <StatCard label="Total revenue"      value={fmt(stats.total_revenue_cents)}  sub={`${stats.total_orders} orders`} />
-        <StatCard label="To dispatch"        value={stats.to_dispatch}               sub="paid / confirmed / packing" accent="#8b5cf6" />
-        <StatCard label="Pending payment"    value={stats.pending_payment}           sub="awaiting checkout" accent="#f59e0b" />
+        <StatCard label="Today's revenue" value={fmt(stats.today_revenue_cents)} sub={`${stats.today_orders} orders today`} accent="var(--accent, #2C5545)" />
+        <StatCard label="Total revenue"   value={fmt(stats.total_revenue_cents)} sub={`${stats.total_orders} orders`} />
+        <StatCard label="Avg order value" value={fmt(aov)}                        sub="per paid order" accent="#2B5797" />
+        <StatCard label="This week"       value={weekOrders}                      sub="orders (7 days)" accent="#8b5cf6" />
       </div>
+
+      <TrendChart series={series} fmt={fmt} />
+
+      {alerts.length > 0 ? (
+        <div style={{ marginTop: 18 }}>
+          <p style={ovS.sectionLabel}>Needs attention</p>
+          <div style={ovS.alertRow}>
+            {alerts.map(a => (
+              <button key={a.label} onClick={() => setTab && setTab(a.tab)} style={ovS.alertCard}>
+                <span style={{ ...ovS.alertValue, color: a.color }}>{a.value}</span>
+                <span style={ovS.alertLabel}>{a.label}</span>
+                <span style={ovS.alertHint}>{a.hint} →</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p style={{ ...ovS.sectionLabel, marginTop: 18 }}>✓ All caught up — nothing needs attention right now.</p>
+      )}
     </div>
   )
+}
+
+function TrendChart({ series, fmt }) {
+  if (!series.length) return null
+  const max = Math.max(1, ...series.map(d => d.revenue_cents))
+  const dayName = iso => new Date(iso).toLocaleDateString('en-ZA', { weekday: 'short' })
+  return (
+    <div style={ovS.chartCard}>
+      <p style={ovS.sectionLabel}>Revenue — last 7 days</p>
+      <div style={ovS.bars}>
+        {series.map(d => (
+          <div key={d.date} style={ovS.barCol} title={`${d.date}: ${fmt(d.revenue_cents)} · ${d.orders} orders`}>
+            <div style={ovS.barWrap}>
+              <div style={{ ...ovS.bar, height: `${Math.max(2, Math.round((d.revenue_cents / max) * 100))}%` }} />
+            </div>
+            <span style={ovS.barLabel}>{dayName(d.date)}</span>
+          </div>
+        ))}
+      </div>
+      <p style={ovS.chartFoot}>Peak day: {fmt(max)}</p>
+    </div>
+  )
+}
+
+const ovS = {
+  sectionLabel: { fontSize: 12, fontWeight: 700, color: '#8A8680', textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px' },
+  chartCard: { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 12, padding: 18, marginTop: 16 },
+  bars: { display: 'flex', alignItems: 'flex-end', gap: 10, height: 120 },
+  barCol: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, height: '100%' },
+  barWrap: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' },
+  bar: { width: '100%', background: 'linear-gradient(180deg, #2C5545, #3d7a5f)', borderRadius: '4px 4px 0 0', minHeight: 2 },
+  barLabel: { fontSize: 11, color: '#8A8680' },
+  chartFoot: { fontSize: 11, color: '#B5B0A8', margin: '10px 0 0', textAlign: 'right' },
+  alertRow: { display: 'flex', gap: 10, flexWrap: 'wrap' },
+  alertCard: { flex: '1 1 150px', minWidth: 140, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 12, padding: '14px 16px', textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2 },
+  alertValue: { fontSize: 22, fontWeight: 700 },
+  alertLabel: { fontSize: 13, fontWeight: 600, color: '#2A2A2A' },
+  alertHint: { fontSize: 11, color: '#8A8680' },
 }
 
 function StatCard({ label, value, sub, accent = '#6b7280' }) {
@@ -866,9 +930,10 @@ const styles = {
   title:        { fontFamily:"'Cormorant Garamond', serif", fontSize:26, fontWeight:700, color:'#1E1E1E', margin:0 },
   subtitle:     { fontFamily:'system-ui', fontSize:12, color:'#8A8680', margin:'2px 0 0' },
   closeBtn:     { background:'transparent', border:'none', fontSize:28, cursor:'pointer', color:'#8A8680', lineHeight:1 },
-  tabs:         { display:'flex', borderBottom:'1px solid #DDD8CE', padding:'0 28px' },
-  tab:          { padding:'12px 16px', border:'none', background:'transparent', cursor:'pointer', fontFamily:'system-ui', fontSize:13, color:'#8A8680', borderBottom:'2px solid transparent' },
+  tabs:         { display:'flex', alignItems:'center', borderBottom:'1px solid #DDD8CE', padding:'0 28px', overflowX:'auto', whiteSpace:'nowrap' },
+  tab:          { padding:'12px 14px', border:'none', background:'transparent', cursor:'pointer', fontFamily:'system-ui', fontSize:13, color:'#8A8680', borderBottom:'2px solid transparent', flex:'0 0 auto' },
   tabActive:    { color:'var(--accent, #2C5545)', borderBottom:'2px solid var(--accent, #2C5545)', fontWeight:600 },
+  tabDivider:   { width:1, height:18, background:'#DDD8CE', margin:'0 6px', flex:'0 0 auto' },
   content:      { padding:'20px 28px', flex:1, overflowY:'auto' },
   loading:      { color:'#8A8680', fontSize:13, fontFamily:'system-ui' },
   empty:        { color:'#8A8680', fontSize:13, fontFamily:'system-ui', padding:'24px 0', textAlign:'center' },

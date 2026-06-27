@@ -325,6 +325,22 @@ async def admin_stats(tenant_id: str):
     except Exception:
         invoice_outstanding = invoice_overdue = invoice_paid_month = 0
 
+    # 7-day revenue trend (oldest → newest) from paid orders.
+    from datetime import date as _date, timedelta as _td
+    today_d = _date.fromisoformat(today)
+    series = []
+    for i in range(6, -1, -1):
+        d = (today_d - _td(days=i)).isoformat()
+        day_orders = [o for o in paid if o["created_at"][:10] == d]
+        series.append({"date": d, "revenue_cents": sum(o["total_cents"] for o in day_orders),
+                       "orders": len(day_orders)})
+
+    try:
+        low_stock = await service.get_low_stock_products(tenant_id, threshold=5)
+        low_stock_count = len(low_stock)
+    except Exception:
+        low_stock_count = 0
+
     return {
         "total_orders": len(paid),
         "total_revenue_cents": sum(o["total_cents"] for o in paid),
@@ -335,6 +351,8 @@ async def admin_stats(tenant_id: str):
         "invoice_outstanding_cents": invoice_outstanding,
         "invoice_overdue_cents": invoice_overdue,
         "invoice_paid_month_cents": invoice_paid_month,
+        "low_stock_count": low_stock_count,
+        "daily_revenue": series,
     }
 
 
