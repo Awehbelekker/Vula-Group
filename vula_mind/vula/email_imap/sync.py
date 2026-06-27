@@ -197,10 +197,12 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         logger.debug("attachment analysis skipped: %s", exc)
 
     try:
-        from vula.integrations.doc_filing import match_project, project_examples
+        from vula.integrations.doc_filing import (match_project, project_examples,
+                                                  lookup_learned_project)
         field_text = " ".join(str(v) for v in fields.values() if isinstance(v, (str, int, float)))
         hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
-        match = match_project(tenant_id, hint)
+        # Learned rules (from past corrections) win — they're high-confidence by definition.
+        match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
         confident = bool(match and match.get("confidence") == "high")
 
         # Only auto-file on a CONFIDENT match. Anything weaker (no match, or a single

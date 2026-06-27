@@ -104,6 +104,66 @@ def match_project(tenant_id: str, text: str) -> Optional[dict]:
     return None
 
 
+# Only specific signals — NOT 'payer' (usually the internal owner who pays everything,
+# which would over-generalise) and not generic from/to.
+_SIGNAL_KEYS = (("reference", "reference"), ("payee", "payee"),
+                ("supplier", "supplier"), ("vendor", "supplier"), ("client", "client"))
+
+
+def _signals_from(fields: dict) -> list:
+    """Extract (signal_type, normalised_value) learning signals from a doc's fields."""
+    out, seen = [], set()
+    for key, stype in _SIGNAL_KEYS:
+        v = (fields or {}).get(key)
+        if isinstance(v, str):
+            val = v.strip().lower()
+            if len(val) >= 3 and val not in seen:
+                seen.add(val)
+                out.append((stype, val))
+    return out
+
+
+def learn_filing_rule(tenant_id: str, fields: dict, project: str) -> int:
+    """Remember that a doc with these signals belongs to `project`."""
+    if not project or not fields:
+        return 0
+    n = 0
+    for stype, val in _signals_from(fields):
+        try:
+            existing = (_client().table("vula_filing_rules").select("id,hits")
+                        .eq("tenant_id", tenant_id).eq("signal", val).eq("project", project)
+                        .limit(1).execute().data or [])
+            if existing:
+                _client().table("vula_filing_rules").update(
+                    {"hits": (existing[0].get("hits") or 0) + 1, "last_used": "now()"}
+                ).eq("id", existing[0]["id"]).execute()
+            else:
+                _client().table("vula_filing_rules").insert(
+                    {"tenant_id": tenant_id, "signal": val, "signal_type": stype,
+                     "project": project}).execute()
+            n += 1
+        except Exception as exc:
+            logger.debug("learn_filing_rule skipped (run migration 026?): %s", exc)
+    return n
+
+
+def lookup_learned_project(tenant_id: str, fields: dict) -> Optional[dict]:
+    """If a learned rule matches this doc's signals, return its project (high confidence)."""
+    sigs = [v for _, v in _signals_from(fields)]
+    if not sigs:
+        return None
+    try:
+        rows = (_client().table("vula_filing_rules").select("project,signal,hits")
+                .eq("tenant_id", tenant_id).in_("signal", sigs)
+                .order("hits", desc=True).limit(1).execute().data or [])
+    except Exception:
+        return None
+    if rows:
+        return {"project": rows[0]["project"], "clickup_list_id": None,
+                "confidence": "high", "learned": rows[0]["signal"]}
+    return None
+
+
 def project_examples(tenant_id: str, n: int = 3) -> list[str]:
     """A few project labels to prompt the user with when asking which project."""
     labels: list[str] = []
@@ -322,5 +382,8 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     except Exception as exc:
         logger.warning("Pending doc update failed: %s", exc)
 
-    return {"filed": True, "project": match["project"],
+    # Learn from this correction so similar docs auto-file next time.
+    learned = learn_filing_rule(tenant_id, doc.get("fields") or {}, match["project"])
+
+    return {"filed": True, "project": match["project"], "learned_signals": learned,
             "clickup": bool(clickup_task_id), "filename": doc.get("filename")}
