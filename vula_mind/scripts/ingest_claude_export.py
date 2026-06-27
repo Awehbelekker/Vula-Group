@@ -291,7 +291,8 @@ async def ingest_bucket(items: list[ScoredConv], project_docs: list[dict],
         fp = dest_dir / f"conv_{safe or s.uuid[:8]}.txt"
         fp.write_text(s.formatted_text, encoding='utf-8')
         try:
-            result = await pipeline.ingest_file(fp)
+            # Chat exports are low-authority — excluded from factual retrieval.
+            result = await pipeline.ingest_file(fp, source_type="conversation")
             status = 'OK' if result.status in ('done', 'success') else 'FAIL'
             _p(f"  [{status}]  {s.title[:58]:<58} {result.chunks_stored} chunks")
             if result.status in ('done', 'success'):

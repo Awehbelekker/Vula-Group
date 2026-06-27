@@ -465,22 +465,30 @@ class QdrantStore:
         return f"vula_{tenant_id.replace('-', '_')}"
 
     async def ensure_collection(self, tenant_id: str, vector_size: int = 1024) -> None:
-        """Create collection if it doesn't exist."""
+        """Create collection if it doesn't exist, and ensure the source_type payload
+        index (required by Qdrant to filter authority-aware retrieval)."""
         name = self._collection_name(tenant_id)
         async with httpx.AsyncClient(timeout=10.0, headers=self._headers()) as client:
             resp = await client.get(f"{self.base}/collections/{name}")
-            if resp.status_code == 200:
-                return
-            resp = await client.put(
-                f"{self.base}/collections/{name}",
-                json={
-                    "vectors": {"size": vector_size, "distance": "Cosine"},
-                    "optimizers_config": {"default_segment_number": 2},
-                },
-            )
-            if resp.status_code not in (200, 201):
-                raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
-            logger.info("Created Qdrant collection: %s", name)
+            if resp.status_code != 200:
+                resp = await client.put(
+                    f"{self.base}/collections/{name}",
+                    json={
+                        "vectors": {"size": vector_size, "distance": "Cosine"},
+                        "optimizers_config": {"default_segment_number": 2},
+                    },
+                )
+                if resp.status_code not in (200, 201):
+                    raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
+                logger.info("Created Qdrant collection: %s", name)
+            # Idempotent: ensure the keyword index used by authority filtering.
+            try:
+                await client.put(
+                    f"{self.base}/collections/{name}/index",
+                    json={"field_name": "source_type", "field_schema": "keyword"},
+                )
+            except Exception as exc:
+                logger.debug("source_type index ensure skipped for %s: %s", name, exc)
 
     async def upsert_chunks(self, tenant_id: str, chunks: List[DocumentChunk]) -> int:
         """Store document chunks with embeddings."""
@@ -522,21 +530,43 @@ class QdrantStore:
         query_embedding: List[float],
         limit: int = 5,
         score_threshold: float = 0.3,
+        exclude_source_types: Optional[List[str]] = None,
     ) -> List[dict]:
-        """Semantic search across tenant's knowledge base."""
+        """Semantic search across tenant's knowledge base.
+
+        `exclude_source_types` filters out low-authority content (e.g. ingested chat
+        exports / auto-learned Q&A tagged 'conversation'/'learned') so factual answers
+        don't get polluted. Untagged legacy points are never excluded.
+        """
         name = self._collection_name(tenant_id)
+        body: dict = {
+            "vector": query_embedding,
+            "limit": limit,
+            "score_threshold": score_threshold,
+            "with_payload": True,
+        }
+        if exclude_source_types:
+            body["filter"] = {
+                "must_not": [
+                    {"key": "source_type", "match": {"value": t}}
+                    for t in exclude_source_types
+                ]
+            }
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             resp = await client.post(
                 f"{self.base}/collections/{name}/points/search",
-                json={
-                    "vector": query_embedding,
-                    "limit": limit,
-                    "score_threshold": score_threshold,
-                    "with_payload": True,
-                },
+                json=body,
             )
             if resp.status_code == 404:
                 return []
+            # If filtering is unavailable (e.g. missing index on a legacy collection),
+            # degrade gracefully to an unfiltered search rather than failing the reply.
+            if resp.status_code == 400 and "filter" in body:
+                logger.warning("Authority filter unavailable for %s — retrying unfiltered", name)
+                body.pop("filter", None)
+                resp = await client.post(
+                    f"{self.base}/collections/{name}/points/search", json=body,
+                )
             resp.raise_for_status()
             hits = resp.json().get("result", [])
             results = [hit["payload"] for hit in hits]
@@ -575,7 +605,7 @@ class VulaIngestionPipeline:
         self.embedder = EmbeddingEngine()
         self.store = QdrantStore()
 
-    async def ingest_file(self, file_path: Path) -> IngestionResult:
+    async def ingest_file(self, file_path: Path, source_type: str = "document") -> IngestionResult:
         """
         Full pipeline for a single file.
         Returns IngestionResult with stats.
@@ -618,6 +648,7 @@ class VulaIngestionPipeline:
                         metadata={
                             "file_type": file_path.suffix,
                             "file_size_kb": file_path.stat().st_size // 1024,
+                            "source_type": source_type,
                         },
                     )
                     all_chunks.append(chunk)
@@ -663,7 +694,8 @@ class VulaIngestionPipeline:
                 status="failed", error=str(e),
             )
 
-    async def ingest_text(self, content: str, filename: str, doc_id: str | None = None) -> IngestionResult:
+    async def ingest_text(self, content: str, filename: str, doc_id: str | None = None,
+                          source_type: str = "document") -> IngestionResult:
         """Ingest raw text directly — no file needed. Used to seed the training KB."""
         started = time.time()
         if doc_id is None:
@@ -679,7 +711,7 @@ class VulaIngestionPipeline:
                     page_num=1,
                     chunk_index=i,
                     text=chunk,
-                    metadata={"source": "training_kb"},
+                    metadata={"source": "training_kb", "source_type": source_type},
                 )
                 for i, chunk in enumerate(raw_chunks)
             ]
@@ -712,13 +744,26 @@ class VulaIngestionPipeline:
             results.append(result)
         return results
 
-    async def query(self, question: str, top_k: int = 5) -> List[dict]:
+    # Low-authority content excluded from factual retrieval (ingested chat exports
+    # and auto-learned Q&A) — see source_type tagging at ingest.
+    _NON_AUTHORITATIVE = ["conversation", "learned"]
+
+    async def query(self, question: str, top_k: int = 5,
+                    authoritative_only: bool = False) -> List[dict]:
         """
         Semantic search across this tenant's knowledge base.
         Returns relevant document chunks for RAG.
+
+        authoritative_only: exclude conversational/learned chunks (chat logs) so
+        factual/code answers come only from real documents and references.
         """
         query_embedding = await self.embedder.embed(question)
-        return await self.store.search(self.tenant_id, query_embedding, limit=top_k)
+        exclude = self._NON_AUTHORITATIVE if authoritative_only else None
+        return await self.store.search(
+            self.tenant_id, query_embedding, limit=top_k,
+            score_threshold=0.35 if authoritative_only else 0.3,
+            exclude_source_types=exclude,
+        )
 
     async def answer(
         self,

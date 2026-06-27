@@ -15,7 +15,7 @@ import re
 
 from config import settings
 from core.llm_router import resolve_generation_route
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, CONVERSATION_RULES
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class ArchitecturePlanningSkill(BaseSkill):
 
             # Tenant's own context — past projects, fee schedules
             tenant_pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            tenant_chunks = await tenant_pipeline.query(inp.question, top_k=inp.top_k)
+            tenant_chunks = await tenant_pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
             strong_tenant_hit = bool(tenant_chunks and tenant_chunks[0].get("score", 0) > 0.55)
             if tenant_chunks:
                 contexts.append("## Your practice's knowledge\n" + "\n\n".join(
@@ -52,7 +52,7 @@ class ArchitecturePlanningSkill(BaseSkill):
             # the tenant's own data (cloud embeddings make this ~0.5s).
             try:
                 training_pipeline = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
-                training_chunks = await training_pipeline.query(inp.question, top_k=inp.top_k)
+                training_chunks = await training_pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
                 if training_chunks:
                     contexts.append("## SA construction standards & rates\n" + "\n\n".join(
                         f"[{c.get('filename','standard')}]: {c.get('text','')[:400]}"
@@ -78,7 +78,7 @@ class ArchitecturePlanningSkill(BaseSkill):
             "Style: practical, specific, cite the relevant standard or clause where useful. "
             "All money in ZAR. Dates in DD Month YYYY. Phone numbers as 0XX XXX XXXX. "
             "If the question is outside SA construction practice, say so clearly.\n\n"
-            + CONVERSATION_RULES +
+            + behaviour_preamble() +
             "\nCapability: users CAN send you documents (PDF, Word, Excel) and images "
             "directly on WhatsApp — you automatically file them into the knowledge base "
             "and can then answer questions about them. If asked, tell them to just attach "

@@ -11,7 +11,7 @@ import logging
 import re
 
 from core.llm_router import resolve_generation_route
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, CONVERSATION_RULES
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class ReasoningSkill(BaseSkill):
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            chunks = await pipeline.query(inp.question, top_k=inp.top_k)
+            chunks = await pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
             if chunks:
                 kb_context = "\n\n".join(
                     f"[{c.get('filename','doc')}]: {c.get('text','')[:400]}"
@@ -47,7 +47,7 @@ class ReasoningSkill(BaseSkill):
             "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
             "Lead with the answer, skip preamble. "
             "Always work in ZAR for money, use SA conventions for dates and phone numbers.\n\n"
-            + CONVERSATION_RULES +
+            + behaviour_preamble() +
             "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
             "WhatsApp — you file them into the knowledge base automatically. If asked about "
             "uploading, tell them to just attach the file in this chat."

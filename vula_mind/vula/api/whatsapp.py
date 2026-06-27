@@ -396,6 +396,7 @@ async def _maybe_learn_from_exchange(tenant_id: str, question: str, answer: str)
             content=learned,
             filename=f"{doc_id}.txt",
             doc_id=doc_id,
+            source_type="learned",   # excluded from factual retrieval (low authority)
         )
         logger.info("Learned from exchange for tenant %s (%s)", tenant_id, doc_id)
     except Exception as exc:
