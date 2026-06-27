@@ -140,9 +140,24 @@ async def process_email_sync(tenant_id: str, max_emails: int = 20) -> dict:
 
 
 async def _file_attachment(tenant_id: str, em: dict, att: dict) -> None:
-    """Ingest an attachment into the KB + record it in the Documents library (project-matched)."""
+    """Ingest an attachment into the KB + record it in the Documents library. The AI
+    analyses the document (category/summary/fields) and project-matches on its CONTENT —
+    so e.g. a 'payment notification' that is actually a wage payment for a project gets
+    classified and filed correctly rather than dropped as noise."""
     from config import settings
     from vula.ingestion.pipeline import VulaIngestionPipeline
+
+    db = _client()
+    # Dedup: don't re-file the same attachment if it's already in the library.
+    try:
+        dup = (db.table("vula_filed_documents").select("id")
+               .eq("tenant_id", tenant_id).eq("source", "email")
+               .eq("filename", att["name"]).limit(1).execute().data or [])
+        if dup:
+            return
+    except Exception:
+        pass
+
     d = settings.upload_dir / tenant_id
     d.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", att["name"])
@@ -150,13 +165,26 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict) -> None:
     p.write_bytes(att["data"])
     res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
 
+    # Let the AI read it → category + summary + structured fields.
+    category, summary, fields = "Email attachment", em.get("subject"), {}
+    try:
+        from vula.api.whatsapp import _analyze_document
+        analysis = await _analyze_document(tenant_id, att["name"], p)
+        if analysis:
+            category = analysis.get("category") or category
+            summary = analysis.get("summary") or summary
+            fields = analysis.get("fields") or {}
+    except Exception as exc:
+        logger.debug("attachment analysis skipped: %s", exc)
+
     try:
         from vula.integrations.doc_filing import match_project
-        hint = f"{em.get('subject','')} {em.get('from','')} {em.get('body','')}"
+        field_text = " ".join(str(v) for v in fields.values() if isinstance(v, (str, int, float)))
+        hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
         match = match_project(tenant_id, hint)
-        _client().table("vula_filed_documents").insert({
+        db.table("vula_filed_documents").insert({
             "tenant_id": tenant_id, "project": match["project"] if match else None,
-            "category": "Email attachment", "summary": em.get("subject"), "filename": att["name"],
+            "category": category, "summary": summary, "fields": fields, "filename": att["name"],
             "mime": att.get("mime"), "doc_id": getattr(res, "doc_id", None),
             "source": "email", "status": "filed", "filed_by": em.get("from"),
         }).execute()
