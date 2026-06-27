@@ -77,26 +77,27 @@ async def assign_project(doc_id: str, body: AssignIn) -> dict:
         return {"error": "Document not found."}
     doc = rows[0]
 
-    clickup_task_id = None
+    clickup_list_id, clickup_task_id = body.clickup_list_id, None
     if body.clickup_list_id and doc.get("file_url"):
         try:
             import httpx
-            from vula.clickup import service as clickup_service
+            from vula.integrations.doc_filing import attach_into_project
             async with httpx.AsyncClient(timeout=60.0) as client:
                 fb = await client.get(doc["file_url"])
                 fb.raise_for_status()
                 data = fb.content
-            r = await clickup_service.attach_file_to_list(
-                doc["tenant_id"], body.clickup_list_id,
+            att = await attach_into_project(
+                doc["tenant_id"], body.project, body.clickup_list_id,
                 doc.get("filename") or "document", data,
                 doc.get("mime") or "application/octet-stream")
-            clickup_task_id = r.get("task_id")
+            clickup_list_id = att.get("clickup_list_id") or clickup_list_id
+            clickup_task_id = att.get("clickup_task_id")
         except Exception as exc:
             log.warning("ClickUp attach (assign) failed: %s", exc)
 
     try:
         _client().table("vula_documents").update({
-            "project": body.project, "clickup_list_id": body.clickup_list_id,
+            "project": body.project, "clickup_list_id": clickup_list_id,
             "clickup_task_id": clickup_task_id, "status": "filed",
         }).eq("id", doc_id).execute()
     except Exception as exc:

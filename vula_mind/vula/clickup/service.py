@@ -209,27 +209,30 @@ _DOCS_TASK_TITLE = "📎 Project Documents"
 
 
 async def attach_file_to_list(tenant_id: str, list_id: str, filename: str,
-                              data: bytes, content_type: str = "application/octet-stream") -> dict:
+                              data: bytes, content_type: str = "application/octet-stream",
+                              task_id: Optional[str] = None) -> dict:
     """File a document into a ClickUp list. ClickUp attachments are task-scoped,
-    so we find-or-create one "📎 Project Documents" task per list and attach the
-    file to it. Returns {task_id, attachment_id} or {error}.
+    so we attach to one "📎 Project Documents" task. If `task_id` is given (an
+    already-known project documents task) we attach straight to it; otherwise we
+    find-or-create the task in `list_id`. Returns {task_id, attachment_id} or {error}.
     """
     creds = _creds_or_raise(tenant_id)
     token = creds["token"]
 
-    # Find-or-create the per-list documents task.
-    existing = await find_task(tenant_id, _DOCS_TASK_TITLE, list_id=list_id)
-    if existing:
-        task_id = existing["id"]
-    else:
-        created = await create_task(
-            tenant_id, title=_DOCS_TASK_TITLE,
-            description="Documents filed here automatically by Vula from WhatsApp.",
-            list_id=list_id,
-        )
-        task_id = created.get("id")
-        if not task_id:
-            return {"error": created.get("error", "Could not create documents task.")}
+    if not task_id:
+        # Find-or-create the documents task in this list.
+        existing = await find_task(tenant_id, _DOCS_TASK_TITLE, list_id=list_id)
+        if existing:
+            task_id = existing["id"]
+        else:
+            created = await create_task(
+                tenant_id, title=_DOCS_TASK_TITLE,
+                description="Documents filed here automatically by Vula from WhatsApp.",
+                list_id=list_id,
+            )
+            task_id = created.get("id")
+            if not task_id:
+                return {"error": created.get("error", "Could not create documents task.")}
 
     # Attach the file (multipart). Note: no Content-Type header — httpx sets the
     # multipart boundary; ClickUp auth header carries the token.

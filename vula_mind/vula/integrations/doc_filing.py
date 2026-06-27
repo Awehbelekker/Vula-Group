@@ -118,6 +118,78 @@ def project_examples(tenant_id: str, n: int = 3) -> list[str]:
     return labels
 
 
+def _canonical_list_for_project(tenant_id: str, project: str) -> Optional[str]:
+    """One stable ClickUp list per project, so a project's docs always file to the
+    same place even when it spans many phase lists. Deterministic (sorted by name)."""
+    cands = [(lid, name) for lid, name in _clickup_candidates(tenant_id)
+             if _project_label(name) == project]
+    if not cands:
+        return None
+    cands.sort(key=lambda x: str(x[1]))
+    return cands[0][0]
+
+
+def _existing_project_task(tenant_id: str, project: str) -> Optional[tuple]:
+    """(list_id, task_id) of an already-created '📎 Project Documents' task for this
+    project, from our own records — so we never create a duplicate. Else None."""
+    if not project:
+        return None
+    try:
+        res = (_client().table("vula_documents")
+               .select("clickup_list_id,clickup_task_id")
+               .eq("tenant_id", tenant_id).eq("project", project)
+               .not_.is_("clickup_task_id", "null")
+               .order("created_at", desc=True).limit(1).execute())
+        rows = res.data or []
+    except Exception:
+        return None
+    if rows:
+        return rows[0].get("clickup_list_id"), rows[0].get("clickup_task_id")
+    return None
+
+
+def _existing_filed_doc(tenant_id: str, project: str, filename: str) -> Optional[dict]:
+    """Newest already-filed row with the same tenant+project+filename, or None."""
+    if not project or not filename:
+        return None
+    try:
+        res = (_client().table("vula_documents").select("*")
+               .eq("tenant_id", tenant_id).eq("project", project)
+               .eq("filename", filename).eq("status", "filed")
+               .order("created_at", desc=True).limit(1).execute())
+        rows = res.data or []
+    except Exception:
+        return None
+    return rows[0] if rows else None
+
+
+async def attach_into_project(tenant_id: str, project: Optional[str],
+                              candidate_list_id: Optional[str], filename: str,
+                              data: bytes, content_type: str) -> dict:
+    """Attach a file to a project's single '📎 Project Documents' task, reusing an
+    existing task (from our records) or a canonical list before creating anything.
+    Returns {clickup_list_id, clickup_task_id} (values may be None on failure)."""
+    from vula.clickup import service as clickup_service
+
+    list_id, task_id = candidate_list_id, None
+    if project:
+        reuse = _existing_project_task(tenant_id, project)
+        if reuse:
+            list_id, task_id = reuse[0] or candidate_list_id, reuse[1]
+        else:
+            list_id = _canonical_list_for_project(tenant_id, project) or candidate_list_id
+
+    if not list_id:
+        return {"clickup_list_id": None, "clickup_task_id": None}
+    try:
+        res = await clickup_service.attach_file_to_list(
+            tenant_id, list_id, filename, data, content_type, task_id=task_id)
+        return {"clickup_list_id": list_id, "clickup_task_id": res.get("task_id")}
+    except Exception as exc:
+        logger.warning("ClickUp attach into project '%s' failed: %s", project, exc)
+        return {"clickup_list_id": list_id, "clickup_task_id": None}
+
+
 async def file_document(
     tenant_id: str, *, filename: str, data: Optional[bytes], content_type: str,
     category: str = "", summary: str = "", fields: Optional[dict] = None,
@@ -129,6 +201,20 @@ async def file_document(
     given and we have bytes) attach the file into ClickUp. Returns the row dict
     plus `clickup_task_id` when attached.
     """
+    # Skip-duplicate: same file already filed under this project → update, don't re-attach.
+    if status == "filed" and project:
+        dup = _existing_filed_doc(tenant_id, project, filename)
+        if dup:
+            try:
+                _client().table("vula_documents").update({
+                    "category": category, "summary": summary, "fields": fields or {},
+                    "doc_id": doc_id or dup.get("doc_id"),
+                }).eq("id", dup["id"]).execute()
+            except Exception as exc:
+                logger.debug("Duplicate doc update skipped: %s", exc)
+            dup["duplicate"] = True
+            return dup
+
     file_url = None
     if data:
         safe = re.sub(r"[^A-Za-z0-9._-]+", "_", filename or "document")
@@ -141,13 +227,10 @@ async def file_document(
 
     clickup_task_id = None
     if clickup_list_id and data:
-        try:
-            from vula.clickup import service as clickup_service
-            res = await clickup_service.attach_file_to_list(
-                tenant_id, clickup_list_id, filename, data, content_type)
-            clickup_task_id = res.get("task_id")
-        except Exception as exc:
-            logger.warning("ClickUp attach failed for %s: %s", filename, exc)
+        att = await attach_into_project(tenant_id, project, clickup_list_id,
+                                        filename, data, content_type)
+        clickup_list_id = att.get("clickup_list_id") or clickup_list_id
+        clickup_task_id = att.get("clickup_task_id")
 
     row = {
         "tenant_id": tenant_id, "project": project, "clickup_list_id": clickup_list_id,
@@ -203,25 +286,37 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
             return None
         return {"unmatched": True, "filename": doc.get("filename")}
 
-    clickup_task_id = None
+    # Same file already filed under this project → drop the pending dup, point at it.
+    existing = _existing_filed_doc(tenant_id, match["project"], doc.get("filename") or "")
+    if existing and existing.get("id") != doc["id"]:
+        try:
+            _client().table("vula_documents").delete().eq("id", doc["id"]).execute()
+        except Exception:
+            pass
+        return {"filed": True, "project": match["project"],
+                "clickup": bool(existing.get("clickup_task_id")),
+                "filename": doc.get("filename"), "duplicate": True}
+
+    clickup_list_id, clickup_task_id = match.get("clickup_list_id"), None
     if match.get("clickup_list_id") and doc.get("file_url"):
         try:
             import httpx
-            from vula.clickup import service as clickup_service
             async with httpx.AsyncClient(timeout=60.0) as client:
                 fb = await client.get(doc["file_url"])
                 fb.raise_for_status()
                 data = fb.content
-            r = await clickup_service.attach_file_to_list(
-                tenant_id, match["clickup_list_id"], doc.get("filename") or "document",
-                data, doc.get("mime") or "application/octet-stream")
-            clickup_task_id = r.get("task_id")
+            att = await attach_into_project(
+                tenant_id, match["project"], match["clickup_list_id"],
+                doc.get("filename") or "document", data,
+                doc.get("mime") or "application/octet-stream")
+            clickup_list_id = att.get("clickup_list_id") or clickup_list_id
+            clickup_task_id = att.get("clickup_task_id")
         except Exception as exc:
             logger.warning("ClickUp attach (pending resolve) failed: %s", exc)
 
     try:
         _client().table("vula_documents").update({
-            "project": match["project"], "clickup_list_id": match.get("clickup_list_id"),
+            "project": match["project"], "clickup_list_id": clickup_list_id,
             "clickup_task_id": clickup_task_id, "status": "filed",
         }).eq("id", doc["id"]).execute()
     except Exception as exc:
