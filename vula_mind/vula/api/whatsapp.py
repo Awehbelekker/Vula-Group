@@ -1465,6 +1465,12 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     """
     text_lower = text.lower().strip()
 
+    # Opt-out / data deletion (POPIA) — honoured on commerce lines too, so STOP
+    # from a customer who receives broadcasts actually suppresses them.
+    if _DELETE_RE.match(text):
+        await _handle_data_deletion(phone, tenant_id)
+        return
+
     # Record implied marketing consent on first inbound (POPIA). Best-effort.
     try:
         from vula.api.commerce import record_inbound_consent
