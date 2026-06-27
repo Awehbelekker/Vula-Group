@@ -8,6 +8,7 @@
 
 import VulaYocoConnect from './VulaYocoConnect'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
+import VulaClickUpConnect from './VulaClickUpConnect'
 
 export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
   return (
@@ -33,6 +34,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
           Connect your WhatsApp Business number so customers can order and chat to your AI assistant.
         </p>
         <VulaWhatsAppConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
+      </section>
+
+      {/* ClickUp */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🗂️ ClickUp</h4>
+        <p style={s.sectionHint}>
+          Connect ClickUp to create, list and update tasks — and set reminders — straight from WhatsApp.
+        </p>
+        <VulaClickUpConnect tenantId={tenantId} tenantName={tenantName} />
       </section>
 
       <p style={s.footer}>Powered by Vula</p>

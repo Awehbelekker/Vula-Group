@@ -107,6 +107,13 @@ class Settings(BaseSettings):
     vula_fb_app_secret: str = ""   # Facebook App Secret
     vula_fb_config_id: str = ""    # Embedded Signup configuration ID
 
+    # ── ClickUp OAuth app (one app for all Vula tenants) ────────────────────
+    # Create at ClickUp → Settings → Apps; redirect URL = <api>/v1/clickup/oauth/callback
+    clickup_client_id: str = ""
+    clickup_client_secret: str = ""
+    # Public base URL the OAuth redirect comes back to (defaults to Railway prod)
+    public_base_url: str = "https://vula-group-production.up.railway.app"
+
     # ── Vula Commerce ────────────────────────────────────────────────────────
     # Supabase service role key alias (commerce service uses this name)
     supabase_service_role_key: str = ""

@@ -1,75 +1,183 @@
 """
-vula/api/clickup.py — ClickUp connect + inbound webhook.
+vula/api/clickup.py — ClickUp one-click OAuth connect + inbound webhook.
 
-    POST /v1/clickup/connect          — store a tenant's ClickUp token + list, register webhook
-    GET  /v1/clickup/status/{tenant}  — connection status
-    POST /v1/clickup/webhook          — ClickUp → Vula (task status changes mirror back to field-ops)
+One-click flow (mirrors WhatsApp connect):
+    GET  /v1/clickup/authorize-url?tenant_id=   → ClickUp consent URL (state=tenant)
+    GET  /v1/clickup/oauth/callback?code=&state= → exchange + auto-discover + store + close popup
+    GET  /v1/clickup/status/{tenant_id}          → connection status
+    GET  /v1/clickup/lists/{tenant_id}           → discovered lists (for default picker)
+    POST /v1/clickup/default-list                 → set the default list
+    POST /v1/clickup/connect                      → manual token fallback
+    POST /v1/clickup/webhook                      → ClickUp → Vula status mirror
 """
 from __future__ import annotations
 
 import logging
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from config import settings
+from vula.clickup import service
 from vula.clickup.credentials import _client, invalidate
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["clickup"])
 
+_AUTHORIZE = "https://app.clickup.com/api"
+
+
+def _store_connection(tenant_id: str, token: str, team_id: Optional[str],
+                     lists: Optional[list], default: Optional[str],
+                     team_name: str = "", connected_by: str = "") -> None:
+    """Upsert a tenant's ClickUp connection (mirrors whatsapp_connect upsert)."""
+    list_ids: dict = {"default": default} if default else {}
+    if lists:
+        for l in lists:
+            if l.get("id"):
+                list_ids[l["id"]] = l.get("name")
+    _client().table("vula_clickup_accounts").upsert({
+        "tenant_id": tenant_id,
+        "api_token": token,
+        "team_id": team_id,
+        "list_ids": list_ids,
+        "status": "connected",
+        "connected_by": connected_by,
+        "connected_at": "now()",
+    }, on_conflict="tenant_id").execute()
+    invalidate(tenant_id)
+
+
+async def _register_webhook(tenant_id: str) -> bool:
+    try:
+        res = await service.register_webhook(
+            tenant_id, f"{settings.public_base_url}/v1/clickup/webhook")
+        return "id" in res
+    except Exception as exc:
+        log.warning("ClickUp webhook registration failed for %s: %s", tenant_id, exc)
+        return False
+
+
+# ── One-click OAuth ───────────────────────────────────────────────────────────
+
+@router.get("/authorize-url")
+async def authorize_url(tenant_id: str) -> dict:
+    """Return the ClickUp consent URL for this tenant (opened in a popup)."""
+    if not settings.clickup_client_id:
+        return {"error": "ClickUp app not configured (CLICKUP_CLIENT_ID missing)."}
+    params = {
+        "client_id": settings.clickup_client_id,
+        "redirect_uri": f"{settings.public_base_url}/v1/clickup/oauth/callback",
+        "state": tenant_id,
+    }
+    return {"url": f"{_AUTHORIZE}?{urlencode(params)}"}
+
+
+def _popup_close_html(message: str, ok: bool = True) -> HTMLResponse:
+    colour = "#2C5545" if ok else "#b91c1c"
+    return HTMLResponse(
+        f"""<!doctype html><html><head><meta charset="utf-8"><title>ClickUp</title></head>
+        <body style="font-family:system-ui;text-align:center;padding:48px;color:{colour}">
+        <h2>{message}</h2><p>You can close this window.</p>
+        <script>try{{window.opener&&window.opener.postMessage('clickup-connected','*');}}catch(e){{}}
+        setTimeout(function(){{window.close();}}, 1200);</script>
+        </body></html>"""
+    )
+
+
+@router.get("/oauth/callback")
+async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
+    """ClickUp redirects here. Exchange code → token, auto-discover, store, close popup."""
+    tenant_id = state
+    if not code or not tenant_id:
+        return _popup_close_html("Connection cancelled.", ok=False)
+    try:
+        token = await service.exchange_code(code)
+        if not token:
+            return _popup_close_html("Couldn't get a ClickUp token.", ok=False)
+        info = await service.discover_team_and_lists(token)
+        _store_connection(tenant_id, token, info.get("team_id"), info.get("lists"),
+                         info.get("default"), team_name=info.get("team_name") or "")
+        await _register_webhook(tenant_id)
+        return _popup_close_html(f"ClickUp connected — {info.get('team_name') or 'workspace'} ✅")
+    except Exception as exc:
+        log.error("ClickUp OAuth callback failed for %s: %s", tenant_id, exc)
+        return _popup_close_html("ClickUp connection failed. Please try again.", ok=False)
+
+
+# ── Status / lists / default ──────────────────────────────────────────────────
+
+@router.get("/status/{tenant_id}")
+async def status(tenant_id: str) -> dict:
+    try:
+        res = (_client().table("vula_clickup_accounts")
+               .select("tenant_id,team_id,list_ids,status,connected_at")
+               .eq("tenant_id", tenant_id).limit(1).execute())
+        rows = res.data or []
+    except Exception:
+        rows = []
+    if not rows:
+        return {"tenant_id": tenant_id, "status": "not_connected"}
+    row = rows[0]
+    lists = row.get("list_ids") or {}
+    row["default_list_id"] = lists.get("default") if isinstance(lists, dict) else None
+    return row
+
+
+@router.get("/lists/{tenant_id}")
+async def lists(tenant_id: str) -> dict:
+    """Return the tenant's discovered lists for the default-list picker."""
+    res = (_client().table("vula_clickup_accounts").select("list_ids")
+           .eq("tenant_id", tenant_id).limit(1).execute())
+    rows = res.data or []
+    raw = (rows[0].get("list_ids") if rows else {}) or {}
+    items = [{"id": k, "name": v} for k, v in raw.items() if k != "default"]
+    return {"lists": items, "default": raw.get("default")}
+
+
+class DefaultListIn(BaseModel):
+    tenant_id: str
+    list_id: str
+
+
+@router.post("/default-list")
+async def set_default_list(body: DefaultListIn) -> dict:
+    res = (_client().table("vula_clickup_accounts").select("list_ids")
+           .eq("tenant_id", body.tenant_id).limit(1).execute())
+    rows = res.data or []
+    raw = (rows[0].get("list_ids") if rows else {}) or {}
+    raw["default"] = body.list_id
+    _client().table("vula_clickup_accounts").update({"list_ids": raw}) \
+        .eq("tenant_id", body.tenant_id).execute()
+    invalidate(body.tenant_id)
+    return {"tenant_id": body.tenant_id, "default_list_id": body.list_id}
+
+
+# ── Manual token fallback ─────────────────────────────────────────────────────
 
 class ConnectIn(BaseModel):
     tenant_id: str
     api_token: str
     team_id: Optional[str] = None
     default_list_id: str
-    space_id: Optional[str] = None
     connected_by: Optional[str] = None
 
 
 @router.post("/connect")
 async def connect(body: ConnectIn) -> dict:
-    """Store a tenant's ClickUp credentials and register the status webhook."""
-    record = {
-        "tenant_id": body.tenant_id,
-        "api_token": body.api_token,
-        "team_id": body.team_id,
-        "list_ids": {"default": body.default_list_id},
-        "space_id": body.space_id,
-        "status": "connected",
-        "connected_by": body.connected_by,
-        "connected_at": "now()",
-    }
-    _client().table("vula_clickup_accounts").upsert(record, on_conflict="tenant_id").execute()
-    invalidate(body.tenant_id)
-
-    webhook_ok = False
-    try:
-        from vula.clickup import service
-        base = settings.public_base_url if hasattr(settings, "public_base_url") else \
-            "https://vula-group-production.up.railway.app"
-        res = await service.register_webhook(body.tenant_id, f"{base}/v1/clickup/webhook")
-        webhook_ok = "id" in res
-    except Exception as exc:
-        log.warning("ClickUp webhook registration failed for %s: %s", body.tenant_id, exc)
-
-    return {"tenant_id": body.tenant_id, "status": "connected", "webhook_registered": webhook_ok}
+    _store_connection(body.tenant_id, body.api_token, body.team_id, None,
+                     body.default_list_id, connected_by=body.connected_by or "")
+    ok = await _register_webhook(body.tenant_id)
+    return {"tenant_id": body.tenant_id, "status": "connected", "webhook_registered": ok}
 
 
-@router.get("/status/{tenant_id}")
-async def status(tenant_id: str) -> dict:
-    res = (_client().table("vula_clickup_accounts")
-           .select("tenant_id,team_id,list_ids,status,connected_at")
-           .eq("tenant_id", tenant_id).limit(1).execute())
-    rows = res.data or []
-    return rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
-
+# ── Inbound webhook (ClickUp → Vula) ──────────────────────────────────────────
 
 @router.post("/webhook")
 async def webhook(request: Request) -> dict:
-    """ClickUp task updates → mirror status back onto the linked field-ops task."""
     try:
         body = await request.json()
     except Exception:
@@ -84,7 +192,6 @@ async def webhook(request: Request) -> dict:
     if not link:
         return {"status": "unmapped"}
 
-    # Pull the new status from the history_items payload if present.
     new_status = None
     for h in body.get("history_items", []) or []:
         after = h.get("after")
@@ -93,7 +200,6 @@ async def webhook(request: Request) -> dict:
     if not new_status:
         return {"status": "no_status_change"}
 
-    # Map ClickUp status back to a field-ops status.
     fo_status = {
         "complete": "complete", "closed": "complete", "done": "complete",
         "in progress": "in_progress", "to do": "pending", "open": "pending",

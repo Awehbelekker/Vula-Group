@@ -56,6 +56,56 @@ def _creds_or_raise(tenant_id: str) -> dict:
     return creds
 
 
+# ── OAuth (one-click connect) ─────────────────────────────────────────────────
+
+async def exchange_code(code: str) -> Optional[str]:
+    """Exchange a ClickUp OAuth code for a (long-lived) access token."""
+    from config import settings
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(f"{_BASE}/oauth/token", params={
+            "client_id": settings.clickup_client_id,
+            "client_secret": settings.clickup_client_secret,
+            "code": code,
+        })
+        r.raise_for_status()
+        return r.json().get("access_token")
+
+
+async def discover_team_and_lists(token: str) -> dict:
+    """After OAuth, find the user's first workspace and its lists (folderless +
+    folder lists). Returns {team_id, team_name, lists: [{id, name}], default}.
+    """
+    hdr = _headers(token)
+    out: dict[str, Any] = {"team_id": None, "team_name": None, "lists": [], "default": None}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        teams = (await client.get(f"{_BASE}/team", headers=hdr)).json().get("teams", [])
+        if not teams:
+            return out
+        team = teams[0]
+        out["team_id"], out["team_name"] = team.get("id"), team.get("name")
+
+        spaces = (await client.get(f"{_BASE}/team/{team['id']}/space",
+                                   headers=hdr, params={"archived": "false"})).json().get("spaces", [])
+        lists: list[dict] = []
+        for sp in spaces:
+            sid = sp.get("id")
+            # Folderless lists
+            fl = (await client.get(f"{_BASE}/space/{sid}/list",
+                                   headers=hdr, params={"archived": "false"})).json().get("lists", [])
+            lists += [{"id": l.get("id"), "name": l.get("name")} for l in fl]
+            # Lists inside folders
+            folders = (await client.get(f"{_BASE}/space/{sid}/folder",
+                                        headers=hdr, params={"archived": "false"})).json().get("folders", [])
+            for f in folders:
+                for l in f.get("lists", []):
+                    lists.append({"id": l.get("id"), "name": f"{f.get('name')} / {l.get('name')}"})
+            if len(lists) >= 50:
+                break
+    out["lists"] = lists
+    out["default"] = lists[0]["id"] if lists else None
+    return out
+
+
 async def create_task(tenant_id: str, title: str, description: str = "",
                       due_date: Optional[str] = None, list_id: Optional[str] = None,
                       status: Optional[str] = None, assignees: Optional[list] = None) -> dict:
