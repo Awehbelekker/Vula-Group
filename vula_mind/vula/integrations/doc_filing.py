@@ -104,9 +104,11 @@ def match_project(tenant_id: str, text: str) -> Optional[dict]:
     return None
 
 
-# Only specific signals — NOT 'payer' (usually the internal owner who pays everything,
-# which would over-generalise) and not generic from/to.
-_SIGNAL_KEYS = (("reference", "reference"), ("payee", "payee"),
+# Specific signals only — NOT 'payer' (usually the internal owner who pays everything).
+# A bank account number is the strongest: unique to a beneficiary, immune to name spelling.
+_SIGNAL_KEYS = (("account_number", "account"), ("account", "account"),
+                ("beneficiary_account", "account"),
+                ("reference", "reference"), ("payee", "payee"),
                 ("supplier", "supplier"), ("vendor", "supplier"), ("client", "client"))
 
 

@@ -71,7 +71,7 @@ def _tok(s: str) -> set:
 
 
 def _find_match(tenant_id: str, want_kind: str, amount: float, counterparty: str,
-                reference: str) -> Optional[dict]:
+                reference: str, _account: str = "") -> Optional[dict]:
     """Find an unreconciled counterpart (invoice<->payment) by amount + supplier/reference."""
     try:
         rows = (_client().table("vula_project_finances").select("*")
@@ -86,6 +86,8 @@ def _find_match(tenant_id: str, want_kind: str, amount: float, counterparty: str
         if abs(float(r.get("amount") or 0) - amount) > tol:
             continue                         # amounts must line up
         score = 2                            # amount match is the anchor
+        if _account and _account == (r.get("bank_account") or "").strip():
+            score += 5                       # same bank account = definitive
         if ref and ref == (r.get("reference") or "").lower().strip():
             score += 3
         if ctoks and ctoks & _tok(r.get("counterparty") or ""):
@@ -108,21 +110,23 @@ def post_finance_from_doc(tenant_id: str, project: Optional[str], fields: dict,
     kind = _kind(category, summary)
     counterparty = f.get("payee") or f.get("supplier") or f.get("payer") or f.get("client")
     reference = f.get("reference")
+    account = str(f.get("account_number") or f.get("account") or f.get("beneficiary_account") or "").strip()
     row = {
         "tenant_id": tenant_id, "project": project, "doc_id": doc_id, "filename": filename,
         "direction": _direction(f, summary, category, owner_names),
-        "amount": amount, "counterparty": counterparty, "reference": reference,
-        "category": category, "kind": kind,
+        "amount": amount, "counterparty": counterparty, "bank_account": account or None,
+        "reference": reference, "category": category, "kind": kind,
         "description": f.get("description") or f.get("line_items") or summary,
         "occurred_at": f.get("date"), "source": "email", "reconciled": False,
     }
 
     # Reconcile a payment against an existing invoice (or vice-versa) → inherit what it's
     # for + the project from the matched doc, rather than relying on keyword guessing.
+    # Bank account number is the strongest match key.
     mate = None
     if kind in ("payment", "invoice"):
         mate = _find_match(tenant_id, "invoice" if kind == "payment" else "payment",
-                           amount, counterparty, reference)
+                           amount, counterparty, reference, account)
     if mate:
         row["reconciled"] = True
         row["matched_id"] = mate["id"]

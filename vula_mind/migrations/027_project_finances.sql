@@ -10,6 +10,7 @@ create table if not exists vula_project_finances (
     direction    text not null default 'unknown',   -- in | out | unknown
     amount       numeric not null default 0,
     counterparty text,
+    bank_account text,                               -- beneficiary account no. (strong supplier id)
     reference    text,
     category     text,
     kind         text default 'other',              -- invoice | payment | other

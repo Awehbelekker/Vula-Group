@@ -12,6 +12,7 @@ import VulaDocuments from "./components/VulaDocuments";
 import VulaProjects from "./components/VulaProjects";
 import VulaQSRates from "./components/VulaQSRates";
 import VulaContacts from "./components/VulaContacts";
+import VulaFinances from "./components/VulaFinances";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -44,6 +45,7 @@ const TABS = [
   { id: "projects", label: "Projects", component: VulaProjects },
   { id: "qsrates", label: "QS Rates", component: VulaQSRates },
   { id: "contacts", label: "Contacts", component: VulaContacts },
+  { id: "finances", label: "Finances", component: VulaFinances },
   { id: "docs", label: "Documents", component: VulaDocuments },
   { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
   { id: "training", label: "Training KB", component: VulaTraining },
