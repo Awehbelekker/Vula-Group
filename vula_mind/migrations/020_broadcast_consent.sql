@@ -36,3 +36,8 @@ create index if not exists idx_commerce_consent_tenant on commerce_consent (tena
 
 -- failed_count may not exist on the broadcast log yet (mig 006 had delivered/read only).
 alter table commerce_broadcast_logs add column if not exists failed_count int default 0;
+
+-- Pre-existing bug: commerce_broadcast_logs has an updated_at TRIGGER but no
+-- updated_at COLUMN, so every UPDATE to it 400s ("record new has no field updated_at").
+-- Add the column the trigger expects.
+alter table commerce_broadcast_logs add column if not exists updated_at timestamptz default now();
