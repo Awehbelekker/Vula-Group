@@ -48,7 +48,8 @@ def _fetch_new(creds: dict, last_uid: int, max_emails: int) -> dict:
                 when = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).isoformat()
             except Exception:
                 when = datetime.now(timezone.utc).isoformat()
-            people = getaddresses([msg.get("From", ""), msg.get("To", ""), msg.get("Cc", "")])
+            people = [(_hdr(n), a) for n, a in
+                      getaddresses([msg.get("From", ""), msg.get("To", ""), msg.get("Cc", "")])]
             body, attachments = "", []
             for part in msg.walk():
                 if part.get_content_type() == "text/plain" and not body and "attachment" not in str(part.get("Content-Disposition") or "").lower():
