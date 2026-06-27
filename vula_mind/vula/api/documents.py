@@ -28,7 +28,7 @@ def _client():
 async def list_filed(tenant_id: str, project: Optional[str] = None) -> dict:
     """Filed documents for a tenant (newest first), optionally filtered by project."""
     try:
-        q = (_client().table("vula_documents").select("*")
+        q = (_client().table("vula_filed_documents").select("*")
              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(500))
         if project:
             q = q.eq("project", project)
@@ -69,7 +69,7 @@ class AssignIn(BaseModel):
 async def assign_project(doc_id: str, body: AssignIn) -> dict:
     """Manually file a document under a project (and attach to ClickUp if mapped)."""
     try:
-        res = _client().table("vula_documents").select("*").eq("id", doc_id).limit(1).execute()
+        res = _client().table("vula_filed_documents").select("*").eq("id", doc_id).limit(1).execute()
         rows = res.data or []
     except Exception as exc:
         return {"error": str(exc)}
@@ -96,7 +96,7 @@ async def assign_project(doc_id: str, body: AssignIn) -> dict:
             log.warning("ClickUp attach (assign) failed: %s", exc)
 
     try:
-        _client().table("vula_documents").update({
+        _client().table("vula_filed_documents").update({
             "project": body.project, "clickup_list_id": clickup_list_id,
             "clickup_task_id": clickup_task_id, "status": "filed",
         }).eq("id", doc_id).execute()

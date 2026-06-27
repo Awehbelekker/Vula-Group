@@ -4,7 +4,7 @@ vula/integrations/doc_filing.py — Smart document filing.
 When a tenant WhatsApps a doc/photo, Vula reads + classifies it (whatsapp.py
 `_analyze_document`) and ingests it into the KB. This module adds the *filing*
 layer: match the document to a project, store a durable copy + a queryable record
-in `vula_documents`, and — when the project maps to a ClickUp list — attach the
+in `vula_filed_documents`, and — when the project maps to a ClickUp list — attach the
 file into ClickUp (one "📎 Project Documents" task per list).
 
 Project taxonomy: the tenant's ClickUp lists first, field-ops `project_id`s as
@@ -135,7 +135,7 @@ def _existing_project_task(tenant_id: str, project: str) -> Optional[tuple]:
     if not project:
         return None
     try:
-        res = (_client().table("vula_documents")
+        res = (_client().table("vula_filed_documents")
                .select("clickup_list_id,clickup_task_id")
                .eq("tenant_id", tenant_id).eq("project", project)
                .not_.is_("clickup_task_id", "null")
@@ -153,7 +153,7 @@ def _existing_filed_doc(tenant_id: str, project: str, filename: str) -> Optional
     if not project or not filename:
         return None
     try:
-        res = (_client().table("vula_documents").select("*")
+        res = (_client().table("vula_filed_documents").select("*")
                .eq("tenant_id", tenant_id).eq("project", project)
                .eq("filename", filename).eq("status", "filed")
                .order("created_at", desc=True).limit(1).execute())
@@ -197,7 +197,7 @@ async def file_document(
     project: Optional[str] = None, clickup_list_id: Optional[str] = None,
     status: str = "filed",
 ) -> dict:
-    """Store a durable copy + a `vula_documents` row, and (if a ClickUp list is
+    """Store a durable copy + a `vula_filed_documents` row, and (if a ClickUp list is
     given and we have bytes) attach the file into ClickUp. Returns the row dict
     plus `clickup_task_id` when attached.
     """
@@ -206,7 +206,7 @@ async def file_document(
         dup = _existing_filed_doc(tenant_id, project, filename)
         if dup:
             try:
-                _client().table("vula_documents").update({
+                _client().table("vula_filed_documents").update({
                     "category": category, "summary": summary, "fields": fields or {},
                     "doc_id": doc_id or dup.get("doc_id"),
                 }).eq("id", dup["id"]).execute()
@@ -240,11 +240,11 @@ async def file_document(
         "status": status, "filed_by": filed_by,
     }
     try:
-        ins = _client().table("vula_documents").insert(row).execute()
+        ins = _client().table("vula_filed_documents").insert(row).execute()
         if ins.data:
             row["id"] = ins.data[0].get("id")
     except Exception as exc:
-        logger.warning("vula_documents insert failed (run migration 015?): %s", exc)
+        logger.warning("vula_filed_documents insert failed (run migration 015?): %s", exc)
     return row
 
 
@@ -259,7 +259,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     try:
         from datetime import datetime, timedelta, timezone
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
-        res = (_client().table("vula_documents").select("*")
+        res = (_client().table("vula_filed_documents").select("*")
                .eq("tenant_id", tenant_id).eq("filed_by", phone)
                .eq("status", "pending_project").gte("created_at", cutoff)
                .order("created_at", desc=True).limit(1).execute())
@@ -273,7 +273,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     # "skip" → leave it unfiled (still stored + in KB).
     if text.strip().lower() in ("skip", "none", "no project", "unfiled", "leave it"):
         try:
-            _client().table("vula_documents").update({"status": "filed"}) \
+            _client().table("vula_filed_documents").update({"status": "filed"}) \
                 .eq("id", doc["id"]).execute()
         except Exception:
             pass
@@ -290,7 +290,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     existing = _existing_filed_doc(tenant_id, match["project"], doc.get("filename") or "")
     if existing and existing.get("id") != doc["id"]:
         try:
-            _client().table("vula_documents").delete().eq("id", doc["id"]).execute()
+            _client().table("vula_filed_documents").delete().eq("id", doc["id"]).execute()
         except Exception:
             pass
         return {"filed": True, "project": match["project"],
@@ -315,7 +315,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
             logger.warning("ClickUp attach (pending resolve) failed: %s", exc)
 
     try:
-        _client().table("vula_documents").update({
+        _client().table("vula_filed_documents").update({
             "project": match["project"], "clickup_list_id": clickup_list_id,
             "clickup_task_id": clickup_task_id, "status": "filed",
         }).eq("id", doc["id"]).execute()

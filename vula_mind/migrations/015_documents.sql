@@ -4,7 +4,7 @@
 -- KB, then FILES a durable copy here, linked to a project. When the project maps to a
 -- ClickUp list, the file is also attached into ClickUp (one "Project Documents" task).
 
-create table if not exists vula_documents (
+create table if not exists vula_filed_documents (
     id              uuid primary key default gen_random_uuid(),
     tenant_id       text not null,
     project         text,                       -- matched project / ClickUp list name (null = unfiled)
@@ -23,6 +23,6 @@ create table if not exists vula_documents (
     created_at      timestamptz not null default now()
 );
 
-create index if not exists idx_vula_documents_tenant   on vula_documents (tenant_id, created_at desc);
-create index if not exists idx_vula_documents_project  on vula_documents (tenant_id, project);
-create index if not exists idx_vula_documents_pending  on vula_documents (tenant_id, filed_by, status);
+create index if not exists idx_vula_filed_documents_tenant   on vula_filed_documents (tenant_id, created_at desc);
+create index if not exists idx_vula_filed_documents_project  on vula_filed_documents (tenant_id, project);
+create index if not exists idx_vula_filed_documents_pending  on vula_filed_documents (tenant_id, filed_by, status);
