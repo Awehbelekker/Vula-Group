@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     # Public base URL the OAuth redirect comes back to (defaults to Railway prod)
     public_base_url: str = "https://vula-group-production.up.railway.app"
 
+    # ── Google OAuth app (one app for all tenants — Drive + Gmail) ──────────
+    # Create in Google Cloud Console; redirect URI = <api>/v1/google/oauth/callback
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
     # ── Vula Commerce ────────────────────────────────────────────────────────
     # Supabase service role key alias (commerce service uses this name)
     supabase_service_role_key: str = ""

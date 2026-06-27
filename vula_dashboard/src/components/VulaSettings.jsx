@@ -9,6 +9,7 @@
 import VulaYocoConnect from './VulaYocoConnect'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaClickUpConnect from './VulaClickUpConnect'
+import VulaGoogleConnect from './VulaGoogleConnect'
 
 export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
   return (
@@ -43,6 +44,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
           Connect ClickUp to create, list and update tasks — and set reminders — straight from WhatsApp.
         </p>
         <VulaClickUpConnect tenantId={tenantId} tenantName={tenantName} />
+      </section>
+
+      {/* Google */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🔵 Google (Drive &amp; Gmail)</h4>
+        <p style={s.sectionHint}>
+          Connect Google so Vula can find &amp; file Drive documents and draft Gmail replies (draft-only).
+        </p>
+        <VulaGoogleConnect tenantId={tenantId} tenantName={tenantName} />
       </section>
 
       <p style={s.footer}>Powered by Vula</p>

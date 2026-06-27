@@ -43,6 +43,10 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "how many parking", "parking bays", "occupant load", "occupancy load",
                              "maximum occupancy", "max occupancy", "what width", "minimum width",
                              "how wide", "calculate", "floor area", "how many units"],
+    # Google Drive + Gmail (draft-only email). Defers if not connected.
+    "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail",
+                             "my email", "my emails", "check email", "draft an email",
+                             "draft a reply", "draft email", "reply to the email", "inbox"],
     # Explicit standard/code lookup → cited search of the code library.
     "standards_lookup":     ["look up", "which standard", "which code", "what standard",
                              "what does sans", "code library", "sans clause", "which sans",
