@@ -48,7 +48,7 @@ async def send_message(tenant_id: str, body: ChatMessageRequest) -> ChatMessageR
     db.save(tenant_id, phone, "user", body.message)
 
     # Build conversation history for prompt context
-    history = db.format_for_prompt(tenant_id, phone, limit=5)
+    history = db.format_for_prompt(tenant_id, phone, limit=12)
 
     # Get RAG reply (same logic as WhatsApp, reused here)
     try:
