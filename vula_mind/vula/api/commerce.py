@@ -751,7 +751,6 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
         raise HTTPException(status_code=502, detail=f"Could not draft message: {exc}")
 
 
-@router.post("/{tenant_id}/admin/broadcasts/send")
 # ── Consent / suppression + delivery status (POPIA + analytics) ───────────────
 
 def _suppressed_phones(tenant_id: str) -> set[str]:
@@ -821,6 +820,7 @@ def record_message_status(wamid: str, status: str, error: Optional[str] = None) 
         log.debug("record_message_status skipped: %s", exc)
 
 
+@router.post("/{tenant_id}/admin/broadcasts/send")
 async def admin_send_broadcast(tenant_id: str, body: dict):
     """
     WhatsApp broadcast — sent directly via the Meta Graph API (no n8n).
