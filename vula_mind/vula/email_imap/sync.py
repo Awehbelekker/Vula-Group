@@ -183,9 +183,13 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         field_text = " ".join(str(v) for v in fields.values() if isinstance(v, (str, int, float)))
         hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
         match = match_project(tenant_id, hint)
+        confident = bool(match and match.get("confidence") == "high")
 
-        # No confident project + someone to ask → file as pending and ask on WhatsApp.
-        ask = bool(not match and notify_phone)
+        # Only auto-file on a CONFIDENT match. Anything weaker (no match, or a single
+        # coincidental token) → ask the human on WhatsApp rather than risk mis-filing.
+        ask = bool(not confident and notify_phone)
+        if not confident:
+            match = None
         db.table("vula_filed_documents").insert({
             "tenant_id": tenant_id, "project": match["project"] if match else None,
             "category": category, "summary": summary, "fields": fields, "filename": att["name"],
