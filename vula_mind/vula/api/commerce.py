@@ -752,6 +752,75 @@ async def admin_draft_broadcast(tenant_id: str, body: dict):
 
 
 @router.post("/{tenant_id}/admin/broadcasts/send")
+# ── Consent / suppression + delivery status (POPIA + analytics) ───────────────
+
+def _suppressed_phones(tenant_id: str) -> set[str]:
+    """Normalized phones the tenant must NOT broadcast to (opted out)."""
+    try:
+        rows = (service._client().table("commerce_consent").select("phone")
+                .eq("tenant_id", tenant_id).eq("status", "opted_out").execute().data or [])
+        return {_norm_phone(r["phone"]) for r in rows}
+    except Exception:
+        return set()
+
+
+def record_inbound_consent(tenant_id: str, phone: str) -> None:
+    """Record implied opt-in on first inbound. Never overrides an existing opt-out."""
+    p = _norm_phone(phone)
+    if not tenant_id or not p:
+        return
+    try:
+        db = service._client()
+        existing = (db.table("commerce_consent").select("status")
+                    .eq("tenant_id", tenant_id).eq("phone", p).limit(1).execute().data or [])
+        if existing:
+            return
+        db.table("commerce_consent").insert({
+            "tenant_id": tenant_id, "phone": p, "status": "opted_in", "source": "inbound"}).execute()
+    except Exception as exc:
+        log.debug("consent record skipped (run migration 020?): %s", exc)
+
+
+def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> None:
+    """Persist a do-not-contact suppression (kept even after PII deletion)."""
+    p = _norm_phone(phone)
+    if not tenant_id or not p:
+        return
+    try:
+        service._client().table("commerce_consent").upsert({
+            "tenant_id": tenant_id, "phone": p, "status": "opted_out",
+            "source": source, "updated_at": "now()"}, on_conflict="tenant_id,phone").execute()
+    except Exception as exc:
+        log.debug("opt-out record skipped: %s", exc)
+
+
+def record_message_status(wamid: str, status: str, error: Optional[str] = None) -> None:
+    """Update a broadcast recipient by wamid (from Meta status callbacks) and roll the
+    delivered/read/failed counts up into commerce_broadcast_logs. Best-effort."""
+    if not wamid or not status:
+        return
+    _RANK = {"sent": 1, "failed": 1, "delivered": 2, "read": 3}
+    try:
+        db = service._client()
+        rows = (db.table("commerce_broadcast_recipients").select("broadcast_id,status")
+                .eq("wamid", wamid).limit(1).execute().data or [])
+        if not rows:
+            return
+        bid, cur = rows[0]["broadcast_id"], rows[0].get("status") or "sent"
+        new = status if _RANK.get(status, 0) >= _RANK.get(cur, 0) else cur  # never downgrade
+        db.table("commerce_broadcast_recipients").update({
+            "status": new, "error": error, "updated_at": "now()"}).eq("wamid", wamid).execute()
+        allrows = (db.table("commerce_broadcast_recipients").select("status")
+                   .eq("broadcast_id", bid).execute().data or [])
+        delivered = sum(1 for r in allrows if r["status"] in ("delivered", "read"))
+        read = sum(1 for r in allrows if r["status"] == "read")
+        failed = sum(1 for r in allrows if r["status"] == "failed")
+        db.table("commerce_broadcast_logs").update({
+            "delivered_count": delivered, "read_count": read, "failed_count": failed}).eq("id", bid).execute()
+    except Exception as exc:
+        log.debug("record_message_status skipped: %s", exc)
+
+
 async def admin_send_broadcast(tenant_id: str, body: dict):
     """
     WhatsApp broadcast — sent directly via the Meta Graph API (no n8n).
@@ -786,6 +855,14 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     # Only WhatsApp-reachable contacts with a usable number
     recipients = [c for c in rows if _norm_phone(c.get("phone")).isdigit()]
 
+    # Honour opt-outs (POPIA suppression) before anything is sent.
+    suppressed = _suppressed_phones(tenant_id)
+    suppressed_count = 0
+    if suppressed:
+        before = len(recipients)
+        recipients = [c for c in recipients if _norm_phone(c.get("phone")) not in suppressed]
+        suppressed_count = before - len(recipients)
+
     # ── Dry-run / preview — DEFAULT. Nothing is sent. ────────────────────────
     if dry_run:
         return {
@@ -793,6 +870,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
             "template": template,
             "audience": audience,
             "recipient_count": len(recipients),
+            "suppressed_count": suppressed_count,
             "sample": [
                 {"name": c.get("name") or "Unknown", "phone": c.get("phone")}
                 for c in recipients[:10]
@@ -827,6 +905,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
 
     sent = failed = 0
     errors: list[str] = []
+    recipient_rows: list[dict] = []
     async with httpx.AsyncClient(timeout=15.0) as client:
         for c in recipients:
             number = _norm_phone(c.get("phone"))
@@ -857,18 +936,41 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                     )
                 if resp.is_success:
                     sent += 1
+                    wamid = None
+                    try:
+                        if use_twilio:
+                            wamid = resp.json().get("sid")
+                        else:
+                            wamid = (resp.json().get("messages") or [{}])[0].get("id")
+                    except Exception:
+                        wamid = None
+                    recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
+                                           "phone": number, "wamid": wamid, "status": "sent"})
                 else:
                     failed += 1
+                    recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
+                                           "phone": number, "status": "failed",
+                                           "error": resp.text[:200]})
                     if len(errors) < 3:
                         errors.append(resp.text[:200])
             except Exception as exc:
                 failed += 1
+                recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
+                                       "phone": number, "status": "failed", "error": str(exc)[:200]})
                 if len(errors) < 3:
                     errors.append(str(exc)[:200])
+
+    # Persist per-recipient rows so Meta status callbacks can update delivery/read.
+    if recipient_rows:
+        try:
+            db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
+        except Exception as exc:
+            log.debug("recipient rows insert skipped (run migration 020?): %s", exc)
 
     db.table("commerce_broadcast_logs").update({
         "status": "sent" if sent else "failed",
         "sent_count": sent,
+        "failed_count": failed,
         "last_error": errors[0] if errors else None,
     }).eq("id", log_id).execute()
 
@@ -877,6 +979,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         "channel": "twilio" if use_twilio else "meta",
         "template": template or "(free-text)",
         "audience": audience, "recipient_count": len(recipients),
+        "suppressed_count": suppressed_count,
         "sent": sent, "failed": failed,
         "errors": errors or None,
     }

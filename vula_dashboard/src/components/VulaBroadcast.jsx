@@ -206,6 +206,11 @@ export default function VulaBroadcast({ tenantId }) {
                 </span>
               )}
             </p>
+            {preview.suppressed_count > 0 && (
+              <p style={s.sampleNames}>
+                🚫 {preview.suppressed_count} opted-out contact{preview.suppressed_count !== 1 ? 's' : ''} excluded (POPIA)
+              </p>
+            )}
             {preview.recipient_count === 0 ? (
               <p style={s.error}>No recipients in this segment — nothing to send.</p>
             ) : (

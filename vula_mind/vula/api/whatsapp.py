@@ -229,6 +229,20 @@ async def receive_message(
                                     "you in Vula so it can be linked to your task."
                                 ))
 
+            # Delivery/read status callbacks (outbound) → broadcast analytics.
+            for s in value.get("statuses", []):
+                wamid, st = s.get("id"), s.get("status")
+                err = None
+                if s.get("errors"):
+                    e0 = s["errors"][0]
+                    err = (e0.get("title") or e0.get("message") or str(e0))[:200]
+                if wamid and st:
+                    try:
+                        from vula.api.commerce import record_message_status
+                        record_message_status(wamid, st, err)
+                    except Exception as exc:
+                        logger.debug("status update skipped: %s", exc)
+
     return {"status": "ok"}
 
 
@@ -877,6 +891,15 @@ async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
     logger.info("Data deletion request from %s (tenant=%s)", phone, tenant_id)
     removed = []
 
+    # Persist a do-not-contact suppression that OUTLIVES the PII deletion, so the
+    # number is never broadcast to again even if it later re-messages (POPIA).
+    if tenant_id:
+        try:
+            from vula.api.commerce import record_opt_out
+            record_opt_out(tenant_id, phone, source="stop_keyword")
+        except Exception as exc:
+            logger.debug("opt-out suppression skipped: %s", exc)
+
     # Remove from tenant_phones registry
     try:
         from vula.models.tenants import get_tenant_db
@@ -1441,6 +1464,13 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     n8n remains a last-resort fallback if the skill is unavailable.
     """
     text_lower = text.lower().strip()
+
+    # Record implied marketing consent on first inbound (POPIA). Best-effort.
+    try:
+        from vula.api.commerce import record_inbound_consent
+        record_inbound_consent(tenant_id, phone)
+    except Exception:
+        pass
 
     # 1. Greeting — send welcome + menu
     greeting_words = {"hi", "hello", "hallo", "hey", "howzit", "good morning", "goeie dag"}
