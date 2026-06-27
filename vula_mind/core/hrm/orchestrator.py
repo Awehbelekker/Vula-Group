@@ -48,10 +48,12 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "estimate the cost", "total cost", "what will it cost"],
     # Microsoft OneDrive + Outlook (draft-only email). Defers if not connected.
     "microsoft_admin":      ["onedrive", "one drive", "outlook", "sharepoint"],
-    # Google Drive + Gmail (draft-only email). Defers if not connected.
-    "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail",
-                             "my email", "my emails", "check email", "draft an email",
-                             "draft a reply", "draft email", "reply to the email", "inbox"],
+    # Generic IMAP/SMTP mailbox (GoDaddy/cPanel/Zoho/etc.) — owns generic email phrasing.
+    "email_admin":          ["email", "my mail", "my emails", "inbox", "draft a reply",
+                             "draft an email", "draft email", "check my email", "check email",
+                             "reply to the email", "file the attachment", "email attachment"],
+    # Google Drive + Gmail — provider-named only (generic 'email' goes to email_admin).
+    "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail"],
     # Explicit standard/code lookup → cited search of the code library.
     "standards_lookup":     ["look up", "which standard", "which code", "what standard",
                              "what does sans", "code library", "sans clause", "which sans",

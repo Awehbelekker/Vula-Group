@@ -25,6 +25,7 @@ from core.skills.calculations import CalculationsSkill
 from core.skills.standards_lookup import StandardsLookupSkill
 from core.skills.google_admin import GoogleAdminSkill
 from core.skills.microsoft_admin import MicrosoftAdminSkill
+from core.skills.email_admin import EmailAdminSkill
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ _SKILLS: Dict[str, BaseSkill] = {
     "standards_lookup": StandardsLookupSkill(),
     "google_admin": GoogleAdminSkill(),
     "microsoft_admin": MicrosoftAdminSkill(),
+    "email_admin": EmailAdminSkill(),
 }
 
 # Skills declared in registry.json but not yet implemented — route to reasoning

@@ -11,6 +11,7 @@ import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaClickUpConnect from './VulaClickUpConnect'
 import VulaGoogleConnect from './VulaGoogleConnect'
 import VulaMicrosoftConnect from './VulaMicrosoftConnect'
+import VulaEmailConnect from './VulaEmailConnect'
 
 export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
   return (
@@ -63,6 +64,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
           Connect Microsoft 365 so Vula can find &amp; file OneDrive documents and draft Outlook replies (draft-only).
         </p>
         <VulaMicrosoftConnect tenantId={tenantId} tenantName={tenantName} />
+      </section>
+
+      {/* Email (IMAP/SMTP) */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>✉️ Email (IMAP / SMTP)</h4>
+        <p style={s.sectionHint}>
+          Connect any mailbox without OAuth — GoDaddy Workspace, cPanel, Zoho. Search it, file attachments to the KB, draft replies.
+        </p>
+        <VulaEmailConnect tenantId={tenantId} adminEmail={adminEmail} />
       </section>
 
       <p style={s.footer}>Powered by Vula</p>
