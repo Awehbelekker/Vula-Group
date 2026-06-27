@@ -38,6 +38,9 @@ export default function VulaBroadcast({ tenantId }) {
   const [sent, setSent] = useState(null)       // live-send result {sent, failed, recipient_count}
   const [preview, setPreview] = useState(null)  // dry-run result {recipient_count, sample}
   const [error, setError] = useState(null)
+  const [scheduleAt, setScheduleAt] = useState('')   // datetime-local for a scheduled send
+  const [recurrence, setRecurrence] = useState('once')
+  const [campaigns, setCampaigns] = useState([])
 
   // Ask the AI assistant to write the broadcast from rough details
   async function writeWithAI() {
@@ -68,7 +71,40 @@ export default function VulaBroadcast({ tenantId }) {
     setLoading(false)
   }, [tenantId])
 
-  useEffect(() => { load() }, [load])
+  const loadCampaigns = useCallback(async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/campaigns`)
+      const d = await r.json()
+      setCampaigns((d.campaigns || []).filter(c => c.active))
+    } catch {}
+  }, [tenantId])
+
+  useEffect(() => { load(); loadCampaigns() }, [load, loadCampaigns])
+
+  // Schedule a broadcast for later (or recurring) instead of sending now.
+  async function scheduleCampaign() {
+    if (!bodyText.trim()) { setError('Write the message first.'); return }
+    if (!scheduleAt) { setError('Pick a date & time.'); return }
+    setSending(true); setError(null)
+    try {
+      const tpl = TEMPLATES.find(t => t.id === template)
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/campaigns`, {
+        method: 'POST', headers: H,
+        body: JSON.stringify({
+          name: tpl?.label, body: bodyText, audience_filter: audience,
+          recurrence, run_at: new Date(scheduleAt).toISOString(),
+        }),
+      })
+      const d = await r.json()
+      if (r.ok && d.id) { setScheduleAt(''); setRecurrence('once'); loadCampaigns() }
+      else setError(d.detail || 'Could not schedule')
+    } catch (err) { setError(err.message) } finally { setSending(false) }
+  }
+
+  async function deleteCampaign(id) {
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/campaigns/${id}`, { method: 'DELETE' })
+    loadCampaigns()
+  }
 
   // Step 1 — preview (dry-run): who would this reach? No messages sent.
   async function previewBroadcast() {
@@ -224,6 +260,39 @@ export default function VulaBroadcast({ tenantId }) {
           </div>
         )}
       </div>
+
+      {/* Schedule for later / recurring */}
+      <p style={s.sectionLabel}>📅 Schedule for later</p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        <input type="datetime-local" value={scheduleAt} onChange={e => setScheduleAt(e.target.value)}
+          style={{ padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13 }} />
+        <select value={recurrence} onChange={e => setRecurrence(e.target.value)}
+          style={{ padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13 }}>
+          <option value="once">One-off</option>
+          <option value="daily">Every day</option>
+          <option value="weekly">Every week</option>
+          <option value="monthly">Every month</option>
+        </select>
+        <button onClick={scheduleCampaign} disabled={sending} style={sending ? s.btnDisabled : s.sendBtn}>
+          {sending ? '…' : 'Schedule'}
+        </button>
+        <span style={s.muted}>Uses the message + audience above. Recurring repeats from this time.</span>
+      </div>
+      {campaigns.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          {campaigns.map(c => (
+            <div key={c.id} style={s.histRow}>
+              <div style={{ flex: 1 }}>
+                <span style={s.histName}>{c.name}</span>
+                <span style={s.histMeta}>
+                  {c.audience_filter} · {c.recurrence} · next {new Date(c.next_run_at).toLocaleString('en-ZA')}
+                </span>
+              </div>
+              <button onClick={() => deleteCampaign(c.id)} style={s.cancelBtn}>Cancel</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* History */}
       <p style={s.sectionLabel}>Broadcast history</p>

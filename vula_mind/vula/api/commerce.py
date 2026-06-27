@@ -846,8 +846,8 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     dry_run = body.get("dry_run", True)
     name = body.get("name", template)
 
-    if not template:
-        raise HTTPException(status_code=400, detail="template_name required")
+    if not template and not body.get("body"):
+        raise HTTPException(status_code=400, detail="template_name or body required")
 
     # Resolve the exact audience (same source as the Customers tab)
     customers = await _aggregate_customers(tenant_id)
@@ -983,6 +983,100 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         "sent": sent, "failed": failed,
         "errors": errors or None,
     }
+
+
+# ── Scheduled & recurring campaigns ───────────────────────────────────────────
+
+def _advance(next_run_at: str, recurrence: str):
+    """Next fire time for a recurring campaign, or None for 'once'."""
+    from datetime import datetime, timezone, timedelta
+    delta = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1),
+             "monthly": timedelta(days=30)}.get(recurrence)
+    if not delta:
+        return None
+    nxt = datetime.fromisoformat(next_run_at.replace("Z", "+00:00")) + delta
+    now = datetime.now(timezone.utc)
+    while nxt <= now:               # catch up if runs were missed
+        nxt += delta
+    return nxt.isoformat()
+
+
+@router.get("/{tenant_id}/admin/campaigns")
+async def admin_list_campaigns(tenant_id: str):
+    try:
+        rows = (service._client().table("commerce_campaigns").select("*")
+                .eq("tenant_id", tenant_id).order("next_run_at").limit(200).execute().data or [])
+    except Exception as exc:
+        log.debug("campaigns list skipped (run migration 021?): %s", exc)
+        rows = []
+    return {"tenant_id": tenant_id, "campaigns": rows}
+
+
+@router.post("/{tenant_id}/admin/campaigns")
+async def admin_create_campaign(tenant_id: str, body: dict):
+    template = body.get("template_name", "")
+    text = body.get("body", "")
+    if not template and not text:
+        raise HTTPException(status_code=400, detail="template_name or body required")
+    run_at = body.get("run_at") or body.get("next_run_at")
+    if not run_at:
+        raise HTTPException(status_code=400, detail="run_at (ISO datetime) required")
+    row = {
+        "tenant_id": tenant_id, "name": body.get("name") or template or "Campaign",
+        "template_name": template or None, "body": text or None,
+        "language": body.get("language", "en"),
+        "audience_filter": body.get("audience_filter", "all"),
+        "recurrence": body.get("recurrence", "once"),
+        "next_run_at": run_at, "active": True, "created_by": body.get("created_by"),
+    }
+    res = service._client().table("commerce_campaigns").insert(row).execute()
+    return res.data[0] if res.data else {"error": "insert failed"}
+
+
+@router.delete("/{tenant_id}/admin/campaigns/{campaign_id}")
+async def admin_delete_campaign(tenant_id: str, campaign_id: str):
+    service._client().table("commerce_campaigns").update(
+        {"active": False}).eq("id", campaign_id).execute()
+    return {"id": campaign_id, "active": False}
+
+
+async def process_due_campaigns() -> int:
+    """Fire any campaigns whose next_run_at has passed; advance/deactivate. Returns count."""
+    from datetime import datetime, timezone
+    db = service._client()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        due = (db.table("commerce_campaigns").select("*")
+               .eq("active", True).lte("next_run_at", now_iso).limit(50).execute().data or [])
+    except Exception as exc:
+        log.debug("campaign poll skipped (run migration 021?): %s", exc)
+        return 0
+    n = 0
+    for camp in due:
+        try:
+            await admin_send_broadcast(camp["tenant_id"], {
+                "dry_run": False, "template_name": camp.get("template_name") or "",
+                "body": camp.get("body") or "",
+                "audience_filter": camp.get("audience_filter") or "all",
+                "language": camp.get("language") or "en",
+                "name": camp.get("name") or "Campaign"})
+            n += 1
+        except Exception as exc:
+            log.warning("campaign %s send failed: %s", camp.get("id"), exc)
+        upd = {"last_run_at": now_iso}
+        nxt = _advance(camp["next_run_at"], camp.get("recurrence") or "once")
+        upd["next_run_at" if nxt else "active"] = nxt if nxt else False
+        try:
+            db.table("commerce_campaigns").update(upd).eq("id", camp["id"]).execute()
+        except Exception:
+            pass
+    return n
+
+
+@router.post("/cron/campaigns")
+async def cron_process_campaigns():
+    """Backstop trigger for the scheduler (also runs in-process every 60s)."""
+    return {"processed": await process_due_campaigns()}
 
 
 # ── Scheduled Jobs ──────────────────────────────────────────────────────────

@@ -611,11 +611,27 @@ async def _send_oth_sales_summary() -> None:
                 log.warning("OTH summary to %s failed: %s", name, exc)
 
 
+async def _scheduled_campaigns_loop() -> None:
+    """Fire due scheduled / recurring broadcast campaigns every 60s."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(30)  # let the app settle on boot
+    while True:
+        try:
+            from vula.api.commerce import process_due_campaigns
+            fired = await process_due_campaigns()
+            if fired:
+                log.info("Campaign scheduler fired %d campaign(s)", fired)
+        except Exception as exc:
+            log.warning("Campaign scheduler loop error: %s", exc)
+        await _asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     settings.warn_missing()
     _asyncio.create_task(_seed_training_on_boot())
+    _asyncio.create_task(_scheduled_campaigns_loop())
     _asyncio.create_task(_weekly_rates_loop())
     _asyncio.create_task(_daily_trial_expiry_loop())
     _asyncio.create_task(_daily_delivery_briefing_loop())
