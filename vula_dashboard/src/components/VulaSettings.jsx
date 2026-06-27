@@ -10,6 +10,7 @@ import VulaYocoConnect from './VulaYocoConnect'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaClickUpConnect from './VulaClickUpConnect'
 import VulaGoogleConnect from './VulaGoogleConnect'
+import VulaMicrosoftConnect from './VulaMicrosoftConnect'
 
 export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
   return (
@@ -53,6 +54,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
           Connect Google so Vula can find &amp; file Drive documents and draft Gmail replies (draft-only).
         </p>
         <VulaGoogleConnect tenantId={tenantId} tenantName={tenantName} />
+      </section>
+
+      {/* Microsoft */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🟦 Microsoft (OneDrive &amp; Outlook)</h4>
+        <p style={s.sectionHint}>
+          Connect Microsoft 365 so Vula can find &amp; file OneDrive documents and draft Outlook replies (draft-only).
+        </p>
+        <VulaMicrosoftConnect tenantId={tenantId} tenantName={tenantName} />
       </section>
 
       <p style={s.footer}>Powered by Vula</p>

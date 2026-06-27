@@ -46,6 +46,8 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "what does it cost", "what would it cost", "how much does", "how much will",
                              "how much is", "using our rates", "cost of", "rate for", "what do we charge",
                              "estimate the cost", "total cost", "what will it cost"],
+    # Microsoft OneDrive + Outlook (draft-only email). Defers if not connected.
+    "microsoft_admin":      ["onedrive", "one drive", "outlook", "sharepoint"],
     # Google Drive + Gmail (draft-only email). Defers if not connected.
     "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail",
                              "my email", "my emails", "check email", "draft an email",

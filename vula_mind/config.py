@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
+    # ── Microsoft (Azure AD) OAuth app — OneDrive + Outlook via Graph ───────
+    # Register in Azure portal; redirect URI = <api>/v1/microsoft/oauth/callback
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+    microsoft_authority: str = "https://login.microsoftonline.com/common"
+
     # ── Vula Commerce ────────────────────────────────────────────────────────
     # Supabase service role key alias (commerce service uses this name)
     supabase_service_role_key: str = ""
