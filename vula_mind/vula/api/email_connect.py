@@ -107,6 +107,32 @@ async def set_contact_kind(tenant_id: str, contact_id: str, body: ContactKindIn)
     return {"id": contact_id, "kind": body.kind}
 
 
+@router.get("/followups/{tenant_id}")
+async def list_followups(tenant_id: str, status: str = "open") -> dict:
+    """Emails awaiting a reply."""
+    try:
+        rows = (_client().table("vula_email_followups").select("*")
+                .eq("tenant_id", tenant_id).eq("status", status)
+                .order("received_at", desc=True).limit(200).execute().data or [])
+    except Exception as exc:
+        log.debug("followups list skipped (run migration 028?): %s", exc)
+        rows = []
+    return {"tenant_id": tenant_id, "followups": rows, "count": len(rows)}
+
+
+class FollowupStatusIn(BaseModel):
+    status: str          # done | snoozed | open
+
+
+@router.patch("/followups/{tenant_id}/{followup_id}")
+async def set_followup_status(tenant_id: str, followup_id: str, body: FollowupStatusIn) -> dict:
+    try:
+        _client().table("vula_email_followups").update({"status": body.status}).eq("id", followup_id).execute()
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"id": followup_id, "status": body.status}
+
+
 @router.delete("/disconnect/{tenant_id}")
 async def disconnect(tenant_id: str) -> dict:
     try:

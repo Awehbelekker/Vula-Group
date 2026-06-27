@@ -35,6 +35,84 @@ _NOISE = re.compile(r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notification|mailer|
                     r"bounce|postmaster|marketing|updates?@|alerts?@)", re.IGNORECASE)
 _MAX_ATTACH_BYTES = 15 * 1024 * 1024
 
+_SCHEDULE_KW = ("schedule", "meeting", "meet ", "available", "availability", "calendar",
+                "appointment", "site visit", "what time", "when can", "set up a call")
+_REQUEST_KW = ("please", "could you", "can you", "kindly", "let me know", "would you",
+               "need ", "requesting", "request ", "awaiting", "send me", "advise", "confirm",
+               "feedback", "approve", "quote", "quotation")
+
+
+def _needs_reply(em: dict, own_domain: str):
+    """Best-guess whether an inbound external email is awaiting a reply. Returns
+    (reason, ) or None. Heuristic — cheap, runs on every synced email."""
+    frm = (em.get("from") or "").lower()
+    if own_domain in frm or _NOISE.search(frm):
+        return None                                    # our own mail / bulk senders
+    blob = f"{em.get('subject','')} {em.get('body','')}".lower()
+    if any(k in blob for k in _SCHEDULE_KW):
+        return "schedule"
+    if "?" in blob or any(k in blob for k in _REQUEST_KW):
+        return "request" if any(k in blob for k in _REQUEST_KW) else "question"
+    return None
+
+
+def _track_followup(db, tenant_id: str, em: dict, reason: str) -> None:
+    try:
+        name = ""
+        frm = em.get("from") or ""
+        if "<" in frm:
+            name = frm.split("<")[0].strip().strip('"')
+        db.table("vula_email_followups").upsert({
+            "tenant_id": tenant_id, "email_uid": em.get("uid"),
+            "sender": frm, "sender_name": name or None, "subject": em.get("subject"),
+            "preview": (em.get("body") or "")[:240], "received_at": em.get("when"),
+            "reason": reason, "status": "open",
+        }, on_conflict="tenant_id,email_uid").execute()
+    except Exception as exc:
+        logger.debug("followup track skipped (run migration 028?): %s", exc)
+
+
+async def send_followup_reminders(tenant_id: str, notify_phone: str) -> int:
+    """Once a day, WhatsApp the user a digest of emails still awaiting a reply."""
+    if not notify_phone:
+        return 0
+    from datetime import datetime, timedelta, timezone
+    db = _client()
+    try:
+        rows = (db.table("vula_email_followups").select("*")
+                .eq("tenant_id", tenant_id).eq("status", "open")
+                .order("received_at", desc=False).execute().data or [])
+    except Exception:
+        return 0
+    if not rows:
+        return 0
+    # Don't re-nag within 20h of the last reminder.
+    recent = [r.get("last_reminded_at") for r in rows if r.get("last_reminded_at")]
+    if recent:
+        try:
+            newest = max(datetime.fromisoformat(t.replace("Z", "+00:00")) for t in recent)
+            if datetime.now(timezone.utc) - newest < timedelta(hours=20):
+                return 0
+        except Exception:
+            pass
+    lines = []
+    for r in rows[:6]:
+        who = r.get("sender_name") or r.get("sender") or "someone"
+        lines.append(f"• {who}: {(r.get('subject') or '(no subject)')[:50]}")
+    msg = (f"📬 You have {len(rows)} email(s) awaiting a reply:\n" + "\n".join(lines) +
+           "\n\nReply in your inbox, or open Vula → Follow-ups.")
+    try:
+        from vula.api.whatsapp import _send_reply
+        await _send_reply(notify_phone, msg, tenant_id=tenant_id)
+        ids = [r["id"] for r in rows]
+        now = datetime.now(timezone.utc).isoformat()
+        for i in ids:
+            db.table("vula_email_followups").update({"last_reminded_at": now}).eq("id", i).execute()
+        return len(rows)
+    except Exception as exc:
+        logger.debug("followup reminder send failed: %s", exc)
+        return 0
+
 
 def _fetch_new(creds: dict, last_uid: int, max_emails: int) -> dict:
     """[blocking] Fetch the most-recent NEW emails (UID > last_uid). Returns
@@ -148,6 +226,10 @@ async def _do_email_sync(tenant_id: str, max_emails: int) -> dict:
                 filed += 1
             except Exception as exc:
                 logger.debug("attachment file failed: %s", exc)
+        # Track emails that look like they need a reply.
+        reason = _needs_reply(em, own_domain)
+        if reason:
+            _track_followup(db, tenant_id, em, reason)
 
     try:
         db.table("vula_email_accounts").update({
@@ -255,6 +337,10 @@ async def process_all_email_sync() -> int:
         try:
             res = await process_email_sync(r["tenant_id"])
             total += res.get("synced", 0)
+            # Daily nudge for emails still awaiting a reply.
+            acct = (_client().table("vula_email_accounts").select("notify_phone")
+                    .eq("tenant_id", r["tenant_id"]).limit(1).execute().data or [{}])[0]
+            await send_followup_reminders(r["tenant_id"], acct.get("notify_phone"))
         except Exception as exc:
             logger.warning("email sync failed for %s: %s", r.get("tenant_id"), exc)
     return total
