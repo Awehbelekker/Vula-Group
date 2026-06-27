@@ -51,7 +51,9 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     # Generic IMAP/SMTP mailbox (GoDaddy/cPanel/Zoho/etc.) — owns generic email phrasing.
     "email_admin":          ["email", "my mail", "my emails", "inbox", "draft a reply",
                              "draft an email", "draft email", "check my email", "check email",
-                             "reply to the email", "file the attachment", "email attachment"],
+                             "reply to the email", "file the attachment", "email attachment",
+                             "draft a ", "draft me", "compose", "reply to", "summarise the email",
+                             "read the email", "read the latest"],
     # Google Drive + Gmail — provider-named only (generic 'email' goes to email_admin).
     "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail"],
     # Explicit standard/code lookup → cited search of the code library.

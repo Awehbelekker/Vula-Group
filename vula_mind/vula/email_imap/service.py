@@ -62,11 +62,19 @@ def _search(creds: dict, query: str, limit: int) -> list[dict]:
     m = _imap_login(creds)
     try:
         m.select("INBOX")
-        if query:
-            typ, data = m.search(None, "TEXT", f'"{query}"')
-        else:
+        # IMAP search can't carry non-ASCII; use the ASCII part of the query
+        # (e.g. "Anli Kotzé" → "Anli Kotz"), then fall back to ALL.
+        safe = (query or "").encode("ascii", "ignore").decode().strip()
+        ids = []
+        if safe:
+            try:
+                typ, data = m.search(None, "TEXT", f'"{safe}"')
+                ids = (data[0].split() if data and data[0] else [])
+            except Exception:
+                ids = []
+        if not ids:
             typ, data = m.search(None, "ALL")
-        ids = (data[0].split() if data and data[0] else [])
+            ids = (data[0].split() if data and data[0] else [])
         ids = ids[-max(1, min(limit, 25)):][::-1]  # newest first
         out = []
         for i in ids:
@@ -90,6 +98,9 @@ async def search(creds: dict, query: str = "", limit: int = 10) -> list[dict]:
 # ── Read full message + attachment list ───────────────────────────────────────
 
 def _read(creds: dict, uid: str) -> dict:
+    uid = str(uid or "").strip()
+    if not uid.isdigit():
+        return {"error": "Need a numeric message id (uid) from email_search first."}
     m = _imap_login(creds)
     try:
         m.select("INBOX")
