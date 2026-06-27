@@ -21,6 +21,7 @@ import VulaAssistant from './VulaAssistant'
 import VulaSettings from './VulaSettings'
 import VulaDocuments from './VulaDocuments'
 import VulaProjects from './VulaProjects'
+import VulaQSRates from './VulaQSRates'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -89,6 +90,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
             { id: 'customers', label: '👥 Customers' },
             { id: 'broadcast', label: '📢 Broadcast' },
             { id: 'projects',  label: '🏗️ Projects' },
+            { id: 'qsrates',   label: '📐 QS Rates' },
             { id: 'documents', label: '📂 Documents' },
             { id: 'settings',  label: '⚙️ Settings' },
           ].map(t => (
@@ -116,6 +118,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'customers' && <VulaCustomers     tenantId={tenantId} />}
           {tab === 'broadcast' && <VulaBroadcast     tenantId={tenantId} />}
           {tab === 'projects'  && <VulaProjects      tenantId={tenantId} />}
+          {tab === 'qsrates'   && <VulaQSRates       tenantId={tenantId} />}
           {tab === 'documents' && <VulaDocuments     tenantId={tenantId} />}
           {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail="" />}
         </div>

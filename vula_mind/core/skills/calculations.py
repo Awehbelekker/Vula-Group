@@ -65,6 +65,15 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "expression": {"type": "string", "description": "e.g. 'ceil(850 / 190)' or '1500 / 5'"},
         }, "required": ["expression"]},
     }},
+    {"type": "function", "function": {
+        "name": "lookup_rate",
+        "description": "Look up the tenant's OWN unit rate (ZAR) for a material/work item from "
+                       "their QS rate library, for cost calculations. Returns matching rates with "
+                       "unit. Use before computing any cost — never assume a market rate.",
+        "parameters": {"type": "object", "properties": {
+            "description": {"type": "string", "description": "e.g. 'brick wall' or 'acoustic panel'"},
+        }, "required": ["description"]},
+    }},
 ]
 
 
@@ -84,7 +93,7 @@ class CalculationsSkill(BaseSkill):
         except Exception as exc:
             logger.debug("calculations KB retrieval skipped: %s", exc)
         try:
-            answer = await self._agent_loop(inp.conversation_history, inp.question, context)
+            answer = await self._agent_loop(inp.conversation_history, inp.question, context, inp.tenant_id)
             if not answer:
                 raise RuntimeError("empty answer")
             return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
@@ -109,10 +118,13 @@ class CalculationsSkill(BaseSkill):
             "specific rules): area=L×W; volume=L×W×D; perimeter=2(L+W); VAT=amount×0.15; "
             "retention/contingency = amount × percentage; gradient = rise/run. For material "
             "quantities or code ratios that vary (bricks/m², occupancy ratios, parking bays), "
-            "use the rate from context or ask — do not assume a figure."
+            "use the rate from context or ask — do not assume a figure.\n"
+            "- For COSTS: call lookup_rate to get the tenant's own unit rate, then multiply by "
+            "the quantity with calculate. If lookup_rate finds nothing, ask for the rate or say "
+            "it isn't on file — never assume a market rate."
         )
 
-    async def _agent_loop(self, history: str, question: str, context: str) -> str:
+    async def _agent_loop(self, history: str, question: str, context: str, tenant_id: str) -> str:
         import litellm
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route()
@@ -149,7 +161,7 @@ class CalculationsSkill(BaseSkill):
                     args = json.loads(tc.function.arguments or "{}")
                 except Exception:
                     args = {}
-                result = self._calc(args)
+                result = self._dispatch(tc.function.name, args, tenant_id)
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                     "name": tc.function.name, "content": json.dumps(result)})
 
@@ -157,6 +169,16 @@ class CalculationsSkill(BaseSkill):
             model=model, messages=messages, temperature=0.1, max_tokens=500,
             api_key=api_key, api_base=api_base)
         return (resp.choices[0].message.content or "").strip()
+
+    def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
+        if name == "lookup_rate":
+            try:
+                from vula.api.qs import search_rates
+                rows = search_rates(tenant_id, str(args.get("description", "")), limit=10)
+                return {"rates": rows} if rows else {"message": "No matching rate on file for this tenant."}
+            except Exception as exc:
+                return {"error": str(exc)}
+        return self._calc(args)
 
     def _calc(self, args: Dict[str, Any]) -> Any:
         expr = str(args.get("expression", "")).strip()
