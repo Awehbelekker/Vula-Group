@@ -22,6 +22,15 @@ from vula.email_imap.service import _hdr, _imap_login, _is_real_attachment
 
 logger = logging.getLogger(__name__)
 
+import asyncio as _asyncio
+_sync_locks: dict = {}
+
+def _lock_for(tenant_id: str) -> "_asyncio.Lock":
+    lk = _sync_locks.get(tenant_id)
+    if lk is None:
+        lk = _sync_locks[tenant_id] = _asyncio.Lock()
+    return lk
+
 _NOISE = re.compile(r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notification|mailer|newsletter|"
                     r"bounce|postmaster|marketing|updates?@|alerts?@)", re.IGNORECASE)
 _MAX_ATTACH_BYTES = 15 * 1024 * 1024
@@ -95,6 +104,15 @@ def _upsert_contact(db, tenant_id: str, addr: str, name: str, kind: str, when: s
 
 async def process_email_sync(tenant_id: str, max_emails: int = 20) -> dict:
     """Sync one tenant: build contacts + file work attachments from new mail."""
+    import asyncio
+    lock = _lock_for(tenant_id)
+    if lock.locked():
+        return {"synced": 0, "skipped": "sync already running"}
+    async with lock:
+        return await _do_email_sync(tenant_id, max_emails)
+
+
+async def _do_email_sync(tenant_id: str, max_emails: int) -> dict:
     import asyncio
     creds = get_email_creds(tenant_id)
     if not creds:
