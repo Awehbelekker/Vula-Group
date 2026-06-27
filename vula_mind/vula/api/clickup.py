@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from config import settings
 from vula.clickup import service
-from vula.clickup.credentials import _client, invalidate
+from vula.clickup.credentials import _client, invalidate, get_tenant_clickup_creds
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["clickup"])
@@ -172,6 +172,52 @@ async def connect(body: ConnectIn) -> dict:
                      body.default_list_id, connected_by=body.connected_by or "")
     ok = await _register_webhook(body.tenant_id)
     return {"tenant_id": body.tenant_id, "status": "connected", "webhook_registered": ok}
+
+
+# ── Sync ClickUp projects into the tenant's knowledge base ────────────────────
+
+@router.post("/sync-kb/{tenant_id}")
+async def sync_kb(tenant_id: str) -> dict:
+    """Pull the tenant's ClickUp lists + their tasks into the RAG knowledge base
+    so the AI can answer questions about live projects (e.g. 'what's happening on
+    HPC Bokaap?'). Re-runnable — re-ingests each list under a stable doc id.
+    """
+    creds = get_tenant_clickup_creds(tenant_id)
+    if not creds:
+        return {"error": "ClickUp not connected for this tenant."}
+    list_ids = creds.get("list_ids") or {}
+    if not isinstance(list_ids, dict):
+        return {"error": "No lists stored for this tenant."}
+
+    from vula.ingestion.pipeline import VulaIngestionPipeline
+    pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+
+    synced, chunks = 0, 0
+    for lid, lname in list_ids.items():
+        if lid == "default":
+            continue
+        try:
+            tasks = await service.list_tasks(tenant_id, list_id=lid, limit=100)
+        except Exception:
+            continue
+        if not isinstance(tasks, list) or not tasks:
+            continue
+        lines = [f"ClickUp project / list: {lname}", "Current tasks:"]
+        for t in tasks:
+            due = f" — due {t['due_date']}" if t.get("due_date") else ""
+            who = f" — {', '.join(t['assignees'])}" if t.get("assignees") else ""
+            lines.append(f"- {t.get('title')} [{t.get('status') or 'open'}]{due}{who}")
+        try:
+            res = await pipeline.ingest_text(
+                content="\n".join(lines),
+                filename=f"{lname}.txt".replace("/", "-"),
+                doc_id=f"clickup_{lid}",
+            )
+            synced += 1
+            chunks += getattr(res, "chunks_stored", 0) or 0
+        except Exception as exc:
+            log.warning("KB sync ingest failed for list %s: %s", lid, exc)
+    return {"tenant_id": tenant_id, "synced_lists": synced, "chunks_added": chunks}
 
 
 # ── Inbound webhook (ClickUp → Vula) ──────────────────────────────────────────
