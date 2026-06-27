@@ -15,7 +15,7 @@ import re
 
 from config import settings
 from core.llm_router import resolve_generation_route
-from core.skills.base import BaseSkill, SkillInput, SkillOutput
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, CONVERSATION_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +78,19 @@ class ArchitecturePlanningSkill(BaseSkill):
             "Style: practical, specific, cite the relevant standard or clause where useful. "
             "All money in ZAR. Dates in DD Month YYYY. Phone numbers as 0XX XXX XXXX. "
             "If the question is outside SA construction practice, say so clearly.\n\n"
-            "Capability: users CAN send you documents (PDF, Word, Excel) and images "
+            + CONVERSATION_RULES +
+            "\nCapability: users CAN send you documents (PDF, Word, Excel) and images "
             "directly on WhatsApp — you automatically file them into the knowledge base "
             "and can then answer questions about them. If asked, tell them to just attach "
             "the file here."
         )
         context_block = "\n\n---\n\n".join(contexts) if contexts else ""
+        history_block = (
+            f"Conversation so far:\n{inp.conversation_history}\n\n"
+            if inp.conversation_history else ""
+        )
         user_msg = (
+            f"{history_block}"
             f"{('Context:' + chr(10) + context_block + chr(10) + chr(10)) if context_block else ''}"
             f"Question: {inp.question}\n\nAnswer:"
         )

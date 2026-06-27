@@ -355,7 +355,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     from vula.chat.history import get_db
     db = get_db()
     db.save(tenant_id, thread_key, "user", text)
-    history = db.format_for_prompt(tenant_id, thread_key, limit=5)
+    history = db.format_for_prompt(tenant_id, thread_key, limit=12)
     reply = await _rag_reply(tenant_id, text, conversation_history=history)
     db.save(tenant_id, thread_key, "assistant", reply)
     # Pass tenant_id so the reply is sent FROM the tenant's own number
@@ -1219,8 +1219,8 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
             tenant_id=tenant_id,
             conversation_history=conversation_history,
             max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
-            max_tokens=500,    # speed cap: concise WhatsApp answers generate faster
-            top_k=3,           # speed cap: fewer KB chunks = faster retrieval
+            max_tokens=700,    # room to hold working facts + show code calcs
+            top_k=5,           # retrieve enough to surface the right clause/doc
         )
         if result.final_answer and result.final_answer.strip():
             logger.info(

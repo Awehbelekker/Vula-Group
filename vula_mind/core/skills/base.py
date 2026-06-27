@@ -16,6 +16,24 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
+# Shared conversation behaviour rules — prepended to the system prompt of every
+# answering skill so WhatsApp replies stay grounded, consistent, and focused on
+# what the user is actually asking (instead of inventing missing context).
+CONVERSATION_RULES = (
+    "How to respond:\n"
+    "- Use the facts already established earlier in THIS conversation. If the user "
+    "corrected or updated a value (e.g. an occupancy, dimension, or number), use the "
+    "LATEST value and never revert to an earlier one.\n"
+    "- Never invent missing facts (building type, occupancy, dimensions, project, "
+    "budget, etc.). If an essential fact is missing to answer well, reply with ONE "
+    "short clarifying question instead of assuming.\n"
+    "- For any code/standard calculation (e.g. SANS 10400), name the clause you are "
+    "applying and show the calculation from the user's stated numbers so it is checkable.\n"
+    "- Stay consistent: do not contradict an earlier answer in this thread without "
+    "briefly saying what changed.\n"
+)
+
+
 @dataclass
 class SkillInput:
     question: str

@@ -11,7 +11,7 @@ import logging
 import re
 
 from core.llm_router import resolve_generation_route
-from core.skills.base import BaseSkill, SkillInput, SkillOutput
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, CONVERSATION_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,9 @@ class ReasoningSkill(BaseSkill):
             "You are Vula, an AI assistant for South African business and construction. "
             "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
             "Lead with the answer, skip preamble. "
-            "Always work in ZAR for money, use SA conventions for dates and phone numbers. "
-            "Users CAN send you documents (PDF, Word, Excel) and images directly on "
+            "Always work in ZAR for money, use SA conventions for dates and phone numbers.\n\n"
+            + CONVERSATION_RULES +
+            "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
             "WhatsApp — you file them into the knowledge base automatically. If asked about "
             "uploading, tell them to just attach the file in this chat."
         )
