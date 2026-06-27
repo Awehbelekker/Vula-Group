@@ -39,7 +39,7 @@ class ArchitecturePlanningSkill(BaseSkill):
             strong_tenant_hit = bool(tenant_chunks and tenant_chunks[0].get("score", 0) > 0.55)
             if tenant_chunks:
                 contexts.append("## Your practice's knowledge\n" + "\n\n".join(
-                    f"[{c.get('filename','doc')}]: {c.get('text','')[:500]}"
+                    f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"
                     for c in tenant_chunks
                 ))
                 all_sources.extend([
@@ -55,7 +55,7 @@ class ArchitecturePlanningSkill(BaseSkill):
                 training_chunks = await training_pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
                 if training_chunks:
                     contexts.append("## SA construction standards & rates\n" + "\n\n".join(
-                        f"[{c.get('filename','standard')}]: {c.get('text','')[:400]}"
+                        f"[{c.get('filename','standard')}]: {c.get('text','')[:900]}"
                         for c in training_chunks
                     ))
                     all_sources.extend([

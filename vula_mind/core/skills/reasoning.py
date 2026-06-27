@@ -30,7 +30,7 @@ class ReasoningSkill(BaseSkill):
             chunks = await pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
             if chunks:
                 kb_context = "\n\n".join(
-                    f"[{c.get('filename','doc')}]: {c.get('text','')[:400]}"
+                    f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"
                     for c in chunks
                 )
                 sources = [

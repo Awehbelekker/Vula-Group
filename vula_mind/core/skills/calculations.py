@@ -80,7 +80,7 @@ class CalculationsSkill(BaseSkill):
             chunks = await VulaIngestionPipeline(tenant_id=inp.tenant_id).query(
                 inp.question, top_k=inp.top_k, authoritative_only=True)
             if chunks:
-                context = "\n\n".join(f"[{c.get('filename','doc')}]: {c.get('text','')[:400]}" for c in chunks)
+                context = "\n\n".join(f"[{c.get('filename','doc')}]: {c.get('text','')[:1200]}" for c in chunks)
         except Exception as exc:
             logger.debug("calculations KB retrieval skipped: %s", exc)
         try:

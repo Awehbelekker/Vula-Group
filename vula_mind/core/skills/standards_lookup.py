@@ -43,7 +43,7 @@ class StandardsLookupSkill(BaseSkill):
                 skill_name=self.name, confidence=0.45)
 
         context = "\n\n".join(
-            f"[{c.get('filename','doc')}]: {c.get('text','')[:500]}" for c in chunks)
+            f"[{c.get('filename','doc')}]: {c.get('text','')[:1800]}" for c in chunks)
         sources = [{"type": "kb", "filename": c.get("filename", "?"),
                     "score": round(c.get("score", 0.0), 3)} for c in chunks]
         system_msg = (
