@@ -473,20 +473,23 @@ def format_history(messages: List[dict]) -> str:
 _DOC_TYPE_CODE = {"invoice": "INV", "quote": "QTE", "proforma": "PRO"}
 
 
-def _compute_totals(line_items: List[dict], vat_rate: float) -> tuple[int, int, int, List[dict]]:
+def _compute_totals(line_items: List[dict], vat_rate: float,
+                    prices_include_vat: bool = False) -> tuple[int, int, int, List[dict]]:
     """Return (subtotal_cents, vat_cents, total_cents, normalised_items).
 
     Each line's total_cents is recomputed from quantity * unit_price_cents so the
-    server is the source of truth. VAT is computed on the subtotal and rounded to
-    the nearest cent. All values are integer cents.
+    server is the source of truth. All values are integer cents.
+    - exclusive (default): subtotal = sum(lines); vat = subtotal*rate; total = subtotal+vat.
+    - inclusive: entered line prices already contain VAT → back it out so subtotal is net,
+      vat = entered − net, total = entered. (Correct SA VAT-inclusive handling.)
     """
     normalised: List[dict] = []
-    subtotal = 0
+    entered = 0
     for item in line_items:
         qty = int(item["quantity"])
         unit = int(item["unit_price_cents"])
         line_total = qty * unit
-        subtotal += line_total
+        entered += line_total
         normalised.append(
             {
                 "description": item["description"],
@@ -496,9 +499,11 @@ def _compute_totals(line_items: List[dict], vat_rate: float) -> tuple[int, int, 
                 "product_id": str(item["product_id"]) if item.get("product_id") else None,
             }
         )
-    vat_cents = round(subtotal * (vat_rate / 100.0))
-    total = subtotal + vat_cents
-    return subtotal, vat_cents, total, normalised
+    if prices_include_vat and vat_rate > 0:
+        net = round(entered / (1 + vat_rate / 100.0))
+        return net, entered - net, entered, normalised
+    vat_cents = round(entered * (vat_rate / 100.0))
+    return entered, vat_cents, entered + vat_cents, normalised
 
 
 async def _next_invoice_number(tenant_id: str, doc_type: str) -> str:
@@ -523,8 +528,12 @@ async def _next_invoice_number(tenant_id: str, doc_type: str) -> str:
 async def create_invoice(tenant_id: str, data: dict) -> dict:
     """Create an invoice, quote, or proforma. Totals are computed server-side."""
     doc_type = data.get("doc_type", "invoice")
-    vat_rate = float(data.get("vat_rate", 15.0))
-    subtotal, vat_cents, total, items = _compute_totals(data["line_items"], vat_rate)
+    # Respect the tenant's VAT profile: non-registered → 0%; inclusive pricing → back out VAT.
+    s = await get_invoice_settings(tenant_id) or {}
+    vat_registered = s.get("vat_registered", True)
+    prices_include_vat = bool(s.get("prices_include_vat"))
+    vat_rate = float(data.get("vat_rate", 15.0)) if vat_registered else 0.0
+    subtotal, vat_cents, total, items = _compute_totals(data["line_items"], vat_rate, prices_include_vat)
     invoice = {
         "id": str(uuid.uuid4()),
         "tenant_id": tenant_id,
@@ -856,3 +865,56 @@ async def delete_supplier(tenant_id: str, supplier_id: str) -> None:
         .eq("id", supplier_id)
         .execute()
     )
+
+
+# ── Invoice settings (onboarding + look-and-feel) ─────────────────────────────
+
+# Fields a tenant may set via the onboarding wizard / settings panel.
+_INVOICE_SETTINGS_FIELDS = (
+    "company_name", "company_email", "company_phone", "company_reg",
+    "vat_number", "registered_address", "vat_registered", "prices_include_vat",
+    "account_name", "bank_name", "branch_code", "account_number",
+    "template_choice", "accent_color", "onboarded",
+)
+_TEMPLATE_CHOICES = ("classic", "minimal", "modern")
+
+
+async def get_invoice_settings(tenant_id: str) -> Optional[dict]:
+    """Return the tenant's invoice settings row, or None if not yet configured."""
+    result = (
+        _client()
+        .table("commerce_invoice_settings")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if (result and result.data) else None
+
+
+async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
+    """Create or update the tenant's invoice settings (one row per tenant).
+
+    Only whitelisted fields are persisted. ``template_choice`` is validated
+    against the known templates. Every write is tenant-scoped.
+    """
+    patch = {k: data[k] for k in _INVOICE_SETTINGS_FIELDS if k in data}
+    choice = patch.get("template_choice")
+    if choice is not None and choice not in _TEMPLATE_CHOICES:
+        raise ValueError(f"template_choice must be one of {_TEMPLATE_CHOICES}")
+
+    db = _client()
+    existing = await get_invoice_settings(tenant_id)
+    if existing:
+        patch["updated_at"] = _now()
+        result = (
+            db.table("commerce_invoice_settings")
+            .update(patch)
+            .eq("tenant_id", tenant_id)
+            .execute()
+        )
+        return result.data[0] if result.data else {**existing, **patch}
+
+    row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
+    result = db.table("commerce_invoice_settings").insert(row).execute()
+    return result.data[0] if result.data else row

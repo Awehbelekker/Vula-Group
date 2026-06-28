@@ -353,6 +353,12 @@ const TEMPLATES = [
 
 function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
   const [form, setForm] = useState({
+    company_name:       settings?.company_name || '',
+    company_email:      settings?.company_email || '',
+    company_phone:      settings?.company_phone || '',
+    company_reg:        settings?.company_reg || '',
+    vat_registered:     settings?.vat_registered ?? true,
+    prices_include_vat: settings?.prices_include_vat ?? false,
     vat_number:         settings?.vat_number || '',
     registered_address: settings?.registered_address || '',
     account_name:       settings?.account_name || '',
@@ -393,8 +399,28 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
 
       <p style={s.sectionLabel}>Business details</p>
       <div style={s.formSection}>
-        <input placeholder="VAT / Tax registration number" value={form.vat_number}
-          onChange={e => set('vat_number', e.target.value)} style={s.fInput} />
+        <input placeholder="Registered company name (appears on every invoice)" value={form.company_name}
+          onChange={e => set('company_name', e.target.value)} style={s.fInput} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input placeholder="Business email" value={form.company_email}
+            onChange={e => set('company_email', e.target.value)} style={s.fInput} />
+          <input placeholder="Business phone" value={form.company_phone}
+            onChange={e => set('company_phone', e.target.value)} style={s.fInput} />
+        </div>
+        <input placeholder="Company registration no. (optional)" value={form.company_reg}
+          onChange={e => set('company_reg', e.target.value)} style={s.fInput} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text, #2A2A2A)', fontFamily: 'system-ui' }}>
+          <input type="checkbox" checked={!!form.vat_registered} onChange={e => set('vat_registered', e.target.checked)} />
+          We are VAT-registered (issue Tax Invoices @ 15%)
+        </label>
+        {form.vat_registered && <>
+          <input placeholder="VAT / Tax registration number" value={form.vat_number}
+            onChange={e => set('vat_number', e.target.value)} style={s.fInput} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #8A8680)', fontFamily: 'system-ui' }}>
+            <input type="checkbox" checked={!!form.prices_include_vat} onChange={e => set('prices_include_vat', e.target.checked)} />
+            My prices already include VAT
+          </label>
+        </>}
         <textarea placeholder="Registered physical address" value={form.registered_address}
           onChange={e => set('registered_address', e.target.value)} style={{ ...s.fInput, minHeight: 60, resize: 'vertical' }} />
       </div>

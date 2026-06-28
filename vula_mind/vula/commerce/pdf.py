@@ -16,12 +16,12 @@ from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
-# ── Jinja2 template ───────────────────────────────────────────────────────────
-_TEMPLATE_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<style>
+# ── Jinja2 templates ──────────────────────────────────────────────────────────
+# One shared body markup, themed by three interchangeable CSS blocks. The chosen
+# CSS is substituted into the document skeleton before rendering, so the accent
+# colour and every other Jinja value resolve in a single pass.
+
+_CSS_CLASSIC = """
   @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 11pt; color: #1a1a1a; }
@@ -56,7 +56,88 @@ _TEMPLATE_HTML = """<!DOCTYPE html>
   .badge-paid     { background: #e6f4ea; color: #1e7e34; }
   .badge-overdue  { background: #fde8e8; color: #c62828; }
   .badge-accepted { background: #e6f4ea; color: #1e7e34; }
-</style>
+"""
+
+# Minimal — monochrome, hairline rules, no fills. Clean and ink-light.
+_CSS_MINIMAL = """
+  @page { size: A4; margin: 20mm 18mm 22mm 18mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 10.5pt; color: #222; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 16px; border-bottom: 1px solid #222; }
+  .brand h1 { font-size: 18pt; font-weight: 600; color: #111; margin-bottom: 2px; letter-spacing: 0.5px; }
+  .brand p  { font-size: 8.5pt; color: #777; line-height: 1.5; }
+  .doc-title { text-align: right; }
+  .doc-title h2 { font-size: 13pt; font-weight: 600; color: #111; text-transform: uppercase; letter-spacing: 3px; }
+  .doc-title .num { font-size: 11pt; color: #555; margin-top: 4px; }
+  .doc-title .dates { font-size: 8.5pt; color: #888; margin-top: 6px; line-height: 1.6; }
+  .parties { display: flex; gap: 32px; margin-bottom: 28px; }
+  .party { flex: 1; padding: 0; }
+  .party h3 { font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; color: #aaa; margin-bottom: 6px; }
+  .party p  { font-size: 10pt; line-height: 1.6; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  thead th { background: transparent; color: #111; padding: 8px 10px; font-size: 8.5pt; text-align: left; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1.5px solid #222; }
+  thead th:last-child, thead th:nth-last-child(2), thead th:nth-last-child(3) { text-align: right; }
+  tbody td { padding: 8px 10px; font-size: 10pt; border-bottom: 1px solid #eee; vertical-align: top; }
+  tbody td:last-child, tbody td:nth-last-child(2), tbody td:nth-last-child(3) { text-align: right; }
+  .totals { width: 280px; margin-left: auto; margin-bottom: 28px; }
+  .totals tr td { padding: 5px 8px; font-size: 10.5pt; }
+  .totals tr td:last-child { text-align: right; font-weight: 500; }
+  .totals .total-row td { font-weight: 700; font-size: 12pt; border-top: 1.5px solid #222; padding-top: 8px; color: #111; }
+  .notes { padding: 12px 0; margin-bottom: 24px; font-size: 9.5pt; line-height: 1.6; color: #555; border-top: 1px solid #eee; }
+  .payment { padding: 14px 0; margin-bottom: 24px; font-size: 9.5pt; line-height: 1.7; border-top: 1px solid #eee; }
+  .payment h3 { font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; color: #aaa; margin-bottom: 8px; }
+  .footer { border-top: 1px solid #222; padding-top: 10px; font-size: 8pt; color: #999; text-align: center; line-height: 1.6; }
+  .badge { display: inline-block; padding: 2px 0; font-size: 8pt; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; color: #888; }
+"""
+
+# Modern — bold accent band, rounded cards, high contrast totals.
+_CSS_MODERN = """
+  @page { size: A4; margin: 0 0 18mm 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 11pt; color: #1a1a1a; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin: 0 0 28px; padding: 28px 18mm 22px; background: {{ accent }}; color: #fff; }
+  .brand h1 { font-size: 24pt; font-weight: 800; color: #fff; margin-bottom: 2px; }
+  .brand p  { font-size: 9pt; color: rgba(255,255,255,0.85); line-height: 1.5; }
+  .doc-title { text-align: right; }
+  .doc-title h2 { font-size: 17pt; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 2px; }
+  .doc-title .num { font-size: 12pt; color: rgba(255,255,255,0.9); margin-top: 4px; }
+  .doc-title .dates { font-size: 9pt; color: rgba(255,255,255,0.8); margin-top: 6px; line-height: 1.6; }
+  .parties { display: flex; gap: 20px; margin: 0 18mm 28px; }
+  .party { flex: 1; background: #f4f6f8; border-radius: 10px; padding: 16px 18px; }
+  .party h3 { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.8px; color: {{ accent }}; margin-bottom: 8px; font-weight: 700; }
+  .party p  { font-size: 10pt; line-height: 1.6; }
+  table { width: calc(100% - 36mm); border-collapse: separate; border-spacing: 0; margin: 0 18mm 24px; }
+  thead th { background: #1a1a1a; color: #fff; padding: 11px 12px; font-size: 9.5pt; text-align: left; }
+  thead th:first-child { border-radius: 8px 0 0 8px; }
+  thead th:last-child { border-radius: 0 8px 8px 0; }
+  thead th:last-child, thead th:nth-last-child(2), thead th:nth-last-child(3) { text-align: right; }
+  tbody tr:nth-child(even) { background: #f4f6f8; }
+  tbody td { padding: 10px 12px; font-size: 10pt; border-bottom: 1px solid #eef1f4; vertical-align: top; }
+  tbody td:last-child, tbody td:nth-last-child(2), tbody td:nth-last-child(3) { text-align: right; }
+  .totals { width: 300px; margin: 0 18mm 28px auto; }
+  .totals tr td { padding: 6px 10px; font-size: 10.5pt; }
+  .totals tr td:last-child { text-align: right; font-weight: 500; }
+  .totals .total-row td { font-weight: 800; font-size: 13pt; background: {{ accent }}; color: #fff; padding: 12px 10px; border-radius: 8px; }
+  .notes { background: #f4f6f8; border-radius: 10px; padding: 14px 18px; margin: 0 18mm 24px; font-size: 9.5pt; line-height: 1.6; }
+  .payment { background: #fff; border: 1.5px solid {{ accent }}; border-radius: 10px; padding: 16px 18px; margin: 0 18mm 24px; font-size: 9.5pt; line-height: 1.7; }
+  .payment h3 { font-size: 9pt; text-transform: uppercase; letter-spacing: 0.8px; color: {{ accent }}; margin-bottom: 8px; font-weight: 700; }
+  .footer { margin: 0 18mm; border-top: 1px solid #e4e8ec; padding-top: 10px; font-size: 8.5pt; color: #999; text-align: center; line-height: 1.6; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; background: rgba(255,255,255,0.2); color: #fff; }
+"""
+
+_TEMPLATE_CSS: dict[str, str] = {
+    "classic": _CSS_CLASSIC,
+    "minimal": _CSS_MINIMAL,
+    "modern": _CSS_MODERN,
+}
+
+# Shared document skeleton. ``__TEMPLATE_CSS__`` is replaced with the chosen
+# theme before a single Jinja render pass resolves all values.
+_DOC_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>__TEMPLATE_CSS__</style>
 </head>
 <body>
 
@@ -167,6 +248,54 @@ _DOC_LABELS = {
 }
 
 
+def _payment_info_from_settings(settings: dict) -> str:
+    """Build the EFT payment block from saved banking fields. Returns '' when no
+    banking details are present (so the default/payment section stays hidden)."""
+    lines = []
+    if settings.get("bank_name"):
+        lines.append(f"Bank: {settings['bank_name']}")
+    if settings.get("account_name"):
+        lines.append(f"Account Name: {settings['account_name']}")
+    if settings.get("account_number"):
+        lines.append(f"Account Number: {settings['account_number']}")
+    if settings.get("branch_code"):
+        lines.append(f"Branch Code: {settings['branch_code']}")
+    if not lines:
+        return ""
+    return "EFT Payment:\n" + "\n".join(lines) + \
+        "\nPlease use your invoice number as reference."
+
+
+def merge_branding(tenant_id: str, settings: Optional[dict]) -> dict:
+    """Combine static tenant defaults with the tenant's saved invoice settings.
+
+    Saved settings (VAT number, registered address, banking details, template
+    choice, accent) take precedence over the built-in defaults. The result is a
+    plain branding dict suitable for ``render_invoice_pdf``.
+    """
+    branding = dict(_TENANT_DEFAULTS.get(tenant_id, {}))
+    if not settings:
+        return branding
+    # Company identity — these were previously never carried from settings, leaving
+    # non-default tenants' invoices with a title-cased tenant_id and blank contact info.
+    for src, dst in (("company_name", "name"), ("company_email", "email"),
+                     ("company_phone", "phone"), ("company_reg", "reg")):
+        if settings.get(src):
+            branding[dst] = settings[src]
+    if settings.get("vat_number"):
+        branding["vat"] = settings["vat_number"]
+    if settings.get("registered_address"):
+        branding["address"] = settings["registered_address"]
+    if settings.get("accent_color"):
+        branding["accent"] = settings["accent_color"]
+    branding["vat_registered"] = settings.get("vat_registered", True)
+    payment_info = _payment_info_from_settings(settings)
+    if payment_info:
+        branding["payment_info"] = payment_info
+    branding["template_choice"] = settings.get("template_choice") or "classic"
+    return branding
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> bytes:
@@ -217,8 +346,9 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "tenant_vat": branding.get("vat") or "",
         "accent": branding.get("accent", "#1a7a4a"),
         "payment_info": branding.get("payment_info", ""),
-        # Document meta
-        "doc_label": _DOC_LABELS.get(doc_type, "Document"),
+        # Document meta — only a VAT-registered supplier may issue a "Tax Invoice".
+        "doc_label": ("Invoice" if doc_type == "invoice" and branding.get("vat_registered") is False
+                      else _DOC_LABELS.get(doc_type, "Document")),
         "invoice_number": invoice.get("invoice_number", ""),
         "status": invoice.get("status", "draft"),
         "issue_date": (invoice.get("issue_date") or "")[:10],
@@ -238,12 +368,18 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "notes": invoice.get("notes") or "",
     }
 
+    # Pick the layout template; substitute its CSS before the single render pass
+    # so the accent colour (and any other Jinja value in the CSS) resolves too.
+    choice = branding.get("template_choice") or "classic"
+    css = _TEMPLATE_CSS.get(choice, _TEMPLATE_CSS["classic"])
+    template_html = _DOC_HTML.replace("__TEMPLATE_CSS__", css)
+
     env = Environment(autoescape=False)
-    html_str = env.from_string(_TEMPLATE_HTML).render(**ctx)
+    html_str = env.from_string(template_html).render(**ctx)
     pdf_bytes = WP_HTML(string=html_str).write_pdf()
 
     log.info(
-        "PDF rendered: %s %s for %s (%d bytes)",
-        doc_type, ctx["invoice_number"], tenant_id, len(pdf_bytes),
+        "PDF rendered: %s %s (%s) for %s (%d bytes)",
+        doc_type, ctx["invoice_number"], choice, tenant_id, len(pdf_bytes),
     )
     return pdf_bytes
