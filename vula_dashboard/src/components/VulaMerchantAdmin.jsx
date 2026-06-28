@@ -27,6 +27,7 @@ import VulaFinances from './VulaFinances'
 import VulaFollowups from './VulaFollowups'
 import VulaTeam from './VulaTeam'
 import VulaProjectWorkspace from './VulaProjectWorkspace'
+import VulaFieldOps from './VulaFieldOps'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -93,7 +94,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
               [{ id: 'orders', label: '📦 Orders' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
               [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
               [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }],
-              [{ id: 'workspace', label: '🗂️ Workspace' }, { id: 'projects', label: '🏗️ Projects' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
+              [{ id: 'workspace', label: '🗂️ Workspace' }, { id: 'projects', label: '🏗️ Projects' }, { id: 'fieldops', label: '👷 Field Ops' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
               [...(full ? [{ id: 'team', label: '👥 Team' }, { id: 'settings', label: '⚙️ Settings' }] : [])],
             ]
             const items = []
@@ -131,6 +132,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'followups' && <VulaFollowups     tenantId={tenantId} />}
           {tab === 'broadcast' && <VulaBroadcast     tenantId={tenantId} />}
           {tab === 'projects'  && <VulaProjects      tenantId={tenantId} />}
+          {tab === 'fieldops'  && <VulaFieldOps     tenantId={tenantId} />}
           {tab === 'qsrates'   && <VulaQSRates       tenantId={tenantId} />}
           {tab === 'documents' && <VulaDocuments     tenantId={tenantId} />}
           {tab === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
