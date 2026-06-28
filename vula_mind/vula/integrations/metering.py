@@ -76,28 +76,46 @@ def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens
         logger.debug("meter skipped (run migration 031?): %s", exc)
 
 
-def _success_callback(kwargs, completion_response, start_time, end_time) -> None:
-    """litellm success callback — fires after every completion."""
+def meter_response(tenant_id: str, model: str, resp) -> None:
+    """Record usage straight from a litellm response (reliable, same-context path)."""
     try:
-        tid = _current_tenant.get()
-        if not tid:
-            return
-        u = getattr(completion_response, "usage", None)
+        u = getattr(resp, "usage", None)
         pt = getattr(u, "prompt_tokens", 0) or 0
         ct = getattr(u, "completion_tokens", 0) or 0
-        record_llm(tid, kwargs.get("model") or "", int(pt), int(ct))
+        record_llm(tenant_id, model or "", int(pt), int(ct))
     except Exception:
         pass
 
 
+_INSTALLED = False
+
+
 def install_metering() -> None:
-    """Register the litellm success callback once (idempotent)."""
+    """Register an async litellm CustomLogger once. Async callbacks run in the event loop,
+    so the request's tenant contextvar is visible (unlike sync success_callback threads)."""
+    global _INSTALLED
+    if _INSTALLED:
+        return
     try:
         import litellm
-        cbs = litellm.success_callback or []
-        if _success_callback not in cbs:
-            litellm.success_callback = cbs + [_success_callback]
-            logger.info("Vula metering: litellm success callback installed")
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _VulaMeter(CustomLogger):
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                try:
+                    tid = _current_tenant.get()
+                    if not tid:
+                        return
+                    u = getattr(response_obj, "usage", None)
+                    pt = getattr(u, "prompt_tokens", 0) or 0
+                    ct = getattr(u, "completion_tokens", 0) or 0
+                    record_llm(tid, kwargs.get("model") or "", int(pt), int(ct))
+                except Exception:
+                    pass
+
+        litellm.callbacks = (litellm.callbacks or []) + [_VulaMeter()]
+        _INSTALLED = True
+        logger.info("Vula metering: litellm CustomLogger installed")
     except Exception as exc:
         logger.warning("metering install failed: %s", exc)
 
