@@ -640,7 +640,7 @@ async def _email_sync_loop() -> None:
                 log.info("Email sync processed %d new message(s)", n)
         except Exception as exc:
             log.warning("Email sync loop error: %s", exc)
-        await _asyncio.sleep(15 * 60)
+        await _asyncio.sleep(60 * 60)   # hourly — email isn't time-critical; saves AI cost
 
 
 @asynccontextmanager

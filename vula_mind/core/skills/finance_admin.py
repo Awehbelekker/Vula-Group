@@ -20,7 +20,7 @@ from core.llm_router import resolve_generation_route
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
-MAX_TOOL_ITERATIONS = 4
+MAX_TOOL_ITERATIONS = 3
 
 TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {

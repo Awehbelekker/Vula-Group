@@ -93,6 +93,29 @@ async def resolve_generation_route(
     return f"ollama/{local_model}", None, settings.ollama_base
 
 
+async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optional[str], str]:
+    """Cheap tier for mechanical work (doc analysis, classification, extraction).
+
+    Local-first (FREE on the GPU via the ollama.vula-ai.com tunnel), then a cheap cloud
+    model (gemini-flash), then the 70B as a last resort. Ignores `prefer_cloud_llm` — the
+    whole point is to avoid the premium model for throwaway work. Callers should validate
+    the output and escalate to `resolve_cloud_route()` only on failure/low confidence.
+    """
+    local_model = model or settings.model_worker_cheap_local or settings.model_worker
+    if await ollama_available():
+        return f"ollama/{local_model}", None, settings.ollama_base
+    if settings.openrouter_api_key:
+        return f"openrouter/{settings.model_worker_cheap}", settings.openrouter_api_key, OPENROUTER_BASE
+    return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
+
+
+def resolve_cloud_route() -> Optional[Tuple[str, Optional[str], str]]:
+    """Force the strong 70B cloud model — for user-facing answers and cheap-tier escalation."""
+    if settings.openrouter_api_key:
+        return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
+    return None
+
+
 async def resolve_vision_route() -> Tuple[str, Optional[str], str]:
     """Local-first vision route with OpenRouter fallback (for the Smart Scanner).
 

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     model_embed: str = "bge-m3"
     model_ocr: str = "llava:7b"
     model_vision: str = "google/gemini-2.5-flash"  # OpenRouter vision model for Smart Scanner (cheap, strong OCR)
+    # Cheap tier for mechanical LLM work (doc analysis, classification): local-first via
+    # the ollama.vula-ai.com tunnel, then this cheap cloud model, then escalate to the 70B.
+    model_worker_cheap_local: str = "llama3.1:8b"          # free, on the local GPU via the tunnel
+    model_worker_cheap: str = "google/gemini-2.5-flash"    # cloud fallback when the tunnel is down
 
     # ── Qdrant ──────────────────────────────────────────────────────────────
     qdrant_base: str = "http://localhost:6333"

@@ -672,14 +672,12 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
     try:
         import json as _json
         import litellm
-        from core.llm_router import resolve_generation_route
+        from core.llm_router import resolve_cheap_route, resolve_cloud_route
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_cheap_route()
 
         cats = ", ".join(_DOC_CATEGORIES)
-        resp = await litellm.acompletion(
-            model=model,
-            messages=[
+        _msgs = [
                 {"role": "system", "content":
                     "You are Vula's document analyst for a South African construction/business. "
                     "Read the document and return STRICT JSON only (no prose) with keys: "
@@ -689,25 +687,45 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
                     "{description, qty, unit, rate, amount}; fee proposal: client, stages, total; "
                     "contract: parties, value, dates. Money as numbers in ZAR. Use null when unknown)."},
                 {"role": "user", "content": f"Filename: {filename}\n\nDocument:\n{text}\n\nJSON:"},
-            ],
-            temperature=0.1,
-            max_tokens=900,
-            api_key=api_key,
-            api_base=api_base,
-        )
-        raw = (resp.choices[0].message.content or "").strip()
-        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-        data = _json.loads(raw)
-        cat = data.get("category") or "General Document"
-        if cat not in _DOC_CATEGORIES:
-            cat = "General Document"
-        return {
-            "category": cat,
-            "summary": (data.get("summary") or "").strip(),
-            "fields": data.get("fields") or {},
-        }
+        ]
+
+        def _parse(_resp):
+            raw = (_resp.choices[0].message.content or "").strip()
+            if "</think>" in raw:                       # local reasoning models
+                raw = raw.split("</think>")[-1].strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            i, j = raw.find("{"), raw.rfind("}")
+            data = _json.loads(raw[i:j + 1] if i >= 0 and j > i else raw)
+            cat = data.get("category") or "General Document"
+            if cat not in _DOC_CATEGORIES:
+                cat = "General Document"
+            return {"category": cat, "summary": (data.get("summary") or "").strip(),
+                    "fields": data.get("fields") or {}}
+
+        # Cheap pass first (free local via tunnel / gemini-flash).
+        result = None
+        try:
+            resp = await litellm.acompletion(model=model, messages=_msgs, temperature=0.1,
+                max_tokens=900, api_key=api_key, api_base=api_base)
+            result = _parse(resp)
+        except Exception as exc:
+            logger.debug("Doc analyze cheap pass failed: %s", exc)
+
+        # Escalate to the 70B only if the cheap pass failed or came back empty.
+        if not (result and (result.get("summary") or result.get("fields"))):
+            cloud = resolve_cloud_route()
+            if cloud:
+                try:
+                    logger.info("Doc analyze: cheap weak — escalating %s to 70B", filename)
+                    _cm, _ck, _cb = cloud
+                    resp = await litellm.acompletion(model=_cm, messages=_msgs, temperature=0.1,
+                        max_tokens=900, api_key=_ck, api_base=_cb)
+                    result = _parse(resp)
+                except Exception as exc2:
+                    logger.warning("Doc analyze escalation failed for %s: %s", filename, exc2)
+        return result
     except Exception as exc:
-        logger.warning("Doc analyze LLM failed for %s: %s", filename, exc)
+        logger.warning("Doc analyze setup failed for %s: %s", filename, exc)
         return None
 
 

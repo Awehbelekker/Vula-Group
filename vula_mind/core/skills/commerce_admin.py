@@ -32,7 +32,7 @@ from vula.commerce import service
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 4
+MAX_TOOL_ITERATIONS = 3
 
 _PAID_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered"}
 _VALID_ORDER_STATUS = {"confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}

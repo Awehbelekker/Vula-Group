@@ -29,7 +29,7 @@ from vula.clickup.credentials import get_tenant_clickup_creds
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 4
+MAX_TOOL_ITERATIONS = 3
 
 TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
