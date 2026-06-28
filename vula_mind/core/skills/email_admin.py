@@ -42,6 +42,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}},
             "required": ["to", "subject", "body"]}}},
+    {"type": "function", "function": {
+        "name": "list_followups",
+        "description": "List emails awaiting a reply ('what's waiting on me?', 'anything to follow up?').",
+        "parameters": {"type": "object", "properties": {}}}},
 ]
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
 
@@ -155,6 +159,12 @@ class EmailAdminSkill(BaseSkill):
                 if creds.get("send_mode") == "send":
                     return await service.send(creds, to, subj, body)
                 return await service.save_draft(creds, to, subj, body)
+            if name == "list_followups":
+                from vula.commerce import service as cs
+                rows = (cs._client().table("vula_email_followups").select("sender_name,sender,subject,reason,received_at")
+                        .eq("tenant_id", tenant_id).eq("status", "open")
+                        .order("received_at", desc=True).limit(25).execute().data or [])
+                return {"awaiting_reply": rows, "count": len(rows)}
         except Exception as exc:
             logger.warning("email tool %s failed: %s", name, exc)
             return {"error": str(exc)}

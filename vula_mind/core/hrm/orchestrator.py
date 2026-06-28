@@ -49,11 +49,20 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     # Microsoft OneDrive + Outlook (draft-only email). Defers if not connected.
     "microsoft_admin":      ["onedrive", "one drive", "outlook", "sharepoint"],
     # Generic IMAP/SMTP mailbox (GoDaddy/cPanel/Zoho/etc.) — owns generic email phrasing.
+    # Money/budget/supplier questions answered from the finance ledger.
+    "finance_admin":        ["spent on", "how much have we spent", "how much did we spend",
+                             "money in", "money out", "money in and out", "in vs out",
+                             "budget left", "budget remaining", "left on the budget",
+                             "whats left on the", "what's left on the", "budget for",
+                             "who is account", "supplier paid", "what have we paid", "total invoiced",
+                             "cash in", "cash out", "the ledger"],
     "email_admin":          ["email", "my mail", "my emails", "inbox", "draft a reply",
                              "draft an email", "draft email", "check my email", "check email",
                              "reply to the email", "file the attachment", "email attachment",
                              "draft a ", "draft me", "compose", "reply to", "summarise the email",
-                             "read the email", "read the latest"],
+                             "read the email", "read the latest",
+                             "waiting on me", "to reply", "need a reply", "needs a reply",
+                             "follow up", "follow-up", "outstanding emails", "awaiting reply"],
     # Google Drive + Gmail — provider-named only (generic 'email' goes to email_admin).
     "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail"],
     # Explicit standard/code lookup → cited search of the code library.
