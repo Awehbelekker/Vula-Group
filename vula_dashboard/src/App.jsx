@@ -16,6 +16,7 @@ import VulaFinances from "./components/VulaFinances";
 import VulaFollowups from "./components/VulaFollowups";
 import VulaTeam from "./components/VulaTeam";
 import VulaProjectWorkspace from "./components/VulaProjectWorkspace";
+import VulaQuickLauncher from "./components/VulaQuickLauncher";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -178,6 +179,7 @@ export default function App() {
           </div>
         </nav>
         <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} fullPage access={access} full={full} />
+        <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
       </div>
     );
   }
@@ -272,6 +274,7 @@ export default function App() {
 
       {/* Active view — pass tenantId to every component that needs it */}
       <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} />
+      <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
     </div>
   );
 }
