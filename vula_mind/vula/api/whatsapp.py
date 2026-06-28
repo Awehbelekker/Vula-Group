@@ -60,7 +60,8 @@ _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IG
 # Add a number here (or, later, in vula_whatsapp_accounts) to put it live.
 # This is the single source of truth — "add a number, point it at a tenant".
 _NUMBER_ROUTING: dict[str, tuple[str, str]] = {
-    "1124076000792176": ("off-the-hook", "commerce"),   # +27 67 363 6081 — OTH orders bot (live)
+    "1216487374874418": ("off-the-hook", "commerce"),   # +27 79 178 3933 — OTH orders bot (live; replaced +27 67 363 6081)
+    "1124076000792176": ("off-the-hook", "commerce"),   # +27 67 363 6081 — retired, kept routed during transition
     "1180015145200511": ("digg-demo",    "knowledge"),  # +27 66 566 9387 — DIGG assistant
 }
 
