@@ -4,14 +4,14 @@ const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "#2C5545", amber: "#C4861A", red: "#C0392B",
+  green: "var(--accent)", amber: "#C4861A", red: "#C0392B",
   blue: "#1A5276", text: "#2A2A2A", muted: "#8A8680",
   surfaceAlt: "#F0EDE5", greenLight: "#EAF2EF",
 };
 
 const STATUS_STYLE = {
   pending:            { bg: "#F0EDE5", color: "#8A8680", label: "Pending" },
-  in_progress:        { bg: "#EAF2EF", color: "#2C5545", label: "In Progress" },
+  in_progress:        { bg: "#EAF2EF", color: "var(--accent)", label: "In Progress" },
   awaiting_sign_off:  { bg: "#FEF9E7", color: "#C4861A", label: "Awaiting Sign-off" },
   complete:           { bg: "#EAF2EF", color: "#1A7A4A", label: "Complete" },
   rejected:           { bg: "#FDEDEC", color: "#C0392B", label: "Rejected" },

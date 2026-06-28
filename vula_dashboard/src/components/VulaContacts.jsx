@@ -5,8 +5,8 @@
 import { useState, useEffect, useCallback } from "react";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "#2C5545", text: "#2A2A2A", muted: "#8A8680", surfaceAlt: "#F0EDE5" };
-const KIND = { internal: { label: "Co-worker", color: "#2C5545" }, supplier: { label: "Supplier", color: "#C4861A" }, client: { label: "Client", color: "#2B5797" }, external: { label: "External", color: "#8A8680" } };
+const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", surfaceAlt: "#F0EDE5" };
+const KIND = { internal: { label: "Co-worker", color: "var(--accent)" }, supplier: { label: "Supplier", color: "#C4861A" }, client: { label: "Client", color: "#2B5797" }, external: { label: "External", color: "#8A8680" } };
 const KINDS = ["internal", "client", "supplier", "external"];
 
 export default function VulaContacts({ tenantId }) {

@@ -8,7 +8,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "#2C5545", red: "#C0392B",
+const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#C0392B",
   text: "#2A2A2A", muted: "#8A8680", surfaceAlt: "#F0EDE5" };
 const inp = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, color: C.text, background: C.surface, boxSizing: "border-box" };
 const btn = { padding: "8px 14px", background: C.green, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" };

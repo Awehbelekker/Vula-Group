@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "#2C5545", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
 
 // Access modules map 1:1 to dashboard tab ids.
 const MODULES = [

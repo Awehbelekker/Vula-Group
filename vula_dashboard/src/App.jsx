@@ -28,6 +28,7 @@ import VulaBudget from "./components/VulaBudget";
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 import VulaSmartScanner from "./components/VulaSmartScanner";
 import { getTenantTheme, themeVars } from "./theme/tenantThemes";
+import { applyAccent } from "./theme/tokens";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -90,19 +91,30 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Match browser/PWA chrome (theme-color) to the tenant accent for owners/staff.
+  // Brand the whole portal in the tenant's accent: baseline from tenantThemes, then
+  // override from the DB (commerce_invoice_settings.accent_color) so a tenant's chosen
+  // brand colour drives buttons/tabs/borders everywhere — not just the invoice PDF.
   useEffect(() => {
-    if (role !== "owner" && role !== "staff") return;
-    const tid = tenantId && tenantId !== "master" ? tenantId : "digg-demo";
-    const accent = getTenantTheme(tid).accent;
+    const tid = (role === "master") ? masterTenant
+      : (tenantId && tenantId !== "master" ? tenantId : "digg-demo");
+    const baseAccent = getTenantTheme(tid).accent;
+    applyAccent(baseAccent);
     let meta = document.querySelector('meta[name="theme-color"]');
-    if (!meta) {
-      meta = document.createElement("meta");
-      meta.name = "theme-color";
-      document.head.appendChild(meta);
-    }
-    meta.content = accent;
-  }, [role, tenantId]);
+    if (!meta) { meta = document.createElement("meta"); meta.name = "theme-color"; document.head.appendChild(meta); }
+    meta.content = baseAccent;
+
+    const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+    fetch(`${API}/v1/commerce/${tid}/admin/invoice-settings`)
+      .then((r) => r.json())
+      .then((d) => {
+        const c = d?.settings?.accent_color;
+        if (c && /^#?[0-9a-fA-F]{3,8}$/.test(c)) {
+          const hex = c.startsWith("#") ? c : `#${c}`;
+          applyAccent(hex); meta.content = hex;
+        }
+      })
+      .catch(() => {});
+  }, [role, tenantId, masterTenant]);
 
   // Load this member's access scope (which modules they may see) for owners/staff.
   useEffect(() => {

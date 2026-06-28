@@ -10,7 +10,7 @@ import VulaFollowups from "./VulaFollowups";
 import VulaFinances from "./VulaFinances";
 import VulaInvoices from "./VulaInvoices";
 
-const C = { green: "#2C5545", surface: "#FFFFFF", border: "#DDD8CE", text: "#2A2A2A" };
+const C = { green: "var(--accent)", surface: "#FFFFFF", border: "#DDD8CE", text: "#2A2A2A" };
 
 const ACTIONS = [
   { key: "assistant", icon: "💬", label: "Vula AI", comp: VulaAssistant, always: true },

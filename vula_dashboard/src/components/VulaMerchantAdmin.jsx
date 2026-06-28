@@ -186,7 +186,7 @@ function OverviewTab({ tenantId, setTab }) {
   return (
     <div>
       <div style={styles.statGrid}>
-        <StatCard label="Today's revenue" value={fmt(stats.today_revenue_cents)} sub={`${stats.today_orders} orders today`} accent="var(--accent, #2C5545)" />
+        <StatCard label="Today's revenue" value={fmt(stats.today_revenue_cents)} sub={`${stats.today_orders} orders today`} accent="var(--accent, var(--accent))" />
         <StatCard label="Total revenue"   value={fmt(stats.total_revenue_cents)} sub={`${stats.total_orders} orders`} />
         <StatCard label="Avg order value" value={fmt(aov)}                        sub="per paid order" accent="#2B5797" />
         <StatCard label="This week"       value={weekOrders}                      sub="orders (7 days)" accent="#8b5cf6" />
@@ -242,7 +242,7 @@ const ovS = {
   bars: { display: 'flex', alignItems: 'flex-end', gap: 10, height: 120 },
   barCol: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, height: '100%' },
   barWrap: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' },
-  bar: { width: '100%', background: 'linear-gradient(180deg, #2C5545, #3d7a5f)', borderRadius: '4px 4px 0 0', minHeight: 2 },
+  bar: { width: '100%', background: 'linear-gradient(180deg, var(--accent), #3d7a5f)', borderRadius: '4px 4px 0 0', minHeight: 2 },
   barLabel: { fontSize: 11, color: '#8A8680' },
   chartFoot: { fontSize: 11, color: '#B5B0A8', margin: '10px 0 0', textAlign: 'right' },
   alertRow: { display: 'flex', gap: 10, flexWrap: 'wrap' },
@@ -527,7 +527,7 @@ function DeliveryTab({ tenantId }) {
 
       {!loading && data && (
         <div style={styles.statGrid}>
-          <StatCard label="Deliveries" value={data.total} sub={`${slots.length} slot${slots.length !== 1 ? 's' : ''}`} accent="var(--accent, #2C5545)" />
+          <StatCard label="Deliveries" value={data.total} sub={`${slots.length} slot${slots.length !== 1 ? 's' : ''}`} accent="var(--accent, var(--accent))" />
           <StatCard label="Paid"   value={data.paid_count}   sub={fmt(data.paid_revenue_cents)}   accent="#16a34a" />
           <StatCard label="Unpaid" value={data.unpaid_count} sub={fmt(data.unpaid_revenue_cents)} accent="#f59e0b" />
           <StatCard label="To collect" value={fmt((data.paid_revenue_cents || 0) + (data.unpaid_revenue_cents || 0))} sub="total value" />
@@ -949,7 +949,7 @@ const styles = {
   closeBtn:     { background:'transparent', border:'none', fontSize:28, cursor:'pointer', color:'#8A8680', lineHeight:1 },
   tabs:         { display:'flex', alignItems:'center', borderBottom:'1px solid #DDD8CE', padding:'0 28px', overflowX:'auto', whiteSpace:'nowrap' },
   tab:          { padding:'12px 14px', border:'none', background:'transparent', cursor:'pointer', fontFamily:'system-ui', fontSize:13, color:'#8A8680', borderBottom:'2px solid transparent', flex:'0 0 auto' },
-  tabActive:    { color:'var(--accent, #2C5545)', borderBottom:'2px solid var(--accent, #2C5545)', fontWeight:600 },
+  tabActive:    { color:'var(--accent, var(--accent))', borderBottom:'2px solid var(--accent, var(--accent))', fontWeight:600 },
   tabDivider:   { width:1, height:18, background:'#DDD8CE', margin:'0 6px', flex:'0 0 auto' },
   content:      { padding:'20px 28px', flex:1, overflowY:'auto' },
   loading:      { color:'#8A8680', fontSize:13, fontFamily:'system-ui' },
@@ -958,7 +958,7 @@ const styles = {
 
   statGrid:     { display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:12, marginBottom:20 },
   statCard:     { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'16px 18px' },
-  statValue:    { fontFamily:"'Cormorant Garamond', serif", fontSize:28, fontWeight:700, margin:'0 0 4px', color:'var(--accent, #2C5545)' },
+  statValue:    { fontFamily:"'Cormorant Garamond', serif", fontSize:28, fontWeight:700, margin:'0 0 4px', color:'var(--accent, var(--accent))' },
   statLabel:    { fontFamily:'system-ui', fontSize:12, fontWeight:600, color:'#1E1E1E', margin:'0 0 2px' },
   statSub:      { fontFamily:'system-ui', fontSize:11, color:'#8A8680', margin:0 },
 
@@ -971,18 +971,18 @@ const styles = {
 
   chips:        { display:'flex', gap:6, flexWrap:'wrap', marginBottom:16 },
   chip:         { padding:'5px 12px', borderRadius:20, border:'1px solid #DDD8CE', background:'#fff', cursor:'pointer', fontSize:12, fontFamily:'system-ui', color:'#8A8680' },
-  chipActive:   { background:'var(--accent, #2C5545)', color:'#fff', border:'1px solid var(--accent, #2C5545)' },
+  chipActive:   { background:'var(--accent, var(--accent))', color:'#fff', border:'1px solid var(--accent, var(--accent))' },
 
   list:         { display:'flex', flexDirection:'column', gap:8 },
   orderCard:    { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'14px 16px' },
   orderTop:     { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 },
   orderId:      { fontFamily:"'Source Code Pro', monospace", fontSize:13, fontWeight:600, color:'#1E1E1E', marginRight:8 },
-  orderAmount:  { fontFamily:'system-ui', fontSize:15, fontWeight:700, color:'var(--accent, #2C5545)' },
+  orderAmount:  { fontFamily:'system-ui', fontSize:15, fontWeight:700, color:'var(--accent, var(--accent))' },
   orderMeta:    { fontFamily:'system-ui', fontSize:12, color:'#8A8680', display:'flex', gap:6, marginBottom:4, flexWrap:'wrap' },
   orderDate:    { fontFamily:'system-ui', fontSize:11, color:'#B5B0A8', margin:'2px 0 8px' },
   badge:        { padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600 },
   actions:      { display:'flex', gap:6, flexWrap:'wrap' },
-  btnAction:    { padding:'5px 12px', background:'var(--accent, #2C5545)', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600 },
+  btnAction:    { padding:'5px 12px', background:'var(--accent, var(--accent))', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600 },
   btnDanger:    { padding:'5px 12px', background:'transparent', color:'#ef4444', border:'1px solid rgba(239,68,68,0.3)', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui' },
 
   catHeader:    { fontFamily:"'Cormorant Garamond', serif", fontSize:18, fontWeight:700, color:'#1E1E1E', margin:'0 0 8px' },
@@ -1006,7 +1006,7 @@ const styles = {
   detailNotes:  { fontFamily:'system-ui', fontSize:13, color:'#1E1E1E', margin:'6px 0 0', fontStyle:'italic' },
   detailSection:{ fontFamily:'system-ui', fontSize:12, fontWeight:600, color:'#1E1E1E', margin:'0 0 8px' },
   packRow:      { display:'flex', alignItems:'center', gap:10, background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'10px 12px', fontFamily:'system-ui', fontSize:14, color:'#1E1E1E' },
-  packQty:      { fontWeight:700, color:'var(--accent, #2C5545)' },
+  packQty:      { fontWeight:700, color:'var(--accent, var(--accent))' },
   packPrice:    { color:'#6B7280', fontSize:13, minWidth:70, textAlign:'right' },
-  detailTotal:  { display:'flex', justifyContent:'space-between', fontFamily:'system-ui', fontWeight:700, fontSize:16, color:'var(--accent, #2C5545)', marginTop:12, paddingTop:10, borderTop:'1px solid #DDD8CE' },
+  detailTotal:  { display:'flex', justifyContent:'space-between', fontFamily:'system-ui', fontWeight:700, fontSize:16, color:'var(--accent, var(--accent))', marginTop:12, paddingTop:10, borderTop:'1px solid #DDD8CE' },
 }

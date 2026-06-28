@@ -4,7 +4,7 @@ const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", surfaceAlt: "#F0EDE5",
-  border: "#DDD8CE", green: "#2C5545", greenLight: "#3D7260",
+  border: "#DDD8CE", green: "var(--accent)", greenLight: "#3D7260",
   amber: "#D97706", red: "#DC2626", blue: "#1D4ED8",
   charcoal: "#1E1E1E", text: "#2A2A2A", muted: "#8A8680",
 };

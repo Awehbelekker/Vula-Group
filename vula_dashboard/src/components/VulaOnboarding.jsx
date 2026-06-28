@@ -25,7 +25,7 @@ const TIERS = [
     label: "R7,500/mo",
     desc: "Unlimited users. White-label ready. For established businesses.",
     features: ["Everything in Growth", "White-label branding", "API access", "Dedicated Soul Box hardware", "Onsite setup & training"],
-    color: "#2C5545",
+    color: "var(--accent)",
     highlight: false,
   },
 ];
@@ -541,12 +541,12 @@ export default function VulaOnboarding() {
       `}</style>
 
       <div style={{ minHeight: "100vh", background: "#080808", color: "#F0EDE8", fontFamily: "'DM Sans', system-ui, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}>
-        <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", backgroundImage: "radial-gradient(ellipse at 20% 20%, #C4922A08 0%, transparent 60%), radial-gradient(ellipse at 80% 80%, #2C554506 0%, transparent 60%)" }} />
+        <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", backgroundImage: "radial-gradient(ellipse at 20% 20%, #C4922A08 0%, transparent 60%), radial-gradient(ellipse at 80% 80%, var(--accent)06 0%, transparent 60%)" }} />
 
         <div style={{ position: "relative", zIndex: 1, width: "100%", maxWidth: 580 }}>
           {/* Logo */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 40 }}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, background: "#2C5545", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#fff" }}>V</div>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#fff" }}>V</div>
             <span style={{ fontSize: 15, fontWeight: 600, color: "#F0EDE8" }}>Vula</span>
             <span style={{ marginLeft: "auto", fontSize: 11, color: "#444", fontFamily: "monospace" }}>by Vula Group</span>
           </div>

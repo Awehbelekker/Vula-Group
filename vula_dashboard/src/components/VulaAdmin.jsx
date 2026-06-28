@@ -7,7 +7,7 @@ const COLORS = {
   surface: "#FFFFFF",
   surfaceAlt: "#F0EDE5",
   border: "#DDD8CE",
-  green: "#2C5545",
+  green: "var(--accent)",
   greenLight: "#3D7260",
   amber: "#C4861A",
   charcoal: "#1E1E1E",

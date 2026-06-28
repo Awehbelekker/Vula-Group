@@ -6,7 +6,7 @@
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "#2C5545", muted: "#8A8680", text: "#1E1E1E",
+  green: "var(--accent)", muted: "#8A8680", text: "#1E1E1E",
 };
 
 export default function VulaPrivacy({ view = "privacy" }) {

@@ -317,7 +317,7 @@ function Field({ label, value, accent }) {
   return (
     <div style={s.field}>
       <span style={s.fieldLabel}>{label}</span>
-      <span style={{ ...s.fieldValue, ...(accent ? { color: 'var(--accent, #2C5545)', fontWeight: 700 } : {}) }}>{value}</span>
+      <span style={{ ...s.fieldValue, ...(accent ? { color: 'var(--accent, var(--accent))', fontWeight: 700 } : {}) }}>{value}</span>
     </div>
   )
 }
@@ -328,17 +328,17 @@ const s = {
   sub:          { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0, lineHeight: 1.5 },
   chips:        { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 },
   chip:         { padding: '6px 12px', borderRadius: 20, border: '1px solid #DDD8CE', background: '#fff', cursor: 'pointer', fontSize: 12, fontFamily: 'system-ui', color: '#8A8680' },
-  chipActive:   { background: 'var(--accent, #2C5545)', color: '#fff', border: '1px solid var(--accent, #2C5545)' },
-  captureBtn:   { display: 'block', textAlign: 'center', padding: '32px 16px', border: '2px dashed var(--accent, #2C5545)', borderRadius: 12, cursor: 'pointer', fontSize: 16, fontFamily: 'system-ui', fontWeight: 600, color: 'var(--accent, #2C5545)', background: 'rgba(44,85,69,0.04)' },
+  chipActive:   { background: 'var(--accent, var(--accent))', color: '#fff', border: '1px solid var(--accent, var(--accent))' },
+  captureBtn:   { display: 'block', textAlign: 'center', padding: '32px 16px', border: '2px dashed var(--accent, var(--accent))', borderRadius: 12, cursor: 'pointer', fontSize: 16, fontFamily: 'system-ui', fontWeight: 600, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.04)' },
   hint:         { textAlign: 'center', fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', margin: '8px 0 0' },
   previewWrap:  { position: 'relative', marginBottom: 16 },
   previewImg:   { width: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 8, border: '1px solid #DDD8CE', background: '#fff' },
-  scanningOverlay: { position: 'absolute', inset: 0, background: 'rgba(247,244,238,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui', fontSize: 15, fontWeight: 600, color: 'var(--accent, #2C5545)', borderRadius: 8 },
+  scanningOverlay: { position: 'absolute', inset: 0, background: 'rgba(247,244,238,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui', fontSize: 15, fontWeight: 600, color: 'var(--accent, var(--accent))', borderRadius: 8 },
   retakeBtn:    { position: 'absolute', top: 8, right: 8, padding: '4px 10px', background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' },
   errorBox:     { background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B', borderRadius: 6, padding: '10px 14px', fontSize: 13, fontFamily: 'system-ui', marginBottom: 12 },
   resultCard:   { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 16 },
   resultHeader: { marginBottom: 12 },
-  detectedBadge:{ fontFamily: 'system-ui', fontSize: 11, color: 'var(--accent, #2C5545)', background: 'rgba(44,85,69,0.1)', padding: '4px 10px', borderRadius: 12, fontWeight: 600 },
+  detectedBadge:{ fontFamily: 'system-ui', fontSize: 11, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.1)', padding: '4px 10px', borderRadius: 12, fontWeight: 600 },
   fieldGrid:    { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 12 },
   field:        { display: 'flex', flexDirection: 'column', gap: 2 },
   fieldLabel:   { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
@@ -348,8 +348,8 @@ const s = {
   lineRow:      { display: 'flex', justifyContent: 'space-between', fontFamily: 'system-ui', fontSize: 12, color: '#444', padding: '3px 0' },
   lineQty:      { color: '#8A8680' },
   actions:      { display: 'flex', flexDirection: 'column', gap: 8 },
-  btnPrimary:   { padding: '12px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  btnSecondary: { padding: '12px', background: 'transparent', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  btnPrimary:   { padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  btnSecondary: { padding: '12px', background: 'transparent', color: 'var(--accent, var(--accent))', border: '1px solid var(--accent, var(--accent))', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
   savedCard:    { background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10, padding: 20, textAlign: 'center' },
   savedText:    { fontFamily: 'system-ui', fontSize: 15, fontWeight: 600, color: '#16a34a', margin: '0 0 12px' },
 }

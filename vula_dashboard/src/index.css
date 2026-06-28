@@ -1,0 +1,73 @@
+/* Vula design system — global tokens.
+   Adopted from the off-the-hook design language (cream surfaces, Cormorant display,
+   card/badge radii, soft motion) but colour-neutral: the accent is per-tenant and
+   driven by --accent (set from commerce_invoice_settings.accent_color at load). */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Source+Code+Pro:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  /* Brand (overridden per tenant via JS) */
+  --accent: #2C5545;
+  --accent-dark: #234436;
+  --accent-soft: rgba(44, 85, 69, 0.10);
+  --on-accent: #FFFFFF;
+
+  /* Neutrals */
+  --bg: #F7F4EE;
+  --surface: #FFFFFF;
+  --surface-alt: #F0EDE5;
+  --border: #DDD8CE;
+  --border-soft: #ECE8DF;
+  --ink: #1E1E1E;
+  --text: #2A2A2A;
+  --muted: #8A8680;
+
+  /* Status */
+  --ok: #2C5545;
+  --warn: #C4861A;
+  --danger: #A23B2D;
+  --info: #2B5797;
+
+  /* Typography */
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Source Code Pro', ui-monospace, monospace;
+
+  /* Radii */
+  --r-card: 12px;
+  --r-input: 9px;
+  --r-pill: 999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(30, 30, 30, 0.05), 0 1px 3px rgba(30, 30, 30, 0.06);
+  --shadow-md: 0 4px 16px rgba(30, 30, 30, 0.08);
+  --shadow-lg: 0 12px 40px rgba(30, 30, 30, 0.14);
+
+  /* Spacing scale */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-body);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, .vula-display { font-family: var(--font-display); color: var(--ink); letter-spacing: -0.01em; }
+.vula-mono, .vula-money { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+button { font-family: var(--font-body); }
+input, select, textarea { font-family: var(--font-body); }
+
+/* Motion */
+@keyframes vulaFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes vulaSlideIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@keyframes vulaPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+.vula-fade-up { animation: vulaFadeUp 0.4s ease-out both; }
+.vula-slide-in { animation: vulaSlideIn 0.3s ease-out both; }
+
+/* Thin, branded scrollbars + focus rings */
+::-webkit-scrollbar { height: 8px; width: 8px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

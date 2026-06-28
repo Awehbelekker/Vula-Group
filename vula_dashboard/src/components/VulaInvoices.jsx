@@ -7,7 +7,7 @@
  * - Send via WhatsApp, mark paid, delete
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -26,12 +26,25 @@ export default function VulaInvoices({ tenantId, products = [] }) {
   const [docType, setDocType] = useState('invoice')
   const [matchResults, setMatchResults] = useState({})  // { [invId]: result }
   const [matchingId, setMatchingId] = useState(null)     // id currently matching
+  const [settings, setSettings] = useState(null)         // commerce_invoice_settings row
+  const [showSettings, setShowSettings] = useState(false)
+  const autoOpened = useRef(false)                       // first-run wizard opened once
 
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?doc_type=${docType}`)
-    const d = await r.json()
+    const [d, sr] = await Promise.all([
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?doc_type=${docType}`).then(r => r.json()),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`).then(r => r.json()).catch(() => null),
+    ])
     setInvoices(d.invoices || [])
+    if (sr) {
+      setSettings(sr.settings || null)
+      // First visit: open the setup wizard once if the tenant hasn't onboarded.
+      if (!sr.onboarded && !autoOpened.current) {
+        autoOpened.current = true
+        setShowSettings(true)
+      }
+    }
     setLoading(false)
   }, [tenantId, docType])
 
@@ -135,6 +148,16 @@ export default function VulaInvoices({ tenantId, products = [] }) {
 
   const fmt = c => `R${(c / 100).toFixed(2)}`
 
+  if (showSettings) {
+    return <InvoiceSettings
+      tenantId={tenantId}
+      settings={settings}
+      firstRun={!settings || !settings.onboarded}
+      onDone={() => { setShowSettings(false); load() }}
+      onCancel={() => setShowSettings(false)}
+    />
+  }
+
   if (showCreate) {
     return <InvoiceCreate
       tenantId={tenantId}
@@ -154,6 +177,7 @@ export default function VulaInvoices({ tenantId, products = [] }) {
 
       <div style={s.topBar}>
         <p style={s.count}>{invoices.length} {docType}{invoices.length !== 1 ? 's' : ''}</p>
+        <button onClick={() => setShowSettings(true)} style={s.brandBtn}>⚙ Branding</button>
         <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>
       </div>
 
@@ -319,13 +343,106 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   )
 }
 
+// ── Invoice settings: onboarding wizard + look-and-feel ──────────────────────
+
+const TEMPLATES = [
+  { id: 'classic', name: 'Classic', desc: 'Accent header, filled table — the original Vula look.', accent: 'var(--accent)' },
+  { id: 'minimal', name: 'Minimal', desc: 'Monochrome, hairline rules, ink-light.', accent: '#222222' },
+  { id: 'modern',  name: 'Modern',  desc: 'Bold colour band, rounded cards, high-contrast totals.', accent: '#0077b6' },
+]
+
+function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
+  const [form, setForm] = useState({
+    vat_number:         settings?.vat_number || '',
+    registered_address: settings?.registered_address || '',
+    account_name:       settings?.account_name || '',
+    bank_name:          settings?.bank_name || '',
+    branch_code:        settings?.branch_code || '',
+    account_number:     settings?.account_number || '',
+    template_choice:    settings?.template_choice || 'classic',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  async function save() {
+    setSaving(true)
+    try {
+      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, onboarded: true }),
+      })
+    } finally {
+      setSaving(false)
+      onDone()
+    }
+  }
+
+  return (
+    <div>
+      <div style={s.topBar}>
+        <button onClick={onCancel} style={s.backBtn}>← Back</button>
+        <h3 style={s.formTitle}>Invoice branding</h3>
+      </div>
+
+      {firstRun && (
+        <p style={s.wizardIntro}>
+          👋 Let's set up your invoices. Add your business and banking details so
+          every invoice and quote you send is complete and ready for EFT payment.
+        </p>
+      )}
+
+      <p style={s.sectionLabel}>Business details</p>
+      <div style={s.formSection}>
+        <input placeholder="VAT / Tax registration number" value={form.vat_number}
+          onChange={e => set('vat_number', e.target.value)} style={s.fInput} />
+        <textarea placeholder="Registered physical address" value={form.registered_address}
+          onChange={e => set('registered_address', e.target.value)} style={{ ...s.fInput, minHeight: 60, resize: 'vertical' }} />
+      </div>
+
+      <p style={s.sectionLabel}>Banking details (for EFT payments)</p>
+      <div style={s.formSection}>
+        <input placeholder="Account name" value={form.account_name}
+          onChange={e => set('account_name', e.target.value)} style={s.fInput} />
+        <div style={s.fRow}>
+          <input placeholder="Bank" value={form.bank_name}
+            onChange={e => set('bank_name', e.target.value)} style={s.fInput} />
+          <input placeholder="Branch code" value={form.branch_code}
+            onChange={e => set('branch_code', e.target.value)} style={s.fInput} />
+        </div>
+        <input placeholder="Account number" value={form.account_number}
+          onChange={e => set('account_number', e.target.value)} style={s.fInput} />
+      </div>
+
+      <p style={s.sectionLabel}>Look &amp; feel</p>
+      <div style={s.tplGrid}>
+        {TEMPLATES.map(t => {
+          const active = form.template_choice === t.id
+          return (
+            <div key={t.id} onClick={() => set('template_choice', t.id)}
+              style={{ ...s.tplCard, ...(active ? s.tplCardActive : {}) }}>
+              <div style={{ ...s.tplSwatch, background: t.accent }} />
+              <div style={s.tplName}>{t.name}{active ? ' ✓' : ''}</div>
+              <div style={s.tplDesc}>{t.desc}</div>
+            </div>
+          )
+        })}
+      </div>
+
+      <button onClick={save} disabled={saving} style={s.saveInvBtn}>
+        {saving ? 'Saving…' : firstRun ? 'Save & start invoicing' : 'Save branding'}
+      </button>
+    </div>
+  )
+}
+
 const s = {
   tabs:       { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #DDD8CE', paddingBottom: 8 },
   tab:        { padding: '6px 16px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
-  tabActive:  { background: 'rgba(44,85,69,0.1)', color: 'var(--accent, #2C5545)' },
+  tabActive:  { background: 'rgba(44,85,69,0.1)', color: 'var(--accent, var(--accent))' },
   topBar:     { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 },
   count:      { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
-  newBtn:     { marginLeft: 'auto', padding: '8px 16px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  newBtn:     { padding: '8px 16px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  brandBtn:   { marginLeft: 'auto', padding: '8px 14px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
   backBtn:    { padding: '6px 12px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
   formTitle:  { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: 0 },
   muted:      { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '24px 0' },
@@ -333,7 +450,7 @@ const s = {
   card:       { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '14px 16px' },
   cardTop:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   invNum:     { fontFamily: "'Source Code Pro', monospace", fontSize: 13, fontWeight: 600, color: '#1E1E1E', marginRight: 8 },
-  amount:     { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: 'var(--accent, #2C5545)' },
+  amount:     { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: 'var(--accent, var(--accent))' },
   badge:      { padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600 },
   cust:       { fontFamily: 'system-ui', fontSize: 13, color: '#444', margin: '2px 0' },
   dates:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '0 0 8px' },
@@ -341,10 +458,10 @@ const s = {
   actWa:      { padding: '5px 10px', background: 'rgba(37,211,102,0.1)', color: '#1da851', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actPdf:     { padding: '5px 10px', background: 'rgba(0,119,182,0.08)', color: '#0077b6', border: '1px solid rgba(0,119,182,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: '#a8780a', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  actPaid:    { padding: '5px 10px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
+  actPaid:    { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
   actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, #2C5545)', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: '#2C5545' },
+  actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
+  matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: 'var(--accent)' },
   formSection:{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   fInput:     { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, boxSizing: 'border-box', flex: 1 },
   fRow:       { display: 'flex', gap: 8 },
@@ -355,6 +472,13 @@ const s = {
   dueLabel:   { fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 },
   totals:     { background: '#F7F4EE', borderRadius: 8, padding: 14, margin: '12px 0' },
   totRow:     { display: 'flex', justifyContent: 'space-between', fontFamily: 'system-ui', fontSize: 13, color: '#444', padding: '3px 0' },
-  totFinal:   { borderTop: '1px solid #DDD8CE', marginTop: 6, paddingTop: 8, fontWeight: 700, fontSize: 15, color: 'var(--accent, #2C5545)' },
-  saveInvBtn: { width: '100%', padding: '12px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  totFinal:   { borderTop: '1px solid #DDD8CE', marginTop: 6, paddingTop: 8, fontWeight: 700, fontSize: 15, color: 'var(--accent, var(--accent))' },
+  saveInvBtn: { width: '100%', padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  wizardIntro:{ background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 8, padding: '12px 14px', fontFamily: 'system-ui', fontSize: 13, lineHeight: 1.6, color: 'var(--accent)', margin: '0 0 16px' },
+  tplGrid:    { display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' },
+  tplCard:    { flex: '1 1 150px', minWidth: 150, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: 12, cursor: 'pointer' },
+  tplCardActive:{ borderColor: 'var(--accent, var(--accent))', boxShadow: '0 0 0 2px rgba(44,85,69,0.2)' },
+  tplSwatch:  { height: 28, borderRadius: 4, marginBottom: 8 },
+  tplName:    { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: '#1E1E1E', marginBottom: 4 },
+  tplDesc:    { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', lineHeight: 1.5 },
 }

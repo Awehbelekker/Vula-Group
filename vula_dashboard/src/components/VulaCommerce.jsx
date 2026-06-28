@@ -19,7 +19,7 @@ const COLORS = {
   bg: '#F7F4EE',
   surface: '#FFFFFF',
   border: '#DDD8CE',
-  green: '#2C5545',
+  green: 'var(--accent)',
   amber: '#C4861A',
   charcoal: '#1E1E1E',
   text: '#2A2A2A',

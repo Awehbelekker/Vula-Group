@@ -25,7 +25,7 @@ const COLORS = {
   bg: '#F7F4EE',
   surface: '#FFFFFF',
   border: '#DDD8CE',
-  green: '#2C5545',
+  green: 'var(--accent)',
   amber: '#C4861A',
   muted: '#8A8680',
   charcoal: '#1E1E1E',
@@ -158,7 +158,7 @@ export default function VulaLogin({ onSuccess }) {
             <>
               {LOGIN_THEME.logoUrl ? (
                 <img src={LOGIN_THEME.logoUrl} alt={LOGIN_THEME.name}
-                     style={{ height: 40, width: 'auto', objectFit: 'contain', marginBottom: 6 }} />
+                     style={{ height: 96, width: 'auto', maxWidth: '100%', objectFit: 'contain', marginBottom: 10 }} />
               ) : (
                 <span style={{ ...s.logoText, color: LOGIN_THEME.accent }}>{LOGIN_THEME.name}</span>
               )}

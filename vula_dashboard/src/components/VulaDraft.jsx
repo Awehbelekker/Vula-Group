@@ -147,7 +147,7 @@ const inputStyle = {
   background: "#FFF", outline: "none",
 };
 const btnStyle = (disabled) => ({
-  background: disabled ? "#C5C0B8" : "#2C5545",
+  background: disabled ? "#C5C0B8" : "var(--accent)",
   color: "#FFF", border: "none", borderRadius: 6,
   padding: "12px 24px", fontSize: 15, fontWeight: 600,
   cursor: disabled ? "not-allowed" : "pointer", width: "100%",
