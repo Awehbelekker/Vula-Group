@@ -108,6 +108,114 @@ async function api(method, path, body) {
   return r.json();
 }
 
+function ProjectSelect({ tenantId, value, onChange, label = "Project" }) {
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    setLoading(true);
+    api("GET", `/v1/projects/${tenantId}`)
+      .then(d => setProjects(d.projects || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [tenantId]);
+
+  return (
+    <label style={{ display: "block", marginBottom: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 4 }}>{label}</div>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          width: "100%", padding: "8px 12px", fontSize: 13,
+          border: `1px solid ${C.border}`, borderRadius: 6,
+          background: C.bg, color: value ? C.text : C.muted,
+        }}
+      >
+        <option value="">{loading ? "Loading projects..." : "— select project —"}</option>
+        {projects.map(p => (
+          <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// ─── Daily Briefing Panel ─────────────────────────────────────────────────────
+
+function DailyBriefingPanel({ tenantId }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [dispatching, setDispatching] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    if (!tenantId) return;
+    setLoading(true);
+    try {
+      const d = await api("GET", `/v1/field/daily-tasks/${tenantId}`);
+      setData(d);
+    } catch {}
+    finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const dispatch = async () => {
+    setDispatching(true); setMsg("");
+    try {
+      const r = await api("POST", `/v1/field/daily-tasks/${tenantId}/dispatch`);
+      setMsg(`Success: ${r.contractors_briefed} briefings sent.`);
+    } catch (e) { setMsg(`Error: ${e.message}`); }
+    finally { setDispatching(false); }
+  };
+
+  return (
+    <Card>
+      <SectionHeader
+        title="Morning Briefings"
+        action={<Btn small onClick={load} disabled={loading}>Refresh</Btn>}
+      />
+      <div style={{ marginBottom: 20, fontSize: 13, color: C.muted }}>
+        Every morning at 06:30, Vula automatically sends WhatsApp briefings to contractors with tasks due today.
+        Use this panel to review or manually trigger the dispatch.
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: C.muted }}>Loading today's tasks...</div>
+      ) : !data || data.tasks.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", background: C.surfaceAlt, borderRadius: 8, color: C.muted }}>
+          No tasks due today.
+        </div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 8 }}>
+              {data.tasks.length} tasks for {new Set(data.tasks.map(t => t.contractor_id)).size} contractors
+            </div>
+            {data.tasks.map(t => (
+              <div key={t.task_id} style={{
+                padding: "8px 12px", marginBottom: 4, background: C.surfaceAlt, borderRadius: 6,
+                display: "flex", justifyContent: "space-between", fontSize: 12,
+              }}>
+                <span><strong>{t.contractor_name || "Unassigned"}</strong>: {t.title}</span>
+                <span style={{ color: C.muted }}>{t.project_id}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <Btn onClick={dispatch} disabled={dispatching}>
+              {dispatching ? "Sending..." : "Dispatch Briefings Now"}
+            </Btn>
+            {msg && <div style={{ fontSize: 13, color: C.green, fontWeight: 600 }}>{msg}</div>}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 // ─── Contractor Panel ─────────────────────────────────────────────────────────
 
 function ContractorPanel({ tenantId, onRefresh }) {
@@ -184,32 +292,28 @@ function ProjectPanel({ tenantId }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const load = async () => {
-    if (!projectId.trim()) return;
+  const load = useCallback(async (id) => {
+    const targetId = id || projectId;
+    if (!targetId.trim()) return;
     setLoading(true); setError("");
     try {
-      const d = await api("GET", `/v1/field/project/${projectId.trim()}/status`);
+      const d = await api("GET", `/v1/field/project/${targetId.trim()}/status`);
       setStatus(d);
     } catch (e) { setError(e.message); setStatus(null); }
     finally { setLoading(false); }
+  }, [projectId]);
+
+  const onProjectChange = (id) => {
+    setProjectId(id);
+    if (id) load(id);
+    else setStatus(null);
   };
 
   return (
     <Card>
       <SectionHeader title="Project Status" />
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input
-          value={projectId}
-          onChange={e => setProjectId(e.target.value)}
-          placeholder="Project ID"
-          onKeyDown={e => e.key === "Enter" && load()}
-          style={{
-            flex: 1, padding: "8px 12px", fontSize: 13,
-            border: `1px solid ${C.border}`, borderRadius: 6,
-            background: C.bg, color: C.text, outline: "none",
-          }}
-        />
-        <Btn onClick={load} disabled={loading}>{loading ? "Loading…" : "Load"}</Btn>
+      <div style={{ marginBottom: 16 }}>
+        <ProjectSelect tenantId={tenantId} value={projectId} onChange={onProjectChange} />
       </div>
 
       {error && <div style={{ color: C.red, fontSize: 13, marginBottom: 12 }}>{error}</div>}
@@ -255,10 +359,26 @@ function ProjectPanel({ tenantId }) {
   );
 }
 
-function TaskRow({ task, projectId, onRefresh }) {
+function TaskRow({ task, projectId, onRefresh, tenantId }) {
   const [requesting, setRequesting] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  const requestComplete = async () => {
+  const loadDetail = async () => {
+    if (expanded) { setExpanded(false); return; }
+    setExpanded(true);
+    if (detail) return;
+    setLoading(true);
+    try {
+      const d = await api("GET", `/v1/field/task/${task.id}`);
+      setDetail(d);
+    } catch {}
+    finally { setLoading(false); }
+  };
+
+  const requestComplete = async (e) => {
+    e.stopPropagation();
     setRequesting(true);
     try {
       await api("POST", `/v1/field/task/${task.id}/complete-request`, {});
@@ -267,24 +387,121 @@ function TaskRow({ task, projectId, onRefresh }) {
 
   return (
     <div style={{
-      padding: "10px 12px", marginBottom: 6,
+      padding: "0", marginBottom: 8,
       border: `1px solid ${C.border}`, borderRadius: 8,
-      display: "flex", justifyContent: "space-between", alignItems: "center",
+      background: C.surface, overflow: "hidden",
     }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{task.title}</div>
-        <div style={{ fontSize: 11, color: C.muted }}>
-          {task.trade} · {task.due_date || "no due date"}
-          {task.evidence_count > 0 && ` · ${task.evidence_count} photo${task.evidence_count > 1 ? "s" : ""}`}
+      <div
+        onClick={loadDetail}
+        style={{
+          padding: "12px 14px", cursor: "pointer",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          background: expanded ? C.surfaceAlt : "transparent",
+        }}
+      >
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{task.title}</div>
+          <div style={{ fontSize: 11, color: C.muted }}>
+            {task.trade} · {task.due_date || "no due date"}
+            {task.evidence_count > 0 && ` · ${task.evidence_count} photo${task.evidence_count > 1 ? "s" : ""}`}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <StatusBadge status={task.status} />
+          {task.status === "in_progress" && (
+            <Btn small variant="secondary" onClick={requestComplete} disabled={requesting}>
+              {requesting ? "Sending…" : "Chase"}
+            </Btn>
+          )}
+          <span style={{ fontSize: 12, color: C.muted, marginLeft: 4 }}>{expanded ? "▲" : "▼"}</span>
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <StatusBadge status={task.status} />
-        {task.status === "in_progress" && (
-          <Btn small variant="secondary" onClick={requestComplete} disabled={requesting}>
-            {requesting ? "Sending…" : "Chase"}
-          </Btn>
-        )}
+
+      {expanded && (
+        <div style={{ padding: "14px", borderTop: `1px solid ${C.border}`, background: C.surface }}>
+          {loading ? <div style={{ fontSize: 12, color: C.muted }}>Loading details…</div> : !detail ? (
+            <div style={{ fontSize: 12, color: C.red }}>Could not load task details.</div>
+          ) : (
+            <>
+              {detail.notes && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>Notes</div>
+                  <div style={{ fontSize: 13, color: C.text }}>{detail.notes}</div>
+                </div>
+              )}
+
+              {detail.evidence && detail.evidence.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Evidence Photos</div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {detail.evidence.map(e => (
+                      <div key={e.id} style={{ width: 120 }}>
+                        <a href={e.photo_url} target="_blank" rel="noreferrer">
+                          <img src={e.photo_url} alt="evidence" style={{ width: "100%", height: 90, objectFit: "cover", borderRadius: 6, border: `1px solid ${C.border}` }} />
+                        </a>
+                        {e.caption && <div style={{ fontSize: 10, color: C.muted, marginTop: 4, lineHeight: 1.2 }}>{e.caption}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {detail.sign_off ? (
+                <div style={{ padding: 12, background: detail.sign_off.status === "approved" ? C.greenLight : "#FDEDEC", borderRadius: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: detail.sign_off.status === "approved" ? C.green : C.red }}>
+                      {detail.sign_off.status === "approved" ? "✓ Approved" : "✗ Rejected"}
+                    </span>
+                    <span style={{ fontSize: 11, color: C.muted }}>{detail.sign_off.approved_at?.slice(0, 16).replace("T", " ")}</span>
+                  </div>
+                  {detail.sign_off.notes && <div style={{ fontSize: 12, color: C.text }}>{detail.sign_off.notes}</div>}
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>By: {detail.sign_off.approver}</div>
+                </div>
+              ) : task.status === "awaiting_sign_off" && (
+                <SignOffActions taskId={task.id} onRefresh={() => { setDetail(null); onRefresh(); }} />
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignOffActions({ taskId, onRefresh }) {
+  const [busy, setBusy] = useState(false);
+  const [notes, setNotes] = useState("");
+
+  const sign = async (decision) => {
+    setBusy(true);
+    try {
+      // For sign-off we use a contractor phone as approver phone (simulating manager)
+      // In a real scenario, this would be the logged-in user's verified phone.
+      await api("POST", `/v1/field/walkthrough/${taskId}/approve`, {
+        approver_phone: "system-admin", // Placeholder
+        decision,
+        notes,
+      });
+      onRefresh();
+    } catch (e) { alert(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ padding: 12, background: "#FEF9E7", borderRadius: 8, border: "1px solid #F9E79F" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 8 }}>Sign-off required</div>
+      <textarea
+        value={notes}
+        onChange={e => setNotes(e.target.value)}
+        placeholder="Add review notes (optional)..."
+        style={{
+          width: "100%", padding: 8, fontSize: 12, borderRadius: 6, border: "1px solid #F9E79F",
+          background: "#fff", marginBottom: 10, boxSizing: "border-box"
+        }}
+      />
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn small onClick={() => sign("approved")} disabled={busy}>Approve</Btn>
+        <Btn small variant="danger" onClick={() => sign("rejected")} disabled={busy}>Reject</Btn>
       </div>
     </div>
   );
@@ -333,7 +550,7 @@ function AssignTaskPanel({ tenantId }) {
       <SectionHeader title="Assign Task" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div>
-          <Input label="Project ID" value={form.project_id} onChange={v => setForm(f => ({ ...f, project_id: v }))} placeholder="proj-001" />
+          <ProjectSelect tenantId={tenantId} value={form.project_id} onChange={v => setForm(f => ({ ...f, project_id: v }))} />
           <Input label="Task title" value={form.title} onChange={v => setForm(f => ({ ...f, title: v }))} placeholder="Install roof trusses" />
           <Input label="Trade" value={form.trade} onChange={v => setForm(f => ({ ...f, trade: v }))} placeholder="carpenter" />
           <Input label="Due date" type="date" value={form.due_date} onChange={v => setForm(f => ({ ...f, due_date: v }))} placeholder="" />
@@ -421,7 +638,7 @@ function WalkthroughPanel({ tenantId }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div>
-          <Input label="Project ID" value={form.project_id} onChange={v => setForm(f => ({ ...f, project_id: v }))} placeholder="proj-001" />
+          <ProjectSelect tenantId={tenantId} value={form.project_id} onChange={v => setForm(f => ({ ...f, project_id: v }))} />
           <Input label="Walkthrough title" value={form.title} onChange={v => setForm(f => ({ ...f, title: v }))} placeholder="Roof completion inspection" />
           <label style={{ display: "block", marginBottom: 12 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 4 }}>Contractor</div>
@@ -482,51 +699,28 @@ function WalkthroughPanel({ tenantId }) {
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
-export default function VulaFieldOps() {
-  const [tenantId, setTenantId] = useState(
-    () => localStorage.getItem("vula_tenant_id") || ""
-  );
-  const [tenantInput, setTenantInput] = useState(tenantId);
+export default function VulaFieldOps({ tenantId }) {
   const [tab, setTab] = useState("project");
-
-  const applyTenant = () => {
-    const t = tenantInput.trim();
-    setTenantId(t);
-    localStorage.setItem("vula_tenant_id", t);
-  };
 
   const TABS = [
     { id: "project", label: "Project Status" },
     { id: "assign", label: "Assign Task" },
     { id: "walkthrough", label: "Walkthrough" },
+    { id: "briefings", label: "Briefings" },
     { id: "contractors", label: "Contractors" },
   ];
 
   return (
-    <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
+    <div style={{ padding: "0", maxWidth: 1100, margin: "0 auto" }}>
       {/* Header */}
       <div style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
         <div>
-          <h2 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 700, color: C.text }}>
+          <h2 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 700, color: C.text, fontFamily: "'Cormorant Garamond', serif" }}>
             Field Operations
           </h2>
           <p style={{ margin: 0, fontSize: 13, color: C.muted }}>
             Assign tasks, track progress, dispatch daily briefings, and sign off walkthroughs via WhatsApp.
           </p>
-        </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={tenantInput}
-            onChange={e => setTenantInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && applyTenant()}
-            placeholder="Tenant ID"
-            style={{
-              padding: "7px 12px", fontSize: 13,
-              border: `1px solid ${C.border}`, borderRadius: 6,
-              background: C.bg, color: C.text, outline: "none", width: 180,
-            }}
-          />
-          <Btn variant="secondary" small onClick={applyTenant}>Set</Btn>
         </div>
       </div>
 
@@ -535,7 +729,7 @@ export default function VulaFieldOps() {
           padding: 20, background: "#FEF9E7", border: `1px solid #F9E79F`,
           borderRadius: 8, marginBottom: 24, fontSize: 13, color: C.amber,
         }}>
-          Enter your Tenant ID above to get started.
+          Error: No Tenant ID provided.
         </div>
       )}
 
@@ -555,6 +749,7 @@ export default function VulaFieldOps() {
       {tab === "project" && <ProjectPanel tenantId={tenantId} />}
       {tab === "assign" && <AssignTaskPanel tenantId={tenantId} />}
       {tab === "walkthrough" && <WalkthroughPanel tenantId={tenantId} />}
+      {tab === "briefings" && <DailyBriefingPanel tenantId={tenantId} />}
       {tab === "contractors" && <ContractorPanel tenantId={tenantId} />}
     </div>
   );
