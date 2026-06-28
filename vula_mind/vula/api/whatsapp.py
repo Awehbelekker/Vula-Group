@@ -656,6 +656,12 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
     Returns {"category", "summary", "fields"} or None if analysis fails.
     Best-effort — the document is already in the KB regardless.
     """
+    try:
+        from vula.integrations.metering import set_request_tenant
+        set_request_tenant(tenant_id)
+    except Exception:
+        pass
+
     # 1. Extract text using the same parser the ingestion pipeline uses
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
@@ -1125,10 +1131,37 @@ async def _download_media(media_id: str, contractor_id: str, task_id: str) -> st
         return f"media://{media_id}"
 
 
+def _compress_image(data: bytes, content_type: str) -> tuple[bytes, str]:
+    """Resize/recompress images before storage to save space (the main storage driver).
+    Caps the largest side at 1600px and re-encodes JPEG q80. Best-effort — returns the
+    original on any failure or if compression doesn't actually shrink it."""
+    if not content_type.startswith("image/") or any(x in content_type for x in ("svg", "gif")):
+        return data, content_type
+    try:
+        from io import BytesIO
+        from PIL import Image
+        img = Image.open(BytesIO(data))
+        MAX = 1600
+        if max(img.size) > MAX:
+            img.thumbnail((MAX, MAX), Image.LANCZOS)
+        out = BytesIO()
+        if content_type == "image/png" and img.mode in ("RGBA", "P", "LA"):
+            img.save(out, format="PNG", optimize=True)
+            blob, ct = out.getvalue(), "image/png"
+        else:
+            img.convert("RGB").save(out, format="JPEG", quality=80, optimize=True)
+            blob, ct = out.getvalue(), "image/jpeg"
+        return (blob, ct) if len(blob) < len(data) else (data, content_type)
+    except Exception as exc:
+        logger.debug("image compress skipped: %s", exc)
+        return data, content_type
+
+
 def _upload_to_storage(bucket: str, object_path: str, data: bytes, content_type: str) -> Optional[str]:
     """Upload bytes to a public Supabase Storage bucket. Returns the public URL,
     or None on failure. Used for evidence photos and filed documents."""
     try:
+        data, content_type = _compress_image(data, content_type)
         from vula.models.field_ops import _client
         sb = _client()
         try:
@@ -1265,6 +1298,13 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
     runs them in parallel, and merges. Falls back to plain RAG if the agent
     errors, then to the shared construction KB.
     """
+    # Attribute every nested LLM call (skills, research, etc.) to this tenant for COGS.
+    try:
+        from vula.integrations.metering import set_request_tenant
+        set_request_tenant(tenant_id)
+    except Exception:
+        pass
+
     # 1. Try the full multi-agent runner (research + memory + all skills)
     try:
         from core.agent_runner import get_agent_runner

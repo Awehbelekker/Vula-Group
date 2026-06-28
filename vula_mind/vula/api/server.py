@@ -643,11 +643,30 @@ async def _email_sync_loop() -> None:
         await _asyncio.sleep(60 * 60)   # hourly — email isn't time-critical; saves AI cost
 
 
+async def _infra_snapshot_loop() -> None:
+    """Daily per-tenant snapshot of vectors + storage for COGS visibility."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(120)
+    while True:
+        try:
+            from vula.integrations.metering import snapshot_infra
+            await snapshot_infra()
+        except Exception as exc:
+            log.debug("infra snapshot loop error: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     settings.warn_missing()
+    try:
+        from vula.integrations.metering import install_metering
+        install_metering()
+    except Exception as exc:
+        log.warning("metering install skipped: %s", exc)
     _asyncio.create_task(_seed_training_on_boot())
+    _asyncio.create_task(_infra_snapshot_loop())
     _asyncio.create_task(_scheduled_campaigns_loop())
     _asyncio.create_task(_email_sync_loop())
     _asyncio.create_task(_weekly_rates_loop())

@@ -595,3 +595,48 @@ async def list_signups(limit: int = 20) -> dict:
         return {"signups": [], "error": "Database unavailable"}
 
     return {"signups": signups, "count": len(signups)}
+
+
+@router.get("/admin/usage", dependencies=[Depends(_require_admin)])
+async def admin_usage(days: int = 30) -> dict:
+    """Per-tenant COGS — LLM token cost + infra (vectors/storage) over the last N days."""
+    if not settings.supabase_url or not settings.supabase_service_key:
+        return {"tenants": [], "note": "Supabase not configured"}
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    hdr = {"apikey": settings.supabase_service_key,
+           "Authorization": f"Bearer {settings.supabase_service_key}"}
+    base = settings.supabase_url
+    tenants: dict = {}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            llm = (await client.get(f"{base}/rest/v1/vula_ai_usage?day=gte.{since}"
+                   f"&select=tenant_id,calls,est_cost_usd", headers=hdr)).json()
+            for r in (llm if isinstance(llm, list) else []):
+                t = tenants.setdefault(r["tenant_id"], {"tenant_id": r["tenant_id"], "llm_usd": 0.0,
+                                                         "calls": 0, "infra_usd": 0.0, "vectors": 0})
+                t["llm_usd"] += float(r.get("est_cost_usd") or 0)
+                t["calls"] += int(r.get("calls") or 0)
+            infra = (await client.get(f"{base}/rest/v1/vula_infra_snapshot?order=day.desc&limit=200"
+                     f"&select=tenant_id,vectors,est_cost_usd,day", headers=hdr)).json()
+            seen = set()
+            for r in (infra if isinstance(infra, list) else []):
+                key = r["tenant_id"]
+                if key in seen:
+                    continue
+                seen.add(key)   # latest snapshot per tenant
+                t = tenants.setdefault(key, {"tenant_id": key, "llm_usd": 0.0, "calls": 0,
+                                             "infra_usd": 0.0, "vectors": 0})
+                t["vectors"] = int(r.get("vectors") or 0)
+                t["infra_usd"] = float(r.get("est_cost_usd") or 0)
+    except Exception as exc:
+        logger.error("Admin usage fetch failed: %s", exc)
+        return {"tenants": [], "error": "Database unavailable"}
+    out = []
+    for t in tenants.values():
+        t["llm_usd"] = round(t["llm_usd"], 4)
+        t["total_usd"] = round(t["llm_usd"] + t["infra_usd"], 4)
+        out.append(t)
+    out.sort(key=lambda x: x["total_usd"], reverse=True)
+    return {"days": days, "tenants": out,
+            "total_usd": round(sum(t["total_usd"] for t in out), 2)}
