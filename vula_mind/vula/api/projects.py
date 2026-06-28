@@ -74,6 +74,164 @@ async def set_budget(tenant: str, body: BudgetIn) -> dict:
     return {"project": body.project, "budget": body.budget}
 
 
+# ── Project Workspaces ("Claude Projects" for Vula) ───────────────────────────
+
+@router.get("/{tenant}/labels")
+async def project_labels(tenant: str) -> dict:
+    """Distinct project labels a workspace can open (from filed docs, finances, threads)."""
+    labels = set()
+    db = _client()
+    for table, col in (("vula_filed_documents", "project"), ("vula_project_finances", "project"),
+                       ("vula_project_threads", "project")):
+        try:
+            for r in (db.table(table).select(col).eq("tenant_id", tenant).limit(2000).execute().data or []):
+                if r.get(col):
+                    labels.add(r[col])
+        except Exception:
+            pass
+    try:
+        from vula.integrations.doc_filing import project_examples
+        labels.update(project_examples(tenant, n=20))
+    except Exception:
+        pass
+    return {"projects": sorted(labels)}
+
+
+
+
+@router.get("/{tenant}/p/{project}/threads")
+async def list_threads(tenant: str, project: str) -> dict:
+    try:
+        rows = (_client().table("vula_project_threads").select("*")
+                .eq("tenant_id", tenant).eq("project", project)
+                .order("updated_at", desc=True).limit(100).execute().data or [])
+    except Exception:
+        rows = []
+    return {"threads": rows}
+
+
+@router.post("/{tenant}/p/{project}/threads")
+async def new_thread(tenant: str, project: str) -> dict:
+    try:
+        res = _client().table("vula_project_threads").insert(
+            {"tenant_id": tenant, "project": project, "title": "New chat"}).execute()
+        return {"thread": (res.data or [{}])[0]}
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 030?)"}
+
+
+@router.get("/{tenant}/threads/{thread_id}/messages")
+async def thread_messages(tenant: str, thread_id: str) -> dict:
+    try:
+        rows = (_client().table("vula_project_messages").select("role,content,created_at")
+                .eq("tenant_id", tenant).eq("thread_id", thread_id)
+                .order("created_at").limit(200).execute().data or [])
+    except Exception:
+        rows = []
+    return {"messages": rows}
+
+
+class ChatIn(BaseModel):
+    project: str
+    message: str
+
+
+@router.post("/{tenant}/threads/{thread_id}/messages")
+async def thread_chat(tenant: str, thread_id: str, body: ChatIn) -> dict:
+    from vula.integrations.workspace import workspace_chat
+    reply = await workspace_chat(tenant, body.project, thread_id, body.message)
+    return {"reply": reply}
+
+
+@router.get("/{tenant}/p/{project}/brief")
+async def get_brief(tenant: str, project: str) -> dict:
+    try:
+        rows = (_client().table("vula_project_briefs").select("brief")
+                .eq("tenant_id", tenant).eq("project", project).limit(1).execute().data or [])
+    except Exception:
+        rows = []
+    return {"project": project, "brief": rows[0]["brief"] if rows else ""}
+
+
+class BriefIn(BaseModel):
+    brief: str
+
+
+@router.put("/{tenant}/p/{project}/brief")
+async def set_brief(tenant: str, project: str, body: BriefIn) -> dict:
+    try:
+        _client().table("vula_project_briefs").upsert(
+            {"tenant_id": tenant, "project": project, "brief": body.brief, "updated_at": "now()"},
+            on_conflict="tenant_id,project").execute()
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 030?)"}
+    return {"project": project, "brief": body.brief}
+
+
+@router.get("/{tenant}/p/{project}/tasks")
+async def list_tasks(tenant: str, project: str) -> dict:
+    try:
+        rows = (_client().table("vula_project_tasks").select("*")
+                .eq("tenant_id", tenant).eq("project", project)
+                .order("status").order("created_at", desc=True).limit(200).execute().data or [])
+    except Exception:
+        rows = []
+    return {"tasks": rows}
+
+
+class TaskIn(BaseModel):
+    title: str
+    assignee: Optional[str] = None
+    due: Optional[str] = None
+
+
+@router.post("/{tenant}/p/{project}/tasks")
+async def add_task(tenant: str, project: str, body: TaskIn) -> dict:
+    row = {"tenant_id": tenant, "project": project, "title": body.title,
+           "assignee": body.assignee, "due": body.due, "status": "open", "source": "vula"}
+    try:
+        res = _client().table("vula_project_tasks").insert(row).execute()
+        task = (res.data or [row])[0]
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 030?)"}
+    # Mirror to ClickUp if this project maps to a list.
+    try:
+        from vula.integrations import workspace_clickup
+        cid = await workspace_clickup.create_task(tenant, project, body.title)
+        if cid:
+            _client().table("vula_project_tasks").update({"clickup_task_id": cid}).eq("id", task["id"]).execute()
+            task["clickup_task_id"] = cid
+    except Exception as exc:
+        log.debug("clickup task mirror skipped: %s", exc)
+    return {"task": task}
+
+
+class TaskPatch(BaseModel):
+    status: Optional[str] = None
+    title: Optional[str] = None
+
+
+@router.patch("/{tenant}/tasks/{task_id}")
+async def update_task(tenant: str, task_id: str, body: TaskPatch) -> dict:
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    patch["updated_at"] = "now()"
+    try:
+        _client().table("vula_project_tasks").update(patch).eq("id", task_id).eq("tenant_id", tenant).execute()
+    except Exception as exc:
+        return {"error": str(exc)}
+    # Mirror a status change to ClickUp if linked.
+    if body.status:
+        try:
+            row = (_client().table("vula_project_tasks").select("clickup_task_id")
+                   .eq("id", task_id).limit(1).execute().data or [{}])[0]
+            if row.get("clickup_task_id"):
+                from vula.integrations import workspace_clickup
+                await workspace_clickup.set_status(tenant, row["clickup_task_id"], body.status == "done")
+        except Exception as exc:
+            log.debug("clickup status mirror skipped: %s", exc)
+    return {"id": task_id, **patch}
+
+
 # ── Projects ──────────────────────────────────────────────────────────────────
 
 class ProjectIn(BaseModel):

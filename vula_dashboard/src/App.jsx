@@ -15,6 +15,7 @@ import VulaContacts from "./components/VulaContacts";
 import VulaFinances from "./components/VulaFinances";
 import VulaFollowups from "./components/VulaFollowups";
 import VulaTeam from "./components/VulaTeam";
+import VulaProjectWorkspace from "./components/VulaProjectWorkspace";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -39,6 +40,7 @@ const COLORS = {
 const TABS = [
   { id: "dashboard", label: "Dashboard", component: VulaDashboard },
   { id: "agent", label: "Agent", component: VulaAgent },
+  { id: "workspace", label: "Workspace", component: VulaProjectWorkspace },
   { id: "draft", label: "Draft", component: VulaDraft },
   { id: "qs", label: "Quick Cost", component: VulaQS },
   { id: "qspro", label: "QS Pro", component: VulaQSPro },
@@ -201,7 +203,7 @@ export default function App() {
         </div>
         {(() => {
           const GROUP = {
-            dashboard: 'AI', agent: 'AI', draft: 'AI',
+            dashboard: 'AI', agent: 'AI', workspace: 'AI', draft: 'AI',
             qs: 'Estimating', qspro: 'Estimating', takeoff: 'Estimating',
             projects: 'Knowledge', qsrates: 'Knowledge', docs: 'Knowledge', training: 'Knowledge',
             contacts: 'Office', finances: 'Office', followups: 'Office', team: 'Office',
