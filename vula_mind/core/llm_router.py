@@ -96,14 +96,11 @@ async def resolve_generation_route(
 async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optional[str], str]:
     """Cheap tier for mechanical work (doc analysis, classification, extraction).
 
-    Local-first (FREE on the GPU via the ollama.vula-ai.com tunnel), then a cheap cloud
-    model (gemini-flash), then the 70B as a last resort. Ignores `prefer_cloud_llm` — the
-    whole point is to avoid the premium model for throwaway work. Callers should validate
-    the output and escalate to `resolve_cloud_route()` only on failure/low confidence.
+    Cloud cheap model (gemini-flash, ~1/15th of the 70B), then the 70B as a last resort.
+    The local GPU tunnel is intentionally NOT used (it sits behind Cloudflare bot-protection
+    and is world-open); revisit once it's secured with a service token. Callers should
+    validate the output and escalate to `resolve_cloud_route()` on failure/low confidence.
     """
-    local_model = model or settings.model_worker_cheap_local or settings.model_worker
-    if await ollama_available():
-        return f"ollama/{local_model}", None, settings.ollama_base
     if settings.openrouter_api_key:
         return f"openrouter/{settings.model_worker_cheap}", settings.openrouter_api_key, OPENROUTER_BASE
     return f"openrouter/{settings.model_worker_cloud}", settings.openrouter_api_key, OPENROUTER_BASE
