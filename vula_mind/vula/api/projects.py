@@ -41,6 +41,28 @@ class BudgetIn(BaseModel):
     budget: float
 
 
+@router.post("/{tenant}/finances/backfill")
+async def backfill_finances(tenant: str) -> dict:
+    """Re-post already-filed invoices/payments (with an amount) into the ledger.
+    Idempotent — useful for docs filed before the ledger existed."""
+    from vula.integrations.finances import post_finance_from_doc
+    try:
+        docs = (_client().table("vula_filed_documents").select("project,fields,doc_id,filename,summary,category")
+                .eq("tenant_id", tenant).eq("status", "filed").execute().data or [])
+    except Exception as exc:
+        return {"error": str(exc)}
+    posted = 0
+    for d in docs:
+        f = d.get("fields") or {}
+        if not f.get("amount"):
+            continue
+        row = post_finance_from_doc(tenant, d.get("project"), f, d.get("doc_id"),
+                                    d.get("filename") or "", d.get("summary") or "", d.get("category") or "")
+        if row:
+            posted += 1
+    return {"tenant": tenant, "scanned": len(docs), "posted": posted}
+
+
 @router.post("/{tenant}/budget")
 async def set_budget(tenant: str, body: BudgetIn) -> dict:
     try:
