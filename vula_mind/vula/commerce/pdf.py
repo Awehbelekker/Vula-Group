@@ -143,7 +143,8 @@ _DOC_HTML = """<!DOCTYPE html>
 
 <div class="header">
   <div class="brand">
-    <h1>{{ tenant_name }}</h1>
+    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:60px;max-width:200px;margin-bottom:8px;display:block;">{% endif %}
+    <h1>{{ tenant_name }}{% if trading_as %} <span style="font-size:0.58em;color:#888;font-weight:400;">t/a {{ trading_as }}</span>{% endif %}</h1>
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
     {% if tenant_phone %}<p>{{ tenant_phone }}</p>{% endif %}
@@ -279,7 +280,8 @@ def merge_branding(tenant_id: str, settings: Optional[dict]) -> dict:
     # Company identity — these were previously never carried from settings, leaving
     # non-default tenants' invoices with a title-cased tenant_id and blank contact info.
     for src, dst in (("company_name", "name"), ("company_email", "email"),
-                     ("company_phone", "phone"), ("company_reg", "reg")):
+                     ("company_phone", "phone"), ("company_reg", "reg"),
+                     ("trading_as", "trading_as"), ("logo_url", "logo_url")):
         if settings.get(src):
             branding[dst] = settings[src]
     if settings.get("vat_number"):
@@ -339,6 +341,8 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
     ctx: dict[str, Any] = {
         # Tenant branding
         "tenant_name": branding.get("name", tenant_id.replace("-", " ").title()),
+        "trading_as": branding.get("trading_as", ""),
+        "tenant_logo": branding.get("logo_url", ""),
         "tenant_address": branding.get("address", ""),
         "tenant_email": branding.get("email", ""),
         "tenant_phone": branding.get("phone", ""),

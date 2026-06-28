@@ -22,11 +22,15 @@ def _clear_cache():
 
 @pytest.mark.asyncio
 async def test_route_prefers_local_even_when_openrouter_key_set():
-    """Local-first: Ollama up → use Ollama, even if a cloud key is configured."""
+    """Local-first: Ollama up → use Ollama, even if a cloud key is configured.
+
+    This is the default, non-negotiable behaviour (prefer_cloud_llm is False).
+    """
     with (
         patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
         patch("core.llm_router.settings") as s,
     ):
+        s.prefer_cloud_llm = False
         s.model_worker = "qwen2.5"
         s.ollama_base = "http://localhost:11434"
         s.openrouter_api_key = "sk-or-test"
@@ -38,13 +42,52 @@ async def test_route_prefers_local_even_when_openrouter_key_set():
 
 
 @pytest.mark.asyncio
+async def test_prefer_cloud_llm_is_an_explicit_opt_in_override():
+    """prefer_cloud_llm=True is the only way local-first is bypassed; it must be
+    an explicit accuracy-first opt-in (default False), never the default."""
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
+        patch("core.llm_router.settings") as s,
+    ):
+        s.prefer_cloud_llm = True
+        s.model_worker = "qwen2.5"
+        s.model_worker_cloud = "meta-llama/llama-3.3-70b-instruct"
+        s.ollama_base = "http://localhost:11434"
+        s.openrouter_api_key = "sk-or-test"
+        model, api_key, api_base = await resolve_generation_route()
+
+    assert model == "openrouter/meta-llama/llama-3.3-70b-instruct"
+    assert api_key == "sk-or-test"
+    assert api_base == llm_router.OPENROUTER_BASE
+
+
+@pytest.mark.asyncio
+async def test_prefer_cloud_llm_without_key_still_falls_back_to_local():
+    """Even with the cloud override on, no key means we stay local-first."""
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
+        patch("core.llm_router.settings") as s,
+    ):
+        s.prefer_cloud_llm = True
+        s.model_worker = "qwen2.5"
+        s.ollama_base = "http://localhost:11434"
+        s.openrouter_api_key = ""
+        model, api_key, api_base = await resolve_generation_route()
+
+    assert model == "ollama/qwen2.5"
+    assert api_key is None
+
+
+@pytest.mark.asyncio
 async def test_route_falls_back_to_openrouter_when_ollama_down():
     """Hybrid: Ollama unreachable + key set → fall back to OpenRouter."""
     with (
         patch("core.llm_router.ollama_available", new=AsyncMock(return_value=False)),
         patch("core.llm_router.settings") as s,
     ):
+        s.prefer_cloud_llm = False
         s.model_worker = "deepseek-r1:8b"
+        s.model_worker_cloud = "deepseek-r1:8b"
         s.ollama_base = "http://localhost:11434"
         s.openrouter_api_key = "sk-or-test"
         model, api_key, api_base = await resolve_generation_route()
@@ -61,7 +104,9 @@ async def test_route_stays_local_when_down_and_no_cloud_key():
         patch("core.llm_router.ollama_available", new=AsyncMock(return_value=False)),
         patch("core.llm_router.settings") as s,
     ):
+        s.prefer_cloud_llm = False
         s.model_worker = "deepseek-r1:8b"
+        s.model_worker_cloud = "deepseek-r1:8b"
         s.ollama_base = "http://localhost:11434"
         s.openrouter_api_key = ""
         model, api_key, api_base = await resolve_generation_route()
@@ -77,6 +122,7 @@ async def test_route_honours_explicit_model_override():
         patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
         patch("core.llm_router.settings") as s,
     ):
+        s.prefer_cloud_llm = False
         s.model_worker = "deepseek-r1:8b"
         s.ollama_base = "http://localhost:11434"
         s.openrouter_api_key = ""

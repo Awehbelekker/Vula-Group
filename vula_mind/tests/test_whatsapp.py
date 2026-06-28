@@ -285,7 +285,11 @@ async def test_rag_reply_returns_fallback_when_no_sources():
     mock_pipeline = AsyncMock()
     mock_pipeline.query = AsyncMock(return_value=[])
 
-    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline):
+    # Disable the multi-agent runner so the documented RAG fallback path runs.
+    with (
+        patch("core.agent_runner.get_agent_runner", side_effect=Exception("agent disabled")),
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline),
+    ):
         from vula.api.whatsapp import _rag_reply
         reply = await _rag_reply("tenant-abc", "What are our payment terms?")
 
@@ -298,7 +302,11 @@ async def test_rag_reply_returns_answer_when_sources_found():
     mock_pipeline.query = AsyncMock(return_value=[{"text": "30 days net"}])
     mock_pipeline.answer = AsyncMock(return_value="Payment terms are 30 days net.")
 
-    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline):
+    # Disable the multi-agent runner so the documented RAG fallback path runs.
+    with (
+        patch("core.agent_runner.get_agent_runner", side_effect=Exception("agent disabled")),
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline),
+    ):
         from vula.api.whatsapp import _rag_reply
         reply = await _rag_reply("tenant-abc", "What are our payment terms?")
 
@@ -317,8 +325,10 @@ async def test_rag_reply_handles_pipeline_error():
 
     _pip.VulaIngestionPipeline = _BrokenPipeline
     try:
-        from vula.api.whatsapp import _rag_reply
-        reply = await _rag_reply("tenant-abc", "hello")
+        # Disable the multi-agent runner so the RAG fallback path runs and raises.
+        with patch("core.agent_runner.get_agent_runner", side_effect=Exception("agent disabled")):
+            from vula.api.whatsapp import _rag_reply
+            reply = await _rag_reply("tenant-abc", "hello")
         assert "trouble" in reply.lower()
     finally:
         _pip.VulaIngestionPipeline = original

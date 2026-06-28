@@ -369,3 +369,113 @@ async def test_match_supplier_endpoint_parses_json_string_line_items(fake_db):
     assert out["matched"] is True
     assert out["tier"] == "layout"
     assert out["auto_apply"] is False
+
+
+# ── Invoice settings (onboarding + look-and-feel) ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_invoice_settings_none_before_configured(fake_db):
+    assert await service.get_invoice_settings(TENANT) is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_invoice_settings_creates_then_updates_one_row(fake_db):
+    created = await service.upsert_invoice_settings(
+        TENANT, {"vat_number": "4990123456", "template_choice": "modern", "onboarded": True}
+    )
+    assert created["vat_number"] == "4990123456"
+    assert created["template_choice"] == "modern"
+    assert created["onboarded"] is True
+
+    # Second upsert updates the same row rather than inserting a new one.
+    updated = await service.upsert_invoice_settings(TENANT, {"template_choice": "minimal"})
+    assert updated["template_choice"] == "minimal"
+    assert updated["vat_number"] == "4990123456"  # earlier field preserved
+    assert len(fake_db.store["commerce_invoice_settings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_invoice_settings_whitelists_fields(fake_db):
+    await service.upsert_invoice_settings(
+        TENANT, {"vat_number": "X", "tenant_id": "evil", "id": "spoofed", "junk": 1}
+    )
+    row = fake_db.store["commerce_invoice_settings"][0]
+    assert row["tenant_id"] == TENANT       # body cannot override tenant scope
+    assert row["id"] != "spoofed"           # body cannot set the primary key
+    assert "junk" not in row
+
+
+@pytest.mark.asyncio
+async def test_upsert_invoice_settings_rejects_bad_template(fake_db):
+    with pytest.raises(ValueError):
+        await service.upsert_invoice_settings(TENANT, {"template_choice": "neon"})
+
+
+@pytest.mark.asyncio
+async def test_invoice_settings_are_tenant_scoped(fake_db):
+    await service.upsert_invoice_settings(TENANT, {"vat_number": "AAA", "onboarded": True})
+    assert await service.get_invoice_settings(OTHER) is None
+
+
+@pytest.mark.asyncio
+async def test_invoice_settings_endpoints_roundtrip(fake_db):
+    from vula.api.commerce import (
+        admin_get_invoice_settings, admin_upsert_invoice_settings,
+    )
+    before = await admin_get_invoice_settings(TENANT)
+    assert before["onboarded"] is False and before["settings"] is None
+
+    await admin_upsert_invoice_settings(
+        TENANT, {"bank_name": "FNB", "template_choice": "classic", "onboarded": True}
+    )
+    after = await admin_get_invoice_settings(TENANT)
+    assert after["onboarded"] is True
+    assert after["settings"]["bank_name"] == "FNB"
+
+
+@pytest.mark.asyncio
+async def test_invoice_settings_endpoint_rejects_bad_template(fake_db):
+    from fastapi import HTTPException
+    from vula.api.commerce import admin_upsert_invoice_settings
+    with pytest.raises(HTTPException) as exc:
+        await admin_upsert_invoice_settings(TENANT, {"template_choice": "neon"})
+    assert exc.value.status_code == 400
+
+
+# ── PDF branding merge ────────────────────────────────────────────────────────
+
+def test_merge_branding_builds_payment_block_from_banking_fields():
+    from vula.commerce.pdf import merge_branding
+    branding = merge_branding(TENANT, {
+        "vat_number": "4990123456",
+        "registered_address": "12 Harbour Rd, Kalk Bay",
+        "bank_name": "FNB", "account_name": "Off the Hook",
+        "branch_code": "250655", "account_number": "62000000000",
+        "template_choice": "modern",
+    })
+    assert branding["vat"] == "4990123456"
+    assert branding["address"] == "12 Harbour Rd, Kalk Bay"
+    assert branding["template_choice"] == "modern"
+    assert "Bank: FNB" in branding["payment_info"]
+    assert "Account Number: 62000000000" in branding["payment_info"]
+    assert "invoice number as reference" in branding["payment_info"]
+
+
+def test_merge_branding_without_settings_keeps_tenant_defaults():
+    from vula.commerce.pdf import merge_branding, _TENANT_DEFAULTS
+    # With no saved settings, the static tenant defaults are returned unchanged
+    # and the renderer falls back to the classic template.
+    branding = merge_branding("off-the-hook", None)
+    assert branding.get("name") == _TENANT_DEFAULTS["off-the-hook"]["name"]
+    assert (branding.get("template_choice") or "classic") == "classic"
+
+
+def test_merge_branding_defaults_template_choice_to_classic():
+    from vula.commerce.pdf import merge_branding
+    branding = merge_branding(TENANT, {"vat_number": "X"})
+    assert branding["template_choice"] == "classic"
+
+
+def test_payment_info_empty_without_banking_fields():
+    from vula.commerce.pdf import _payment_info_from_settings
+    assert _payment_info_from_settings({"vat_number": "X"}) == ""

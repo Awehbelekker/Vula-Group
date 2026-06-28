@@ -1,37 +1,152 @@
-"""Tests for field ops data layer and API."""
+"""Tests for field ops data layer and API.
+
+FieldOpsDB is Supabase-backed (parameter-less constructor). These tests run
+against an in-memory fake Supabase client that mimics the subset of the
+query-builder API the data layer uses (select/insert/update, eq, in_, not_.in_,
+order, limit, count="exact").
+"""
 import pytest
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# ─── In-memory fake Supabase client ──────────────────────────────────────────
 
-def make_db():
+class _FakeResult:
+    def __init__(self, data, count=None):
+        self.data = data
+        self.count = count
+
+
+class _FakeQuery:
+    def __init__(self, table: "_FakeTable"):
+        self._table = table
+        self._op = None
+        self._payload = None
+        self._filters = []          # list of (col, kind, value, negate)
+        self._orders = []           # list of (col, desc)
+        self._limit = None
+        self._count = None
+        self._negate_next = False
+
+    def select(self, *_cols, count=None):
+        self._op = "select"
+        self._count = count
+        return self
+
+    def insert(self, payload):
+        self._op = "insert"
+        self._payload = payload
+        return self
+
+    def update(self, payload):
+        self._op = "update"
+        self._payload = payload
+        return self
+
+    @property
+    def not_(self):
+        self._negate_next = True
+        return self
+
+    def eq(self, col, val):
+        self._filters.append((col, "eq", val, self._negate_next))
+        self._negate_next = False
+        return self
+
+    def in_(self, col, vals):
+        self._filters.append((col, "in", list(vals), self._negate_next))
+        self._negate_next = False
+        return self
+
+    def order(self, col, desc=False):
+        self._orders.append((col, desc))
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    def execute(self):
+        return self._table._execute(self)
+
+
+class _FakeTable:
+    def __init__(self):
+        self.rows = []
+
+    @staticmethod
+    def _matches(row, filters):
+        for col, kind, val, negate in filters:
+            if kind == "eq":
+                ok = row.get(col) == val
+            else:  # "in"
+                ok = row.get(col) in val
+            if negate:
+                ok = not ok
+            if not ok:
+                return False
+        return True
+
+    def _execute(self, q: _FakeQuery):
+        if q._op == "insert":
+            items = q._payload if isinstance(q._payload, list) else [q._payload]
+            for it in items:
+                self.rows.append(dict(it))
+            return _FakeResult([dict(it) for it in items])
+
+        if q._op == "update":
+            updated = []
+            for row in self.rows:
+                if self._matches(row, q._filters):
+                    row.update(q._payload)
+                    updated.append(dict(row))
+            return _FakeResult(updated)
+
+        # select
+        matched = [dict(r) for r in self.rows if self._matches(r, q._filters)]
+        for col, desc in reversed(q._orders):
+            matched.sort(key=lambda r: (r.get(col) is None, r.get(col) or ""), reverse=desc)
+        count = len(matched) if q._count == "exact" else None
+        if q._limit is not None:
+            matched = matched[: q._limit]
+        return _FakeResult(matched, count=count)
+
+
+class _FakeSupabase:
+    def __init__(self):
+        self._tables = {}
+
+    def table(self, name):
+        t = self._tables.setdefault(name, _FakeTable())
+        return _FakeQuery(t)
+
+
+# ─── Fixtures ────────────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def fake_sb():
+    import vula.models.field_ops as fo
+    sb = _FakeSupabase()
+    fo._DB = None  # reset cached singleton so it rebuilds with the patched client
+    with patch.object(fo, "_client", return_value=sb):
+        yield sb
+    fo._DB = None
+
+
+@pytest.fixture()
+def db(fake_sb):
     from vula.models.field_ops import FieldOpsDB
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    db = FieldOpsDB(db_path=Path(tmp.name))
-    # patch evidence dir to tmp
-    import tempfile as tf
-    db._evidence_dir = Path(tf.mkdtemp())
-    return db
+    return FieldOpsDB()
 
 
 @pytest.fixture()
-def db():
-    return make_db()
-
-
-@pytest.fixture()
-def client():
+def client(fake_sb):
     from vula.api.field_ops import router
     app = FastAPI()
     app.include_router(router, prefix="/v1/field")
-    with patch("vula.api.field_ops.get_field_ops_db", return_value=make_db()):
-        yield TestClient(app)
+    yield TestClient(app)
 
 
 # ─── FieldOpsDB — contractors ─────────────────────────────────────────────────

@@ -871,7 +871,7 @@ async def delete_supplier(tenant_id: str, supplier_id: str) -> None:
 
 # Fields a tenant may set via the onboarding wizard / settings panel.
 _INVOICE_SETTINGS_FIELDS = (
-    "company_name", "company_email", "company_phone", "company_reg",
+    "company_name", "trading_as", "logo_url", "company_email", "company_phone", "company_reg",
     "vat_number", "registered_address", "vat_registered", "prices_include_vat",
     "account_name", "bank_name", "branch_code", "account_number",
     "template_choice", "accent_color", "onboarded",
@@ -918,3 +918,36 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
     row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
     result = db.table("commerce_invoice_settings").insert(row).execute()
     return result.data[0] if result.data else row
+
+
+# ── Saved clients / suppliers directory (for invoicing) ───────────────────────
+
+_CLIENT_FIELDS = ("kind", "name", "email", "phone", "address", "vat_number", "notes")
+
+
+async def list_invoice_clients(tenant_id: str, kind: Optional[str] = None) -> List[dict]:
+    q = (_client().table("commerce_invoice_clients").select("*")
+         .eq("tenant_id", tenant_id).order("name"))
+    if kind:
+        q = q.eq("kind", kind)
+    return (q.execute().data or [])
+
+
+async def upsert_invoice_client(tenant_id: str, data: dict) -> dict:
+    patch = {k: data[k] for k in _CLIENT_FIELDS if k in data}
+    if not patch.get("name"):
+        raise ValueError("name is required")
+    db = _client()
+    if data.get("id"):
+        patch["updated_at"] = _now()
+        res = (db.table("commerce_invoice_clients").update(patch)
+               .eq("id", data["id"]).eq("tenant_id", tenant_id).execute())
+        return res.data[0] if res.data else {**patch, "id": data["id"]}
+    row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
+    res = db.table("commerce_invoice_clients").insert(row).execute()
+    return res.data[0] if res.data else row
+
+
+async def delete_invoice_client(tenant_id: str, client_id: str) -> None:
+    _client().table("commerce_invoice_clients").delete() \
+        .eq("id", client_id).eq("tenant_id", tenant_id).execute()

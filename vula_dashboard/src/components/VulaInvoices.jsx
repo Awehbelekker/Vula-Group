@@ -354,6 +354,8 @@ const TEMPLATES = [
 function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
   const [form, setForm] = useState({
     company_name:       settings?.company_name || '',
+    trading_as:         settings?.trading_as || '',
+    logo_url:           settings?.logo_url || '',
     company_email:      settings?.company_email || '',
     company_phone:      settings?.company_phone || '',
     company_reg:        settings?.company_reg || '',
@@ -401,6 +403,11 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
       <div style={s.formSection}>
         <input placeholder="Registered company name (appears on every invoice)" value={form.company_name}
           onChange={e => set('company_name', e.target.value)} style={s.fInput} />
+        <input placeholder="Trading as (optional, e.g. brand name)" value={form.trading_as}
+          onChange={e => set('trading_as', e.target.value)} style={s.fInput} />
+        <input placeholder="Logo image URL (shown on invoices)" value={form.logo_url}
+          onChange={e => set('logo_url', e.target.value)} style={s.fInput} />
+        {form.logo_url && <img src={form.logo_url} alt="logo" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain', alignSelf: 'flex-start' }} />}
         <div style={{ display: 'flex', gap: 8 }}>
           <input placeholder="Business email" value={form.company_email}
             onChange={e => set('company_email', e.target.value)} style={s.fInput} />

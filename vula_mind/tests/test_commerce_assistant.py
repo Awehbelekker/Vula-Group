@@ -235,10 +235,12 @@ def test_render_invoice_pdf_returns_bytes():
 
 def test_render_quote_pdf_label():
     """Quote doc_type should produce a 'Quotation' title in the HTML."""
-    from vula.commerce.pdf import _TEMPLATE_HTML, _DOC_LABELS
+    from vula.commerce.pdf import _DOC_HTML, _DOC_LABELS
     assert _DOC_LABELS["quote"] == "Quotation"
     assert _DOC_LABELS["invoice"] == "Tax Invoice"
     assert _DOC_LABELS["proforma"] == "Pro Forma Invoice"
+    # The shared skeleton must expose the CSS slot the renderer substitutes.
+    assert "__TEMPLATE_CSS__" in _DOC_HTML
 
 
 def test_render_invoice_pdf_integer_cents():

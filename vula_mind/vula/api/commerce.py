@@ -598,6 +598,28 @@ async def admin_upsert_invoice_settings(tenant_id: str, body: dict):
     return {"settings": settings}
 
 
+# ── Saved clients / suppliers (invoicing) ─────────────────────────────────────
+
+@router.get("/{tenant_id}/admin/invoice-clients")
+async def admin_list_invoice_clients(tenant_id: str, kind: Optional[str] = None):
+    return {"clients": await service.list_invoice_clients(tenant_id, kind)}
+
+
+@router.post("/{tenant_id}/admin/invoice-clients")
+async def admin_upsert_invoice_client(tenant_id: str, body: dict):
+    try:
+        client = await service.upsert_invoice_client(tenant_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"client": client}
+
+
+@router.delete("/{tenant_id}/admin/invoice-clients/{client_id}")
+async def admin_delete_invoice_client(tenant_id: str, client_id: str):
+    await service.delete_invoice_client(tenant_id, client_id)
+    return {"deleted": client_id}
+
+
 # ── Quote / proforma endpoints ────────────────────────────────────────────────
 # Quotes and proformas share commerce_invoices (doc_type). These routes use the
 # service layer so totals are computed server-side and numbering is doc-type
