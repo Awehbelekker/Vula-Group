@@ -142,10 +142,30 @@ def post_finance_from_doc(tenant_id: str, project: Optional[str], fields: dict,
                 {"reconciled": True, "matched_id": res.data[0]["id"],
                  "project": mate.get("project") or row["project"]}).eq("id", mate["id"]).execute()
         row["matched"] = bool(mate)
+        _notify_payment(tenant_id, row)
         return row
     except Exception as exc:
         logger.debug("finance post skipped (run migration 027?): %s", exc)
         return None
+
+
+def _notify_payment(tenant_id: str, row: dict) -> None:
+    """Best-effort WhatsApp nudge to team members subscribed to payment_received."""
+    try:
+        import asyncio
+        from vula.integrations.notify import notify_team
+        arrow = "▼ out" if row.get("direction") == "out" else ("▲ in" if row.get("direction") == "in" else "•")
+        msg = (f"💵 Payment filed {arrow} R{row['amount']:,.0f} — "
+               f"{row.get('counterparty') or row.get('filename')}"
+               f"{(' · ' + row['project']) if row.get('project') else ''}"
+               f"{(' (' + row['category'] + ')') if row.get('category') else ''}")
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(notify_team(tenant_id, "payment_received", msg))
+        else:
+            loop.run_until_complete(notify_team(tenant_id, "payment_received", msg))
+    except Exception as exc:
+        logger.debug("payment notify skipped: %s", exc)
 
 
 def finance_summary(tenant_id: str, project: str = None) -> dict:

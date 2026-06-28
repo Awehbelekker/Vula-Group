@@ -85,6 +85,7 @@ from vula.api.field_ops import router as field_ops_router
 from vula.api.clickup import router as clickup_router
 from vula.api.documents import router as documents_router
 from vula.api.projects import router as projects_router
+from vula.api.team import router as team_router
 from vula.api.qs import router as qs_router
 from vula.api.google import router as google_router
 from vula.api.microsoft import router as microsoft_router
@@ -735,6 +736,7 @@ app.include_router(field_ops_router, prefix="/v1/field")
 app.include_router(clickup_router, prefix="/v1/clickup")
 app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(projects_router, prefix="/v1/projects")
+app.include_router(team_router, prefix="/v1/team")
 app.include_router(qs_router, prefix="/v1/qs")
 app.include_router(google_router, prefix="/v1/google")
 app.include_router(microsoft_router, prefix="/v1/microsoft")

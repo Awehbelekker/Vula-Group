@@ -72,10 +72,9 @@ def _track_followup(db, tenant_id: str, em: dict, reason: str) -> None:
         logger.debug("followup track skipped (run migration 028?): %s", exc)
 
 
-async def send_followup_reminders(tenant_id: str, notify_phone: str) -> int:
-    """Once a day, WhatsApp the user a digest of emails still awaiting a reply."""
-    if not notify_phone:
-        return 0
+async def send_followup_reminders(tenant_id: str, notify_phone: str = None) -> int:
+    """Once a day, WhatsApp the team a digest of emails still awaiting a reply.
+    Routing (team members + fallback) is handled by notify_team."""
     from datetime import datetime, timedelta, timezone
     db = _client()
     try:
@@ -102,8 +101,10 @@ async def send_followup_reminders(tenant_id: str, notify_phone: str) -> int:
     msg = (f"📬 You have {len(rows)} email(s) awaiting a reply:\n" + "\n".join(lines) +
            "\n\nReply in your inbox, or open Vula → Follow-ups.")
     try:
-        from vula.api.whatsapp import _send_reply
-        await _send_reply(notify_phone, msg, tenant_id=tenant_id)
+        from vula.integrations.notify import notify_team
+        sent = await notify_team(tenant_id, "followup_digest", msg)
+        if not sent:
+            return 0
         ids = [r["id"] for r in rows]
         now = datetime.now(timezone.utc).isoformat()
         for i in ids:
@@ -288,8 +289,8 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         confident = bool(match and match.get("confidence") == "high")
 
         # Only auto-file on a CONFIDENT match. Anything weaker (no match, or a single
-        # coincidental token) → ask the human on WhatsApp rather than risk mis-filing.
-        ask = bool(not confident and notify_phone)
+        # coincidental token) → ask the team on WhatsApp rather than risk mis-filing.
+        ask = not confident
         if not confident:
             match = None
         db.table("vula_filed_documents").insert({
@@ -312,13 +313,13 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
 
         if ask:
             try:
-                from vula.api.whatsapp import _send_reply
+                from vula.integrations.notify import notify_team
                 ex = project_examples(tenant_id)
                 hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
-                await _send_reply(notify_phone, (
+                await notify_team(tenant_id, "which_project", (
                     f"📎 A document came in by email — *{att['name']}* "
                     f"from {em.get('from','')}. Which project should I file it under?{hint_txt} "
-                    f"Reply with the project name, or 'skip'."), tenant_id=tenant_id)
+                    f"Reply with the project name, or 'skip'."))
             except Exception as exc:
                 logger.debug("notify ask failed: %s", exc)
     except Exception as exc:

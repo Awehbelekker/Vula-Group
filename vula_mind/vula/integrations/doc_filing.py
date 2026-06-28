@@ -321,11 +321,19 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     try:
         from datetime import datetime, timedelta, timezone
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
-        res = (_client().table("vula_filed_documents").select("*")
-               .eq("tenant_id", tenant_id).eq("filed_by", phone)
-               .eq("status", "pending_project").gte("created_at", cutoff)
-               .order("created_at", desc=True).limit(1).execute())
-        rows = res.data or []
+        base = (_client().table("vula_filed_documents").select("*")
+                .eq("tenant_id", tenant_id).eq("status", "pending_project")
+                .gte("created_at", cutoff).order("created_at", desc=True))
+        # Match the doc filed for this exact phone first; otherwise, if the replier is a
+        # known team member, let them answer the tenant's most-recent pending doc.
+        rows = base.eq("filed_by", phone).limit(1).execute().data or []
+        if not rows:
+            try:
+                from vula.integrations.notify import team_member_for_phone
+                if team_member_for_phone(tenant_id, phone):
+                    rows = base.limit(1).execute().data or []
+            except Exception:
+                pass
     except Exception:
         return None
     if not rows:

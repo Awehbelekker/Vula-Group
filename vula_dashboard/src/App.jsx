@@ -14,6 +14,7 @@ import VulaQSRates from "./components/VulaQSRates";
 import VulaContacts from "./components/VulaContacts";
 import VulaFinances from "./components/VulaFinances";
 import VulaFollowups from "./components/VulaFollowups";
+import VulaTeam from "./components/VulaTeam";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -48,6 +49,7 @@ const TABS = [
   { id: "contacts", label: "Contacts", component: VulaContacts },
   { id: "finances", label: "Finances", component: VulaFinances },
   { id: "followups", label: "Follow-ups", component: VulaFollowups },
+  { id: "team", label: "Team", component: VulaTeam },
   { id: "docs", label: "Documents", component: VulaDocuments },
   { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
   { id: "training", label: "Training KB", component: VulaTraining },
@@ -76,7 +78,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [route, setRoute] = useState(window.location.hash);
   const [masterTenant, setMasterTenant] = useState("digg-demo");
-  const { user, role, tenantId, logout } = useAuthStore();
+  const { user, role, tenantId, logout, access, full, setMember } = useAuthStore();
 
   // Track hash changes for public legal routes
   useEffect(() => {
@@ -98,6 +100,17 @@ export default function App() {
     }
     meta.content = accent;
   }, [role, tenantId]);
+
+  // Load this member's access scope (which modules they may see) for owners/staff.
+  useEffect(() => {
+    if (!user || (role !== "owner" && role !== "staff")) return;
+    const tid = tenantId && tenantId !== "master" ? tenantId : "digg-demo";
+    const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+    fetch(`${API}/v1/team/${tid}/me?email=${encodeURIComponent(user.email || "")}`)
+      .then((r) => r.json())
+      .then((d) => setMember({ access: d.access, full: d.full }))
+      .catch(() => setMember({ access: [], full: true }));
+  }, [user, role, tenantId, setMember]);
 
   // Public legal pages — no auth required (needed for Meta app publishing)
   if (route === "#/privacy") return <VulaPrivacy view="privacy" />;
@@ -162,7 +175,7 @@ export default function App() {
             </button>
           </div>
         </nav>
-        <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} fullPage />
+        <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} fullPage access={access} full={full} />
       </div>
     );
   }
@@ -191,6 +204,7 @@ export default function App() {
             dashboard: 'AI', agent: 'AI', draft: 'AI',
             qs: 'Estimating', qspro: 'Estimating', takeoff: 'Estimating',
             projects: 'Knowledge', qsrates: 'Knowledge', docs: 'Knowledge', training: 'Knowledge',
+            contacts: 'Office', finances: 'Office', followups: 'Office', team: 'Office',
             commerce: 'Commerce', merchant: 'Commerce', invoices: 'Commerce', budget: 'Commerce', scanner: 'Commerce',
             onboard: 'Clients', admin: 'Clients', subscriptions: 'Clients',
             field: 'Field',

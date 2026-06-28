@@ -13,9 +13,12 @@ export const useAuthStore = create(
       user: null,          // { id, email, name }
       tenantId: null,      // 'off-the-hook' | 'master' | etc.
       role: null,          // 'master' | 'owner' | 'staff'
+      access: [],          // module keys this member may see (empty = all)
+      full: true,          // owner/manager (or no access list) → sees everything
 
       login: (user, tenantId, role) => set({ user, tenantId, role }),
-      logout: () => set({ user: null, tenantId: null, role: null }),
+      setMember: ({ access, full }) => set({ access: access || [], full: !!full }),
+      logout: () => set({ user: null, tenantId: null, role: null, access: [], full: true }),
     }),
     { name: 'vula-auth' }
   )

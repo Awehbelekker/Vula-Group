@@ -25,6 +25,7 @@ import VulaQSRates from './VulaQSRates'
 import VulaContacts from './VulaContacts'
 import VulaFinances from './VulaFinances'
 import VulaFollowups from './VulaFollowups'
+import VulaTeam from './VulaTeam'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -56,8 +57,13 @@ const CATEGORY_LABELS = {
   extras:         'Extras',
 }
 
-export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullPage = false }) {
+export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullPage = false, access = [], full = true }) {
   const [tab, setTab] = useState('orders')
+  // A member with a defined access list sees only those modules (+ overview). Owners/
+  // managers (full) see everything including Team/Settings.
+  const canSee = (id) => full || id === 'overview' || (access || []).includes(id)
+  // If the current tab isn't visible to this member, fall back to a safe default.
+  useEffect(() => { if (!canSee(tab)) setTab('overview') }, [access, full])  // eslint-disable-line
   const [products, setProducts] = useState([])
 
   // Load products once — shared by scanner + invoices
@@ -87,12 +93,14 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
               [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
               [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }],
               [{ id: 'projects', label: '🏗️ Projects' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
-              [{ id: 'settings', label: '⚙️ Settings' }],
+              [...(full ? [{ id: 'team', label: '👥 Team' }, { id: 'settings', label: '⚙️ Settings' }] : [])],
             ]
             const items = []
-            GROUPS.forEach((g, gi) => {
-              if (gi > 0) items.push({ divider: true, key: `d${gi}` })
-              g.forEach(t => items.push(t))
+            GROUPS.forEach((g) => {
+              const visible = g.filter(t => canSee(t.id))
+              if (!visible.length) return
+              if (items.length) items.push({ divider: true, key: `d${items.length}` })
+              visible.forEach(t => items.push(t))
             })
             return items.map(t => t.divider
               ? <span key={t.key} style={styles.tabDivider} />
@@ -124,6 +132,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'projects'  && <VulaProjects      tenantId={tenantId} />}
           {tab === 'qsrates'   && <VulaQSRates       tenantId={tenantId} />}
           {tab === 'documents' && <VulaDocuments     tenantId={tenantId} />}
+          {tab === 'team'      && <VulaTeam          tenantId={tenantId} />}
           {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail="" />}
         </div>
     </>
