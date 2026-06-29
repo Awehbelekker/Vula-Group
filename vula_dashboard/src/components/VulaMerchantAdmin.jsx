@@ -28,6 +28,7 @@ import VulaFollowups from './VulaFollowups'
 import VulaTeam from './VulaTeam'
 import VulaProjectWorkspace from './VulaProjectWorkspace'
 import VulaFieldOps from './VulaFieldOps'
+import VulaReports from './VulaReports'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -90,7 +91,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
         <div style={styles.tabs}>
           {(() => {
             const GROUPS = [
-              [{ id: 'overview', label: '📊 Overview' }, { id: 'assistant', label: '💬 Assistant' }],
+              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }],
               [{ id: 'orders', label: '📦 Orders' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
               [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
               [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }],
@@ -133,6 +134,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'broadcast' && <VulaBroadcast     tenantId={tenantId} />}
           {tab === 'projects'  && <VulaProjects      tenantId={tenantId} />}
           {tab === 'fieldops'  && <VulaFieldOps     tenantId={tenantId} />}
+          {tab === 'reports'   && <VulaReports      tenantId={tenantId} />}
           {tab === 'qsrates'   && <VulaQSRates       tenantId={tenantId} />}
           {tab === 'documents' && <VulaDocuments     tenantId={tenantId} />}
           {tab === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}

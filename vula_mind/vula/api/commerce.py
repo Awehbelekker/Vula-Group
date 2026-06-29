@@ -356,6 +356,39 @@ async def admin_stats(tenant_id: str):
     }
 
 
+@router.get("/{tenant_id}/admin/reports")
+async def admin_reports(tenant_id: str, days: int = 30):
+    """Sales-trend + product-performance report (tenant-scoped, integer cents)."""
+    from datetime import datetime, timezone, timedelta as _td
+    db = service._client()
+    today = datetime.now(timezone.utc).date()
+    since = (today - _td(days=days - 1)).isoformat()
+    orders = (db.table("commerce_orders").select("id,total_cents,status,created_at")
+              .eq("tenant_id", tenant_id).gte("created_at", since).execute().data or [])
+    paid = [o for o in orders if o["status"] not in ("pending_payment", "cancelled", "refunded")]
+
+    trend = []
+    for i in range(days - 1, -1, -1):
+        d = (today - _td(days=i)).isoformat()
+        day = [o for o in paid if (o.get("created_at") or "")[:10] == d]
+        trend.append({"date": d, "revenue_cents": sum(o["total_cents"] for o in day), "orders": len(day)})
+
+    paid_ids = [o["id"] for o in paid]
+    items = []
+    if paid_ids:
+        items = (db.table("commerce_order_items").select("product_name,quantity,total_cents,order_id")
+                 .in_("order_id", paid_ids).execute().data or [])
+    agg: dict = {}
+    for it in items:
+        name = it.get("product_name") or "—"
+        a = agg.setdefault(name, {"name": name, "units": 0, "revenue_cents": 0})
+        a["units"] += int(it.get("quantity") or 0)
+        a["revenue_cents"] += int(it.get("total_cents") or 0)
+    top = sorted(agg.values(), key=lambda x: x["revenue_cents"], reverse=True)[:10]
+    return {"days": days, "revenue_trend": trend, "top_products": top,
+            "total_revenue_cents": sum(o["total_cents"] for o in paid), "total_orders": len(paid)}
+
+
 # ── Invoice endpoints ─────────────────────────────────────────────────────────
 
 @router.get("/{tenant_id}/admin/invoices")

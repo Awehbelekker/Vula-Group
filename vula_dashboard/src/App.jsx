@@ -17,6 +17,7 @@ import VulaFollowups from "./components/VulaFollowups";
 import VulaTeam from "./components/VulaTeam";
 import VulaProjectWorkspace from "./components/VulaProjectWorkspace";
 import VulaQuickLauncher from "./components/VulaQuickLauncher";
+import VulaReports from "./components/VulaReports";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -60,6 +61,7 @@ const TABS = [
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },
   { id: "commerce", label: "Commerce", component: VulaCommerce },
+  { id: "reports", label: "Reports", component: VulaReports },
   { id: "merchant", label: "Merchant", component: VulaMerchantAdmin },
   { id: "invoices", label: "Invoices", component: VulaInvoices },
   { id: "budget", label: "Budget", component: VulaBudget },
@@ -221,7 +223,7 @@ export default function App() {
             qs: 'Estimating', qspro: 'Estimating', takeoff: 'Estimating',
             projects: 'Knowledge', qsrates: 'Knowledge', docs: 'Knowledge', training: 'Knowledge',
             contacts: 'Office', finances: 'Office', followups: 'Office', team: 'Office',
-            commerce: 'Commerce', merchant: 'Commerce', invoices: 'Commerce', budget: 'Commerce', scanner: 'Commerce',
+            commerce: 'Commerce', merchant: 'Commerce', invoices: 'Commerce', budget: 'Commerce', scanner: 'Commerce', reports: 'Commerce',
             onboard: 'Clients', admin: 'Clients', subscriptions: 'Clients',
             field: 'Field',
           }
