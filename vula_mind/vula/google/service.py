@@ -25,9 +25,10 @@ _GMAIL = "https://gmail.googleapis.com/gmail/v1"
 _USERINFO = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 SCOPES = [
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.compose",  # create drafts (not send)
+    # drive.file is a NON-restricted scope (no CASA security assessment): Vula only sees
+    # files the user opens via the Google Picker or that Vula itself creates. Gmail is
+    # handled by the IMAP/SMTP email connector, so no Gmail OAuth scopes are requested.
+    "https://www.googleapis.com/auth/drive.file",
     "openid", "email",
 ]
 

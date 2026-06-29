@@ -62,9 +62,10 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "draft a ", "draft me", "compose", "reply to", "summarise the email",
                              "read the email", "read the latest",
                              "waiting on me", "to reply", "need a reply", "needs a reply",
-                             "follow up", "follow-up", "outstanding emails", "awaiting reply"],
+                             "follow up", "follow-up", "outstanding emails", "awaiting reply",
+                             "gmail", "google mail"],
     # Google Drive + Gmail — provider-named only (generic 'email' goes to email_admin).
-    "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "gmail"],
+    "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "from drive"],
     # Explicit standard/code lookup → cited search of the code library.
     "standards_lookup":     ["look up", "which standard", "which code", "what standard",
                              "what does sans", "code library", "sans clause", "which sans",

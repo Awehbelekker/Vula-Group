@@ -36,26 +36,15 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "knowledge base so the assistant can answer questions about it.",
         "parameters": {"type": "object", "properties": {
             "file_id": {"type": "string"}, "name": {"type": "string"}}, "required": ["file_id"]}}},
-    {"type": "function", "function": {
-        "name": "gmail_list", "description": "List recent emails (optional Gmail search query).",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}},
-    {"type": "function", "function": {
-        "name": "gmail_read", "description": "Read a full email by id (from gmail_list).",
-        "parameters": {"type": "object", "properties": {
-            "message_id": {"type": "string"}}, "required": ["message_id"]}}},
-    {"type": "function", "function": {
-        "name": "gmail_draft",
-        "description": "Create a Gmail DRAFT (it is NOT sent — the user reviews and sends).",
-        "parameters": {"type": "object", "properties": {
-            "to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}},
-            "required": ["to", "subject", "body"]}}},
+    # Gmail is handled by the IMAP/SMTP email connector (email_admin) — no Gmail OAuth
+    # scopes are requested, so Google Drive verification stays out of the CASA tier.
 ]
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
 
 
 class GoogleAdminSkill(BaseSkill):
     name = "google_admin"
-    description = "Search/file Google Drive documents and read/draft Gmail (draft-only)."
+    description = "Search and file documents the user shares from Google Drive (via the Picker)."
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         from vula.google.credentials import get_access_token
