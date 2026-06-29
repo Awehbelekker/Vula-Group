@@ -1435,13 +1435,28 @@ async def admin_customer_history(tenant_id: str, phone: str):
                            "title": iv.get("invoice_number"), "detail": iv.get("status"), "amount_cents": iv.get("total_cents")})
     except Exception:
         pass
+    # Commerce order-bot conversations (the OTH WhatsApp chats live here).
+    try:
+        sess = (db.table("commerce_conversation_sessions").select("id")
+                .eq("tenant_id", tenant_id).eq("customer_phone", phone).execute().data or [])
+        sids = [s["id"] for s in sess]
+        if sids:
+            cmsgs = (db.table("commerce_conversation_messages").select("role,content,created_at")
+                     .eq("tenant_id", tenant_id).in_("session_id", sids)
+                     .order("created_at", desc=True).limit(40).execute().data or [])
+            for m in cmsgs:
+                events.append({"type": "message", "at": m.get("created_at"),
+                               "title": ("Vula" if m.get("role") == "assistant" else "Customer"),
+                               "detail": (m.get("content") or "")[:200]})
+    except Exception:
+        pass
+    # Knowledge/portal chats (durable store, for non-commerce tenants).
     try:
         from vula.chat.history import get_db
-        msgs = get_db().get(tenant_id, phone=digits, limit=20)
-        for m in msgs:
+        for m in get_db().get(tenant_id, phone=digits, limit=20):
             events.append({"type": "message", "at": getattr(m, "created_at", None),
-                           "title": ("You" if m.role == "assistant" else "Customer"),
-                           "detail": (m.text or "")[:160]})
+                           "title": ("Vula" if m.role == "assistant" else "Customer"),
+                           "detail": (m.text or "")[:200]})
     except Exception:
         pass
     events.sort(key=lambda e: e.get("at") or "", reverse=True)
