@@ -36,7 +36,7 @@ insert into vula_tenant_config
 values
   ('off-the-hook', 'Off the Hook', 'food', 'https://offthehook.co.za',
    '{"accent":"#0E7C7B","ink":"#0B3B3A"}'::jsonb, 'yoco', '1216487374874418',
-   '["products","orders","payments","invoices","delivery","crm","reports","broadcasts","inbox"]'::jsonb,
+   '["products","orders","payments","invoices","delivery","crm","reports","broadcasts","inbox","followups","budget","team"]'::jsonb,
    'growth', 'active'),
   ('digg-demo', 'DIGG Architecture', 'services', 'https://digg.vula-ai.com',
    '{"accent":"#1E1E1E","ink":"#1E1E1E"}'::jsonb, null, '1180015145200511',
