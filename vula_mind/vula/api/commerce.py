@@ -699,35 +699,32 @@ async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
         raise HTTPException(status_code=404, detail="Invoice not found")
     if inv.get("status") == "paid":
         return {"already_paid": True, "pay_url": inv.get("pay_url")}
-    from vula.api.yoco import _get_tenant_yoco_creds
-    creds = await _get_tenant_yoco_creds(tenant_id)
-    if not creds or not creds.get("secret_key"):
-        raise HTTPException(status_code=503, detail="Connect Yoco to enable pay links.")
+    from vula import payments
     store_url = settings.store_urls.get(tenant_id, "https://offthehook.co.za")
-    async with httpx.AsyncClient(timeout=12.0) as client:
-        resp = await client.post(
-            "https://payments.yoco.com/api/checkouts",
-            headers={"Authorization": f"Bearer {creds['secret_key']}", "Content-Type": "application/json"},
-            json={
-                "amount": int(inv["total_cents"]), "currency": "ZAR",
-                "successUrl": f"{store_url}/payment/success?invoice={invoice_id}",
-                "cancelUrl": f"{store_url}/payment/cancel?invoice={invoice_id}",
-                "metadata": {"invoice_id": invoice_id, "invoice_number": inv.get("invoice_number"),
-                             "tenant_id": tenant_id, "customer_phone": inv.get("customer_phone") or ""},
-            },
-        )
-    if not resp.is_success:
-        log.error("Yoco invoice checkout failed: %s", resp.text)
-        raise HTTPException(status_code=502, detail="Payment gateway error — try again")
-    d = resp.json()
-    url = d.get("redirectUrl")
+    api_base = "https://vula-group-production.up.railway.app"
+    row = payments.default_provider_row(tenant_id)
+    provider = row["provider"] if row else "yoco"
+    notify_url = f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}"
+    try:
+        link = await payments.create_pay_link(
+            tenant_id, amount_cents=int(inv["total_cents"]), reference=invoice_id,
+            description=f"Invoice {inv.get('invoice_number') or ''}".strip(),
+            success_url=f"{store_url}/payment/success?invoice={invoice_id}",
+            cancel_url=f"{store_url}/payment/cancel?invoice={invoice_id}",
+            notify_url=notify_url,
+            customer={"email": inv.get("customer_email"), "phone": inv.get("customer_phone")})
+    except Exception as exc:
+        log.error("Pay-link create failed (%s): %s", provider, exc)
+        raise HTTPException(status_code=502, detail="Payment gateway error — check your gateway keys.")
+    if not link or not link.url:
+        raise HTTPException(status_code=503, detail="No payment gateway connected — connect one in Payments.")
     try:
         service._client().table("commerce_invoices").update(
-            {"pay_url": url, "yoco_checkout_id": d.get("id"), "updated_at": service._now()}
+            {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id"), "updated_at": service._now()}
         ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
     except Exception:
         pass
-    return {"pay_url": url, "amount_cents": int(inv["total_cents"])}
+    return {"pay_url": link.url, "provider": link.provider, "amount_cents": int(inv["total_cents"])}
 
 
 # ── Quote / proforma endpoints ────────────────────────────────────────────────
