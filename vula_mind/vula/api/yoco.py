@@ -199,6 +199,19 @@ async def yoco_webhook(request: Request) -> dict:
     display_id = metadata.get("display_id", "")
     amount_cents = data.get("amount", 0)
 
+    # Invoice pay-links carry invoice_id (not order_id) → mark the invoice paid.
+    invoice_id = metadata.get("invoice_id")
+    if invoice_id and event_type in ("payment.succeeded", "checkout.completed"):
+        try:
+            from vula.commerce import service as _svc
+            _svc._client().table("commerce_invoices").update(
+                {"status": "paid", "updated_at": _svc._now()}
+            ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+            log.info("Invoice %s paid via Yoco", metadata.get("invoice_number", invoice_id))
+        except Exception as exc:
+            log.warning("invoice mark-paid failed: %s", exc)
+        return {"received": True}
+
     if not order_id:
         log.warning("Yoco webhook missing order_id in metadata")
         return {"received": True}

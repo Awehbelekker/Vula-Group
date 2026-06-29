@@ -130,6 +130,20 @@ export default function VulaInvoices({ tenantId, products = [] }) {
     window.open(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`, '_blank')
   }
 
+  async function payLink(inv) {
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pay-link`, { method: 'POST' })
+      .then(r => r.json()).catch(() => ({}))
+    if (d.pay_url) {
+      try { await navigator.clipboard.writeText(d.pay_url) } catch (e) { /* clipboard may be blocked */ }
+      alert(`Pay link created & copied to clipboard:\n\n${d.pay_url}\n\nSend it to your customer — the invoice marks itself paid once they pay.`)
+      load()
+    } else if (d.already_paid) {
+      alert('This invoice is already paid.')
+    } else {
+      alert(d.detail || 'Could not create pay link — connect Yoco in Branding/Settings first.')
+    }
+  }
+
   async function emailInvoice(inv) {
     if (!confirm(`Email ${inv.invoice_number} to ${inv.customer_email}?`)) return
     try {
@@ -213,6 +227,7 @@ export default function VulaInvoices({ tenantId, products = [] }) {
                   {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
                   <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
                   {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
+                  {inv.doc_type === 'invoice' && inv.status !== 'paid' && <button onClick={() => payLink(inv)} style={s.actPaid}>💳 Pay link</button>}
                   {inv.doc_type === 'invoice' && (
                     <button
                       onClick={() => matchSupplier(inv)}

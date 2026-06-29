@@ -244,7 +244,10 @@ _DOC_HTML = """<!DOCTYPE html>
 <div class="payment">
   <h3>Payment Details</h3>
   {{ payment_info | replace("\\n", "<br>") | safe }}
+  {% if pay_url %}<p style="margin-top:8px;"><a href="{{ pay_url }}" style="display:inline-block;background:{{ accent }};color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:700;">💳 Pay now online</a></p>{% endif %}
 </div>
+{% elif pay_url %}
+<div class="payment"><h3>Pay online</h3><p><a href="{{ pay_url }}" style="display:inline-block;background:{{ accent }};color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:700;">💳 Pay now</a></p></div>
 {% endif %}
 
 <div class="footer">
@@ -385,6 +388,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "tenant_vat": branding.get("vat") or "",
         "accent": branding.get("accent", "#1a7a4a"),
         "payment_info": branding.get("payment_info", ""),
+        "pay_url": invoice.get("pay_url", ""),
         # Document meta — only a VAT-registered supplier may issue a "Tax Invoice".
         "doc_label": ("Invoice" if doc_type == "invoice" and branding.get("vat_registered") is False
                       else _DOC_LABELS.get(doc_type, "Document")),

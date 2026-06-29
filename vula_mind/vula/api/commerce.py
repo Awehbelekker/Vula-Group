@@ -681,6 +681,45 @@ async def cron_recurring_invoices():
     return {"generated": await service.process_due_recurring()}
 
 
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")
+async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
+    """Create a Yoco 'Pay now' checkout for an invoice; store + return the link."""
+    inv = await service.get_invoice(tenant_id, invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.get("status") == "paid":
+        return {"already_paid": True, "pay_url": inv.get("pay_url")}
+    from vula.api.yoco import _get_tenant_yoco_creds
+    creds = await _get_tenant_yoco_creds(tenant_id)
+    if not creds or not creds.get("secret_key"):
+        raise HTTPException(status_code=503, detail="Connect Yoco to enable pay links.")
+    store_url = settings.store_urls.get(tenant_id, "https://offthehook.co.za")
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        resp = await client.post(
+            "https://payments.yoco.com/api/checkouts",
+            headers={"Authorization": f"Bearer {creds['secret_key']}", "Content-Type": "application/json"},
+            json={
+                "amount": int(inv["total_cents"]), "currency": "ZAR",
+                "successUrl": f"{store_url}/payment/success?invoice={invoice_id}",
+                "cancelUrl": f"{store_url}/payment/cancel?invoice={invoice_id}",
+                "metadata": {"invoice_id": invoice_id, "invoice_number": inv.get("invoice_number"),
+                             "tenant_id": tenant_id, "customer_phone": inv.get("customer_phone") or ""},
+            },
+        )
+    if not resp.is_success:
+        log.error("Yoco invoice checkout failed: %s", resp.text)
+        raise HTTPException(status_code=502, detail="Payment gateway error — try again")
+    d = resp.json()
+    url = d.get("redirectUrl")
+    try:
+        service._client().table("commerce_invoices").update(
+            {"pay_url": url, "yoco_checkout_id": d.get("id"), "updated_at": service._now()}
+        ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+    except Exception:
+        pass
+    return {"pay_url": url, "amount_cents": int(inv["total_cents"])}
+
+
 # ── Quote / proforma endpoints ────────────────────────────────────────────────
 # Quotes and proformas share commerce_invoices (doc_type). These routes use the
 # service layer so totals are computed server-side and numbering is doc-type
