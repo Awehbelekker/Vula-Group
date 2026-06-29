@@ -23,6 +23,16 @@ export default function VulaCustomers({ tenantId }) {
   const [audience, setAudience] = useState('all')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [openPhone, setOpenPhone] = useState(null)
+  const [history, setHistory] = useState([])
+
+  const openHistory = async (phone) => {
+    if (openPhone === phone) { setOpenPhone(null); return }
+    setOpenPhone(phone); setHistory([])
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/history`)
+    const d = await r.json()
+    setHistory(d.events || [])
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -90,20 +100,39 @@ export default function VulaCustomers({ tenantId }) {
       ) : (
         <div style={s.list}>
           {rows.map((c, i) => (
-            <div key={i} style={s.row}>
-              <div style={s.avatar}>{(c.name || c.phone || '?').charAt(0).toUpperCase()}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <span style={s.name}>{c.name || 'Unknown'}</span>
-                <span style={s.meta}>
-                  {c.phone} · {c.channel === 'whatsapp' ? '💬 WhatsApp' : '🌐 Web'}
-                  {c.orders > 0 ? ` · ${c.orders} order${c.orders !== 1 ? 's' : ''}` : ' · no orders yet'}
-                  {' · seen '}{since(c.last_order_at || c.last_seen_at)}
-                </span>
+            <div key={i}>
+              <div style={{ ...s.row, cursor: 'pointer' }} onClick={() => openHistory(c.phone)}>
+                <div style={s.avatar}>{(c.name || c.phone || '?').charAt(0).toUpperCase()}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={s.name}>{c.name || 'Unknown'}</span>
+                  <span style={s.meta}>
+                    {c.phone} · {c.channel === 'whatsapp' ? '💬 WhatsApp' : '🌐 Web'}
+                    {c.orders > 0 ? ` · ${c.orders} order${c.orders !== 1 ? 's' : ''}` : ' · no orders yet'}
+                    {' · seen '}{since(c.last_order_at || c.last_seen_at)}
+                  </span>
+                </div>
+                <div style={s.right}>
+                  <span style={s.spent}>{fmt(c.total_spent_cents)}</span>
+                  <a href={waLink(c.phone)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={s.waBtn}>💬</a>
+                  <span style={{ color: '#8A8680', fontSize: 16, transform: openPhone === c.phone ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>›</span>
+                </div>
               </div>
-              <div style={s.right}>
-                <span style={s.spent}>{fmt(c.total_spent_cents)}</span>
-                <a href={waLink(c.phone)} target="_blank" rel="noreferrer" style={s.waBtn}>💬</a>
-              </div>
+              {openPhone === c.phone && (
+                <div style={{ background: 'var(--surface-alt, #F0EDE5)', borderRadius: 10, padding: 14, margin: '2px 0 10px' }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 8 }}>Interaction history</div>
+                  {history.length === 0 && <div style={{ fontSize: 12.5, color: '#8A8680' }}>No recorded orders, invoices or chats yet.</div>}
+                  {history.map((e, j) => (
+                    <div key={j} style={{ display: 'flex', gap: 10, padding: '6px 0', borderTop: j ? '1px solid #E5DFCF' : 'none', fontSize: 12.5 }}>
+                      <span style={{ width: 78, color: '#8A8680', flexShrink: 0 }}>{(e.at || '').slice(0, 10)}</span>
+                      <span style={{ flexShrink: 0 }}>{e.type === 'order' ? '📦' : e.type === 'message' ? '💬' : (e.type === 'quote' ? '📝' : '🧾')}</span>
+                      <span style={{ flex: 1, color: '#2A2A2A' }}>
+                        <b>{e.title}</b>{e.detail ? ` · ${e.detail}` : ''}
+                      </span>
+                      {e.amount_cents != null && <span style={{ fontFamily: "'Source Code Pro', monospace", color: '#2A2A2A' }}>{fmt(e.amount_cents)}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
