@@ -876,7 +876,7 @@ _INVOICE_SETTINGS_FIELDS = (
     "account_name", "bank_name", "branch_code", "account_number",
     "template_choice", "accent_color", "onboarded",
 )
-_TEMPLATE_CHOICES = ("classic", "minimal", "modern")
+_TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded")
 
 
 async def get_invoice_settings(tenant_id: str) -> Optional[dict]:

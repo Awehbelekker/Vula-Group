@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { supabase } from '../lib/supabase'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -375,6 +376,7 @@ const TEMPLATES = [
   { id: 'classic', name: 'Classic', desc: 'Accent header, filled table — the original Vula look.', accent: 'var(--accent)' },
   { id: 'minimal', name: 'Minimal', desc: 'Monochrome, hairline rules, ink-light.', accent: '#222222' },
   { id: 'modern',  name: 'Modern',  desc: 'Bold colour band, rounded cards, high-contrast totals.', accent: '#0077b6' },
+  { id: 'branded', name: 'Branded', desc: 'Logo-forward: centred logo, accent rules, your brand front-and-centre.', accent: '#2C5545' },
 ]
 
 function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
@@ -396,7 +398,23 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
     template_choice:    settings?.template_choice || 'classic',
   })
   const [saving, setSaving] = useState(false)
+  const [uploadingLogo, setUploadingLogo] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  async function uploadLogo(e) {
+    const file = (e.target.files || [])[0]
+    if (!file) return
+    setUploadingLogo(true)
+    try {
+      const clean = file.name.replace(/[^a-zA-Z0-9.-]/g, '-').toLowerCase()
+      const path = `${tenantId}/logo/${Date.now()}-${clean}`
+      const { error } = await supabase.storage.from('product-images').upload(path, file, { cacheControl: '3600', upsert: true })
+      if (!error) {
+        const { data } = supabase.storage.from('product-images').getPublicUrl(path)
+        if (data?.publicUrl) set('logo_url', data.publicUrl)
+      }
+    } finally { setUploadingLogo(false) }
+  }
 
   async function save() {
     setSaving(true)
@@ -431,9 +449,14 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
           onChange={e => set('company_name', e.target.value)} style={s.fInput} />
         <input placeholder="Trading as (optional, e.g. brand name)" value={form.trading_as}
           onChange={e => set('trading_as', e.target.value)} style={s.fInput} />
-        <input placeholder="Logo image URL (shown on invoices)" value={form.logo_url}
-          onChange={e => set('logo_url', e.target.value)} style={s.fInput} />
-        {form.logo_url && <img src={form.logo_url} alt="logo" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain', alignSelf: 'flex-start' }} />}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+            {uploadingLogo ? 'Uploading…' : (form.logo_url ? '↻ Replace logo' : '📷 Upload logo')}
+            <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={uploadLogo} style={{ display: 'none' }} />
+          </label>
+          {form.logo_url && <img src={form.logo_url} alt="logo" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
+          {form.logo_url && <button type="button" onClick={() => set('logo_url', '')} style={{ background: 'none', border: 'none', color: '#8A8680', cursor: 'pointer', fontSize: 18 }}>×</button>}
+        </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input placeholder="Business email" value={form.company_email}
             onChange={e => set('company_email', e.target.value)} style={s.fInput} />

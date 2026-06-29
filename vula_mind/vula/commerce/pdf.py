@@ -125,10 +125,45 @@ _CSS_MODERN = """
   .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; background: rgba(255,255,255,0.2); color: #fff; }
 """
 
+_CSS_BRANDED = """
+  @page { size: A4; margin: 16mm 0 18mm 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 11pt; color: #1f2430; }
+  .header { text-align: center; padding: 0 18mm 18px; border-bottom: 3px solid {{ accent }}; margin: 0 0 26px; }
+  .brand img { margin: 0 auto 8px; }
+  .brand h1 { font-size: 21pt; font-weight: 800; color: {{ accent }}; letter-spacing: -0.5px; }
+  .brand p  { font-size: 9pt; color: #6b7280; line-height: 1.5; }
+  .doc-title { margin-top: 12px; }
+  .doc-title h2 { font-size: 14pt; font-weight: 700; color: #1f2430; text-transform: uppercase; letter-spacing: 3px; }
+  .doc-title .num { font-size: 11pt; color: {{ accent }}; margin-top: 2px; font-weight: 600; }
+  .doc-title .dates { font-size: 9pt; color: #6b7280; margin-top: 6px; line-height: 1.6; }
+  .badge { display: inline-block; padding: 3px 12px; border-radius: 20px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; background: {{ accent }}; color: #fff; }
+  .parties { display: flex; gap: 20px; margin: 0 18mm 26px; }
+  .party { flex: 1; border: 1px solid #e7e9ee; border-radius: 10px; padding: 15px 18px; }
+  .party h3 { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.8px; color: {{ accent }}; margin-bottom: 8px; font-weight: 700; }
+  .party p  { font-size: 10pt; line-height: 1.6; }
+  table { width: calc(100% - 36mm); border-collapse: separate; border-spacing: 0; margin: 0 18mm 22px; }
+  thead th { background: {{ accent }}; color: #fff; padding: 11px 12px; font-size: 9.5pt; text-align: left; }
+  thead th:first-child { border-radius: 8px 0 0 8px; }
+  thead th:last-child { border-radius: 0 8px 8px 0; }
+  thead th:last-child, thead th:nth-last-child(2), thead th:nth-last-child(3) { text-align: right; }
+  tbody td { padding: 10px 12px; font-size: 10pt; border-bottom: 1px solid #eef1f4; vertical-align: top; }
+  tbody td:last-child, tbody td:nth-last-child(2), tbody td:nth-last-child(3) { text-align: right; }
+  .totals { width: 300px; margin: 0 18mm 26px auto; }
+  .totals tr td { padding: 6px 10px; font-size: 10.5pt; }
+  .totals tr td:last-child { text-align: right; font-weight: 500; }
+  .totals .total-row td { font-weight: 800; font-size: 13pt; background: {{ accent }}; color: #fff; padding: 12px 10px; border-radius: 8px; }
+  .notes { border-left: 3px solid {{ accent }}; padding: 6px 16px; margin: 0 18mm 22px; font-size: 9.5pt; line-height: 1.6; color: #4b5563; }
+  .payment { background: #fff; border: 1.5px solid {{ accent }}; border-radius: 10px; padding: 16px 18px; margin: 0 18mm 22px; font-size: 9.5pt; line-height: 1.7; }
+  .payment h3 { font-size: 9pt; text-transform: uppercase; letter-spacing: 0.8px; color: {{ accent }}; margin-bottom: 8px; font-weight: 700; }
+  .footer { margin: 0 18mm; border-top: 1px solid #e4e8ec; padding-top: 10px; font-size: 8.5pt; color: #9aa1ad; text-align: center; line-height: 1.6; }
+"""
+
 _TEMPLATE_CSS: dict[str, str] = {
     "classic": _CSS_CLASSIC,
     "minimal": _CSS_MINIMAL,
     "modern": _CSS_MODERN,
+    "branded": _CSS_BRANDED,
 }
 
 # Shared document skeleton. ``__TEMPLATE_CSS__`` is replaced with the chosen
