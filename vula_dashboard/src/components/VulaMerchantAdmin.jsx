@@ -909,7 +909,15 @@ function SuppliersTab({ tenantId }) {
       </div>
 
       {suppliers.length === 0 ? (
-        <p style={styles.empty}>No suppliers yet. Add one so scanned bills auto-fill payment terms.</p>
+        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: '#FFFFFF', border: `1px solid ${'#DDD8CE'}`, borderRadius: 12, padding: 32 }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🚚</div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', marginBottom: 6 }}>Set up your suppliers</div>
+          <p style={{ fontSize: 13, color: '#8A8680', lineHeight: 1.55, margin: '0 0 16px' }}>
+            Add suppliers once and Vula auto-fills payment terms, VAT and account details when you
+            scan their bills — and matches incoming invoices automatically.
+          </p>
+          {!editing && <button onClick={startNew} style={{ ...styles.btnAction }}>+ Add your first supplier</button>}
+        </div>
       ) : (
         <div style={styles.list}>
           {suppliers.map(s => (

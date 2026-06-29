@@ -161,7 +161,15 @@ export default function VulaBudget({ tenantId, stats }) {
 
       {/* Expense list */}
       {loading ? <p style={s.muted}>Loading…</p> : expenses.length === 0 ? (
-        <p style={s.muted}>No expenses this month. Use the Smart Scanner to add receipts fast.</p>
+        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: '#FFFFFF', border: '1px solid #DDD8CE', borderRadius: 12, padding: 32 }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>💰</div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', marginBottom: 6 }}>Start tracking spend</div>
+          <p style={{ fontSize: 13, color: '#8A8680', lineHeight: 1.55, margin: '0 0 16px' }}>
+            Log your first expense to see budget-vs-actual by category. Fastest way: snap a receipt
+            with the <b>Smart Scanner</b> and Vula fills it in for you.
+          </p>
+          <button onClick={() => setShowAdd(true)} style={{ ...s.saveBtn, width: 'auto', padding: '9px 18px' }}>+ Add your first expense</button>
+        </div>
       ) : (
         <div style={s.list}>
           {expenses.map(e => (
