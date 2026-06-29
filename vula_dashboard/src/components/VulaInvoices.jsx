@@ -29,6 +29,7 @@ export default function VulaInvoices({ tenantId, products = [] }) {
   const [matchingId, setMatchingId] = useState(null)     // id currently matching
   const [settings, setSettings] = useState(null)         // commerce_invoice_settings row
   const [showSettings, setShowSettings] = useState(false)
+  const [showRecurring, setShowRecurring] = useState(false)
   const autoOpened = useRef(false)                       // first-run wizard opened once
 
   const load = useCallback(async () => {
@@ -169,6 +170,10 @@ export default function VulaInvoices({ tenantId, products = [] }) {
     />
   }
 
+  if (showRecurring) {
+    return <RecurringManager tenantId={tenantId} onCancel={() => setShowRecurring(false)} />
+  }
+
   return (
     <div>
       <div style={s.tabs}>
@@ -178,6 +183,7 @@ export default function VulaInvoices({ tenantId, products = [] }) {
 
       <div style={s.topBar}>
         <p style={s.count}>{invoices.length} {docType}{invoices.length !== 1 ? 's' : ''}</p>
+        <button onClick={() => setShowRecurring(true)} style={s.brandBtn}>🔁 Recurring</button>
         <button onClick={() => setShowSettings(true)} style={s.brandBtn}>⚙ Branding</button>
         <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>
       </div>
@@ -378,6 +384,66 @@ const TEMPLATES = [
   { id: 'modern',  name: 'Modern',  desc: 'Bold colour band, rounded cards, high-contrast totals.', accent: '#0077b6' },
   { id: 'branded', name: 'Branded', desc: 'Logo-forward: centred logo, accent rules, your brand front-and-centre.', accent: '#2C5545' },
 ]
+
+function RecurringManager({ tenantId, onCancel }) {
+  const [list, setList] = useState([])
+  const [form, setForm] = useState({ label: '', customer_name: '', customer_phone: '', customer_email: '', cadence: 'monthly', next_run_at: new Date().toISOString().slice(0, 10) })
+  const [items, setItems] = useState([{ description: '', quantity: 1, unit_price: '' }])
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/recurring-invoices`).then(r => r.json())
+    setList(d.recurring || [])
+  }, [tenantId])
+  useEffect(() => { load() }, [load])
+
+  const upd = (i, f, v) => setItems(items.map((it, idx) => idx === i ? { ...it, [f]: v } : it))
+  async function save() {
+    if (!form.customer_name) return
+    setSaving(true)
+    const lineItems = items.map(it => { const c = Math.round((parseFloat(it.unit_price) || 0) * 100); return { description: it.description, quantity: parseFloat(it.quantity) || 0, unit_price_cents: c, total_cents: Math.round(c * (parseFloat(it.quantity) || 0)) } })
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/recurring-invoices`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, line_items: lineItems, vat_rate: 15 }) })
+    setSaving(false); setForm({ ...form, label: '', customer_name: '', customer_phone: '', customer_email: '' }); setItems([{ description: '', quantity: 1, unit_price: '' }]); load()
+  }
+  async function del(id) { await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/recurring-invoices/${id}`, { method: 'DELETE' }); load() }
+
+  return (
+    <div>
+      <div style={s.topBar}><button onClick={onCancel} style={s.backBtn}>← Back</button><h3 style={s.formTitle}>Recurring invoices</h3></div>
+      <p style={s.muted}>Vula auto-generates these as <b>draft</b> invoices on the chosen cadence — you review and send.</p>
+      <div style={s.formSection}>
+        <input placeholder="Label (e.g. Monthly retainer — Sporty)" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} style={s.fInput} />
+        <input placeholder="Customer name" value={form.customer_name} onChange={e => setForm({ ...form, customer_name: e.target.value })} style={s.fInput} />
+        <div style={s.fRow}>
+          <input placeholder="Phone" value={form.customer_phone} onChange={e => setForm({ ...form, customer_phone: e.target.value })} style={s.fInput} />
+          <input placeholder="Email" value={form.customer_email} onChange={e => setForm({ ...form, customer_email: e.target.value })} style={s.fInput} />
+        </div>
+        <div style={s.fRow}>
+          <select value={form.cadence} onChange={e => setForm({ ...form, cadence: e.target.value })} style={s.fInput}><option value="monthly">Monthly</option><option value="weekly">Weekly</option></select>
+          <input type="date" value={form.next_run_at} onChange={e => setForm({ ...form, next_run_at: e.target.value })} style={s.fInput} />
+        </div>
+      </div>
+      <p style={s.sectionLabel}>Line items</p>
+      {items.map((it, i) => (
+        <div key={i} style={s.itemRow}>
+          <input placeholder="Description" value={it.description} onChange={e => upd(i, 'description', e.target.value)} style={{ ...s.fInput, flex: 2 }} />
+          <input type="number" placeholder="Qty" value={it.quantity} onChange={e => upd(i, 'quantity', e.target.value)} style={{ ...s.fInput, width: 60 }} />
+          <input type="number" step="0.01" placeholder="R" value={it.unit_price} onChange={e => upd(i, 'unit_price', e.target.value)} style={{ ...s.fInput, width: 80 }} />
+        </div>
+      ))}
+      <button onClick={() => setItems([...items, { description: '', quantity: 1, unit_price: '' }])} style={s.brandBtn}>+ line</button>
+      <button onClick={save} disabled={saving} style={{ ...s.saveInvBtn, marginTop: 12 }}>{saving ? 'Saving…' : 'Add recurring invoice'}</button>
+
+      <p style={s.sectionLabel}>Active recurring</p>
+      {list.length === 0 ? <p style={s.muted}>None yet.</p> : list.map(r => (
+        <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 8, marginBottom: 8 }}>
+          <div><b>{r.label || r.customer_name}</b><div style={{ fontSize: 12, color: '#8A8680' }}>{r.customer_name} · {r.cadence} · next {String(r.next_run_at).slice(0, 10)}</div></div>
+          <button onClick={() => del(r.id)} style={{ color: '#A23B2D', background: 'none', border: '1px solid #DDD8CE', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Remove</button>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
   const [form, setForm] = useState({

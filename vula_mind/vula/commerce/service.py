@@ -951,3 +951,80 @@ async def upsert_invoice_client(tenant_id: str, data: dict) -> dict:
 async def delete_invoice_client(tenant_id: str, client_id: str) -> None:
     _client().table("commerce_invoice_clients").delete() \
         .eq("id", client_id).eq("tenant_id", tenant_id).execute()
+
+
+# ── Recurring invoices ────────────────────────────────────────────────────────
+
+_RECURRING_FIELDS = ("label", "customer_name", "customer_email", "customer_phone",
+                     "customer_address", "line_items", "vat_rate", "cadence",
+                     "next_run_at", "active")
+
+
+def _advance(date_iso: str, cadence: str) -> str:
+    from datetime import date as _d
+    d = _d.fromisoformat(date_iso[:10])
+    if cadence == "weekly":
+        return (d + __import__("datetime").timedelta(days=7)).isoformat()
+    # monthly — same day next month, clamped to month length
+    import calendar
+    y, m = (d.year + (d.month // 12)), ((d.month % 12) + 1)
+    day = min(d.day, calendar.monthrange(y, m)[1])
+    return _d(y, m, day).isoformat()
+
+
+async def list_recurring(tenant_id: str) -> List[dict]:
+    return (_client().table("commerce_recurring_invoices").select("*")
+            .eq("tenant_id", tenant_id).order("next_run_at").execute().data or [])
+
+
+async def upsert_recurring(tenant_id: str, data: dict) -> dict:
+    patch = {k: data[k] for k in _RECURRING_FIELDS if k in data}
+    if not patch.get("customer_name"):
+        raise ValueError("customer_name is required")
+    if not patch.get("next_run_at"):
+        patch["next_run_at"] = _now()[:10]
+    db = _client()
+    if data.get("id"):
+        patch["updated_at"] = _now()
+        res = (db.table("commerce_recurring_invoices").update(patch)
+               .eq("id", data["id"]).eq("tenant_id", tenant_id).execute())
+        return res.data[0] if res.data else {**patch, "id": data["id"]}
+    row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
+    res = db.table("commerce_recurring_invoices").insert(row).execute()
+    return res.data[0] if res.data else row
+
+
+async def delete_recurring(tenant_id: str, rec_id: str) -> None:
+    _client().table("commerce_recurring_invoices").delete() \
+        .eq("id", rec_id).eq("tenant_id", tenant_id).execute()
+
+
+async def process_due_recurring() -> int:
+    """Generate invoices for every active recurring template whose next_run_at has passed.
+    Idempotent-ish: advances next_run_at after each generation. Returns count generated."""
+    today = _now()[:10]
+    try:
+        due = (_client().table("commerce_recurring_invoices").select("*")
+               .eq("active", True).lte("next_run_at", today).limit(200).execute().data or [])
+    except Exception:
+        return 0
+    n = 0
+    for r in due:
+        try:
+            inv = await create_invoice(r["tenant_id"], {
+                "doc_type": "invoice",
+                "customer_name": r.get("customer_name"), "customer_email": r.get("customer_email"),
+                "customer_phone": r.get("customer_phone"), "customer_address": r.get("customer_address"),
+                "line_items": r.get("line_items") or [], "vat_rate": float(r.get("vat_rate") or 15),
+                "status": "draft",
+                "issue_date": today,
+                "notes": (r.get("label") and f"Recurring: {r['label']}") or None,
+            })
+            _client().table("commerce_recurring_invoices").update({
+                "next_run_at": _advance(r["next_run_at"], r.get("cadence") or "monthly"),
+                "last_invoice_id": inv.get("id"), "last_run_at": _now(), "updated_at": _now(),
+            }).eq("id", r["id"]).execute()
+            n += 1
+        except Exception:
+            continue
+    return n

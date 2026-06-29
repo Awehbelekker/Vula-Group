@@ -653,6 +653,34 @@ async def admin_delete_invoice_client(tenant_id: str, client_id: str):
     return {"deleted": client_id}
 
 
+# ── Recurring invoices ────────────────────────────────────────────────────────
+
+@router.get("/{tenant_id}/admin/recurring-invoices")
+async def admin_list_recurring(tenant_id: str):
+    return {"recurring": await service.list_recurring(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/recurring-invoices")
+async def admin_upsert_recurring(tenant_id: str, body: dict):
+    try:
+        rec = await service.upsert_recurring(tenant_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"recurring": rec}
+
+
+@router.delete("/{tenant_id}/admin/recurring-invoices/{rec_id}")
+async def admin_delete_recurring(tenant_id: str, rec_id: str):
+    await service.delete_recurring(tenant_id, rec_id)
+    return {"deleted": rec_id}
+
+
+@router.post("/cron/recurring-invoices")
+async def cron_recurring_invoices():
+    """Generate invoices for all due recurring templates (called by the scheduler)."""
+    return {"generated": await service.process_due_recurring()}
+
+
 # ── Quote / proforma endpoints ────────────────────────────────────────────────
 # Quotes and proformas share commerce_invoices (doc_type). These routes use the
 # service layer so totals are computed server-side and numbering is doc-type
