@@ -1409,6 +1409,45 @@ async def admin_list_customers(
     }
 
 
+@router.get("/{tenant_id}/admin/customers/{phone}/history")
+async def admin_customer_history(tenant_id: str, phone: str):
+    """Per-customer interaction timeline: orders + invoices + recent chat (tenant-scoped)."""
+    db = service._client()
+    digits = _norm_phone(phone)
+    events: list = []
+    try:
+        orders = (db.table("commerce_orders")
+                  .select("display_id,total_cents,status,created_at")
+                  .eq("tenant_id", tenant_id).eq("customer_phone", phone)
+                  .order("created_at", desc=True).limit(50).execute().data or [])
+        for o in orders:
+            events.append({"type": "order", "at": o.get("created_at"), "title": f"Order {o.get('display_id') or ''}".strip(),
+                           "detail": o.get("status"), "amount_cents": o.get("total_cents")})
+    except Exception:
+        pass
+    try:
+        invs = (db.table("commerce_invoices")
+                .select("invoice_number,total_cents,status,created_at,doc_type")
+                .eq("tenant_id", tenant_id).eq("customer_phone", phone)
+                .order("created_at", desc=True).limit(50).execute().data or [])
+        for iv in invs:
+            events.append({"type": iv.get("doc_type") or "invoice", "at": iv.get("created_at"),
+                           "title": iv.get("invoice_number"), "detail": iv.get("status"), "amount_cents": iv.get("total_cents")})
+    except Exception:
+        pass
+    try:
+        from vula.chat.history import get_db
+        msgs = get_db().get(tenant_id, phone=digits, limit=20)
+        for m in msgs:
+            events.append({"type": "message", "at": getattr(m, "created_at", None),
+                           "title": ("You" if m.role == "assistant" else "Customer"),
+                           "detail": (m.text or "")[:160]})
+    except Exception:
+        pass
+    events.sort(key=lambda e: e.get("at") or "", reverse=True)
+    return {"phone": phone, "events": events[:80]}
+
+
 # ── Delivery list ─────────────────────────────────────────────────────────────
 
 @router.get("/{tenant_id}/admin/delivery-list")
