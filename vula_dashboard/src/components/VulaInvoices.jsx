@@ -252,6 +252,25 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   const [validUntil, setValidUntil] = useState('')
   const [vatRate, setVatRate] = useState(15)
   const [saving, setSaving] = useState(false)
+  const [savedClients, setSavedClients] = useState([])
+
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-clients`)
+      .then(r => r.json()).then(d => setSavedClients(d.clients || [])).catch(() => {})
+  }, [tenantId])
+
+  function pickClient(id) {
+    const c = savedClients.find(x => x.id === id)
+    if (c) setCustomer({ name: c.name || '', phone: c.phone || '', email: c.email || '', address: c.address || '' })
+  }
+  async function saveClient() {
+    if (!customer.name) return
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-clients`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'client', ...customer }),
+    }).then(r => r.json())
+    if (d.client) setSavedClients([d.client, ...savedClients.filter(c => c.id !== d.client.id)])
+  }
 
   function updateItem(i, field, val) {
     setItems(items.map((it, idx) => idx === i ? { ...it, [field]: val } : it))
@@ -300,11 +319,18 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       </div>
 
       <div style={s.formSection}>
+        {savedClients.length > 0 && (
+          <select onChange={e => pickClient(e.target.value)} defaultValue="" style={{ ...s.fInput, color: 'var(--muted, #8A8680)' }}>
+            <option value="">📇 Pick a saved client…</option>
+            {savedClients.map(c => <option key={c.id} value={c.id} style={{ color: '#2A2A2A' }}>{c.name}{c.phone ? ` · ${c.phone}` : ''}</option>)}
+          </select>
+        )}
         <input placeholder="Customer name" value={customer.name} onChange={e => setCustomer({ ...customer, name: e.target.value })} style={s.fInput} />
         <div style={s.fRow}>
           <input placeholder="Phone" value={customer.phone} onChange={e => setCustomer({ ...customer, phone: e.target.value })} style={s.fInput} />
           <input placeholder="Email (optional)" value={customer.email} onChange={e => setCustomer({ ...customer, email: e.target.value })} style={s.fInput} />
         </div>
+        {customer.name && <button type="button" onClick={saveClient} style={{ alignSelf: 'flex-start', padding: '5px 12px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' }}>💾 Save as client</button>}
       </div>
 
       <p style={s.sectionLabel}>Line items</p>
