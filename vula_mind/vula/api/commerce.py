@@ -111,7 +111,8 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
         )
     yoco_secret = yoco_creds["secret_key"]
 
-    store_url = settings.store_urls.get(tenant_id, "https://offthehook.co.za")
+    from vula.api import tenants as _tenants
+    store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
@@ -700,7 +701,8 @@ async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
     if inv.get("status") == "paid":
         return {"already_paid": True, "pay_url": inv.get("pay_url")}
     from vula import payments
-    store_url = settings.store_urls.get(tenant_id, "https://offthehook.co.za")
+    from vula.api import tenants as _tenants
+    store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
     api_base = "https://vula-group-production.up.railway.app"
     row = payments.default_provider_row(tenant_id)
     provider = row["provider"] if row else "yoco"

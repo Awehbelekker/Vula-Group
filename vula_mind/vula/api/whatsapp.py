@@ -66,10 +66,35 @@ _NUMBER_ROUTING: dict[str, tuple[str, str]] = {
 }
 
 
+_ROUTE_CACHE: dict[str, tuple[float, tuple[str, str]]] = {}
+_ROUTE_TTL = 120.0
+
+
 def _resolve_number_route(phone_number_id: str) -> tuple[str | None, str | None]:
-    """Resolve (tenant_id, mode) for the number a message came in on."""
+    """Resolve (tenant_id, mode) for the number a message came in on.
+
+    Static map first (hot path for known numbers), then DB (vula_whatsapp_accounts)
+    so a NEW tenant's number routes with no code change — cached to keep it off the
+    per-message hot path."""
     route = _NUMBER_ROUTING.get(phone_number_id)
-    return route if route else (None, None)
+    if route:
+        return route
+    import time as _t
+    hit = _ROUTE_CACHE.get(phone_number_id)
+    if hit and (_t.time() - hit[0]) < _ROUTE_TTL:
+        return hit[1]
+    try:
+        from vula.commerce import service as cs
+        rows = (cs._client().table("vula_whatsapp_accounts")
+                .select("tenant_id,route_mode").eq("phone_number_id", phone_number_id)
+                .limit(1).execute().data or [])
+        if rows:
+            resolved = (rows[0]["tenant_id"], rows[0].get("route_mode") or "commerce")
+            _ROUTE_CACHE[phone_number_id] = (_t.time(), resolved)
+            return resolved
+    except Exception as exc:
+        logger.debug("number route DB lookup skipped: %s", exc)
+    return (None, None)
 
 # Commerce order keywords — triggers seafood ordering flow
 _ORDER_RE = re.compile(

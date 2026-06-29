@@ -36,6 +36,31 @@ _TENANT_TEAM: dict[str, list[tuple[str, str, str]]] = {
     ],
 }
 
+
+def _tenant_team(tenant_id: str) -> list[tuple[str, str, str]]:
+    """Who gets order alerts — DB-driven (vula_team_members) so a new tenant's team
+    needs no code change; falls back to the static map. Owners/managers/operations
+    and anyone who opted into an order notify event."""
+    try:
+        from vula.commerce import service as cs
+        rows = (cs._client().table("vula_team_members")
+                .select("name,whatsapp,role,notify,active")
+                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+        team = []
+        for r in rows:
+            phone = (r.get("whatsapp") or "").strip()
+            if not phone:
+                continue
+            notify = r.get("notify") or []
+            if r.get("role") in ("owner", "manager", "operations") or \
+               any(n in notify for n in ("order_paid", "new_order", "orders")):
+                team.append((r.get("name") or "", phone, r.get("role") or "staff"))
+        if team:
+            return team
+    except Exception as exc:
+        log.debug("team DB lookup skipped: %s", exc)
+    return _TENANT_TEAM.get(tenant_id, [])
+
 # Per-tenant WhatsApp Business phone number IDs (Meta phone number ID)
 _TENANT_PHONE_IDS: dict[str, str] = {
     "off-the-hook": "1124076000792176",  # +27 67 363 6081 (system-user WABA)
@@ -83,7 +108,8 @@ async def _notify_order_paid(
 
         # Customer confirmation
         if customer_phone:
-            store_url = settings.store_urls.get(tenant_id, "offthehook.co.za")
+            from vula.api import tenants as _tenants
+            store_url = _tenants.store_url(tenant_id) or "offthehook.co.za"
             await _send(
                 customer_phone,
                 f"Hi {customer_name or 'there'}! Your Off the Hook order *{display_id}* "
@@ -93,7 +119,7 @@ async def _notify_order_paid(
             )
 
         # Team alerts
-        for name, phone, role in _TENANT_TEAM.get(tenant_id, []):
+        for name, phone, role in _tenant_team(tenant_id):
             try:
                 order = await commerce.get_order(order_id)
                 items = order.get("commerce_order_items") or []

@@ -318,6 +318,22 @@ def _slugify(text: str) -> str:
     return slug.strip("-")[:40]
 
 
+def _map_business_type(industry: str | None) -> str:
+    """Map free-text industry → a control-plane business_type (drives default modules)."""
+    s = (industry or "").lower()
+    if any(k in s for k in ("food", "restaurant", "takeaway", "cafe", "catering", "seafood", "butcher", "bakery")):
+        return "food"
+    if any(k in s for k in ("retail", "shop", "store", "ecommerce", "e-commerce", "boutique", "fashion", "goods", "apparel")):
+        return "retail"
+    if any(k in s for k in ("architect", "consult", "agency", "legal", "account", "design", "professional", "studio", "marketing")):
+        return "services"
+    if any(k in s for k in ("construct", "build", "trade", "plumb", "electric", "contractor", "engineering", "renovat")):
+        return "trades"
+    if any(k in s for k in ("health", "wellness", "clinic", "salon", "spa", "fitness", "beauty", "medical", "dental")):
+        return "health"
+    return "other"
+
+
 async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
     tenant_id = str(uuid.uuid4())
     temp_password = secrets.token_urlsafe(12)
@@ -371,6 +387,21 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
             logger.info("Tenant synced to Supabase: %s", tenant_id)
         except Exception as exc:
             logger.warning("Supabase sync failed (non-fatal): %s", exc)
+
+        # Seed the control-plane config keyed by the operational slug — industry-aware
+        # module enablement so the new tenant immediately sees the right features.
+        try:
+            from vula.api.tenants import BUSINESS_TYPES
+            bt = _map_business_type(req.industry)
+            preset = BUSINESS_TYPES.get(bt, BUSINESS_TYPES["other"])
+            await _supabase.insert("vula_tenant_config", {
+                "tenant_id": slug, "display_name": req.company_name,
+                "business_type": bt, "modules": preset["modules"],
+                "plan": req.plan, "status": "active",
+            })
+            logger.info("Tenant config seeded: %s (business_type=%s)", slug, bt)
+        except Exception as exc:
+            logger.warning("Tenant config seed failed (non-fatal): %s", exc)
 
     return record, temp_password
 

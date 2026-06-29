@@ -87,6 +87,7 @@ from vula.api.documents import router as documents_router
 from vula.api.projects import router as projects_router
 from vula.api.team import router as team_router
 from vula.api.payments import router as payments_router
+from vula.api.tenants import router as tenants_router
 from vula.api.qs import router as qs_router
 from vula.api.google import router as google_router
 from vula.api.microsoft import router as microsoft_router
@@ -774,6 +775,7 @@ app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(projects_router, prefix="/v1/projects")
 app.include_router(team_router, prefix="/v1/team")
 app.include_router(payments_router, prefix="/v1/payments")
+app.include_router(tenants_router, prefix="/v1/tenants")
 app.include_router(qs_router, prefix="/v1/qs")
 app.include_router(google_router, prefix="/v1/google")
 app.include_router(microsoft_router, prefix="/v1/microsoft")

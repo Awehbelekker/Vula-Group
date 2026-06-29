@@ -19,6 +19,7 @@ import VulaProjectWorkspace from "./components/VulaProjectWorkspace";
 import VulaQuickLauncher from "./components/VulaQuickLauncher";
 import VulaReports from "./components/VulaReports";
 import VulaPayments from "./components/VulaPayments";
+import VulaTenants from "./components/VulaTenants";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -64,6 +65,7 @@ const TABS = [
   { id: "commerce", label: "Commerce", component: VulaCommerce },
   { id: "reports", label: "Reports", component: VulaReports },
   { id: "payments", label: "Payments", component: VulaPayments },
+  { id: "tenants", label: "Tenants", component: VulaTenants },
   { id: "merchant", label: "Merchant", component: VulaMerchantAdmin },
   { id: "invoices", label: "Invoices", component: VulaInvoices },
   { id: "budget", label: "Budget", component: VulaBudget },

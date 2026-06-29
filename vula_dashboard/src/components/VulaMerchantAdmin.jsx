@@ -69,11 +69,21 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
   // If the current tab isn't visible to this member, fall back to a safe default.
   useEffect(() => { if (!canSee(tab)) setTab('overview') }, [access, full])  // eslint-disable-line
   const [products, setProducts] = useState([])
+  const [modules, setModules] = useState(null)   // tenant's enabled capability keys (control plane)
 
-  // Load products once — shared by scanner + invoices
+  // Tenant-level module gating (business-type driven). Always show core tabs; map a few
+  // tab ids to their module key. null/empty modules = show everything (no config yet).
+  const CORE = new Set(['overview', 'assistant', 'settings', 'suppliers', 'qsrates'])
+  const MODMAP = { customers: 'crm', contacts: 'crm', broadcast: 'broadcasts' }
+  const tenantHas = (id) => modules === null || !modules.length || CORE.has(id)
+    || (modules || []).includes(MODMAP[id] || id)
+
+  // Load products + tenant modules
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`)
       .then(r => r.json()).then(d => setProducts(d.products || [])).catch(() => {})
+    fetch(`${VULA_API}/v1/tenants/${tenantId}`)
+      .then(r => r.json()).then(d => setModules(d.modules || [])).catch(() => setModules([]))
   }, [tenantId])
 
   // Inner content shared by modal + full-page modes.
@@ -101,7 +111,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
             ]
             const items = []
             GROUPS.forEach((g) => {
-              const visible = g.filter(t => canSee(t.id))
+              const visible = g.filter(t => canSee(t.id) && tenantHas(t.id))
               if (!visible.length) return
               if (items.length) items.push({ divider: true, key: `d${items.length}` })
               visible.forEach(t => items.push(t))
