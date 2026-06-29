@@ -130,6 +130,14 @@ export default function VulaInvoices({ tenantId, products = [] }) {
     window.open(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`, '_blank')
   }
 
+  async function creditNote(inv) {
+    if (!confirm(`Create a credit note for ${inv.invoice_number} (${fmt(inv.total_cents)})?`)) return
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/credit-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(r => r.json()).catch(() => ({}))
+    if (d.credit_note) { alert(`Credit note ${d.credit_note.invoice_number} created.`); load() }
+    else alert(d.detail || 'Could not create credit note.')
+  }
+
   async function payLink(inv) {
     const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pay-link`, { method: 'POST' })
       .then(r => r.json()).catch(() => ({}))
@@ -193,13 +201,14 @@ export default function VulaInvoices({ tenantId, products = [] }) {
       <div style={s.tabs}>
         <button onClick={() => setDocType('invoice')} style={{...s.tab, ...(docType === 'invoice' ? s.tabActive : {})}}>Invoices</button>
         <button onClick={() => setDocType('quote')} style={{...s.tab, ...(docType === 'quote' ? s.tabActive : {})}}>Quotes</button>
+        <button onClick={() => setDocType('credit_note')} style={{...s.tab, ...(docType === 'credit_note' ? s.tabActive : {})}}>Credit Notes</button>
       </div>
 
       <div style={s.topBar}>
         <p style={s.count}>{invoices.length} {docType}{invoices.length !== 1 ? 's' : ''}</p>
         <button onClick={() => setShowRecurring(true)} style={s.brandBtn}>🔁 Recurring</button>
         <button onClick={() => setShowSettings(true)} style={s.brandBtn}>⚙ Branding</button>
-        <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>
+        {docType !== 'credit_note' && <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>}
       </div>
 
       {loading ? <p style={s.muted}>Loading…</p> : invoices.length === 0 ? (
@@ -228,6 +237,7 @@ export default function VulaInvoices({ tenantId, products = [] }) {
                   <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
                   {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
                   {inv.doc_type === 'invoice' && inv.status !== 'paid' && <button onClick={() => payLink(inv)} style={s.actPaid}>💳 Pay link</button>}
+                  {inv.doc_type === 'invoice' && <button onClick={() => creditNote(inv)} style={s.actMatch}>↩️ Credit note</button>}
                   {inv.doc_type === 'invoice' && (
                     <button
                       onClick={() => matchSupplier(inv)}

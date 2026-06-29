@@ -470,7 +470,7 @@ def format_history(messages: List[dict]) -> str:
 # One table (commerce_invoices) serves invoices, quotes, and proformas via
 # doc_type. All money is integer cents (ZAR). Every query is tenant-scoped.
 
-_DOC_TYPE_CODE = {"invoice": "INV", "quote": "QTE", "proforma": "PRO"}
+_DOC_TYPE_CODE = {"invoice": "INV", "quote": "QTE", "proforma": "PRO", "credit_note": "CRN"}
 
 
 def _compute_totals(line_items: List[dict], vat_rate: float,
@@ -1028,3 +1028,33 @@ async def process_due_recurring() -> int:
         except Exception:
             continue
     return n
+
+
+# ── Credit notes ──────────────────────────────────────────────────────────────
+
+async def create_credit_note(tenant_id: str, invoice_id: str, line_items: Optional[List[dict]] = None) -> dict:
+    """Create a credit note against an invoice (reuses the invoice engine).
+    Defaults to crediting the full invoice; pass line_items for a partial credit."""
+    src = await get_invoice(tenant_id, invoice_id)
+    if not src:
+        raise ValueError("Invoice not found")
+    items = line_items or src.get("line_items") or []
+    if isinstance(items, str):
+        import json as _json
+        try: items = _json.loads(items)
+        except Exception: items = []
+    cn = await create_invoice(tenant_id, {
+        "doc_type": "credit_note",
+        "customer_name": src.get("customer_name"), "customer_email": src.get("customer_email"),
+        "customer_phone": src.get("customer_phone"), "customer_address": src.get("customer_address"),
+        "line_items": items, "vat_rate": float(src.get("vat_rate") or 15),
+        "status": "sent", "issue_date": _now()[:10],
+        "notes": f"Credit note against invoice {src.get('invoice_number')}",
+    })
+    try:
+        _client().table("commerce_invoices").update({"credited_invoice_id": invoice_id}) \
+            .eq("id", cn["id"]).eq("tenant_id", tenant_id).execute()
+        cn["credited_invoice_id"] = invoice_id
+    except Exception:
+        pass
+    return cn

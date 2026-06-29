@@ -681,6 +681,16 @@ async def cron_recurring_invoices():
     return {"generated": await service.process_due_recurring()}
 
 
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/credit-note")
+async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict = None):
+    """Create a credit note against an invoice (full, or partial via body.line_items)."""
+    try:
+        cn = await service.create_credit_note(tenant_id, invoice_id, (body or {}).get("line_items"))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"credit_note": cn}
+
+
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")
 async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
     """Create a Yoco 'Pay now' checkout for an invoice; store + return the link."""

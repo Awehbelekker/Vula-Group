@@ -284,6 +284,7 @@ _DOC_LABELS = {
     "invoice": "Tax Invoice",
     "quote": "Quotation",
     "proforma": "Pro Forma Invoice",
+    "credit_note": "Credit Note",
 }
 
 
