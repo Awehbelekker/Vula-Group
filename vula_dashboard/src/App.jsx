@@ -21,6 +21,7 @@ import VulaReports from "./components/VulaReports";
 import VulaPayments from "./components/VulaPayments";
 import VulaTenants from "./components/VulaTenants";
 import VulaSubscriptions from "./components/VulaSubscriptions";
+import VulaAISpend from "./components/VulaAISpend";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
 import VulaCommerce from "./components/VulaCommerce";
@@ -59,6 +60,7 @@ const TABS = [
   { id: "team", label: "Team", component: VulaTeam },
   { id: "docs", label: "Documents", component: VulaDocuments },
   { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
+  { id: "aispend", label: "AI Spend", component: VulaAISpend },
   { id: "training", label: "Training KB", component: VulaTraining },
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },

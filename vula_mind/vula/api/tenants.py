@@ -149,6 +149,43 @@ async def registry() -> dict:
     }
 
 
+@router.get("/ai-spend")
+async def ai_spend(days: int = 14) -> dict:
+    """AI/LLM spend (COGS) across all tenants — from vula_ai_usage. Master view."""
+    from datetime import datetime, timezone, timedelta
+    since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+    try:
+        rows = (_client().table("vula_ai_usage")
+                .select("tenant_id,day,model,calls,prompt_tokens,completion_tokens,est_cost_usd")
+                .gte("day", since).execute().data or [])
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 031?)", "total_usd": 0,
+                "by_tenant": [], "by_model": [], "daily": []}
+
+    def _agg(key):
+        d: dict = {}
+        for r in rows:
+            k = r.get(key) or "?"
+            e = d.setdefault(k, {"key": k, "usd": 0.0, "calls": 0, "tokens": 0})
+            e["usd"] += float(r.get("est_cost_usd") or 0)
+            e["calls"] += int(r.get("calls") or 0)
+            e["tokens"] += int(r.get("prompt_tokens") or 0) + int(r.get("completion_tokens") or 0)
+        return [{**v, "usd": round(v["usd"], 4)} for v in sorted(d.values(), key=lambda x: -x["usd"])]
+
+    daily: dict = {}
+    for r in rows:
+        e = daily.setdefault(r.get("day"), {"day": r.get("day"), "usd": 0.0})
+        e["usd"] += float(r.get("est_cost_usd") or 0)
+    return {
+        "days": days,
+        "total_usd": round(sum(float(r.get("est_cost_usd") or 0) for r in rows), 4),
+        "total_calls": sum(int(r.get("calls") or 0) for r in rows),
+        "by_tenant": _agg("tenant_id"),
+        "by_model": _agg("model"),
+        "daily": [{"day": v["day"], "usd": round(v["usd"], 4)} for v in sorted(daily.values(), key=lambda x: x["day"])],
+    }
+
+
 @router.get("/{tenant_id}")
 async def get_tenant(tenant_id: str) -> dict:
     cfg = get_config(tenant_id, fresh=True)
