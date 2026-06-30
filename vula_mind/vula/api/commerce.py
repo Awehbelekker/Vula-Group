@@ -54,6 +54,91 @@ async def get_product(tenant_id: str, slug: str):
     return product
 
 
+# ── CMS pages (Puck self-serve page builder, P3) ─────────────────────────────
+# Public: published pages only. Admin: read-all / upsert / delete. All tenant-scoped.
+
+class PageIn(BaseModel):
+    title: Optional[str] = None
+    puck_data: dict = {}
+    seo: Optional[dict] = None
+    status: str = "draft"          # draft | published
+
+
+@router.get("/{tenant_id}/pages")
+async def list_pages(tenant_id: str):
+    """Published pages (public) — slugs + titles for nav, not full bodies."""
+    try:
+        rows = (service._client().table("vula_pages")
+                .select("slug,title,seo,status,updated_at")
+                .eq("tenant_id", tenant_id).eq("status", "published")
+                .order("updated_at", desc=True).execute().data or [])
+    except Exception as exc:
+        log.debug("pages list skipped (run migration 041?): %s", exc)
+        rows = []
+    return {"tenant_id": tenant_id, "pages": rows}
+
+
+@router.get("/{tenant_id}/pages/{slug}")
+async def get_page(tenant_id: str, slug: str):
+    """A single published page with its Puck document (public render)."""
+    try:
+        rows = (service._client().table("vula_pages").select("*")
+                .eq("tenant_id", tenant_id).eq("slug", slug)
+                .eq("status", "published").limit(1).execute().data or [])
+    except Exception as exc:
+        log.debug("page get skipped (run migration 041?): %s", exc)
+        rows = []
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Page '{slug}' not found")
+    return rows[0]
+
+
+@router.get("/{tenant_id}/admin/pages")
+async def admin_list_pages(tenant_id: str):
+    """All pages (draft + published) for the store editor."""
+    try:
+        rows = (service._client().table("vula_pages")
+                .select("id,slug,title,status,updated_at")
+                .eq("tenant_id", tenant_id).order("updated_at", desc=True).execute().data or [])
+    except Exception as exc:
+        return {"tenant_id": tenant_id, "pages": [], "error": f"{exc} (run migration 041?)"}
+    return {"tenant_id": tenant_id, "pages": rows}
+
+
+@router.get("/{tenant_id}/admin/pages/{slug}")
+async def admin_get_page(tenant_id: str, slug: str):
+    rows = (service._client().table("vula_pages").select("*")
+            .eq("tenant_id", tenant_id).eq("slug", slug).limit(1).execute().data or [])
+    return rows[0] if rows else {"tenant_id": tenant_id, "slug": slug, "puck_data": {}, "status": "draft"}
+
+
+@router.put("/{tenant_id}/admin/pages/{slug}")
+async def upsert_page(tenant_id: str, slug: str, body: PageIn):
+    """Create or update a page (store editor / Puck save)."""
+    row = {"tenant_id": tenant_id, "slug": slug, "title": body.title,
+           "puck_data": body.puck_data or {}, "seo": body.seo or {},
+           "status": body.status or "draft", "updated_at": service._now()}
+    db = service._client()
+    try:
+        existing = (db.table("vula_pages").select("id")
+                    .eq("tenant_id", tenant_id).eq("slug", slug).limit(1).execute().data or [])
+        if existing:
+            db.table("vula_pages").update(row).eq("id", existing[0]["id"]).execute()
+            row["id"] = existing[0]["id"]
+        else:
+            db.table("vula_pages").insert(row).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"{exc} (run migration 041?)")
+    return {"page": row}
+
+
+@router.delete("/{tenant_id}/admin/pages/{slug}")
+async def delete_page(tenant_id: str, slug: str):
+    service._client().table("vula_pages").delete() \
+        .eq("tenant_id", tenant_id).eq("slug", slug).execute()
+    return {"removed": slug}
+
+
 # ── Cart ─────────────────────────────────────────────────────────────────────
 
 @router.get("/{tenant_id}/cart/{session_id}")
