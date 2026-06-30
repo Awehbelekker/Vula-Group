@@ -1778,59 +1778,68 @@ async def _handle_commerce_interactive(
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     """Send the Off the Hook welcome message with interactive category list."""
-    if not settings.whatsapp_token:
+    # Use the tenant's LIVE WhatsApp creds (phone_id + token) — same source as _send_reply —
+    # not a hardcoded (retired) number. Falls back to env. Failures fall back to a text menu.
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds and settings.whatsapp_token and settings.whatsapp_phone_id:
+        creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+    if not creds:
+        logger.info("Commerce welcome: no WhatsApp creds for %s", tenant_id)
         return
 
-    # Per-tenant phone number IDs — Off the Hook uses its own dedicated number
-    _TENANT_PHONE_IDS: dict[str, str] = {
-        "off-the-hook": "1124076000792176",  # +27 67 363 6081 (system-user WABA)
-    }
-    phone_number_id = _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_number_id
-    if not phone_number_id:
-        await _send_reply(phone, (
-            "Welcome to Off the Hook! 🐟\n\n"
-            "Cape Town's freshest daily catch, door to door.\n\n"
-            "What are you looking for?\n"
-            "1. Linefish (yellowtail, snoek, kob)\n"
-            "2. Shellfish & prawns\n"
-            "3. Crayfish\n"
-            "4. Box deals\n"
-            "5. Smoked fish\n\n"
-            "Reply with a number or product name, or visit offthehook.co.za"
-        ))
-        return
+    number = phone.lstrip("+").replace(" ", "").replace("-", "")
+    if number.startswith("0"):
+        number = "27" + number[1:]
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await client.post(
-            f"https://graph.facebook.com/v19.0/{phone_number_id}/messages",
-            headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
-            json={
-                "messaging_product": "whatsapp",
-                "to": phone,
-                "type": "interactive",
-                "interactive": {
-                    "type": "list",
-                    "header": {"type": "text", "text": "Off the Hook 🐟"},
-                    "body": {"text": "Cape Town's freshest catch, door to door.\n\nWhat are you after today?"},
-                    "footer": {"text": "Free delivery on orders over R500"},
-                    "action": {
-                        "button": "View menu",
-                        "sections": [
-                            {
-                                "title": "Today's catch",
-                                "rows": [
-                                    {"id": "cat_linefish", "title": "Linefish", "description": "Yellowtail, snoek, kob, red roman"},
-                                    {"id": "cat_shellfish", "title": "Shellfish & prawns", "description": "Tiger prawns, mussels, calamari"},
-                                    {"id": "cat_crayfish", "title": "Crayfish", "description": "West Coast rock lobster"},
-                                    {"id": "cat_box_deal", "title": "Box deals", "description": "Braai box, weekly catch box"},
-                                    {"id": "cat_smoked", "title": "Smoked fish", "description": "Hot-smoked yellowtail, snoek pâté"},
-                                ],
-                            }
-                        ],
+    _text_menu = (
+        "Welcome to Off the Hook! 🐟\n\n"
+        "Cape Town's freshest daily catch, door to door.\n\n"
+        "What are you looking for?\n"
+        "1. Linefish (yellowtail, snoek, kob)\n"
+        "2. Shellfish & prawns\n"
+        "3. Crayfish\n"
+        "4. Box deals\n"
+        "5. Smoked fish\n\n"
+        "Reply with a number or product name, or visit offthehook.co.za"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": number,
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "list",
+                        "header": {"type": "text", "text": "Off the Hook 🐟"},
+                        "body": {"text": "Cape Town's freshest catch, door to door.\n\nWhat are you after today?"},
+                        "footer": {"text": "Free delivery on orders over R500"},
+                        "action": {
+                            "button": "View menu",
+                            "sections": [
+                                {
+                                    "title": "Today's catch",
+                                    "rows": [
+                                        {"id": "cat_linefish", "title": "Linefish", "description": "Yellowtail, snoek, kob, red roman"},
+                                        {"id": "cat_shellfish", "title": "Shellfish & prawns", "description": "Tiger prawns, mussels, calamari"},
+                                        {"id": "cat_crayfish", "title": "Crayfish", "description": "West Coast rock lobster"},
+                                        {"id": "cat_box_deal", "title": "Box deals", "description": "Braai box, weekly catch box"},
+                                        {"id": "cat_smoked", "title": "Smoked fish", "description": "Hot-smoked yellowtail, snoek pâté"},
+                                    ],
+                                }
+                            ],
+                        },
                     },
                 },
-            },
-        )
+            )
+            resp.raise_for_status()
+            logger.info("Commerce welcome (list) sent to %s", phone)
+    except Exception as exc:
+        logger.error("Commerce welcome failed to %s: %s — falling back to text menu", phone, exc)
+        await _send_reply(phone, _text_menu, tenant_id=tenant_id)
 
 
 async def _forward_to_n8n_commerce(

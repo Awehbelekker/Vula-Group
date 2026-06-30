@@ -76,15 +76,27 @@ async def _notify_order_paid(
     amount_cents: int,
 ) -> None:
     """Send WhatsApp order confirmation to customer and alert the team."""
-    if not settings.whatsapp_token:
+    # Resolve the tenant's LIVE WhatsApp creds (phone_id + token), not a hardcoded
+    # (retired) number. Falls back to env/global.
+    creds = None
+    try:
+        from vula.api.whatsapp import _get_tenant_wa_creds
+        creds = await _get_tenant_wa_creds(tenant_id)
+    except Exception:
+        creds = None
+    if not creds and settings.whatsapp_token and (settings.whatsapp_phone_id or _TENANT_PHONE_IDS.get(tenant_id)):
+        creds = {"token": settings.whatsapp_token,
+                 "phone_id": _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_id}
+    if not creds:
+        log.info("Order notify: no WhatsApp creds for %s", tenant_id)
         return
 
-    phone_id = _TENANT_PHONE_IDS.get(tenant_id) or settings.whatsapp_phone_id
+    phone_id = creds["phone_id"]
     amount = f"R{amount_cents / 100:.2f}"
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         headers = {
-            "Authorization": f"Bearer {settings.whatsapp_token}",
+            "Authorization": f"Bearer {creds['token']}",
             "Content-Type": "application/json",
         }
 
