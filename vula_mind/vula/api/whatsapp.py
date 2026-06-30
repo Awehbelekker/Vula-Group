@@ -1772,11 +1772,16 @@ async def _handle_commerce_interactive(
     phone: str, reply_id: str, reply_title: str, msg_id: str, tenant_id: str
 ) -> None:
     """Handle interactive list/button replies from the WhatsApp product catalog."""
-    # A category tap → ask the commerce assistant to list that category's products
-    # (works with the existing tool-calling skill — no n8n needed).
+    # Category tap → show that category's products (with prices) as a sub-menu.
     if reply_id.startswith("cat_"):
-        label = reply_title or reply_id[4:].replace("_", " ")
-        await _handle_commerce_message(phone, f"Show me your {label}", msg_id, tenant_id)
+        category = reply_id[4:]
+        sent = await _send_category_products(phone, tenant_id, category)
+        if not sent:  # no creds → let the assistant list it as text
+            await _handle_commerce_message(phone, f"Show me your {reply_title or category.replace('_', ' ')}", msg_id, tenant_id)
+        return
+    # Product tap → hand to the commerce assistant to add it / take the order.
+    if reply_id.startswith("prod_"):
+        await _handle_commerce_message(phone, f"I'd like to order {reply_title}", msg_id, tenant_id)
         return
     await _forward_to_n8n_commerce(phone, reply_id, msg_id, tenant_id, reply_title=reply_title)
 
@@ -1789,6 +1794,76 @@ _CATEGORY_LABELS = {
     "box_deal": "Box Deals", "smoked": "Smoked Fish", "frozen": "Frozen", "extras": "Extras",
     "general": "Our Products",
 }
+
+
+def _fmt_price(cents) -> str:
+    try:
+        return f"R{int(cents) / 100:.2f}"
+    except Exception:
+        return ""
+
+
+def _product_desc(p: dict) -> str:
+    parts = [_fmt_price(p.get("price_cents") or 0)]
+    if p.get("weight_grams"):
+        parts.append(f"{int(p['weight_grams'])}g")
+    elif p.get("serves"):
+        parts.append(f"serves {p['serves']}")
+    return " · ".join(x for x in parts if x)[:72]
+
+
+async def _send_wa_list(creds: dict, number: str, header: str, body: str,
+                        footer: str, button: str, sections: list) -> bool:
+    """Send an interactive WhatsApp list (≤10 rows total across sections)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
+                      "interactive": {"type": "list",
+                                      "header": {"type": "text", "text": header[:60]},
+                                      "body": {"text": body[:1024]},
+                                      "footer": {"text": footer[:60]},
+                                      "action": {"button": button[:20], "sections": sections}}},
+            )
+            resp.raise_for_status()
+            return True
+    except Exception as exc:
+        logger.error("WA list send failed to %s: %s", number, exc)
+        return False
+
+
+async def _resolve_wa(tenant_id: str) -> Optional[dict]:
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds and settings.whatsapp_token and settings.whatsapp_phone_id:
+        creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+    return creds
+
+
+def _wa_number(phone: str) -> str:
+    n = phone.lstrip("+").replace(" ", "").replace("-", "")
+    return "27" + n[1:] if n.startswith("0") else n
+
+
+async def _send_category_products(phone: str, tenant_id: str, category: str) -> bool:
+    """Send a sub-menu of in-stock products (with prices) for one category."""
+    creds = await _resolve_wa(tenant_id)
+    if not creds:
+        return False
+    try:
+        from vula.commerce import service as _cs
+        prods = await _cs.list_products(tenant_id, category=category, in_stock_only=True)
+    except Exception:
+        prods = []
+    rows = [{"id": f"prod_{p.get('id')}", "title": (p.get("name") or "Item")[:24],
+             "description": _product_desc(p)} for p in prods[:10]]
+    if not rows:
+        await _send_reply(phone, "Nothing in stock there right now — type what you're after and I'll help. 🐟", tenant_id=tenant_id)
+        return True
+    label = (_CATEGORY_LABELS.get(category) or category.replace("_", " ").title())
+    return await _send_wa_list(creds, _wa_number(phone), label, "Tap an item to order, or type a question.",
+                               "Off the Hook 🐟", "Choose item", [{"title": label[:24], "rows": rows}])
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
@@ -1806,56 +1881,56 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     if number.startswith("0"):
         number = "27" + number[1:]
 
-    # Build the menu from the tenant's LIVE in-stock catalog (WhatsApp lists allow ≤10 rows).
-    rows = []
+    # Build the menu from the tenant's LIVE in-stock catalog.
     try:
         from vula.commerce import service as _cs
         prods = await _cs.list_products(tenant_id, in_stock_only=True)
-        counts: dict[str, int] = {}
-        for p in prods:
-            counts[p.get("category") or "general"] = counts.get(p.get("category") or "general", 0) + 1
-        for key, n in list(counts.items())[:10]:
-            label = (_CATEGORY_LABELS.get(key) or key.replace("_", " ").title())[:24]
-            rows.append({"id": f"cat_{key}", "title": label,
-                         "description": (f"{n} item{'s' if n != 1 else ''} available")[:72]})
     except Exception as exc:
-        logger.debug("welcome categories fetch failed: %s", exc)
+        logger.debug("welcome catalog fetch failed: %s", exc)
+        prods = []
 
-    _text_lines = "\n".join(f"{i+1}. {r['title']}" for i, r in enumerate(rows)) or \
-        "1. Linefish\n2. Shellfish & prawns\n3. Crayfish\n4. Box deals\n5. Smoked fish"
+    # ⭐ Today's specials — featured / daily-catch items, with prices
+    specials = [p for p in prods if p.get("is_daily_catch") or p.get("is_featured")][:4]
+    spec_rows = [{"id": f"prod_{p.get('id')}", "title": (p.get("name") or "Item")[:24],
+                  "description": _product_desc(p)} for p in specials]
+
+    # Categories — fill the remaining row budget (WhatsApp lists allow ≤10 rows total)
+    counts: dict[str, int] = {}
+    for p in prods:
+        counts[p.get("category") or "general"] = counts.get(p.get("category") or "general", 0) + 1
+    cat_rows = []
+    for key, n in list(counts.items())[:max(0, 10 - len(spec_rows))]:
+        label = (_CATEGORY_LABELS.get(key) or key.replace("_", " ").title())[:24]
+        cat_rows.append({"id": f"cat_{key}", "title": label,
+                         "description": (f"{n} item{'s' if n != 1 else ''}")[:72]})
+
+    sections = []
+    if spec_rows:
+        sections.append({"title": "Today's specials", "rows": spec_rows})
+    if cat_rows:
+        sections.append({"title": "Browse the catch", "rows": cat_rows})
+
+    _text_lines = "\n".join(f"• {r['title']}" for r in (cat_rows or spec_rows)) or \
+        "Fresh Fish, Frozen Seafood, Fresh Chicken, Frozen Chicken"
     _text_menu = (
         "Welcome to Off the Hook! 🐟\n\n"
         "Cape Town's freshest daily catch, door to door.\n\n"
         f"What are you looking for?\n{_text_lines}\n\n"
-        "Reply with a number or product name, or visit offthehook.co.za"
+        "Reply with a product name, or visit offthehook.co.za"
     )
 
-    if not rows:  # no catalog → text menu
+    if not sections:
         await _send_reply(phone, _text_menu, tenant_id=tenant_id)
         return
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
-                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": number,
-                    "type": "interactive",
-                    "interactive": {
-                        "type": "list",
-                        "header": {"type": "text", "text": "Off the Hook 🐟"},
-                        "body": {"text": "Cape Town's freshest catch, door to door.\n\nTap a category, or just tell me what you want."},
-                        "footer": {"text": "Free delivery on orders over R500"},
-                        "action": {"button": "View menu", "sections": [{"title": "Browse the catch", "rows": rows}]},
-                    },
-                },
-            )
-            resp.raise_for_status()
-            logger.info("Commerce welcome (list, %d categories) sent to %s", len(rows), phone)
-    except Exception as exc:
-        logger.error("Commerce welcome failed to %s: %s — falling back to text menu", phone, exc)
+    ok = await _send_wa_list(
+        creds, number, "Off the Hook 🐟",
+        "Cape Town's freshest catch, door to door.\n\nTap a special or category, or just tell me what you want.",
+        "Free delivery on orders over R500", "View menu", sections,
+    )
+    if ok:
+        logger.info("Commerce welcome sent to %s (%d specials, %d cats)", phone, len(spec_rows), len(cat_rows))
+    else:
         await _send_reply(phone, _text_menu, tenant_id=tenant_id)
 
 
