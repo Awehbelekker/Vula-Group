@@ -78,9 +78,13 @@ class AgentRunner:
 
         self._hrm.plan(graph, use_llm_scoring=use_llm_scoring)
 
-        # Cost cap: keep only the first N branches (1 branch = 1 LLM call)
-        if max_branches and len(graph.branches) > max_branches:
-            graph.branches = graph.branches[:max_branches]
+        # Cost cap: keep only the first N branches (1 branch = 1 LLM call). When the caller
+        # doesn't specify, fall back to MAX_AGENT_BRANCHES (default 1) so non-WhatsApp paths
+        # can't silently fan out to 2–3× the LLM cost.
+        import os
+        cap = max_branches or int(os.environ.get("MAX_AGENT_BRANCHES", "1") or 1)
+        if cap and len(graph.branches) > cap:
+            graph.branches = graph.branches[:cap]
 
         graph.status = GraphStatus.EXECUTING
 

@@ -103,9 +103,9 @@ def install_metering() -> None:
         class _VulaMeter(CustomLogger):
             async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
                 try:
-                    tid = _current_tenant.get()
-                    if not tid:
-                        return
+                    # Capture EVERYTHING — attribute to the request tenant when known,
+                    # else "_unattributed" so background/test spend is never invisible.
+                    tid = _current_tenant.get() or "_unattributed"
                     u = getattr(response_obj, "usage", None)
                     pt = getattr(u, "prompt_tokens", 0) or 0
                     ct = getattr(u, "completion_tokens", 0) or 0

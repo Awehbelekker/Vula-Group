@@ -76,6 +76,11 @@ async def resolve_generation_route(
     local_model = model or settings.model_worker
     cloud_model = settings.model_worker_cloud or settings.model_worker
 
+    # Dev/test mode — force the cheapest model so QA doesn't burn premium tokens.
+    import os
+    if os.environ.get("VULA_DEV_MODE", "").lower() in ("1", "true", "yes") and settings.openrouter_api_key:
+        return f"openrouter/{settings.model_worker_cheap}", settings.openrouter_api_key, OPENROUTER_BASE
+
     # Accuracy-first: force the smart cloud model regardless of local availability.
     if settings.prefer_cloud_llm and settings.openrouter_api_key:
         return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE

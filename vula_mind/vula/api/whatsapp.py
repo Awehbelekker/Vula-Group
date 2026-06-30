@@ -427,6 +427,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     except Exception as exc:
         logger.debug("project context skipped: %s", exc)
 
+    try:
+        from vula.integrations.metering import set_request_tenant
+        set_request_tenant(tenant_id)
+    except Exception:
+        pass
     reply = await _rag_reply(tenant_id, text, conversation_history=history)
 
     # ── Escalate-and-learn: if the agent isn't confident, reuse a learned answer,
@@ -1592,6 +1597,11 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     grounded with the tenant knowledge base and persisted multi-turn memory).
     n8n remains a last-resort fallback if the skill is unavailable.
     """
+    try:
+        from vula.integrations.metering import set_request_tenant
+        set_request_tenant(tenant_id)
+    except Exception:
+        pass
     text_lower = text.lower().strip()
 
     # Opt-out / data deletion (POPIA) — honoured on commerce lines too, so STOP
