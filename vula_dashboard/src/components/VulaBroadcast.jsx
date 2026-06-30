@@ -30,7 +30,8 @@ export default function VulaBroadcast({ tenantId }) {
   const [broadcasts, setBroadcasts] = useState([])
   const [loading, setLoading] = useState(true)
   const [template, setTemplate] = useState(TEMPLATES[0].id)
-  const [audience, setAudience] = useState('all')
+  const [audiences, setAudiences] = useState(['all'])
+  const toggleAud = (id) => setAudiences(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   const [details, setDetails] = useState('')    // raw details Stacy types for the AI
   const [bodyText, setBodyText] = useState('')   // the actual message that gets sent
   const [drafting, setDrafting] = useState(false)
@@ -113,7 +114,7 @@ export default function VulaBroadcast({ tenantId }) {
   }
   async function deleteSegment(id) {
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/segments/${id}`, { method: 'DELETE' })
-    if (audience === `seg:${id}`) setAudience('all')
+    setAudiences(prev => prev.filter(x => x !== `seg:${id}`))
     loadSegments()
   }
 
@@ -127,7 +128,7 @@ export default function VulaBroadcast({ tenantId }) {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/campaigns`, {
         method: 'POST', headers: H,
         body: JSON.stringify({
-          name: tpl?.label, body: bodyText, audience_filter: audience,
+          name: tpl?.label, body: bodyText, audience_filter: (audiences.join(',') || 'all'),
           recurrence, run_at: new Date(scheduleAt).toISOString(),
         }),
       })
@@ -149,7 +150,7 @@ export default function VulaBroadcast({ tenantId }) {
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
         method: 'POST', headers: H,
-        body: JSON.stringify({ body: bodyText, audience_filter: audience, dry_run: true }),
+        body: JSON.stringify({ body: bodyText, audience_filter: (audiences.join(',') || 'all'), dry_run: true }),
       })
       const d = await r.json()
       if (r.ok) setPreview(d)
@@ -168,7 +169,7 @@ export default function VulaBroadcast({ tenantId }) {
       const tpl = TEMPLATES.find(t => t.id === template)
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
         method: 'POST', headers: H,
-        body: JSON.stringify({ body: bodyText, audience_filter: audience, name: tpl?.label, dry_run: false }),
+        body: JSON.stringify({ body: bodyText, audience_filter: (audiences.join(',') || 'all'), name: tpl?.label, dry_run: false }),
       })
       const d = await r.json()
       if (r.ok) { setSent(d); setPreview(null); setDetails(''); load() }
@@ -181,8 +182,9 @@ export default function VulaBroadcast({ tenantId }) {
   }
 
   const selectedTpl = TEMPLATES.find(t => t.id === template)
-  const selectedAud = AUDIENCES.find(a => a.id === audience)
-    || { label: '🎯 ' + (segments.find(sg => `seg:${sg.id}` === audience)?.name || 'segment') }
+  const audLabel = (id) => AUDIENCES.find(a => a.id === id)?.label
+    || ('🎯 ' + (segments.find(sg => `seg:${sg.id}` === id)?.name || 'segment'))
+  const selectedAudLabel = audiences.length ? audiences.map(audLabel).join(' + ') : 'No audience selected'
 
   return (
     <div>
@@ -233,22 +235,22 @@ export default function VulaBroadcast({ tenantId }) {
         />
         <p style={s.charCount}>{bodyText.length} characters</p>
 
-        <p style={s.sectionLabel}>Audience</p>
+        <p style={s.sectionLabel}>Audience <span style={{ fontWeight: 400, color: '#8A8680' }}>— pick one or more; overlaps are de-duplicated</span></p>
         <div style={s.audRow}>
           {AUDIENCES.map(a => (
             <button
               key={a.id}
-              onClick={() => setAudience(a.id)}
-              style={{ ...s.audBtn, ...(audience === a.id ? s.audBtnActive : {}) }}
+              onClick={() => toggleAud(a.id)}
+              style={{ ...s.audBtn, ...(audiences.includes(a.id) ? s.audBtnActive : {}) }}
             >
-              <span style={s.audLabel}>{a.label}</span>
+              <span style={s.audLabel}>{audiences.includes(a.id) ? '☑ ' : '☐ '}{a.label}</span>
               <span style={s.audHint}>{a.hint}</span>
             </button>
           ))}
           {segments.map(seg => (
-            <button key={seg.id} onClick={() => setAudience(`seg:${seg.id}`)}
-              style={{ ...s.audBtn, ...(audience === `seg:${seg.id}` ? s.audBtnActive : {}) }}>
-              <span style={s.audLabel}>🎯 {seg.name}
+            <button key={seg.id} onClick={() => toggleAud(`seg:${seg.id}`)}
+              style={{ ...s.audBtn, ...(audiences.includes(`seg:${seg.id}`) ? s.audBtnActive : {}) }}>
+              <span style={s.audLabel}>{audiences.includes(`seg:${seg.id}`) ? '☑ ' : '☐ '}🎯 {seg.name}
                 <span onClick={(e) => { e.stopPropagation(); deleteSegment(seg.id) }}
                   style={{ marginLeft: 6, color: '#C0392B', cursor: 'pointer' }}>×</span>
               </span>
@@ -289,7 +291,7 @@ export default function VulaBroadcast({ tenantId }) {
         <div style={s.preview}>
           <p style={s.previewLabel}>About to broadcast</p>
           <p style={s.previewText}>
-            <strong>{selectedTpl?.label}</strong> → <strong>{selectedAud?.label}</strong>
+            <strong>{selectedTpl?.label}</strong> → <strong>{selectedAudLabel}</strong>
           </p>
         </div>
 

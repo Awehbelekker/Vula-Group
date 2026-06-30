@@ -1099,7 +1099,22 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     # Resolve the exact audience (same source as the Customers tab); audience may be
     # a built-in (all/active_30d/high_value) or a saved custom segment ('seg:<id>').
     customers = await _aggregate_customers(tenant_id)
-    rows = _filter_audience(customers, _resolve_audience(tenant_id, audience))
+    # Audience may be one token, a comma-joined string, or a list → UNION the recipients
+    # (overlaps de-duplicated by phone). Powers multi-select audiences.
+    if isinstance(audience, list):
+        toks = [str(t).strip() for t in audience if str(t).strip()]
+    else:
+        toks = [t.strip() for t in str(audience or "all").split(",") if t.strip()]
+    toks = toks or ["all"]
+    audience = ",".join(toks)  # normalised for storage + response
+    seen: set = set()
+    rows = []
+    for t in toks:
+        for c in _filter_audience(customers, _resolve_audience(tenant_id, t)):
+            ph = _norm_phone(c.get("phone"))
+            if ph and ph not in seen:
+                seen.add(ph)
+                rows.append(c)
     # Only WhatsApp-reachable contacts with a usable number
     recipients = [c for c in rows if _norm_phone(c.get("phone")).isdigit()]
 
