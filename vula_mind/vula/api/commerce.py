@@ -139,6 +139,19 @@ async def delete_page(tenant_id: str, slug: str):
     return {"removed": slug}
 
 
+# ── Order workflow settings ───────────────────────────────────────────────────
+@router.get("/{tenant_id}/admin/order-settings")
+async def get_order_settings_ep(tenant_id: str):
+    from vula.commerce.order_workflow import get_order_settings
+    return {"settings": get_order_settings(tenant_id)}
+
+
+@router.put("/{tenant_id}/admin/order-settings")
+async def put_order_settings_ep(tenant_id: str, body: dict):
+    from vula.commerce.order_workflow import upsert_order_settings
+    return {"settings": upsert_order_settings(tenant_id, body or {})}
+
+
 # ── Cart ─────────────────────────────────────────────────────────────────────
 
 @router.get("/{tenant_id}/cart/{session_id}")

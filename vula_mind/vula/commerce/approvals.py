@@ -156,6 +156,12 @@ async def _on_approved(approval: dict) -> None:
     elif approval["entity_type"] == "task":
         from vula.models.field_ops import get_field_ops_db
         get_field_ops_db().update_task_status(approval["entity_id"], "complete")
+    elif approval["entity_type"] == "order":
+        from vula.commerce.order_workflow import dispatch_order
+        meta = approval.get("meta") or {}
+        await dispatch_order(approval["tenant_id"], approval["entity_id"],
+                             meta.get("summary") or approval.get("title", ""),
+                             meta.get("customer_name", ""))
 
 
 async def _deliver_invoice(approval: dict) -> None:

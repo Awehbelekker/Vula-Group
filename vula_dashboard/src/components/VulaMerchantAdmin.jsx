@@ -29,6 +29,7 @@ import VulaTeam from './VulaTeam'
 import VulaProjectWorkspace from './VulaProjectWorkspace'
 import VulaFieldOps from './VulaFieldOps'
 import VulaReports from './VulaReports'
+import VulaOrderWorkflow from './VulaOrderWorkflow'
 import VulaPayments from './VulaPayments'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
@@ -132,7 +133,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'overview'  && <OverviewTab tenantId={tenantId} setTab={setTab} />}
           {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
           {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
-          {tab === 'delivery'  && <DeliveryTab tenantId={tenantId} />}
+          {tab === 'delivery'  && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
           {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
           {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} />}
           {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}

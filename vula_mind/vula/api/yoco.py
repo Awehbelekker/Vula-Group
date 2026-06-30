@@ -118,25 +118,45 @@ async def _notify_order_paid(
                 f"Thank you!"
             )
 
-        # Team alerts
-        for name, phone, role in _tenant_team(tenant_id):
-            try:
-                order = await commerce.get_order(order_id)
-                items = order.get("commerce_order_items") or []
-                item_lines = "\n".join(
-                    f"  • {i.get('product_name','?')} x{i.get('quantity',1)}"
-                    for i in items[:8]
-                ) or "  (items not loaded)"
-            except Exception:
-                item_lines = "  (see dashboard)"
+        # Order item summary (once)
+        try:
+            order = await commerce.get_order(order_id)
+            items = order.get("commerce_order_items") or []
+            item_lines = "\n".join(
+                f"  • {i.get('product_name','?')} x{i.get('quantity',1)}" for i in items[:10]
+            ) or "  (see dashboard)"
+        except Exception:
+            item_lines = "  (see dashboard)"
+        summary = (f"Order {display_id} — {amount}\n"
+                   f"Customer: {customer_name or 'Unknown'} ({customer_phone or 'no phone'})\n{item_lines}")
 
-            await _send(
-                phone,
-                f"New order {display_id} — {amount}\n"
-                f"Customer: {customer_name or 'Unknown'} ({customer_phone or 'no phone'})\n"
-                f"{item_lines}\n\n"
-                f"Vula dashboard → Off the Hook → Orders"
-            )
+        # Per-tenant workflow: require owner approval before fulfilment, or dispatch now.
+        from vula.commerce.order_workflow import get_order_settings, dispatch_order
+        cfg = get_order_settings(tenant_id)
+        team = _tenant_team(tenant_id)
+
+        if cfg.get("require_approval") and team:
+            owners = [{"phone": p, "name": n, "role": r} for (n, p, r) in team if r in ("owner", "manager")] \
+                     or [{"phone": p, "name": n, "role": r} for (n, p, r) in team]
+            try:
+                from vula.commerce.approvals import create_approval
+                await create_approval(
+                    tenant_id, "order", order_id, title=summary, approvers=owners,
+                    deliver_via=cfg.get("dispatch_channel", "whatsapp"),
+                    meta={"summary": summary, "customer_name": customer_name or "",
+                          "display_id": display_id, "amount": amount},
+                )  # WhatsApps each owner the summary + APPROVE/REJECT
+            except Exception as exc:
+                log.warning("order approval create failed: %s", exc)
+                for name, phone, role in team:
+                    await _send(phone, summary + "\n\nVula dashboard → Orders")
+        else:
+            for name, phone, role in team:
+                await _send(phone, summary + "\n\nVula dashboard → Orders")
+            try:
+                await dispatch_order(tenant_id, order_id, summary, customer_name)
+            except Exception as exc:
+                log.warning("order dispatch failed: %s", exc)
 
 
 async def _get_tenant_yoco_creds(tenant_id: str) -> Optional[dict]:
