@@ -3,6 +3,7 @@
  * each can see (access) and which notifications they get by WhatsApp (per event).
  */
 import { useState, useEffect, useCallback } from "react";
+import { supabase } from "../lib/supabase";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
@@ -24,14 +25,46 @@ const ROLES = ["owner", "manager", "bookkeeper", "staff"];
 export default function VulaTeam({ tenantId }) {
   const [members, setMembers] = useState([]);
   const [form, setForm] = useState({ name: "", whatsapp: "", role: "staff" });
+  const [logins, setLogins] = useState([]);
+  const [loginForm, setLoginForm] = useState({ email: "", role: "staff" });
+  const [tempPw, setTempPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
     if (!tenantId) return;
     const r = await fetch(`${VULA_API}/v1/team/${tenantId}`);
     const d = await r.json();
     setMembers(d.members || []);
+    const lu = await fetch(`${VULA_API}/v1/users/${tenantId}/users`).then((x) => x.json()).catch(() => ({}));
+    setLogins(lu.users || []);
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
+
+  const createLogin = async () => {
+    if (!loginForm.email) return;
+    setMsg(""); setTempPw("");
+    const d = await fetch(`${VULA_API}/v1/users/${tenantId}/users`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(loginForm),
+    }).then((x) => x.json());
+    if (d.temp_password) { setTempPw(`${d.email} — temporary password: ${d.temp_password}`); setLoginForm({ email: "", role: "staff" }); load(); }
+    else setMsg(d.error || "Could not create login");
+  };
+  const resetPw = async (uid, email) => {
+    setMsg(""); setTempPw("");
+    const d = await fetch(`${VULA_API}/v1/users/${tenantId}/users/${uid}/reset`, { method: "POST" }).then((x) => x.json());
+    if (d.temp_password) setTempPw(`${email || ""} — temporary password: ${d.temp_password}`);
+    else setMsg(d.error || "Reset failed");
+  };
+  const removeLogin = async (uid) => {
+    await fetch(`${VULA_API}/v1/users/${tenantId}/users/${uid}`, { method: "DELETE" }); load();
+  };
+  const changeMyPassword = async () => {
+    setMsg("");
+    if ((newPw || "").length < 8) { setMsg("Password must be at least 8 characters."); return; }
+    const { error } = await supabase.auth.updateUser({ password: newPw });
+    setMsg(error ? error.message : "Your password was changed ✓"); setNewPw("");
+  };
 
   const add = async () => {
     if (!form.name && !form.whatsapp) return;
@@ -59,6 +92,41 @@ export default function VulaTeam({ tenantId }) {
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
       <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Team</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Add people, give each their own WhatsApp, and choose what they see and get notified about.</p>
+
+      {/* ── Logins & passwords ─────────────────────────────────────────── */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 18 }}>
+        <div style={{ fontWeight: 700, color: C.text, marginBottom: 2 }}>Logins & passwords</div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>Create a dashboard login for a staff member, or reset a password. Share the one-time temporary password — they change it after signing in.</div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <input placeholder="staff@email.com" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, minWidth: 220 }} />
+          <select value={loginForm.role} onChange={(e) => setLoginForm({ ...loginForm, role: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }}>
+            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <button onClick={createLogin} style={{ padding: "8px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Create login</button>
+        </div>
+
+        {tempPw && <div style={{ background: "#FBF7E9", border: "1px solid #E6D9A8", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: "#6B5A12", marginBottom: 10 }}>🔑 {tempPw} <span style={{ color: C.muted }}>(copy now — shown once)</span></div>}
+        {msg && <div style={{ fontSize: 12.5, color: msg.includes("✓") ? "#2C7A4B" : "#A23B2D", marginBottom: 10 }}>{msg}</div>}
+
+        {logins.map((u) => (
+          <div key={u.user_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderTop: `1px solid ${C.alt}`, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{u.email || u.user_id.slice(0, 8)}</span>
+            <span style={{ fontSize: 11.5, color: C.muted }}>{u.role}</span>
+            <span style={{ fontSize: 11, color: C.muted }}>{u.last_sign_in ? `last in ${new Date(u.last_sign_in).toLocaleDateString()}` : "never signed in"}</span>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <button onClick={() => resetPw(u.user_id, u.email)} style={{ fontSize: 11.5, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Reset password</button>
+              <button onClick={() => removeLogin(u.user_id)} style={{ fontSize: 11.5, color: "#A23B2D", background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Revoke</button>
+            </div>
+          </div>
+        ))}
+
+        <div style={{ borderTop: `1px solid ${C.alt}`, marginTop: 12, paddingTop: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, color: C.muted }}>Change my password:</span>
+          <input type="password" placeholder="New password" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
+          <button onClick={changeMyPassword} style={{ padding: "7px 14px", background: C.text, color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, cursor: "pointer" }}>Update</button>
+        </div>
+      </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
         <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
