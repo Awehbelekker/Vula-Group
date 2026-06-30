@@ -22,7 +22,7 @@ const TEMPLATES = [
 
 const AUDIENCES = [
   { id: 'all',          label: 'All customers',            hint: 'Everyone who has ever ordered' },
-  { id: 'ordered_30d',  label: 'Active (last 30 days)',    hint: 'Customers who ordered recently' },
+  { id: 'active_30d',   label: 'Active (last 30 days)',    hint: 'Customers who ordered recently' },
   { id: 'high_value',   label: 'High-value customers',    hint: 'Customers with total orders > R500' },
 ]
 
@@ -45,6 +45,9 @@ export default function VulaBroadcast({ tenantId }) {
   const [segments, setSegments] = useState([])
   const [showSeg, setShowSeg] = useState(false)
   const [segForm, setSegForm] = useState({ name: '', not_ordered_within_days: '', min_spend: '', channel: '' })
+  const [counts, setCounts] = useState({ counts: {}, segments: {} })
+  const [testPhone, setTestPhone] = useState('')
+  const [testMsg, setTestMsg] = useState('')
 
   // Ask the AI assistant to write the broadcast from rough details
   async function writeWithAI() {
@@ -91,7 +94,32 @@ export default function VulaBroadcast({ tenantId }) {
     } catch {}
   }, [tenantId])
 
-  useEffect(() => { load(); loadCampaigns(); loadSegments() }, [load, loadCampaigns, loadSegments])
+  const loadCounts = useCallback(async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/audience-counts`)
+      setCounts(await r.json())
+    } catch {}
+  }, [tenantId])
+
+  useEffect(() => { load(); loadCampaigns(); loadSegments(); loadCounts() }, [load, loadCampaigns, loadSegments, loadCounts])
+
+  // Send the message to your own number only — a live preview before broadcasting.
+  async function sendTest() {
+    if (!bodyText.trim()) { setError('Write the message first.'); return }
+    if (!testPhone.trim()) { setError('Enter a phone number to test to.'); return }
+    setTestMsg(''); setError(null)
+    try {
+      const tpl = TEMPLATES.find(t => t.id === template)
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
+        method: 'POST', headers: H,
+        body: JSON.stringify({ body: bodyText, template_name: tpl?.id, test_phone: testPhone, dry_run: false }),
+      })
+      const d = await r.json()
+      setTestMsg(r.ok && d.sent ? `✓ Test sent to ${testPhone}` : (d.detail || `Could not send test (${d.failed || 0} failed)`))
+    } catch (err) { setError(err.message) }
+  }
+
+  const audCount = (id) => id.startsWith('seg:') ? counts.segments?.[id.slice(4)] : counts.counts?.[id]
 
   const segHint = (cr = {}) => [
     cr.not_ordered_within_days != null && `no order in ${cr.not_ordered_within_days}d`,
@@ -235,6 +263,14 @@ export default function VulaBroadcast({ tenantId }) {
         />
         <p style={s.charCount}>{bodyText.length} characters</p>
 
+        {/* Send a test to your own number before broadcasting */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+          <input value={testPhone} onChange={e => setTestPhone(e.target.value)} placeholder="Test to: 2782…"
+            style={{ ...s.input, width: 170 }} />
+          <button onClick={sendTest} style={{ ...s.aiBtn, background: '#5B6B7A' }}>📲 Send test</button>
+          {testMsg && <span style={{ fontSize: 12, fontFamily: 'system-ui', color: testMsg.startsWith('✓') ? '#16a34a' : '#ef4444' }}>{testMsg}</span>}
+        </div>
+
         <p style={s.sectionLabel}>Audience <span style={{ fontWeight: 400, color: '#8A8680' }}>— pick one or more; overlaps are de-duplicated</span></p>
         <div style={s.audRow}>
           {AUDIENCES.map(a => (
@@ -243,7 +279,8 @@ export default function VulaBroadcast({ tenantId }) {
               onClick={() => toggleAud(a.id)}
               style={{ ...s.audBtn, ...(audiences.includes(a.id) ? s.audBtnActive : {}) }}
             >
-              <span style={s.audLabel}>{audiences.includes(a.id) ? '☑ ' : '☐ '}{a.label}</span>
+              <span style={s.audLabel}>{audiences.includes(a.id) ? '☑ ' : '☐ '}{a.label}
+                {audCount(a.id) != null && <span style={s.reachBadge}>{audCount(a.id)} reachable</span>}</span>
               <span style={s.audHint}>{a.hint}</span>
             </button>
           ))}
@@ -251,6 +288,7 @@ export default function VulaBroadcast({ tenantId }) {
             <button key={seg.id} onClick={() => toggleAud(`seg:${seg.id}`)}
               style={{ ...s.audBtn, ...(audiences.includes(`seg:${seg.id}`) ? s.audBtnActive : {}) }}>
               <span style={s.audLabel}>{audiences.includes(`seg:${seg.id}`) ? '☑ ' : '☐ '}🎯 {seg.name}
+                {audCount(`seg:${seg.id}`) != null && <span style={s.reachBadge}>{audCount(`seg:${seg.id}`)} reachable</span>}
                 <span onClick={(e) => { e.stopPropagation(); deleteSegment(seg.id) }}
                   style={{ marginLeft: 6, color: '#C0392B', cursor: 'pointer' }}>×</span>
               </span>
@@ -333,6 +371,7 @@ export default function VulaBroadcast({ tenantId }) {
 
       {/* Schedule for later / recurring */}
       <p style={s.sectionLabel}>📅 Schedule for later</p>
+      <p style={{ ...s.audHint, margin: '-4px 0 8px' }}>💡 Food promos land best on weekday late afternoons (≈ 4–6pm), before dinner planning.</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <input type="datetime-local" value={scheduleAt} onChange={e => setScheduleAt(e.target.value)}
           style={{ padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13 }} />
@@ -411,6 +450,7 @@ const s = {
   audBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid var(--accent, var(--accent))' },
   audLabel:     { fontFamily: 'system-ui', fontSize: 13, fontWeight: 600, color: '#1E1E1E', minWidth: 140 },
   audHint:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
+  reachBadge:   { marginLeft: 8, fontFamily: 'system-ui', fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'rgba(44,85,69,0.10)', padding: '1px 7px', borderRadius: 10 },
   preview:      { background: '#F7F4EE', borderRadius: 6, padding: '10px 14px', marginBottom: 14 },
   previewLabel: { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '0 0 4px' },
   previewText:  { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', margin: 0 },

@@ -1092,6 +1092,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     language = body.get("language", "en")
     dry_run = body.get("dry_run", True)
     name = body.get("name", template)
+    test_phone = body.get("test_phone")
 
     if not template and not body.get("body"):
         raise HTTPException(status_code=400, detail="template_name or body required")
@@ -1125,6 +1126,15 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         before = len(recipients)
         recipients = [c for c in recipients if _norm_phone(c.get("phone")) not in suppressed]
         suppressed_count = before - len(recipients)
+
+    # Test send → only this number (skip audience + suppression), so you can preview the
+    # exact message on your own phone before going live.
+    if test_phone:
+        _tp = _norm_phone(test_phone)
+        recipients = [{"name": "Test", "phone": _tp, "total_spent_cents": 0}] if _tp and _tp.isdigit() else []
+        suppressed_count = 0
+        audience = "test"
+        name = f"{name} (test)"
 
     # ── Dry-run / preview — DEFAULT. Nothing is sent. ────────────────────────
     if dry_run:
@@ -1573,6 +1583,32 @@ def _resolve_audience(tenant_id: str, audience):
         except Exception:
             pass
     return audience
+
+
+@router.get("/{tenant_id}/admin/audience-counts")
+async def admin_audience_counts(tenant_id: str):
+    """Reachable count (WhatsApp-able, opt-outs excluded) per audience — for the broadcast UI."""
+    customers = await _aggregate_customers(tenant_id)
+    suppressed = _suppressed_phones(tenant_id)
+
+    def _count(aud):
+        n = 0
+        for c in _filter_audience(customers, _resolve_audience(tenant_id, aud)):
+            ph = _norm_phone(c.get("phone"))
+            if ph.isdigit() and ph not in suppressed:
+                n += 1
+        return n
+
+    counts = {a: _count(a) for a in ("all", "active_30d", "high_value")}
+    segments = {}
+    try:
+        srows = (service._client().table("commerce_segments").select("id")
+                 .eq("tenant_id", tenant_id).execute().data or [])
+        for sg in srows:
+            segments[sg["id"]] = _count(f"seg:{sg['id']}")
+    except Exception:
+        pass
+    return {"counts": counts, "segments": segments}
 
 
 @router.get("/{tenant_id}/admin/customers")
