@@ -69,6 +69,10 @@ _NUMBER_ROUTING: dict[str, tuple[str, str]] = {
 _ROUTE_CACHE: dict[str, tuple[float, tuple[str, str]]] = {}
 _ROUTE_TTL = 120.0
 
+# Last agent confidence for the current request (set in _rag_reply, read for escalation).
+import contextvars as _contextvars
+_LAST_CONF = _contextvars.ContextVar("vula_last_conf", default=1.0)
+
 
 def _resolve_number_route(phone_number_id: str) -> tuple[str | None, str | None]:
     """Resolve (tenant_id, mode) for the number a message came in on.
@@ -290,6 +294,21 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     """
     logger.info("WhatsApp inbound from %s: %s", phone, text[:80])
 
+    # ── Escalation answer: if this phone is a helper with an open escalation, their
+    # message IS the answer — relay it to the customer and learn it for next time.
+    try:
+        from vula import escalation as esc
+        open_esc = esc.open_escalation_for_helper(phone)
+    except Exception:
+        open_esc = None
+    if open_esc and text.strip() and not _DONE_RE.match(text) \
+       and not _APPROVE_RE.match(text) and not _REJECT_RE.match(text):
+        info = esc.answer_escalation(open_esc, text.strip())
+        await _send_reply(info["customer_phone"],
+                          f"About your question — {text.strip()}", tenant_id=info["tenant_id"])
+        await _send_reply(phone, "✅ Sent to the customer and saved — I'll handle this one myself next time.")
+        return
+
     if route_tenant_id:
         # Dedicated tenant line — the number identifies the tenant, so grant
         # this sender full assistant access on that tenant's model.
@@ -409,6 +428,28 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         logger.debug("project context skipped: %s", exc)
 
     reply = await _rag_reply(tenant_id, text, conversation_history=history)
+
+    # ── Escalate-and-learn: if the agent isn't confident, reuse a learned answer,
+    # else ask a human helper on WhatsApp and hold the customer with a friendly note.
+    try:
+        from vula import escalation as esc
+        if esc.should_escalate(reply, _LAST_CONF.get()):
+            learned = esc.find_learned_answer(tenant_id, text)
+            if learned:
+                reply = learned
+            else:
+                row = esc.create_escalation(tenant_id, phone, text)
+                if row:
+                    await _send_reply(
+                        row["helper_phone"],
+                        f"❓ A customer asked:\n\n\"{text.strip()}\"\n\nReply to this message with "
+                        f"the answer — I'll send it to them and remember it.",
+                        tenant_id=tenant_id,
+                    )
+                    reply = "Thanks for your question! Let me check with the team and get right back to you. 🙏"
+    except Exception as exc:
+        logger.debug("escalation skipped: %s", exc)
+
     db.save(tenant_id, thread_key, "assistant", reply)
     # Pass tenant_id so the reply is sent FROM the tenant's own number
     # (per-tenant creds in vula_whatsapp_accounts), not the shared test line.
@@ -1347,6 +1388,10 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 "Agent answered tenant=%s skill=%s confidence=%.2f",
                 tenant_id, result.skill_used, result.confidence,
             )
+            try:
+                _LAST_CONF.set(float(result.confidence or 0.0))
+            except Exception:
+                pass
             return result.final_answer
     except Exception as exc:
         logger.warning("Agent runner failed for %s, falling back to RAG: %s", tenant_id, exc)

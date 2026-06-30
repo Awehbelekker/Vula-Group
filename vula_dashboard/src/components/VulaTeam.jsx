@@ -19,6 +19,7 @@ const EVENTS = [
   ["which_project", "Which-project?"], ["followup_digest", "Follow-up digest"],
   ["payment_received", "Payments"], ["new_invoice", "New invoices"],
   ["new_order", "New orders"], ["low_stock", "Low stock"],
+  ["help_request", "Help requests (agent escalations)"],
 ];
 const ROLES = ["owner", "manager", "bookkeeper", "staff"];
 
