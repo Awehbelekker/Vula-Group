@@ -1772,8 +1772,23 @@ async def _handle_commerce_interactive(
     phone: str, reply_id: str, reply_title: str, msg_id: str, tenant_id: str
 ) -> None:
     """Handle interactive list/button replies from the WhatsApp product catalog."""
-    # Forward to n8n — it maintains the conversation state and draft order
+    # A category tap → ask the commerce assistant to list that category's products
+    # (works with the existing tool-calling skill — no n8n needed).
+    if reply_id.startswith("cat_"):
+        label = reply_title or reply_id[4:].replace("_", " ")
+        await _handle_commerce_message(phone, f"Show me your {label}", msg_id, tenant_id)
+        return
     await _forward_to_n8n_commerce(phone, reply_id, msg_id, tenant_id, reply_title=reply_title)
+
+
+# Friendly labels for common category keys (fallback = title-cased key).
+_CATEGORY_LABELS = {
+    "fresh_fish": "Fresh Fish", "fresh_chicken": "Fresh Chicken",
+    "frozen_chicken": "Frozen Chicken", "frozen_seafood": "Frozen Seafood",
+    "linefish": "Linefish", "shellfish": "Shellfish & Prawns", "crayfish": "Crayfish",
+    "box_deal": "Box Deals", "smoked": "Smoked Fish", "frozen": "Frozen", "extras": "Extras",
+    "general": "Our Products",
+}
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
@@ -1791,17 +1806,33 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     if number.startswith("0"):
         number = "27" + number[1:]
 
+    # Build the menu from the tenant's LIVE in-stock catalog (WhatsApp lists allow ≤10 rows).
+    rows = []
+    try:
+        from vula.commerce import service as _cs
+        prods = await _cs.list_products(tenant_id, in_stock_only=True)
+        counts: dict[str, int] = {}
+        for p in prods:
+            counts[p.get("category") or "general"] = counts.get(p.get("category") or "general", 0) + 1
+        for key, n in list(counts.items())[:10]:
+            label = (_CATEGORY_LABELS.get(key) or key.replace("_", " ").title())[:24]
+            rows.append({"id": f"cat_{key}", "title": label,
+                         "description": (f"{n} item{'s' if n != 1 else ''} available")[:72]})
+    except Exception as exc:
+        logger.debug("welcome categories fetch failed: %s", exc)
+
+    _text_lines = "\n".join(f"{i+1}. {r['title']}" for i, r in enumerate(rows)) or \
+        "1. Linefish\n2. Shellfish & prawns\n3. Crayfish\n4. Box deals\n5. Smoked fish"
     _text_menu = (
         "Welcome to Off the Hook! 🐟\n\n"
         "Cape Town's freshest daily catch, door to door.\n\n"
-        "What are you looking for?\n"
-        "1. Linefish (yellowtail, snoek, kob)\n"
-        "2. Shellfish & prawns\n"
-        "3. Crayfish\n"
-        "4. Box deals\n"
-        "5. Smoked fish\n\n"
+        f"What are you looking for?\n{_text_lines}\n\n"
         "Reply with a number or product name, or visit offthehook.co.za"
     )
+
+    if not rows:  # no catalog → text menu
+        await _send_reply(phone, _text_menu, tenant_id=tenant_id)
+        return
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1815,28 +1846,14 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
                     "interactive": {
                         "type": "list",
                         "header": {"type": "text", "text": "Off the Hook 🐟"},
-                        "body": {"text": "Cape Town's freshest catch, door to door.\n\nWhat are you after today?"},
+                        "body": {"text": "Cape Town's freshest catch, door to door.\n\nTap a category, or just tell me what you want."},
                         "footer": {"text": "Free delivery on orders over R500"},
-                        "action": {
-                            "button": "View menu",
-                            "sections": [
-                                {
-                                    "title": "Today's catch",
-                                    "rows": [
-                                        {"id": "cat_linefish", "title": "Linefish", "description": "Yellowtail, snoek, kob, red roman"},
-                                        {"id": "cat_shellfish", "title": "Shellfish & prawns", "description": "Tiger prawns, mussels, calamari"},
-                                        {"id": "cat_crayfish", "title": "Crayfish", "description": "West Coast rock lobster"},
-                                        {"id": "cat_box_deal", "title": "Box deals", "description": "Braai box, weekly catch box"},
-                                        {"id": "cat_smoked", "title": "Smoked fish", "description": "Hot-smoked yellowtail, snoek pâté"},
-                                    ],
-                                }
-                            ],
-                        },
+                        "action": {"button": "View menu", "sections": [{"title": "Browse the catch", "rows": rows}]},
                     },
                 },
             )
             resp.raise_for_status()
-            logger.info("Commerce welcome (list) sent to %s", phone)
+            logger.info("Commerce welcome (list, %d categories) sent to %s", len(rows), phone)
     except Exception as exc:
         logger.error("Commerce welcome failed to %s: %s — falling back to text menu", phone, exc)
         await _send_reply(phone, _text_menu, tenant_id=tenant_id)
