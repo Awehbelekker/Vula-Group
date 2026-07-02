@@ -92,14 +92,29 @@ class CalculationsSkill(BaseSkill):
                 context = "\n\n".join(f"[{c.get('filename','doc')}]: {c.get('text','')[:1200]}" for c in chunks)
         except Exception as exc:
             logger.debug("calculations KB retrieval skipped: %s", exc)
+        self._verified: List[Any] = []      # deterministic safe_eval results seen this run
+        self._calc_errors = 0
         try:
             answer = await self._agent_loop(inp.conversation_history, inp.question, context, inp.tenant_id)
             if not answer:
                 raise RuntimeError("empty answer")
-            return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("calculations loop failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
+
+        # Verified-reasoning check: the final answer must be anchored to a deterministic
+        # (safe_eval) computation. If the model states a headline number that matches NO verified
+        # calculation, don't present it as fact — flag it and drop confidence. This catches the
+        # model computing correctly with the tool but then misreporting a different number.
+        anchored, matched = self._verify_answer(answer, self._verified)
+        confidence = 0.85
+        if anchored is False:
+            confidence = 0.45
+            answer += ("\n\n⚠️ Please confirm these figures — the final number couldn't be matched "
+                       "to a verified calculation.")
+        logger.info("VRL calc-verify tenant=%s anchored=%s verified=%d errors=%d matched=%s",
+                    inp.tenant_id, anchored, len(self._verified), self._calc_errors, matched)
+        return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence)
 
     def _system_prompt(self) -> str:
         return (
@@ -188,9 +203,31 @@ class CalculationsSkill(BaseSkill):
             val = safe_eval(expr)
             if isinstance(val, float) and val.is_integer():
                 val = int(val)
+            v = getattr(self, "_verified", None)
+            if isinstance(v, list):
+                v.append(val)                      # record the deterministic ground truth
             return {"expression": expr, "result": val}
         except Exception as exc:
+            if isinstance(getattr(self, "_verified", None), list):
+                self._calc_errors = getattr(self, "_calc_errors", 0) + 1
             return {"expression": expr, "error": f"invalid expression: {exc}"}
+
+    @staticmethod
+    def _numbers(text: str) -> List[float]:
+        return [float(m.replace(",", "")) for m in re.findall(r"-?\d[\d,]*\.?\d*", text or "")]
+
+    def _verify_answer(self, answer: str, verified: List[Any]):
+        """Is the answer's number anchored to a deterministic result?
+        Returns (True | False | None-if-nothing-was-computed, matched_value)."""
+        if not verified:
+            return (None, None)
+        ans_nums = self._numbers(answer)
+        for val in verified:
+            fv = float(val)
+            tol = max(0.5, abs(fv) * 0.005)
+            if any(abs(a - fv) <= tol for a in ans_nums):
+                return (True, val)
+        return (False, None)
 
     def _parse_inline(self, content: str):
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
