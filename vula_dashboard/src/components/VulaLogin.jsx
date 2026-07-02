@@ -42,19 +42,45 @@ export default function VulaLogin({ onSuccess }) {
   const [loading, setLoading] = useState(false)
   const { login } = useAuthStore()
 
-  // Detect Supabase recovery / invite token in URL hash on mount
+  // Resolve tenant/role for a signed-in user (any method) and enter the app.
+  async function resolveAndLogin(user) {
+    const { data: assignment, error: dbErr } = await supabase
+      .from('vula_tenant_users')
+      .select('tenant_id, role')
+      .eq('user_id', user.id)
+      .limit(1)
+      .single()
+    if (dbErr || !assignment) {
+      throw new Error('No Vula access is linked to this account. Ask your admin to add you.')
+    }
+    login(
+      { id: user.id, email: user.email, name: user.user_metadata?.full_name || (user.email || '').split('@')[0] },
+      assignment.tenant_id,
+      assignment.role,
+    )
+    onSuccess?.()
+  }
+
+  // On mount: recovery/invite token → set-password; otherwise an existing session
+  // (returning from Google / magic-link) → resolve + enter the app.
   useEffect(() => {
     const hash = window.location.hash
     if (hash.includes('type=recovery') || hash.includes('type=invite')) {
-      // Supabase has already set a session from the token — switch to set-password form
       setMode('set_password')
       setInfo('Enter a new password for your account.')
-      // Clean URL
       window.history.replaceState(null, '', window.location.pathname)
+      return
     }
-  }, [])
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session?.user) resolveAndLogin(data.session.user).catch((err) => setError(err.message))
+    })
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      if (session?.user) resolveAndLogin(session.user).catch((err) => setError(err.message))
+    })
+    return () => sub?.subscription?.unsubscribe?.()
+  }, [])  // eslint-disable-line
 
-  // ── Normal sign-in ──────────────────────────────────────────────────────────
+  // ── Normal sign-in (email + password) ───────────────────────────────────────
   async function handleSignIn(e) {
     e.preventDefault()
     setError('')
@@ -62,27 +88,36 @@ export default function VulaLogin({ onSuccess }) {
     try {
       const { data, error: authErr } = await supabase.auth.signInWithPassword({ email, password })
       if (authErr) throw authErr
-
-      const user = data.user
-      const { data: assignment, error: dbErr } = await supabase
-        .from('vula_tenant_users')
-        .select('tenant_id, role')
-        .eq('user_id', user.id)
-        .limit(1)
-        .single()
-
-      if (dbErr || !assignment) {
-        throw new Error('No tenant access found. Contact Richard at Vula.')
-      }
-
-      login(
-        { id: user.id, email: user.email, name: user.user_metadata?.full_name || email.split('@')[0] },
-        assignment.tenant_id,
-        assignment.role,
-      )
-      onSuccess?.()
+      await resolveAndLogin(data.user)
     } catch (err) {
       setError(err.message || 'Login failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Continue with Google (one-click) ─────────────────────────────────────────
+  async function handleGoogle() {
+    setError('')
+    const { error: err } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${window.location.origin}${window.location.pathname}` },
+    })
+    if (err) setError(err.message)
+  }
+
+  // ── Magic link (passwordless) ────────────────────────────────────────────────
+  async function handleMagicLink() {
+    if (!email) { setError('Enter your email first, then tap “Email me a link”.'); return }
+    setError(''); setLoading(true)
+    try {
+      const { error: err } = await supabase.auth.signInWithOtp({
+        email, options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` },
+      })
+      if (err) throw err
+      setInfo(`Magic link sent to ${email}. Open it on this device to sign in.`)
+    } catch (err) {
+      setError(err.message || 'Could not send the link')
     } finally {
       setLoading(false)
     }
@@ -177,12 +212,18 @@ export default function VulaLogin({ onSuccess }) {
             <h1 style={s.heading}>Sign in</h1>
             {info && <div style={s.infoBox}>{info}</div>}
             {error && <div style={s.errorBox}>{error}</div>}
+            <button type="button" onClick={handleGoogle} style={s.googleBtn}>
+              <span style={{ fontWeight: 700, marginRight: 8, color: '#4285F4' }}>G</span> Continue with Google
+            </button>
+            <div style={s.divider}><span style={s.dividerText}>or</span></div>
             <form onSubmit={handleSignIn} style={s.form}>
               <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
               <Field label="Password" type="password" value={password} onChange={setPassword} placeholder="••••••••" />
               <Btn disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</Btn>
             </form>
             <p style={s.footer}>
+              <button style={s.textBtn} onClick={handleMagicLink}>Email me a link</button>
+              <span style={{ color: '#CFC9BE', margin: '0 8px' }}>·</span>
               <button style={s.textBtn} onClick={() => { setMode('reset_request'); setError(''); setInfo('') }}>
                 Forgot password?
               </button>
@@ -267,4 +308,7 @@ const s = {
   btnDisabled: { padding: '12px', background: '#DDD8CE', color: COLORS.muted, border: 'none', borderRadius: 6, fontSize: 14, cursor: 'not-allowed', fontFamily: 'system-ui' },
   footer:      { marginTop: 20, textAlign: 'center' },
   textBtn:     { background: 'none', border: 'none', color: COLORS.green, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', textDecoration: 'underline' },
+  googleBtn:   { width: '100%', padding: '11px', background: '#fff', color: COLORS.charcoal, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  divider:     { display: 'flex', alignItems: 'center', textAlign: 'center', margin: '16px 0', color: COLORS.muted, fontSize: 12, fontFamily: 'system-ui' },
+  dividerText: { background: COLORS.surface, padding: '0 10px', position: 'relative', margin: '0 auto', borderTop: `1px solid ${COLORS.border}`, top: 0 },
 }
