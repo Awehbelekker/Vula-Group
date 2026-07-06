@@ -115,6 +115,17 @@ async def send_followup_reminders(tenant_id: str, notify_phone: str = None) -> i
         return 0
 
 
+def _extract_msg_bytes(md) -> Optional[bytes]:
+    """Some IMAP servers interleave an untagged FLAGS line for a DIFFERENT message
+    (e.g. a \\Seen update) into the same fetch response, so md[0] isn't reliably the
+    (info, literal) tuple we asked for — scan for the entry that actually carries the
+    RFC822 literal rather than assuming position 0."""
+    for item in md or []:
+        if isinstance(item, tuple) and len(item) >= 2 and isinstance(item[1], (bytes, bytearray)):
+            return item[1]
+    return None
+
+
 def _fetch_new(creds: dict, last_uid: int, max_emails: int) -> dict:
     """[blocking] Fetch the most-recent NEW emails (UID > last_uid). Returns
     {emails: [...], max_uid: int}. Each email carries parsed contacts + real attachments."""
@@ -128,9 +139,10 @@ def _fetch_new(creds: dict, last_uid: int, max_emails: int) -> dict:
         out = []
         for u in batch:
             typ, md = m.uid("fetch", str(u).encode(), "(RFC822)")
-            if not md or not md[0]:
+            raw = _extract_msg_bytes(md)
+            if not raw:
                 continue
-            msg = email.message_from_bytes(md[0][1])
+            msg = email.message_from_bytes(raw)
             when = None
             try:
                 when = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).isoformat()
@@ -280,7 +292,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         logger.debug("attachment analysis skipped: %s", exc)
 
     try:
-        from vula.integrations.doc_filing import (match_project, project_examples,
+        from vula.integrations.doc_filing import (file_document, match_project, project_examples,
                                                   lookup_learned_project)
         field_text = " ".join(str(v) for v in fields.values() if isinstance(v, (str, int, float)))
         hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
@@ -293,13 +305,19 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         ask = not confident
         if not confident:
             match = None
-        db.table("vula_filed_documents").insert({
-            "tenant_id": tenant_id, "project": match["project"] if match else None,
-            "category": category, "summary": summary, "fields": fields, "filename": att["name"],
-            "mime": att.get("mime"), "doc_id": getattr(res, "doc_id", None),
-            "source": "email", "status": "pending_project" if ask else "filed",
-            "filed_by": notify_phone if ask else em.get("from"),
-        }).execute()
+        # file_document() does what this used to hand-roll, plus the two things it was
+        # missing: a durable Supabase Storage copy (file_url) and — when the match carries
+        # a ClickUp list — attaching the file into that project's ClickUp task.
+        await file_document(
+            tenant_id, filename=att["name"], data=att["data"],
+            content_type=att.get("mime") or "application/octet-stream",
+            category=category, summary=summary, fields=fields,
+            doc_id=getattr(res, "doc_id", None), source="email",
+            filed_by=notify_phone if ask else (em.get("from") or ""),
+            project=match["project"] if match else None,
+            clickup_list_id=match.get("clickup_list_id") if match else None,
+            status="pending_project" if ask else "filed",
+        )
 
         # Post to the project finance ledger if it carries an amount.
         if confident and match:
