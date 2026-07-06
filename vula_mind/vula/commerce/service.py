@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -15,6 +16,8 @@ from typing import List, Optional
 
 from config import settings
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 
 def _client() -> Client:
@@ -205,12 +208,23 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
         "total_cents": total,
         "status": "pending_payment",
         "channel": checkout_data.get("channel", "web"),
+        "payment_method": checkout_data.get("payment_method"),  # online | cod | eft (migration 044)
         "cart_id": cart["id"],
         "created_at": _now(),
         "updated_at": _now(),
     }
 
-    result = _client().table("commerce_orders").insert(order).execute()
+    try:
+        result = _client().table("commerce_orders").insert(order).execute()
+    except Exception as exc:
+        # payment_method column may not exist yet (migration 044 not run) — fold the
+        # method into delivery_notes and retry so ordering never breaks on a missing column.
+        method = order.pop("payment_method", None)
+        if method:
+            note = order.get("delivery_notes") or ""
+            order["delivery_notes"] = (f"[pay:{method}] " + note).strip()
+        logger.warning("order insert retried without payment_method (%s): %s", method, exc)
+        result = _client().table("commerce_orders").insert(order).execute()
     order_id = result.data[0]["id"]
 
     # Insert order items
@@ -427,7 +441,7 @@ async def get_or_create_session(
 
 
 async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> None:
-    """Persist a single conversation turn."""
+    """Persist a single conversation turn and update the session snapshot."""
     _client().table("commerce_conversation_messages").insert(
         {
             "id": str(uuid.uuid4()),
@@ -438,6 +452,78 @@ async def append_message(tenant_id: str, session_id: str, role: str, content: st
             "created_at": _now(),
         }
     ).execute()
+    # Update last-message snapshot on the session row (best-effort).
+    try:
+        snippet = content[:160]
+        _client().table("commerce_conversation_sessions").update({
+            "last_message": snippet,
+            "last_role": role,
+            "last_at": _now(),
+            "updated_at": _now(),
+        }).eq("id", session_id).execute()
+    except Exception:
+        pass
+
+
+async def set_session_paused(tenant_id: str, session_id: str, paused: bool) -> dict:
+    """Toggle the human-handoff flag on a session. Returns the updated row."""
+    update: dict = {"paused": paused, "updated_at": _now()}
+    if paused:
+        update["paused_at"] = _now()
+    else:
+        update["paused_by"] = None
+        update["paused_at"] = None
+    result = (
+        _client()
+        .table("commerce_conversation_sessions")
+        .update(update)
+        .eq("tenant_id", tenant_id)
+        .eq("id", session_id)
+        .execute()
+    )
+    return result.data[0] if result.data else {}
+
+
+async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
+    """Return recent conversation sessions for the shared inbox list view."""
+    result = (
+        _client()
+        .table("commerce_conversation_sessions")
+        .select("id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at")
+        .eq("tenant_id", tenant_id)
+        .order("updated_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    rows = result.data or []
+    # Expose session id as session_id for the frontend.
+    for r in rows:
+        r["session_id"] = r["id"]
+    return rows
+
+
+async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[dict]:
+    """Return the session header + full message list for the thread view."""
+    sessions = (
+        _client()
+        .table("commerce_conversation_sessions")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    if not sessions.data:
+        return None
+    session = sessions.data[0]
+    messages = await get_recent_messages(tenant_id, session_id, limit=200)
+    return {
+        "session_id": session["id"],
+        "customer": session.get("customer_name") or session.get("customer_phone") or session.get("session_key"),
+        "phone": session.get("customer_phone") or session.get("session_key"),
+        "paused": bool(session.get("paused")),
+        "messages": [{"role": m["role"], "content": m["content"], "created_at": m.get("created_at")} for m in messages],
+    }
 
 
 async def get_recent_messages(tenant_id: str, session_id: str, limit: int = 12) -> List[dict]:

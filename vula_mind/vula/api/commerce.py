@@ -399,6 +399,111 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     return {"answer": answer, "ok": bool(out.success and out.answer)}
 
 
+# ── Shared inbox (conversations + human handoff) ─────────────────────────────
+# Owners see live customer WhatsApp chats and can take over from the bot.
+# Handoff state is stored in commerce_conversation_sessions.last_skill:
+#   'human_handoff' → a human has taken over; the bot stays quiet for this chat.
+
+_HANDOFF = "human_handoff"
+
+
+@router.get("/{tenant_id}/admin/conversations")
+async def admin_list_conversations(tenant_id: str, limit: int = Query(60, ge=1, le=200)):
+    """List customer conversations with a last-message preview + handoff status."""
+    db = service._client()
+    sessions = (
+        db.table("commerce_conversation_sessions").select("*")
+        .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+    ).data or []
+    # Bulk-fetch recent messages → last message per session (avoids N+1).
+    msgs = (
+        db.table("commerce_conversation_messages")
+        .select("session_id,role,content,created_at")
+        .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(600).execute()
+    ).data or []
+    last: dict = {}
+    for m in msgs:
+        last.setdefault(m["session_id"], m)
+
+    convos = []
+    for s in sessions:
+        # Only show real customer chats (skip the owner admin sessions).
+        if str(s.get("session_key", "")).startswith(("admin:", "webadmin:")):
+            continue
+        lm = last.get(s["id"]) or {}
+        convos.append({
+            "session_id": s["id"],
+            "customer_name": s.get("customer_name"),
+            "customer_phone": s.get("customer_phone") or s.get("session_key"),
+            "channel": s.get("channel") or "whatsapp",
+            "paused": s.get("last_skill") == _HANDOFF,
+            "last_message": (lm.get("content") or "")[:120],
+            "last_role": lm.get("role"),
+            "last_at": lm.get("created_at") or s.get("updated_at"),
+        })
+    convos.sort(key=lambda c: c.get("last_at") or "", reverse=True)
+    return {"conversations": convos, "count": len(convos)}
+
+
+@router.get("/{tenant_id}/admin/conversations/{session_id}/messages")
+async def admin_conversation_messages(tenant_id: str, session_id: str, limit: int = Query(120, ge=1, le=500)):
+    """Full message thread for one conversation."""
+    db = service._client()
+    msgs = (
+        db.table("commerce_conversation_messages")
+        .select("role,content,created_at")
+        .eq("tenant_id", tenant_id).eq("session_id", session_id)
+        .order("created_at", desc=True).limit(limit).execute()
+    ).data or []
+    sess = (
+        db.table("commerce_conversation_sessions").select("*")
+        .eq("tenant_id", tenant_id).eq("id", session_id).limit(1).execute()
+    ).data
+    s0 = sess[0] if sess else {}
+    return {
+        "messages": list(reversed(msgs)),
+        "paused": s0.get("last_skill") == _HANDOFF,
+        "customer": s0.get("customer_name"),
+        "phone": s0.get("customer_phone") or s0.get("session_key"),
+    }
+
+
+@router.post("/{tenant_id}/admin/conversations/{session_id}/handoff")
+async def admin_conversation_handoff(tenant_id: str, session_id: str, body: dict):
+    """Pause the bot for this chat (human takes over) or hand it back to the bot."""
+    paused = bool(body.get("paused", True))
+    service._client().table("commerce_conversation_sessions").update(
+        {"last_skill": _HANDOFF if paused else None, "updated_at": service._now()}
+    ).eq("tenant_id", tenant_id).eq("id", session_id).execute()
+    return {"session_id": session_id, "paused": paused}
+
+
+@router.post("/{tenant_id}/admin/conversations/{session_id}/reply")
+async def admin_conversation_reply(tenant_id: str, session_id: str, body: dict):
+    """Owner sends a manual WhatsApp reply — takes over the chat (pauses the bot)."""
+    text = (body.get("message") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="message is required")
+    db = service._client()
+    sess = (
+        db.table("commerce_conversation_sessions").select("*")
+        .eq("tenant_id", tenant_id).eq("id", session_id).limit(1).execute()
+    ).data
+    if not sess:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    to = sess[0].get("customer_phone") or sess[0].get("session_key")
+
+    from vula.api.whatsapp import _send_reply
+    sent = await _send_reply(to, text, tenant_id)
+
+    # Taking over → pause the bot and record the agent message.
+    db.table("commerce_conversation_sessions").update(
+        {"last_skill": _HANDOFF, "updated_at": service._now()}
+    ).eq("tenant_id", tenant_id).eq("id", session_id).execute()
+    await service.append_message(tenant_id, session_id, "agent", text)
+    return {"sent": sent, "paused": True}
+
+
 @router.get("/{tenant_id}/admin/stats")
 async def admin_stats(tenant_id: str):
     """Revenue/order stats including invoice summary for the merchant dashboard."""
@@ -1116,8 +1221,11 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
             if ph and ph not in seen:
                 seen.add(ph)
                 rows.append(c)
-    # Only WhatsApp-reachable contacts with a usable number
-    recipients = [c for c in rows if _norm_phone(c.get("phone")).isdigit()]
+    # Only WhatsApp-reachable contacts with a usable number, and — for the opt-in-first posture —
+    # exclude imported contacts who haven't opted in yet (consent 'unknown'). Existing order/chat
+    # customers (no consent field) and explicitly opted-in contacts are kept.
+    recipients = [c for c in rows
+                  if _norm_phone(c.get("phone")).isdigit() and c.get("consent") != "unknown"]
 
     # Honour opt-outs (POPIA suppression) before anything is sent.
     suppressed = _suppressed_phones(tenant_id)
@@ -1502,6 +1610,35 @@ async def _aggregate_customers(tenant_id: str) -> dict[str, dict]:
         if s.get("channel"):
             c["channel"] = s["channel"]
         c["last_seen_at"] = s.get("updated_at")
+
+    # Imported contact book (existing clients) → merged in, deduped by phone. Guarded so a
+    # missing table (migration 046 not yet run) never breaks the Customers tab or broadcasts.
+    try:
+        contacts = (
+            db.table("commerce_contacts")
+            .select("phone,name,email,area,product,tags,consent_status")
+            .eq("tenant_id", tenant_id).execute()
+        ).data or []
+    except Exception as exc:
+        log.debug("contacts merge skipped (run migration 046?): %s", exc)
+        contacts = []
+    for ct in contacts:
+        key = _norm_phone(ct.get("phone"))
+        if not key or not key.isdigit():
+            continue
+        c = customers.setdefault(key, {
+            "phone": ct.get("phone"), "name": ct.get("name"), "orders": 0,
+            "total_spent_cents": 0, "last_order_at": None, "source": "import", "channel": "whatsapp",
+        })
+        if ct.get("name") and not c.get("name"):
+            c["name"] = ct["name"]
+        if ct.get("email") and not c.get("email"):
+            c["email"] = ct["email"]
+        # Carry tags + consent so segments and the opt-in campaign can target them.
+        c.setdefault("area", ct.get("area"))
+        c.setdefault("product", ct.get("product"))
+        c.setdefault("tags", ct.get("tags") or [])
+        c["consent"] = ct.get("consent_status") or "unknown"
 
     return customers
 
@@ -2231,3 +2368,82 @@ async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
     if not result.data:
         raise HTTPException(status_code=404, detail="Expense not found")
     return result.data[0]
+
+
+# ── Shared Inbox ──────────────────────────────────────────────────────────────
+# These four endpoints back VulaInbox.jsx (conversation list, thread view,
+# human handoff toggle, and manual agent reply via WhatsApp).
+
+
+@router.get("/{tenant_id}/admin/conversations")
+async def admin_list_conversations(tenant_id: str, limit: int = Query(50, ge=1, le=200)):
+    """Return recent WhatsApp conversation sessions for the shared inbox."""
+    conversations = await service.list_conversations(tenant_id, limit=limit)
+    return {"tenant_id": tenant_id, "conversations": conversations}
+
+
+@router.get("/{tenant_id}/admin/conversations/{session_id}/messages")
+async def admin_get_thread(tenant_id: str, session_id: str):
+    """Return the full thread for one conversation (header + all messages)."""
+    thread = await service.get_conversation_thread(tenant_id, session_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return thread
+
+
+class HandoffRequest(BaseModel):
+    paused: bool
+
+
+@router.post("/{tenant_id}/admin/conversations/{session_id}/handoff")
+async def admin_handoff(tenant_id: str, session_id: str, body: HandoffRequest):
+    """Toggle human handoff on a session.
+
+    paused=true  → bot goes quiet; human replies via the /reply endpoint.
+    paused=false → bot resumes handling messages.
+    """
+    updated = await service.set_session_paused(tenant_id, session_id, body.paused)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True, "session_id": session_id, "paused": body.paused}
+
+
+class AgentReplyRequest(BaseModel):
+    message: str
+
+
+@router.post("/{tenant_id}/admin/conversations/{session_id}/reply")
+async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest):
+    """Send a manual WhatsApp reply from the human agent and log it in the thread.
+
+    Automatically takes over the session (sets paused=true) if not already paused,
+    so the bot stays quiet after the agent replies.
+    """
+    text = (body.message or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    thread = await service.get_conversation_thread(tenant_id, session_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    phone = thread.get("phone")
+    if not phone:
+        raise HTTPException(status_code=400, detail="No customer phone number on this session")
+
+    # Auto-pause if not already — agent replied, so bot should stay quiet.
+    if not thread.get("paused"):
+        await service.set_session_paused(tenant_id, session_id, True)
+
+    # Send via WhatsApp.
+    try:
+        from vula.api.whatsapp import _send_reply
+        await _send_reply(phone, text, tenant_id=tenant_id)
+    except Exception as exc:
+        log.warning("Admin reply WhatsApp send failed for %s: %s", session_id, exc)
+        raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {exc}") from exc
+
+    # Persist the agent's message in the thread.
+    await service.append_message(tenant_id, session_id, "agent", text)
+
+    return {"ok": True, "session_id": session_id, "sent": text}
