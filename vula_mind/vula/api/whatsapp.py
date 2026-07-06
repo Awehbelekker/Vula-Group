@@ -278,6 +278,60 @@ async def receive_message(
 
 # ─── Message routing ─────────────────────────────────────────────────────────
 
+async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
+    """If this phone is a helper (e.g. Staci) with an open escalation, their message
+    IS the answer — relay it to the customer and learn it for next time.
+
+    Returns True if the message was consumed as an answer. Runs on EVERY inbound path
+    (knowledge and commerce) so a helper can reply on whichever tenant line they were
+    pinged from — not just the knowledge assistant's line.
+    """
+    try:
+        from vula import escalation as esc
+        open_esc = esc.open_escalation_for_helper(phone)
+    except Exception:
+        open_esc = None
+    if not (open_esc and text.strip()):
+        return False
+    if _DONE_RE.match(text) or _APPROVE_RE.match(text) or _REJECT_RE.match(text):
+        return False
+    info = esc.answer_escalation(open_esc, text.strip())
+    await _send_reply(info["customer_phone"],
+                      f"About your question — {text.strip()}", tenant_id=info["tenant_id"])
+    await _send_reply(phone, "✅ Sent to the customer and saved — I'll handle this one myself next time.")
+    return True
+
+
+async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
+                                    reply: str, confidence: Optional[float] = None) -> str:
+    """If `reply` shows the agent couldn't answer, reuse a learned answer, else ask a
+    human helper on WhatsApp and hold the customer with a friendly note.
+
+    Returns the reply to actually send. Shared by the knowledge and commerce paths so
+    escalate-and-learn works for every tenant. Commerce has no confidence signal, so it
+    escalates purely on the "I don't know / can't help" text patterns in should_escalate.
+    """
+    try:
+        from vula import escalation as esc
+        if not esc.should_escalate(reply, confidence):
+            return reply
+        learned = esc.find_learned_answer(tenant_id, text)
+        if learned:
+            return learned
+        row = esc.create_escalation(tenant_id, phone, text)
+        if row:
+            await _send_reply(
+                row["helper_phone"],
+                f"❓ A customer asked:\n\n\"{text.strip()}\"\n\nReply to this message with "
+                f"the answer — I'll send it to them and remember it.",
+                tenant_id=tenant_id,
+            )
+            return "Thanks for your question! Let me check with the team and get right back to you. 🙏"
+    except Exception as exc:
+        logger.debug("escalation skipped: %s", exc)
+    return reply
+
+
 async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: Optional[str] = None) -> None:
     """Route an inbound text message.
 
@@ -296,17 +350,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
 
     # ── Escalation answer: if this phone is a helper with an open escalation, their
     # message IS the answer — relay it to the customer and learn it for next time.
-    try:
-        from vula import escalation as esc
-        open_esc = esc.open_escalation_for_helper(phone)
-    except Exception:
-        open_esc = None
-    if open_esc and text.strip() and not _DONE_RE.match(text) \
-       and not _APPROVE_RE.match(text) and not _REJECT_RE.match(text):
-        info = esc.answer_escalation(open_esc, text.strip())
-        await _send_reply(info["customer_phone"],
-                          f"About your question — {text.strip()}", tenant_id=info["tenant_id"])
-        await _send_reply(phone, "✅ Sent to the customer and saved — I'll handle this one myself next time.")
+    if await _maybe_helper_escalation_answer(phone, text):
         return
 
     if route_tenant_id:
@@ -436,24 +480,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
 
     # ── Escalate-and-learn: if the agent isn't confident, reuse a learned answer,
     # else ask a human helper on WhatsApp and hold the customer with a friendly note.
-    try:
-        from vula import escalation as esc
-        if esc.should_escalate(reply, _LAST_CONF.get()):
-            learned = esc.find_learned_answer(tenant_id, text)
-            if learned:
-                reply = learned
-            else:
-                row = esc.create_escalation(tenant_id, phone, text)
-                if row:
-                    await _send_reply(
-                        row["helper_phone"],
-                        f"❓ A customer asked:\n\n\"{text.strip()}\"\n\nReply to this message with "
-                        f"the answer — I'll send it to them and remember it.",
-                        tenant_id=tenant_id,
-                    )
-                    reply = "Thanks for your question! Let me check with the team and get right back to you. 🙏"
-    except Exception as exc:
-        logger.debug("escalation skipped: %s", exc)
+    reply = await _maybe_escalate_and_learn(tenant_id, phone, text, reply, _LAST_CONF.get())
 
     db.save(tenant_id, thread_key, "assistant", reply)
     # Pass tenant_id so the reply is sent FROM the tenant's own number
@@ -1604,6 +1631,24 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
         pass
     text_lower = text.lower().strip()
 
+    # Escalation answer: if a helper (e.g. Staci) is replying to an open escalation on
+    # this tenant's line, their message is the answer — relay + learn, don't treat it as
+    # a customer order. Runs on the commerce path too so every tenant is covered.
+    if await _maybe_helper_escalation_answer(phone, text):
+        return
+
+    # Onboarding capture: if this contact is mid opt-in/intro flow, their message is part of
+    # it (opt-in → name → delivery address → email), not a normal order. Handle + return.
+    try:
+        from vula.commerce import onboarding
+        onb_reply = await onboarding.handle_capture(tenant_id, phone, text)
+    except Exception as exc:
+        logger.debug("onboarding capture skipped: %s", exc)
+        onb_reply = None
+    if onb_reply is not None:
+        await _send_reply(phone, onb_reply, tenant_id)
+        return
+
     # Opt-out / data deletion (POPIA) — honoured on commerce lines too, so STOP
     # from a customer who receives broadcasts actually suppresses them.
     if _DELETE_RE.match(text):
@@ -1616,6 +1661,21 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
         record_inbound_consent(tenant_id, phone)
     except Exception:
         pass
+
+    # Human handoff: if an owner/agent has taken over this conversation from the
+    # shared inbox, the bot stays quiet — but we still log the customer's message
+    # so the agent sees it in the inbox thread.
+    try:
+        from vula.commerce import service as commerce_service
+        session = await commerce_service.get_or_create_session(
+            tenant_id, session_key=phone, channel="whatsapp", customer_phone=phone
+        )
+        if session.get("paused"):
+            await commerce_service.append_message(tenant_id, session["id"], "user", text)
+            logger.info("Handoff active for %s (%s) — bot muted, message logged", phone, tenant_id)
+            return
+    except Exception as exc:
+        logger.debug("Handoff check failed (non-fatal): %s", exc)
 
     # 1. Greeting — send welcome + menu
     greeting_words = {"hi", "hello", "hallo", "hey", "howzit", "good morning", "goeie dag"}
@@ -1765,13 +1825,19 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str) -> bool
         logger.warning("commerce_assistant returned no answer: %s", output.error)
         return False
 
-    await _send_reply(phone, output.answer, tenant_id)
+    # Escalate-and-learn: if the shopping assistant couldn't really answer (e.g. a
+    # question outside the catalog — delivery areas, custom orders, opening hours it
+    # doesn't know), ask the tenant's human helper on WhatsApp and hold the customer
+    # with a friendly note, instead of guessing. Same loop as the knowledge path.
+    reply = await _maybe_escalate_and_learn(tenant_id, phone, text, output.answer)
+
+    await _send_reply(phone, reply, tenant_id)
 
     # Persist this turn so the next message has context.
     if session_id:
         try:
             await commerce_service.append_message(tenant_id, session_id, "user", text)
-            await commerce_service.append_message(tenant_id, session_id, "assistant", output.answer)
+            await commerce_service.append_message(tenant_id, session_id, "assistant", reply)
         except Exception as exc:
             logger.debug("Commerce message persistence failed (non-fatal): %s", exc)
 
