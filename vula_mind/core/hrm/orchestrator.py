@@ -31,8 +31,23 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     # ClickUp first — explicit task-management phrasing only, so it never shadows
     # construction/field-ops queries. The skill itself defers if ClickUp isn't connected.
     "clickup_admin":        ["clickup", "click up", "add a task", "create a task", "new task",
-                             "my tasks", "list tasks", "task list", "to-do", "to do list",
-                             "remind me", "set a reminder", "reminder"],
+                             "my tasks", "list tasks", "task list", "to-do", "to do list", "todo",
+                             "remind me", "set a reminder", "reminder",
+                             # meeting phrases — use specific forms, not bare "meeting"
+                             # so "read the meeting notes email" doesn't get stolen
+                             "schedule a meeting", "set up a meeting", "book a meeting",
+                             "schedule meeting", "meet with", "set a meeting",
+                             # "schedule a" alone is kept for "schedule a call / demo / interview"
+                             "schedule a",
+                             "note to self", "make a note", "put on the list", "task for",
+                             "assign to", "assign a task",
+                             # follow-up: specific task-creation forms only.
+                             # Bare "follow up" / "follow-up" are intentionally absent
+                             # so "follow up email" can still reach email_admin.
+                             "follow up with", "follow-up with",
+                             "follow up on", "follow-up on",
+                             "follow up task", "follow-up task",
+                             "create a follow", "add a follow"],
     # Commerce next — clear ordering intent
     "commerce_assistant":   ["order", "buy", "cart", "checkout", "stock", "in stock", "menu",
                              "catalog", "catalogue", "track order", "add to cart",
@@ -62,7 +77,11 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "draft a ", "draft me", "compose", "reply to", "summarise the email",
                              "read the email", "read the latest",
                              "waiting on me", "to reply", "need a reply", "needs a reply",
-                             "follow up", "follow-up", "outstanding emails", "awaiting reply",
+                             # bare "follow up" / "follow-up" intentionally removed here —
+                             # they are handled by clickup_admin (higher priority in dict).
+                             # Email-specific follow-up forms remain:
+                             "follow up email", "follow-up email", "follow up on that email",
+                             "outstanding emails", "awaiting reply",
                              "gmail", "google mail"],
     # Google Drive + Gmail — provider-named only (generic 'email' goes to email_admin).
     "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "from drive"],
