@@ -131,9 +131,40 @@ async def create_task(tenant_id: str, title: str, description: str = "",
     return {"id": d.get("id"), "url": d.get("url"), "name": d.get("name")}
 
 
+async def list_team_members(tenant_id: str) -> list[dict]:
+    """List the tenant's ClickUp workspace members. Returns [{id, username, email}]."""
+    creds = _creds_or_raise(tenant_id)
+    team_id = creds.get("team_id")
+    if not team_id:
+        return []
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{_BASE}/team/{team_id}", headers=_headers(creds["token"]))
+        r.raise_for_status()
+        members = r.json().get("team", {}).get("members", [])
+    out = []
+    for m in members:
+        u = m.get("user") or {}
+        if u.get("id"):
+            out.append({"id": u.get("id"), "username": u.get("username") or "", "email": u.get("email") or ""})
+    return out
+
+
+async def resolve_assignee(tenant_id: str, name: str) -> Optional[dict]:
+    """Match `name` (e.g. 'Nolo') against workspace members' username/email — case-insensitive
+    substring match, so a first name is enough. Returns {id, username}, or None if no member matches."""
+    needle = (name or "").strip().lower()
+    if not needle:
+        return None
+    for m in await list_team_members(tenant_id):
+        if needle in (m["username"] or "").lower() or needle in (m["email"] or "").lower():
+            return {"id": m["id"], "username": m["username"]}
+    return None
+
+
 async def list_tasks(tenant_id: str, list_id: Optional[str] = None,
-                    status: Optional[str] = None, limit: int = 15) -> Any:
-    """List tasks in a list, optionally filtered by status."""
+                    status: Optional[str] = None, limit: int = 15,
+                    assignee_id: Optional[str] = None) -> Any:
+    """List tasks in a list, optionally filtered by status and/or assignee."""
     creds = _creds_or_raise(tenant_id)
     lid = list_id or default_list_id(creds)
     if not lid:
@@ -141,6 +172,8 @@ async def list_tasks(tenant_id: str, list_id: Optional[str] = None,
     params: dict[str, Any] = {"subtasks": "true", "include_closed": "false"}
     if status:
         params["statuses[]"] = status
+    if assignee_id:
+        params["assignees[]"] = assignee_id
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.get(f"{_BASE}/list/{lid}/task", headers=_headers(creds["token"]), params=params)
         r.raise_for_status()

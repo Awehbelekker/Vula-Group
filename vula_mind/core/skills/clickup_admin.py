@@ -34,18 +34,22 @@ MAX_TOOL_ITERATIONS = 3
 TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
         "name": "create_task",
-        "description": "Create a new ClickUp task.",
+        "description": "Create a new ClickUp task. For 'set up/schedule/book a meeting' requests, "
+                       "create a task titled 'Meeting: <subject>' with the parsed date/time — this "
+                       "is a reminder task, NOT a calendar invite (Vula has no calendar integration).",
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string", "description": "Task title"},
             "description": {"type": "string", "description": "Optional details"},
-            "due_date": {"type": "string", "description": "Optional due date, ISO e.g. 2026-06-30"}},
+            "due_date": {"type": "string", "description": "Optional due date, ISO e.g. 2026-06-30"},
+            "assignee": {"type": "string", "description": "Name of the person to assign this task to, e.g. 'Nolo'"}},
             "required": ["title"]},
     }},
     {"type": "function", "function": {
         "name": "list_tasks",
-        "description": "List the tenant's ClickUp tasks, optionally filtered by status.",
+        "description": "List the tenant's ClickUp tasks, optionally filtered by status and/or assignee.",
         "parameters": {"type": "object", "properties": {
             "status": {"type": "string", "description": "e.g. open, in progress, complete"},
+            "assignee": {"type": "string", "description": "Name of the person to filter by, e.g. 'Nolo'"},
             "limit": {"type": "integer"}}},
     }},
     {"type": "function", "function": {
@@ -94,8 +98,14 @@ class ClickUpAdminSkill(BaseSkill):
             "You are Vula's task assistant, managing the user's ClickUp over WhatsApp. "
             "Use the tools to create, list, and update tasks and reminders — never invent "
             "task data. Parse natural dates (e.g. 'Friday', 'tomorrow') into ISO dates when "
-            "calling tools. Keep replies short and WhatsApp-friendly, and confirm back what "
-            "you created or changed."
+            "calling tools. If the user names a person ('give Nolo a todo', 'what's on Nolo's "
+            "plate'), pass their name as the assignee argument. If a create_task result comes "
+            "back with assignee_not_found, tell the user plainly that no matching team member "
+            "was found and that the task was created unassigned — never claim it was assigned. "
+            "'Set up/schedule/book a meeting' has no calendar integration — create a task titled "
+            "'Meeting: <subject>' with the parsed date and tell the user it's noted as a "
+            "task/reminder, never say a calendar invite was sent. Keep replies short and "
+            "WhatsApp-friendly, and confirm back what you created or changed."
         )
 
     # ── Agent loop (mirrors commerce_admin) ──────────────────────────────────
@@ -195,12 +205,31 @@ class ClickUpAdminSkill(BaseSkill):
         tid = ctx["tenant_id"]
         try:
             if name == "create_task":
-                return await service.create_task(tid, title=args.get("title", ""),
-                                                 description=args.get("description", ""),
-                                                 due_date=args.get("due_date"))
+                assignee_name = args.get("assignee")
+                assignees, assignee_not_found = None, None
+                if assignee_name:
+                    member = await service.resolve_assignee(tid, assignee_name)
+                    if member:
+                        assignees = [member["id"]]
+                    else:
+                        assignee_not_found = assignee_name
+                result = await service.create_task(tid, title=args.get("title", ""),
+                                                   description=args.get("description", ""),
+                                                   due_date=args.get("due_date"),
+                                                   assignees=assignees)
+                if assignee_not_found and isinstance(result, dict):
+                    result["assignee_not_found"] = assignee_not_found
+                return result
             if name == "list_tasks":
+                assignee_id = None
+                if args.get("assignee"):
+                    member = await service.resolve_assignee(tid, args["assignee"])
+                    if not member:
+                        return {"error": f"No team member found matching '{args['assignee']}'."}
+                    assignee_id = member["id"]
                 return await service.list_tasks(tid, status=args.get("status"),
-                                               limit=args.get("limit", 15))
+                                               limit=args.get("limit", 15),
+                                               assignee_id=assignee_id)
             if name == "update_task_status":
                 return await service.update_task_status_by_name(tid, args.get("title", ""),
                                                                args.get("status", ""))
