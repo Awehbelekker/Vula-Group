@@ -18,6 +18,7 @@ import VulaBudget from './VulaBudget'
 import VulaBroadcast from './VulaBroadcast'
 import VulaCustomers from './VulaCustomers'
 import VulaAssistant from './VulaAssistant'
+import VulaInbox from './VulaInbox'
 import VulaSettings from './VulaSettings'
 import VulaDocuments from './VulaDocuments'
 import VulaProjects from './VulaProjects'
@@ -74,7 +75,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
 
   // Tenant-level module gating (business-type driven). Always show core tabs; map a few
   // tab ids to their module key. null/empty modules = show everything (no config yet).
-  const CORE = new Set(['overview', 'assistant', 'settings', 'suppliers', 'qsrates'])
+  const CORE = new Set(['overview', 'assistant', 'inbox', 'settings', 'suppliers', 'qsrates'])
   const MODMAP = { customers: 'crm', contacts: 'crm', broadcast: 'broadcasts' }
   const tenantHas = (id) => modules === null || !modules.length || CORE.has(id)
     || (modules || []).includes(MODMAP[id] || id)
@@ -103,7 +104,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
         <div style={styles.tabs}>
           {(() => {
             const GROUPS = [
-              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }],
+              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'inbox', label: '📥 Inbox' }],
               [{ id: 'orders', label: '📦 Orders' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
               [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'payments', label: '💳 Payments' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
               [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }],
@@ -132,6 +133,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
         <div style={styles.content}>
           {tab === 'overview'  && <OverviewTab tenantId={tenantId} setTab={setTab} />}
           {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
+          {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}
           {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
           {tab === 'delivery'  && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
           {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
