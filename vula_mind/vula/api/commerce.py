@@ -399,111 +399,6 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     return {"answer": answer, "ok": bool(out.success and out.answer)}
 
 
-# ── Shared inbox (conversations + human handoff) ─────────────────────────────
-# Owners see live customer WhatsApp chats and can take over from the bot.
-# Handoff state is stored in commerce_conversation_sessions.last_skill:
-#   'human_handoff' → a human has taken over; the bot stays quiet for this chat.
-
-_HANDOFF = "human_handoff"
-
-
-@router.get("/{tenant_id}/admin/conversations")
-async def admin_list_conversations(tenant_id: str, limit: int = Query(60, ge=1, le=200)):
-    """List customer conversations with a last-message preview + handoff status."""
-    db = service._client()
-    sessions = (
-        db.table("commerce_conversation_sessions").select("*")
-        .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
-    ).data or []
-    # Bulk-fetch recent messages → last message per session (avoids N+1).
-    msgs = (
-        db.table("commerce_conversation_messages")
-        .select("session_id,role,content,created_at")
-        .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(600).execute()
-    ).data or []
-    last: dict = {}
-    for m in msgs:
-        last.setdefault(m["session_id"], m)
-
-    convos = []
-    for s in sessions:
-        # Only show real customer chats (skip the owner admin sessions).
-        if str(s.get("session_key", "")).startswith(("admin:", "webadmin:")):
-            continue
-        lm = last.get(s["id"]) or {}
-        convos.append({
-            "session_id": s["id"],
-            "customer_name": s.get("customer_name"),
-            "customer_phone": s.get("customer_phone") or s.get("session_key"),
-            "channel": s.get("channel") or "whatsapp",
-            "paused": s.get("last_skill") == _HANDOFF,
-            "last_message": (lm.get("content") or "")[:120],
-            "last_role": lm.get("role"),
-            "last_at": lm.get("created_at") or s.get("updated_at"),
-        })
-    convos.sort(key=lambda c: c.get("last_at") or "", reverse=True)
-    return {"conversations": convos, "count": len(convos)}
-
-
-@router.get("/{tenant_id}/admin/conversations/{session_id}/messages")
-async def admin_conversation_messages(tenant_id: str, session_id: str, limit: int = Query(120, ge=1, le=500)):
-    """Full message thread for one conversation."""
-    db = service._client()
-    msgs = (
-        db.table("commerce_conversation_messages")
-        .select("role,content,created_at")
-        .eq("tenant_id", tenant_id).eq("session_id", session_id)
-        .order("created_at", desc=True).limit(limit).execute()
-    ).data or []
-    sess = (
-        db.table("commerce_conversation_sessions").select("*")
-        .eq("tenant_id", tenant_id).eq("id", session_id).limit(1).execute()
-    ).data
-    s0 = sess[0] if sess else {}
-    return {
-        "messages": list(reversed(msgs)),
-        "paused": s0.get("last_skill") == _HANDOFF,
-        "customer": s0.get("customer_name"),
-        "phone": s0.get("customer_phone") or s0.get("session_key"),
-    }
-
-
-@router.post("/{tenant_id}/admin/conversations/{session_id}/handoff")
-async def admin_conversation_handoff(tenant_id: str, session_id: str, body: dict):
-    """Pause the bot for this chat (human takes over) or hand it back to the bot."""
-    paused = bool(body.get("paused", True))
-    service._client().table("commerce_conversation_sessions").update(
-        {"last_skill": _HANDOFF if paused else None, "updated_at": service._now()}
-    ).eq("tenant_id", tenant_id).eq("id", session_id).execute()
-    return {"session_id": session_id, "paused": paused}
-
-
-@router.post("/{tenant_id}/admin/conversations/{session_id}/reply")
-async def admin_conversation_reply(tenant_id: str, session_id: str, body: dict):
-    """Owner sends a manual WhatsApp reply — takes over the chat (pauses the bot)."""
-    text = (body.get("message") or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="message is required")
-    db = service._client()
-    sess = (
-        db.table("commerce_conversation_sessions").select("*")
-        .eq("tenant_id", tenant_id).eq("id", session_id).limit(1).execute()
-    ).data
-    if not sess:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    to = sess[0].get("customer_phone") or sess[0].get("session_key")
-
-    from vula.api.whatsapp import _send_reply
-    sent = await _send_reply(to, text, tenant_id)
-
-    # Taking over → pause the bot and record the agent message.
-    db.table("commerce_conversation_sessions").update(
-        {"last_skill": _HANDOFF, "updated_at": service._now()}
-    ).eq("tenant_id", tenant_id).eq("id", session_id).execute()
-    await service.append_message(tenant_id, session_id, "agent", text)
-    return {"sent": sent, "paused": True}
-
-
 @router.get("/{tenant_id}/admin/stats")
 async def admin_stats(tenant_id: str):
     """Revenue/order stats including invoice summary for the merchant dashboard."""
@@ -2484,3 +2379,105 @@ async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest):
     await service.append_message(tenant_id, session_id, "agent", text)
 
     return {"ok": True, "session_id": session_id, "sent": text}
+
+
+# ── Team inbox: assignment, notes, tags, canned replies (migration 048) ───────
+class ConvMetaRequest(BaseModel):
+    assigned_to: Optional[str] = None
+    agent_note: Optional[str] = None
+    tags: Optional[list] = None
+
+
+@router.post("/{tenant_id}/admin/conversations/{session_id}/meta")
+async def admin_conv_meta(tenant_id: str, session_id: str, body: ConvMetaRequest):
+    """Assign a conversation to a team member, add an internal note, or set triage tags."""
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not patch:
+        return {"ok": True, "session_id": session_id, "unchanged": True}
+    patch["updated_at"] = service._now()
+    try:
+        service._client().table("commerce_conversation_sessions").update(patch).eq(
+            "tenant_id", tenant_id).eq("id", session_id).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"{exc} (run migration 048?)")
+    return {"ok": True, "session_id": session_id, **patch}
+
+
+@router.get("/{tenant_id}/admin/canned-replies")
+async def admin_list_canned(tenant_id: str):
+    try:
+        rows = (service._client().table("commerce_canned_replies").select("*")
+                .eq("tenant_id", tenant_id).order("sort").execute().data or [])
+    except Exception as exc:
+        log.debug("canned replies skipped (run migration 048?): %s", exc)
+        rows = []
+    return {"tenant_id": tenant_id, "canned_replies": rows}
+
+
+@router.post("/{tenant_id}/admin/canned-replies")
+async def admin_add_canned(tenant_id: str, body: dict):
+    b = body or {}
+    title, txt = (b.get("title") or "").strip(), (b.get("body") or "").strip()
+    if not (title and txt):
+        raise HTTPException(status_code=400, detail="title and body are required")
+    row = {"tenant_id": tenant_id, "title": title[:60], "body": txt, "sort": int(b.get("sort") or 99)}
+    res = service._client().table("commerce_canned_replies").insert(row).execute()
+    return {"ok": True, "canned_reply": (res.data or [row])[0]}
+
+
+@router.delete("/{tenant_id}/admin/canned-replies/{reply_id}")
+async def admin_delete_canned(tenant_id: str, reply_id: str):
+    service._client().table("commerce_canned_replies").delete().eq(
+        "tenant_id", tenant_id).eq("id", reply_id).execute()
+    return {"ok": True, "id": reply_id}
+
+
+@router.get("/{tenant_id}/admin/cs-metrics")
+async def admin_cs_metrics(tenant_id: str):
+    """Customer-service economics — including cost-per-conversation, the number that beats Cue's
+    ~R20/AI-resolution because local-first inference makes conversations near-free at the margin."""
+    from datetime import datetime, timezone, timedelta
+    ZAR = 18.5  # rough USD→ZAR
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30))
+    db = service._client()
+
+    ai_usd = calls = 0.0
+    try:
+        for r in (db.table("vula_ai_usage").select("est_cost_usd,calls")
+                  .eq("tenant_id", tenant_id).gte("day", cutoff.date().isoformat()).execute().data or []):
+            ai_usd += float(r.get("est_cost_usd") or 0)
+            calls += int(r.get("calls") or 0)
+    except Exception:
+        pass
+
+    convos = 0
+    try:
+        convos = len((db.table("commerce_conversation_sessions").select("id")
+                      .eq("tenant_id", tenant_id).gte("updated_at", cutoff.isoformat())
+                      .limit(5000).execute().data or []))
+    except Exception:
+        pass
+
+    # Local-first share (near-zero marginal cost) from the routing telemetry.
+    local = cloud = 0
+    try:
+        for r in (db.table("vula_reasoning_telemetry").select("outcome")
+                  .eq("system", "vula-llm-router").gte("created_at", cutoff.isoformat())
+                  .limit(5000).execute().data or []):
+            if r.get("outcome") == "local":
+                local += 1
+            elif r.get("outcome") == "cloud":
+                cloud += 1
+    except Exception:
+        pass
+    total_dec = local + cloud
+
+    cpc_zar = round((ai_usd * ZAR) / convos, 2) if convos else 0.0
+    return {
+        "tenant_id": tenant_id, "period_days": 30,
+        "conversations": convos, "ai_calls": int(calls),
+        "ai_cost_zar": round(ai_usd * ZAR, 2),
+        "cost_per_conversation_zar": cpc_zar,
+        "pct_handled_local": round(100 * local / total_dec) if total_dec else None,
+        "benchmark_cue_per_resolution_zar": 20,  # Cue £0.89 ≈ ~R20
+    }

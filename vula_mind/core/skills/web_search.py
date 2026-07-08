@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import logging
 import re
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
-from config import settings
 from core.skills.base import BaseSkill, SkillInput, SkillOutput
 
 logger = logging.getLogger(__name__)

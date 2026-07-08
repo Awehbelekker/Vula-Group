@@ -10,7 +10,6 @@ vula/api/payments.py — connect SA payment gateways + receive their webhooks.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -66,7 +65,6 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
     prov = payments.get_provider(provider)
     if not prov:
         return {"received": True}
-    row = next((r for r in (payments.default_provider_row(tenant_id) and [payments.default_provider_row(tenant_id)] or [])), None)
     # Load this provider's creds (may differ from default).
     creds = {}
     try:

@@ -39,18 +39,24 @@ def test_query_without_auth_when_no_key_configured():
 # ── Input validation ──────────────────────────────────────────────────────────
 
 def test_query_rejects_empty_question():
-    resp = client.post("/query", json={"tenant_id": "test", "question": "   "})
-    assert resp.status_code == 422
+    with patch("vula.api.server.settings") as mock_settings:
+        mock_settings.api_key = ""  # isolate validation from the auth check (own test above)
+        resp = client.post("/query", json={"tenant_id": "test", "question": "   "})
+        assert resp.status_code == 422
 
 
 def test_query_rejects_invalid_tenant_id():
-    resp = client.post("/query", json={"tenant_id": "../../etc/passwd", "question": "test"})
-    assert resp.status_code == 422
+    with patch("vula.api.server.settings") as mock_settings:
+        mock_settings.api_key = ""
+        resp = client.post("/query", json={"tenant_id": "../../etc/passwd", "question": "test"})
+        assert resp.status_code == 422
 
 
 def test_query_rejects_tenant_with_special_chars():
-    resp = client.post("/query", json={"tenant_id": "tenant<script>", "question": "test"})
-    assert resp.status_code == 422
+    with patch("vula.api.server.settings") as mock_settings:
+        mock_settings.api_key = ""
+        resp = client.post("/query", json={"tenant_id": "tenant<script>", "question": "test"})
+        assert resp.status_code == 422
 
 
 def test_valid_tenant_id_formats():

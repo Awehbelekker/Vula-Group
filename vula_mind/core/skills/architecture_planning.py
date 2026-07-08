@@ -36,7 +36,6 @@ class ArchitecturePlanningSkill(BaseSkill):
             # Tenant's own context — past projects, fee schedules
             tenant_pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
             tenant_chunks = await tenant_pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
-            strong_tenant_hit = bool(tenant_chunks and tenant_chunks[0].get("score", 0) > 0.55)
             if tenant_chunks:
                 contexts.append("## Your practice's knowledge\n" + "\n\n".join(
                     f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"

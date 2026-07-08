@@ -303,7 +303,6 @@ async def get_customers(
     rows = result.data or []
 
     # Aggregate per phone
-    from collections import defaultdict
     from datetime import datetime, timezone, timedelta
     cust: dict[str, dict] = {}
     for r in rows:

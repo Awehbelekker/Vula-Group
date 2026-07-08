@@ -311,7 +311,6 @@ async def _chase_unpaid_orders() -> None:
         return
 
     from datetime import datetime, timezone, timedelta
-    from vula.commerce import service as _commerce
 
     tenant_id = "off-the-hook"
     phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
@@ -576,7 +575,7 @@ async def _send_oth_sales_summary() -> None:
             for name, qty in top:
                 lines.append(f"  - {name} x{qty}")
         if unpaid_orders:
-            lines.append(f"\nUnpaid orders:")
+            lines.append("\nUnpaid orders:")
             for o in unpaid_orders[:5]:
                 lines.append(
                     f"  {o['display_id']} — {o['customer_name']} "

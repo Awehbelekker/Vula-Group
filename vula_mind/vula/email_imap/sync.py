@@ -10,7 +10,6 @@ Sync position is the IMAP UID stored on the account row, so nothing is processed
 from __future__ import annotations
 
 import email
-import imaplib
 import logging
 import re
 from datetime import datetime, timezone
@@ -195,7 +194,6 @@ def _upsert_contact(db, tenant_id: str, addr: str, name: str, kind: str, when: s
 
 async def process_email_sync(tenant_id: str, max_emails: int = 20) -> dict:
     """Sync one tenant: build contacts + file work attachments from new mail."""
-    import asyncio
     lock = _lock_for(tenant_id)
     if lock.locked():
         return {"synced": 0, "skipped": "sync already running"}

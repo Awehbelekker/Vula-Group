@@ -15,7 +15,6 @@ import smtplib
 import ssl
 from email.header import decode_header, make_header
 from email.message import EmailMessage
-from email.utils import parsedate_to_datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
