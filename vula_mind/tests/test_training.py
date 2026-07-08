@@ -144,6 +144,10 @@ async def test_training_kb_status_seeded():
 
 
 # ── _rag_reply fallback ───────────────────────────────────────────────────────
+# _rag_reply tries the full multi-agent runner FIRST (a real, non-deterministic LLM
+# call) and only falls through to the VulaIngestionPipeline-based logic these tests
+# exercise if that runner errors — so every test here must also force the runner to
+# fail, or it never reaches (and never deterministically tests) the fallback at all.
 
 @pytest.mark.asyncio
 async def test_rag_reply_uses_training_fallback_when_no_tenant_sources():
@@ -162,7 +166,8 @@ async def test_rag_reply_uses_training_fallback_when_no_tenant_sources():
             return mock_training_pipeline
         return mock_tenant_pipeline
 
-    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", side_effect=_pipeline_factory):
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", side_effect=_pipeline_factory), \
+         patch("core.agent_runner.get_agent_runner", side_effect=RuntimeError("agent runner unavailable in test")):
         from vula.api.whatsapp import _rag_reply
         reply = await _rag_reply("tenant-abc", "What is a PC Sum?")
 
@@ -183,7 +188,8 @@ async def test_rag_reply_prefers_tenant_sources_over_training():
             return mock_training_pipeline
         return mock_tenant_pipeline
 
-    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", side_effect=_pipeline_factory):
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", side_effect=_pipeline_factory), \
+         patch("core.agent_runner.get_agent_runner", side_effect=RuntimeError("agent runner unavailable in test")):
         from vula.api.whatsapp import _rag_reply
         reply = await _rag_reply("tenant-abc", "What is our PC sum budget?")
 
@@ -196,7 +202,8 @@ async def test_rag_reply_fallback_message_when_both_empty():
     mock_pipeline = AsyncMock()
     mock_pipeline.query = AsyncMock(return_value=[])
 
-    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline):
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline), \
+         patch("core.agent_runner.get_agent_runner", side_effect=RuntimeError("agent runner unavailable in test")):
         from vula.api.whatsapp import _rag_reply
         reply = await _rag_reply("tenant-abc", "Random question with no match")
 
