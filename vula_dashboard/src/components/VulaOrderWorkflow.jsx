@@ -28,6 +28,10 @@ export default function VulaOrderWorkflow({ tenantId }) {
 
   if (!s) return null;
   const field = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 };
+  const methods = Array.isArray(s.payment_methods) ? s.payment_methods : ["online", "cod", "eft"];
+  const toggleMethod = (m, on) =>
+    save({ payment_methods: on ? [...new Set([...methods, m])] : methods.filter((x) => x !== m) });
+  const PM = [["online", "Card / online"], ["cod", "Pay on delivery"], ["eft", "EFT / bank transfer"]];
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
@@ -62,6 +66,29 @@ export default function VulaOrderWorkflow({ tenantId }) {
           <input defaultValue={s.fulfillment_email || ""} placeholder="kitchen@…" style={field}
             onBlur={(e) => e.target.value !== (s.fulfillment_email || "") && save({ fulfillment_email: e.target.value })} />
         </label>
+      </div>
+
+      <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 16, paddingTop: 14 }}>
+        <span style={{ fontWeight: 700, color: C.text, fontSize: 13 }}>Payment options offered to customers</span>
+        <p style={{ fontSize: 12, color: C.muted, margin: "2px 0 10px" }}>
+          Which ways can customers pay when ordering over WhatsApp?
+        </p>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+          {PM.map(([key, label]) => (
+            <label key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: C.text, cursor: "pointer" }}>
+              <input type="checkbox" checked={methods.includes(key)} onChange={(e) => toggleMethod(key, e.target.checked)} />
+              {label}
+            </label>
+          ))}
+        </div>
+        {methods.includes("eft") && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 11, color: C.muted, textTransform: "uppercase" }}>EFT / bank details (shown to customers who choose EFT)</span>
+            <textarea defaultValue={s.eft_details || ""} rows={4} style={{ ...field, resize: "vertical", fontFamily: "inherit" }}
+              placeholder={"Bank: FNB\nAccount name: Off the Hook\nAccount no: 1234567890\nBranch: 250655"}
+              onBlur={(e) => e.target.value !== (s.eft_details || "") && save({ eft_details: e.target.value })} />
+          </label>
+        )}
       </div>
     </div>
   );

@@ -1,79 +1,176 @@
-/**
- * VulaReports.jsx — Sales Trend + Product Performance (Phase-1 reporting).
- * Reads /admin/reports (tenant-scoped, integer cents).
- */
 import { useState, useEffect, useCallback } from "react";
-import { T } from "../theme/tokens";
-import { Card, StatCard, SectionTitle } from "./ui";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
-const rand = (c) => "R" + Math.round((c || 0) / 100).toLocaleString("en-ZA");
+
+const C = {
+  bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
+  green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680",
+  surfaceAlt: "#F0EDE5", greenLight: "#EAF2EF", amber: "#C4861A",
+};
+
+function fmt(cents) {
+  return `R ${(cents / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
+}
+
+function StatCard({ label, value, sub }) {
+  return (
+    <div style={{
+      background: C.surface, border: `1px solid ${C.border}`,
+      borderRadius: 10, padding: "16px 20px",
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: "uppercase", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: C.text }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function BarChart({ data }) {
+  const max = Math.max(...data.map(d => d.revenue_cents), 1);
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 120, padding: "0 4px" }}>
+      {data.map((d, i) => {
+        const pct = (d.revenue_cents / max) * 100;
+        const label = d.date?.slice(5); // MM-DD
+        return (
+          <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+            <div
+              title={`${label}: ${fmt(d.revenue_cents)} · ${d.orders} orders`}
+              style={{
+                width: "100%", background: d.revenue_cents > 0 ? C.green : C.border,
+                height: `${Math.max(pct, 2)}%`, borderRadius: "3px 3px 0 0",
+                opacity: 0.85, cursor: "default", transition: "opacity 0.15s",
+              }}
+            />
+            {data.length <= 14 && (
+              <div style={{ fontSize: 9, color: C.muted, writingMode: "vertical-lr", transform: "rotate(180deg)" }}>
+                {label}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function VulaReports({ tenantId }) {
   const [days, setDays] = useState(30);
-  const [data, setData] = useState({ revenue_trend: [], top_products: [], total_revenue_cents: 0, total_orders: 0 });
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (d) => {
     if (!tenantId) return;
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports?days=${days}`);
-    setData(await r.json());
-  }, [tenantId, days]);
-  useEffect(() => { load(); }, [load]);
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports?days=${d}`);
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      setData(await res.json());
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }, [tenantId]);
 
-  const trend = data.revenue_trend || [];
-  const max = Math.max(1, ...trend.map((d) => d.revenue_cents));
-  const top = data.top_products || [];
-  const maxP = Math.max(1, ...top.map((p) => p.revenue_cents));
-  const aov = data.total_orders ? data.total_revenue_cents / data.total_orders : 0;
+  useEffect(() => { load(days); }, [load, days]);
+
+  const avgCents = data?.total_orders > 0 ? Math.round(data.total_revenue_cents / data.total_orders) : 0;
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
-        <SectionTitle sub="Sales trend & product performance">Reports</SectionTitle>
+    <div style={{ padding: "4px 0" }}>
+      {/* Period selector */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: C.text }}>Sales Reports</h2>
         <div style={{ display: "flex", gap: 6 }}>
-          {[7, 30, 90].map((d) => (
-            <button key={d} onClick={() => setDays(d)} style={{ padding: "6px 12px", borderRadius: T.rPill, fontSize: 12, cursor: "pointer",
-              border: `1px solid ${days === d ? T.accent : T.border}`, background: days === d ? T.accent : T.surface, color: days === d ? T.onAccent : T.muted }}>{d}d</button>
+          {[7, 14, 30, 90].map(n => (
+            <button key={n} onClick={() => setDays(n)} style={{
+              padding: "6px 14px", fontSize: 12, fontWeight: 600, borderRadius: 6,
+              border: `1px solid ${days === n ? C.green : C.border}`,
+              background: days === n ? C.greenLight : C.surface,
+              color: days === n ? C.green : C.muted, cursor: "pointer",
+            }}>{n}d</button>
           ))}
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, margin: "16px 0 20px" }}>
-        <StatCard label={`Revenue · ${days}d`} value={rand(data.total_revenue_cents)} accent />
-        <StatCard label="Orders" value={data.total_orders || 0} />
-        <StatCard label="Avg order value" value={rand(aov)} />
-      </div>
+      {error && <div style={{ padding: 12, background: "#FDEDEC", borderRadius: 8, color: "#C0392B", fontSize: 13, marginBottom: 20 }}>{error}</div>}
 
-      {/* Sales trend */}
-      <Card style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, marginBottom: 14 }}>Sales trend</div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: trend.length > 45 ? 1 : 3, height: 140 }}>
-          {trend.map((d) => (
-            <div key={d.date} title={`${d.date}: ${rand(d.revenue_cents)} · ${d.orders} orders`}
-              style={{ flex: 1, background: T.accent, opacity: 0.25 + 0.75 * (d.revenue_cents / max),
-                height: `${Math.max(2, (d.revenue_cents / max) * 100)}%`, borderRadius: "3px 3px 0 0", minWidth: 2 }} />
-          ))}
-        </div>
-        {trend.length === 0 && <div style={{ fontSize: 13, color: T.muted, padding: 12 }}>No sales in this period.</div>}
-      </Card>
+      {loading && <div style={{ padding: 60, textAlign: "center", color: C.muted }}>Loading…</div>}
 
-      {/* Product performance */}
-      <Card>
-        <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, marginBottom: 14 }}>Top products</div>
-        {top.length === 0 && <div style={{ fontSize: 13, color: T.muted }}>No product sales yet.</div>}
-        {top.map((p) => (
-          <div key={p.name} style={{ marginBottom: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 3 }}>
-              <span style={{ color: T.text }}>{p.name} <span style={{ color: T.muted, fontSize: 11 }}>· {p.units} units</span></span>
-              <span className="vula-money" style={{ color: T.ink, fontWeight: 600 }}>{rand(p.revenue_cents)}</span>
+      {!loading && data && (
+        <>
+          {/* Summary stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 24 }}>
+            <StatCard label="Total Revenue" value={fmt(data.total_revenue_cents)} sub={`last ${days} days`} />
+            <StatCard label="Total Orders" value={data.total_orders} sub="paid / confirmed / dispatched" />
+            <StatCard label="Avg Order Value" value={fmt(avgCents)} sub="per order" />
+          </div>
+
+          {/* Revenue trend */}
+          <div style={{
+            background: C.surface, border: `1px solid ${C.border}`,
+            borderRadius: 10, padding: 20, marginBottom: 24,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 16 }}>
+              Revenue Trend — last {days} days
             </div>
-            <div style={{ height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: "hidden" }}>
-              <div style={{ width: `${(p.revenue_cents / maxP) * 100}%`, height: "100%", background: T.accent, borderRadius: 3 }} />
+            {data.revenue_trend && data.revenue_trend.length > 0 ? (
+              <BarChart data={data.revenue_trend} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>
+                No revenue data for this period.
+              </div>
+            )}
+            <div style={{ marginTop: 12, display: "flex", gap: 20, fontSize: 11, color: C.muted }}>
+              <span>Hover bars for daily detail</span>
+              {data.revenue_trend?.length > 14 && <span>Showing {data.revenue_trend.length} days</span>}
             </div>
           </div>
-        ))}
-      </Card>
-      <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 20 }}>Powered by Vula · paid orders only</p>
+
+          {/* Top products */}
+          <div style={{
+            background: C.surface, border: `1px solid ${C.border}`,
+            borderRadius: 10, padding: 20,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 16 }}>
+              Top Products by Revenue
+            </div>
+            {data.top_products && data.top_products.length > 0 ? (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <th style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>Product</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>Units</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>Revenue</th>
+                    <th style={{ padding: "6px 8px", width: 120 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.top_products.map((p, i) => {
+                    const maxRev = data.top_products[0]?.revenue_cents || 1;
+                    const pct = Math.round((p.revenue_cents / maxRev) * 100);
+                    return (
+                      <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: C.text }}>{p.name}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", color: C.muted }}>{p.units}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: C.text }}>{fmt(p.revenue_cents)}</td>
+                        <td style={{ padding: "10px 8px" }}>
+                          <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${pct}%`, background: C.green, borderRadius: 3 }} />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>
+                No product data for this period.
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

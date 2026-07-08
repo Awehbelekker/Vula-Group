@@ -1382,6 +1382,22 @@ def _advance(next_run_at: str, recurrence: str):
     return nxt.isoformat()
 
 
+@router.post("/{tenant_id}/admin/recipes")
+async def admin_add_recipe(tenant_id: str, body: dict):
+    """Staci adds a recipe → ingested into the tenant KB so the assistant can recommend it while
+    a customer is ordering."""
+    b = body or {}
+    title = (b.get("title") or "").strip()
+    text = (b.get("text") or "").strip()
+    if not (title and text):
+        raise HTTPException(status_code=400, detail="title and text are required")
+    slug = "".join(c if c.isalnum() else "-" for c in title.lower()).strip("-")[:60] or "recipe"
+    from vula.ingestion.pipeline import VulaIngestionPipeline
+    await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
+        content=f"# {title}\n\n{text}\n\n(Off the Hook recipe)", filename=f"recipe-{slug}.md")
+    return {"ok": True, "title": title}
+
+
 @router.get("/{tenant_id}/admin/campaigns")
 async def admin_list_campaigns(tenant_id: str):
     try:

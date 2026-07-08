@@ -24,7 +24,53 @@ from vula.commerce import service
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 4
+MAX_TOOL_ITERATIONS = 6
+
+# Known tool names — so we only treat text as a tool call when it actually names one of ours.
+_TOOL_NAMES = {"list_products", "add_to_cart", "view_cart", "start_checkout", "track_order",
+               "get_daily_catch", "suggest_recipe", "create_quote", "place_order", "review_order",
+               "remove_from_cart", "change_order"}
+
+
+def _parse_text_toolcall(text: str):
+    """Some models emit a tool call as text instead of a structured tool_calls object — either as
+    valid JSON ({"function":"get_daily_catch","arguments":{}}) or malformed (no outer braces, e.g.
+    "function": "suggest_recipe", "arguments": {"dish":"hake"}). Extract (name, args) from either so
+    we never leak it to the customer. Returns None if the text isn't a recognised tool call."""
+    if not text or '"' not in text:
+        return None
+    # 1) Well-formed JSON object anywhere in the text.
+    s = re.sub(r"^\s*```(?:json)?|```\s*$", "", text.strip(), flags=re.IGNORECASE).strip()
+    i, j = s.find("{"), s.rfind("}")
+    if 0 <= i < j:
+        try:
+            d = json.loads(s[i:j + 1])
+            if isinstance(d, dict):
+                name = d.get("function") or d.get("name") or d.get("tool")
+                if isinstance(name, dict):
+                    name = name.get("name")
+                args = d.get("arguments") or d.get("parameters") or d.get("args") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+                if isinstance(name, str) and name in _TOOL_NAMES and isinstance(args, dict):
+                    return name, args
+        except Exception:
+            pass
+    # 2) Malformed — regex out the function name + arguments object.
+    m = re.search(r'"(?:function|name|tool)"\s*:\s*"([a-zA-Z_]+)"', text)
+    if m and m.group(1) in _TOOL_NAMES:
+        args: Dict[str, Any] = {}
+        am = re.search(r'"(?:arguments|parameters|args)"\s*:\s*(\{[^{}]*\})', text)
+        if am:
+            try:
+                args = json.loads(am.group(1))
+            except Exception:
+                args = {}
+        return m.group(1), args
+    return None
 
 # OpenAI-style function specs — used by litellm for both Ollama and OpenRouter.
 TOOL_SPECS: List[Dict[str, Any]] = [
@@ -152,6 +198,86 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "place_order",
+            "description": (
+                "Place the customer's cart as a confirmed order and return an itemised order "
+                "confirmation (their quotation). Call this once you have the delivery address AND "
+                "the customer has chosen how to pay. payment_method must be one of: 'online' (pay "
+                "by card now), 'cod' (pay on delivery), or 'eft' (bank transfer). Always send the "
+                "returned confirmation back to the customer."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "payment_method": {
+                        "type": "string",
+                        "enum": ["online", "cod", "eft"],
+                        "description": "How the customer chose to pay: online card, cod (pay on delivery), or eft (bank transfer).",
+                    },
+                    "delivery_address": {"type": "string", "description": "Where to deliver the order."},
+                    "customer_name": {"type": "string", "description": "Customer's name."},
+                    "delivery_slot": {
+                        "type": "string",
+                        "enum": ["morning", "afternoon", "express"],
+                        "description": "Preferred delivery slot, default morning.",
+                    },
+                    "delivery_notes": {"type": "string", "description": "Any special delivery instructions."},
+                },
+                "required": ["payment_method", "delivery_address"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "review_order",
+            "description": (
+                "Show the customer an itemised order summary (total, delivery, payment) to confirm "
+                "BEFORE it's placed. ALWAYS call this before place_order. Returns a preview to send "
+                "them; then wait for them to reply CONFIRM. Same fields as place_order."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "payment_method": {"type": "string", "enum": ["online", "cod", "eft"]},
+                    "delivery_address": {"type": "string"},
+                    "customer_name": {"type": "string"},
+                    "delivery_slot": {"type": "string", "enum": ["morning", "afternoon", "express"]},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_from_cart",
+            "description": "Remove a product from the cart by name (used when the customer wants to change their order before confirming).",
+            "parameters": {
+                "type": "object",
+                "properties": {"product": {"type": "string", "description": "Product name to remove."}},
+                "required": ["product"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "change_order",
+            "description": (
+                "The customer wants to change an order they've ALREADY placed. Flags their most recent "
+                "order to the shop team to update. Use only after place_order; for changes before "
+                "confirming, edit the cart instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"change": {"type": "string", "description": "What they want changed."}},
+                "required": ["change"],
+            },
+        },
+    },
 ]
 
 
@@ -206,8 +332,17 @@ class CommerceAssistantSkill(BaseSkill):
             "suggest_recipe — it returns a recipe AND shows which ingredients are in stock.\n"
             "- After suggesting a recipe, offer to add the available ingredients to their cart.\n"
             "- Be proactive: if a customer buys yellowtail, suggest a recipe for it unprompted.\n"
-            "- When the customer is ready to pay, call start_checkout and share the link.\n"
-            "- For quotes, call create_quote and share the quote number and total."
+            "- To ORDER over WhatsApp: confirm the cart, get the delivery address, then ask how "
+            "they'd like to pay — *online card*, *pay on delivery*, or *EFT / bank transfer*.\n"
+            "- Then call *review_order* and send the customer the summary it returns. WAIT for them "
+            "to reply *CONFIRM*. Do NOT call place_order until they confirm.\n"
+            "- If they want to change something before confirming, use add_to_cart / remove_from_cart, "
+            "then call review_order again to show the updated summary.\n"
+            "- Once they reply CONFIRM, call *place_order* with the payment_method and send the "
+            "returned confirmation (order number + payment instructions) — that is their receipt.\n"
+            "- If a customer wants to change an order they ALREADY placed, call change_order.\n"
+            "- Only use start_checkout if the customer specifically wants to pay on the website.\n"
+            "- For a price quote without ordering, call create_quote and share the number and total."
             + kb_block
         )
 
@@ -236,14 +371,18 @@ class CommerceAssistantSkill(BaseSkill):
         self, system_msg: str, history: str, question: str, ctx: Dict[str, Any]
     ) -> str:
         import litellm
+        from uuid import uuid4
+        from core.llm_router import escalate_to_cloud, looks_unreliable
 
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
-
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
         if history:
             messages.append({"role": "user", "content": f"(Earlier conversation)\n{history}"})
         messages.append({"role": "user", "content": question})
+
+        run_id = str(uuid4())
+        model, api_key, api_base = await resolve_generation_route(
+            task_type="commerce_chat", messages=messages, run_id=run_id)
 
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(
@@ -259,7 +398,37 @@ class CommerceAssistantSkill(BaseSkill):
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
-                return (msg.content or "").strip()
+                answer = (msg.content or "").strip()
+                # Some models (esp. local ones) emit the tool call as raw JSON TEXT instead of a
+                # structured tool_calls object. Never send that JSON to the customer — detect it,
+                # run the tool, feed the result back, and loop so the model writes a real reply.
+                parsed = _parse_text_toolcall(answer)
+                if parsed:
+                    # A text tool-call means the (local) model isn't doing structured tool-calling.
+                    # Escalate this turn to the cloud model — which does — and retry cleanly.
+                    if model.startswith("ollama/"):
+                        esc = escalate_to_cloud("local_toolcall_text", run_id=run_id, task_type="commerce_chat")
+                        if esc:
+                            model, api_key, api_base = esc
+                            continue
+                    # No cloud available → run the parsed tool ourselves and loop for a reply.
+                    tname, targs = parsed
+                    result = await self._dispatch_tool(tname, targs, ctx)
+                    messages.append({"role": "assistant", "content": answer})
+                    messages.append({"role": "user", "content":
+                        f"(system: the {tname} tool returned: {json.dumps(result, default=str)[:1500]}. "
+                        f"Now reply to the customer in plain, friendly language — never output JSON.)"})
+                    continue
+                # Requirement (b): a weak local final answer escalates to cloud (tool turns stay local).
+                if model.startswith("ollama/") and looks_unreliable(answer):
+                    esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="commerce_chat")
+                    if esc:
+                        model, api_key, api_base = esc
+                        resp = await litellm.acompletion(
+                            model=model, messages=messages, temperature=0.3,
+                            max_tokens=900, api_key=api_key, api_base=api_base)
+                        answer = (resp.choices[0].message.content or "").strip()
+                return answer
 
             messages.append(
                 {
@@ -320,6 +489,14 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_suggest_recipe(tid, args)
         if name == "create_quote":
             return await self._exec_create_quote(tid, sid, phone, args)
+        if name == "review_order":
+            return await self._exec_review_order(tid, sid, phone, args)
+        if name == "remove_from_cart":
+            return await self._exec_remove_from_cart(tid, sid, phone, args)
+        if name == "change_order":
+            return await self._exec_change_order(tid, phone, args)
+        if name == "place_order":
+            return await self._exec_place_order(tid, sid, phone, args)
         return {"error": f"unknown tool {name}"}
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -450,9 +627,36 @@ class CommerceAssistantSkill(BaseSkill):
         except Exception:
             products, catalog_names, catalog_str = [], [], ""
 
+        # Ground in the tenant's OWN recipe knowledge base first, so recommendations adapt a real
+        # OTH recipe rather than being invented fresh each time.
+        kb_recipe = ""
+        try:
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(f"{dish} recipe", top_k=2)
+            kb_recipe = "\n\n".join((c.get("text") or "")[:600] for c in (chunks or []) if c.get("text"))
+        except Exception:
+            kb_recipe = ""
+        grounding = (f"\nOur own recipe to base this on (adapt it, keep it true to ours):\n{kb_recipe}\n"
+                     if kb_recipe.strip() else "")
+
+        # Live web inspiration (B): fresh chef-style ideas. Used as INSPIRATION only — the model
+        # writes an Off the Hook-voiced recipe, never copies wording (copyright-safe). Best-effort.
+        web_ref = ""
+        try:
+            from core.skills.web_search import _ddg_search
+            hits = await _ddg_search(f"{dish} recipe", limit=4)
+            web_ref = "\n".join(f"- {h.get('title', '')} ({h.get('url', '')})"
+                                for h in (hits or [])[:4] if h.get("title"))
+        except Exception:
+            web_ref = ""
+        inspiration = (f"\nFresh ideas from the web for INSPIRATION ONLY — adapt into Off the Hook's own "
+                       f"voice, do NOT copy any wording; you may nod to the dish or chef style:\n{web_ref}\n"
+                       if web_ref.strip() else "")
+
         prompt = (
             f"You are a South African recipe assistant for a fresh fish and chicken delivery business.\n"
-            f"A customer wants to cook: {dish} (serves {serves}).\n\n"
+            f"A customer wants to cook: {dish} (serves {serves}).\n"
+            f"{grounding}{inspiration}\n"
             f"These ingredients are currently in stock and available to order:\n{catalog_str}\n\n"
             f"Write a SHORT, practical South African recipe (max 180 words):\n"
             f"- Recipe name\n"
@@ -570,6 +774,207 @@ class CommerceAssistantSkill(BaseSkill):
             "items": len(line_items),
             "total": f"R{quote['total_cents'] / 100:.2f}",
         }
+
+    async def _exec_review_order(
+        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Preview the order (itemised total + delivery + payment) WITHOUT placing it, so the
+        customer can confirm or change first. place_order runs only after they reply CONFIRM."""
+        from vula.commerce import order_workflow as ow
+        cfg = ow.get_order_settings(tenant_id)
+        enabled = [str(m).lower() for m in (cfg.get("payment_methods") or ["online", "cod", "eft"])]
+        method = (args.get("payment_method") or "").lower().strip()
+
+        cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+        items = cart.get("commerce_cart_items", []) or []
+        if not items:
+            return {"error": "The cart is empty — add items before reviewing."}
+        subtotal = sum(i["quantity"] * i["unit_price_cents"] for i in items)
+        delivery = cart.get("delivery_cents", 8000)
+        total = subtotal + delivery
+        item_lines = "\n".join(
+            f"• {it['quantity']}× {(it.get('commerce_products') or {}).get('name', 'Item')} — "
+            f"R{it['quantity'] * it['unit_price_cents'] / 100:.2f}" for it in items)
+        addr = (args.get("delivery_address") or "").strip()
+        pay = ow.PAYMENT_LABELS.get(method) if method in enabled else None
+        preview = (
+            f"🧾 *Please check your order:*\n{item_lines}\n"
+            f"Subtotal: R{subtotal / 100:.2f}\nDelivery: R{delivery / 100:.2f}\n*Total: R{total / 100:.2f}*"
+            + (f"\nDeliver to: {addr}" if addr else "")
+            + (f"\nPayment: {pay}" if pay else "")
+            + "\n\nReply *CONFIRM* to place it, or tell me what to change.")
+        return {
+            "preview": preview,
+            "still_needed": [k for k, v in (("delivery address", addr), ("payment method", pay)) if not v],
+            "instruction_to_assistant": ("Send 'preview' to the customer verbatim. Do NOT call "
+                                         "place_order until they reply CONFIRM. Ask for anything in "
+                                         "'still_needed' first."),
+        }
+
+    async def _exec_remove_from_cart(
+        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        name = (args.get("product") or "").strip()
+        cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+        items = cart.get("commerce_cart_items", []) or []
+        target = next((it for it in items
+                       if name.lower() in (it.get("commerce_products") or {}).get("name", "").lower()), None)
+        if not target:
+            return {"error": f"'{name}' isn't in the cart."}
+        await service.remove_from_cart(cart["id"], target["id"])
+        return {"removed": (target.get("commerce_products") or {}).get("name", name)}
+
+    async def _exec_change_order(
+        self, tenant_id: str, phone: Optional[str], args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Customer wants to change an order they've already placed → flag their most recent live
+        order to the shop team (line-item edits on a placed order are handled by a person)."""
+        note = (args.get("change") or "").strip()
+        digits = "".join(c for c in (phone or "") if c.isdigit())
+        orders = await service.list_orders(tenant_id, limit=30)
+        live = [o for o in orders
+                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:] or "x")
+                and o.get("status") not in ("delivered", "cancelled", "refunded")]
+        if not live:
+            return {"error": "I couldn't find a recent order to change — could be already delivered."}
+        order = live[0]
+        try:
+            from vula.commerce import order_workflow as ow
+            await ow.dispatch_order(tenant_id, order["id"],
+                                    f"✏️ CHANGE REQUEST on {order['display_id']}: {note}",
+                                    order.get("customer_name") or "")
+        except Exception as exc:
+            logger.warning("change_order notify failed: %s", exc)
+        return {"order_number": order["display_id"],
+                "message": f"Got it — I've asked the team to update order {order['display_id']}. "
+                           f"They'll confirm the change with you shortly."}
+
+    async def _exec_place_order(
+        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Turn the current cart into a confirmed order with a chosen payment method, and
+        return an itemised confirmation (the customer's quotation). Handles online card
+        (pay-link if a gateway is connected), pay-on-delivery, and EFT/bank transfer."""
+        from vula.commerce import order_workflow as ow
+
+        cfg = ow.get_order_settings(tenant_id)
+        enabled = [str(m).lower() for m in (cfg.get("payment_methods") or ["online", "cod", "eft"])]
+        method = (args.get("payment_method") or "").lower().strip()
+        if method not in ("online", "cod", "eft"):
+            return {"error": "Ask the customer how they'd like to pay — online card, pay on delivery, or EFT — then call place_order."}
+        if method not in enabled:
+            offered = ", ".join(ow.PAYMENT_LABELS.get(m, m) for m in enabled)
+            return {"error": f"That payment method isn't offered here. Available: {offered}."}
+
+        address = (args.get("delivery_address") or "").strip()
+        if not address:
+            return {"error": "Need a delivery address before placing the order — ask the customer for it."}
+        name = (args.get("customer_name") or "Customer").strip()
+        slot = (args.get("delivery_slot") or "morning").strip().lower()
+        if slot not in ("morning", "afternoon", "express"):
+            slot = "morning"
+
+        cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+        items = cart.get("commerce_cart_items", []) or []
+        if not items:
+            return {"error": "The cart is empty — add items before placing the order."}
+
+        try:
+            order = await service.create_order(tenant_id, cart, {
+                "customer_phone": phone or "",
+                "customer_name": name,
+                "delivery_address": address,
+                "delivery_slot": slot,
+                "delivery_notes": args.get("delivery_notes"),
+                "channel": "whatsapp",
+                "payment_method": method,
+            })
+        except Exception as exc:
+            logger.warning("place_order create_order failed: %s", exc)
+            return {"error": "Something went wrong placing the order — please try again in a moment."}
+
+        lines = []
+        for it in items:
+            prod = it.get("commerce_products") or {}
+            qty, unit = it["quantity"], it["unit_price_cents"]
+            lines.append({"name": prod.get("name", "Item"), "quantity": qty,
+                          "line_total": f"R{qty * unit / 100:.2f}"})
+
+        total = order["total_cents"]
+        pay_line = ow.payment_instructions(cfg, method)
+        pay_link = None
+        if method == "online":
+            pl = await self._online_pay_link(tenant_id, order)
+            if pl:
+                pay_line, pay_link = f"💳 Pay securely here: {pl}", pl
+            else:
+                base = (settings.store_urls.get(tenant_id, "") or "").rstrip("/")
+                if base:
+                    pay_line = f"💳 Complete your payment here: {base}/cart"
+
+        await self._notify_shop_new_order(tenant_id, order, lines, method, name)
+
+        item_lines = "\n".join(f"• {l['quantity']}× {l['name']} — {l['line_total']}" for l in lines)
+        confirmation = (
+            f"✅ *Order {order['display_id']} confirmed*\n{item_lines}\n"
+            f"Subtotal: R{order['subtotal_cents'] / 100:.2f}\n"
+            f"Delivery: R{order['delivery_cents'] / 100:.2f}\n"
+            f"*Total: R{total / 100:.2f}*\n\n"
+            f"Deliver to: {address} ({slot})\n\n{pay_line}"
+        )
+        return {
+            "order_number": order["display_id"],
+            "items": lines,
+            "subtotal": f"R{order['subtotal_cents'] / 100:.2f}",
+            "delivery": f"R{order['delivery_cents'] / 100:.2f}",
+            "total": f"R{total / 100:.2f}",
+            "payment_method": ow.PAYMENT_LABELS.get(method, method),
+            "payment_link": pay_link,
+            "confirmation": confirmation,
+            "instruction_to_assistant": "Send the 'confirmation' text to the customer verbatim as their order confirmation.",
+        }
+
+    async def _online_pay_link(self, tenant_id: str, order: Dict[str, Any]) -> Optional[str]:
+        """A hosted card pay-link via the tenant's connected gateway, or None if none is set up."""
+        try:
+            from vula.payments import create_pay_link, default_provider_row
+            base = (settings.store_urls.get(tenant_id, "") or "").rstrip("/") or "https://vula-group-production.up.railway.app"
+            api = "https://vula-group-production.up.railway.app"
+            prov = (default_provider_row(tenant_id) or {}).get("provider", "default")
+            link = await create_pay_link(
+                tenant_id,
+                amount_cents=order["total_cents"],
+                reference=order["display_id"],
+                description=f"Order {order['display_id']}",
+                success_url=f"{base}/order/{order['display_id']}",
+                cancel_url=f"{base}/cart",
+                notify_url=f"{api}/api/payments/webhook/{tenant_id}/{prov}",
+                customer={"name": order.get("customer_name"), "phone": order.get("customer_phone")},
+            )
+            return link.url if link else None
+        except Exception as exc:
+            logger.warning("online pay-link failed for %s: %s", tenant_id, exc)
+            return None
+
+    async def _notify_shop_new_order(
+        self, tenant_id: str, order: Dict[str, Any], lines: List[Dict[str, Any]], method: str, name: str
+    ) -> None:
+        """Tell the shop about a new order. COD/EFT orders never hit the payment webhook,
+        so this is the only way the owner hears about them."""
+        try:
+            from vula.commerce import order_workflow as ow
+            item_str = "\n".join(f"  • {l['quantity']}× {l['name']} — {l['line_total']}" for l in lines)
+            summary = (
+                f"🆕 New WhatsApp order {order['display_id']}\n"
+                f"Customer: {name} ({order.get('customer_phone')})\n"
+                f"Deliver to: {order.get('delivery_address')} ({order.get('delivery_slot')})\n"
+                f"{item_str}\n"
+                f"Total: R{order['total_cents'] / 100:.2f}\n"
+                f"Payment: {ow.PAYMENT_LABELS.get(method, method)}"
+            )
+            await ow.dispatch_order(tenant_id, order["id"], summary, name)
+        except Exception as exc:
+            logger.warning("new-order notify failed: %s", exc)
 
     # ── Fallback (no tool-calling support) ───────────────────────────────────
     async def _fallback(

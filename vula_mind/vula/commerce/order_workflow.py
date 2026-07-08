@@ -15,8 +15,28 @@ logger = logging.getLogger(__name__)
 _DEFAULTS = {
     "require_approval": False, "dispatch_channel": "whatsapp",
     "fulfillment_email": None, "fulfillment_whatsapp": None,
+    "payment_methods": ["online", "cod", "eft"], "eft_details": None,
 }
-_FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp")
+_FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp",
+           "payment_methods", "eft_details")
+
+# Customer-facing labels for the payment methods.
+PAYMENT_LABELS = {"online": "Card / online payment", "cod": "Pay on delivery", "eft": "EFT / bank transfer"}
+
+
+def payment_instructions(cfg: dict, method: str) -> str:
+    """The line(s) to show a customer for their chosen payment method."""
+    method = (method or "").lower()
+    if method == "cod":
+        return "💵 *Pay on delivery* — have cash or card ready when your order arrives."
+    if method == "eft":
+        details = (cfg.get("eft_details") or "").strip()
+        if details:
+            return ("🏦 *EFT / bank transfer* — please pay into:\n" + details +
+                    "\n\nUse your order number as the reference and send proof of payment here.")
+        return ("🏦 *EFT / bank transfer* — we'll send our banking details shortly. "
+                "Use your order number as the payment reference.")
+    return "💳 *Card / online payment*"
 
 
 def _client():
