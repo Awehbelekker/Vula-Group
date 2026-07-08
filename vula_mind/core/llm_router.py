@@ -16,8 +16,13 @@ pinned per-collection in the ingestion pipeline.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import time
+import uuid
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 import httpx
@@ -28,33 +33,99 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
+# Task types that genuinely need frontier (cloud) reasoning — the explicit part of the
+# requirement-(c) complexity threshold. Everything else stays local unless the token cap trips.
+_FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning"}
+
 # Health-probe cache: base_url -> (checked_at_monotonic, is_up)
 _HEALTH_TTL_S = 30.0
 _PROBE_TIMEOUT_S = 1.5
 _cache: dict[str, tuple[float, bool]] = {}
 
 
-async def ollama_available(base: Optional[str] = None) -> bool:
+def _host(url: str) -> str:
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(url).netloc or url).lower()
+    except Exception:
+        return (url or "").lower()
+
+
+def _ollama_headers() -> dict:
+    """Cloudflare Access service-token headers for the local Ollama tunnel, from env.
+
+    The tunnel (ollama.vula-ai.com) sits behind Cloudflare Access — every request must present
+    these or it's blocked at the edge (POPIA: keeps the SA inference node private). Empty when
+    unconfigured (e.g. a bare localhost Ollama), so local dev needs no token.
+    """
+    cid = os.environ.get("OLLAMA_CF_ACCESS_CLIENT_ID", "")
+    csec = os.environ.get("OLLAMA_CF_ACCESS_CLIENT_SECRET", "")
+    return {"CF-Access-Client-Id": cid, "CF-Access-Client-Secret": csec} if cid and csec else {}
+
+
+_ollama_auth_installed = False
+
+
+def install_ollama_auth() -> None:
+    """Wrap litellm.acompletion once so calls to the Ollama base carry the CF-Access headers.
+
+    Scoped by host — the service token is attached ONLY to requests hitting the configured Ollama
+    base, never to OpenRouter. No-op if creds aren't set. Called lazily from resolve_generation_route
+    so importing this module stays cheap (no eager litellm import)."""
+    global _ollama_auth_installed
+    if _ollama_auth_installed:
+        return
+    try:
+        import litellm
+    except Exception:
+        return
+    _orig = litellm.acompletion
+
+    async def _wrapped(*args, **kwargs):
+        hdrs = _ollama_headers()
+        base = kwargs.get("api_base") or ""
+        if hdrs and base and _host(base) == _host(settings.ollama_base):
+            merged = dict(kwargs.get("extra_headers") or {})
+            merged.update(hdrs)
+            kwargs["extra_headers"] = merged
+        return await _orig(*args, **kwargs)
+
+    litellm.acompletion = _wrapped
+    _ollama_auth_installed = True
+
+
+async def ollama_available(base: Optional[str] = None, model: Optional[str] = None) -> bool:
     """Return True if the local Ollama endpoint answers within the timeout.
 
-    The result is cached for _HEALTH_TTL_S so we don't probe on every request.
+    When `model` is given, also require that model to be present in /api/tags — so a route to a
+    model the local host hasn't pulled (e.g. the tunnel serves llama3.2:3b but MODEL_WORKER is
+    llama3.1:8b) fails the probe and escalates-with-reason instead of 404ing silently.
+
+    The result is cached per (base, model) for _HEALTH_TTL_S so we don't probe on every request.
     """
     base = (base or settings.ollama_base).rstrip("/")
+    cache_key = f"{base}::{model or '*'}"
     now = time.monotonic()
-    cached = _cache.get(base)
+    cached = _cache.get(cache_key)
     if cached and (now - cached[0]) < _HEALTH_TTL_S:
         return cached[1]
 
     up = False
     try:
         async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S) as client:
-            resp = await client.get(f"{base}/api/tags")
-            up = resp.status_code == 200
+            resp = await client.get(f"{base}/api/tags", headers=_ollama_headers() or None)
+            if resp.status_code == 200:
+                if model:
+                    names = {m.get("name") for m in (resp.json().get("models") or [])}
+                    base_names = {(n or "").split(":")[0] for n in names}
+                    up = model in names or model.split(":")[0] in base_names
+                else:
+                    up = True
     except Exception as exc:
         logger.debug("Ollama health probe failed for %s: %s", base, exc)
         up = False
 
-    _cache[base] = (now, up)
+    _cache[cache_key] = (now, up)
     return up
 
 
@@ -63,39 +134,168 @@ def reset_health_cache() -> None:
     _cache.clear()
 
 
+def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] = None) -> Optional[str]:
+    """Requirement (c): return a reason string if the task genuinely needs frontier (cloud)
+    reasoning, else None. Explicit threshold: a frontier task_type, or an estimated prompt size
+    (chars/4 ≈ tokens) at/above settings.local_complexity_token_cap (default 8000). Deliberately
+    conservative — the majority of tenant traffic stays local."""
+    if task_type and task_type in _FRONTIER_TASK_TYPES:
+        return f"complexity:{task_type}"
+    if messages:
+        cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
+        chars = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict))
+        if chars // 4 >= cap:
+            return f"complexity:tokens>={cap}"
+    return None
+
+
+def looks_unreliable(text: str, confidence: Optional[float] = None,
+                     min_chars: int = 3, confidence_threshold: Optional[float] = None) -> bool:
+    """Requirement (b): post-response reliability check, ported from LocalCoder's
+    ollama_backend.looks_unreliable. Empty/too-short or an outright refusal always escalates; low
+    logprob-confidence escalates only when both a threshold and a confidence value are available.
+    Not a quality judge — a short correct answer is fine."""
+    t = (text or "").strip()
+    if len(t) < min_chars:
+        return True
+    lowered = t.lower()
+    if any(m in lowered for m in ("i cannot", "i can't help", "as an ai language model")):
+        return True
+    if confidence_threshold is not None and confidence is not None:
+        return confidence < confidence_threshold
+    return False
+
+
+def _task_label(task_type: Optional[str], messages: Optional[list]) -> str:
+    """A POPIA-safe task descriptor for the telemetry log: the task_type if given, else a short
+    hash of the last user message. Raw prompt content is NEVER written to the log."""
+    if task_type:
+        return task_type
+    if messages:
+        for m in reversed(messages):
+            if isinstance(m, dict) and m.get("content"):
+                return "hash:" + hashlib.sha256(str(m["content"]).encode("utf-8")).hexdigest()[:12]
+    return "unspecified"
+
+
+def _log_decision(*, run_id: str, task: str, outcome: str, escalated: bool,
+                  backend: str, reason: str) -> None:
+    """Append the shared telemetry envelope for one routing decision (schema/system/run_id/task/
+    timestamp/outcome/escalated, + backend/reason). Answers "why did tenant data leave South
+    Africa" per request. POPIA: `task` is a type label or hash, never raw prompt content.
+
+    Sink: one JSON line to the logger (stdout, Railway-captured); also appended to $VULA_ROUTER_LOG
+    when set, so verified-reasoning/tools/report.py can read it beside LocalCoder + VRL logs."""
+    entry = {
+        "schema": 1,
+        "system": "vula-llm-router",
+        "run_id": run_id,
+        "task": task,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "outcome": outcome,      # "local" | "cloud"
+        "escalated": escalated,
+        "backend": backend,      # ollama/<model> | openrouter/<model>
+        "reason": reason,
+    }
+    line = json.dumps(entry)
+    logger.info("route-decision %s", line)
+    path = os.environ.get("VULA_ROUTER_LOG")
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
+    # Persistent sink so live prod decisions accumulate for the verified-reasoning report.
+    try:
+        from core.reasoning_telemetry import emit
+        tenant = None
+        try:
+            from vula.integrations.metering import _current_tenant
+            tenant = _current_tenant.get()
+        except Exception:
+            pass
+        emit(system="vula-llm-router", run_id=run_id, task=task, outcome=outcome,
+             escalated=escalated, reason=reason, tenant_id=tenant, extra={"backend": backend})
+    except Exception:
+        pass
+
+
 async def resolve_generation_route(
     model: Optional[str] = None,
+    *,
+    task_type: Optional[str] = None,
+    messages: Optional[list] = None,
+    run_id: Optional[str] = None,
 ) -> Tuple[str, Optional[str], str]:
-    """Local-first generation route with OpenRouter fallback.
+    """Local-first generation route with logged, reason-bearing cloud fallback.
+
+    Cloud is used only for a sanctioned, logged reason — (a) local unreachable, (c) genuine task
+    complexity — plus the explicit operator override (prefer_cloud_llm), which is no longer the
+    default and is itself logged. Requirement (b), an unreliable *local response*, is handled by
+    the caller after generation via looks_unreliable() + escalate_to_cloud().
 
     Returns (litellm_model, api_key, api_base).
     """
-    # Local model name (Ollama) and cloud fallback model name (OpenRouter) may
-    # differ — e.g. "deepseek-r1:8b" locally vs "meta-llama/llama-3.3-70b" on
-    # OpenRouter. A caller-supplied `model` overrides the local name only.
+    # Local model name (Ollama) and cloud fallback model name (OpenRouter) may differ — e.g.
+    # "deepseek-r1:8b" locally vs "meta-llama/llama-3.3-70b" on OpenRouter. A caller-supplied
+    # `model` overrides the local name only.
     local_model = model or settings.model_worker
     cloud_model = settings.model_worker_cloud or settings.model_worker
+    run_id = run_id or str(uuid.uuid4())
+    task = _task_label(task_type, messages)
+    install_ollama_auth()  # ensure Ollama calls carry the CF-Access token before any generation
 
     # Dev/test mode — force the cheapest model so QA doesn't burn premium tokens.
-    import os
     if os.environ.get("VULA_DEV_MODE", "").lower() in ("1", "true", "yes") and settings.openrouter_api_key:
+        _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
+                      backend=f"openrouter/{settings.model_worker_cheap}", reason="dev_mode")
         return f"openrouter/{settings.model_worker_cheap}", settings.openrouter_api_key, OPENROUTER_BASE
 
-    # Accuracy-first: force the smart cloud model regardless of local availability.
+    # Explicit operator override — accuracy-first, but no longer the default and always logged so
+    # even this path is auditable for "why did data leave SA".
     if settings.prefer_cloud_llm and settings.openrouter_api_key:
+        _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
+                      backend=f"openrouter/{cloud_model}", reason="operator_prefer_cloud")
         return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
 
-    if await ollama_available():
+    # ── Local-first ──────────────────────────────────────────────────────────
+    if await ollama_available(model=local_model):
+        # (c) complexity — only a genuine frontier task is allowed to leave local.
+        complex_reason = assess_complexity(messages=messages, task_type=task_type)
+        if complex_reason and settings.openrouter_api_key:
+            logger.info("Cloud for complexity (%s) — run=%s task=%s", complex_reason, run_id, task)
+            _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
+                          backend=f"openrouter/{cloud_model}", reason=complex_reason)
+            return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
+        _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
+                      backend=f"ollama/{local_model}", reason="local_first")
         return f"ollama/{local_model}", None, settings.ollama_base
 
+    # (a) local unreachable → cloud, logged with the reason a regulator would ask about.
     if settings.openrouter_api_key:
-        logger.info("Ollama unreachable — falling back to OpenRouter (%s)", cloud_model)
+        logger.info("Cloud fallback: local unreachable — run=%s task=%s", run_id, task)
+        _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
+                      backend=f"openrouter/{cloud_model}", reason="local_unreachable")
         return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
 
-    logger.warning(
-        "Ollama unreachable and no OPENROUTER_API_KEY set — generation will likely fail"
-    )
+    logger.warning("Local unreachable and no OPENROUTER_API_KEY set — generation will likely fail")
+    _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
+                  backend=f"ollama/{local_model}", reason="local_unreachable_no_cloud_key")
     return f"ollama/{local_model}", None, settings.ollama_base
+
+
+def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,
+                      task_type: Optional[str] = None) -> Optional[Tuple[str, Optional[str], str]]:
+    """Return the cloud route after a local response failed the reliability check (requirement b),
+    logging the escalation in the shared envelope. Returns None if no cloud key is configured (the
+    caller then keeps the local answer)."""
+    if not settings.openrouter_api_key:
+        return None
+    cloud_model = settings.model_worker_cloud or settings.model_worker
+    _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type or "unspecified",
+                  outcome="cloud", escalated=True, backend=f"openrouter/{cloud_model}", reason=reason)
+    return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
 
 
 async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optional[str], str]:

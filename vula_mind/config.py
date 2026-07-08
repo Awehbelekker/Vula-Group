@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     # for embeddings.
     prefer_cloud_llm: bool = False
 
+    # Requirement-(c) complexity threshold for llm_router: local-first is kept unless the estimated
+    # prompt size (chars/4 ≈ tokens) reaches this cap, in which case generation escalates to the
+    # cloud model (logged with reason). Tune to Vula's real workload.
+    local_complexity_token_cap: int = 8000
+
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""

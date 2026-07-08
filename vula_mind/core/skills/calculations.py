@@ -114,6 +114,19 @@ class CalculationsSkill(BaseSkill):
                        "to a verified calculation.")
         logger.info("VRL calc-verify tenant=%s anchored=%s verified=%d errors=%d matched=%s",
                     inp.tenant_id, anchored, len(self._verified), self._calc_errors, matched)
+        # Persist the verify event to the shared telemetry sink so live prod VRL runs accumulate
+        # for the report. anchored=False means the headline number wasn't matched to a deterministic
+        # calc — the escalation-worthy case (mirrors "caught a wrong proposal" in the harness).
+        try:
+            import uuid as _uuid
+            from core.reasoning_telemetry import emit
+            emit(system="verified-reasoning", run_id=_uuid.uuid4().hex[:8], task="calc",
+                 outcome="accepted" if anchored else "unanchored", escalated=(anchored is False),
+                 verifier="digg.calc", tenant_id=inp.tenant_id,
+                 extra={"verified_count": len(self._verified), "calc_errors": self._calc_errors,
+                        "matched": matched, "anchored": anchored})
+        except Exception:
+            pass
         return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence)
 
     def _system_prompt(self) -> str:

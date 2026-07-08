@@ -64,23 +64,35 @@ class ReasoningSkill(BaseSkill):
 
         try:
             import litellm
+            from uuid import uuid4
+            from core.llm_router import escalate_to_cloud, looks_unreliable
             litellm.drop_params = True
 
-            model, api_key, api_base = await resolve_generation_route()
+            _msgs = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ]
+            run_id = str(uuid4())
+            model, api_key, api_base = await resolve_generation_route(
+                task_type="reasoning", messages=_msgs, run_id=run_id)
 
-            resp = await litellm.acompletion(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.3,
-                max_tokens=inp.max_tokens,
-                api_key=api_key,
-                api_base=api_base,
-            )
+            async def _complete(m, k, b):
+                return await litellm.acompletion(
+                    model=m, messages=_msgs, temperature=0.3,
+                    max_tokens=inp.max_tokens, api_key=k, api_base=b)
+
+            resp = await _complete(model, api_key, api_base)
             raw = resp.choices[0].message.content or ""
             answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+            # Requirement (b): if the local answer is empty/refusal, escalate to cloud and log why.
+            if model.startswith("ollama/") and looks_unreliable(answer):
+                esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="reasoning")
+                if esc:
+                    model, api_key, api_base = esc
+                    resp = await _complete(model, api_key, api_base)
+                    raw = resp.choices[0].message.content or ""
+                    answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
             confidence = 0.75 if kb_context else 0.55
             return SkillOutput(

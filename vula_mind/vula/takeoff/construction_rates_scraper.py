@@ -159,9 +159,13 @@ class RateExtractor:
         )
 
         try:
+            # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
+            # (same ones llm_router uses) or this direct call is blocked at the edge.
+            from core.llm_router import _ollama_headers
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     f"{OLLAMA_BASE}/api/generate",
+                    headers=_ollama_headers() or None,
                     json={
                         "model": LLM_MODEL,
                         "prompt": extraction_prompt,

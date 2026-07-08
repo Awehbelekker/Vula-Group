@@ -8,6 +8,11 @@ from core.llm_router import (
     resolve_generation_route,
     resolve_vision_route,
     reset_health_cache,
+    assess_complexity,
+    looks_unreliable,
+    escalate_to_cloud,
+    _task_label,
+    _log_decision,
 )
 
 
@@ -222,3 +227,117 @@ async def test_probe_result_is_cached():
         await llm_router.ollama_available("http://localhost:11434")
 
     assert get_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_probe_requires_the_specific_model_when_given():
+    """Model-presence probe: /api/tags up but the requested model absent → not available.
+
+    Guards the real prod mismatch (tunnel serves llama3.2:3b, MODEL_WORKER=llama3.1:8b)."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = MagicMock(return_value={"models": [{"name": "llama3.2:3b"}]})
+    client = _http_client(AsyncMock(return_value=resp))
+    with patch("core.llm_router.httpx.AsyncClient", return_value=client):
+        assert await llm_router.ollama_available("http://x:11434", model="llama3.2:3b") is True
+        assert await llm_router.ollama_available("http://x:11434", model="llama3.1:8b") is False
+
+
+# ── requirement (c): complexity threshold ─────────────────────────────────────
+
+def test_assess_complexity_frontier_type_and_token_cap():
+    with patch("core.llm_router.settings") as s:
+        s.local_complexity_token_cap = 100
+        assert assess_complexity(task_type="architecture_planning") == "complexity:architecture_planning"
+        assert assess_complexity(task_type="commerce_chat") is None
+        assert assess_complexity(messages=[{"role": "user", "content": "x" * 5000}]) == "complexity:tokens>=100"
+        assert assess_complexity(messages=[{"role": "user", "content": "hi"}]) is None
+
+
+@pytest.mark.asyncio
+async def test_complexity_routes_to_cloud_with_logged_reason():
+    logged = {}
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
+        patch("core.llm_router._log_decision", side_effect=lambda **k: logged.update(k)),
+        patch("core.llm_router.settings") as s,
+    ):
+        s.prefer_cloud_llm = False
+        s.model_worker = "llama3.2:3b"
+        s.model_worker_cloud = "meta-llama/llama-3.3-70b-instruct"
+        s.ollama_base = "http://x:11434"
+        s.openrouter_api_key = "sk-or-test"
+        model, key, _ = await resolve_generation_route(task_type="architecture_planning")
+
+    assert model == "openrouter/meta-llama/llama-3.3-70b-instruct"
+    assert logged["outcome"] == "cloud" and logged["escalated"] is True
+    assert logged["reason"] == "complexity:architecture_planning"
+
+
+@pytest.mark.asyncio
+async def test_local_first_decision_is_logged():
+    logged = {}
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
+        patch("core.llm_router._log_decision", side_effect=lambda **k: logged.update(k)),
+        patch("core.llm_router.settings") as s,
+    ):
+        s.prefer_cloud_llm = False
+        s.model_worker = "llama3.2:3b"
+        s.model_worker_cloud = "x"
+        s.ollama_base = "http://x:11434"
+        s.openrouter_api_key = "sk-or-test"
+        model, key, _ = await resolve_generation_route(task_type="commerce_chat")
+
+    assert model == "ollama/llama3.2:3b" and key is None
+    assert logged["outcome"] == "local" and logged["escalated"] is False
+    assert logged["reason"] == "local_first"
+
+
+# ── requirement (b): post-response reliability + escalation ───────────────────
+
+def test_looks_unreliable():
+    assert looks_unreliable("") is True
+    assert looks_unreliable("   ") is True
+    assert looks_unreliable("I cannot help with that") is True
+    assert looks_unreliable("As an AI language model, I can't") is True
+    assert looks_unreliable("R185.00 for 2kg hake") is False
+    # confidence only counts when a threshold is supplied
+    assert looks_unreliable("okay", confidence=0.2, confidence_threshold=0.4) is True
+    assert looks_unreliable("okay", confidence=0.9, confidence_threshold=0.4) is False
+    assert looks_unreliable("okay", confidence=0.2) is False
+
+
+def test_escalate_to_cloud_returns_route_or_none():
+    with patch("core.llm_router.settings") as s:
+        s.openrouter_api_key = "sk-or-test"
+        s.model_worker_cloud = "meta-llama/llama-3.3-70b-instruct"
+        route = escalate_to_cloud("local_unreliable", run_id="r1", task_type="reasoning")
+    assert route[0] == "openrouter/meta-llama/llama-3.3-70b-instruct"
+    assert route[1] == "sk-or-test"
+
+    with patch("core.llm_router.settings") as s2:
+        s2.openrouter_api_key = ""
+        assert escalate_to_cloud("local_unreliable") is None
+
+
+# ── requirement 4 + POPIA: shared telemetry envelope, no raw prompt ───────────
+
+def test_task_label_never_leaks_prompt_content():
+    msgs = [{"role": "user", "content": "SECRET tenant medical record 42"}]
+    label = _task_label(None, msgs)
+    assert label.startswith("hash:")
+    assert "SECRET" not in label and "medical" not in label
+    assert _task_label("reasoning", msgs) == "reasoning"
+
+
+def test_log_decision_emits_shared_envelope(tmp_path, monkeypatch):
+    logf = tmp_path / "router.jsonl"
+    monkeypatch.setenv("VULA_ROUTER_LOG", str(logf))
+    _log_decision(run_id="r1", task="reasoning", outcome="local", escalated=False,
+                  backend="ollama/llama3.2:3b", reason="local_first")
+    import json as _json
+    entry = _json.loads(logf.read_text(encoding="utf-8").strip())
+    assert entry["schema"] == 1 and entry["system"] == "vula-llm-router"
+    assert {"run_id", "task", "timestamp", "outcome", "escalated"} <= set(entry)
+    assert entry["reason"] == "local_first" and entry["backend"] == "ollama/llama3.2:3b"
