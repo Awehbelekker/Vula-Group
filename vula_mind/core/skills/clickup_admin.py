@@ -40,7 +40,9 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string", "description": "Task title"},
             "description": {"type": "string", "description": "Optional details"},
-            "due_date": {"type": "string", "description": "Optional due date, ISO e.g. 2026-06-30"},
+            "due_date": {"type": "string", "description": "Optional due date. Pass the user's own "
+                        "words verbatim (e.g. 'tomorrow', 'Friday', 'next Friday', 'in 3 days') or "
+                        "an ISO date — do NOT compute the date yourself, the tool resolves it."},
             "assignee": {"type": "string", "description": "Name of the person to assign this task to, e.g. 'Nolo'"}},
             "required": ["title"]},
     }},
@@ -61,11 +63,23 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["title", "status"]},
     }},
     {"type": "function", "function": {
+        "name": "update_task_due_date",
+        "description": "Change an existing task's due date by matching its title. Use this — "
+                       "never update_task_status — to fix or set a date after the fact.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "A fragment of the task title to match"},
+            "due_date": {"type": "string", "description": "The user's own words verbatim "
+                        "('tomorrow', 'Friday', 'next Friday') or an ISO date"}},
+            "required": ["title", "due_date"]},
+    }},
+    {"type": "function", "function": {
         "name": "set_reminder",
         "description": "Create a due-dated reminder task.",
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string"},
-            "due_date": {"type": "string", "description": "ISO date/time the reminder is for"}},
+            "due_date": {"type": "string", "description": "Pass the user's own words verbatim "
+                        "(e.g. 'tomorrow', 'Friday', 'next Friday', 'in 3 days') or an ISO date — "
+                        "do NOT compute the date yourself, the tool resolves it."}},
             "required": ["title", "due_date"]},
     }},
 ]
@@ -83,7 +97,7 @@ class ClickUpAdminSkill(BaseSkill):
                        "to connect ClickUp, then I can manage tasks for you here.",
                 skill_name=self.name, confidence=0.25,
             )
-        ctx = {"tenant_id": inp.tenant_id}
+        ctx = {"tenant_id": inp.tenant_id, "_created_tasks": {}}
         try:
             answer = await self._agent_loop(inp.conversation_history, inp.question, ctx)
             if not answer:
@@ -97,8 +111,12 @@ class ClickUpAdminSkill(BaseSkill):
         return (
             "You are Vula's task assistant, managing the user's ClickUp over WhatsApp. "
             "Use the tools to create, list, and update tasks and reminders — never invent "
-            "task data. Parse natural dates (e.g. 'Friday', 'tomorrow') into ISO dates when "
-            "calling tools. If the user names a person ('give Nolo a todo', 'what's on Nolo's "
+            "task data. For due dates, pass the user's own words verbatim ('Friday', 'tomorrow', "
+            "'next Friday', 'in 3 days') — do NOT convert or compute the date yourself, the tool "
+            "resolves it deterministically and your own date arithmetic is unreliable. If you "
+            "created a task without a due date and need to add or fix one, call "
+            "update_task_due_date — never update_task_status for a date change, it will fail. "
+            "If the user names a person ('give Nolo a todo', 'what's on Nolo's "
             "plate'), pass their name as the assignee argument. If a create_task result comes "
             "back with assignee_not_found, tell the user plainly that no matching team member "
             "was found and that the task was created unassigned — never claim it was assigned. "
@@ -205,6 +223,19 @@ class ClickUpAdminSkill(BaseSkill):
         tid = ctx["tenant_id"]
         try:
             if name == "create_task":
+                # Same-request dedup: models occasionally emit two create_task calls for one
+                # user ask (observed: an identical "Meeting: ..." task created twice in one
+                # reply). Key on the fields that define "the same task" and reuse the first
+                # result rather than creating a second real task in ClickUp.
+                dedup_key = (
+                    (args.get("title") or "").strip().lower(),
+                    (args.get("due_date") or "").strip().lower(),
+                    (args.get("assignee") or "").strip().lower(),
+                )
+                created = ctx.setdefault("_created_tasks", {})
+                if dedup_key in created:
+                    return created[dedup_key]
+
                 assignee_name = args.get("assignee")
                 assignees, assignee_not_found = None, None
                 if assignee_name:
@@ -219,6 +250,7 @@ class ClickUpAdminSkill(BaseSkill):
                                                    assignees=assignees)
                 if assignee_not_found and isinstance(result, dict):
                     result["assignee_not_found"] = assignee_not_found
+                created[dedup_key] = result
                 return result
             if name == "list_tasks":
                 assignee_id = None
@@ -233,9 +265,19 @@ class ClickUpAdminSkill(BaseSkill):
             if name == "update_task_status":
                 return await service.update_task_status_by_name(tid, args.get("title", ""),
                                                                args.get("status", ""))
+            if name == "update_task_due_date":
+                return await service.update_task_due_date_by_name(tid, args.get("title", ""),
+                                                                 args.get("due_date", ""))
             if name == "set_reminder":
-                return await service.set_reminder(tid, title=args.get("title", ""),
-                                                 due_date=args.get("due_date", ""))
+                dedup_key = ("reminder", (args.get("title") or "").strip().lower(),
+                            (args.get("due_date") or "").strip().lower())
+                created = ctx.setdefault("_created_tasks", {})
+                if dedup_key in created:
+                    return created[dedup_key]
+                result = await service.set_reminder(tid, title=args.get("title", ""),
+                                                   due_date=args.get("due_date", ""))
+                created[dedup_key] = result
+                return result
         except ClickUpNotConnected:
             return {"error": "ClickUp is not connected for this tenant."}
         except Exception as exc:

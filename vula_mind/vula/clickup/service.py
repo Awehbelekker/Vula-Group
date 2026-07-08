@@ -10,7 +10,8 @@ Dates are Unix epoch milliseconds.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -21,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://api.clickup.com/api/v2"
 
+# South Africa Standard Time — no DST, fixed UTC+2. Relative dates ("today", "Friday")
+# are resolved against this, not UTC, so a message sent late at night SAST still lands
+# on the SA calendar day the sender meant.
+_SAST = timezone(timedelta(hours=2))
+
+_WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+             "friday": 4, "saturday": 5, "sunday": 6}
+
 
 class ClickUpNotConnected(Exception):
     """Raised when a tenant has no connected ClickUp account."""
@@ -30,11 +39,59 @@ def _headers(token: str) -> dict:
     return {"Authorization": token, "Content-Type": "application/json"}
 
 
+def _resolve_relative_date(text: str) -> Optional[datetime]:
+    """Deterministically resolve common relative-date phrases ('today', 'tomorrow',
+    'Friday', 'next Friday', 'in 3 days') against the server's real current date.
+
+    This exists because asking an LLM to do its own date arithmetic in the prompt is
+    unreliable (observed: 'next Friday' resolving to today, or to an arbitrary past-ish
+    date) — so this is the source of truth for relative phrasing, not a fallback the LLM
+    is expected to get right first. Returns None for anything it doesn't recognise (the
+    caller then tries ISO parsing instead).
+
+    Convention for weekday names (the "next Friday" problem has no single correct
+    answer in English, so this picks one and is consistent): a bare or "this "-prefixed
+    weekday means the nearest occurrence, which may be today; "next "-prefixed always
+    means an occurrence strictly after today (skips to the following week if today
+    already is that weekday).
+    """
+    text = re.sub(r"\s+", " ", (text or "").strip().lower())
+    today = datetime.now(_SAST).date()
+
+    if text == "today":
+        target = today
+    elif text == "tomorrow":
+        target = today + timedelta(days=1)
+    elif (m := re.fullmatch(r"in (\d+) days?", text)):
+        target = today + timedelta(days=int(m.group(1)))
+    elif (m := re.fullmatch(r"in (\d+) weeks?", text)):
+        target = today + timedelta(weeks=int(m.group(1)))
+    elif (m := re.fullmatch(r"(next |this )?(\w+day)", text)) and m.group(2) in _WEEKDAYS:
+        prefix, day_name = (m.group(1) or "").strip(), m.group(2)
+        delta = (_WEEKDAYS[day_name] - today.weekday()) % 7
+        if prefix == "next" and delta == 0:
+            delta = 7
+        target = today + timedelta(days=delta)
+    else:
+        return None
+
+    return datetime(target.year, target.month, target.day, tzinfo=_SAST)
+
+
 def _to_epoch_ms(value: Optional[str]) -> Optional[int]:
-    """Parse an ISO date/datetime (or 'YYYY-MM-DD') into epoch ms, else None."""
+    """Parse a due-date value into epoch ms, else None.
+
+    Tries deterministic relative-date phrases first (see _resolve_relative_date), then
+    falls back to ISO date/datetime or 'YYYY-MM-DD' for anything already in that form.
+    """
     if not value:
         return None
     s = str(value).strip()
+
+    rel = _resolve_relative_date(s)
+    if rel:
+        return int(rel.timestamp() * 1000)
+
     for parse in (
         lambda x: datetime.fromisoformat(x.replace("Z", "+00:00")),
         lambda x: datetime.strptime(x, "%Y-%m-%d"),
@@ -224,6 +281,30 @@ async def update_task_status_by_name(tenant_id: str, title_query: str, status: s
     if not match:
         return {"error": f"No task matching '{title_query}'."}
     res = await update_task_status(tenant_id, match["id"], status)
+    res["title"] = match["title"]
+    return res
+
+
+async def update_task_due_date(tenant_id: str, task_id: str, due_date: str) -> dict:
+    """Update a ClickUp task's due date. `due_date` goes through the same relative-date
+    resolution as create_task (e.g. 'Friday', 'tomorrow', or an ISO date)."""
+    creds = _creds_or_raise(tenant_id)
+    ms = _to_epoch_ms(due_date)
+    if not ms:
+        return {"error": f"Couldn't understand due date '{due_date}'."}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.put(f"{_BASE}/task/{task_id}", headers=_headers(creds["token"]),
+                             json={"due_date": ms})
+        r.raise_for_status()
+    return {"updated": task_id, "new_due_date": due_date}
+
+
+async def update_task_due_date_by_name(tenant_id: str, title_query: str, due_date: str) -> dict:
+    """Find a task by title fragment and update its due date."""
+    match = await find_task(tenant_id, title_query)
+    if not match:
+        return {"error": f"No task matching '{title_query}'."}
+    res = await update_task_due_date(tenant_id, match["id"], due_date)
     res["title"] = match["title"]
     return res
 
