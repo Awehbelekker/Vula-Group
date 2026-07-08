@@ -1382,6 +1382,27 @@ def _advance(next_run_at: str, recurrence: str):
     return nxt.isoformat()
 
 
+@router.get("/{tenant_id}/admin/onboarding/status")
+async def admin_onboarding_status(tenant_id: str):
+    """Onboarding funnel counts for the dashboard panel."""
+    from vula.commerce import onboarding
+    return {"tenant_id": tenant_id, "stats": onboarding.onboarding_stats(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/onboarding/send-batch")
+async def admin_onboarding_send_batch(tenant_id: str, body: dict):
+    """Send the intro/opt-in template to the next N un-invited contacts. Staci controls when + how
+    many (the number ramps gently, protecting quality rating). Pass test_phone to preview to a
+    single number without touching the queue."""
+    from vula.commerce import onboarding
+    b = body or {}
+    result = await onboarding.send_batch(
+        tenant_id, template=b.get("template") or "oth_intro_optin",
+        language=b.get("language") or "en", limit=int(b.get("batch_size") or 25),
+        test_phone=b.get("test_phone"))
+    return {"tenant_id": tenant_id, **result}
+
+
 @router.post("/{tenant_id}/admin/recipes")
 async def admin_add_recipe(tenant_id: str, body: dict):
     """Staci adds a recipe → ingested into the tenant KB so the assistant can recommend it while
