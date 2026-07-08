@@ -34,13 +34,25 @@ _TOOL_NAMES = {"list_products", "add_to_cart", "view_cart", "start_checkout", "t
 
 def _parse_text_toolcall(text: str):
     """Some models emit a tool call as text instead of a structured tool_calls object — either as
-    valid JSON ({"function":"get_daily_catch","arguments":{}}) or malformed (no outer braces, e.g.
-    "function": "suggest_recipe", "arguments": {"dish":"hake"}). Extract (name, args) from either so
-    we never leak it to the customer. Returns None if the text isn't a recognised tool call."""
+    valid JSON ({"function":"get_daily_catch","arguments":{}}), malformed (no outer braces, e.g.
+    "function": "suggest_recipe", "arguments": {"dish":"hake"}), or a bare function name glued
+    straight onto its args with no framing at all (e.g. remove_from_cart{"product": "..."} — seen
+    leaking to a real customer). Extract (name, args) from any of these so we never leak it.
+    Returns None if the text isn't a recognised tool call."""
     if not text or '"' not in text:
         return None
-    # 1) Well-formed JSON object anywhere in the text.
     s = re.sub(r"^\s*```(?:json)?|```\s*$", "", text.strip(), flags=re.IGNORECASE).strip()
+    # 0) Bare "tool_name{...}" or "tool_name: {...}" with no key framing — check this first since
+    # the JSON-object strategy below would otherwise parse the args as a nameless dict and miss it.
+    m0 = re.match(r"^([a-zA-Z_]+)\s*:?\s*(\{.*\})\s*$", s, re.DOTALL)
+    if m0 and m0.group(1) in _TOOL_NAMES:
+        try:
+            args = json.loads(m0.group(2))
+            if isinstance(args, dict):
+                return m0.group(1), args
+        except Exception:
+            pass
+    # 1) Well-formed JSON object anywhere in the text.
     i, j = s.find("{"), s.rfind("}")
     if 0 <= i < j:
         try:
