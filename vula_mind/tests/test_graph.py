@@ -37,6 +37,9 @@ def test_aliases():
     g = TaskGraph(original_prompt="hello")
     g.add_branch(skill_id="reasoning", prompt="hello")
     g.branches[0].status = BranchStatus.COMPLETE
+    # elapsed_ms computes live from time.time() until completed_at is set — freeze it first so
+    # total_latency_ms and elapsed_ms (both read it fresh) don't flake by a few live microseconds.
+    g.completed_at = time.time()
 
     assert g.goal == g.original_prompt
     assert g.graph_id == g.task_id
