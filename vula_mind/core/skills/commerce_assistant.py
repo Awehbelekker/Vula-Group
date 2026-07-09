@@ -84,6 +84,33 @@ def _parse_text_toolcall(text: str):
         return m.group(1), args
     return None
 
+def _is_kg(product) -> bool:
+    return str((product or {}).get("sold_by") or "").lower() == "kg"
+
+
+def _norm_qty(product, raw) -> float:
+    """Parse a requested quantity: decimals allowed for kg (e.g. 1.5), whole packs otherwise."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        v = 1.0
+    if _is_kg(product):
+        return round(v, 3) if v > 0 else 1.0
+    return float(max(1, int(v)))
+
+
+def _fmt_qty(product, qty) -> str:
+    """Human label for a quantity given how the product is sold (e.g. '1.5kg' or '2')."""
+    if _is_kg(product):
+        return f"{float(qty):.3f}".rstrip("0").rstrip(".") + "kg"
+    return str(int(float(qty)))
+
+
+def _line_cents(qty, unit_price_cents) -> int:
+    """Line total in integer cents, decimal-safe for kg quantities."""
+    return int(round(float(qty) * float(unit_price_cents or 0)))
+
+
 # OpenAI-style function specs — used by litellm for both Ollama and OpenRouter.
 TOOL_SPECS: List[Dict[str, Any]] = [
     {
@@ -109,7 +136,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "product": {"type": "string", "description": "Product name or slug."},
-                    "quantity": {"type": "integer", "description": "Quantity, default 1."},
+                    "quantity": {"type": "number", "description": "Amount to add. For products priced per kg, this is the number of kilograms (decimals allowed, e.g. 1.5). For packs, the number of packs. Default 1."},
                 },
                 "required": ["product"],
             },
@@ -338,6 +365,9 @@ class CommerceAssistantSkill(BaseSkill):
             "Guidelines:\n"
             "- Use real tools for products, cart and orders — never invent prices or stock.\n"
             "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly.\n"
+            "- Some products are sold by the *kilogram* (their price shows as R…/kg). For those, ask "
+            "the customer HOW MANY KG they'd like — halves are fine (0.5, 1, 1.5, 2) — and pass that "
+            "as the quantity to add_to_cart. For packs, quantity is simply the number of packs.\n"
             "- On first contact or when asked what's good/fresh/special, call get_daily_catch "
             "to show today's highlights before anything else.\n"
             "- When a customer mentions a dish, ingredient, or asks what to cook, call "
@@ -535,10 +565,6 @@ class CommerceAssistantSkill(BaseSkill):
         self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
     ) -> Dict[str, Any]:
         name = (args.get("product") or "").strip()
-        try:
-            qty = max(1, int(args.get("quantity", 1) or 1))
-        except (TypeError, ValueError):
-            qty = 1
         product = None
         if re.match(r"^[a-z0-9-]+$", name):
             product = await service.get_product_by_slug(tenant_id, name)
@@ -547,12 +573,16 @@ class CommerceAssistantSkill(BaseSkill):
             product = next((p for p in candidates if name.lower() in p["name"].lower()), None)
         if not product:
             return {"error": f"No in-stock product matching '{name}'."}
+        # Decimal amount for kg products (e.g. 1.5 kg), whole packs otherwise.
+        qty = _norm_qty(product, args.get("quantity", 1))
         cart = await service.get_or_create_cart(tenant_id, session_id, phone)
         await service.add_to_cart(tenant_id, cart["id"], product["id"], qty)
+        unit = "/kg" if _is_kg(product) else ""
         return {
             "added": product["name"],
-            "quantity": qty,
-            "unit_price": f"R{product['price_cents'] / 100:.2f}",
+            "quantity": _fmt_qty(product, qty),
+            "unit_price": f"R{product['price_cents'] / 100:.2f}{unit}",
+            "line_total": f"R{_line_cents(qty, product['price_cents']) / 100:.2f}",
         }
 
     async def _exec_view_cart(
@@ -563,10 +593,11 @@ class CommerceAssistantSkill(BaseSkill):
         lines, subtotal = [], 0
         for it in items:
             prod = it.get("commerce_products") or {}
-            line_total = it["quantity"] * it["unit_price_cents"]
+            line_total = _line_cents(it["quantity"], it["unit_price_cents"])
             subtotal += line_total
             lines.append(
-                {"name": prod.get("name"), "quantity": it["quantity"], "line_total": f"R{line_total / 100:.2f}"}
+                {"name": prod.get("name"), "quantity": _fmt_qty(prod, it["quantity"]),
+                 "line_total": f"R{line_total / 100:.2f}"}
             )
         delivery = cart.get("delivery_cents", 8000)
         return {
@@ -744,10 +775,7 @@ class CommerceAssistantSkill(BaseSkill):
                 product = await self._resolve_product(tenant_id, it.get("product", ""))
                 if not product:
                     continue
-                try:
-                    qty = max(1, int(it.get("quantity", 1) or 1))
-                except (TypeError, ValueError):
-                    qty = 1
+                qty = _norm_qty(product, it.get("quantity", 1))   # decimals for kg items
                 line_items.append(
                     {
                         "description": product["name"],
@@ -801,12 +829,13 @@ class CommerceAssistantSkill(BaseSkill):
         items = cart.get("commerce_cart_items", []) or []
         if not items:
             return {"error": "The cart is empty — add items before reviewing."}
-        subtotal = sum(i["quantity"] * i["unit_price_cents"] for i in items)
+        subtotal = sum(_line_cents(i["quantity"], i["unit_price_cents"]) for i in items)
         delivery = cart.get("delivery_cents", 8000)
         total = subtotal + delivery
         item_lines = "\n".join(
-            f"• {it['quantity']}× {(it.get('commerce_products') or {}).get('name', 'Item')} — "
-            f"R{it['quantity'] * it['unit_price_cents'] / 100:.2f}" for it in items)
+            f"• {_fmt_qty(it.get('commerce_products') or {}, it['quantity'])} "
+            f"{(it.get('commerce_products') or {}).get('name', 'Item')} — "
+            f"R{_line_cents(it['quantity'], it['unit_price_cents']) / 100:.2f}" for it in items)
         addr = (args.get("delivery_address") or "").strip()
         pay = ow.PAYMENT_LABELS.get(method) if method in enabled else None
         preview = (
@@ -909,8 +938,8 @@ class CommerceAssistantSkill(BaseSkill):
         for it in items:
             prod = it.get("commerce_products") or {}
             qty, unit = it["quantity"], it["unit_price_cents"]
-            lines.append({"name": prod.get("name", "Item"), "quantity": qty,
-                          "line_total": f"R{qty * unit / 100:.2f}"})
+            lines.append({"name": prod.get("name", "Item"), "quantity": _fmt_qty(prod, qty),
+                          "line_total": f"R{_line_cents(qty, unit) / 100:.2f}"})
 
         total = order["total_cents"]
         pay_line = ow.payment_instructions(cfg, method)
@@ -926,7 +955,7 @@ class CommerceAssistantSkill(BaseSkill):
 
         await self._notify_shop_new_order(tenant_id, order, lines, method, name)
 
-        item_lines = "\n".join(f"• {l['quantity']}× {l['name']} — {l['line_total']}" for l in lines)
+        item_lines = "\n".join(f"• {l['quantity']} × {l['name']} — {l['line_total']}" for l in lines)
         confirmation = (
             f"✅ *Order {order['display_id']} confirmed*\n{item_lines}\n"
             f"Subtotal: R{order['subtotal_cents'] / 100:.2f}\n"
@@ -975,7 +1004,7 @@ class CommerceAssistantSkill(BaseSkill):
         so this is the only way the owner hears about them."""
         try:
             from vula.commerce import order_workflow as ow
-            item_str = "\n".join(f"  • {l['quantity']}× {l['name']} — {l['line_total']}" for l in lines)
+            item_str = "\n".join(f"  • {l['quantity']} × {l['name']} — {l['line_total']}" for l in lines)
             summary = (
                 f"🆕 New WhatsApp order {order['display_id']}\n"
                 f"Customer: {name} ({order.get('customer_phone')})\n"

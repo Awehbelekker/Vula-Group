@@ -40,7 +40,9 @@ async def test_dispatch_add_to_cart_by_slug():
     ):
         out = await skill._dispatch_tool("add_to_cart", {"product": "snoek", "quantity": 2}, CTX)
     mock_add.assert_awaited_once_with(TENANT, "c1", "p1", 2)
-    assert out == {"added": "Fresh Snoek", "quantity": 2, "unit_price": "R185.00"}
+    # quantity is a display string ("2" not 2) and line_total is included — both from the
+    # per-kg pricing support (_fmt_qty/_line_cents), which apply even to non-kg products.
+    assert out == {"added": "Fresh Snoek", "quantity": "2", "unit_price": "R185.00", "line_total": "R370.00"}
 
 
 @pytest.mark.asyncio

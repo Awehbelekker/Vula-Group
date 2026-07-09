@@ -125,7 +125,7 @@ async def get_or_create_cart(tenant_id: str, session_id: str, customer_phone: Op
     return result.data[0]
 
 
-async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: int) -> dict:
+async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: float) -> dict:
     # Check existing
     existing = (
         _client()
@@ -188,7 +188,8 @@ async def clear_cart(cart_id: str) -> None:
 
 async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     items = cart.get("commerce_cart_items", [])
-    subtotal = sum(i["quantity"] * i["unit_price_cents"] for i in items)
+    # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
+    subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
     delivery = cart.get("delivery_cents", 8000)
     total = subtotal + delivery
     display_id = await _next_order_display_id(tenant_id)
@@ -236,7 +237,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
             "product_name": i.get("commerce_products", {}).get("name", ""),
             "quantity": i["quantity"],
             "unit_price_cents": i["unit_price_cents"],
-            "total_cents": i["quantity"] * i["unit_price_cents"],
+            "total_cents": int(round(i["quantity"] * i["unit_price_cents"])),
         }
         for i in items
     ]
