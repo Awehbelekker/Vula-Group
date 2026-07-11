@@ -157,38 +157,89 @@ class IngestionResult:
 class OCRProcessor:
     """
     Converts scanned images and PDFs to clean Markdown text.
-    
-    Primary:  GLM-OCR via Ollama (0.9B, MIT, #1 on OmniDocBench)
-    Fallback: Docling (pure Python, no GPU needed)
+
+    Primary:  GLM-OCR via Ollama (local, free — but a shared GPU box over a tunnel, so slow
+              under load; confirmed via direct reproduction to hit ReadTimeout on image-heavy
+              pages even at 180s, which renders as an empty message in older logs).
+    Fallback: cloud vision (settings.model_vision, e.g. gemini-2.5-flash) — properly
+              provisioned, consistently fast, small per-call cost. Used whenever local OCR
+              fails or times out, not just when local is totally unreachable.
+    Last resort: pytesseract (pure Python, no GPU/cloud needed) — only if no cloud key is set.
     """
 
     def __init__(self, ollama_base: str = OLLAMA_BASE):
         self.ollama_base = ollama_base
 
     async def process_image(self, image_path: Path) -> str:
-        """Extract text from image/scanned page using GLM-OCR."""
+        """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
+        failure or timeout, then to local pytesseract as the last resort."""
         import base64
         with open(image_path, "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode()
 
+        prompt = "Parse this document to Markdown. Extract all text, tables, and structure accurately."
         payload = {
             "model": GLM_OCR_MODEL,
-            "prompt": "Parse this document to Markdown. Extract all text, tables, and structure accurately.",
+            "prompt": prompt,
             "images": [image_b64],
             "stream": False,
             "options": {"temperature": 0.1, "num_predict": 4096},
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
+            # (same ones llm_router uses) or this call is blocked at the edge with a redirect
+            # that then fails to parse as JSON.
+            from core.llm_router import _ollama_headers
+            async with httpx.AsyncClient(timeout=90.0) as client:
                 resp = await client.post(
-                    f"{self.ollama_base}/api/generate", json=payload
+                    f"{self.ollama_base}/api/generate", json=payload,
+                    headers=_ollama_headers() or None,
                 )
                 resp.raise_for_status()
-                return resp.json().get("response", "").strip()
+                text = resp.json().get("response", "").strip()
+                if text:
+                    return text
         except Exception as e:
-            logger.warning(f"GLM-OCR failed, falling back to Docling: {e}")
-            return await self._docling_fallback(image_path)
+            logger.warning(f"GLM-OCR failed, escalating to cloud vision: {e}")
+
+        cloud_text = await self._cloud_vision_fallback(image_path, prompt)
+        if cloud_text:
+            return cloud_text
+        return await self._docling_fallback(image_path)
+
+    async def _cloud_vision_fallback(self, path: Path, prompt: str) -> str:
+        """Escalate to the cloud vision model (fast, reliable) — same route used for the
+        WhatsApp evidence-photo check. Returns "" if no cloud key is configured."""
+        try:
+            from core.llm_router import resolve_cloud_vision_route
+            route = resolve_cloud_vision_route()
+            if not route:
+                return ""
+            model, api_key, api_base = route
+
+            import base64
+            import litellm
+            litellm.drop_params = True
+            img_b64 = base64.b64encode(path.read_bytes()).decode()
+            resp = await litellm.acompletion(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                    ],
+                }],
+                temperature=0.1,
+                max_tokens=4096,
+                api_key=api_key,
+                api_base=api_base,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.warning(f"Cloud vision OCR fallback failed: {e}")
+            return ""
 
     async def _docling_fallback(self, path: Path) -> str:
         """Pure Python fallback using pdfminer + pytesseract."""
