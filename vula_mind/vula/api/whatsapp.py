@@ -32,6 +32,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from config import settings
+from core.transcribe import transcribe_audio
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,16 @@ async def receive_message(
                     )
                     if phone and reply_id:
                         await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
+
+                elif msg_type == "audio":
+                    # Voice note → transcribe → route the text like a normal message.
+                    audio = msg.get("audio") or {}
+                    media_id = audio.get("id", "")
+                    mime_type = audio.get("mime_type", "audio/ogg")
+                    if phone and media_id:
+                        await _handle_voice_note(
+                            phone, media_id, mime_type, msg_id, route_mode, route_tenant
+                        )
 
                 elif msg_type == "document":
                     doc = msg.get("document") or {}
@@ -747,6 +758,43 @@ _DOC_CATEGORIES = [
 ]
 
 
+def _sanitize_json_string(raw: str) -> str:
+    """LLMs sometimes emit literal control characters (a real newline/tab) inside a JSON
+    string value instead of escaping them (\\n, \\t) — invalid per the JSON spec but a
+    well-known model quirk (e.g. a multi-line "summary" or "notes" field), and the actual
+    cause of "Expecting ',' delimiter" errors seen in production doc analysis. Walk the
+    string once, tracking whether we're inside a quoted string (respecting existing escape
+    sequences), and escape stray control characters only there — formatting/whitespace
+    between tokens is left untouched."""
+    out = []
+    in_string = False
+    escape = False
+    for ch in raw:
+        if in_string:
+            if escape:
+                out.append(ch)
+                escape = False
+            elif ch == "\\":
+                out.append(ch)
+                escape = True
+            elif ch == '"':
+                out.append(ch)
+                in_string = False
+            elif ch == "\n":
+                out.append("\\n")
+            elif ch == "\t":
+                out.append("\\t")
+            elif ch == "\r":
+                out.append("\\r")
+            else:
+                out.append(ch)
+        else:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+    return "".join(out)
+
+
 async def _analyze_document(tenant_id: str, filename: str, local_path) -> Optional[dict]:
     """Deep-analyze an uploaded document: read its content, classify it, and
     pull out the structured fields worth keeping in the backend.
@@ -799,7 +847,22 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
                 raw = raw.split("</think>")[-1].strip()
             raw = raw.replace("```json", "").replace("```", "").strip()
             i, j = raw.find("{"), raw.rfind("}")
-            data = _json.loads(raw[i:j + 1] if i >= 0 and j > i else raw)
+            candidate = raw[i:j + 1] if i >= 0 and j > i else raw
+            try:
+                data = _json.loads(candidate)
+            except _json.JSONDecodeError:
+                try:
+                    # Handles raw control characters (newline/tab) left unescaped inside a
+                    # string value — see _sanitize_json_string.
+                    data = _json.loads(_sanitize_json_string(candidate))
+                except _json.JSONDecodeError:
+                    # Handles the harder case: an unescaped literal quote INSIDE a string
+                    # value (e.g. a door schedule's 32" x 80" — the inch mark terminates the
+                    # string early as far as a strict parser is concerned). Ambiguous to fix
+                    # with a hand-rolled character scan, so defer to a purpose-built repair
+                    # library for malformed LLM JSON output.
+                    import json_repair
+                    data = json_repair.loads(candidate)
             cat = data.get("category") or "General Document"
             if cat not in _DOC_CATEGORIES:
                 cat = "General Document"
@@ -882,6 +945,59 @@ def _classify_document(filename: str, path) -> str:
         if any(k in blob for k in keywords):
             return label
     return "General Document"
+
+
+async def _download_media_bytes(media_id: str) -> Optional[bytes]:
+    """Fetch raw media bytes from the Meta Graph API (2-step: get URL, then download)."""
+    if not settings.whatsapp_token:
+        logger.warning("WHATSAPP_TOKEN not set — cannot download media")
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            info = await client.get(
+                f"{settings.whatsapp_api_url}/{media_id}",
+                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+            )
+            info.raise_for_status()
+            url = info.json().get("url", "")
+            if not url:
+                return None
+            dl = await client.get(
+                url, headers={"Authorization": f"Bearer {settings.whatsapp_token}"}
+            )
+            dl.raise_for_status()
+            return dl.content
+    except Exception as exc:
+        logger.error("media download failed for media_id=%s: %s", media_id, exc)
+        return None
+
+
+async def _handle_voice_note(
+    phone: str, media_id: str, mime_type: str, msg_id: str,
+    route_mode: str, route_tenant: Optional[str],
+) -> None:
+    """Transcribe an inbound voice note and route the text like a typed message."""
+    audio = await _download_media_bytes(media_id)
+    if not audio:
+        await _send_reply(phone, "Sorry, I couldn't fetch that voice note. Please type your message. 🙏")
+        return
+    text = await transcribe_audio(
+        audio, mime_type=mime_type, filename=f"voice-{msg_id}.ogg", tenant_id=route_tenant
+    )
+    if not text:
+        await _send_reply(phone, (
+            "I couldn't make out that voice note. 🎙️ Could you type it out for me? "
+            "/ Ek kon nie die stemboodskap hoor nie — tik dit asseblief."
+        ))
+        return
+    # Reflect back what we heard (builds trust; lets them correct a mis-hear).
+    await _send_reply(phone, f"🎙️ I heard: “{text}”")
+    if route_mode == "commerce":
+        await _handle_commerce_message(phone, text, msg_id, route_tenant)
+    elif route_mode == "knowledge":
+        await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
+    else:
+        await _handle_message(phone, text, msg_id)
 
 
 async def _download_document(media_id: str, tenant_id: str, filename: str, mime_type: str):

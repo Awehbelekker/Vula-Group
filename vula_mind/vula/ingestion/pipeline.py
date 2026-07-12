@@ -208,6 +208,9 @@ class OCRProcessor:
             return cloud_text
         return await self._docling_fallback(image_path)
 
+    _IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                   ".webp": "image/webp", ".gif": "image/gif", ".tiff": "image/tiff"}
+
     async def _cloud_vision_fallback(self, path: Path, prompt: str) -> str:
         """Escalate to the cloud vision model (fast, reliable) — same route used for the
         WhatsApp evidence-photo check. Returns "" if no cloud key is configured."""
@@ -222,13 +225,14 @@ class OCRProcessor:
             import litellm
             litellm.drop_params = True
             img_b64 = base64.b64encode(path.read_bytes()).decode()
+            mime = self._IMAGE_MIME.get(path.suffix.lower(), "image/png")
             resp = await litellm.acompletion(
                 model=model,
                 messages=[{
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
                     ],
                 }],
                 temperature=0.1,
@@ -258,8 +262,9 @@ class OCRProcessor:
 class DocumentParser:
     """
     Parses various file types to clean text pages.
-    
-    Supported: PDF, DOCX, XLSX, CSV, TXT, MD, PNG, JPG, JPEG, WEBP
+
+    Supported: PDF, DOCX, XLSX, CSV, TXT, MD, PNG, JPG, JPEG, WEBP, GIF
+    Placeholder-only (filename/metadata noted, content not read): DWG, DXF
     """
 
     def __init__(self):
@@ -278,12 +283,26 @@ class DocumentParser:
             return await self._parse_docx(file_path)
         elif suffix in (".xlsx", ".xls", ".csv"):
             return await self._parse_spreadsheet(file_path)
-        elif suffix in (".png", ".jpg", ".jpeg", ".webp", ".tiff"):
+        elif suffix in (".png", ".jpg", ".jpeg", ".webp", ".tiff", ".gif"):
             text = await self.ocr.process_image(file_path)
             return [(1, text)] if text else []
         elif suffix in (".txt", ".md"):
             text = file_path.read_text(errors="replace")
             return [(1, text)]
+        elif suffix in (".dwg", ".dxf"):
+            # No free/native Python reader for Autodesk's binary DWG format (DXF is
+            # ASCII/parseable via ezdxf, but not worth a new dependency for one format
+            # until it's actually needed). Rather than silently returning nothing —
+            # which left every CAD drawing stuck unanalysed with zero information — hand
+            # back an honest placeholder so downstream analysis can at least classify it
+            # as a drawing from the filename and record that it received one, instead of
+            # failing outright. A real content-reading fix needs a DWG→DXF/PDF converter
+            # (e.g. the ODA File Converter or a paid conversion API) — not implemented.
+            kind = "DWG" if suffix == ".dwg" else "DXF"
+            note = (f"[{kind} CAD drawing file — Vula cannot read native {kind} content yet "
+                    f"(no converter configured). Filename: {file_path.name}]")
+            logger.info(f"{kind} file received, no content reader available: {file_path.name}")
+            return [(1, note)]
         else:
             logger.warning(f"Unsupported file type: {suffix}")
             return []
