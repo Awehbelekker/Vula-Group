@@ -32,7 +32,6 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from config import settings
-from core.transcribe import transcribe_audio
 
 logger = logging.getLogger(__name__)
 
@@ -228,16 +227,6 @@ async def receive_message(
                     )
                     if phone and reply_id:
                         await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
-
-                elif msg_type == "audio":
-                    # Voice note → transcribe → route the text like a normal message.
-                    audio = msg.get("audio") or {}
-                    media_id = audio.get("id", "")
-                    mime_type = audio.get("mime_type", "audio/ogg")
-                    if phone and media_id:
-                        await _handle_voice_note(
-                            phone, media_id, mime_type, msg_id, route_mode, route_tenant
-                        )
 
                 elif msg_type == "document":
                     doc = msg.get("document") or {}
@@ -970,34 +959,6 @@ async def _download_media_bytes(media_id: str) -> Optional[bytes]:
     except Exception as exc:
         logger.error("media download failed for media_id=%s: %s", media_id, exc)
         return None
-
-
-async def _handle_voice_note(
-    phone: str, media_id: str, mime_type: str, msg_id: str,
-    route_mode: str, route_tenant: Optional[str],
-) -> None:
-    """Transcribe an inbound voice note and route the text like a typed message."""
-    audio = await _download_media_bytes(media_id)
-    if not audio:
-        await _send_reply(phone, "Sorry, I couldn't fetch that voice note. Please type your message. 🙏")
-        return
-    text = await transcribe_audio(
-        audio, mime_type=mime_type, filename=f"voice-{msg_id}.ogg", tenant_id=route_tenant
-    )
-    if not text:
-        await _send_reply(phone, (
-            "I couldn't make out that voice note. 🎙️ Could you type it out for me? "
-            "/ Ek kon nie die stemboodskap hoor nie — tik dit asseblief."
-        ))
-        return
-    # Reflect back what we heard (builds trust; lets them correct a mis-hear).
-    await _send_reply(phone, f"🎙️ I heard: “{text}”")
-    if route_mode == "commerce":
-        await _handle_commerce_message(phone, text, msg_id, route_tenant)
-    elif route_mode == "knowledge":
-        await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
-    else:
-        await _handle_message(phone, text, msg_id)
 
 
 async def _download_document(media_id: str, tenant_id: str, filename: str, mime_type: str):
