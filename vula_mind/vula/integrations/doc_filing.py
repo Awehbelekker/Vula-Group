@@ -320,7 +320,10 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     """
     try:
         from datetime import datetime, timedelta, timezone
-        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        # 30 minutes was too tight at real volume — most "which project?" prompts went
+        # unanswered in time and the doc was permanently orphaned even when someone
+        # replied hours later. 24h gives a realistic same-day/next-morning window.
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         base = (_client().table("vula_filed_documents").select("*")
                 .eq("tenant_id", tenant_id).eq("status", "pending_project")
                 .gte("created_at", cutoff).order("created_at", desc=True))
