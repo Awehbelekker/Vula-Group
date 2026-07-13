@@ -10,7 +10,7 @@
  *   🐟 Products — toggle stock on/off, edit price, mark weekly special
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import VulaImageUpload from './VulaImageUpload'
 import VulaSmartScanner from './VulaSmartScanner'
 import VulaInvoices from './VulaInvoices'
@@ -18,6 +18,8 @@ import VulaBookings from './VulaBookings'
 import VulaMarketing from './VulaMarketing'
 import VulaFinanceInsights from './VulaFinanceInsights'
 import VulaRecurringOrders from './VulaRecurringOrders'
+// Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
+const VulaPages = lazy(() => import('./VulaPages'))
 import VulaBudget from './VulaBudget'
 import VulaBroadcast from './VulaBroadcast'
 import VulaCustomers from './VulaCustomers'
@@ -80,7 +82,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
 
   // Tenant-level module gating (business-type driven). Always show core tabs; map a few
   // tab ids to their module key. null/empty modules = show everything (no config yet).
-  const CORE = new Set(['overview', 'assistant', 'inbox', 'settings', 'suppliers', 'qsrates', 'marketing'])
+  const CORE = new Set(['overview', 'assistant', 'inbox', 'settings', 'suppliers', 'qsrates', 'marketing', 'pages'])
   const MODMAP = { customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders' }
   const tenantHas = (id) => modules === null || !modules.length || CORE.has(id)
     || (modules || []).includes(MODMAP[id] || id)
@@ -112,7 +114,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
               [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'inbox', label: '📥 Inbox' }],
               [{ id: 'orders', label: '📦 Orders' }, { id: 'subscriptions', label: '🔁 Subscriptions' }, { id: 'bookings', label: '📅 Bookings' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
               [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'payments', label: '💳 Payments' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
-              [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'marketing', label: '✨ Marketing' }],
+              [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'marketing', label: '✨ Marketing' }, { id: 'pages', label: '🎨 Pages' }],
               [{ id: 'workspace', label: '🗂️ Workspace' }, { id: 'projects', label: '🏗️ Projects' }, { id: 'fieldops', label: '👷 Field Ops' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
               [...(full ? [{ id: 'team', label: '👥 Team' }, { id: 'settings', label: '⚙️ Settings' }] : [])],
             ]
@@ -154,6 +156,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'followups' && <VulaFollowups     tenantId={tenantId} />}
           {tab === 'broadcast' && <><VulaClientOnboarding tenantId={tenantId} /><VulaBroadcast tenantId={tenantId} /></>}
           {tab === 'marketing' && <VulaMarketing tenantId={tenantId} />}
+          {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: '#8A8680' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
           {tab === 'projects'  && <VulaProjects      tenantId={tenantId} />}
           {tab === 'fieldops'  && <VulaFieldOps     tenantId={tenantId} />}
           {tab === 'reports'   && <><VulaFinanceInsights tenantId={tenantId} /><VulaReports tenantId={tenantId} /></>}

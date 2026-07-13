@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import VulaLogin from "./components/VulaLogin";
 import VulaPrivacy from "./components/VulaPrivacy";
+// Lazy: pulls in @measured/puck (~1 MB) — only the public page-render route needs it.
+const VulaPageRender = lazy(() => import("./components/VulaPageRender"));
 import { useAuthStore } from "./store/auth";
 import VulaDashboard from "./components/VulaDashboard";
 import VulaQS from "./components/VulaQS";
@@ -139,6 +141,16 @@ export default function App() {
   if (route === "#/privacy") return <VulaPrivacy view="privacy" />;
   if (route === "#/terms") return <VulaPrivacy view="terms" />;
   if (route === "#/data-deletion") return <VulaPrivacy view="data-deletion" />;
+
+  // Public Puck page renderer — #/page/{tenant}/{slug} — available to every tenant, no auth.
+  if (route.startsWith("#/page/")) {
+    const parts = route.replace(/^#\/page\//, "").split("/");
+    return (
+      <Suspense fallback={<div style={{ padding: 24, fontFamily: "system-ui", color: "#8A8680" }}>Loading…</div>}>
+        <VulaPageRender tenant={parts[0]} slug={parts.slice(1).join("/")} />
+      </Suspense>
+    );
+  }
 
   // Resolve effective tenant — master picks via the switcher; owners see their own
   const effectiveTenantId = (role === "master")
