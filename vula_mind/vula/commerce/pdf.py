@@ -212,18 +212,20 @@ _DOC_HTML = """<!DOCTYPE html>
 <table>
   <thead>
     <tr>
-      <th style="width:50%">Description</th>
-      <th style="width:10%">Qty</th>
-      <th style="width:20%">Unit Price</th>
-      <th style="width:20%">Total</th>
+      <th style="width:44%">Description</th>
+      <th style="width:9%">Qty</th>
+      <th style="width:9%">Unit</th>
+      <th style="width:19%">Unit Price</th>
+      <th style="width:19%">Total</th>
     </tr>
   </thead>
   <tbody>
     {% for item in line_items %}
     <tr>
-      <td>{{ item.description }}</td>
-      <td>{{ item.quantity }}</td>
-      <td>R{{ "%.2f" | format(item.unit_price_cents / 100) }}</td>
+      <td>{{ item.description }}{% if item.discount_pct %} <span style="color:#8A8680">(−{{ "%g" | format(item.discount_pct | float) }}%)</span>{% endif %}</td>
+      <td>{{ "%g" | format(item.quantity | float) }}</td>
+      <td>{{ item.unit or "" }}</td>
+      <td>R{{ "%.2f" | format(item.unit_price_cents / 100) }}{% if item.unit %}/{{ item.unit }}{% endif %}</td>
       <td>R{{ "%.2f" | format(item.total_cents / 100) }}</td>
     </tr>
     {% endfor %}
@@ -232,8 +234,11 @@ _DOC_HTML = """<!DOCTYPE html>
 
 <table class="totals">
   <tr><td>Subtotal</td><td>R{{ "%.2f" | format(subtotal_cents / 100) }}</td></tr>
+  {% if discount_cents %}<tr><td>Discount</td><td>−R{{ "%.2f" | format(discount_cents / 100) }}</td></tr>{% endif %}
   <tr><td>VAT ({{ vat_rate | int }}%)</td><td>R{{ "%.2f" | format(vat_cents / 100) }}</td></tr>
-  <tr class="total-row"><td>TOTAL DUE</td><td>R{{ "%.2f" | format(total_cents / 100) }}</td></tr>
+  <tr class="total-row"><td>{% if deposit_cents %}TOTAL{% else %}TOTAL DUE{% endif %}</td><td>R{{ "%.2f" | format(total_cents / 100) }}</td></tr>
+  {% if deposit_cents %}<tr><td>Deposit paid</td><td>−R{{ "%.2f" | format(deposit_cents / 100) }}</td></tr>
+  <tr class="total-row"><td>BALANCE DUE</td><td>R{{ "%.2f" | format((total_cents - deposit_cents) / 100) }}</td></tr>{% endif %}
 </table>
 
 {% if notes %}
@@ -373,7 +378,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
     # Ensure every item has total_cents computed
     for item in line_items:
         if item.get("total_cents") is None:
-            item["total_cents"] = int(item.get("quantity", 1)) * int(item.get("unit_price_cents", 0))
+            item["total_cents"] = int(round(float(item.get("quantity", 1) or 1) * int(item.get("unit_price_cents", 0))))
 
     doc_type = invoice.get("doc_type", "invoice")
 
@@ -406,9 +411,11 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         # Financials — always integer cents, never floats in storage
         "line_items": line_items,
         "subtotal_cents": int(invoice.get("subtotal_cents") or 0),
+        "discount_cents": int(invoice.get("discount_cents") or 0),
         "vat_rate": float(invoice.get("vat_rate") or 15.0),
         "vat_cents": int(invoice.get("vat_cents") or 0),
         "total_cents": int(invoice.get("total_cents") or 0),
+        "deposit_cents": int(invoice.get("deposit_cents") or 0),
         "notes": invoice.get("notes") or "",
     }
 

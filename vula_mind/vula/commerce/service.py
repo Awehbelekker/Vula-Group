@@ -20,7 +20,15 @@ from supabase import create_client, Client
 logger = logging.getLogger(__name__)
 
 
+_client_singleton: Optional[Client] = None
+
+
 def _client() -> Client:
+    """Shared Supabase client. Cached module-wide — previously a fresh client (httpx session +
+    auth setup) was created on *every* DB call, adding latency to every request."""
+    global _client_singleton
+    if _client_singleton is not None:
+        return _client_singleton
     # Accept either env var name — Railway has SUPABASE_SERVICE_KEY,
     # newer code uses SUPABASE_SERVICE_ROLE_KEY. Use whichever is set.
     key = settings.supabase_service_role_key or settings.supabase_service_key
@@ -29,7 +37,8 @@ def _client() -> Client:
             "Supabase service key not set. "
             "Set SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY in Railway."
         )
-    return create_client(settings.supabase_url, key)
+    _client_singleton = create_client(settings.supabase_url, key)
+    return _client_singleton
 
 
 def _now() -> str:
@@ -572,14 +581,15 @@ def _compute_totals(line_items: List[dict], vat_rate: float,
     normalised: List[dict] = []
     entered = 0
     for item in line_items:
-        qty = int(item["quantity"])
+        qty = float(item["quantity"])          # decimals allowed for per-kg items
         unit = int(item["unit_price_cents"])
-        line_total = qty * unit
+        line_total = int(round(qty * unit))
         entered += line_total
         normalised.append(
             {
                 "description": item["description"],
                 "quantity": qty,
+                "unit": (item.get("unit") or "").strip() or None,   # ea/no./kg/m/m²/m³/lin.m/hr/day/%
                 "unit_price_cents": unit,
                 "total_cents": line_total,
                 "product_id": str(item["product_id"]) if item.get("product_id") else None,

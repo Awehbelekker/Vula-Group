@@ -198,6 +198,7 @@ class DocType(str, Enum):
 class InvoiceStatus(str, Enum):
     draft = "draft"
     sent = "sent"
+    part_paid = "part_paid"   # a deposit / partial payment received; balance still due
     paid = "paid"
     overdue = "overdue"
     cancelled = "cancelled"
@@ -208,16 +209,25 @@ class InvoiceStatus(str, Enum):
 
 class InvoiceLineItem(BaseModel):
     description: str
-    quantity: int = 1
+    quantity: float = 1                    # decimals allowed (1.5 kg, 120.5 m², 8 hr)
+    unit: Optional[str] = None             # ea/no./kg/m/m²/m³/lin.m/hr/day/% — free text
     unit_price_cents: int                  # ZAR cents — never floats
-    total_cents: Optional[int] = None      # computed = quantity * unit_price_cents
+    discount_pct: float = 0                # per-line discount %, 0–100
+    total_cents: Optional[int] = None      # computed = quantity * unit_price_cents * (1 - discount_pct/100)
     product_id: Optional[UUID] = None
 
     @field_validator("quantity")
     @classmethod
-    def _qty_positive(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("quantity must be at least 1")
+    def _qty_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("quantity must be greater than 0")
+        return v
+
+    @field_validator("discount_pct")
+    @classmethod
+    def _disc_range(cls, v: float) -> float:
+        if v < 0 or v > 100:
+            raise ValueError("discount_pct must be between 0 and 100")
         return v
 
     @field_validator("unit_price_cents")
@@ -236,6 +246,8 @@ class InvoiceCreate(BaseModel):
     customer_address: Optional[str] = None
     line_items: List[InvoiceLineItem]
     vat_rate: float = 15.0
+    discount_pct: float = 0                # invoice-level discount %, applied to the subtotal
+    deposit_cents: int = 0                 # amount already paid (deposit) — balance = total - deposit
     status: InvoiceStatus = InvoiceStatus.draft
     issue_date: Optional[str] = None       # ISO date
     due_date: Optional[str] = None         # ISO date — invoices
@@ -243,6 +255,7 @@ class InvoiceCreate(BaseModel):
     notes: Optional[str] = None
     payment_method: Optional[str] = None
     order_id: Optional[UUID] = None
+    project: Optional[str] = None          # link this invoice to a project (unified project financials)
 
     @field_validator("line_items")
     @classmethod
@@ -265,9 +278,11 @@ class Invoice(BaseModel):
     supplier: Optional[str] = None         # for inbound
     line_items: List[InvoiceLineItem] = []
     subtotal_cents: int = 0
+    discount_cents: int = 0                # invoice-level discount amount
     vat_rate: float = 15.0
     vat_cents: int = 0
     total_cents: int = 0
+    deposit_cents: int = 0                 # amount already paid
     status: InvoiceStatus = InvoiceStatus.draft
     issue_date: Optional[str] = None
     due_date: Optional[str] = None

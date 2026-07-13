@@ -87,12 +87,35 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
         log.warning("payment webhook verify failed (%s): %s", provider, exc)
         return {"received": True}
     if result and result.get("paid") and result.get("reference"):
+        ref = result["reference"]
+        from vula.commerce import service as cs
+        db = cs._client()
+        # 1. Invoice? (invoice pay-links use reference = invoice id)
         try:
-            from vula.commerce import service as cs
-            cs._client().table("commerce_invoices").update(
-                {"status": "paid", "updated_at": cs._now()}
-            ).eq("id", result["reference"]).eq("tenant_id", tenant_id).execute()
-            log.info("Invoice %s paid via %s", result["reference"], provider)
+            upd = (db.table("commerce_invoices")
+                   .update({"status": "paid", "updated_at": cs._now()})
+                   .eq("tenant_id", tenant_id).eq("id", ref).execute())
+            if upd.data:
+                log.info("Invoice %s paid via %s", ref, provider)
+                return {"received": True}
         except Exception as exc:
             log.warning("invoice mark-paid failed: %s", exc)
+        # 2. Order? (order pay-links use reference = display_id) — mark paid + trigger fulfilment.
+        try:
+            rows = (db.table("commerce_orders")
+                    .select("id,display_id,customer_phone,customer_name,total_cents,status")
+                    .eq("tenant_id", tenant_id).eq("display_id", ref).limit(1).execute().data or [])
+            if rows:
+                o = rows[0]
+                if o.get("status") == "pending_payment":
+                    db.table("commerce_orders").update(
+                        {"status": "paid", "payment_method": "online", "updated_at": cs._now()}
+                    ).eq("id", o["id"]).execute()
+                    from vula.api.yoco import _notify_order_paid
+                    await _notify_order_paid(
+                        tenant_id, o["display_id"], o["id"], o.get("customer_phone"),
+                        o.get("customer_name") or "", int(o.get("total_cents") or 0))
+                log.info("Order %s paid via %s", ref, provider)
+        except Exception as exc:
+            log.warning("order mark-paid failed: %s", exc)
     return {"received": True}

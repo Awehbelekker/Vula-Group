@@ -399,6 +399,33 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     return {"answer": answer, "ok": bool(out.success and out.answer)}
 
 
+class MarketingRequest(BaseModel):
+    kind: str = "specials"          # specials | product | promo | broadcast
+    topic: str = ""                 # product name (for 'product') or the offer/subject
+    tone: str = ""
+    variants: int = 2
+
+
+@router.post("/{tenant_id}/admin/marketing/generate")
+async def admin_marketing_generate(tenant_id: str, body: MarketingRequest):
+    """Generate grounded marketing copy (specials post, product description, promo, broadcast)."""
+    from vula.commerce import marketing
+    return await marketing.generate(
+        tenant_id, kind=body.kind, topic=body.topic, tone=body.tone, variants=body.variants,
+    )
+
+
+@router.get("/{tenant_id}/admin/finances/insights")
+async def admin_finances_insights(tenant_id: str, days: int = 30, explain: bool = False):
+    """Plain-language financial insights: P&L, VAT collected, receivables, top customers.
+    Deterministic numbers always; a short LLM narrative when explain=true."""
+    from vula.commerce import finances
+    data = await finances.insights(tenant_id, days=days)
+    if explain:
+        data["summary"] = await finances.narrate(tenant_id, data)
+    return data
+
+
 @router.get("/{tenant_id}/admin/stats")
 async def admin_stats(tenant_id: str):
     """Revenue/order stats including invoice summary for the merchant dashboard."""
@@ -1487,20 +1514,34 @@ def _norm_phone(p: Optional[str]) -> str:
     return n
 
 
-async def _aggregate_customers(tenant_id: str) -> dict[str, dict]:
-    """Merge orders + conversation sessions into one contact per phone number.
+_AGG_CACHE: dict[str, tuple[float, dict]] = {}
+_AGG_TTL = 45.0   # seconds — the audience is stable; opt-outs are applied fresh downstream
 
-    Shared by the Customers tab and the broadcast sender so the audience shown
-    in the dashboard is exactly the audience a broadcast reaches.
+
+async def _aggregate_customers(tenant_id: str, use_cache: bool = True) -> dict[str, dict]:
+    """Merge orders + conversation sessions + imported contacts into one contact per phone.
+
+    Shared by the Customers tab and the broadcast sender so the audience shown in the dashboard is
+    exactly the audience a broadcast reaches. Cached for a few seconds and each source is capped, so
+    it stays fast as data grows (this used to pull *every* order + session + contact on every call).
+    Opt-outs are applied downstream (`_suppressed_phones`), so a stale cache never mis-sends.
     """
+    import time as _time
+    if use_cache:
+        hit = _AGG_CACHE.get(tenant_id)
+        if hit and (_time.monotonic() - hit[0]) < _AGG_TTL:
+            return hit[1]
+
     db = service._client()
     customers: dict[str, dict] = {}
 
-    # Orders → spend & recency
+    # Orders → spend & recency (cap to recent so it stays fast as history grows)
     orders = (
         db.table("commerce_orders")
         .select("customer_phone,customer_name,total_cents,status,created_at")
         .eq("tenant_id", tenant_id)
+        .order("created_at", desc=True)
+        .limit(3000)
         .execute()
     ).data or []
     for o in orders:
@@ -1521,11 +1562,13 @@ async def _aggregate_customers(tenant_id: str) -> dict[str, dict]:
         if ca and (not c["last_order_at"] or ca > c["last_order_at"]):
             c["last_order_at"] = ca
 
-    # Conversation sessions → contacts who messaged in
+    # Conversation sessions → contacts who messaged in (cap to recent)
     sessions = (
         db.table("commerce_conversation_sessions")
         .select("customer_phone,customer_name,channel,updated_at,session_key")
         .eq("tenant_id", tenant_id)
+        .order("updated_at", desc=True)
+        .limit(5000)
         .execute()
     ).data or []
     for s in sessions:
@@ -1549,7 +1592,7 @@ async def _aggregate_customers(tenant_id: str) -> dict[str, dict]:
         contacts = (
             db.table("commerce_contacts")
             .select("phone,name,email,area,product,tags,consent_status")
-            .eq("tenant_id", tenant_id).execute()
+            .eq("tenant_id", tenant_id).limit(20000).execute()
         ).data or []
     except Exception as exc:
         log.debug("contacts merge skipped (run migration 046?): %s", exc)
@@ -1572,6 +1615,7 @@ async def _aggregate_customers(tenant_id: str) -> dict[str, dict]:
         c.setdefault("tags", ct.get("tags") or [])
         c["consent"] = ct.get("consent_status") or "unknown"
 
+    _AGG_CACHE[tenant_id] = (_time.monotonic(), customers)
     return customers
 
 

@@ -31,6 +31,7 @@ router = APIRouter(tags=["tenants"])
 MODULES: dict[str, str] = {
     "products":   "Products",
     "orders":     "Orders",
+    "bookings":   "Bookings",
     "payments":   "Payments",
     "invoices":   "Invoices",
     "delivery":   "Delivery",
@@ -38,6 +39,7 @@ MODULES: dict[str, str] = {
     "crm":        "Customers (CRM)",
     "reports":    "Reports",
     "broadcasts": "Broadcasts",
+    "marketing":  "Marketing (AI copy)",
     "inbox":      "Team Inbox",
     "automations":"Automations",
     "budget":     "Budget",
@@ -55,21 +57,21 @@ MODULES: dict[str, str] = {
 BUSINESS_TYPES: dict[str, dict] = {
     "food":     {"label": "Food / Restaurant / Takeaway",
                  "modules": ["products", "orders", "payments", "invoices", "delivery",
-                             "crm", "reports", "broadcasts", "inbox", "team"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team"]},
     "retail":   {"label": "Retail / E-commerce",
                  "modules": ["products", "orders", "payments", "invoices", "pages",
-                             "crm", "reports", "broadcasts", "inbox", "team"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team"]},
     "services": {"label": "Professional services (architecture, agency, consulting)",
-                 "modules": ["invoices", "projects", "documents", "finances", "fieldops",
+                 "modules": ["invoices", "bookings", "projects", "documents", "finances", "fieldops",
                              "followups", "reports", "team"]},
     "trades":   {"label": "Trades / Construction / Field work",
                  "modules": ["invoices", "fieldops", "projects", "budget", "scanner",
                              "finances", "followups", "team"]},
     "health":   {"label": "Health / Wellness / Bookings",
-                 "modules": ["invoices", "crm", "followups", "broadcasts", "inbox",
-                             "reports", "pages", "team"]},
+                 "modules": ["bookings", "invoices", "crm", "followups", "broadcasts", "marketing",
+                             "inbox", "reports", "pages", "team"]},
     "other":    {"label": "Other / General",
-                 "modules": ["invoices", "crm", "reports", "followups", "team"]},
+                 "modules": ["invoices", "crm", "reports", "marketing", "followups", "team"]},
 }
 
 
