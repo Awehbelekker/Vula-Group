@@ -94,6 +94,8 @@ from vula.api.google import router as google_router
 from vula.api.microsoft import router as microsoft_router
 from vula.api.email_connect import router as email_connect_router
 from vula.api.commerce import router as commerce_router
+from vula.api.bookings import router as bookings_router
+from vula.api.subscriptions import router as subscriptions_router
 from vula.api.yoco import router as yoco_router
 from vula.api.whatsapp_connect import router as whatsapp_connect_router
 from vula.api.yoco_connect import router as yoco_connect_router
@@ -630,6 +632,21 @@ async def _scheduled_campaigns_loop() -> None:
         await _asyncio.sleep(60)
 
 
+async def _subscriptions_loop() -> None:
+    """Create due recurring orders every hour (acts only when a subscription's next_run arrives)."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(90)  # settle on boot
+    while True:
+        try:
+            from vula.commerce.subscriptions import process_due
+            n = await process_due()
+            if n:
+                log.info("Subscriptions scheduler created %d recurring order(s)", n)
+        except Exception as exc:
+            log.warning("Subscriptions scheduler loop error: %s", exc)
+        await _asyncio.sleep(3600)
+
+
 async def _email_sync_loop() -> None:
     """Auto-sync connected mailboxes every 15 min: build contacts + file attachments."""
     import asyncio as _asyncio
@@ -686,6 +703,7 @@ async def lifespan(app: FastAPI):
     _asyncio.create_task(_infra_snapshot_loop())
     _asyncio.create_task(_recurring_invoices_loop())
     _asyncio.create_task(_scheduled_campaigns_loop())
+    _asyncio.create_task(_subscriptions_loop())
     _asyncio.create_task(_email_sync_loop())
     _asyncio.create_task(_weekly_rates_loop())
     _asyncio.create_task(_daily_trial_expiry_loop())
@@ -782,6 +800,8 @@ app.include_router(google_router, prefix="/v1/google")
 app.include_router(microsoft_router, prefix="/v1/microsoft")
 app.include_router(email_connect_router, prefix="/v1/email")
 app.include_router(commerce_router, prefix="/v1/commerce")
+app.include_router(bookings_router, prefix="/v1/bookings")
+app.include_router(subscriptions_router, prefix="/v1/subscriptions")
 app.include_router(yoco_router, prefix="/v1/yoco")
 app.include_router(yoco_connect_router, prefix="/v1/yoco")
 app.include_router(whatsapp_connect_router, prefix="/v1/whatsapp")

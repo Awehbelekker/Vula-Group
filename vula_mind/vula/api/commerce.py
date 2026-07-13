@@ -1747,10 +1747,8 @@ async def admin_list_customers(
     }
 
 
-@router.get("/{tenant_id}/admin/customers/{phone}/history")
-async def admin_customer_history(tenant_id: str, phone: str):
+def _customer_timeline(db, tenant_id: str, phone: str) -> list:
     """Per-customer interaction timeline: orders + invoices + recent chat (tenant-scoped)."""
-    db = service._client()
     digits = _norm_phone(phone)
     events: list = []
     try:
@@ -1798,7 +1796,82 @@ async def admin_customer_history(tenant_id: str, phone: str):
     except Exception:
         pass
     events.sort(key=lambda e: e.get("at") or "", reverse=True)
-    return {"phone": phone, "events": events[:80]}
+    return events[:80]
+
+
+@router.get("/{tenant_id}/admin/customers/{phone}/history")
+async def admin_customer_history(tenant_id: str, phone: str):
+    """Per-customer interaction timeline (tenant-scoped)."""
+    return {"phone": phone, "events": _customer_timeline(service._client(), tenant_id, phone)}
+
+
+@router.get("/{tenant_id}/admin/customers/{phone}/detail")
+async def admin_customer_detail(tenant_id: str, phone: str):
+    """Full customer profile: lifetime value, order stats, language, note + timeline."""
+    db = service._client()
+    orders, invs, sess = [], [], []
+    try:
+        orders = (db.table("commerce_orders")
+                  .select("total_cents,status,created_at,customer_name,customer_email")
+                  .eq("tenant_id", tenant_id).eq("customer_phone", phone).execute().data or [])
+    except Exception:
+        pass
+    paid = [o for o in orders if o.get("status") not in ("pending_payment", "cancelled", "refunded")]
+    ltv = sum(int(o.get("total_cents") or 0) for o in paid)
+    paid_count = len(paid)
+    dates = sorted(o["created_at"] for o in orders if o.get("created_at"))
+    try:
+        invs = (db.table("commerce_invoices").select("total_cents,status")
+                .eq("tenant_id", tenant_id).eq("customer_phone", phone).execute().data or [])
+    except Exception:
+        pass
+    inv_outstanding = sum(int(i.get("total_cents") or 0) for i in invs if i.get("status") in ("sent", "overdue"))
+    # Session holds the language preference + internal note (agent_note), keyed by phone.
+    lang, note, sess_name = None, None, None
+    try:
+        sess = (db.table("commerce_conversation_sessions")
+                .select("preferred_language,agent_note,customer_name")
+                .eq("tenant_id", tenant_id).eq("customer_phone", phone).limit(1).execute().data or [])
+        if sess:
+            lang = sess[0].get("preferred_language")
+            note = sess[0].get("agent_note")
+            sess_name = sess[0].get("customer_name")
+    except Exception:
+        pass
+    name = next((o.get("customer_name") for o in orders if o.get("customer_name")), None) or sess_name
+    email = next((o.get("customer_email") for o in orders if o.get("customer_email")), None)
+    return {
+        "profile": {"name": name, "phone": phone, "email": email,
+                    "preferred_language": lang,
+                    "first_order_at": dates[0] if dates else None,
+                    "last_order_at": dates[-1] if dates else None},
+        "stats": {"lifetime_value_cents": ltv, "order_count": len(orders),
+                  "paid_order_count": paid_count,
+                  "avg_order_cents": int(ltv / paid_count) if paid_count else 0,
+                  "invoice_outstanding_cents": inv_outstanding},
+        "note": note or "",
+        "events": _customer_timeline(db, tenant_id, phone),
+    }
+
+
+@router.post("/{tenant_id}/admin/customers/{phone}/note")
+async def admin_customer_note(tenant_id: str, phone: str, body: dict):
+    """Save an internal CRM note against a customer (shared with the inbox agent_note)."""
+    from uuid import uuid4
+    note = (body or {}).get("note", "")
+    db = service._client()
+    try:
+        res = (db.table("commerce_conversation_sessions").update({"agent_note": note})
+               .eq("tenant_id", tenant_id).eq("customer_phone", phone).execute())
+        if not res.data:
+            # No session yet (e.g. web-only customer) — create a lightweight one to hold the note.
+            db.table("commerce_conversation_sessions").insert({
+                "id": str(uuid4()), "tenant_id": tenant_id, "session_key": phone,
+                "channel": "web", "customer_phone": phone, "agent_note": note,
+            }).execute()
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 048?)"}
+    return {"ok": True, "note": note}
 
 
 # ── Delivery list ─────────────────────────────────────────────────────────────

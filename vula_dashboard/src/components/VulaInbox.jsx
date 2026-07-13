@@ -82,7 +82,13 @@ function Thread({ tenantId, sessionId, onBack }) {
   const [data, setData] = useState(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [canned, setCanned] = useState([])
   const endRef = useRef(null)
+
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/canned-replies`)
+      .then(r => r.json()).then(d => setCanned(d.canned_replies || [])).catch(() => {})
+  }, [tenantId])
 
   const load = useCallback(async () => {
     try {
@@ -122,6 +128,13 @@ function Thread({ tenantId, sessionId, onBack }) {
     setBusy(false)
   }
 
+  async function saveMeta(patch) {
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/meta`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+    }).catch(() => {})
+    load()
+  }
+
   const msgs = data?.messages || []
   const paused = data?.paused
 
@@ -148,6 +161,18 @@ function Thread({ tenantId, sessionId, onBack }) {
         <p style={s.pausedNote}>You've taken over — the AI is quiet. Replies below go straight to the customer on WhatsApp.</p>
       )}
 
+      <div style={s.metaRow}>
+        <input key={`asg-${sessionId}`} defaultValue={data?.assigned_to || ''} placeholder="👤 Assign to…"
+          onBlur={e => e.target.value !== (data?.assigned_to || '') && saveMeta({ assigned_to: e.target.value })}
+          style={s.metaInput} />
+        <input key={`tag-${sessionId}`} defaultValue={(data?.tags || []).join(', ')} placeholder="🏷️ tags (comma)"
+          onBlur={e => saveMeta({ tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })}
+          style={s.metaInput} />
+        <input key={`note-${sessionId}`} defaultValue={data?.agent_note || ''} placeholder="📝 internal note (not sent)"
+          onBlur={e => e.target.value !== (data?.agent_note || '') && saveMeta({ agent_note: e.target.value })}
+          style={{ ...s.metaInput, flex: 2 }} />
+      </div>
+
       <div style={s.thread}>
         {msgs.map((m, i) => {
           const mine = m.role !== 'user'
@@ -163,6 +188,15 @@ function Thread({ tenantId, sessionId, onBack }) {
         })}
         <div ref={endRef} />
       </div>
+
+      {canned.length > 0 && (
+        <div style={s.cannedRow}>
+          {canned.map(c => (
+            <button key={c.id} type="button" title={c.body} style={s.cannedChip}
+              onClick={() => setInput(c.body)}>{c.title}</button>
+          ))}
+        </div>
+      )}
 
       <form onSubmit={sendReply} style={s.inputRow}>
         <input
@@ -204,6 +238,10 @@ const s = {
   inBubble:    { background: '#fff', color: '#1E1E1E', border: '1px solid #DDD8CE', borderBottomLeftRadius: 4 },
   outBubble:   { background: 'var(--accent-soft, rgba(44,85,69,0.10))', color: '#1E1E1E', borderBottomRightRadius: 4 },
   roleTag:     { fontSize: 10, fontWeight: 700, color: '#8A8680', letterSpacing: '0.04em' },
+  metaRow:     { display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid #EDE9DF', marginBottom: 4 },
+  metaInput:   { flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: '#3A3A3A' },
+  cannedRow:   { display: 'flex', gap: 6, flexWrap: 'wrap', paddingTop: 10 },
+  cannedChip:  { padding: '5px 10px', background: '#F3F1EA', border: '1px solid #DDD8CE', borderRadius: 14, fontSize: 12, color: '#3A3A3A', cursor: 'pointer', fontFamily: 'system-ui' },
   inputRow:    { display: 'flex', gap: 8, paddingTop: 10, borderTop: '1px solid #EDE9DF' },
   input:       { flex: 1, padding: '11px 14px', border: '1px solid #DDD8CE', borderRadius: 8, fontFamily: 'system-ui', fontSize: 14, boxSizing: 'border-box' },
   sendBtn:     { padding: '11px 20px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },

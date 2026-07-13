@@ -495,15 +495,19 @@ async def set_session_paused(tenant_id: str, session_id: str, paused: bool) -> d
 
 async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
     """Return recent conversation sessions for the shared inbox list view."""
-    result = (
-        _client()
-        .table("commerce_conversation_sessions")
-        .select("id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at")
-        .eq("tenant_id", tenant_id)
-        .order("updated_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
+    base = "id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at"
+    try:
+        result = (
+            _client().table("commerce_conversation_sessions")
+            .select(base + ",assigned_to,agent_note,tags")
+            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+        )
+    except Exception:
+        # team-inbox columns not present yet (migration 048 not run) — fall back gracefully.
+        result = (
+            _client().table("commerce_conversation_sessions").select(base)
+            .eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(limit).execute()
+        )
     rows = result.data or []
     # Expose session id as session_id for the frontend.
     for r in rows:
@@ -531,6 +535,9 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
         "customer": session.get("customer_name") or session.get("customer_phone") or session.get("session_key"),
         "phone": session.get("customer_phone") or session.get("session_key"),
         "paused": bool(session.get("paused")),
+        "assigned_to": session.get("assigned_to"),
+        "agent_note": session.get("agent_note"),
+        "tags": session.get("tags") or [],
         "messages": [{"role": m["role"], "content": m["content"], "created_at": m.get("created_at")} for m in messages],
     }
 
