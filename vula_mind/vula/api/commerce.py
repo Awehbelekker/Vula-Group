@@ -163,7 +163,7 @@ async def get_cart(tenant_id: str, session_id: str, phone: Optional[str] = Query
 @router.post("/{tenant_id}/cart/{session_id}/add")
 async def add_to_cart(tenant_id: str, session_id: str, body: AddToCartRequest):
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
-    item = await service.add_to_cart(cart["id"], str(body.product_id), body.quantity)
+    item = await service.add_to_cart(tenant_id, cart["id"], str(body.product_id), body.quantity)
     return {"cart_id": cart["id"], "item": item}
 
 
