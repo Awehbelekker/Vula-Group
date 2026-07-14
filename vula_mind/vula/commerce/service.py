@@ -96,11 +96,54 @@ async def create_product(tenant_id: str, data: dict) -> dict:
 
 
 async def update_product_stock(tenant_id: str, product_id: str, quantity_delta: int) -> None:
-    """Decrement stock by quantity_delta. Uses raw SQL to avoid race conditions."""
+    """Decrement stock by quantity_delta (positive reduces, negative restores). Raw SQL, race-safe."""
     _client().rpc(
         "decrement_product_stock",
         {"p_tenant_id": tenant_id, "p_product_id": product_id, "p_delta": quantity_delta},
     ).execute()
+
+
+async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
+    """Decrement (sale) or restore (cancel/refund) product stock for an order's items — ONCE.
+
+    Idempotent via the order's `stock_adjusted` flag (migration 054): a paid/confirmed order
+    deducts stock exactly once no matter how many times its status changes, and a cancel/refund
+    restores it exactly once. Returns True if it acted. Best-effort: never raises to the caller.
+    """
+    try:
+        order = await get_order(order_id)
+    except Exception as exc:
+        logger.debug("apply_order_stock: get_order failed: %s", exc)
+        return False
+    if not order:
+        return False
+    already = bool(order.get("stock_adjusted"))
+    if restore and not already:
+        return False          # nothing was deducted → nothing to restore
+    if (not restore) and already:
+        return False          # already deducted → don't double-count
+    tenant_id = order.get("tenant_id")
+    items = order.get("commerce_order_items") or []
+    for it in items:
+        pid = it.get("product_id")
+        if not pid:
+            continue
+        qty = int(round(float(it.get("quantity") or 0)))
+        if qty <= 0:
+            continue
+        delta = -qty if restore else qty   # positive decrements; negative restores
+        try:
+            await update_product_stock(tenant_id, pid, delta)
+        except Exception as exc:
+            logger.warning("stock adjust failed for product %s (order %s): %s", pid, order_id, exc)
+    try:
+        _client().table("commerce_orders").update(
+            {"stock_adjusted": (not restore), "updated_at": _now()}
+        ).eq("id", order_id).execute()
+    except Exception as exc:
+        logger.debug("stock_adjusted flag update skipped (run migration 054?): %s", exc)
+    logger.info("order %s stock %s", order_id, "restored" if restore else "decremented")
+    return True
 
 
 # ── Cart ─────────────────────────────────────────────────────────────────────
@@ -449,6 +492,16 @@ async def get_or_create_session(
     return result.data[0]
 
 
+async def set_session_language(tenant_id: str, session_key: str, language: str) -> None:
+    """Remember the customer's language on their session (best-effort; needs migration 052)."""
+    try:
+        _client().table("commerce_conversation_sessions").update(
+            {"preferred_language": language, "updated_at": _now()}
+        ).eq("tenant_id", tenant_id).eq("session_key", session_key).execute()
+    except Exception as exc:
+        logger.debug("set_session_language skipped (run migration 052?): %s", exc)
+
+
 async def append_message(tenant_id: str, session_id: str, role: str, content: str) -> None:
     """Persist a single conversation turn and update the session snapshot."""
     _client().table("commerce_conversation_messages").insert(
@@ -576,21 +629,23 @@ _DOC_TYPE_CODE = {"invoice": "INV", "quote": "QTE", "proforma": "PRO", "credit_n
 
 
 def _compute_totals(line_items: List[dict], vat_rate: float,
-                    prices_include_vat: bool = False) -> tuple[int, int, int, List[dict]]:
-    """Return (subtotal_cents, vat_cents, total_cents, normalised_items).
+                    prices_include_vat: bool = False,
+                    invoice_discount_pct: float = 0.0) -> tuple[int, int, int, int, List[dict]]:
+    """Return (subtotal_cents, discount_cents, vat_cents, total_cents, normalised_items).
 
-    Each line's total_cents is recomputed from quantity * unit_price_cents so the
-    server is the source of truth. All values are integer cents.
-    - exclusive (default): subtotal = sum(lines); vat = subtotal*rate; total = subtotal+vat.
-    - inclusive: entered line prices already contain VAT → back it out so subtotal is net,
-      vat = entered − net, total = entered. (Correct SA VAT-inclusive handling.)
+    Each line's total is recomputed server-side from quantity * unit_price * (1 - line discount).
+    An optional invoice-level discount % then comes off the subtotal, and VAT applies to the
+    discounted amount. All values are integer cents.
+    - exclusive (default): subtotal = sum(lines); taxable = subtotal − discount; vat = taxable*rate.
+    - inclusive: entered line prices already contain VAT → discount off the gross, then back out VAT.
     """
     normalised: List[dict] = []
     entered = 0
     for item in line_items:
         qty = float(item["quantity"])          # decimals allowed for per-kg items
         unit = int(item["unit_price_cents"])
-        line_total = int(round(qty * unit))
+        line_disc = float(item.get("discount_pct") or 0)
+        line_total = int(round(qty * unit * (1 - line_disc / 100.0)))
         entered += line_total
         normalised.append(
             {
@@ -598,15 +653,21 @@ def _compute_totals(line_items: List[dict], vat_rate: float,
                 "quantity": qty,
                 "unit": (item.get("unit") or "").strip() or None,   # ea/no./kg/m/m²/m³/lin.m/hr/day/%
                 "unit_price_cents": unit,
+                "discount_pct": line_disc or None,
                 "total_cents": line_total,
                 "product_id": str(item["product_id"]) if item.get("product_id") else None,
             }
         )
+    discount_cents = int(round(entered * (invoice_discount_pct / 100.0))) if invoice_discount_pct else 0
+    after_discount = entered - discount_cents
     if prices_include_vat and vat_rate > 0:
-        net = round(entered / (1 + vat_rate / 100.0))
-        return net, entered - net, entered, normalised
-    vat_cents = round(entered * (vat_rate / 100.0))
-    return entered, vat_cents, entered + vat_cents, normalised
+        # entered prices already contain VAT. Work in ex-VAT terms so the columns foot:
+        # subtotal(ex, pre-discount) − discount(ex) = taxable(ex); taxable + vat = total(incl).
+        subtotal = round(entered / (1 + vat_rate / 100.0))
+        net_after = round(after_discount / (1 + vat_rate / 100.0))
+        return subtotal, subtotal - net_after, after_discount - net_after, after_discount, normalised
+    vat_cents = round(after_discount * (vat_rate / 100.0))
+    return entered, discount_cents, vat_cents, after_discount + vat_cents, normalised
 
 
 async def _next_invoice_number(tenant_id: str, doc_type: str) -> str:
@@ -636,7 +697,10 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     vat_registered = s.get("vat_registered", True)
     prices_include_vat = bool(s.get("prices_include_vat"))
     vat_rate = float(data.get("vat_rate", 15.0)) if vat_registered else 0.0
-    subtotal, vat_cents, total, items = _compute_totals(data["line_items"], vat_rate, prices_include_vat)
+    inv_disc_pct = float(data.get("discount_pct") or 0)
+    subtotal, discount_cents, vat_cents, total, items = _compute_totals(
+        data["line_items"], vat_rate, prices_include_vat, inv_disc_pct)
+    deposit_cents = int(data.get("deposit_cents") or 0)
     invoice = {
         "id": str(uuid.uuid4()),
         "tenant_id": tenant_id,
@@ -648,10 +712,13 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
         "customer_address": data.get("customer_address"),
         "line_items": items,
         "subtotal_cents": subtotal,
+        "discount_cents": discount_cents,
         "vat_rate": vat_rate,
         "vat_cents": vat_cents,
         "total_cents": total,
+        "deposit_cents": deposit_cents,
         "status": data.get("status", "draft"),
+        "project": data.get("project"),
         "issue_date": data.get("issue_date") or _now()[:10],
         "due_date": data.get("due_date"),
         "valid_until": data.get("valid_until"),
@@ -661,7 +728,16 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
         "created_at": _now(),
         "updated_at": _now(),
     }
-    result = _client().table("commerce_invoices").insert(invoice).execute()
+    try:
+        result = _client().table("commerce_invoices").insert(invoice).execute()
+    except Exception as exc:
+        # discount_cents/deposit_cents (053) or project (055) columns may not exist yet — drop
+        # them and retry so invoicing never breaks on a missing column.
+        invoice.pop("discount_cents", None)
+        invoice.pop("deposit_cents", None)
+        invoice.pop("project", None)
+        logger.warning("invoice insert retried without discount/deposit/project (run migrations 053/055?): %s", exc)
+        result = _client().table("commerce_invoices").insert(invoice).execute()
     return result.data[0]
 
 

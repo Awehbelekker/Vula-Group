@@ -279,16 +279,22 @@ export default function VulaInvoices({ tenantId, products = [] }) {
 
 function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   const [customer, setCustomer] = useState({ name: '', phone: '', email: '', address: '' })
-  const [items, setItems] = useState([{ description: '', quantity: 1, unit_price: '' }])
+  const [items, setItems] = useState([{ description: '', quantity: 1, unit: '', unit_price: '', discount: '' }])
   const [dueDate, setDueDate] = useState('')
   const [validUntil, setValidUntil] = useState('')
   const [vatRate, setVatRate] = useState(15)
+  const [discountPct, setDiscountPct] = useState('')   // invoice-level discount %
+  const [deposit, setDeposit] = useState('')           // deposit already paid (rands)
   const [saving, setSaving] = useState(false)
   const [savedClients, setSavedClients] = useState([])
+  const [project, setProject] = useState('')
+  const [projectList, setProjectList] = useState([])
 
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-clients`)
       .then(r => r.json()).then(d => setSavedClients(d.clients || [])).catch(() => {})
+    fetch(`${VULA_API}/v1/projects/${tenantId}/labels`)
+      .then(r => r.json()).then(d => setProjectList(d.projects || [])).catch(() => {})
   }, [tenantId])
 
   function pickClient(id) {
@@ -305,23 +311,43 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   }
 
   function updateItem(i, field, val) {
-    setItems(items.map((it, idx) => idx === i ? { ...it, [field]: val } : it))
+    setItems(items.map((it, idx) => {
+      if (idx !== i) return it
+      const next = { ...it, [field]: val }
+      // Pick a product/service from the catalog → autofill price + unit (still fully editable).
+      if (field === 'description') {
+        const p = products.find(pr => (pr.name || '').toLowerCase() === (val || '').toLowerCase())
+        if (p) {
+          next.unit_price = (p.price_cents / 100).toFixed(2)
+          if (!next.unit) next.unit = p.sold_by === 'kg' ? 'kg' : (p.sold_by === 'hour' ? 'hr' : '')
+        }
+      }
+      return next
+    }))
   }
-  function addItem() { setItems([...items, { description: '', quantity: 1, unit_price: '' }]) }
+  function addItem() { setItems([...items, { description: '', quantity: 1, unit: '', unit_price: '', discount: '' }]) }
   function removeItem(i) { setItems(items.filter((_, idx) => idx !== i)) }
 
   const lineItems = items.map(it => {
     const cents = Math.round((parseFloat(it.unit_price) || 0) * 100)
+    const disc = parseFloat(it.discount) || 0
+    const qty = parseFloat(it.quantity) || 0
     return {
       description: it.description,
-      quantity: parseFloat(it.quantity) || 0,
+      quantity: qty,
+      unit: (it.unit || '').trim(),
       unit_price_cents: cents,
-      total_cents: Math.round(cents * (parseFloat(it.quantity) || 0)),
+      discount_pct: disc,
+      total_cents: Math.round(cents * qty * (1 - disc / 100)),
     }
   })
   const subtotal = lineItems.reduce((sum, i) => sum + i.total_cents, 0)
-  const vat = Math.round(subtotal * vatRate / 100)
-  const total = subtotal + vat
+  const invDiscCents = Math.round(subtotal * (parseFloat(discountPct) || 0) / 100)
+  const taxable = subtotal - invDiscCents
+  const vat = Math.round(taxable * vatRate / 100)
+  const total = taxable + vat
+  const depositCents = Math.round((parseFloat(deposit) || 0) * 100)
+  const balance = total - depositCents
   const fmt = c => `R${(c / 100).toFixed(2)}`
 
   async function save() {
@@ -333,6 +359,9 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
         customer_name: customer.name, customer_phone: customer.phone,
         customer_email: customer.email, customer_address: customer.address,
         line_items: lineItems, vat_rate: vatRate,
+        discount_pct: parseFloat(discountPct) || 0,
+        deposit_cents: depositCents,
+        project: project || null,
         issue_date: new Date().toISOString().slice(0, 10),
         due_date: dueDate || null,
         valid_until: validUntil || null,
@@ -368,14 +397,19 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       <p style={s.sectionLabel}>Line items</p>
       {items.map((it, i) => (
         <div key={i} style={s.itemRow}>
-          <input list="prod-list" placeholder="Description" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: 2 }} />
-          <input type="number" placeholder="Qty" value={it.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} style={{ ...s.fInput, width: 60 }} />
-          <input type="number" step="0.01" placeholder="R" value={it.unit_price} onChange={e => updateItem(i, 'unit_price', e.target.value)} style={{ ...s.fInput, width: 80 }} />
+          <input list="prod-list" placeholder="Description / pick product or service" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: 2 }} />
+          <input type="number" step="0.001" placeholder="Qty" value={it.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} style={{ ...s.fInput, width: 54 }} />
+          <input list="unit-list" placeholder="unit" value={it.unit} onChange={e => updateItem(i, 'unit', e.target.value)} style={{ ...s.fInput, width: 58 }} />
+          <input type="number" step="0.01" placeholder="R" value={it.unit_price} onChange={e => updateItem(i, 'unit_price', e.target.value)} style={{ ...s.fInput, width: 76 }} />
+          <input type="number" step="1" placeholder="-%" title="Line discount %" value={it.discount} onChange={e => updateItem(i, 'discount', e.target.value)} style={{ ...s.fInput, width: 48 }} />
           {items.length > 1 && <button onClick={() => removeItem(i)} style={s.rmBtn}>×</button>}
         </div>
       ))}
       <datalist id="prod-list">
-        {products.map(p => <option key={p.id} value={p.name}>{`R${(p.price_cents / 100).toFixed(2)}`}</option>)}
+        {products.map(p => <option key={p.id} value={p.name}>{`R${(p.price_cents / 100).toFixed(2)}${p.sold_by === 'kg' ? '/kg' : ''}`}</option>)}
+      </datalist>
+      <datalist id="unit-list">
+        {['ea', 'no.', 'item', 'kg', 'm', 'm²', 'm³', 'lin.m', 'hr', 'day', '%'].map(u => <option key={u} value={u} />)}
       </datalist>
       <button onClick={addItem} style={s.addItemBtn}>+ Add line</button>
 
@@ -386,12 +420,23 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
           <label style={s.dueLabel}>Valid until <input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)} style={s.fInput} /></label>
         )}
         <label style={s.dueLabel}>VAT % <input type="number" value={vatRate} onChange={e => setVatRate(parseFloat(e.target.value) || 0)} style={{ ...s.fInput, width: 60 }} /></label>
+        <label style={s.dueLabel}>Discount % <input type="number" step="1" placeholder="0" value={discountPct} onChange={e => setDiscountPct(e.target.value)} style={{ ...s.fInput, width: 60 }} /></label>
+        <label style={s.dueLabel}>Deposit R <input type="number" step="0.01" placeholder="0" value={deposit} onChange={e => setDeposit(e.target.value)} style={{ ...s.fInput, width: 76 }} /></label>
+        {projectList.length > 0 && (
+          <label style={s.dueLabel}>Project
+            <input list="proj-list" placeholder="none" value={project} onChange={e => setProject(e.target.value)} style={{ ...s.fInput, width: 150 }} />
+            <datalist id="proj-list">{projectList.map(p => <option key={p} value={p} />)}</datalist>
+          </label>
+        )}
       </div>
 
       <div style={s.totals}>
         <div style={s.totRow}><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
+        {invDiscCents > 0 && <div style={s.totRow}><span>Discount ({discountPct}%)</span><span>−{fmt(invDiscCents)}</span></div>}
         <div style={s.totRow}><span>VAT ({vatRate}%)</span><span>{fmt(vat)}</span></div>
-        <div style={{ ...s.totRow, ...s.totFinal }}><span>Total</span><span>{fmt(total)}</span></div>
+        <div style={{ ...s.totRow, ...s.totFinal }}><span>{depositCents > 0 ? 'Total' : 'Total'}</span><span>{fmt(total)}</span></div>
+        {depositCents > 0 && <div style={s.totRow}><span>Deposit paid</span><span>−{fmt(depositCents)}</span></div>}
+        {depositCents > 0 && <div style={{ ...s.totRow, ...s.totFinal }}><span>Balance due</span><span>{fmt(balance)}</span></div>}
       </div>
 
       <button onClick={save} disabled={saving || !customer.name} style={s.saveInvBtn}>

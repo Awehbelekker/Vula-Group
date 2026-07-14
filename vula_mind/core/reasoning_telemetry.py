@@ -51,3 +51,18 @@ def emit(*, system: str, run_id: str | None = None, task: str | None = None,
         loop.run_in_executor(None, _insert, entry)   # off the request path
     except RuntimeError:
         _insert(entry)                                 # no loop (sync context) — inline
+
+
+_PII_KEYS = {"customer_phone", "phone", "email", "customer_email", "customer_address", "address"}
+
+
+def log_tool_call(tenant_id: str, skill: str, tool: str, args: dict | None = None) -> None:
+    """Record that an agent called a tool (for the Agent Activity view). POPIA-safe: drops
+    contact fields and truncates values, so we log WHAT the agent did, not customer PII."""
+    safe = {}
+    for k, v in (args or {}).items():
+        if k in _PII_KEYS:
+            continue
+        s = str(v)
+        safe[k] = (s[:60] + "…") if len(s) > 60 else s
+    emit(system="vula-agent-tool", task=tool, outcome=skill, tenant_id=tenant_id, extra={"args": safe})

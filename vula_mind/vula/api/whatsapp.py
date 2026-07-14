@@ -32,6 +32,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from config import settings
+from core.transcribe import transcribe_audio
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,9 @@ async def receive_message(
                 phone = msg.get("from", "")
                 msg_id = msg.get("id", "")
                 msg_type = msg.get("type", "")
+                # Diagnostic: surface the exact inbound type + media presence so we can see
+                # why a voice note isn't transcribing (audio branch expects type=="audio").
+                logger.info("WA msg type=%s from=%s keys=%s", msg_type, phone, list(msg.keys()))
 
                 # 3. Idempotency check
                 if msg_id:
@@ -228,6 +232,16 @@ async def receive_message(
                     if phone and reply_id:
                         await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
 
+                elif msg_type == "audio":
+                    # Voice note → transcribe → route the text like a normal message.
+                    audio = msg.get("audio") or {}
+                    media_id = audio.get("id", "")
+                    mime_type = audio.get("mime_type", "audio/ogg")
+                    if phone and media_id:
+                        await _handle_voice_note(
+                            phone, media_id, mime_type, msg_id, route_mode, route_tenant
+                        )
+
                 elif msg_type == "document":
                     doc = msg.get("document") or {}
                     media_id = doc.get("id", "")
@@ -244,11 +258,17 @@ async def receive_message(
                     caption = media.get("caption", "")
                     mime_type = media.get("mime_type", "image/jpeg")
                     if phone and media_id:
-                        # A registered contractor's photo → task evidence first.
-                        handled = await _handle_media(phone, media_id, caption, msg_id)
+                        # An explicit receipt/expense caption routes to the books even for a
+                        # contractor (site crews buy materials + claim) — otherwise a registered
+                        # contractor's photo is treated as task evidence first.
+                        cap_l = (caption or "").lower()
+                        expense_intent = any(k in cap_l for k in _EXPENSE_WORDS)
+                        handled = False
+                        if not expense_intent:
+                            handled = await _handle_media(phone, media_id, caption, msg_id)
                         if not handled:
-                            if route_mode == "knowledge":
-                                # Anyone else on a tenant line → ingest into the KB
+                            if route_mode == "knowledge" or route_tenant or expense_intent:
+                                # Tenant line (or an expense photo) → ingest + auto-log expenses.
                                 fname = caption or f"image-{msg_id}.jpg"
                                 await _handle_document_ingest(
                                     phone, media_id, fname, mime_type, route_tenant_id=route_tenant
@@ -388,6 +408,18 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
         return
+
+    # Answering "which project is that receipt for?" → allocate the pending expense claim.
+    if tenant_id:
+        _alloc = await _maybe_allocate_pending_expense(tenant_id, phone, text)
+        if _alloc:
+            await _send_reply(phone, _alloc, tenant_id)
+            return
+        # Answering a bank-review question ("R720 to Lonese — what's this?").
+        _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
+        if _rev:
+            await _send_reply(phone, _rev, tenant_id)
+            return
 
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
@@ -583,21 +615,27 @@ async def _handle_document_ingest(
         await _send_reply(
             phone,
             f"I can't ingest '{filename or 'that file'}' yet. "
-            f"Send PDFs, Word docs, Excel files, or plain text."
+            f"Send PDFs, Word docs, Excel files, or plain text.",
+            tenant_id,
         )
         return
 
-    await _send_reply(
-        phone,
-        f"Got it! Ingesting '{filename or 'your document'}' into your knowledge base. "
-        f"This takes 1-3 minutes. I'll confirm when it's ready."
-    )
+    # Send from the TENANT's number (omitting tenant_id falls back to the global line,
+    # which 400s for senders not on its allow-list). Tell them what actually happens next.
+    if (mime_type or "").startswith("image/"):
+        ack = ("📸 Got it — reading that now. If it's a receipt or invoice I'll book it "
+               "straight into your books; anything else gets filed. Give me a minute…")
+    else:
+        ack = (f"📄 Got it — processing '{filename or 'your document'}'. Bank statements get "
+               "reconciled, invoices go to your books, and everything is filed so you can ask "
+               "me about it. This takes 1-3 minutes.")
+    await _send_reply(phone, ack, tenant_id)
 
     try:
         # Download from Meta
         local_path = await _download_document(media_id, tenant_id, filename, mime_type)
         if not local_path:
-            await _send_reply(phone, f"Sorry, I couldn't download '{filename}'. Please try again.")
+            await _send_reply(phone, f"Sorry, I couldn't download '{filename}'. Please try again.", tenant_id)
             return
 
         # Ingest via pipeline — always adds to KB so Vula learns from every doc
@@ -609,14 +647,49 @@ async def _handle_document_ingest(
             await _send_reply(
                 phone,
                 f"There was a problem ingesting '{result.filename}': {result.error or 'unknown error'}. "
-                f"Please try again or contact your Vula rep."
+                f"Please try again or contact your Vula rep.",
+                tenant_id,
             )
             return
 
-        # For PDFs/images that look like invoices or receipts, also attempt
-        # auto-scan → commit to books. Only for admin role.
+        # Bank statement PDF? → run bank reconciliation, NOT the invoice scanner (a statement
+        # has "Tax Invoice" printed on it and would book junk into the books).
+        if local_path.suffix.lower() == ".pdf":
+            try:
+                from vula.commerce import bank_rec
+                head = bank_rec.extract_pdf_text(
+                    local_path, bank_rec.get_statement_password(tenant_id))[:4000].lower()
+            except Exception:
+                head = ""
+            if "statement" in head and any(k in head for k in
+                                           ("opening balance", "closing balance", "transaction history")):
+                rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
+                if rec.get("error"):
+                    await _send_reply(phone, f"🏦 That looks like a bank statement, but I couldn't "
+                                             f"process it: {rec['error']}", tenant_id)
+                else:
+                    msg = (f"🏦 Bank statement processed: *{rec.get('parsed', 0)} transactions*.\n"
+                           f"✅ {rec.get('matched_invoices', 0)} matched to invoices"
+                           f" · 🧾 {rec.get('matched_expenses', 0)} matched to receipts"
+                           f" · 👷 {rec.get('matched_workers', 0)} worker payments")
+                    ni = rec.get("needs_input", 0)
+                    if ni:
+                        # Start the review right here in the chat — one item at a time.
+                        from vula.commerce import bank_review
+                        q = bank_review.start_review(tenant_id)
+                        if q:
+                            msg += f"\n\n{ni} I couldn't allocate — let's sort them here:\n\n{q}"
+                        else:
+                            msg += (f"\n❓ {ni} need a quick review in your 🏦 Bank tab.")
+                    else:
+                        msg += "\nEverything allocated — see the 🏦 Bank tab."
+                    await _send_reply(phone, msg, tenant_id)
+                return
+
+        # PDFs that look like supplier invoices → auto-scan → commit to books (photos are
+        # handled as expense claims below, off the reliable deep-analysis fields).
         scan_msg = ""
-        if role == "admin" and local_path.suffix.lower() in (".pdf", ".jpg", ".jpeg", ".png"):
+        if role == "admin" and local_path.suffix.lower() == ".pdf":
             try:
                 import base64, httpx as _httpx
                 from config import settings as _s
@@ -635,8 +708,13 @@ async def _handle_document_ingest(
                         doc_type = scan_data.get("doc_type", "")
                         total = scan_data.get("total_cents", 0) or 0
 
-                        if doc_type in ("receipt", "invoice", "delivery_note") and total > 0:
-                            # Auto-commit to books
+                        if doc_type in ("receipt", "petty_cash") and total > 0:
+                            # A receipt = money spent for the business → log as an EXPENSE CLAIM
+                            # (who paid it, categorised, VAT split, allocated to a project).
+                            scan_msg = await _log_expense_claim(
+                                tenant_id, phone, scan_data, result.doc_id)
+                        elif doc_type in ("invoice", "delivery_note") and total > 0:
+                            # Supplier invoice/delivery note → commit to books as before.
                             commit_resp = await client.post(
                                 f"http://localhost:{_s.api_port}/v1/commerce/{tenant_id}/admin/scan/commit",
                                 headers={"X-API-Key": _s.api_key, "Content-Type": "application/json"},
@@ -669,6 +747,44 @@ async def _handle_document_ingest(
             except Exception as exc:
                 logger.debug("Extraction store skipped (run migration 011?): %s", exc)
             breakdown = _format_extraction(analysis)
+
+            # A PHOTO of a receipt/invoice = money spent for the business → expense claim.
+            # ONE strong vision call reads the actual image (the OCR-text → small-model path
+            # hallucinated totals). Delivery notes are filed, never booked as money.
+            is_img = local_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+            if not scan_msg and is_img:
+                fin = await _scan_financial_photo(str(local_path))
+                dtp = (fin or {}).get("doc_type")
+                total_r = _num((fin or {}).get("total"))
+                if fin and dtp in ("receipt", "invoice") and total_r > 0:
+                    vat_r = _num(fin.get("vat"))
+                    # Sanity: SA VAT is 15/115 of the gross (~13%). An impossible figure means a
+                    # misread — drop it and let the books compute it from the category instead.
+                    if not (0 <= vat_r <= total_r * 0.16):
+                        vat_r = 0
+                    # Dedup on the image CONTENT — a re-sent photo has identical bytes even though
+                    # it gets a new media id, so this catches re-sends AND Meta redeliveries.
+                    import hashlib
+                    img_ref = "img:" + hashlib.sha256(local_path.read_bytes()).hexdigest()[:40]
+                    scan_msg = await _log_expense_claim(tenant_id, phone, {
+                        "total_cents": round(total_r * 100),
+                        "vat_cents": round(vat_r * 100),
+                        "supplier": fin.get("vendor"),
+                        "date": fin.get("date"),
+                        "notes": summary,
+                        "card_last4": fin.get("card_last4"),
+                        "payment_method": fin.get("payment_method"),
+                    }, img_ref)
+                    cur = (fin.get("currency") or "").upper()
+                    if scan_msg and cur and cur not in ("ZAR", "UNKNOWN"):
+                        scan_msg += (f"\n⚠️ This looks like a *{cur}* amount, not rands — "
+                                     "please check it in the Expenses tab.")
+                elif fin and dtp == "delivery_note":
+                    scan_msg = ("\n\n📦 That's a *delivery note* — filed with your documents "
+                                "(no money booked). I'll match it against the supplier's invoice.")
+                elif fin and dtp == "menu" and any(k in (filename or "").lower() for k in _EXPENSE_WORDS):
+                    scan_msg = ("\n\n⚠️ That looks like a *menu/price list*, not a receipt — "
+                                "nothing was booked.")
         else:
             # Fallback to keyword classification if deep analysis was unavailable
             doc_category = _classify_document(result.filename, local_path)
@@ -680,23 +796,181 @@ async def _handle_document_ingest(
             doc_category, summary, fields,
         )
 
-        msg = (
-            f"✅ Filed '{result.filename}' as *{doc_category}* — "
-            f"{result.chunks_stored} chunks added."
-        )
-        if summary:
-            msg += f"\n\n📄 {summary}"
-        if breakdown:
-            msg += f"\n\n{breakdown}"
-        if file_note:
-            msg += f"\n\n{file_note}"
+        if scan_msg and any(k in scan_msg for k in ("💳", "♻️", "📦", "⚠️")):
+            # Money was booked (or deliberately not) — lead with THAT, not the filing mechanics.
+            msg = scan_msg.strip() + "\n\n🗂 The document itself is filed — ask me about it any time."
         else:
-            msg += "\n\nAsk me anything about it."
-        msg += scan_msg
+            msg = (
+                f"✅ Filed '{result.filename}' as *{doc_category}* — "
+                f"{result.chunks_stored} chunks added."
+            )
+            if summary:
+                msg += f"\n\n📄 {summary}"
+            if breakdown:
+                msg += f"\n\n{breakdown}"
+            if file_note:
+                msg += f"\n\n{file_note}"
+            else:
+                msg += "\n\nAsk me anything about it."
+            msg += scan_msg
         await _send_reply(phone, msg, tenant_id)
     except Exception as exc:
         logger.error("Document ingest failed for %s: %s", phone, exc)
-        await _send_reply(phone, f"Something went wrong ingesting '{filename}'. Please try again.")
+        await _send_reply(phone, f"Something went wrong ingesting '{filename}'. Please try again.", tenant_id)
+
+
+def _num(v) -> float:
+    """Best-effort parse a money value from a number or a string like 'R 1,234.56'."""
+    if isinstance(v, (int, float)):
+        return float(v)
+    if not v:
+        return 0.0
+    try:
+        return float(re.sub(r"[^\d.]", "", str(v).replace(",", "")) or 0)
+    except Exception:
+        return 0.0
+
+
+async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
+                             doc_id: Optional[str] = None) -> str:
+    """A scanned receipt = money spent for the business → record an expense CLAIM (who paid, what
+    category, VAT split, which project). Returns a short confirmation appended to the filing reply;
+    asks for a project when the tenant runs projects and this one isn't allocated yet."""
+    try:
+        from vula.commerce import expenses
+        total = int(scan_data.get("total_cents") or 0)
+        vat = int(scan_data.get("vat_cents") or 0) or None
+        supplier = scan_data.get("supplier") or None
+        # Who paid + is it out-of-pocket? An owner/admin's own card = not reimbursable; a
+        # contractor/staff member who bought materials on site = reimburse them.
+        name, reimbursable = None, False
+        try:
+            from vula.models.tenants import get_tenant_db
+            lk = get_tenant_db().lookup_by_phone_with_role(phone)
+            if lk:
+                name = lk.get("name")
+                reimbursable = (lk.get("role") not in ("admin", "owner"))
+        except Exception:
+            pass
+        if not name:
+            try:
+                from vula.models.field_ops import get_field_ops_db
+                c = get_field_ops_db().get_contractor_by_phone(phone)
+                if c:
+                    name, reimbursable = getattr(c, "name", None), True
+            except Exception:
+                pass
+        # Whose money? The card digits on the slip decide — a registered company card is
+        # business money (never owed back); a different card is out of pocket.
+        paid_with = expenses.resolve_paid_with(
+            tenant_id, card_last4=scan_data.get("card_last4"),
+            payment_method=scan_data.get("payment_method"))
+        project = expenses.match_project(tenant_id, scan_data.get("notes") or "")
+        claim = await expenses.create_claim(
+            tenant_id, amount_cents=total,
+            description=(scan_data.get("notes") or supplier or "Receipt"),
+            supplier=supplier, date=scan_data.get("date"), vat_cents=vat, project=project,
+            paid_by=phone, paid_by_name=name, reimbursable=reimbursable,
+            paid_with=paid_with, card_last4=scan_data.get("card_last4"),
+            channel="whatsapp", receipt_doc_id=doc_id)
+        if claim.get("duplicate"):
+            where = f" (on {claim['project']})" if claim.get("project") else ""
+            return (f"\n\n♻️ I've already logged this one — *R{total/100:,.2f}*"
+                    f"{(' from ' + supplier) if supplier else ''}{where}. Skipped the duplicate.")
+        cat = claim.get("category") or "expense"
+        msg = f"\n\n💳 Logged as an expense: *R{total/100:,.2f}* → {cat}"
+        if claim.get("vat_cents"):
+            msg += f" (incl. VAT R{claim['vat_cents']/100:,.2f})"
+        if claim.get("project"):
+            msg += f", on *{claim['project']}*"
+        if paid_with == "company_card":
+            msg += " — paid on the *company card* (I'll match it to the bank statement)."
+        elif paid_with == "personal":
+            msg += f" — paid on a *personal card*, so it's owed back to {name or 'you'}. 👛"
+        elif claim.get("reimbursable"):
+            msg += f" — marked to reimburse {name or 'you'}. 👛"
+        else:
+            msg += "."
+        if not claim.get("project") and claim.get("needs_project"):
+            msg += "\n📍 Which project/site is this for? Reply with the site name, or 'none'."
+        elif paid_with is None and expenses.list_cards(tenant_id):
+            msg += "\n💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'."
+        return msg
+    except Exception as exc:
+        logger.warning("expense claim from receipt failed: %s", exc)
+        return ""
+
+
+async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Optional[str]:
+    """If a bank-review question is outstanding AND the sender is on the tenant's team
+    (never a customer), treat the message as the answer. Returns the reply or None."""
+    try:
+        from vula.integrations.notify import team_member_for_phone, _fallback_phone, _digits
+        is_team = bool(team_member_for_phone(tenant_id, phone))
+        if not is_team:
+            fb = _fallback_phone(tenant_id)
+            is_team = bool(fb and _digits(fb) == _digits(phone))
+        if not is_team:
+            from vula.models.tenants import get_tenant_db
+            lk = get_tenant_db().lookup_by_phone_with_role(phone)
+            is_team = bool(lk and lk.get("tenant_id") == tenant_id and lk.get("role") == "admin")
+        if not is_team:
+            return None
+        from vula.commerce import bank_review
+        return await bank_review.handle_answer(tenant_id, text)
+    except Exception as exc:
+        logger.debug("bank review answer skipped: %s", exc)
+        return None
+
+
+async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str) -> Optional[str]:
+    """If this text is answering 'which project is that receipt for?', allocate the most recent
+    unallocated WhatsApp expense claim from this sender. Returns a reply if handled, else None."""
+    text = (text or "").strip()
+    if not text or len(text) > 60:      # a project answer is short; long texts are real messages
+        return None
+    try:
+        from vula.commerce import expenses, service
+        low = text.lower()
+
+        # Answering "company card or your own money?" on the latest unresolved claim.
+        if any(k in low for k in ("company", "own", "personal", "my card", "my money", "cash")):
+            rows = (service._client().table("commerce_expenses").select("*")
+                    .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
+                    .eq("status", "submitted").is_("paid_with", "null")
+                    .order("updated_at", desc=True).limit(1).execute().data or [])
+            if rows:
+                claim = rows[0]
+                is_company = "company" in low
+                paid_with = "company_card" if is_company else ("cash" if "cash" in low else "personal")
+                service._client().table("commerce_expenses").update(
+                    {"paid_with": paid_with, "reimbursable": not is_company,
+                     "updated_at": service._now()}).eq("id", claim["id"]).execute()
+                amt = int(claim.get("amount_cents") or 0) / 100
+                if is_company:
+                    return (f"👍 Noted — that *R{amt:,.2f}* was on the company card. "
+                            "I'll match it against the bank statement.")
+                return (f"👍 Noted — *R{amt:,.2f}* was your own money, so it's marked "
+                        "to be paid back to you. 👛")
+
+        rows = (service._client().table("commerce_expenses").select("*")
+                .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
+                .eq("status", "submitted").is_("project", "null")
+                .order("updated_at", desc=True).limit(1).execute().data or [])
+        if not rows:
+            return None
+        claim = rows[0]
+        if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
+            expenses.assign(tenant_id, claim["id"], project="")   # '' = resolved, not re-asked
+            return "👍 Noted — no project. It's in your books."
+        proj = expenses.match_project(tenant_id, text)
+        if proj:
+            expenses.assign(tenant_id, claim["id"], project=proj)
+            return f"✅ Allocated that *R{int(claim.get('amount_cents') or 0)/100:,.2f}* expense to *{proj}*."
+        return None
+    except Exception as exc:
+        logger.debug("pending-expense allocate skipped: %s", exc)
+        return None
 
 
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
@@ -738,6 +1012,9 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
         return ""
 
+
+# Caption keywords that mark a photo as "money I spent" → route to the expense/books path.
+_EXPENSE_WORDS = ("expense", "receipt", "slip", "claim", "petty cash", "bought", "paid for", "till slip")
 
 _DOC_CATEGORIES = [
     "Fee Proposal / Schedule", "Contract / Agreement", "Bill of Quantities (BOQ)",
@@ -961,6 +1238,48 @@ async def _download_media_bytes(media_id: str) -> Optional[bytes]:
         return None
 
 
+async def _handle_voice_note(
+    phone: str, media_id: str, mime_type: str, msg_id: str,
+    route_mode: str, route_tenant: Optional[str],
+) -> None:
+    """Transcribe an inbound voice note and route the text like a typed message."""
+    audio = await _download_media_bytes(media_id)
+    if not audio:
+        await _send_reply(phone, "Sorry, I couldn't fetch that voice note. Please type your message. 🙏", route_tenant or "")
+        return
+    text, lang = await transcribe_audio(
+        audio, mime_type=mime_type, filename=f"voice-{msg_id}.ogg", tenant_id=route_tenant
+    )
+    if not text:
+        await _send_reply(phone, (
+            "I couldn't make out that voice note. 🎙️ Could you type it out for me? "
+            "/ Ek kon nie die stemboodskap hoor nie — tik dit asseblief."
+        ), route_tenant or "")
+        return
+    # We only understand SPEECH in English & Afrikaans. If Whisper labels the note as another
+    # language, the transcript is unreliable — ask them to type (we CAN reply in text in their
+    # language) or send a voice note in a supported one. Don't process the garbled transcript.
+    from core.lang import is_voice_supported
+    if not is_voice_supported(lang):
+        await _send_reply(phone, (
+            "👋 I can only understand *voice notes* in English and Afrikaans right now. "
+            "Please *type* your message in your own language — I'll reply in it — or send a "
+            "voice note in English or Afrikaans. Enkosi! Ngiyabonga! Dankie! 🙏"
+        ), route_tenant or "")
+        logger.info("voice note in unsupported language (lang=%s) from %s — asked to type", lang, phone)
+        return
+    # Process the transcript exactly like a typed message — the assistant replies naturally
+    # (in the customer's language). No "I heard…" echo; the reply itself confirms understanding.
+    # `lang` is Whisper's detected language — a reliable signal to remember the customer's language.
+    logger.info("voice note transcript (%s, lang=%s): %r", phone, lang, text[:120])
+    if route_mode == "commerce":
+        await _handle_commerce_message(phone, text, msg_id, route_tenant, detected_lang=lang)
+    elif route_mode == "knowledge":
+        await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
+    else:
+        await _handle_message(phone, text, msg_id)
+
+
 async def _download_document(media_id: str, tenant_id: str, filename: str, mime_type: str):
     """Download a document from Meta Graph API and save to the upload directory."""
     if not settings.whatsapp_token:
@@ -1029,6 +1348,19 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
     contractor = db.get_contractor_by_phone(phone)
     if not contractor:
         return False  # not a contractor → let the caller decide (KB ingest, etc.)
+
+    # Even a contractor buys materials + claims. If the photo is a RECEIPT (not site work),
+    # route it to the books/expenses instead of logging it as task evidence.
+    try:
+        probe = await _download_document(media_id, contractor.tenant_id, f"receipt-{msg_id}.jpg", "image/jpeg")
+        if probe and await _is_receipt_photo(probe):
+            logger.info("contractor photo detected as RECEIPT → expenses (%s)", phone)
+            await _handle_document_ingest(
+                phone, media_id, caption or f"receipt-{msg_id}.jpg", "image/jpeg",
+                route_tenant_id=contractor.tenant_id)
+            return True
+    except Exception as exc:
+        logger.debug("receipt probe skipped: %s", exc)
 
     # Find the contractor's active task awaiting sign-off or in-progress
     active_tasks = db.get_tasks_for_contractor(
@@ -1363,6 +1695,65 @@ def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str
     return _upload_to_storage("evidence", object_path, data, content_type)
 
 
+async def _scan_financial_photo(photo_path: str) -> Optional[dict]:
+    """ONE strong cloud-vision call on the actual IMAGE → strict JSON for financial documents.
+    This is the authoritative reader for photographed receipts/invoices — reading the image
+    directly is far more consistent than OCR-text → small local model (which hallucinated
+    totals). Returns {doc_type, vendor, date, currency, total, vat} or None."""
+    from pathlib import Path as _Path
+    try:
+        p = _Path(photo_path or "")
+        if not p.exists() or p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            return None
+        from core.llm_router import resolve_cloud_vision_route
+        route = resolve_cloud_vision_route()
+        if not route:
+            return None
+        model, api_key, api_base = route
+        import base64
+        import json as _json
+        import litellm
+        litellm.drop_params = True
+        img_b64 = base64.b64encode(p.read_bytes()).decode()
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text":
+                    "Read this document image carefully. Return STRICT JSON only, no prose:\n"
+                    '{"doc_type":"receipt|invoice|delivery_note|quote|statement|menu|other",'
+                    '"vendor":string|null,"date":"YYYY-MM-DD"|null,'
+                    '"currency":"ZAR"|"USD"|"EUR"|"other"|"unknown",'
+                    '"total":number|null,"vat":number|null,'
+                    '"payment_method":"card"|"cash"|"eft"|"unknown","card_last4":string|null}\n'
+                    "Rules: total = the single final amount PAYABLE printed on the document "
+                    "(grand total / amount due) — copy the printed number exactly, do not compute. "
+                    "vat = the printed VAT/tax amount, null if not shown. R means ZAR. "
+                    "card_last4 = the last 4 card digits if printed (e.g. '**** 1234', 'Card 572'), "
+                    "else null. A menu/price list has many prices but no single bill total → "
+                    "doc_type=menu, total=null. A delivery note lists goods delivered, often "
+                    "without prices."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+            ]}],
+            temperature=0, max_tokens=200, api_key=api_key, api_base=api_base)
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        i, j = raw.find("{"), raw.rfind("}")
+        if i < 0 or j <= i:
+            return None
+        data = _json.loads(raw[i:j + 1])
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.debug("financial photo scan failed: %s", exc)
+        return None
+
+
+async def _is_receipt_photo(photo_path: str) -> bool:
+    """Is this image a financial document (receipt/invoice/delivery note) rather than site work?
+    Lets a contractor's material-purchase photo route to the books instead of task evidence."""
+    fin = await _scan_financial_photo(photo_path)
+    return bool(fin and fin.get("doc_type") in ("receipt", "invoice", "delivery_note", "quote"))
+
+
 async def _assess_evidence_photo(photo_path: str, task_title: str, task_desc: str) -> str:
     """Vision-check a contractor's evidence photo against their task.
 
@@ -1619,6 +2010,16 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
             resp.raise_for_status()
             logger.info("WhatsApp reply sent to %s", to)
             return True
+    except httpx.HTTPStatusError as exc:
+        # Surface Meta's actual reason (e.g. #131030 recipient not in allowed list,
+        # #131047 re-engagement/24h window) — raise_for_status alone hides the body.
+        body = ""
+        try:
+            body = exc.response.text[:600]
+        except Exception:
+            pass
+        logger.error("WhatsApp reply failed to %s (%s): %s", to, exc, body)
+        return False
     except Exception as exc:
         logger.error("WhatsApp reply failed to %s: %s", to, exc)
         return False
@@ -1693,7 +2094,8 @@ async def _send_invoice_document(
 
 # ─── Commerce ordering flow ───────────────────────────────────────────────────
 
-async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id: str) -> None:
+async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id: str,
+                                   detected_lang: Optional[str] = None) -> None:
     """Route inbound messages for commerce tenants (e.g. Off the Hook customers).
 
     Greetings get the interactive welcome menu. Everything else is handled by the
@@ -1712,6 +2114,18 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # this tenant's line, their message is the answer — relay + learn, don't treat it as
     # a customer order. Runs on the commerce path too so every tenant is covered.
     if await _maybe_helper_escalation_answer(phone, text):
+        return
+
+    # Answering "which project is that receipt for?" → allocate the pending expense claim.
+    _alloc = await _maybe_allocate_pending_expense(tenant_id, phone, text)
+    if _alloc:
+        await _send_reply(phone, _alloc, tenant_id)
+        return
+
+    # Answering a bank-review question (team members only — never customers).
+    _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
+    if _rev:
+        await _send_reply(phone, _rev, tenant_id)
         return
 
     # Onboarding capture: if this contact is mid opt-in/intro flow, their message is part of
@@ -1877,16 +2291,30 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str) -> bool
     # Load (or create) the session and recent history for multi-turn memory.
     history = ""
     session_id: Optional[str] = None
+    preferred_language: Optional[str] = None
     try:
         session = await commerce_service.get_or_create_session(
             tenant_id, session_key=phone, channel="whatsapp", customer_phone=phone
         )
         session_id = session["id"]
+        preferred_language = session.get("preferred_language")
         history = commerce_service.format_history(
             await commerce_service.get_recent_messages(tenant_id, session_id, limit=12)
         )
     except Exception as exc:
         logger.debug("Commerce session/history load failed (non-fatal): %s", exc)
+
+    # Remember the customer's language: Whisper's detection (voice) is trusted; else a light
+    # text heuristic. Persist when we learn/change it, and use it to reply in their language.
+    try:
+        from core.lang import detect_language, normalize_lang
+        lang = normalize_lang(detected_lang) or detect_language(text)
+        if lang and lang != normalize_lang(preferred_language):
+            preferred_language = lang
+            await commerce_service.set_session_language(tenant_id, phone, lang)
+        preferred_language = preferred_language or lang
+    except Exception as exc:
+        logger.debug("language preference update skipped: %s", exc)
 
     skill = get_skill("commerce_assistant")
     output = await skill(
@@ -1894,7 +2322,8 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str) -> bool
             question=text,
             tenant_id=tenant_id,
             conversation_history=history,
-            metadata={"session_id": phone, "customer_phone": phone},
+            metadata={"session_id": phone, "customer_phone": phone,
+                      "preferred_language": preferred_language},
         )
     )
 

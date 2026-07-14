@@ -8,10 +8,23 @@ const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
 const rand = (n) => "R" + (Number(n) || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
 
+function Cell({ label, value, sub, color }) {
+  const C = { surface: "#FFFFFF", border: "#DDD8CE", muted: "#8A8680", text: "#2A2A2A" };
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 10, textTransform: "uppercase", color: C.muted, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: color || C.text }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>{sub}</div>}
+    </div>
+  );
+}
+
 export default function VulaFinances({ tenantId }) {
   const [data, setData] = useState({ projects: [], transactions: [], total_in: 0, total_out: 0 });
   const [editing, setEditing] = useState(null);
   const [budget, setBudget] = useState("");
+  const [openProj, setOpenProj] = useState(null);
+  const [detail, setDetail] = useState(null);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
@@ -19,6 +32,27 @@ export default function VulaFinances({ tenantId }) {
     setData(await r.json());
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
+
+  const [contractDraft, setContractDraft] = useState("");
+
+  const openDetail = async (project) => {
+    if (openProj === project) { setOpenProj(null); return; }
+    setOpenProj(project); setDetail(null); setContractDraft("");
+    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
+    setDetail(r);
+  };
+
+  const saveContract = async (project) => {
+    const total = Number(contractDraft);
+    if (!total) return;
+    await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/boq`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ total }),
+    });
+    setContractDraft("");
+    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
+    setDetail(r); load();
+  };
 
   const saveBudget = async (project) => {
     await fetch(`${VULA_API}/v1/projects/${tenantId}/budget`, {
@@ -54,16 +88,43 @@ export default function VulaFinances({ tenantId }) {
         </div>
         {data.projects.length === 0 && <div style={{ padding: 16, fontSize: 13, color: C.muted }}>No financial documents filed yet.</div>}
         {data.projects.map((p) => (
-          <div key={p.project} style={{ padding: "11px 16px", borderTop: `1px solid ${C.alt}`, display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr 1.2fr", gap: 8, alignItems: "center", fontSize: 13 }}>
-            <span style={{ fontWeight: 600, color: C.text }}>{p.project} <span style={{ color: C.muted, fontWeight: 400, fontSize: 11 }}>· {p.count}</span></span>
-            <span style={{ color: C.green }}>{rand(p.in)}</span>
-            <span style={{ color: C.red }}>{rand(p.out)}</span>
-            <span>
-              {editing === p.project
-                ? <input autoFocus value={budget} onChange={(e) => setBudget(e.target.value)} onBlur={() => saveBudget(p.project)} onKeyDown={(e) => e.key === "Enter" && saveBudget(p.project)} placeholder="0" style={{ width: 80, padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 12 }} />
-                : <span onClick={() => { setEditing(p.project); setBudget(p.budget || ""); }} style={{ cursor: "pointer", color: p.budget ? C.text : C.muted, borderBottom: `1px dotted ${C.muted}` }}>{p.budget ? rand(p.budget) : "set"}</span>}
-            </span>
-            <span style={{ color: p.remaining != null && p.remaining < 0 ? C.red : C.text }}>{p.remaining != null ? rand(p.remaining) : "—"}</span>
+          <div key={p.project}>
+            <div style={{ padding: "11px 16px", borderTop: `1px solid ${C.alt}`, display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr 1.2fr", gap: 8, alignItems: "center", fontSize: 13 }}>
+              <span onClick={() => openDetail(p.project)} style={{ fontWeight: 600, color: C.text, cursor: "pointer" }}>
+                <span style={{ color: C.muted, marginRight: 4, display: "inline-block", transform: openProj === p.project ? "rotate(90deg)" : "none", transition: "transform .15s" }}>›</span>
+                {p.project} <span style={{ color: C.muted, fontWeight: 400, fontSize: 11 }}>· {p.count}</span>
+              </span>
+              <span style={{ color: C.green }}>{rand(p.in)}</span>
+              <span style={{ color: C.red }}>{rand(p.out)}</span>
+              <span>
+                {editing === p.project
+                  ? <input autoFocus value={budget} onChange={(e) => setBudget(e.target.value)} onBlur={() => saveBudget(p.project)} onKeyDown={(e) => e.key === "Enter" && saveBudget(p.project)} placeholder="0" style={{ width: 80, padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 12 }} />
+                  : <span onClick={() => { setEditing(p.project); setBudget(p.budget || ""); }} style={{ cursor: "pointer", color: p.budget ? C.text : C.muted, borderBottom: `1px dotted ${C.muted}` }}>{p.budget ? rand(p.budget) : "set"}</span>}
+              </span>
+              <span style={{ color: p.remaining != null && p.remaining < 0 ? C.red : C.text }}>{p.remaining != null ? rand(p.remaining) : "—"}</span>
+            </div>
+            {openProj === p.project && (
+              <div style={{ padding: "12px 16px 16px", background: C.alt, borderTop: `1px solid ${C.border}` }}>
+                {!detail ? <span style={{ fontSize: 12, color: C.muted }}>Loading…</span> : (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+                    <Cell label="Contract / budget" value={rand(detail.contract)} />
+                    <Cell label="Invoiced" value={rand(detail.invoiced)} sub={`${detail.invoice_count} invoice(s)`} />
+                    <Cell label="Outstanding" value={rand(detail.outstanding)} color={detail.outstanding > 0 ? C.red : C.text} sub="billed, unpaid" />
+                    <Cell label="Paid in" value={rand(detail.paid_in)} color={C.green} />
+                    <Cell label="Spent" value={rand(detail.spent)} color={C.red} sub="cash out + expenses" />
+                    <Cell label="Net" value={rand(detail.net)} />
+                    <Cell label="Budget left" value={detail.remaining != null ? rand(detail.remaining) : "—"} color={detail.remaining != null && detail.remaining < 0 ? C.red : C.text} />
+                  </div>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                  <span style={{ fontSize: 12, color: C.muted }}>Set contract value (from your BoQ):</span>
+                  <input value={contractDraft} onChange={e => setContractDraft(e.target.value)} placeholder="R total"
+                    style={{ width: 120, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
+                  <button onClick={() => saveContract(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "#fff", fontSize: 12, cursor: "pointer" }}>Save</button>
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Unified from invoices, expenses and filed payments. Contract value persists (survives restarts) and drives budget-remaining; link invoices to a project on the invoice form.</div>
+              </div>
+            )}
           </div>
         ))}
       </div>

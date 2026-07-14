@@ -26,10 +26,21 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 6
 
+
+def _tenant_has_bookings(tenant_id: str) -> bool:
+    """True if this tenant has the bookings module enabled (gates the appointment tools)."""
+    try:
+        from vula.api.tenants import enabled_modules
+        return "bookings" in (enabled_modules(tenant_id) or [])
+    except Exception:
+        return False
+
 # Known tool names — so we only treat text as a tool call when it actually names one of ours.
 _TOOL_NAMES = {"list_products", "add_to_cart", "view_cart", "start_checkout", "track_order",
                "get_daily_catch", "suggest_recipe", "create_quote", "place_order", "review_order",
-               "remove_from_cart", "change_order"}
+               "remove_from_cart", "change_order",
+               "list_availability", "book_appointment", "cancel_appointment",
+               "create_subscription"}
 
 
 def _parse_text_toolcall(text: str):
@@ -317,6 +328,75 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_subscription",
+            "description": (
+                "Set up a recurring/standing order from the customer's CURRENT cart (e.g. 'send me "
+                "this every Friday', 'the same order weekly'). Add the items to the cart first, then "
+                "call this. An order is auto-created each cycle."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cadence": {"type": "string", "enum": ["weekly", "biweekly", "monthly"],
+                                "description": "How often to repeat."},
+                },
+                "required": ["cadence"],
+            },
+        },
+    },
+]
+
+
+# Appointment tools — only exposed to tenants with the `bookings` module enabled.
+BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_availability",
+            "description": (
+                "Show free appointment slots for a given date. Call this when a customer wants to "
+                "book and has named (or you've agreed) a day. Returns open times they can pick from."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "The date as YYYY-MM-DD (local SA date)."},
+                    "service": {"type": "string", "description": "Service name they want, if mentioned."},
+                },
+                "required": ["date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "book_appointment",
+            "description": (
+                "Book an appointment once the customer has chosen a specific date AND time. Confirm "
+                "the time back to them first. Returns the confirmed booking or an error if the slot is taken."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "Chosen slot as YYYY-MM-DDTHH:MM (local time)."},
+                    "service": {"type": "string", "description": "Service name they're booking."},
+                    "customer_name": {"type": "string", "description": "Customer's name."},
+                },
+                "required": ["start"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_appointment",
+            "description": "Cancel the customer's upcoming appointment (their most recent confirmed booking).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
@@ -337,9 +417,10 @@ class CommerceAssistantSkill(BaseSkill):
                 or f"{inp.tenant_id}:web"
             ),
             "customer_phone": inp.metadata.get("customer_phone"),
+            "bookings": _tenant_has_bookings(inp.tenant_id),
         }
         kb_context, sources = await self._retrieve_kb(inp)
-        system_msg = self._system_prompt(inp.tenant_id, kb_context)
+        system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"))
 
         try:
             answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx)
@@ -356,15 +437,44 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._fallback(inp, ctx, kb_context, sources)
 
     # ── Prompt + grounding ───────────────────────────────────────────────────
-    def _system_prompt(self, tenant_id: str, kb_context: str) -> str:
+    def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None) -> str:
         kb_block = f"\n\nBusiness knowledge (use this to answer accurately):\n{kb_context}" if kb_context else ""
+        lang_block = ""
+        try:
+            from core.lang import language_name
+            name = language_name(preferred_language)
+            if name and name != "English":
+                lang_block = (
+                    f"\n\nThis customer usually speaks {name}. Greet and reply in {name} by default, "
+                    f"unless they clearly switch to another language in this message — then follow them."
+                )
+        except Exception:
+            pass
+        booking_block = ""
+        if _tenant_has_bookings(tenant_id):
+            booking_block = (
+                "\n- This business takes APPOINTMENTS. If a customer wants to book, agree a date, call "
+                "list_availability to show open times, confirm the exact time back to them, then call "
+                "book_appointment. To cancel, call cancel_appointment. Never promise a time you haven't "
+                "confirmed via list_availability."
+            )
         return (
             "You are a friendly, knowledgeable WhatsApp assistant for a South African fresh "
             "fish and chicken delivery business. Your goals: help customers find great products, "
             "inspire them with recipes, build their cart, and check out.\n\n"
             "Guidelines:\n"
+            "- Reply in the SAME language the customer writes in. South Africans message in English, "
+            "Afrikaans, isiZulu, isiXhosa, Sesotho and more — mirror their language naturally and "
+            "warmly. If they mix languages, follow their lead; if unsure, use English.\n"
             "- Use real tools for products, cart and orders — never invent prices or stock.\n"
             "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly.\n"
+            "- CART DISCIPLINE (important): only add a product to the cart when the customer has "
+            "clearly named THAT specific item AND a quantity. NEVER add several products at once, and "
+            "NEVER add items they didn't ask for. If they only greet, ask what's available, or are "
+            "vague, call list_products or get_daily_catch and let them choose — add nothing yet.\n"
+            "- Voice notes and accents can make numbers unclear. If a quantity is large or surprising "
+            "(say 10 or more), repeat it back and ask them to confirm before adding — e.g. 'Just to "
+            "check — did you want 10 hake, or 1?'. When unsure of a quantity, ask; don't guess.\n"
             "- Some products are sold by the *kilogram* (their price shows as R…/kg). For those, ask "
             "the customer HOW MANY KG they'd like — halves are fine (0.5, 1, 1.5, 2) — and pass that "
             "as the quantity to add_to_cart. For packs, quantity is simply the number of packs.\n"
@@ -382,9 +492,13 @@ class CommerceAssistantSkill(BaseSkill):
             "then call review_order again to show the updated summary.\n"
             "- Once they reply CONFIRM, call *place_order* with the payment_method and send the "
             "returned confirmation (order number + payment instructions) — that is their receipt.\n"
+            "- If a customer wants the same order repeated regularly ('every Friday', 'weekly'), "
+            "add the items to their cart, then call create_subscription with the cadence.\n"
             "- If a customer wants to change an order they ALREADY placed, call change_order.\n"
             "- Only use start_checkout if the customer specifically wants to pay on the website.\n"
             "- For a price quote without ordering, call create_quote and share the number and total."
+            + lang_block
+            + booking_block
             + kb_block
         )
 
@@ -426,11 +540,13 @@ class CommerceAssistantSkill(BaseSkill):
         model, api_key, api_base = await resolve_generation_route(
             task_type="commerce_chat", messages=messages, run_id=run_id)
 
+        tools = TOOL_SPECS + BOOKING_TOOL_SPECS if ctx.get("bookings") else TOOL_SPECS
+
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(
                 model=model,
                 messages=messages,
-                tools=TOOL_SPECS,
+                tools=tools,
                 tool_choice="auto",
                 temperature=0.3,
                 max_tokens=900,
@@ -515,6 +631,11 @@ class CommerceAssistantSkill(BaseSkill):
     # ── Tool dispatch + executors ────────────────────────────────────────────
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid, sid, phone = ctx["tenant_id"], ctx["session_id"], ctx["customer_phone"]
+        try:
+            from core.reasoning_telemetry import log_tool_call
+            log_tool_call(tid, "customer", name, args)
+        except Exception:
+            pass
         if name == "list_products":
             return await self._exec_list_products(tid, args)
         if name == "add_to_cart":
@@ -539,7 +660,93 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_change_order(tid, phone, args)
         if name == "place_order":
             return await self._exec_place_order(tid, sid, phone, args)
+        if name == "list_availability":
+            return await self._exec_list_availability(tid, args)
+        if name == "book_appointment":
+            return await self._exec_book_appointment(tid, phone, args)
+        if name == "cancel_appointment":
+            return await self._exec_cancel_appointment(tid, phone)
+        if name == "create_subscription":
+            return await self._exec_create_subscription(tid, sid, phone, args)
         return {"error": f"unknown tool {name}"}
+
+    async def _exec_create_subscription(self, tenant_id: str, session_id: str,
+                                        phone: Optional[str], args: Dict[str, Any]) -> Dict[str, Any]:
+        from vula.commerce import subscriptions as subs
+        cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+        items = (cart or {}).get("commerce_cart_items") or []
+        if not items:
+            return {"error": "Their cart is empty — add the items they want repeated first."}
+        sub_items = [{
+            "product_id": i.get("product_id"),
+            "product_name": (i.get("commerce_products") or {}).get("name") or "",
+            "quantity": i.get("quantity") or 1,
+            "unit_price_cents": i.get("unit_price_cents") or 0,
+        } for i in items]
+        cadence = args.get("cadence") if args.get("cadence") in subs.CADENCES else "weekly"
+        res = await subs.create(tenant_id, {
+            "customer_phone": phone, "customer_name": (cart or {}).get("customer_name"),
+            "items": sub_items, "cadence": cadence, "channel": "whatsapp",
+            "delivery_cents": (cart or {}).get("delivery_cents") or 0,
+        })
+        if res.get("error"):
+            return res
+        s = res["subscription"]
+        return {"created": True, "cadence": cadence, "next_run": s.get("next_run"),
+                "message": f"Standing order set — repeats {cadence}, next on {s.get('next_run')}."}
+
+    # ── Booking tool handlers (only reachable when the tenant has bookings) ────
+    async def _exec_list_availability(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        from vula.bookings import service as bk
+        svc_id = None
+        want = (args.get("service") or "").strip().lower()
+        if want:
+            for s in await bk.list_services(tenant_id):
+                if want in (s.get("name") or "").lower():
+                    svc_id = s["id"]
+                    break
+        try:
+            result = await bk.availability(tenant_id, (args.get("date") or "").strip(), svc_id)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if result.get("closed"):
+            return {"date": result["date"], "message": "We're closed that day — please pick another date."}
+        times = [s["label"] for s in result.get("slots", [])]
+        return {"date": result["date"], "available_times": times[:12],
+                "message": ("No free slots that day." if not times
+                            else f"{len(times)} slots available.")}
+
+    async def _exec_book_appointment(self, tenant_id: str, phone: Optional[str],
+                                     args: Dict[str, Any]) -> Dict[str, Any]:
+        from vula.bookings import service as bk
+        svc_id, svc_name = None, (args.get("service") or "").strip()
+        if svc_name:
+            for s in await bk.list_services(tenant_id):
+                if svc_name.lower() in (s.get("name") or "").lower():
+                    svc_id, svc_name = s["id"], s["name"]
+                    break
+        res = await bk.create_booking(tenant_id, {
+            "service_id": svc_id, "service_name": svc_name or None,
+            "customer_name": args.get("customer_name"), "customer_phone": phone,
+            "start": args.get("start"), "channel": "whatsapp",
+        })
+        if res.get("error"):
+            return res
+        b = res["booking"]
+        return {"confirmed": True, "when": b.get("start_local"),
+                "service": b.get("service_name"),
+                "message": f"Booked for {b.get('start_local')}."}
+
+    async def _exec_cancel_appointment(self, tenant_id: str, phone: Optional[str]) -> Dict[str, Any]:
+        from vula.bookings import service as bk
+        if not phone:
+            return {"error": "I need your phone number on file to find the booking."}
+        upcoming = await bk.list_bookings(tenant_id, status="confirmed",
+                                          from_utc=bk._now_utc().isoformat(), phone=phone)
+        if not upcoming:
+            return {"message": "You have no upcoming appointments to cancel."}
+        await bk.set_status(tenant_id, upcoming[0]["id"], "cancelled")
+        return {"cancelled": True, "message": "Your appointment has been cancelled."}
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
         products = await service.list_products(
@@ -989,7 +1196,7 @@ class CommerceAssistantSkill(BaseSkill):
                 description=f"Order {order['display_id']}",
                 success_url=f"{base}/order/{order['display_id']}",
                 cancel_url=f"{base}/cart",
-                notify_url=f"{api}/api/payments/webhook/{tenant_id}/{prov}",
+                notify_url=f"{api}/v1/payments/webhook/{tenant_id}/{prov}",
                 customer={"name": order.get("customer_name"), "phone": order.get("customer_phone")},
             )
             return link.url if link else None

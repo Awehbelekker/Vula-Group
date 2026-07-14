@@ -273,7 +273,7 @@ async def _send_oth_delivery_briefing() -> None:
         msg = "\n".join(lines)
 
     # Send to Stacy and Roland via OTH business number
-    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
+    phone_id = await _oth_phone_id()
     team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
 
     import httpx as _httpx
@@ -307,6 +307,20 @@ async def _unpaid_order_followup_loop() -> None:
         await _asyncio.sleep(30 * 60)  # run every 30 minutes
 
 
+async def _oth_phone_id() -> str:
+    """OTH's current live WhatsApp phone_id, looked up from vula_whatsapp_accounts (never
+    hardcode a number here again — the old number was retired and silently 400'd every send
+    for weeks before this lookup replaced it)."""
+    try:
+        from vula.api.whatsapp import _get_tenant_wa_creds
+        creds = await _get_tenant_wa_creds("off-the-hook")
+        if creds and creds.get("phone_id"):
+            return creds["phone_id"]
+    except Exception as exc:
+        log.debug("OTH phone_id lookup failed, using known-good fallback: %s", exc)
+    return "1216487374874418"   # +27 79 178 3933 — current OTH number (as of 2026-07)
+
+
 async def _chase_unpaid_orders() -> None:
     """Find orders pending_payment for 2-4h and send a WhatsApp nudge (once per order)."""
     if not settings.whatsapp_token:
@@ -315,7 +329,7 @@ async def _chase_unpaid_orders() -> None:
     from datetime import datetime, timezone, timedelta
 
     tenant_id = "off-the-hook"
-    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
+    phone_id = await _oth_phone_id()
 
     try:
         from supabase import create_client as _sb_client
@@ -415,7 +429,7 @@ async def _send_low_stock_alert() -> None:
     from vula.commerce import service as _commerce
 
     tenant_id = "off-the-hook"
-    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
+    phone_id = await _oth_phone_id()
     roland = "27721822828"
 
     try:
@@ -482,7 +496,7 @@ async def _send_friday_catch_reminder() -> None:
     if not settings.whatsapp_token:
         return
 
-    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
+    phone_id = await _oth_phone_id()
     stacy = "27722684085"
     msg = (
         "Happy Friday Stacy! Quick reminder to update this week's catch of the day "
@@ -586,7 +600,7 @@ async def _send_oth_sales_summary() -> None:
         lines.append("\nGreat work today!")
         msg = "\n".join(lines)
 
-    phone_id = "1124076000792176"  # OTH bot — +27 67 363 6081 (system-user WABA)
+    phone_id = await _oth_phone_id()
     team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
 
     import httpx as _httpx
@@ -630,6 +644,29 @@ async def _scheduled_campaigns_loop() -> None:
         except Exception as exc:
             log.warning("Campaign scheduler loop error: %s", exc)
         await _asyncio.sleep(60)
+
+
+async def _daily_commerce_jobs_loop() -> None:
+    """Once a day: mark overdue invoices (+remind customers) and send low-stock alerts, per tenant."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(150)  # settle on boot
+    while True:
+        try:
+            from vula.api.commerce import _process_overdue_invoices, _process_stock_alerts
+            from vula.api import tenants as _t
+            rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+            for r in rows:
+                tid = r.get("tenant_id")
+                if not tid:
+                    continue
+                try:
+                    await _process_overdue_invoices(tid)
+                    await _process_stock_alerts(tid)   # throttled to once/day internally
+                except Exception as exc:
+                    log.debug("daily commerce job failed for %s: %s", tid, exc)
+        except Exception as exc:
+            log.warning("Daily commerce jobs loop error: %s", exc)
+        await _asyncio.sleep(86400)  # daily
 
 
 async def _subscriptions_loop() -> None:
@@ -704,6 +741,7 @@ async def lifespan(app: FastAPI):
     _asyncio.create_task(_recurring_invoices_loop())
     _asyncio.create_task(_scheduled_campaigns_loop())
     _asyncio.create_task(_subscriptions_loop())
+    _asyncio.create_task(_daily_commerce_jobs_loop())
     _asyncio.create_task(_email_sync_loop())
     _asyncio.create_task(_weekly_rates_loop())
     _asyncio.create_task(_daily_trial_expiry_loop())

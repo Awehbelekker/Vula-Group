@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     # When set, the server uses OpenRouter for generation and embeddings.
     openrouter_api_key: str = ""
 
+    # ── Voice-note transcription (WhatsApp audio → text) ───────────────────────
+    # OpenAI-compatible /audio/transcriptions endpoint. Local-first: point
+    # TRANSCRIBE_BASE at a faster-whisper server on the SA GPU when available;
+    # otherwise a cloud provider (Groq whisper-large-v3, OpenAI whisper-1).
+    # If none is configured, voice notes degrade gracefully (ask the customer to type).
+    transcribe_base: str = ""          # e.g. https://api.groq.com/openai/v1  or  http://whisper.vula-ai.com/v1
+    transcribe_api_key: str = ""       # key for that endpoint (blank for a local server)
+    transcribe_model: str = "whisper-large-v3"
+    openai_api_key: str = ""           # fallback: transcribe via api.openai.com (whisper-1)
+
     # ── Twilio WhatsApp (alternative to Meta — test via Twilio Sandbox) ─────────
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
@@ -148,6 +158,24 @@ class Settings(BaseSettings):
         import json
         try:
             return json.loads(self.store_urls_json)
+        except Exception:
+            return {}
+
+    # ── Verified-reasoning: per-skill verification (core/verification.py) ────
+    # JSON map of skill name → policy ("none"|"deterministic"|"adversarial"), overriding the
+    # skill's class attribute. Flip per skill via env, no redeploy: e.g. '{"reasoning": "adversarial"}'
+    verification_policy_overrides: str = "{}"
+    verification_adversarial_action: str = "caveat"   # caveat | escalate (escalate reserved)
+    verification_checker_timeout_s: float = 8.0       # hard cap on the adversarial pass
+    verification_checker_max_tokens: int = 300
+    readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
+
+    @property
+    def verification_policies(self) -> dict[str, str]:
+        import json
+        try:
+            data = json.loads(self.verification_policy_overrides)
+            return data if isinstance(data, dict) else {}
         except Exception:
             return {}
 

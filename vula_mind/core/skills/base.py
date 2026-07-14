@@ -22,6 +22,9 @@ from typing import Any, Dict, List, Optional
 
 CONVERSATION_RULES = (
     "How to respond:\n"
+    "- Reply in the SAME language the person is using. South Africans write in English, "
+    "Afrikaans, isiZulu, isiXhosa, Sesotho and more — mirror their language naturally; if unsure, "
+    "use English.\n"
     "- Use the facts already established earlier in THIS conversation. If the user "
     "corrected or updated a value (e.g. an occupancy, dimension, or number), use the "
     "LATEST value and never revert to an earlier one.\n"
@@ -95,6 +98,9 @@ class SkillOutput:
     sources: List[Dict[str, Any]] = field(default_factory=list)
     latency_ms: int = 0
     error: Optional[str] = None
+    # Set by the skill (deterministic self-check, e.g. calculations) or by the verification
+    # hook (adversarial pass): {"verifier", "outcome", "escalated", "extra", ...}.
+    verification: Optional[Dict[str, Any]] = None
 
     @property
     def success(self) -> bool:
@@ -104,6 +110,9 @@ class SkillOutput:
 class BaseSkill(ABC):
     name: str = "base"
     description: str = ""
+    # Per-skill verification policy: "none" | "deterministic" | "adversarial".
+    # Overridable per skill at runtime via VERIFICATION_POLICY_OVERRIDES (core/verification.py).
+    verification_policy: str = "none"
 
     @abstractmethod
     async def run(self, inp: SkillInput) -> SkillOutput:
@@ -115,7 +124,6 @@ class BaseSkill(ABC):
             result = await self.run(inp)
             result.latency_ms = int((time.monotonic() - started) * 1000)
             result.skill_name = self.name
-            return result
         except Exception as exc:
             latency = int((time.monotonic() - started) * 1000)
             return SkillOutput(
@@ -125,3 +133,11 @@ class BaseSkill(ABC):
                 latency_ms=latency,
                 error=str(exc),
             )
+        # Verification hook — policy "none" is a strict no-op; a hook failure must never
+        # break the answer (core/verification.py fails open and swallows its own errors).
+        try:
+            from core import verification as _verification
+            await _verification.apply(self, inp, result)
+        except Exception:
+            pass
+        return result

@@ -279,10 +279,28 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
     new_status = body.get("status")
     if new_status not in valid:
         raise HTTPException(status_code=400, detail=f"status must be one of {valid}")
-    order = await service.get_order(order_id)
+    try:
+        order = await service.get_order(order_id)
+    except Exception:
+        order = None            # get_order uses .single() → raises when the order doesn't exist
     if not order or order.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="Order not found")
     await service.update_order_status(order_id, new_status)
+    # Keep stock in sync: restore on cancel/refund, deduct once when it enters fulfilment.
+    if new_status in ("cancelled", "refunded"):
+        await service.apply_order_stock(order_id, restore=True)
+    elif new_status in ("confirmed", "packing", "dispatched", "delivered"):
+        await service.apply_order_stock(order_id, restore=False)
+    # A refund moves real money — Vula restores stock + flags the team to process the refund in
+    # their payment gateway (automated per-gateway refund API is a separate, opt-in step).
+    if new_status == "refunded":
+        try:
+            from vula.integrations.notify import notify_team
+            await notify_team(tenant_id, "refund",
+                              f"Refund needed: order {order.get('display_id') or order_id} "
+                              f"(R{(order.get('total_cents') or 0)/100:.2f}) — process it in your payment gateway.")
+        except Exception as exc:
+            log.debug("refund team notify skipped: %s", exc)
     return {"order_id": order_id, "status": new_status}
 
 
@@ -399,6 +417,74 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     return {"answer": answer, "ok": bool(out.success and out.answer)}
 
 
+@router.get("/{tenant_id}/admin/agent-activity")
+async def admin_agent_activity(tenant_id: str, limit: int = 60):
+    """Observe the agent: recent tool calls + local/cloud routing decisions (from telemetry)."""
+    db = service._client()
+    try:
+        rows = (db.table("vula_reasoning_telemetry")
+                .select("system,task,outcome,reason,escalated,extra,created_at")
+                .eq("tenant_id", tenant_id)
+                .in_("system", ["vula-agent-tool", "vula-llm-router"])
+                .order("created_at", desc=True).limit(min(limit, 200)).execute().data or [])
+    except Exception as exc:
+        return {"events": [], "error": f"{exc} (run migration 045?)"}
+    events = []
+    for r in rows:
+        if r.get("system") == "vula-agent-tool":
+            events.append({"kind": "tool", "who": r.get("outcome"), "tool": r.get("task"),
+                           "args": (r.get("extra") or {}).get("args"), "at": r.get("created_at")})
+        else:  # router decision
+            events.append({"kind": "route", "task": r.get("task"), "outcome": r.get("outcome"),
+                           "backend": (r.get("extra") or {}).get("backend") or r.get("reason"),
+                           "escalated": r.get("escalated"), "reason": r.get("reason"), "at": r.get("created_at")})
+    return {"events": events}
+
+
+class TeachRequest(BaseModel):
+    question: str
+    answer: str
+
+
+@router.post("/{tenant_id}/admin/agent-teach")
+async def admin_agent_teach(tenant_id: str, body: TeachRequest):
+    """Teach the agent: store a correct answer as authoritative KB reference so future
+    replies use it. Feeds the same retrieval the assistants ground on."""
+    q, a = (body.question or "").strip(), (body.answer or "").strip()
+    if not q or not a:
+        raise HTTPException(status_code=400, detail="question and answer are required")
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        import hashlib
+        doc_id = "taught_" + hashlib.sha1(q.lower().encode()).hexdigest()[:16]
+        await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
+            content=f"Q: {q}\nA: {a}", filename="owner-taught.txt", doc_id=doc_id, source_type="reference")
+    except Exception as exc:
+        return {"error": f"could not teach: {exc}"}
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-agent-teach", task="correction", tenant_id=tenant_id, outcome="learned")
+    except Exception:
+        pass
+    return {"ok": True, "learned": q}
+
+
+@router.post("/{tenant_id}/admin/agent-unteach")
+async def admin_agent_unteach(tenant_id: str, body: dict):
+    """Remove something previously taught (by the same question)."""
+    q = (body or {}).get("question", "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="question is required")
+    import hashlib
+    doc_id = "taught_" + hashlib.sha1(q.lower().encode()).hexdigest()[:16]
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        await VulaIngestionPipeline(tenant_id=tenant_id).store.delete_document(tenant_id, doc_id)
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"ok": True, "removed": q}
+
+
 class MarketingRequest(BaseModel):
     kind: str = "specials"          # specials | product | promo | broadcast
     topic: str = ""                 # product name (for 'product') or the offer/subject
@@ -424,6 +510,569 @@ async def admin_finances_insights(tenant_id: str, days: int = 30, explain: bool 
     if explain:
         data["summary"] = await finances.narrate(tenant_id, data)
     return data
+
+
+# ── Bank reconciliation (read the statement → match invoices/expenses) ─────────
+class BankSettingsIn(BaseModel):
+    password: str            # statement PDF password (e.g. ID number) — stored encrypted
+    bank: str = "Capitec"
+
+
+@router.post("/{tenant_id}/admin/bank/settings")
+async def admin_bank_settings(tenant_id: str, body: BankSettingsIn):
+    """Store the (encrypted) statement password so Vula can auto-unlock weekly statements."""
+    from vula.commerce import bank_rec
+    try:
+        bank_rec.set_statement_password(tenant_id, body.password, body.bank)
+    except Exception as exc:
+        return {"error": f"{exc} (connect email + run migration 057 first?)"}
+    return {"ok": True, "bank": body.bank}
+
+
+class BankStatementIn(BaseModel):
+    pdf_base64: str
+    password: Optional[str] = None
+    filename: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/bank/statement")
+async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
+    """Upload a statement PDF (base64) → decrypt, parse, reconcile. Returns immediately —
+    reconciliation runs server-side (minutes); poll GET admin/bank/reconciliation. The owner
+    gets a WhatsApp summary + review of anything unallocated."""
+    import asyncio, base64 as _b64, os, tempfile
+    from pathlib import Path
+    from vula.commerce import bank_rec
+    data = body.pdf_base64.split(",", 1)[-1] if body.pdf_base64.startswith("data:") else body.pdf_base64
+    try:
+        raw = _b64.b64decode(data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid pdf_base64")
+    fd, tmp = tempfile.mkstemp(suffix=".pdf")
+    with os.fdopen(fd, "wb") as f:
+        f.write(raw)
+
+    async def _run():
+        try:
+            return await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
+                                                   source_file=body.filename or "upload.pdf")
+        finally:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+    asyncio.create_task(_statement_job(tenant_id, _run()))
+    return {"processing": True,
+            "note": "Statement received — reconciling now. Check back in a few minutes."}
+
+
+async def _statement_job(tenant_id: str, coro, notify: bool = True):
+    """Run a statement-reconciliation coroutine to completion (statements take minutes —
+    longer than the HTTP gateway allows), then WhatsApp the owner the summary and start
+    the review loop for anything Vula couldn't allocate."""
+    try:
+        rec = await coro
+    except Exception as exc:
+        log.warning("statement job failed for %s: %s", tenant_id, exc)
+        return
+    if notify and isinstance(rec, dict) and not rec.get("error"):
+        try:
+            from vula.commerce import bank_review
+            await bank_review.kickoff(tenant_id, rec)
+        except Exception as exc:
+            log.debug("statement kickoff skipped: %s", exc)
+
+
+@router.post("/{tenant_id}/admin/bank/statement/from-text")
+async def admin_bank_statement_from_text(tenant_id: str, body: dict):
+    """Reconcile a statement from its raw TEXT — same pipeline as the PDF path, minus
+    decryption. Body: {text, filename?, background?=true}. Statements take minutes, so by
+    default this returns immediately and the job continues server-side (poll
+    GET admin/bank/reconciliation); the owner also gets a WhatsApp summary + review."""
+    import asyncio
+    from vula.commerce import bank_rec
+    text = (body or {}).get("text") or ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="text required")
+
+    async def _run():
+        txns = await bank_rec.extract_transactions(text)
+        if not txns:
+            return {"error": "no transactions found in the text"}
+        return await bank_rec.reconcile(tenant_id, txns,
+                                        source_file=(body or {}).get("filename") or "pasted-statement")
+
+    if (body or {}).get("background", True):
+        asyncio.create_task(_statement_job(tenant_id, _run()))
+        return {"processing": True,
+                "note": "Statement is being reconciled — check the Bank tab in a few minutes."}
+    return await _run()
+
+
+@router.post("/{tenant_id}/admin/bank/statement/from-upload")
+async def admin_bank_statement_from_upload(tenant_id: str, body: dict):
+    """Reconcile a statement PDF that was already uploaded (e.g. WhatsApp'd before statement
+    detection existed). Body: {filename} — looked up in the tenant's upload directory."""
+    import asyncio
+    from pathlib import Path
+    from config import settings as _s
+    from vula.commerce import bank_rec
+    fname = ((body or {}).get("filename") or "").replace("/", "_").replace("\\", "_")
+    if not fname:
+        raise HTTPException(status_code=400, detail="filename required")
+    path = Path(_s.upload_dir) / tenant_id / fname
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"no uploaded file named {fname}")
+    asyncio.create_task(_statement_job(tenant_id, bank_rec.ingest_statement(
+        tenant_id, path, source_file=fname)))
+    return {"processing": True, "note": "Reconciling — check the Bank tab in a few minutes."}
+
+
+@router.post("/{tenant_id}/admin/bank/recategorize")
+async def admin_bank_recategorize(tenant_id: str):
+    """Re-run AI categorisation over every transaction still waiting for input (e.g. after a
+    failed batch call left them on the default account). Learned rules apply first; anything
+    the model still can't place stays flagged for the owner."""
+    from vula.commerce import accounting, bank_review
+    db = service._client()
+    rows = bank_review.pending_txns(tenant_id)
+    if not rows:
+        return {"reviewed": 0, "updated": 0, "still_pending": 0}
+    accounts = accounting.ensure_chart(tenant_id)
+    acc_map = {a["code"]: a for a in accounts}
+    txns = [{"description": r.get("description"), "reference": r.get("reference"),
+             "amount_cents": r.get("amount_cents"), "direction": r.get("direction")} for r in rows]
+    cats = await accounting.categorize_batch(tenant_id, txns, accounts)
+    vat_reg = accounting.is_vat_registered(tenant_id)
+    updated = 0
+    for r, c in zip(rows, cats):
+        if c["source"] == "default":
+            continue        # still unsure — stays in the review queue
+        acct = acc_map.get(c["account_code"])
+        db.table("commerce_bank_transactions").update({
+            "account_code": c["account_code"],
+            "vat_cents": accounting.vat_for(acct, int(r.get("amount_cents") or 0), vat_reg),
+            "vat_treatment": (acct or {}).get("vat_treatment"),
+            "categorized_by": c["source"],
+        }).eq("id", r["id"]).execute()
+        updated += 1
+    return {"reviewed": len(rows), "updated": updated, "still_pending": len(rows) - updated}
+
+
+@router.post("/{tenant_id}/admin/bank/review/start")
+async def admin_bank_review_start(tenant_id: str):
+    """Start the WhatsApp review loop: sends the owner the first unallocated transaction as a
+    question; their replies allocate + teach, one at a time."""
+    from vula.commerce import bank_review
+    from vula.integrations.notify import notify_team
+    q = bank_review.start_review(tenant_id)
+    if not q:
+        return {"started": False, "note": "nothing needs review"}
+    sent = await notify_team(tenant_id, "bank_review", q)
+    return {"started": True, "sent_to": sent}
+
+
+@router.get("/{tenant_id}/admin/bank/transactions")
+async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, limit: int = 200):
+    db = service._client()
+    try:
+        q = db.table("commerce_bank_transactions").select("*").eq("tenant_id", tenant_id)
+        if status == "needs_input":
+            q = q.in_("categorized_by", ["default", "asked"])   # Vula unsure — owner to allocate
+        elif status:
+            q = q.eq("match_status", status)
+        rows = q.order("txn_date", desc=True).limit(min(limit, 500)).execute().data or []
+    except Exception as exc:
+        return {"transactions": [], "error": f"{exc} (run migration 057?)"}
+    return {"transactions": rows}
+
+
+@router.get("/{tenant_id}/admin/bank/reconciliation")
+async def admin_bank_reconciliation(tenant_id: str):
+    """Summary: money in/out from statements, match counts, and invoices sent-vs-paid."""
+    db = service._client()
+    try:
+        rows = (db.table("commerce_bank_transactions").select("amount_cents,direction,match_status,categorized_by")
+                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 057?)"}
+    money_in = sum(int(r.get("amount_cents") or 0) for r in rows if r.get("direction") == "in")
+    money_out = sum(int(r.get("amount_cents") or 0) for r in rows if r.get("direction") == "out")
+    matched = len([r for r in rows if r.get("match_status") == "matched"])
+    unmatched_in = len([r for r in rows if r.get("direction") == "in" and r.get("match_status") == "unmatched"])
+    unmatched_out = len([r for r in rows if r.get("direction") == "out" and r.get("match_status") == "unmatched"])
+    needs_input = len([r for r in rows if r.get("categorized_by") in ("default", "asked")])   # Vula unsure → owner allocates
+    try:
+        inv = (db.table("commerce_invoices").select("status,total_cents,doc_type")
+               .eq("tenant_id", tenant_id).limit(3000).execute().data or [])
+        inv = [i for i in inv if (i.get("doc_type") or "invoice") == "invoice"]
+    except Exception:
+        inv = []
+    sent = sum(int(i.get("total_cents") or 0) for i in inv if i.get("status") in ("sent", "overdue"))
+    paid = sum(int(i.get("total_cents") or 0) for i in inv if i.get("status") == "paid")
+    return {"money_in_cents": money_in, "money_out_cents": money_out, "matched": matched,
+            "unmatched_credits": unmatched_in, "unmatched_debits": unmatched_out,
+            "needs_input": needs_input,
+            "invoices_sent_unpaid_cents": sent, "invoices_paid_cents": paid, "txn_count": len(rows)}
+
+
+class BankMatchIn(BaseModel):
+    action: str = "match"          # match | ignore | expense
+    invoice_id: Optional[str] = None
+    category: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/{txn_id}/match")
+async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
+    """One-tap review of an unmatched transaction: match to an invoice (mark paid), log as an
+    expense, or ignore."""
+    db = service._client()
+    rows = (db.table("commerce_bank_transactions").select("*")
+            .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    txn = rows[0]
+    patch = {}
+    if body.action == "match" and body.invoice_id:
+        await service.update_invoice_status(tenant_id, body.invoice_id, "paid")
+        patch = {"matched_invoice_id": body.invoice_id, "match_status": "matched"}
+    elif body.action == "expense":
+        from uuid import uuid4
+        exp = {"id": str(uuid4()), "tenant_id": tenant_id, "date": txn.get("txn_date"),
+               "category": body.category or "other", "description": txn.get("description") or "Bank debit",
+               "amount_cents": int(txn.get("amount_cents") or 0)}
+        try:
+            res = db.table("commerce_expenses").insert(exp).execute()
+            patch = {"matched_expense_id": (res.data or [exp])[0].get("id"), "match_status": "matched"}
+        except Exception as exc:
+            return {"error": str(exc)}
+    elif body.action == "ignore":
+        patch = {"match_status": "ignored"}
+    else:
+        raise HTTPException(status_code=400, detail="action must be match|expense|ignore")
+    db.table("commerce_bank_transactions").update(patch).eq("id", txn_id).execute()
+    return {"ok": True, **patch}
+
+
+# ── Accounting: chart of accounts, categorisation, reports (Stage 2) ───────────
+@router.get("/{tenant_id}/admin/accounts")
+async def admin_accounts(tenant_id: str):
+    """Tenant's chart of accounts (seeded with SA defaults on first call)."""
+    from vula.commerce import accounting
+    return {"accounts": accounting.ensure_chart(tenant_id),
+            "vat_registered": accounting.is_vat_registered(tenant_id)}
+
+
+class AccountIn(BaseModel):
+    code: str
+    name: str
+    type: str = "expense"
+    vat_treatment: str = "standard"
+    deductible: bool = True
+    sort: int = 0
+    active: bool = True
+
+
+@router.post("/{tenant_id}/admin/accounts")
+async def admin_upsert_account(tenant_id: str, body: AccountIn):
+    db = service._client()
+    row = {"tenant_id": tenant_id, **body.model_dump()}
+    try:
+        db.table("commerce_accounts").upsert(row, on_conflict="tenant_id,code").execute()
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 058?)"}
+    return {"account": row}
+
+
+class CategorizeIn(BaseModel):
+    account_code: str
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/{txn_id}/categorize")
+async def admin_categorize_txn(tenant_id: str, txn_id: str, body: CategorizeIn):
+    """Set a transaction's account (owner correction) → recompute VAT + LEARN the rule."""
+    from vula.commerce import accounting
+    db = service._client()
+    rows = (db.table("commerce_bank_transactions").select("*")
+            .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    txn = rows[0]
+    accts = {a["code"]: a for a in accounting.ensure_chart(tenant_id)}
+    acc = accts.get(body.account_code)
+    if not acc:
+        raise HTTPException(status_code=400, detail="unknown account_code")
+    vat = accounting.vat_for(acc, int(txn.get("amount_cents") or 0), accounting.is_vat_registered(tenant_id))
+    db.table("commerce_bank_transactions").update(
+        {"account_code": body.account_code, "vat_cents": vat,
+         "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
+    ).eq("id", txn_id).execute()
+    accounting.learn_category_rule(tenant_id, txn, body.account_code)   # so similar txns auto-fill
+    return {"ok": True, "account_code": body.account_code, "vat_cents": vat}
+
+
+@router.get("/{tenant_id}/admin/reports/pnl")
+async def admin_report_pnl(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    from vula.commerce import accounting
+    return accounting.pnl(tenant_id, since, until)
+
+
+@router.get("/{tenant_id}/admin/reports/vat")
+async def admin_report_vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    from vula.commerce import accounting
+    return accounting.vat_return(tenant_id, since, until)
+
+
+@router.get("/{tenant_id}/admin/reports/ledger")
+async def admin_report_ledger(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    from vula.commerce import accounting
+    return {"ledger": accounting.general_ledger(tenant_id, since, until)}
+
+
+@router.get("/{tenant_id}/admin/reports/ledger.csv")
+async def admin_report_ledger_csv(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    """General ledger as CSV — the audit trail her accountant can file from."""
+    import csv, io
+    from fastapi.responses import Response
+    from vula.commerce import accounting
+    rows = accounting.general_ledger(tenant_id, since, until)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Date", "Description", "Account", "Direction", "Amount (R)", "VAT (R)", "Reference", "Source"])
+    for r in rows:
+        w.writerow([r.get("date"), r.get("description"), r.get("account"), r.get("direction"),
+                    f"{(r.get('amount_cents') or 0)/100:.2f}", f"{(r.get('vat_cents') or 0)/100:.2f}",
+                    r.get("reference") or "", r.get("source") or ""])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="ledger-{tenant_id}.csv"'})
+
+
+# ── Casual labour: worker register + payment recognition + report ─────────────
+class WorkerIn(BaseModel):
+    id: Optional[str] = None
+    name: str
+    id_number: Optional[str] = None
+    bank_account: Optional[str] = None
+    phone: Optional[str] = None
+    rate_rands: Optional[float] = None
+    rate_period: str = "daily"
+    type: str = "casual"
+    default_project: Optional[str] = None
+    active: bool = True
+
+
+@router.get("/{tenant_id}/admin/workers")
+async def admin_list_workers(tenant_id: str, all: bool = False):
+    from vula.commerce import labour
+    return {"workers": labour.list_workers(tenant_id, active_only=not all)}
+
+
+@router.post("/{tenant_id}/admin/workers")
+async def admin_upsert_worker(tenant_id: str, body: WorkerIn):
+    from vula.commerce import labour
+    try:
+        return {"worker": labour.upsert_worker(tenant_id, body.model_dump())}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 059?)"}
+
+
+@router.delete("/{tenant_id}/admin/workers/{worker_id}")
+async def admin_delete_worker(tenant_id: str, worker_id: str):
+    from vula.commerce import labour
+    labour.delete_worker(tenant_id, worker_id)
+    return {"removed": worker_id}
+
+
+class AssignWorkerIn(BaseModel):
+    worker_id: str
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/{txn_id}/worker")
+async def admin_assign_worker(tenant_id: str, txn_id: str, body: AssignWorkerIn):
+    """Assign a payment to a worker → categorise as casual labour, tag the project, and LEARN it."""
+    from vula.commerce import labour, accounting
+    db = service._client()
+    rows = (db.table("commerce_bank_transactions").select("*")
+            .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    txn = rows[0]
+    wrows = (db.table("commerce_workers").select("*")
+             .eq("tenant_id", tenant_id).eq("id", body.worker_id).limit(1).execute().data or [])
+    if not wrows:
+        raise HTTPException(status_code=404, detail="worker not found")
+    w = wrows[0]
+    db.table("commerce_bank_transactions").update(
+        {"worker_id": body.worker_id, "project": w.get("default_project"),
+         "account_code": "casual_labour", "vat_cents": 0, "vat_treatment": "none",
+         "categorized_by": "owner", "match_status": "matched"}).eq("id", txn_id).execute()
+    accounting.learn_category_rule(tenant_id, txn, "casual_labour")   # so similar payments auto-file
+    return {"ok": True, "worker": w.get("name"), "project": w.get("default_project")}
+
+
+@router.get("/{tenant_id}/admin/reports/labour")
+async def admin_report_labour(tenant_id: str, since: Optional[str] = None,
+                              until: Optional[str] = None, project: Optional[str] = None):
+    from vula.commerce import labour
+    return labour.labour_report(tenant_id, since, until, project)
+
+
+# ── Expense claims (who paid for the business + reimbursement) ────────────────
+class ExpenseIn(BaseModel):
+    amount_cents: int
+    description: str
+    supplier: Optional[str] = None
+    date: Optional[str] = None
+    vat_cents: Optional[int] = None
+    category: Optional[str] = None
+    account_code: Optional[str] = None
+    project: Optional[str] = None
+    paid_by: Optional[str] = None
+    paid_by_name: Optional[str] = None
+    reimbursable: bool = False
+    paid_with: Optional[str] = None
+    card_last4: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ExpenseAssignIn(BaseModel):
+    project: Optional[str] = None
+    account_code: Optional[str] = None
+    category: Optional[str] = None
+
+
+@router.get("/{tenant_id}/admin/expenses")
+async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
+                              reimbursable: Optional[bool] = None, project: Optional[str] = None,
+                              since: Optional[str] = None, until: Optional[str] = None):
+    from vula.commerce import expenses
+    return {"expenses": expenses.list_claims(tenant_id, status=status, reimbursable=reimbursable,
+                                             project=project, since=since, until=until),
+            "projects": expenses.known_projects(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/expenses")
+async def admin_create_expense(tenant_id: str, body: ExpenseIn):
+    from vula.commerce import expenses
+    try:
+        claim = await expenses.create_claim(tenant_id, channel="dashboard", **body.model_dump())
+        return {"expense": claim}
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 060?)"}
+
+
+@router.post("/{tenant_id}/admin/expenses/{expense_id}/assign")
+async def admin_assign_expense(tenant_id: str, expense_id: str, body: ExpenseAssignIn):
+    """Allocate/correct a claim (project + account) and LEARN it for next time."""
+    from vula.commerce import expenses
+    return {"expense": expenses.assign(tenant_id, expense_id, **body.model_dump())}
+
+
+@router.post("/{tenant_id}/admin/expenses/{expense_id}/status")
+async def admin_expense_status(tenant_id: str, expense_id: str, body: dict):
+    """Move a claim through its lifecycle: approved / reimbursed / paid / rejected."""
+    from vula.commerce import expenses
+    status = (body or {}).get("status") or ""
+    if status not in ("submitted", "approved", "reimbursed", "paid", "rejected", "cancelled"):
+        raise HTTPException(status_code=400, detail="bad status")
+    return {"expense": expenses.set_status(tenant_id, expense_id, status)}
+
+
+@router.get("/{tenant_id}/admin/reports/expenses")
+async def admin_report_expenses(tenant_id: str, since: Optional[str] = None,
+                                until: Optional[str] = None, project: Optional[str] = None):
+    from vula.commerce import expenses
+    return expenses.report(tenant_id, since=since, until=until, project=project)
+
+
+# ── Company cards (whose money paid — drives reimbursement + bank matching) ───
+@router.get("/{tenant_id}/admin/cards")
+async def admin_list_cards(tenant_id: str):
+    from vula.commerce import expenses
+    return {"cards": expenses.list_cards(tenant_id, active_only=False)}
+
+
+@router.post("/{tenant_id}/admin/cards")
+async def admin_add_card(tenant_id: str, body: dict):
+    from vula.commerce import expenses
+    try:
+        return {"card": expenses.upsert_card(tenant_id, (body or {}).get("last4") or "",
+                                             (body or {}).get("label"))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 061?)"}
+
+
+@router.delete("/{tenant_id}/admin/cards/{card_id}")
+async def admin_delete_card(tenant_id: str, card_id: str):
+    from vula.commerce import expenses
+    expenses.delete_card(tenant_id, card_id)
+    return {"removed": card_id}
+
+
+# ── Historical onboarding: reconstruct past orders from comms (review → commit) ──
+class ImportExtractIn(BaseModel):
+    text: str
+
+
+@router.post("/{tenant_id}/admin/import/extract")
+async def admin_import_extract(tenant_id: str, body: ImportExtractIn):
+    """Draft structured orders from pasted/uploaded history (WhatsApp export, email). For review —
+    does NOT create anything."""
+    from vula.commerce import importer
+    orders = await importer.extract_orders(body.text or "")
+    return {"orders": orders, "count": len(orders)}
+
+
+@router.post("/{tenant_id}/admin/import/invoices/extract")
+async def admin_import_invoices_extract(tenant_id: str, body: ImportExtractIn):
+    """Draft historical invoices from a pasted export (e.g. Xero CSV). Review only."""
+    from vula.commerce import importer
+    invoices = await importer.extract_invoices(body.text or "")
+    return {"invoices": invoices, "count": len(invoices)}
+
+
+@router.post("/{tenant_id}/admin/import/invoices/commit")
+async def admin_import_invoices_commit(tenant_id: str, body: dict):
+    """Register reviewed historical invoices (old numbering) so bank credits can match them."""
+    from vula.commerce import importer
+    invoices = (body or {}).get("invoices") or []
+    if not invoices:
+        raise HTTPException(status_code=400, detail="no invoices to commit")
+    return importer.commit_invoices(tenant_id, invoices)
+
+
+@router.post("/{tenant_id}/admin/import/commit")
+async def admin_import_commit(tenant_id: str, body: dict):
+    """Create real historical orders + contacts from the reviewed drafts."""
+    from vula.commerce import importer
+    orders = (body or {}).get("orders") or []
+    if not orders:
+        return {"created": 0, "skipped": 0}
+    return await importer.commit_orders(tenant_id, orders)
+
+
+@router.delete("/{tenant_id}/admin/import/orders")
+async def admin_import_undo(tenant_id: str):
+    """Undo a historical import — remove all import-tagged orders (safety net)."""
+    from vula.commerce.importer import IMPORT_TAG
+    db = service._client()
+    try:
+        rows = (db.table("commerce_orders").select("id").eq("tenant_id", tenant_id)
+                .like("delivery_notes", f"{IMPORT_TAG}%").limit(5000).execute().data or [])
+        ids = [r["id"] for r in rows]
+        for oid in ids:
+            db.table("commerce_order_items").delete().eq("order_id", oid).execute()
+        if ids:
+            db.table("commerce_orders").delete().eq("tenant_id", tenant_id) \
+                .like("delivery_notes", f"{IMPORT_TAG}%").execute()
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"removed": len(ids)}
 
 
 @router.get("/{tenant_id}/admin/stats")
@@ -548,6 +1197,7 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
         "customer_address", "line_items", "subtotal_cents", "vat_rate",
         "vat_cents", "total_cents", "due_date", "notes", "payment_method",
         "yoco_checkout_id", "yoco_payment_id", "paid_at",
+        "discount_cents", "deposit_cents",
     }
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
@@ -937,7 +1587,13 @@ async def admin_create_expense(tenant_id: str, body: dict):
         "supplier": body.get("supplier"),
         "receipt_url": body.get("receipt_url"),
     }
-    result = db.table("commerce_expenses").insert(row).execute()
+    if body.get("project"):
+        row["project"] = body["project"]
+    try:
+        result = db.table("commerce_expenses").insert(row).execute()
+    except Exception:
+        row.pop("project", None)   # column may not exist yet (migration 055)
+        result = db.table("commerce_expenses").insert(row).execute()
     return result.data[0] if result.data else row
 
 
@@ -1483,12 +2139,77 @@ async def job_reorder_reminders(tenant_id: str):
     return {"ok": True, "candidates": len(candidates)}
 
 
+_last_stock_alert: dict[str, str] = {}   # tenant → date, so we alert at most once a day
+
+
+async def _process_stock_alerts(tenant_id: str, force: bool = False) -> int:
+    """Alert the team about low-stock items (at most once per day per tenant)."""
+    from datetime import date as _date
+    low = await service.get_low_stock_products(tenant_id, threshold=5)
+    if not low:
+        return 0
+    today = _date.today().isoformat()
+    if not force and _last_stock_alert.get(tenant_id) == today:
+        return 0   # already alerted today
+    lines = "\n".join(f"• {p['name']} — {p.get('stock_quantity', 0)} left" for p in low[:20])
+    try:
+        from vula.integrations.notify import notify_team
+        await notify_team(tenant_id, "low_stock",
+                          f"⚠️ Low stock ({len(low)} item{'s' if len(low) != 1 else ''}):\n{lines}\n\nTime to restock.")
+        _last_stock_alert[tenant_id] = today
+    except Exception as exc:
+        log.debug("stock alert send skipped: %s", exc)
+    return len(low)
+
+
+async def _process_overdue_invoices(tenant_id: str) -> int:
+    """Mark past-due invoices overdue and send the customer a one-time WhatsApp reminder."""
+    from datetime import date as _date
+    db = service._client()
+    today = _date.today().isoformat()
+    try:
+        rows = (db.table("commerce_invoices")
+                .select("id,invoice_number,customer_name,customer_phone,total_cents,due_date,doc_type,status")
+                .eq("tenant_id", tenant_id).eq("status", "sent").execute().data or [])
+    except Exception as exc:
+        log.debug("overdue scan skipped: %s", exc)
+        return 0
+    reminded = 0
+    for iv in rows:
+        due = iv.get("due_date")
+        if not due or due >= today:
+            continue
+        if (iv.get("doc_type") or "invoice") != "invoice":
+            continue   # only invoices go overdue — not quotes/proformas
+        db.table("commerce_invoices").update(
+            {"status": "overdue", "updated_at": service._now()}).eq("id", iv["id"]).execute()
+        phone = (iv.get("customer_phone") or "").strip()
+        if phone:
+            try:
+                from vula.api.whatsapp import _send_reply
+                await _send_reply(phone, (
+                    f"Hi {iv.get('customer_name') or 'there'}, a friendly reminder that invoice "
+                    f"*{iv.get('invoice_number')}* for R{(iv.get('total_cents') or 0) / 100:.2f} is now "
+                    f"past its due date. Please arrange payment when you can — reply here with any questions. "
+                    f"Thank you! 🙏"), tenant_id)
+                reminded += 1
+            except Exception as exc:
+                log.debug("overdue reminder send failed: %s", exc)
+    if reminded:
+        log.info("Overdue invoices: reminded %d customer(s) for %s", reminded, tenant_id)
+    return reminded
+
+
 @router.post("/{tenant_id}/jobs/stock-alerts")
 async def job_stock_alerts(tenant_id: str):
-    """Scan for low stock items."""
-    low_stock = await service.get_low_stock_products(tenant_id, threshold=5)
-    # logic to alert ops
-    return {"ok": True, "found": len(low_stock), "items": low_stock}
+    """Alert the team about low-stock items (scheduler + manual trigger)."""
+    return {"ok": True, "alerted": await _process_stock_alerts(tenant_id, force=True)}
+
+
+@router.post("/{tenant_id}/jobs/overdue-invoices")
+async def job_overdue_invoices(tenant_id: str):
+    """Mark past-due invoices overdue + remind customers (scheduler + manual trigger)."""
+    return {"ok": True, "reminded": await _process_overdue_invoices(tenant_id)}
 
 
 @router.post("/{tenant_id}/jobs/weekly-specials")
@@ -1985,17 +2706,34 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
     if img.startswith("data:"):
         img = img.split(",", 1)[-1]  # strip data URL prefix
 
+    # Business-type-aware context, so extraction fits the tenant (architecture/trades vs food) —
+    # was hardcoded to "food business", which biased units + categories for other verticals.
+    try:
+        from vula.api.tenants import get_config
+        _bt = (get_config(tenant_id) or {}).get("business_type") or "other"
+    except Exception:
+        _bt = "other"
+    _BIZ = {
+        "food": ("a South African food / restaurant business", "kg|pack|each"),
+        "retail": ("a South African retail / e-commerce business", "each|pack|unit"),
+        "services": ("a South African professional services / architecture firm", "hr|day|item|m²|no."),
+        "trades": ("a South African construction / trades business", "m|m²|m³|kg|no.|hr|item"),
+        "health": ("a South African health / wellness practice", "session|item|hr"),
+        "other": ("a South African small business", "each|kg|hr|item"),
+    }
+    biz, unit_hint = _BIZ.get(_bt, _BIZ["other"])
+
     # Build instruction based on doc type
     if body.doc_type == "auto":
         instruction = (
             "Identify what kind of business document this is (receipt, delivery_note, invoice, or order) "
-            "for a South African food business, then extract all relevant structured data from it."
+            f"for {biz}, then extract all relevant structured data from it."
         )
     else:
         instruction = _SCAN_PROMPTS.get(body.doc_type, _SCAN_PROMPTS["receipt"])
 
     system = (
-        "You are a document-extraction engine for a food business admin system. "
+        f"You are a document-extraction engine for {biz}. "
         "Look at the image and return ONLY a valid JSON object — no prose, no markdown fences. "
         "Use this schema:\n"
         "{\n"
@@ -2008,7 +2746,7 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
         '  "category": string|null,\n'
         '  "total_cents": integer|null,  // Rands × 100\n'
         '  "vat_cents": integer|null,\n'
-        '  "line_items": [{"description": string, "quantity": number, "unit": "kg|pack|each"|null, "unit_price_cents": integer|null, "total_cents": integer|null}],\n'
+        '  "line_items": [{"description": string, "quantity": number, "unit": "' + unit_hint + '"|null, "unit_price_cents": integer|null, "total_cents": integer|null}],\n'
         '  "confidence": "high|medium|low",\n'
         '  "notes": string|null\n'
         "}\n"

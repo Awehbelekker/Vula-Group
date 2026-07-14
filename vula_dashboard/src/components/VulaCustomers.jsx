@@ -16,6 +16,11 @@ const AUDIENCES = [
   { id: 'high_value',  label: 'High value (>R500)' },
 ]
 
+const LANG_NAMES = {
+  en: 'English', af: 'Afrikaans', zu: 'isiZulu', xh: 'isiXhosa', st: 'Sesotho',
+  nso: 'Sepedi', tn: 'Setswana', ts: 'Xitsonga', ve: 'Tshivenda', ss: 'siSwati', nr: 'isiNdebele',
+}
+
 export default function VulaCustomers({ tenantId }) {
   const [rows, setRows] = useState([])
   const [count, setCount] = useState(0)
@@ -24,14 +29,25 @@ export default function VulaCustomers({ tenantId }) {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [openPhone, setOpenPhone] = useState(null)
-  const [history, setHistory] = useState([])
+  const [detail, setDetail] = useState(null)
+  const [noteDraft, setNoteDraft] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
 
   const openHistory = async (phone) => {
     if (openPhone === phone) { setOpenPhone(null); return }
-    setOpenPhone(phone); setHistory([])
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/history`)
+    setOpenPhone(phone); setDetail(null); setNoteDraft('')
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/detail`)
     const d = await r.json()
-    setHistory(d.events || [])
+    setDetail(d); setNoteDraft(d.note || '')
+  }
+
+  const saveNote = async (phone) => {
+    setSavingNote(true)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/note`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: noteDraft }),
+    }).catch(() => {})
+    setSavingNote(false)
   }
 
   const load = useCallback(async () => {
@@ -119,18 +135,52 @@ export default function VulaCustomers({ tenantId }) {
               </div>
               {openPhone === c.phone && (
                 <div style={{ background: 'var(--surface-alt, #F0EDE5)', borderRadius: 10, padding: 14, margin: '2px 0 10px' }}>
-                  <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 8 }}>Interaction history</div>
-                  {history.length === 0 && <div style={{ fontSize: 12.5, color: '#8A8680' }}>No recorded orders, invoices or chats yet.</div>}
-                  {history.map((e, j) => (
-                    <div key={j} style={{ display: 'flex', gap: 10, padding: '6px 0', borderTop: j ? '1px solid #E5DFCF' : 'none', fontSize: 12.5 }}>
-                      <span style={{ width: 78, color: '#8A8680', flexShrink: 0 }}>{(e.at || '').slice(0, 10)}</span>
-                      <span style={{ flexShrink: 0 }}>{e.type === 'order' ? '📦' : e.type === 'message' ? '💬' : (e.type === 'quote' ? '📝' : '🧾')}</span>
-                      <span style={{ flex: 1, color: '#2A2A2A' }}>
-                        <b>{e.title}</b>{e.detail ? ` · ${e.detail}` : ''}
-                      </span>
-                      {e.amount_cents != null && <span style={{ fontFamily: "'Source Code Pro', monospace", color: '#2A2A2A' }}>{fmt(e.amount_cents)}</span>}
-                    </div>
-                  ))}
+                  {!detail ? (
+                    <div style={{ fontSize: 12.5, color: '#8A8680' }}>Loading…</div>
+                  ) : (
+                    <>
+                      {/* Stat cards */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginBottom: 12 }}>
+                        <Stat label="Lifetime value" value={fmt(detail.stats?.lifetime_value_cents)} strong />
+                        <Stat label="Paid orders" value={detail.stats?.paid_order_count ?? 0} />
+                        <Stat label="Avg order" value={fmt(detail.stats?.avg_order_cents)} />
+                        {detail.stats?.invoice_outstanding_cents > 0 &&
+                          <Stat label="Owes (invoices)" value={fmt(detail.stats.invoice_outstanding_cents)} />}
+                      </div>
+                      {/* Profile line */}
+                      <div style={{ fontSize: 12, color: '#8A8680', marginBottom: 10, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                        {detail.profile?.email && <span>✉️ {detail.profile.email}</span>}
+                        {detail.profile?.preferred_language &&
+                          <span>🗣️ {LANG_NAMES[detail.profile.preferred_language] || detail.profile.preferred_language}</span>}
+                        {detail.profile?.first_order_at && <span>🗓️ First order {String(detail.profile.first_order_at).slice(0, 10)}</span>}
+                      </div>
+                      {/* Notes */}
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={s.secLabel}>Internal note</div>
+                        <textarea
+                          value={noteDraft}
+                          onChange={e => setNoteDraft(e.target.value)}
+                          onBlur={() => saveNote(c.phone)}
+                          placeholder="Add a private note about this customer (preferences, allergies, delivery quirks)…"
+                          style={{ width: '100%', minHeight: 48, boxSizing: 'border-box', padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 12.5, resize: 'vertical', background: '#fff' }}
+                        />
+                        {savingNote && <span style={{ fontSize: 11, color: '#8A8680' }}>saving…</span>}
+                      </div>
+                      {/* Timeline */}
+                      <div style={s.secLabel}>Interaction history</div>
+                      {(detail.events || []).length === 0 && <div style={{ fontSize: 12.5, color: '#8A8680' }}>No recorded orders, invoices or chats yet.</div>}
+                      {(detail.events || []).map((e, j) => (
+                        <div key={j} style={{ display: 'flex', gap: 10, padding: '6px 0', borderTop: j ? '1px solid #E5DFCF' : 'none', fontSize: 12.5 }}>
+                          <span style={{ width: 78, color: '#8A8680', flexShrink: 0 }}>{(e.at || '').slice(0, 10)}</span>
+                          <span style={{ flexShrink: 0 }}>{e.type === 'order' ? '📦' : e.type === 'message' ? '💬' : (e.type === 'quote' ? '📝' : '🧾')}</span>
+                          <span style={{ flex: 1, color: '#2A2A2A' }}>
+                            <b>{e.title}</b>{e.detail ? ` · ${e.detail}` : ''}
+                          </span>
+                          {e.amount_cents != null && <span style={{ fontFamily: "'Source Code Pro', monospace", color: '#2A2A2A' }}>{fmt(e.amount_cents)}</span>}
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -141,8 +191,18 @@ export default function VulaCustomers({ tenantId }) {
   )
 }
 
+function Stat({ label, value, strong }) {
+  return (
+    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '8px 10px' }}>
+      <div style={{ fontSize: 10, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: strong ? 17 : 15, fontWeight: 700, color: strong ? 'var(--accent, #2C5545)' : '#1E1E1E' }}>{value}</div>
+    </div>
+  )
+}
+
 const s = {
   intro:     { marginBottom: 14 },
+  secLabel:  { fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 8 },
   h3:        { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: '0 0 4px' },
   sub:       { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
   segs:      { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 },

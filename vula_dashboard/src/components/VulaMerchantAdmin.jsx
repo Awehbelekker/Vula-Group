@@ -17,9 +17,13 @@ import VulaInvoices from './VulaInvoices'
 import VulaBookings from './VulaBookings'
 import VulaMarketing from './VulaMarketing'
 import VulaFinanceInsights from './VulaFinanceInsights'
+import VulaBankRec from './VulaBankRec'
+import VulaAccounting from './VulaAccounting'
+import VulaLabour from './VulaLabour'
+import VulaExpenses from './VulaExpenses'
+import VulaImport from './VulaImport'
 import VulaRecurringOrders from './VulaRecurringOrders'
-// Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
-const VulaPages = lazy(() => import('./VulaPages'))
+import VulaAgentActivity from './VulaAgentActivity'
 import VulaBudget from './VulaBudget'
 import VulaBroadcast from './VulaBroadcast'
 import VulaCustomers from './VulaCustomers'
@@ -38,6 +42,9 @@ import VulaFieldOps from './VulaFieldOps'
 import VulaReports from './VulaReports'
 import VulaOrderWorkflow from './VulaOrderWorkflow'
 import VulaClientOnboarding from './VulaClientOnboarding'
+import VulaCSMetrics from './VulaCSMetrics'
+// Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
+const VulaPages = lazy(() => import('./VulaPages'))
 import VulaPayments from './VulaPayments'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
@@ -82,7 +89,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
 
   // Tenant-level module gating (business-type driven). Always show core tabs; map a few
   // tab ids to their module key. null/empty modules = show everything (no config yet).
-  const CORE = new Set(['overview', 'assistant', 'inbox', 'settings', 'suppliers', 'qsrates', 'marketing', 'pages'])
+  const CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'qsrates', 'pages', 'marketing', 'bank', 'books', 'labour', 'expenses', 'import'])
   const MODMAP = { customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders' }
   const tenantHas = (id) => modules === null || !modules.length || CORE.has(id)
     || (modules || []).includes(MODMAP[id] || id)
@@ -111,10 +118,10 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
         <div style={styles.tabs}>
           {(() => {
             const GROUPS = [
-              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'inbox', label: '📥 Inbox' }],
+              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'agentlog', label: '🧠 Agent' }, { id: 'inbox', label: '📥 Inbox' }],
               [{ id: 'orders', label: '📦 Orders' }, { id: 'subscriptions', label: '🔁 Subscriptions' }, { id: 'bookings', label: '📅 Bookings' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
-              [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'payments', label: '💳 Payments' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
-              [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'marketing', label: '✨ Marketing' }, { id: 'pages', label: '🎨 Pages' }],
+              [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'bank', label: '🏦 Bank' }, { id: 'books', label: '📒 Books' }, { id: 'labour', label: '👷 Labour' }, { id: 'expenses', label: '💸 Expenses' }, { id: 'payments', label: '💳 Payments' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
+              [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'import', label: '📥 Import' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'marketing', label: '✨ Marketing' }, { id: 'pages', label: '🎨 Pages' }],
               [{ id: 'workspace', label: '🗂️ Workspace' }, { id: 'projects', label: '🏗️ Projects' }, { id: 'fieldops', label: '👷 Field Ops' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
               [...(full ? [{ id: 'team', label: '👥 Team' }, { id: 'settings', label: '⚙️ Settings' }] : [])],
             ]
@@ -140,6 +147,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
         <div style={styles.content}>
           {tab === 'overview'  && <OverviewTab tenantId={tenantId} setTab={setTab} />}
           {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
+          {tab === 'agentlog'  && <VulaAgentActivity tenantId={tenantId} />}
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}
           {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
           {tab === 'bookings'  && <VulaBookings tenantId={tenantId} />}
@@ -149,6 +157,11 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} />}
           {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
           {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} />}
+          {tab === 'bank'      && <VulaBankRec      tenantId={tenantId} />}
+          {tab === 'books'     && <VulaAccounting  tenantId={tenantId} />}
+          {tab === 'labour'    && <VulaLabour      tenantId={tenantId} />}
+          {tab === 'expenses'  && <VulaExpenses    tenantId={tenantId} />}
+          {tab === 'import'    && <VulaImport      tenantId={tenantId} />}
           {tab === 'budget'    && <VulaBudget        tenantId={tenantId} />}
           {tab === 'customers' && <VulaCustomers     tenantId={tenantId} />}
           {tab === 'contacts'  && <VulaContacts      tenantId={tenantId} />}
@@ -223,6 +236,8 @@ function OverviewTab({ tenantId, setTab }) {
       </div>
 
       <TrendChart series={series} fmt={fmt} />
+
+      <VulaCSMetrics tenantId={tenantId} />
 
       {alerts.length > 0 ? (
         <div style={{ marginTop: 18 }}>

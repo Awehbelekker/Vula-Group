@@ -61,9 +61,12 @@ def _tenant_team(tenant_id: str) -> list[tuple[str, str, str]]:
         log.debug("team DB lookup skipped: %s", exc)
     return _TENANT_TEAM.get(tenant_id, [])
 
-# Per-tenant WhatsApp Business phone number IDs (Meta phone number ID)
+# Last-resort fallback if the vula_whatsapp_accounts DB lookup fails below — keep in sync
+# with the tenant's CURRENT number (this table went stale for weeks pointing at a retired
+# number and silently 400'd every send; the DB lookup is the source of truth, this is backup only).
 _TENANT_PHONE_IDS: dict[str, str] = {
-    "off-the-hook": "1124076000792176",  # +27 67 363 6081 (system-user WABA)
+    "off-the-hook": "1216487374874418",  # +27 79 178 3933
+    "digg-demo": "1180015145200511",     # +27 66 566 9387
 }
 
 
@@ -76,6 +79,12 @@ async def _notify_order_paid(
     amount_cents: int,
 ) -> None:
     """Send WhatsApp order confirmation to customer and alert the team."""
+    # Payment confirmed → deduct stock once (idempotent via the order's stock_adjusted flag).
+    try:
+        from vula.commerce import service as _cs
+        await _cs.apply_order_stock(order_id, restore=False)
+    except Exception as exc:
+        log.debug("order-paid stock decrement skipped: %s", exc)
     # Resolve the tenant's LIVE WhatsApp creds (phone_id + token), not a hardcoded
     # (retired) number. Falls back to env/global.
     creds = None

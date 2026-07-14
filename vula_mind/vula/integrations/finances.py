@@ -207,3 +207,101 @@ def finance_summary(tenant_id: str, project: str = None) -> dict:
     return {"projects": projects, "transactions": rows[:100],
             "total_in": round(sum(p["in"] for p in projects), 2),
             "total_out": round(sum(p["out"] for p in projects), 2)}
+
+
+def _norm_label(s: str) -> str:
+    """Loose project-label match so 'HPC_Bokaap', 'HPC Bokaap', 'hpc-bokaap' all reconcile."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def project_financials(tenant_id: str, project: str) -> dict:
+    """Unified money picture for ONE project, pulling every source into one view:
+      • contract/budget  — vula_project_budgets (settable; stands in for the BoQ value)
+      • invoiced / paid  — commerce_invoices linked to the project (by status)
+      • expenses         — commerce_expenses linked to the project
+      • cash in / out    — vula_project_finances ledger (scanned/emailed payments)
+    Labels are matched loosely so 'HPC_Bokaap' and 'HPC Bokaap' reconcile.
+    """
+    db = _client()
+    key = _norm_label(project)
+
+    def _match(rows, field="project"):
+        return [r for r in rows if _norm_label(r.get(field)) == key]
+
+    # Ledger (payments in/out) — reuse finance_summary's rows, loosely matched.
+    ledger_rows = []
+    try:
+        ledger_rows = (db.table("vula_project_finances").select("*")
+                       .eq("tenant_id", tenant_id).limit(2000).execute().data or [])
+    except Exception:
+        pass
+    ledger = _match(ledger_rows)
+    paid_in = sum(float(r.get("amount") or 0) for r in ledger if r.get("direction") == "in")
+    paid_out = sum(float(r.get("amount") or 0) for r in ledger if r.get("direction") == "out")
+
+    # Invoices linked to the project (guarded — column may not exist pre-migration 055).
+    invoiced = invoiced_paid = 0.0
+    inv_count = 0
+    try:
+        invs = (db.table("commerce_invoices")
+                .select("total_cents,status,project,doc_type").eq("tenant_id", tenant_id)
+                .limit(3000).execute().data or [])
+        invs = [i for i in _match(invs) if (i.get("doc_type") or "invoice") == "invoice"]
+        inv_count = len(invs)
+        invoiced = sum(int(i.get("total_cents") or 0) for i in invs) / 100.0
+        invoiced_paid = sum(int(i.get("total_cents") or 0) for i in invs if i.get("status") == "paid") / 100.0
+    except Exception as exc:
+        logger.debug("project invoices skipped (run migration 055?): %s", exc)
+
+    # Expenses linked to the project.
+    expenses = 0.0
+    try:
+        exps = (db.table("commerce_expenses").select("amount_cents,project")
+                .eq("tenant_id", tenant_id).limit(3000).execute().data or [])
+        expenses = sum(int(e.get("amount_cents") or 0) for e in _match(exps)) / 100.0
+    except Exception as exc:
+        logger.debug("project expenses skipped (run migration 055?): %s", exc)
+
+    # Casual labour paid on this project (bank debits categorised as casual_labour, tagged to it).
+    labour = 0.0
+    try:
+        lab = (db.table("commerce_bank_transactions").select("amount_cents,project,account_code")
+               .eq("tenant_id", tenant_id).eq("account_code", "casual_labour").limit(5000).execute().data or [])
+        labour = sum(int(r.get("amount_cents") or 0) for r in _match(lab)) / 100.0
+    except Exception as exc:
+        logger.debug("project labour skipped (run migration 059?): %s", exc)
+
+    # Contract value: a persisted BoQ (migration 056) wins; else the manual budget.
+    contract = 0.0
+    try:
+        boq = (db.table("vula_project_boq").select("project,total_cents")
+               .eq("tenant_id", tenant_id).limit(500).execute().data or [])
+        b = _match(boq)
+        if b:
+            contract = int(b[0].get("total_cents") or 0) / 100.0
+    except Exception as exc:
+        logger.debug("project boq skipped (run migration 056?): %s", exc)
+    if not contract:
+        try:
+            brows = (db.table("vula_project_budgets").select("project,budget")
+                     .eq("tenant_id", tenant_id).limit(500).execute().data or [])
+            b = _match(brows)
+            contract = float(b[0]["budget"]) if b else 0.0
+        except Exception:
+            pass
+
+    spent = round(paid_out + expenses + labour, 2)  # cash paid out + logged expenses + casual labour
+    return {
+        "project": project,
+        "contract": round(contract, 2),            # contract value / budget (BoQ stand-in)
+        "invoiced": round(invoiced, 2),            # total raised to the client
+        "invoiced_paid": round(invoiced_paid, 2),  # invoices marked paid
+        "invoice_count": inv_count,
+        "paid_in": round(paid_in, 2),              # cash received (ledger)
+        "spent": spent,                            # cash out + expenses + labour
+        "labour_cents": int(round(labour * 100)),  # casual labour paid on this project
+        "net": round(paid_in - spent, 2),
+        "remaining": round(contract - spent, 2) if contract else None,
+        "outstanding": round(max(invoiced - invoiced_paid, 0), 2),  # billed but not yet paid
+        "transactions": sorted(ledger, key=lambda r: r.get("created_at") or "", reverse=True)[:100],
+    }

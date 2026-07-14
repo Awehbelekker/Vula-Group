@@ -75,6 +75,28 @@ async def sync_now(tenant_id: str) -> dict:
     return await process_email_sync(tenant_id)
 
 
+@router.post("/backfill/{tenant_id}")
+async def backfill(tenant_id: str, count: int = 200) -> dict:
+    """Catch Vula up on a mailbox's back-history: pull the most-recent `count` emails (regardless
+    of the sync cursor) so historical invoices, proofs-of-payment and statements get filed. Runs
+    in the BACKGROUND (attachment OCR/ingest is slow ~3s/email) and returns immediately; poll
+    /status to see contacts grow. Capped to keep it bounded."""
+    import asyncio
+    from vula.email_imap.sync import process_email_sync
+    n = max(1, min(count, 500))
+
+    async def _run():
+        try:
+            res = await process_email_sync(tenant_id, max_emails=n, from_uid=0)
+            log.info("email backfill for %s done: %s", tenant_id, res)
+        except Exception as exc:
+            log.warning("email backfill for %s failed: %s", tenant_id, exc)
+
+    asyncio.create_task(_run())
+    return {"status": "started", "count": n,
+            "note": "Backfill running in the background — filing contacts + attachments. Check /status."}
+
+
 @router.get("/contacts/{tenant_id}")
 async def list_contacts(tenant_id: str, kind: Optional[str] = None) -> dict:
     """The contact / supplier / co-worker directory built from email."""

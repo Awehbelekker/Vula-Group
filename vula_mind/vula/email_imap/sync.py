@@ -192,16 +192,19 @@ def _upsert_contact(db, tenant_id: str, addr: str, name: str, kind: str, when: s
         logger.debug("contact upsert skipped (run migration 024?): %s", exc)
 
 
-async def process_email_sync(tenant_id: str, max_emails: int = 20) -> dict:
-    """Sync one tenant: build contacts + file work attachments from new mail."""
+async def process_email_sync(tenant_id: str, max_emails: int = 20,
+                             from_uid: Optional[int] = None) -> dict:
+    """Sync one tenant: build contacts + file work attachments from new mail.
+    `from_uid` overrides the stored cursor (from_uid=0 → historical backfill of the most-recent
+    `max_emails`), so we can catch Vula up on a mailbox's back-history in one controlled pass."""
     lock = _lock_for(tenant_id)
     if lock.locked():
         return {"synced": 0, "skipped": "sync already running"}
     async with lock:
-        return await _do_email_sync(tenant_id, max_emails)
+        return await _do_email_sync(tenant_id, max_emails, from_uid)
 
 
-async def _do_email_sync(tenant_id: str, max_emails: int) -> dict:
+async def _do_email_sync(tenant_id: str, max_emails: int, from_uid: Optional[int] = None) -> dict:
     import asyncio
     creds = get_email_creds(tenant_id)
     if not creds:
@@ -212,9 +215,10 @@ async def _do_email_sync(tenant_id: str, max_emails: int) -> dict:
                .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0]
     except Exception:
         return {"synced": 0}
-    if row.get("auto_sync") is False:
+    if row.get("auto_sync") is False and from_uid is None:
         return {"synced": 0}
-    last_uid = int(row.get("last_sync_uid") or 0)
+    # Backfill (from_uid given) scans from that floor; normal sync continues from the stored cursor.
+    last_uid = int(from_uid) if from_uid is not None else int(row.get("last_sync_uid") or 0)
     notify_phone = row.get("notify_phone")
     own_domain = creds["email"].split("@")[-1].lower()
 
@@ -275,6 +279,29 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", att["name"])
     p = d / safe
     p.write_bytes(att["data"])
+
+    # Bank statement? → unlock with the stored ID password + reconcile against invoices/expenses,
+    # in addition to filing it as a document. Best-effort; never blocks normal filing.
+    try:
+        blob = f"{em.get('subject','')} {em.get('from','')} {att['name']}".lower()
+        if att["name"].lower().endswith(".pdf") and ("statement" in blob or "capitec" in blob):
+            from vula.commerce import bank_rec
+            rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"])
+            logger.info("bank statement auto-reconciled (%s): %s", tenant_id, rec)
+            # Ask the owner to finish the ones Vula wasn't sure about (one nudge per statement).
+            to_review = int(rec.get("needs_input", 0)) + int(rec.get("unmatched_credits", 0))
+            if not rec.get("error") and to_review > 0:
+                try:
+                    from vula.integrations.notify import notify_team
+                    await notify_team(tenant_id, "bank_statement",
+                                      f"🏦 Statement reconciled: {rec.get('matched_invoices', 0)} invoice(s) marked paid, "
+                                      f"{rec.get('matched_workers', 0)} labour payment(s) recognised. "
+                                      f"*{to_review} transaction(s) need you to confirm where they go* — open the Bank tab.")
+                except Exception as exc:
+                    logger.debug("bank statement notify skipped: %s", exc)
+    except Exception as exc:
+        logger.debug("bank statement auto-reconcile skipped: %s", exc)
+
     res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
 
     # Let the AI read it → category + summary + structured fields.

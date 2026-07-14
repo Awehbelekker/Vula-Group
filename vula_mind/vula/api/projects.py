@@ -36,6 +36,33 @@ async def get_finances(tenant: str, project: Optional[str] = None) -> dict:
     return finance_summary(tenant, project)
 
 
+@router.get("/{tenant}/p/{project}/financials")
+async def get_project_financials(tenant: str, project: str) -> dict:
+    """Unified money picture for one project: contract/budget, invoiced, paid-in, spent, net."""
+    from vula.integrations.finances import project_financials
+    return project_financials(tenant, project)
+
+
+class BoqIn(BaseModel):
+    total: float                 # BoQ / contract value in Rands
+    title: Optional[str] = None
+    source_job: Optional[str] = None
+
+
+@router.post("/{tenant}/p/{project}/boq")
+async def set_project_boq(tenant: str, project: str, body: BoqIn) -> dict:
+    """Persist a project's BoQ / contract value (e.g. from a takeoff) so it survives restarts
+    and drives the unified project financials' contract figure."""
+    row = {"tenant_id": tenant, "project": project, "title": body.title,
+           "total_cents": int(round(body.total * 100)), "source_job": body.source_job,
+           "updated_at": "now()"}
+    try:
+        _client().table("vula_project_boq").upsert(row, on_conflict="tenant_id,project").execute()
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 056?)"}
+    return {"project": project, "contract": body.total}
+
+
 class BudgetIn(BaseModel):
     project: str
     budget: float
