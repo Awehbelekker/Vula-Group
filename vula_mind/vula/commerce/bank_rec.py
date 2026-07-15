@@ -351,7 +351,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             db.table("commerce_bank_transactions").upsert(
                 row, on_conflict="tenant_id,txn_date,amount_cents,description").execute()
             saved += 1
-        except Exception as exc:
+        except Exception:
             # 058/059 columns (account_code/vat/worker_id/project) may not exist yet — retry with core.
             for k in ("account_code", "vat_cents", "vat_treatment", "categorized_by", "worker_id", "project"):
                 row.pop(k, None)

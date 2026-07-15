@@ -220,7 +220,7 @@ def commit_invoices(tenant_id: str, invoices: List[Dict[str, Any]]) -> Dict[str,
         }
         try:
             db.table("commerce_invoices").insert(row).execute()
-        except Exception as exc:
+        except Exception:
             # Older schema variants — drop optional columns and retry once.
             for k in ("date", "due_date", "direction", "doc_type", "source"):
                 row.pop(k, None)

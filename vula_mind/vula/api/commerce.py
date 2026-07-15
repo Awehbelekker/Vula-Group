@@ -893,7 +893,7 @@ class AssignWorkerIn(BaseModel):
 @router.post("/{tenant_id}/admin/bank/transactions/{txn_id}/worker")
 async def admin_assign_worker(tenant_id: str, txn_id: str, body: AssignWorkerIn):
     """Assign a payment to a worker → categorise as casual labour, tag the project, and LEARN it."""
-    from vula.commerce import labour, accounting
+    from vula.commerce import accounting
     db = service._client()
     rows = (db.table("commerce_bank_transactions").select("*")
             .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
@@ -1556,46 +1556,8 @@ async def admin_update_quote_status(tenant_id: str, quote_id: str, body: dict):
 
 
 # ── Expense endpoints ─────────────────────────────────────────────────────────
-
-@router.get("/{tenant_id}/admin/expenses")
-async def admin_list_expenses(
-    tenant_id: str,
-    month: Optional[str] = Query(None),  # YYYY-MM
-    limit: int = Query(100, ge=1, le=500),
-):
-    db = service._client()
-    q = db.table("commerce_expenses").select("*").eq("tenant_id", tenant_id)
-    if month:
-        q = q.gte("date", f"{month}-01").lt("date", f"{month[:4]}-{int(month[5:])+1:02d}-01")
-    result = q.order("date", desc=True).limit(limit).execute()
-    rows = result.data or []
-    total = sum(r["amount_cents"] for r in rows)
-    return {"expenses": rows, "count": len(rows), "total_cents": total}
-
-
-@router.post("/{tenant_id}/admin/expenses")
-async def admin_create_expense(tenant_id: str, body: dict):
-    from uuid import uuid4
-    db = service._client()
-    row = {
-        "id": str(uuid4()),
-        "tenant_id": tenant_id,
-        "date": body.get("date"),
-        "category": body.get("category", "other"),
-        "description": body.get("description", ""),
-        "amount_cents": int(body.get("amount_cents", 0)),
-        "supplier": body.get("supplier"),
-        "receipt_url": body.get("receipt_url"),
-    }
-    if body.get("project"):
-        row["project"] = body["project"]
-    try:
-        result = db.table("commerce_expenses").insert(row).execute()
-    except Exception:
-        row.pop("project", None)   # column may not exist yet (migration 055)
-        result = db.table("commerce_expenses").insert(row).execute()
-    return result.data[0] if result.data else row
-
+# (list/create moved to the expense-claims workflow above — see admin_list_expenses /
+# admin_create_expense near the top of the file, migration 060)
 
 @router.delete("/{tenant_id}/admin/expenses/{expense_id}")
 async def admin_delete_expense(tenant_id: str, expense_id: str):
