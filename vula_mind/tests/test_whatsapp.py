@@ -332,3 +332,40 @@ async def test_rag_reply_handles_pipeline_error():
         assert "trouble" in reply.lower()
     finally:
         _pip.VulaIngestionPipeline = original
+
+
+# ── _run_commerce_assistant — voice/language threading ────────────────────────
+
+@pytest.mark.asyncio
+async def test_run_commerce_assistant_persists_detected_language():
+    """Whisper's detected language must reach commerce_service.set_session_language and the
+    skill's metadata. Regression test: detected_lang was silently dropped between
+    _handle_commerce_message and _run_commerce_assistant, and the resulting NameError inside
+    _run_commerce_assistant was swallowed by a broad except — so this path never ran at all."""
+    from vula.api.whatsapp import _run_commerce_assistant
+
+    mock_session = {"id": "sess-1", "preferred_language": None}
+    mock_service = MagicMock()
+    mock_service.get_or_create_session = AsyncMock(return_value=mock_session)
+    mock_service.get_recent_messages = AsyncMock(return_value=[])
+    mock_service.format_history = MagicMock(return_value="")
+    mock_service.set_session_language = AsyncMock()
+    mock_service.append_message = AsyncMock()
+
+    mock_output = MagicMock(success=True, answer="Goeie dag! Hoe kan ek help?", error=None)
+    mock_skill = AsyncMock(return_value=mock_output)
+
+    with (
+        patch("vula.commerce.service", mock_service),
+        patch("core.skills.loader.get_skill", return_value=mock_skill),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)),
+    ):
+        handled = await _run_commerce_assistant(
+            "27821234567", "gee my twee hake asseblief", "off-the-hook", detected_lang="af"
+        )
+
+    assert handled is True
+    mock_service.set_session_language.assert_awaited_once_with("off-the-hook", "27821234567", "af")
+    _, call_kwargs = mock_skill.call_args
+    sent_input = mock_skill.call_args[0][0]
+    assert sent_input.metadata["preferred_language"] == "af"

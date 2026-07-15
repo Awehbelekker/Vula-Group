@@ -2202,7 +2202,7 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
             return
         # Admin agent failed → fall through to the customer assistant.
 
-    handled = await _run_commerce_assistant(phone, text, tenant_id)
+    handled = await _run_commerce_assistant(phone, text, tenant_id, detected_lang=detected_lang)
     if not handled:
         # Skill unavailable/failed — fall back to n8n, then a holding reply.
         await _forward_to_n8n_commerce(phone, text, msg_id, tenant_id)
@@ -2275,7 +2275,8 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
     return True
 
 
-async def _run_commerce_assistant(phone: str, text: str, tenant_id: str) -> bool:
+async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
+                                  detected_lang: Optional[str] = None) -> bool:
     """Drive the commerce_assistant skill with persisted conversation memory.
 
     Returns True if a reply was sent, False if the skill could not produce one.
