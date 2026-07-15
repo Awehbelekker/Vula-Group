@@ -25,6 +25,9 @@ export default function VulaBudget({ tenantId, stats }) {
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10) })
   const [due, setDue] = useState(null) // { overdue, upcoming, *_total_cents }
+  const [recurring, setRecurring] = useState([])
+  const [showAddRecurring, setShowAddRecurring] = useState(false)
+  const [rForm, setRForm] = useState({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: new Date().toISOString().slice(0, 10) })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -46,6 +49,39 @@ export default function VulaBudget({ tenantId, stats }) {
   }, [tenantId, month])
 
   useEffect(() => { load() }, [load])
+
+  const loadRecurring = useCallback(async () => {
+    const r = await fetch(`${VULA_API}/v1/recurring-bills/${tenantId}?status=active`).then(r => r.json()).catch(() => ({}))
+    setRecurring(r.bills || [])
+  }, [tenantId])
+
+  useEffect(() => { loadRecurring() }, [loadRecurring])
+
+  async function addRecurring(e) {
+    e.preventDefault()
+    const cents = Math.round(parseFloat(rForm.amount) * 100)
+    if (isNaN(cents) || cents <= 0 || !rForm.description) return
+    await fetch(`${VULA_API}/v1/recurring-bills/${tenantId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: rForm.description, supplier: rForm.supplier || null, category: rForm.category,
+        amount_cents: cents, cadence: rForm.cadence, next_due: rForm.next_due,
+      }),
+    })
+    setRForm({ description: '', supplier: '', category: 'rent', amount: '', cadence: 'monthly', next_due: new Date().toISOString().slice(0, 10) })
+    setShowAddRecurring(false)
+    loadRecurring()
+  }
+
+  async function cancelRecurring(id) {
+    if (!window.confirm('Stop this recurring bill? Past expenses it already created stay on the books.')) return
+    await fetch(`${VULA_API}/v1/recurring-bills/${tenantId}/${id}/status`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'cancelled' }),
+    })
+    loadRecurring()
+  }
 
   async function markPaid(id) {
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/${id}/pay`, { method: 'PATCH' })
@@ -132,6 +168,61 @@ export default function VulaBudget({ tenantId, stats }) {
         </div>
       )}
 
+      {/* Recurring bills — rent, utilities, subscriptions, supplier accounts */}
+      <div style={s.duePanel}>
+        <div style={s.dueHead}>
+          <span style={s.dueTitle}>🔁 Recurring bills</span>
+          <button onClick={() => setShowAddRecurring(!showAddRecurring)} style={s.smallAddBtn}>+ Add</button>
+        </div>
+        <p style={{ ...s.dueMeta, color: '#8A8680', margin: '0 0 8px' }}>
+          Rent, utilities, software — Vula creates the expense automatically ahead of each due date.
+        </p>
+        {showAddRecurring && (
+          <form onSubmit={addRecurring} style={{ ...s.addForm, marginBottom: 10 }}>
+            <input placeholder="Description (e.g. Rent)" value={rForm.description}
+              onChange={e => setRForm({ ...rForm, description: e.target.value })} style={s.input} required />
+            <div style={s.formRow}>
+              <select value={rForm.category} onChange={e => setRForm({ ...rForm, category: e.target.value })} style={s.select}>
+                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={rForm.cadence} onChange={e => setRForm({ ...rForm, cadence: e.target.value })} style={s.select}>
+                <option value="monthly">Monthly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </div>
+            <div style={s.formRow}>
+              <input placeholder="Supplier (optional)" value={rForm.supplier}
+                onChange={e => setRForm({ ...rForm, supplier: e.target.value })} style={s.input} />
+              <input placeholder="Amount (R)" type="number" step="0.01" value={rForm.amount}
+                onChange={e => setRForm({ ...rForm, amount: e.target.value })} style={s.input} required />
+            </div>
+            <div style={s.formRow}>
+              <label style={{ ...s.dueMeta, color: '#8A8680', display: 'flex', alignItems: 'center', gap: 6 }}>
+                Next due
+                <input type="date" value={rForm.next_due}
+                  onChange={e => setRForm({ ...rForm, next_due: e.target.value })} style={s.input} required />
+              </label>
+            </div>
+            <button type="submit" style={s.saveBtn}>Save recurring bill</button>
+          </form>
+        )}
+        {recurring.length === 0 ? (
+          <p style={s.muted}>No recurring bills set up yet.</p>
+        ) : recurring.map(b => (
+          <div key={b.id} style={s.dueRow}>
+            <div style={{ flex: 1 }}>
+              <span style={s.dueDesc}>{b.description}</span>
+              <span style={{ ...s.dueMeta, color: '#8A8680' }}>
+                {b.cadence} · next {b.next_due}{b.supplier ? ` · ${b.supplier}` : ''}
+              </span>
+            </div>
+            <span style={s.dueAmt}>{fmt(b.amount_cents)}</span>
+            <button onClick={() => cancelRecurring(b.id)} style={s.delBtn}>×</button>
+          </div>
+        ))}
+      </div>
+
       {/* Category bar */}
       {Object.keys(byCat).length > 0 && (
         <div style={s.catBar}>
@@ -211,6 +302,7 @@ const s = {
   dueMeta:    { display: 'block', fontFamily: 'system-ui', fontSize: 11 },
   dueAmt:     { fontFamily: 'system-ui', fontSize: 14, fontWeight: 700, color: '#1E1E1E' },
   payBtn:     { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  smallAddBtn:{ padding: '5px 10px', background: 'transparent', color: 'var(--accent, var(--accent))', border: '1px solid var(--accent, var(--accent))', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
   controls:   { display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' },
   monthInput: { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13 },
   addBtn:     { padding: '7px 14px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
