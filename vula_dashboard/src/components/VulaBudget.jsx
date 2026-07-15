@@ -28,12 +28,19 @@ export default function VulaBudget({ tenantId, stats }) {
 
   const load = useCallback(async () => {
     setLoading(true)
+    // /admin/expenses now serves the expense-claims workflow (migration 060): it filters by
+    // since/until, not month, and doesn't return a total_cents summary — so filter and total
+    // here instead of trusting the server for those two things.
+    const [y, m] = month.split('-').map(Number)
+    const since = `${month}-01`
+    const until = new Date(y, m, 0).toISOString().slice(0, 10)  // last day of the selected month
     const [exp, dueResp] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses?month=${month}`).then(r => r.json()),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses?since=${since}&until=${until}`).then(r => r.json()),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/expenses/due?days_ahead=30`).then(r => r.json()).catch(() => null),
     ])
-    setExpenses(exp.expenses || [])
-    setTotal(exp.total_cents || 0)
+    const rows = exp.expenses || []
+    setExpenses(rows)
+    setTotal(rows.reduce((sum, e) => sum + (e.amount_cents || 0), 0))
     setDue(dueResp)
     setLoading(false)
   }, [tenantId, month])
