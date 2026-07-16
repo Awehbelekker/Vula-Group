@@ -2,6 +2,11 @@
 ## The Complete Business, Naming System & Claude Code Build Prompt
 ### Version 1.0 — May 2026
 
+> **Archived 2026-07-16.** This was an early branding/naming exploration (Vula Business, Vula
+> Mind, Vula Mesh, Vula Core, …) that was never adopted — the shipped product is simply "Vula".
+> Kept for history only; see the repo root [README.md](../README.md) for the current, accurate
+> picture of what Vula does and how it's built.
+
 ---
 
 # PART 1: THE BRAND ARCHITECTURE
