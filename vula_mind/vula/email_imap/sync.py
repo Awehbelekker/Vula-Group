@@ -317,13 +317,17 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             if not rec.get("error") and matched > 0:
                 payment_matched = True  # suppress the generic "which project?" ask below
             elif not rec.get("error"):
-                # Read fine, but nothing outstanding matched the amount — say so plainly instead
-                # of silently falling through to a "which project" question about a payment.
+                # Read fine, but nothing outstanding matched the amount — ask right here instead
+                # of silently falling through to a "which project" question about a payment, or
+                # just pointing at the dashboard (bank_review.start_client_review, same reply-
+                # driven loop the WhatsApp answer handler expects).
                 try:
                     from vula.integrations.notify import notify_team
-                    await notify_team(tenant_id, "payment_unmatched", (
-                        f"💰 Payment confirmation received (*{att['name']}*) but I couldn't match it "
-                        f"to an outstanding invoice or order — check the Bank tab to allocate it."))
+                    from vula.commerce import bank_review
+                    q = bank_review.start_client_review(tenant_id)
+                    msg = f"💰 Payment confirmation received (*{att['name']}*) but I couldn't match it automatically."
+                    await notify_team(tenant_id, "payment_unmatched",
+                                      f"{msg}\n\n{q}" if q else f"{msg} Check the Bank tab to allocate it.")
                     payment_matched = True  # already told the owner in payment-specific language
                 except Exception as exc:
                     logger.debug("payment unmatched notify skipped: %s", exc)

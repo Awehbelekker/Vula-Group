@@ -663,10 +663,11 @@ async def admin_bank_recategorize(tenant_id: str):
 @router.post("/{tenant_id}/admin/bank/review/start")
 async def admin_bank_review_start(tenant_id: str):
     """Start the WhatsApp review loop: sends the owner the first unallocated transaction as a
-    question; their replies allocate + teach, one at a time."""
+    question; their replies allocate + teach, one at a time. Unmatched money-IN (which order/
+    customer paid this?) goes first — more time-sensitive than a category cleanup question."""
     from vula.commerce import bank_review
     from vula.integrations.notify import notify_team
-    q = bank_review.start_review(tenant_id)
+    q = bank_review.start_client_review(tenant_id) or bank_review.start_review(tenant_id)
     if not q:
         return {"started": False, "note": "nothing needs review"}
     sent = await notify_team(tenant_id, "bank_review", q)
@@ -720,13 +721,14 @@ async def admin_bank_reconciliation(tenant_id: str):
 class BankMatchIn(BaseModel):
     action: str = "match"          # match | ignore | expense
     invoice_id: Optional[str] = None
+    order_id: Optional[str] = None
     category: Optional[str] = None
 
 
 @router.post("/{tenant_id}/admin/bank/transactions/{txn_id}/match")
 async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
-    """One-tap review of an unmatched transaction: match to an invoice (mark paid), log as an
-    expense, or ignore."""
+    """One-tap review of an unmatched transaction: match to an invoice or order (mark paid),
+    log as an expense, or ignore."""
     db = service._client()
     rows = (db.table("commerce_bank_transactions").select("*")
             .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
@@ -737,6 +739,21 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
     if body.action == "match" and body.invoice_id:
         await service.update_invoice_status(tenant_id, body.invoice_id, "paid")
         patch = {"matched_invoice_id": body.invoice_id, "match_status": "matched"}
+    elif body.action == "match" and body.order_id:
+        orows = (db.table("commerce_orders").select("id,display_id,customer_name,customer_phone,total_cents")
+                 .eq("tenant_id", tenant_id).eq("id", body.order_id).limit(1).execute().data or [])
+        if not orows:
+            raise HTTPException(status_code=404, detail="order not found")
+        o = orows[0]
+        await service.update_order_status(o["id"], "paid")
+        try:
+            from vula.api.yoco import _notify_order_paid
+            await _notify_order_paid(tenant_id, o.get("display_id") or o["id"], o["id"],
+                                     o.get("customer_phone"), o.get("customer_name") or "",
+                                     int(o.get("total_cents") or 0))
+        except Exception as exc:
+            log.warning("order-paid notify failed for manual bank match: %s", exc)
+        patch = {"matched_order_id": body.order_id, "match_status": "matched"}
     elif body.action == "expense":
         from uuid import uuid4
         exp = {"id": str(uuid4()), "tenant_id": tenant_id, "date": txn.get("txn_date"),

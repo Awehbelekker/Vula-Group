@@ -917,7 +917,8 @@ async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Op
         if not is_team:
             return None
         from vula.commerce import bank_review
-        return await bank_review.handle_answer(tenant_id, text)
+        return (await bank_review.handle_client_answer(tenant_id, text)
+                or await bank_review.handle_answer(tenant_id, text))
     except Exception as exc:
         logger.debug("bank review answer skipped: %s", exc)
         return None

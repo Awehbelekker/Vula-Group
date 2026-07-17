@@ -13,6 +13,7 @@ export default function VulaBankRec({ tenantId }) {
   const [sum, setSum] = useState(null);
   const [txns, setTxns] = useState([]);
   const [invoices, setInvoices] = useState([]);
+  const [pendingOrders, setPendingOrders] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [workers, setWorkers] = useState([]);
   const [vatReg, setVatReg] = useState(false);
@@ -22,14 +23,16 @@ export default function VulaBankRec({ tenantId }) {
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
-    const [s, t, inv, acc, wk] = await Promise.all([
+    const [s, t, inv, ord, acc, wk] = await Promise.all([
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/reconciliation`).then(r => r.json()).catch(() => null),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions${filter ? `?status=${filter}` : ""}`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?status=sent`).then(r => r.json()).catch(() => ({})),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders?status=pending_payment`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/accounts`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/workers`).then(r => r.json()).catch(() => ({})),
     ]);
     setSum(s); setTxns(t.transactions || []); setInvoices(inv.invoices || []);
+    setPendingOrders(ord.orders || []);
     setAccounts(acc.accounts || []); setVatReg(!!acc.vat_registered); setWorkers(wk.workers || []);
   }, [tenantId, filter]);
 
@@ -101,10 +104,10 @@ export default function VulaBankRec({ tenantId }) {
     flash(r.error ? r.error : (r.started ? "📲 Sent to your WhatsApp — answer one at a time there." : "Nothing needs review 🎉"));
   };
 
-  const act = async (id, action, invoice_id) => {
+  const act = async (id, action, invoice_id, order_id) => {
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${id}/match`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, invoice_id }),
+      body: JSON.stringify({ action, invoice_id, order_id }),
     }).catch(() => {});
     load();
   };
@@ -113,7 +116,7 @@ export default function VulaBankRec({ tenantId }) {
     <div style={{ fontFamily: "system-ui", color: C.text }}>
       <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0 2px" }}>🏦 Bank reconciliation</h4>
       <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>
-        Vula reads your weekly Capitec statement, matches deposits to invoices (marks them paid), and flags the rest. No accounting software needed.
+        Vula reads your weekly Capitec statement (and payment-confirmation emails) and matches deposits to invoices or orders paid by EFT (marks them paid), flagging the rest. No accounting software needed.
       </p>
 
       {/* Summary */}
@@ -188,6 +191,12 @@ export default function VulaBankRec({ tenantId }) {
                       <select defaultValue="" onChange={e => e.target.value && act(t.id, "match", e.target.value)} style={{ ...input, maxWidth: 150 }}>
                         <option value="">Match invoice…</option>
                         {invoices.map(i => <option key={i.id} value={i.id}>{i.invoice_number} · {R(i.total_cents)}</option>)}
+                      </select>
+                    )}
+                    {t.direction === "in" && (
+                      <select defaultValue="" onChange={e => e.target.value && act(t.id, "match", null, e.target.value)} style={{ ...input, maxWidth: 150 }}>
+                        <option value="">Match order…</option>
+                        {pendingOrders.map(o => <option key={o.id} value={o.id}>{o.display_id} · {o.customer_name || "?"} · {R(o.total_cents)}</option>)}
                       </select>
                     )}
                     {t.direction === "out" && <button style={miniBtn} onClick={() => act(t.id, "expense")}>Log expense</button>}

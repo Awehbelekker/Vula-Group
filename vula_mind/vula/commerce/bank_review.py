@@ -4,6 +4,12 @@ allocate confidently. Instead of the owner opening the Bank tab, Vula asks them 
 at a time ("R720 to 'Lonese Jacobs' — what's this for?"), applies the answer, LEARNS the
 rule, and moves to the next. State lives on the row itself: categorized_by 'default' =
 waiting, 'asked' = question sent (one at a time), 'owner' = answered.
+
+A second, independent question type lives here too: an unmatched CREDIT — money in that
+couldn't be matched to an invoice/order by amount+reference — asks "which order/customer is
+this for?" (match_status 'unmatched' → 'asked' → 'matched'/'ignored'). Different axis from the
+category loop above (WHO paid vs WHAT category), so it uses match_status, not categorized_by,
+and the two loops never collide on the same row.
 """
 from __future__ import annotations
 
@@ -163,3 +169,154 @@ def _next_or_done(tenant_id: str, prefix: str) -> str:
     except Exception:
         pass
     return prefix + "\n\n" + _question(txn, 1, len(rows))
+
+
+# ── Client/order matching for unmatched credits ─────────────────────────────────
+
+def pending_client_txns(tenant_id: str) -> List[dict]:
+    """Unmatched money-in that couldn't be auto-matched to an invoice or order."""
+    try:
+        return (_client().table("commerce_bank_transactions").select("*")
+                .eq("tenant_id", tenant_id).eq("direction", "in")
+                .in_("match_status", ["unmatched", "asked"])
+                .order("txn_date").limit(500).execute().data or [])
+    except Exception as exc:
+        log.debug("pending_client_txns skipped: %s", exc)
+        return []
+
+
+def _client_question(txn: dict, i: int, n: int) -> str:
+    amt = int(txn.get("amount_cents") or 0) / 100
+    return (f"🏦 {i}/{n}: *R{amt:,.2f}* received on {txn.get('txn_date')} — "
+            f"\"{(txn.get('description') or '')[:90]}\".\n"
+            "Which order or customer is this for? Reply with the order number "
+            "(e.g. OFF-00006) or the customer's name, or 'skip'.")
+
+
+def start_client_review(tenant_id: str) -> Optional[str]:
+    """Mark the first unmatched credit 'asked' and return the question to send.
+    Returns None when there's nothing to review."""
+    rows = pending_client_txns(tenant_id)
+    if not rows:
+        return None
+    txn = next((t for t in rows if t.get("match_status") == "asked"), rows[0])
+    try:
+        _client().table("commerce_bank_transactions").update(
+            {"match_status": "asked"}).eq("id", txn["id"]).execute()
+    except Exception:
+        pass
+    return _client_question(txn, 1, len(rows))
+
+
+async def _apply_order_match(tenant_id: str, txn: dict, order: dict) -> str:
+    from vula.commerce import service
+    await service.update_order_status(order["id"], "paid")
+    try:
+        from vula.api.yoco import _notify_order_paid
+        await _notify_order_paid(tenant_id, order.get("display_id") or order["id"], order["id"],
+                                 order.get("customer_phone"), order.get("customer_name") or "",
+                                 int(order.get("total_cents") or 0))
+    except Exception as exc:
+        log.warning("order-paid notify failed for WhatsApp bank match: %s", exc)
+    _client().table("commerce_bank_transactions").update(
+        {"matched_order_id": order["id"], "match_status": "matched"}).eq("id", txn["id"]).execute()
+    amt = int(txn.get("amount_cents") or 0) / 100
+    return _next_client_or_done(
+        tenant_id, f"✅ R{amt:,.2f} → order *{order.get('display_id') or order['id']}* "
+                   f"({order.get('customer_name') or 'customer'}) — marked paid.")
+
+
+async def _apply_invoice_match(tenant_id: str, txn: dict, invoice: dict) -> str:
+    from vula.commerce import service
+    await service.update_invoice_status(tenant_id, invoice["id"], "paid")
+    _client().table("commerce_bank_transactions").update(
+        {"matched_invoice_id": invoice["id"], "match_status": "matched"}).eq("id", txn["id"]).execute()
+    amt = int(txn.get("amount_cents") or 0) / 100
+    return _next_client_or_done(
+        tenant_id, f"✅ R{amt:,.2f} → invoice *{invoice.get('invoice_number') or invoice['id']}* "
+                   f"({invoice.get('customer_name') or 'customer'}) — marked paid.")
+
+
+async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
+    """If a client-matching question is outstanding, treat `text` as the order number or
+    customer name it's for. Returns the reply (confirmation + next question), or None if this
+    wasn't a client-matching answer."""
+    text = (text or "").strip()
+    if not text or len(text) > 60:
+        return None
+    db = _client()
+    try:
+        asked = (db.table("commerce_bank_transactions").select("*")
+                 .eq("tenant_id", tenant_id).eq("direction", "in")
+                 .eq("match_status", "asked").limit(1).execute().data or [])
+    except Exception:
+        return None
+    if not asked:
+        return None
+    txn = asked[0]
+    low = text.lower()
+
+    if low in ("stop", "later", "cancel", "end"):
+        db.table("commerce_bank_transactions").update(
+            {"match_status": "unmatched"}).eq("id", txn["id"]).execute()
+        return "👍 No problem — it's waiting in your 🏦 Bank tab whenever you're ready."
+    if low in ("skip", "next", "dunno", "not sure"):
+        db.table("commerce_bank_transactions").update(
+            {"match_status": "ignored"}).eq("id", txn["id"]).execute()
+        return _next_client_or_done(tenant_id, "⏭ Skipped.")
+
+    # 1. Trust an explicit order number / invoice number outright — direct human intent beats
+    # an amount tolerance check (covers deposits/partial payments too).
+    orow = (db.table("commerce_orders")
+            .select("id,display_id,customer_name,customer_phone,total_cents,status")
+            .eq("tenant_id", tenant_id).ilike("display_id", text)
+            .eq("status", "pending_payment").limit(1).execute().data or [])
+    if orow:
+        return await _apply_order_match(tenant_id, txn, orow[0])
+    irow = (db.table("commerce_invoices")
+            .select("id,invoice_number,customer_name,total_cents,status")
+            .eq("tenant_id", tenant_id).ilike("invoice_number", text)
+            .in_("status", ["sent", "overdue"]).limit(1).execute().data or [])
+    if irow:
+        return await _apply_invoice_match(tenant_id, txn, irow[0])
+
+    # 2. Name search — an amount match is required here since a name alone is weaker evidence
+    # (reuses the same amount+name-overlap matcher the automatic path uses).
+    from vula.commerce.bank_rec import _match_order, _match_invoice, _tok
+    orders = (db.table("commerce_orders")
+              .select("id,display_id,customer_name,customer_phone,total_cents")
+              .eq("tenant_id", tenant_id).eq("status", "pending_payment").limit(500).execute().data or [])
+    invoices = (db.table("commerce_invoices")
+                .select("id,invoice_number,customer_name,total_cents,status,doc_type")
+                .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"]).limit(500).execute().data or [])
+    invoices = [i for i in invoices if (i.get("doc_type") or "invoice") == "invoice"]
+    name_toks = _tok(text)
+    order_hits = [o for o in orders if name_toks & _tok(o.get("customer_name"))]
+    invoice_hits = [i for i in invoices if name_toks & _tok(i.get("customer_name"))]
+    augmented = dict(txn, reference=f"{txn.get('reference') or ''} {text}")
+
+    om = _match_order(augmented, order_hits) if order_hits else None
+    if om:
+        return await _apply_order_match(tenant_id, txn, om)
+    im = _match_invoice(augmented, invoice_hits) if invoice_hits else None
+    if im:
+        return await _apply_invoice_match(tenant_id, txn, im)
+
+    if order_hits or invoice_hits:
+        return ("🤔 Found that name but the amount doesn't line up — reply with the exact "
+                "order number instead (e.g. OFF-00006), or 'skip'.")
+    return ("🤔 I couldn't find an order or invoice matching that. Try the order number "
+            "(e.g. OFF-00006) or the exact customer name — or 'skip'.")
+
+
+def _next_client_or_done(tenant_id: str, prefix: str) -> str:
+    rows = pending_client_txns(tenant_id)
+    if not rows:
+        return prefix + "\n\n🎉 That's everything — all payments allocated."
+    txn = rows[0]
+    try:
+        _client().table("commerce_bank_transactions").update(
+            {"match_status": "asked"}).eq("id", txn["id"]).execute()
+    except Exception:
+        pass
+    return prefix + "\n\n" + _client_question(txn, 1, len(rows))
