@@ -1,13 +1,15 @@
 """
 vula/google/service.py — Google Drive + Gmail operations (per tenant).
 
-OAuth one-click connect (settings.google_client_id/secret). Drive: search + pull
-files (pulled files are ingested into the KB). Gmail: list/read + create DRAFTS only
+OAuth one-click connect (settings.google_client_id/secret). Drive: search, pull files
+(ingested into the KB), and upload — but only drive.file scope, so Vula can only see/manage
+files it created itself, never a tenant's whole Drive. Gmail: list/read + create DRAFTS only
 (Vula never sends without explicit approval).
 """
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from email.mime.text import MIMEText
 from typing import Optional
@@ -89,6 +91,34 @@ _EXPORT = {
     "application/vnd.google-apps.spreadsheet": ("application/pdf", ".pdf"),
     "application/vnd.google-apps.presentation": ("application/pdf", ".pdf"),
 }
+
+
+async def drive_upload(tenant_id: str, filename: str, mime_type: str, data: bytes,
+                       folder_id: Optional[str] = None) -> dict:
+    """Upload bytes as a new Drive file. Only files Vula itself creates are visible to it
+    again later (drive.file scope) — this is the one write path that scope is meant for.
+    Returns {id, name, webViewLink} or raises GoogleNotConnected if no account is linked."""
+    token = await _token(tenant_id)
+    metadata: dict = {"name": filename}
+    if folder_id:
+        metadata["parents"] = [folder_id]
+    boundary = "vula-drive-upload-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{json.dumps(metadata)}\r\n"
+        f"--{boundary}\r\n"
+        f"Content-Type: {mime_type}\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--".encode("utf-8")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(
+            "https://www.googleapis.com/upload/drive/v3/files",
+            params={"uploadType": "multipart", "fields": "id,name,webViewLink"},
+            headers={**_hdr(token), "Content-Type": f"multipart/related; boundary={boundary}"},
+            content=body,
+        )
+        r.raise_for_status()
+        return r.json()
 
 
 async def drive_download(tenant_id: str, file_id: str) -> dict:

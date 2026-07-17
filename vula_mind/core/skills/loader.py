@@ -27,6 +27,7 @@ from core.skills.google_admin import GoogleAdminSkill
 from core.skills.microsoft_admin import MicrosoftAdminSkill
 from core.skills.email_admin import EmailAdminSkill
 from core.skills.finance_admin import FinanceAdminSkill
+from core.skills.draft_admin import DraftAdminSkill
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ _SKILLS: Dict[str, BaseSkill] = {
     "microsoft_admin": MicrosoftAdminSkill(),
     "email_admin": EmailAdminSkill(),
     "finance_admin": FinanceAdminSkill(),
+    "draft_admin": DraftAdminSkill(),
 }
 
 # Skills declared in registry.json but not yet implemented — route to reasoning

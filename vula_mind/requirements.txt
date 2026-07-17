@@ -38,8 +38,9 @@ psutil>=5.9.0
 ezdxf>=1.3.0
 pdf2image>=1.17.0
 
-# ── PDF Generation (invoices / quotes) ──────────────────────────────────────
+# ── PDF Generation (invoices / quotes / letters) ────────────────────────────
 weasyprint>=60.0          # HTML → PDF; requires libpango/libcairo (see Dockerfile)
+markdown>=3.5             # AI-drafted letters (vula/api/draft.py) are markdown; render to HTML for PDF
 
 # ── Supabase (tenant DB + commerce) ─────────────────────────────────────────
 supabase>=2.3.0

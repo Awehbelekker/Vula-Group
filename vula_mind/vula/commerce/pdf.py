@@ -434,3 +434,151 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         doc_type, ctx["invoice_number"], choice, tenant_id, len(pdf_bytes),
     )
     return pdf_bytes
+
+
+# ── Letters (fee proposals, appointment letters, tender invitations, ...) ──────
+# Reuses the same tenant-branded header/footer + accent-colour theming as invoices, but with
+# a plain body: a "To" block, an optional subject/reference line, and free-text paragraphs.
+
+_LETTER_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+__TEMPLATE_CSS__
+.letter-date { text-align: right; font-size: 9.5pt; color: #666; margin-bottom: 22px; }
+.letter-to { margin-bottom: 22px; font-size: 10pt; line-height: 1.6; }
+.letter-subject { font-weight: 700; margin-bottom: 18px; font-size: 10.5pt; }
+.letter-body { font-size: 10.5pt; line-height: 1.7; }
+.letter-body p { margin-bottom: 12px; }
+.letter-body h1, .letter-body h2, .letter-body h3 { color: {{ accent }}; margin: 18px 0 10px; }
+.letter-body h1 { font-size: 14pt; } .letter-body h2 { font-size: 12.5pt; } .letter-body h3 { font-size: 11pt; }
+.letter-body ul, .letter-body ol { margin: 0 0 12px 20px; }
+.letter-body li { margin-bottom: 4px; }
+.letter-body table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+.letter-body th, .letter-body td { padding: 6px 8px; font-size: 10pt; border-bottom: 1px solid #eee; text-align: left; }
+.letter-sign { margin-top: 40px; font-size: 10pt; line-height: 1.7; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="brand">
+    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:60px;max-width:200px;margin-bottom:8px;display:block;">{% endif %}
+    <h1>{{ tenant_name }}{% if trading_as %} <span style="font-size:0.58em;color:#888;font-weight:400;">t/a {{ trading_as }}</span>{% endif %}</h1>
+    <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
+    {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
+    {% if tenant_phone %}<p>{{ tenant_phone }}</p>{% endif %}
+    {% if tenant_reg %}<p>Reg: {{ tenant_reg }}</p>{% endif %}
+  </div>
+  <div class="doc-title">
+    <h2>{{ doc_label }}</h2>
+  </div>
+</div>
+
+<div class="letter-date">{{ issue_date }}</div>
+
+{% if recipient %}
+<div class="letter-to">
+  {{ recipient | replace("\\n", "<br>") | safe }}
+</div>
+{% endif %}
+
+{% if subject %}<div class="letter-subject">Re: {{ subject }}</div>{% endif %}
+
+<div class="letter-body">{% if body_html %}{{ body_html | safe }}{% else %}{% for para in body_paragraphs %}<p>{{ para }}</p>{% endfor %}{% endif %}</div>
+
+{% if sign_off %}
+<div class="letter-sign">{{ sign_off | replace("\\n", "<br>") | safe }}</div>
+{% endif %}
+
+<div class="footer">
+  {{ tenant_name }} &mdash; {{ tenant_address | replace("\\n", " | ") | safe }}
+</div>
+</body>
+</html>"""
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    """Split on blank lines into paragraphs; a lone newline stays within a paragraph."""
+    import re as _re
+    return _re.split(r"\n\s*\n", text or "")
+
+
+def render_letter_pdf(
+    *,
+    tenant_id: str,
+    body: str = "",
+    body_markdown: Optional[str] = None,
+    doc_label: str = "Letter",
+    subject: Optional[str] = None,
+    recipient: Optional[str] = None,
+    sign_off: Optional[str] = None,
+    issue_date: Optional[str] = None,
+    tenant_profile: Optional[dict] = None,
+) -> bytes:
+    """Render letter content onto the tenant's branded letterhead.
+
+    Args:
+        body: plain-text content. Blank lines split it into paragraphs. Ignored if
+            body_markdown is given.
+        body_markdown: markdown content (e.g. straight from an LLM draft) — rendered to
+            proper headings/lists/tables instead of literal '#'/'*' characters.
+        doc_label: heading shown top-right, e.g. "Letter of Appointment", "Fee Proposal".
+        recipient: "To" block (name/address), plain text, newlines preserved.
+        sign_off: closing block, e.g. "Kind regards,\\nJudy Downing\\nDIGG Architects".
+        tenant_profile: branding override — falls back to _TENANT_DEFAULTS keyed by tenant_id,
+            same as render_invoice_pdf (use merge_branding() to source from saved invoice settings).
+    """
+    try:
+        from datetime import datetime, timezone
+        from jinja2 import Environment
+        from weasyprint import HTML as WP_HTML
+    except ImportError as exc:
+        raise RuntimeError(
+            "PDF rendering requires weasyprint and jinja2. Run: pip install weasyprint"
+        ) from exc
+
+    branding = tenant_profile or _TENANT_DEFAULTS.get(tenant_id, {})
+    body_html = None
+    paragraphs: list[str] = []
+    if body_markdown:
+        import markdown as _markdown
+        body_html = _markdown.markdown(body_markdown, extensions=["tables"])
+    else:
+        paragraphs = [p.strip() for p in _split_paragraphs(body) if p.strip()]
+
+    ctx: dict[str, Any] = {
+        "tenant_name": branding.get("name", tenant_id.replace("-", " ").title()),
+        "trading_as": branding.get("trading_as", ""),
+        "tenant_logo": branding.get("logo_url", ""),
+        "tenant_address": branding.get("address", ""),
+        "tenant_email": branding.get("email", ""),
+        "tenant_phone": branding.get("phone", ""),
+        "tenant_reg": branding.get("reg") or "",
+        "accent": branding.get("accent", "#1a7a4a"),
+        "doc_label": doc_label,
+        "issue_date": issue_date or datetime.now(timezone.utc).date().isoformat(),
+        "recipient": recipient or "",
+        "subject": subject or "",
+        "body_html": body_html,
+        "body_paragraphs": paragraphs,
+        "sign_off": sign_off or "",
+    }
+
+    choice = branding.get("template_choice") or "classic"
+    css = _TEMPLATE_CSS.get(choice, _TEMPLATE_CSS["classic"])
+    template_html = _LETTER_HTML.replace("__TEMPLATE_CSS__", css)
+
+    env = Environment(autoescape=False)
+    html_str = env.from_string(template_html).render(**ctx)
+    pdf_bytes = WP_HTML(string=html_str).write_pdf()
+
+    log.info("Letter PDF rendered: %s (%s) for %s (%d bytes)", doc_label, choice, tenant_id, len(pdf_bytes))
+    return pdf_bytes
+
+
+def re_split_blank_lines(text: str) -> list[str]:
+    """Split on blank lines into paragraphs; a lone newline stays within a paragraph."""
+    import re as _re
+    return _re.split(r"\n\s*\n", text or "")

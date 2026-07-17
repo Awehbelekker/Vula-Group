@@ -48,6 +48,15 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "follow up on", "follow-up on",
                              "follow up task", "follow-up task",
                              "create a follow", "add a follow"],
+    # Letters/proposals on letterhead — specific document-type phrasing only, placed BEFORE
+    # email_admin so "draft a fee proposal" doesn't get stolen by email_admin's generic
+    # "draft a "/"draft me"/"compose" (those stay email-shaped: "draft a reply", "compose an email").
+    "draft_admin":          ["fee proposal", "scope of works", "letter of appointment",
+                             "appointment letter", "tender invitation", "site meeting minutes",
+                             "meeting minutes", "project programme", "payment certificate",
+                             "on letterhead", "on our letterhead", "draft a letter", "draft a proposal",
+                             "draft a fee proposal", "draft me a letter", "draft me a proposal",
+                             "write a letter", "write me a letter"],
     # Commerce next — clear ordering intent
     "commerce_assistant":   ["order", "buy", "cart", "checkout", "stock", "in stock", "menu",
                              "catalog", "catalogue", "track order", "add to cart",

@@ -32,7 +32,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Response, Security
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
@@ -445,3 +445,41 @@ async def get_draft(draft_id: str) -> dict:
     if not draft:
         raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found.")
     return draft
+
+
+@router.get("/draft/{draft_id}/pdf", dependencies=[Depends(_require_auth)])
+async def get_draft_pdf(draft_id: str, recipient: Optional[str] = None, sign_off: Optional[str] = None):
+    """Render a previously generated draft onto the tenant's branded letterhead as a PDF.
+
+    ?recipient= and ?sign_off= are optional plain-text overrides (the drafted content
+    usually already includes these as part of its generated sections).
+    """
+    draft = _store.get(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found.")
+
+    doc_config = DOCUMENT_TYPES.get(draft["doc_type"], {})
+    try:
+        from vula.commerce.pdf import render_letter_pdf, merge_branding
+        from vula.commerce import service as commerce_service
+        settings_row = await commerce_service.get_invoice_settings(draft["tenant_id"])
+        branding = merge_branding(draft["tenant_id"], settings_row)
+        pdf_bytes = render_letter_pdf(
+            tenant_id=draft["tenant_id"],
+            body_markdown=draft["content"],
+            doc_label=doc_config.get("label", "Letter"),
+            recipient=recipient,
+            sign_off=sign_off,
+            tenant_profile=branding,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("Draft PDF render failed for %s: %s", draft_id, exc)
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{draft_id}.pdf"'},
+    )
