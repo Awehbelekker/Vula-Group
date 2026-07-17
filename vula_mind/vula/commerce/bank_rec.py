@@ -170,28 +170,40 @@ def _tok(s: str) -> set:
     return set(re.findall(r"[a-z0-9]{3,}", (s or "").lower()))
 
 
-def _match_invoice(txn: Dict[str, Any], invoices: List[dict]) -> Optional[dict]:
-    """Confident match of a credit to an outstanding invoice by amount (+ name/reference boost)."""
+def _match_by_amount(txn: Dict[str, Any], candidates: List[dict], amount_key: str,
+                     name_fields: tuple) -> Optional[dict]:
+    """Confident match of a credit to an outstanding invoice/order by amount (+ name/reference
+    boost). Shared by _match_invoice and _match_order — same tolerance + ambiguity rules."""
     amt = txn["amount_cents"]
     tol = max(100, int(amt * 0.01))          # R1 or 1%
     blob = _tok(txn.get("description")) | _tok(txn.get("reference"))
     best, best_score = None, 0
-    for inv in invoices:
-        if abs(int(inv.get("total_cents") or 0) - amt) > tol:
+    for c in candidates:
+        if abs(int(c.get(amount_key) or 0) - amt) > tol:
             continue
         score = 2                            # exact-ish amount is the anchor
-        name_toks = _tok(inv.get("customer_name")) | _tok(inv.get("invoice_number"))
+        name_toks = set()
+        for f in name_fields:
+            name_toks |= _tok(c.get(f))
         if blob & name_toks:
             score += 3                       # name/number appears in the txn reference
         if score > best_score:
-            best, best_score = inv, score
-    # Require amount match; if multiple invoices share the amount and none name-matched, it's ambiguous.
+            best, best_score = c, score
+    # Require amount match; if multiple candidates share the amount and none name-matched, ambiguous.
     if best is None:
         return None
-    same_amt = [i for i in invoices if abs(int(i.get("total_cents") or 0) - amt) <= tol]
+    same_amt = [c for c in candidates if abs(int(c.get(amount_key) or 0) - amt) <= tol]
     if len(same_amt) > 1 and best_score < 5:
         return None                          # ambiguous → leave for review
     return best
+
+
+def _match_invoice(txn: Dict[str, Any], invoices: List[dict]) -> Optional[dict]:
+    return _match_by_amount(txn, invoices, "total_cents", ("customer_name", "invoice_number"))
+
+
+def _match_order(txn: Dict[str, Any], orders: List[dict]) -> Optional[dict]:
+    return _match_by_amount(txn, orders, "total_cents", ("customer_name", "display_id"))
 
 
 async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str = "") -> Dict[str, Any]:
@@ -218,6 +230,18 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     except Exception as exc:
         log.debug("reconcile: invoice load skipped: %s", exc)
         invoices = []
+
+    # Orders awaiting an EFT payment (checkout has always offered EFT as a payment method,
+    # alongside online/COD) — a customer's proof-of-payment email needs to reconcile against
+    # THESE too, not just invoices.
+    try:
+        orders = (db.table("commerce_orders")
+                  .select("id,display_id,customer_name,customer_phone,total_cents,status")
+                  .eq("tenant_id", tenant_id).eq("status", "pending_payment")
+                  .limit(2000).execute().data or [])
+    except Exception as exc:
+        log.debug("reconcile: order load skipped: %s", exc)
+        orders = []
 
     # Casual-labour workers to recognise payments to (by bank account / name).
     from vula.commerce import labour
@@ -273,10 +297,11 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     batch_cats = await accounting.categorize_batch(tenant_id, txns, accounts)
 
     matched_invoices, unmatched_in, unmatched_out, saved, matched_workers, needs_input = 0, 0, 0, 0, 0, 0
-    matched_expenses = 0
+    matched_expenses, matched_orders = 0, 0
     used_invoice_ids: set = set()
+    used_order_ids: set = set()
     for idx, t in enumerate(txns):
-        status, inv_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None
+        status, inv_id, order_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None, None
         if t["direction"] == "in":
             candidates = [i for i in invoices if i["id"] not in used_invoice_ids]
             m = _match_invoice(t, candidates)
@@ -289,7 +314,23 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                 except Exception as exc:
                     log.warning("mark invoice paid failed: %s", exc)
             else:
-                unmatched_in += 1
+                order_candidates = [o for o in orders if o["id"] not in used_order_ids]
+                om = _match_order(t, order_candidates)
+                if om:
+                    try:
+                        await service.update_order_status(om["id"], "paid")
+                        order_id, status = om["id"], "matched"
+                        used_order_ids.add(om["id"])
+                        matched_orders += 1
+                        from vula.api.yoco import _notify_order_paid
+                        await _notify_order_paid(
+                            tenant_id, om.get("display_id") or om["id"], om["id"],
+                            om.get("customer_phone"), om.get("customer_name") or "",
+                            int(om.get("total_cents") or 0))
+                    except Exception as exc:
+                        log.warning("mark order paid failed: %s", exc)
+                else:
+                    unmatched_in += 1
         else:
             w = labour.match_worker(t, workers)
             if w:
@@ -313,7 +354,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         # worker-matched debits → casual labour (and learn the mapping); expense-matched
         # debits → the RECEIPT's account.
         code, cat_src = None, "matched"
-        if t["direction"] == "in" and inv_id and "sales" in acc_map:
+        if t["direction"] == "in" and (inv_id or order_id) and "sales" in acc_map:
             code = "sales"
         elif worker_id and "casual_labour" in acc_map:
             code, cat_src = "casual_labour", "labour"
@@ -341,7 +382,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             "tenant_id": tenant_id, "txn_date": t.get("date"), "description": t.get("description") or "",
             "amount_cents": t["amount_cents"], "direction": t["direction"],
             "balance_cents": t.get("balance_cents"), "reference": t.get("reference"),
-            "matched_invoice_id": inv_id, "matched_expense_id": exp_id,
+            "matched_invoice_id": inv_id, "matched_expense_id": exp_id, "matched_order_id": order_id,
             "match_status": status, "source_file": source_file,
             "account_code": code, "vat_cents": vat_cents,
             "vat_treatment": (acc_map.get(code) or {}).get("vat_treatment"), "categorized_by": cat_src,
@@ -352,8 +393,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                 row, on_conflict="tenant_id,txn_date,amount_cents,description").execute()
             saved += 1
         except Exception:
-            # 058/059 columns (account_code/vat/worker_id/project) may not exist yet — retry with core.
-            for k in ("account_code", "vat_cents", "vat_treatment", "categorized_by", "worker_id", "project"):
+            # 058/059/074 columns may not exist yet (account_code/vat/worker_id/project/matched_order_id)
+            # — retry with core columns only.
+            for k in ("account_code", "vat_cents", "vat_treatment", "categorized_by", "worker_id",
+                     "project", "matched_order_id"):
                 row.pop(k, None)
             try:
                 db.table("commerce_bank_transactions").upsert(
@@ -363,6 +406,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                 log.debug("bank txn upsert skipped (run migration 057?): %s", exc2)
 
     return {"parsed": len(txns), "saved": saved, "matched_invoices": matched_invoices,
+            "matched_orders": matched_orders,
             "matched_workers": matched_workers, "matched_expenses": matched_expenses,
             "needs_input": needs_input,
             "unmatched_credits": unmatched_in, "unmatched_debits": unmatched_out}
@@ -383,4 +427,119 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         return {"error": "no transactions found in the statement"}
     result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name)
     log.info("bank statement reconciled for %s: %s", tenant_id, result)
+    return result
+
+
+# ── Single-document payment confirmations (POP) ────────────────────────────────
+# A customer forwarding one bank "payment confirmation"/"proof of payment" for a single EFT is a
+# different document shape from a weekly multi-transaction statement — one paragraph or receipt-
+# style layout, not a table of rows — so it gets its own targeted extraction prompt rather than
+# reusing the statement parser (which expects "every transaction line" and may see nothing to
+# extract in prose).
+
+_CONFIRMATION_SYSTEM = (
+    "You read ONE bank payment confirmation / proof-of-payment document (not a multi-line "
+    "statement). Extract the single payment as a JSON array with exactly one element, or an "
+    "empty array [] if this isn't actually a payment confirmation. Return ONLY the JSON array, "
+    "no prose or markdown. The element:\n"
+    '{"date":"YYYY-MM-DD","description":string,"amount_cents":integer,'
+    '"direction":"in|out","reference":string|null}\n'
+    "Rules: amount_cents is the paid amount in cents (Rands×100). direction is 'in' if this "
+    "confirms money the account HOLDER received/was paid, 'out' if it confirms a payment the "
+    "account holder MADE to someone else (most customer-forwarded proofs-of-payment for an "
+    "order/invoice are 'out' from the customer's bank, which is 'in' from the business's side — "
+    "always answer from the RECEIVING business's perspective: a customer's proof of payment is "
+    "'in'). reference is any invoice/order number, beneficiary reference, or payer name shown. "
+    "Dates on South African documents are DD/MM/YYYY (day first — 17/07/2026 means 17 July 2026); "
+    "convert to YYYY-MM-DD in your output."
+)
+
+
+async def extract_payment_confirmation(text: str) -> List[Dict[str, Any]]:
+    """Single-transaction extraction for a payment-confirmation document. Reuses the same
+    JSON-cleanup as extract_transactions but with a prompt suited to a one-payment document."""
+    import litellm
+    from core.llm_router import resolve_generation_route
+
+    if not text.strip():
+        return []
+    litellm.drop_params = True
+    model, api_key, api_base = await resolve_generation_route(task_type="bank_statement")
+    try:
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "system", "content": _CONFIRMATION_SYSTEM},
+                      {"role": "user", "content": text[:6000]}],
+            temperature=0, max_tokens=500, api_key=api_key, api_base=api_base,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as exc:
+        log.warning("payment confirmation extraction failed: %s", exc)
+        return []
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+    i, j = raw.find("["), raw.rfind("]")
+    if i < 0 or j < 0:
+        return []
+    try:
+        arr = json.loads(raw[i:j + 1])
+    except Exception:
+        try:
+            import json_repair
+            arr = json_repair.loads(raw[i:j + 1])
+        except Exception:
+            return []
+
+    out = []
+    for t in arr if isinstance(arr, list) else []:
+        if not isinstance(t, dict):
+            continue
+        try:
+            amt = int(float(t.get("amount_cents") or 0))
+        except Exception:
+            continue
+        if amt <= 0:
+            continue
+        direction = str(t.get("direction") or "in").lower()
+        # A malformed/unconverted date (e.g. DD/MM/YYYY slipping through) must never reach the
+        # DB as a DATE column value — fall back to today rather than let the insert fail silently.
+        raw_date = str(t.get("date") or "").strip()[:10]
+        date = raw_date if re.match(r"^\d{4}-\d{2}-\d{2}$", raw_date) else None
+        out.append({
+            "date": date,
+            "description": (t.get("description") or "").strip()[:300],
+            "amount_cents": amt,
+            "direction": "out" if direction.startswith("out") else "in",
+            "balance_cents": None,
+            "reference": t.get("reference") or None,
+        })
+    return out
+
+
+async def ingest_payment_confirmation(tenant_id: str, pdf_path: Path,
+                                      source_file: str = "") -> Dict[str, Any]:
+    """Single-document pipeline for a POP/payment-confirmation email attachment: read (usually
+    unencrypted, unlike a full statement) → extract the one payment → reconcile against
+    outstanding invoices AND pending-EFT orders."""
+    pwd = None
+    try:
+        text = extract_pdf_text(Path(pdf_path), pwd)
+    except Exception:
+        text = ""
+    if not text.strip():
+        # Some banks encrypt even a one-page confirmation with the same ID-number password
+        # used for statements — worth one retry before giving up.
+        stored = get_statement_password(tenant_id)
+        if stored:
+            try:
+                text = extract_pdf_text(Path(pdf_path), stored)
+            except Exception as exc:
+                return {"error": f"could not read document: {exc}"}
+    if not text.strip():
+        return {"error": "no readable text (scanned image?)"}
+    txns = await extract_payment_confirmation(text)
+    if not txns:
+        return {"error": "not recognised as a payment confirmation"}
+    result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name)
+    log.info("payment confirmation reconciled for %s: %s", tenant_id, result)
     return result

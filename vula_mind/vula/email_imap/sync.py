@@ -280,12 +280,21 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
     p = d / safe
     p.write_bytes(att["data"])
 
-    # Bank statement? → unlock with the stored ID password + reconcile against invoices/expenses,
-    # in addition to filing it as a document. Best-effort; never blocks normal filing.
+    # Bank statement, or a single payment-confirmation/POP? → unlock/read + reconcile against
+    # invoices AND pending-EFT orders, in addition to filing it as a document. Best-effort;
+    # never blocks normal filing. A POP that reconciles skips the generic "which project?" ask
+    # below (payment_matched) — it's already been handled, and "project" is the wrong question
+    # for a payment confirmation on a non-project business anyway.
+    payment_matched = False
+    _BANK_DOMAINS = ("standardbank.co.za", "fnb.co.za", "nedbank.co.za", "absa.co.za",
+                     "capitecbank.co.za", "investec.co.za", "tymebank.co.za", "africanbank.co.za",
+                     "bidvestbank.co.za", "discovery.co.za")
+    _POP_WORDS = ("payment confirmation", "proof of payment", "remittance advice",
+                 "eft confirmation", " pop.pdf", "-pop.pdf")
     try:
         blob = f"{em.get('subject','')} {em.get('from','')} {att['name']}".lower()
+        from vula.commerce import bank_rec
         if att["name"].lower().endswith(".pdf") and ("statement" in blob or "capitec" in blob):
-            from vula.commerce import bank_rec
             rec = await bank_rec.ingest_statement(tenant_id, p, source_file=att["name"])
             logger.info("bank statement auto-reconciled (%s): %s", tenant_id, rec)
             # Ask the owner to finish the ones Vula wasn't sure about (one nudge per statement).
@@ -294,13 +303,32 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
                 try:
                     from vula.integrations.notify import notify_team
                     await notify_team(tenant_id, "bank_statement",
-                                      f"🏦 Statement reconciled: {rec.get('matched_invoices', 0)} invoice(s) marked paid, "
+                                      f"🏦 Statement reconciled: {rec.get('matched_invoices', 0)} invoice(s), "
+                                      f"{rec.get('matched_orders', 0)} order(s) marked paid, "
                                       f"{rec.get('matched_workers', 0)} labour payment(s) recognised. "
                                       f"*{to_review} transaction(s) need you to confirm where they go* — open the Bank tab.")
                 except Exception as exc:
                     logger.debug("bank statement notify skipped: %s", exc)
+        elif att["name"].lower().endswith(".pdf") and (
+                any(d in blob for d in _BANK_DOMAINS) or any(w in blob for w in _POP_WORDS)):
+            rec = await bank_rec.ingest_payment_confirmation(tenant_id, p, source_file=att["name"])
+            logger.info("payment confirmation processed (%s): %s", tenant_id, rec)
+            matched = int(rec.get("matched_invoices", 0)) + int(rec.get("matched_orders", 0))
+            if not rec.get("error") and matched > 0:
+                payment_matched = True  # suppress the generic "which project?" ask below
+            elif not rec.get("error"):
+                # Read fine, but nothing outstanding matched the amount — say so plainly instead
+                # of silently falling through to a "which project" question about a payment.
+                try:
+                    from vula.integrations.notify import notify_team
+                    await notify_team(tenant_id, "payment_unmatched", (
+                        f"💰 Payment confirmation received (*{att['name']}*) but I couldn't match it "
+                        f"to an outstanding invoice or order — check the Bank tab to allocate it."))
+                    payment_matched = True  # already told the owner in payment-specific language
+                except Exception as exc:
+                    logger.debug("payment unmatched notify skipped: %s", exc)
     except Exception as exc:
-        logger.debug("bank statement auto-reconcile skipped: %s", exc)
+        logger.debug("bank statement/payment auto-reconcile skipped: %s", exc)
 
     res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
 
@@ -327,7 +355,9 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
 
         # Only auto-file on a CONFIDENT match. Anything weaker (no match, or a single
         # coincidental token) → ask the team on WhatsApp rather than risk mis-filing.
-        ask = not confident
+        # Unless this was already handled as a payment confirmation above — "which project?"
+        # is the wrong question for a POP, and the owner's already been told either way.
+        ask = not confident and not payment_matched
         if not confident:
             match = None
         # file_document() does what this used to hand-roll, plus the two things it was
