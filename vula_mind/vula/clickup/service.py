@@ -258,6 +258,26 @@ async def find_task(tenant_id: str, query: str, list_id: Optional[str] = None) -
     return next((t for t in rows if q and q in (t.get("title") or "").lower()), None)
 
 
+async def get_task(tenant_id: str, task_id: str) -> Optional[dict]:
+    """Fetch one task's full detail — status, list, tags — using this tenant's token.
+    Returns None on a 404 (also used to probe "does this tenant's ClickUp see this
+    task id?" when a webhook payload doesn't carry a tenant)."""
+    creds = _creds_or_raise(tenant_id)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{_BASE}/task/{task_id}", headers=_headers(creds["token"]))
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        d = r.json()
+    return {
+        "id": d.get("id"), "title": d.get("name"), "description": d.get("description") or "",
+        "status": ((d.get("status") or {}).get("status") or "").lower(),
+        "list_id": (d.get("list") or {}).get("id"),
+        "tags": [t.get("name", "").lower() for t in (d.get("tags") or [])],
+        "assignees": [a.get("username") for a in (d.get("assignees") or [])],
+    }
+
+
 async def update_task_status(tenant_id: str, task_id: str, status: str, notes: str = "") -> dict:
     """Update a ClickUp task's status (and optionally append a comment)."""
     creds = _creds_or_raise(tenant_id)

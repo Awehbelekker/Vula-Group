@@ -233,11 +233,6 @@ async def webhook(request: Request) -> dict:
     if not clickup_task_id:
         return {"status": "ignored"}
 
-    from vula.integrations.clickup_sync import field_task_for_clickup
-    link = field_task_for_clickup(clickup_task_id)
-    if not link:
-        return {"status": "unmapped"}
-
     new_status = None
     for h in body.get("history_items", []) or []:
         after = h.get("after")
@@ -246,17 +241,58 @@ async def webhook(request: Request) -> dict:
     if not new_status:
         return {"status": "no_status_change"}
 
-    fo_status = {
-        "complete": "complete", "closed": "complete", "done": "complete",
-        "in progress": "in_progress", "to do": "pending", "open": "pending",
-    }.get(str(new_status).lower(), None)
-    if not fo_status:
-        return {"status": "unmapped_status"}
+    from vula.integrations.clickup_sync import field_task_for_clickup
+    link = field_task_for_clickup(clickup_task_id)
+    if link:
+        fo_status = {
+            "complete": "complete", "closed": "complete", "done": "complete",
+            "in progress": "in_progress", "to do": "pending", "open": "pending",
+        }.get(str(new_status).lower(), None)
+        if not fo_status:
+            return {"status": "unmapped_status"}
+        try:
+            from vula.models.field_ops import get_field_ops_db
+            get_field_ops_db().update_task_status(link["field_task_id"], fo_status)
+        except Exception as exc:
+            log.warning("Field-ops update from ClickUp webhook failed: %s", exc)
+            return {"status": "error"}
+        return {"status": "ok", "field_task": link["field_task_id"], "new_status": fo_status}
 
+    # Not a field-ops-mirrored task — try procurement (a native ClickUp task tagged
+    # procurement/stock). The webhook payload carries no tenant, so probe each
+    # ClickUp-connected tenant's token for this task id — fine at today's scale
+    # (a handful of connected tenants, webhooks fire rarely).
+    tenant_id = await _resolve_tenant_for_task(clickup_task_id)
+    if not tenant_id:
+        return {"status": "unmapped"}
     try:
-        from vula.models.field_ops import get_field_ops_db
-        get_field_ops_db().update_task_status(link["field_task_id"], fo_status)
+        from vula.clickup.service import get_task
+        from vula.integrations.procurement import handle_task_status_change
+        task = await get_task(tenant_id, clickup_task_id)
+        if not task:
+            return {"status": "unmapped"}
+        posted = await handle_task_status_change(tenant_id, task)
+        return {"status": "ok", "tenant_id": tenant_id, "procurement_logged": bool(posted)}
     except Exception as exc:
-        log.warning("Field-ops update from ClickUp webhook failed: %s", exc)
+        log.warning("Procurement webhook handling failed for %s: %s", clickup_task_id, exc)
         return {"status": "error"}
-    return {"status": "ok", "field_task": link["field_task_id"], "new_status": fo_status}
+
+
+async def _resolve_tenant_for_task(clickup_task_id: str) -> Optional[str]:
+    """Find which connected tenant's ClickUp token can see this task id."""
+    from vula.clickup.service import get_task
+    try:
+        rows = (_client().table("vula_clickup_accounts").select("tenant_id")
+                .eq("status", "connected").execute().data or [])
+    except Exception:
+        return None
+    for row in rows:
+        tid = row.get("tenant_id")
+        if not tid:
+            continue
+        try:
+            if await get_task(tid, clickup_task_id):
+                return tid
+        except Exception:
+            continue
+    return None

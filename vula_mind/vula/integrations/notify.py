@@ -21,6 +21,7 @@ EVENTS = (
     "new_invoice",
     "new_order",
     "low_stock",
+    "procurement_done",   # a procurement/stock-ordering ClickUp task was marked complete
 )
 
 
