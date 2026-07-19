@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     vula_base_url: str = "https://app.vula.ai"
+    # Ian's own WhatsApp number — a tenant owner/team message that sounds like a question about
+    # the Vula PLATFORM itself (not their business) gets forwarded here (vula/integrations/
+    # platform_support.py). Blank = feature is a no-op (never blocks normal routing).
+    platform_support_phone: str = ""
 
     # ── Cloud LLM fallback (used on Railway where local Ollama is unavailable) ──
     # Set OPENROUTER_API_KEY to enable cloud inference via OpenRouter.

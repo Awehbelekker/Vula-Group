@@ -421,6 +421,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
             await _send_reply(phone, _rev, tenant_id)
             return
 
+        # A team/owner question about the Vula PLATFORM itself → forward to Ian, not routed
+        # as a normal business message.
+        if await _maybe_platform_support(tenant_id, phone, text):
+            return
+
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
         await _handle_task_complete(phone, tenant_id)
@@ -922,6 +927,37 @@ async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Op
     except Exception as exc:
         logger.debug("bank review answer skipped: %s", exc)
         return None
+
+
+async def _maybe_platform_support(tenant_id: str, phone: str, text: str) -> bool:
+    """If a team/owner message sounds like a question about the VULA PLATFORM itself (not this
+    tenant's business), forward it to Ian and confirm to the sender. Never fires for a customer —
+    same is_team gate as _maybe_bank_review_answer. Returns True if handled (a reply was sent)."""
+    try:
+        from vula.integrations.platform_support import detect
+        if not detect(text):
+            return False
+        from vula.integrations.notify import team_member_for_phone, _fallback_phone, _digits
+        is_team = bool(team_member_for_phone(tenant_id, phone))
+        if not is_team:
+            fb = _fallback_phone(tenant_id)
+            is_team = bool(fb and _digits(fb) == _digits(phone))
+        if not is_team:
+            from vula.models.tenants import get_tenant_db
+            lk = get_tenant_db().lookup_by_phone_with_role(phone)
+            is_team = bool(lk and lk.get("tenant_id") == tenant_id and lk.get("role") == "admin")
+        if not is_team:
+            return False
+        from vula.integrations.platform_support import forward
+        sender = team_member_for_phone(tenant_id, phone) or {}
+        await forward(tenant_id, phone, sender.get("name") or "", text)
+        await _send_reply(phone, (
+            "Got it — I've passed this on to the Vula team, we'll follow up with you directly. 🙏"
+        ), tenant_id)
+        return True
+    except Exception as exc:
+        logger.debug("platform support forward skipped: %s", exc)
+        return False
 
 
 async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str) -> Optional[str]:
@@ -2127,6 +2163,11 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
     if _rev:
         await _send_reply(phone, _rev, tenant_id)
+        return
+
+    # A team/owner question about the Vula PLATFORM itself → forward to Ian, not routed as a
+    # normal business message. Team-gated, so a customer ordering fish never triggers this.
+    if await _maybe_platform_support(tenant_id, phone, text):
         return
 
     # Onboarding capture: if this contact is mid opt-in/intro flow, their message is part of
