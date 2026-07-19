@@ -59,7 +59,9 @@ async def test_forward_logs_even_when_support_phone_unset():
 
 
 @pytest.mark.asyncio
-async def test_forward_attempts_whatsapp_when_support_phone_set():
+async def test_forward_prefers_template_and_skips_freeform_fallback():
+    """The approved template works regardless of the 24h window — if it sends successfully,
+    the free-form fallback (which only works within an open window) must not even be tried."""
     mock_table = MagicMock()
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
@@ -68,6 +70,32 @@ async def test_forward_attempts_whatsapp_when_support_phone_set():
     with (
         patch("vula.integrations.platform_support._client", return_value=mock_db),
         patch("config.settings", mock_settings),
+        patch("vula.api.whatsapp._send_wa_template", new=AsyncMock(return_value=True)) as mock_template,
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
+    ):
+        from vula.integrations.platform_support import forward, TEMPLATE_NAME
+        await forward("off-the-hook", "27821234567", "Staci", "the vula app is broken")
+
+    mock_template.assert_awaited_once()
+    args, _ = mock_template.call_args
+    assert args[0] == "off-the-hook"
+    assert args[1] == "27829999999"
+    assert args[2] == TEMPLATE_NAME
+    assert "Staci" in args[3] and "27821234567" in args[3]
+    mock_send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_forward_falls_back_to_freeform_when_template_fails():
+    mock_table = MagicMock()
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    mock_settings = MagicMock(platform_support_phone="27829999999")
+
+    with (
+        patch("vula.integrations.platform_support._client", return_value=mock_db),
+        patch("config.settings", mock_settings),
+        patch("vula.api.whatsapp._send_wa_template", new=AsyncMock(return_value=False)),
         patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
     ):
         from vula.integrations.platform_support import forward
@@ -89,6 +117,7 @@ async def test_forward_never_raises_if_db_and_whatsapp_both_fail():
     with (
         patch("vula.integrations.platform_support._client", return_value=mock_db),
         patch("config.settings", mock_settings),
+        patch("vula.api.whatsapp._send_wa_template", new=AsyncMock(side_effect=Exception("template down"))),
         patch("vula.api.whatsapp._send_reply", new=AsyncMock(side_effect=Exception("wa down"))),
     ):
         from vula.integrations.platform_support import forward

@@ -6,11 +6,12 @@ Detection is natural-language keywords (+ an explicit "vula support" trigger as 
 fallback), gated to team/owner only — the same is_team check already used for bank-review and
 escalation answers, so a customer ordering fish can never trigger this.
 
-Delivery is two-layered: durable (always logs to vula_platform_feedback — Ian can never miss
-one) plus best-effort WhatsApp (may fail with Meta's "re-engagement" error if Ian hasn't
-messaged that specific tenant's number within 24h and no approved template exists yet for it —
-this is expected, not a bug; see _send_wa_template's docstring in vula/api/whatsapp.py for the
-same constraint already hit by other proactive-notification code this session).
+Delivery is three-layered: durable (always logs to vula_platform_feedback — Ian can never miss
+one), then an approved WhatsApp TEMPLATE (works regardless of the 24h window — see
+vula/commerce/wa_templates.py; "vula_platform_feedback" was submitted for off-the-hook's WABA
+and is pending Meta review as of 2026-07-19 — other tenants don't have it yet, submit one per
+tenant via wa_templates.create_template the same way), then a free-form fallback (works only if
+Ian already has an open 24h window with that specific tenant's number).
 """
 from __future__ import annotations
 
@@ -40,9 +41,13 @@ def detect(text: str) -> bool:
     return any(k in low for k in _KEYWORDS)
 
 
+TEMPLATE_NAME = "vula_platform_feedback"   # one param: "From {sender} ({phone}) on {tenant}: {message}"
+
+
 async def forward(tenant_id: str, phone: str, sender_name: str, text: str) -> None:
-    """Log durably, then best-effort WhatsApp Ian directly. Never raises — this must never
-    block or break the tenant's normal conversation."""
+    """Log durably, then WhatsApp Ian — approved template first (works regardless of the 24h
+    window), free-form as a fallback. Never raises — this must never block or break the
+    tenant's normal conversation."""
     try:
         _client().table("vula_platform_feedback").insert({
             "tenant_id": tenant_id, "phone": phone, "sender_name": sender_name or "",
@@ -54,13 +59,20 @@ async def forward(tenant_id: str, phone: str, sender_name: str, text: str) -> No
     from config import settings
     if not settings.platform_support_phone:
         return
+    who = f"{sender_name} ({phone})" if sender_name else phone
+    try:
+        from vula.api.whatsapp import _send_wa_template
+        detail = f"From {who} on {tenant_id}: {text}"
+        if await _send_wa_template(tenant_id, settings.platform_support_phone, TEMPLATE_NAME, detail):
+            return
+    except Exception as exc:
+        logger.info("platform feedback template send failed (%s): %s", tenant_id, exc)
     try:
         from vula.api.whatsapp import _send_reply
-        who = f"{sender_name} ({phone})" if sender_name else phone
         msg = f"📣 Platform feedback from {who} on {tenant_id}:\n\n{text}"
         await _send_reply(settings.platform_support_phone, msg, tenant_id=tenant_id)
     except Exception as exc:
-        # Expected to fail with Meta's re-engagement error until either Ian has an open 24h
-        # window with this tenant's number, or an approved template exists — the DB log above
-        # already guarantees the message isn't lost.
+        # Expected to fail with Meta's re-engagement error if the template above isn't
+        # approved yet (or doesn't exist for this tenant) AND Ian has no open 24h window with
+        # this tenant's number — the DB log above already guarantees the message isn't lost.
         logger.info("platform feedback WhatsApp forward skipped (%s): %s", tenant_id, exc)
