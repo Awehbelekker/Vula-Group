@@ -183,6 +183,28 @@ MARKETING_TOOLS = [
             "kind": {"type": "string", "enum": ["specials", "product", "promo", "broadcast"]},
             "topic": {"type": "string"}, "tone": {"type": "string"}}}}},
 ]
+DRAFT_TOOLS = [
+    {"type": "function", "function": {
+        "name": "draft_letter",
+        "description": (
+            "Draft a professional business letter/proposal, put it on the business's branded "
+            "letterhead as a PDF, and send it back as a WhatsApp document. Optionally also save "
+            "it to the user's connected Google Drive."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "document_type": {"type": "string", "enum": [
+                "fee_proposal", "scope_of_works", "appointment_letter", "site_meeting_minutes",
+                "tender_invitation", "project_programme", "payment_certificate"],
+                "description": "fee_proposal | scope_of_works | appointment_letter | "
+                               "site_meeting_minutes | tender_invitation | project_programme | "
+                               "payment_certificate"},
+            "brief": {"type": "string", "description": "What the letter should say — the fuller, the better."},
+            "project_name": {"type": "string"},
+            "client_name": {"type": "string"},
+            "recipient": {"type": "string", "description": "Who it's addressed to (name/address block)."},
+            "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
+        }, "required": ["document_type", "brief"]}}},
+]
 SUBSCRIPTION_TOOLS = [
     {"type": "function", "function": {
         "name": "create_subscription",
@@ -218,9 +240,9 @@ _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
 ]
-# Always available (universally useful, not tied to a business type): marketing copy.
+# Always available (universally useful, not tied to a business type): marketing copy, letter drafting.
 _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
-                   + MARKETING_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS + BROADCAST_TOOLS)
+                   + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS + BROADCAST_TOOLS)
 
 
 def _tools_for(tenant_id: str) -> List[Dict[str, Any]]:
@@ -230,7 +252,7 @@ def _tools_for(tenant_id: str) -> List[Dict[str, Any]]:
         mods = set(enabled_modules(tenant_id) or [])
     except Exception:
         mods = set()
-    tools = list(TOOL_SPECS) + MARKETING_TOOLS   # marketing is always on
+    tools = list(TOOL_SPECS) + MARKETING_TOOLS + DRAFT_TOOLS   # always on
     show_all = not mods                       # no config yet → show everything
     for mod, group in _GATED_GROUPS:
         if show_all or mod in mods:
@@ -246,7 +268,7 @@ class CommerceAdminSkill(BaseSkill):
     )
 
     async def run(self, inp: SkillInput) -> SkillOutput:
-        ctx = {"tenant_id": inp.tenant_id}
+        ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone")}
         tools = _tools_for(inp.tenant_id)
         system_msg = self._system_prompt(inp.tenant_id)
         try:
@@ -411,6 +433,9 @@ class CommerceAdminSkill(BaseSkill):
             if name == "list_subscriptions": return await self._list_subscriptions(tid, args.get("status"))
             if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""))
             if name == "send_broadcast":     return await self._send_broadcast(tid, args)
+            if name == "draft_letter":
+                from core.skills.draft_admin import draft_letter
+                return await draft_letter(args, tid, ctx.get("phone") or "")
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
             return {"error": str(exc)}

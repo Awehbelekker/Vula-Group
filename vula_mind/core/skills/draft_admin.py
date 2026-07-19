@@ -51,6 +51,81 @@ TOOL_SPECS: List[Dict[str, Any]] = [
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
 
 
+async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict:
+    """Generate a letter (grounded in the tenant's KB + shared standards), render it onto the
+    tenant's branded letterhead, send it back as a WhatsApp document, and optionally upload to
+    Drive. Standalone so both draft_admin (knowledge-mode tenants) and commerce_admin
+    (commerce-mode tenant owners) can call the identical draft_letter tool."""
+    from vula.api.draft import DOCUMENT_TYPES, _retrieve_context, _generate_document, _store
+    import hashlib
+    from datetime import datetime
+
+    doc_type = args.get("document_type") or "fee_proposal"
+    base_config = DOCUMENT_TYPES.get(doc_type)
+    if not base_config:
+        return {"error": f"unknown document_type '{doc_type}'. Valid: {list(DOCUMENT_TYPES)}"}
+    brief = (args.get("brief") or "").strip()
+    if not brief:
+        return {"error": "brief is required"}
+
+    # This path renders onto the tenant's REAL letterhead (render_letter_pdf) — drop the
+    # generated placeholder header/letterhead section so it isn't duplicated under the
+    # actual logo/address, and tell the model not to invent one either.
+    doc_config = dict(base_config)
+    doc_config["output_sections"] = [s for s in base_config["output_sections"]
+                                     if s not in ("header", "letterhead", "certificate_header")]
+    doc_config["system_prompt"] = base_config["system_prompt"] + (
+        "\nDo NOT include a letterhead, company header, [placeholder] logo/address block, date "
+        "line, recipient/'To' block, or subject line — all of those are placed automatically "
+        "above your content on the business's real letterhead. Start directly with the first "
+        "substantive section (e.g. the opening paragraph or project description).")
+
+    context, sources = await _retrieve_context(tenant_id, brief, doc_type, None)
+    content, model_used = await _generate_document(
+        doc_config=doc_config, brief=brief, context=context,
+        project_name=args.get("project_name"), client_name=args.get("client_name"),
+        project_value=None, output_format="markdown",
+    )
+    word_count = len(content.split())
+    draft_id = hashlib.md5(
+        f"{tenant_id}:{doc_type}:{brief[:50]}:{datetime.utcnow().isoformat()}".encode()
+    ).hexdigest()[:16]
+    _store.save(tenant_id=tenant_id, draft_id=draft_id, doc_type=doc_type, brief=brief,
+               content=content, word_count=word_count, model=model_used, sources=sources)
+
+    from vula.commerce.pdf import render_letter_pdf, merge_branding
+    from vula.commerce import service as commerce_service
+    settings_row = await commerce_service.get_invoice_settings(tenant_id)
+    branding = merge_branding(tenant_id, settings_row)
+    pdf_bytes = render_letter_pdf(
+        tenant_id=tenant_id, body_markdown=content, doc_label=doc_config["label"],
+        recipient=args.get("recipient"), subject=args.get("project_name"),
+        tenant_profile=branding,
+    )
+
+    filename = f"{doc_config['label'].replace(' ', '_')}.pdf"
+    result: Dict[str, Any] = {"draft_id": draft_id, "document_type": doc_type, "word_count": word_count}
+
+    sent = False
+    if phone:
+        from vula.api.whatsapp import _send_invoice_document
+        sent = await _send_invoice_document(
+            phone, pdf_bytes, filename, caption=doc_config["label"], tenant_id=tenant_id,
+        )
+    result["sent_via_whatsapp"] = sent
+
+    if args.get("save_to_drive"):
+        try:
+            from vula.google import service as google_service
+            uploaded = await google_service.drive_upload(tenant_id, filename, "application/pdf", pdf_bytes)
+            result["drive"] = {"saved": True, "link": uploaded.get("webViewLink")}
+        except Exception as exc:
+            result["drive"] = {"saved": False, "reason": "Google not connected" if
+                               type(exc).__name__ == "GoogleNotConnected" else str(exc)}
+
+    return result
+
+
 class DraftAdminSkill(BaseSkill):
     name = "draft_admin"
     description = "Draft letters/proposals onto the business's letterhead and deliver as a WhatsApp PDF."
@@ -134,77 +209,7 @@ class DraftAdminSkill(BaseSkill):
         if name != "draft_letter":
             return {"error": f"unknown tool {name}"}
         try:
-            return await self._draft_letter(args, tenant_id, phone)
+            return await draft_letter(args, tenant_id, phone)
         except Exception as exc:
             logger.warning("draft_letter failed: %s", exc)
             return {"error": str(exc)}
-
-    async def _draft_letter(self, args: Dict[str, Any], tenant_id: str, phone: str) -> dict:
-        from vula.api.draft import DOCUMENT_TYPES, _retrieve_context, _generate_document, _store
-        import hashlib
-        from datetime import datetime
-
-        doc_type = args.get("document_type") or "fee_proposal"
-        base_config = DOCUMENT_TYPES.get(doc_type)
-        if not base_config:
-            return {"error": f"unknown document_type '{doc_type}'. Valid: {list(DOCUMENT_TYPES)}"}
-        brief = (args.get("brief") or "").strip()
-        if not brief:
-            return {"error": "brief is required"}
-
-        # This path renders onto the tenant's REAL letterhead (render_letter_pdf) — drop the
-        # generated placeholder header/letterhead section so it isn't duplicated under the
-        # actual logo/address, and tell the model not to invent one either.
-        doc_config = dict(base_config)
-        doc_config["output_sections"] = [s for s in base_config["output_sections"]
-                                         if s not in ("header", "letterhead", "certificate_header")]
-        doc_config["system_prompt"] = base_config["system_prompt"] + (
-            "\nDo NOT include a letterhead, company header, [placeholder] logo/address block, date "
-            "line, recipient/'To' block, or subject line — all of those are placed automatically "
-            "above your content on the business's real letterhead. Start directly with the first "
-            "substantive section (e.g. the opening paragraph or project description).")
-
-        context, sources = await _retrieve_context(tenant_id, brief, doc_type, None)
-        content, model_used = await _generate_document(
-            doc_config=doc_config, brief=brief, context=context,
-            project_name=args.get("project_name"), client_name=args.get("client_name"),
-            project_value=None, output_format="markdown",
-        )
-        word_count = len(content.split())
-        draft_id = hashlib.md5(
-            f"{tenant_id}:{doc_type}:{brief[:50]}:{datetime.utcnow().isoformat()}".encode()
-        ).hexdigest()[:16]
-        _store.save(tenant_id=tenant_id, draft_id=draft_id, doc_type=doc_type, brief=brief,
-                   content=content, word_count=word_count, model=model_used, sources=sources)
-
-        from vula.commerce.pdf import render_letter_pdf, merge_branding
-        from vula.commerce import service as commerce_service
-        settings_row = await commerce_service.get_invoice_settings(tenant_id)
-        branding = merge_branding(tenant_id, settings_row)
-        pdf_bytes = render_letter_pdf(
-            tenant_id=tenant_id, body_markdown=content, doc_label=doc_config["label"],
-            recipient=args.get("recipient"), subject=args.get("project_name"),
-            tenant_profile=branding,
-        )
-
-        filename = f"{doc_config['label'].replace(' ', '_')}.pdf"
-        result: Dict[str, Any] = {"draft_id": draft_id, "document_type": doc_type, "word_count": word_count}
-
-        sent = False
-        if phone:
-            from vula.api.whatsapp import _send_invoice_document
-            sent = await _send_invoice_document(
-                phone, pdf_bytes, filename, caption=doc_config["label"], tenant_id=tenant_id,
-            )
-        result["sent_via_whatsapp"] = sent
-
-        if args.get("save_to_drive"):
-            try:
-                from vula.google import service as google_service
-                uploaded = await google_service.drive_upload(tenant_id, filename, "application/pdf", pdf_bytes)
-                result["drive"] = {"saved": True, "link": uploaded.get("webViewLink")}
-            except Exception as exc:
-                result["drive"] = {"saved": False, "reason": "Google not connected" if
-                                   type(exc).__name__ == "GoogleNotConnected" else str(exc)}
-
-        return result

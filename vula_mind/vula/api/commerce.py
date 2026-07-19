@@ -1079,6 +1079,7 @@ class ExpenseIn(BaseModel):
     paid_with: Optional[str] = None
     card_last4: Optional[str] = None
     notes: Optional[str] = None
+    due_date: Optional[str] = None   # set → a one-off pending bill, not an expense claim (see below)
 
 
 class ExpenseAssignIn(BaseModel):
@@ -1099,9 +1100,32 @@ async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
 
 @router.post("/{tenant_id}/admin/expenses")
 async def admin_create_expense(tenant_id: str, body: ExpenseIn):
+    if body.due_date:
+        # A one-off bill not due yet — status='pending', not an expense CLAIM (which is money
+        # already spent, status='submitted' immediately). Same shape recurring_bills.py spawns,
+        # just entered by hand instead of by a schedule. Feeds the existing "Payments due" panel
+        # and PATCH .../pay action — both already expect exactly this.
+        import uuid as _uuid
+        db = service._client()
+        row = {
+            "id": str(_uuid.uuid4()), "tenant_id": tenant_id,
+            "date": body.date or service._now()[:10],
+            "category": body.category or "other", "description": body.description,
+            "amount_cents": body.amount_cents, "supplier": body.supplier,
+            "due_date": body.due_date, "status": "pending", "source": "manual",
+            "account_code": body.account_code,
+        }
+        try:
+            res = db.table("commerce_expenses").insert(row).execute()
+        except Exception as exc:
+            return {"error": f"{exc} (run migration 009/074?)"}
+        return {"expense": (res.data or [row])[0]}
+
     from vula.commerce import expenses
     try:
-        claim = await expenses.create_claim(tenant_id, channel="dashboard", **body.model_dump())
+        claim = await expenses.create_claim(
+            tenant_id, channel="dashboard",
+            **body.model_dump(exclude={"due_date"}))
         return {"expense": claim}
     except Exception as exc:
         return {"error": f"{exc} (run migration 060?)"}

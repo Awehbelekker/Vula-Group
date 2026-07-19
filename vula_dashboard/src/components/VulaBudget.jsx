@@ -23,7 +23,7 @@ export default function VulaBudget({ tenantId, stats }) {
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
   const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10) })
+  const [form, setForm] = useState({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10), due_date: '' })
   const [due, setDue] = useState(null) // { overdue, upcoming, *_total_cents }
   const [recurring, setRecurring] = useState([])
   const [showAddRecurring, setShowAddRecurring] = useState(false)
@@ -98,9 +98,10 @@ export default function VulaBudget({ tenantId, stats }) {
       body: JSON.stringify({
         date: form.date, category: form.category,
         description: form.description, amount_cents: cents, supplier: form.supplier,
+        due_date: form.due_date || null,
       }),
     })
-    setForm({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10) })
+    setForm({ category: 'stock', description: '', amount: '', supplier: '', date: new Date().toISOString().slice(0, 10), due_date: '' })
     setShowAdd(false)
     load()
   }
@@ -253,6 +254,10 @@ export default function VulaBudget({ tenantId, stats }) {
             <input placeholder="Supplier (optional)" value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })} style={s.input} />
             <input placeholder="Amount (R)" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} style={s.input} required />
           </div>
+          <label style={{ ...s.dueMeta, color: '#8A8680', display: 'flex', alignItems: 'center', gap: 6 }}>
+            Due date (optional — leave blank if already paid)
+            <input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} style={s.input} />
+          </label>
           <button type="submit" style={s.saveBtn}>Save expense</button>
         </form>
       )}
