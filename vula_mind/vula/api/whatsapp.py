@@ -2011,6 +2011,45 @@ async def _get_tenant_wa_creds(tenant_id: str) -> dict | None:
     return None
 
 
+async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str) -> bool:
+    """Send an APPROVED WhatsApp template message. Proactive/scheduled notifications must use a
+    template — free text to someone who hasn't messaged recently fails with 'Re-engagement message'
+    (confirmed 2026-07-15: this affected every scheduled OTH/DIGG proactive notification, not a
+    dev-mode issue). Shared by server.py (OTH schedules), field_ops.py (DIGG field-ops), and
+    vula/integrations/platform_support.py (tenant → Ian feedback forwarding)."""
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds:
+        if settings.whatsapp_token and settings.whatsapp_phone_id:
+            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+        else:
+            logger.info("WhatsApp not configured — skipping template send to %s", to)
+            return False
+
+    number = to.lstrip("+").replace(" ", "").replace("-", "")
+    if number.startswith("0"):
+        number = "27" + number[1:]
+
+    body: dict = {"messaging_product": "whatsapp", "to": number, "type": "template",
+                  "template": {"name": template, "language": {"code": "en"}}}
+    if params:
+        body["template"]["components"] = [
+            {"type": "body", "parameters": [{"type": "text", "text": str(p)} for p in params]}
+        ]
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json=body,
+            )
+            if not resp.is_success:
+                logger.warning("template send failed (%s -> %s): %s", template, to, resp.text[:200])
+            return resp.is_success
+    except Exception as exc:
+        logger.warning("template send failed (%s -> %s): %s", template, to, exc)
+        return False
+
+
 async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
     """
     Send a WhatsApp text message via the Meta Graph API.
