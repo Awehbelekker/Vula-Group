@@ -8,10 +8,15 @@ escalation answers, so a customer ordering fish can never trigger this.
 
 Delivery is three-layered: durable (always logs to vula_platform_feedback — Ian can never miss
 one), then an approved WhatsApp TEMPLATE (works regardless of the 24h window — see
-vula/commerce/wa_templates.py; "vula_platform_feedback" was submitted for off-the-hook's WABA
-and is pending Meta review as of 2026-07-19 — other tenants don't have it yet, submit one per
-tenant via wa_templates.create_template the same way), then a free-form fallback (works only if
-Ian already has an open 24h window with that specific tenant's number).
+vula/commerce/wa_templates.py), then a free-form fallback (works only if Ian already has an
+open 24h window with that specific tenant's number).
+
+ensure_template() provisions the template for a tenant's WABA — called once for every existing
+tenant, and automatically every time a NEW tenant finishes connecting WhatsApp
+(vula/api/whatsapp_connect.py). Meta templates are WABA-wide, not tenant-scoped, so sibling
+tenants sharing one Meta Business Account (confirmed: digg-demo and off-the-hook share a WABA)
+only need one real Meta submission between them — ensure_template still gives each tenant its
+own commerce_wa_templates row for the dashboard's per-tenant grouping either way.
 """
 from __future__ import annotations
 
@@ -42,6 +47,58 @@ def detect(text: str) -> bool:
 
 
 TEMPLATE_NAME = "vula_platform_feedback"   # one param: "From {sender} ({phone}) on {tenant}: {message}"
+_TEMPLATE_BODY = (
+    "\U0001F4E3 New Vula platform feedback:\n\n{{1}}\n\n"
+    "Please follow up with the sender directly."
+)
+_TEMPLATE_EXAMPLE = ("From Staci Brits (27821234567) on off-the-hook: "
+                     "The bank tab is a bit confusing, could you check it?")
+
+
+async def ensure_template(tenant_id: str) -> dict:
+    """Make sure this tenant's WABA has TEMPLATE_NAME; submit it if not. Safe to call
+    repeatedly — a tenant reconnecting WhatsApp, or two sibling tenants sharing one WABA,
+    just find it already there. Never raises."""
+    try:
+        from vula.commerce import wa_templates
+        creds = await wa_templates._waba_creds(tenant_id)
+        if not creds:
+            return {"skipped": "no WABA connected"}
+
+        import httpx
+        live = []
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(
+                    f"{wa_templates.GRAPH_BASE}/{creds['waba_id']}/message_templates",
+                    headers={"Authorization": f"Bearer {creds['token']}"},
+                    params={"fields": "name,status", "name": TEMPLATE_NAME},
+                )
+                if resp.is_success:
+                    live = resp.json().get("data", [])
+        except Exception as exc:
+            logger.debug("template existence check failed for %s: %s", tenant_id, exc)
+
+        if live:
+            # Already on this WABA (possibly via a sibling tenant) — just make sure THIS
+            # tenant has its own local row too, for the dashboard's per-tenant grouping.
+            try:
+                wa_templates._client().table("commerce_wa_templates").upsert({
+                    "tenant_id": tenant_id, "name": TEMPLATE_NAME, "category": "UTILITY",
+                    "language": "en", "body_text": _TEMPLATE_BODY, "param_count": 1,
+                    "example": [_TEMPLATE_EXAMPLE], "created_by": "system:platform_support",
+                }, on_conflict="tenant_id,name").execute()
+            except Exception as exc:
+                logger.debug("template local row upsert skipped for %s: %s", tenant_id, exc)
+            return {"already_exists": True, "status": live[0].get("status")}
+
+        return await wa_templates.create_template(
+            tenant_id, TEMPLATE_NAME, _TEMPLATE_BODY, category="UTILITY", language="en",
+            example_params=[_TEMPLATE_EXAMPLE], created_by="system:platform_support",
+        )
+    except Exception as exc:
+        logger.warning("ensure_template failed for %s: %s", tenant_id, exc)
+        return {"error": str(exc)}
 
 
 async def forward(tenant_id: str, phone: str, sender_name: str, text: str) -> None:

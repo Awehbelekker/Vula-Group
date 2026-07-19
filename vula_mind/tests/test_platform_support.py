@@ -122,3 +122,68 @@ async def test_forward_never_raises_if_db_and_whatsapp_both_fail():
     ):
         from vula.integrations.platform_support import forward
         await forward("off-the-hook", "27821234567", "Staci", "the vula app is broken")  # must not raise
+
+
+def _mock_httpx_get(json_data, is_success=True):
+    """A patch target for httpx.AsyncClient() used as `async with ... as client: await client.get(...)`."""
+    resp = MagicMock(is_success=is_success)
+    resp.json.return_value = json_data
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=ctx)
+
+
+@pytest.mark.asyncio
+async def test_ensure_template_skips_without_waba():
+    with patch("vula.commerce.wa_templates._waba_creds", new=AsyncMock(return_value=None)):
+        from vula.integrations.platform_support import ensure_template
+        result = await ensure_template("kelp-boardbags")
+    assert result == {"skipped": "no WABA connected"}
+
+
+@pytest.mark.asyncio
+async def test_ensure_template_reuses_existing_and_upserts_local_row():
+    creds = {"waba_id": "waba1", "token": "tok"}
+    mock_table = MagicMock()
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    with (
+        patch("vula.commerce.wa_templates._waba_creds", new=AsyncMock(return_value=creds)),
+        patch("httpx.AsyncClient", _mock_httpx_get({"data": [{"name": "vula_platform_feedback", "status": "APPROVED"}]})),
+        patch("vula.commerce.wa_templates._client", return_value=mock_db),
+        patch("vula.commerce.wa_templates.create_template", new=AsyncMock()) as mock_create,
+    ):
+        from vula.integrations.platform_support import ensure_template
+        result = await ensure_template("digg-demo")
+
+    assert result == {"already_exists": True, "status": "APPROVED"}
+    mock_create.assert_not_awaited()
+    mock_db.table.assert_called_with("commerce_wa_templates")
+    mock_table.upsert.assert_called_once()
+    upserted = mock_table.upsert.call_args[0][0]
+    assert upserted["tenant_id"] == "digg-demo"
+    assert upserted["name"] == "vula_platform_feedback"
+
+
+@pytest.mark.asyncio
+async def test_ensure_template_creates_when_missing():
+    creds = {"waba_id": "waba1", "token": "tok"}
+
+    with (
+        patch("vula.commerce.wa_templates._waba_creds", new=AsyncMock(return_value=creds)),
+        patch("httpx.AsyncClient", _mock_httpx_get({"data": []})),
+        patch("vula.commerce.wa_templates.create_template",
+              new=AsyncMock(return_value={"name": "vula_platform_feedback", "status": "PENDING"})) as mock_create,
+    ):
+        from vula.integrations.platform_support import ensure_template
+        result = await ensure_template("off-the-hook")
+
+    mock_create.assert_awaited_once()
+    args, kwargs = mock_create.call_args
+    assert args[0] == "off-the-hook"
+    assert args[1] == "vula_platform_feedback"
+    assert result["status"] == "PENDING"
