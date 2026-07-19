@@ -70,12 +70,15 @@ def _tok(s: str) -> set:
     return set(re.findall(r"[a-z0-9]{3,}", (s or "").lower()))
 
 
-def _find_match(tenant_id: str, want_kind: str, amount: float, counterparty: str,
-                reference: str, _account: str = "") -> Optional[dict]:
-    """Find an unreconciled counterpart (invoice<->payment) by amount + supplier/reference."""
+def _find_match(tenant_id: str, want_kind, amount: float, counterparty: str,
+                reference: str, _account: str = "", project: Optional[str] = None) -> Optional[dict]:
+    """Find an unreconciled counterpart (invoice<->payment, or expense<->payment — e.g. a
+    Nolo procurement completion waiting for the POP that pays it) by amount + supplier/
+    reference/project. `want_kind` may be a single kind or a list of candidate kinds."""
+    want_kinds = [want_kind] if isinstance(want_kind, str) else list(want_kind)
     try:
         rows = (_client().table("vula_project_finances").select("*")
-                .eq("tenant_id", tenant_id).eq("kind", want_kind).eq("reconciled", False)
+                .eq("tenant_id", tenant_id).in_("kind", want_kinds).eq("reconciled", False)
                 .execute().data or [])
     except Exception:
         return None
@@ -92,6 +95,8 @@ def _find_match(tenant_id: str, want_kind: str, amount: float, counterparty: str
             score += 3
         if ctoks and ctoks & _tok(r.get("counterparty") or ""):
             score += 2
+        if project and r.get("project") and _norm_label(project) == _norm_label(r.get("project")):
+            score += 2                       # same project — helps when amounts collide
         if score > best_score:
             best, best_score = r, score
     return best
@@ -120,13 +125,18 @@ def post_finance_from_doc(tenant_id: str, project: Optional[str], fields: dict,
         "occurred_at": f.get("date"), "source": "email", "reconciled": False,
     }
 
-    # Reconcile a payment against an existing invoice (or vice-versa) → inherit what it's
-    # for + the project from the matched doc, rather than relying on keyword guessing.
-    # Bank account number is the strongest match key.
+    # Reconcile a payment against an existing invoice/expense (or vice-versa) → inherit
+    # what it's for + the project from the matched doc, rather than relying on keyword
+    # guessing. Bank account number is the strongest match key. "expense" here covers a
+    # procurement/stock-ordering ClickUp task Nolo already logged a cost for — the POP
+    # that eventually pays it should link back to that entry, not sit as a second,
+    # unlinked line.
     mate = None
-    if kind in ("payment", "invoice"):
-        mate = _find_match(tenant_id, "invoice" if kind == "payment" else "payment",
-                           amount, counterparty, reference, account)
+    if kind == "payment":
+        mate = _find_match(tenant_id, ["invoice", "expense"], amount, counterparty,
+                           reference, account, project)
+    elif kind == "invoice":
+        mate = _find_match(tenant_id, "payment", amount, counterparty, reference, account, project)
     if mate:
         row["reconciled"] = True
         row["matched_id"] = mate["id"]
@@ -168,6 +178,23 @@ def _notify_payment(tenant_id: str, row: dict) -> None:
         logger.debug("payment notify skipped: %s", exc)
 
 
+def _dedupe_reconciled(rows: list) -> list:
+    """A reconciled pair (e.g. a Nolo procurement "expense" entry + the POP that later
+    paid it, or an invoice + the payment that settled it) is stored as two linked rows so
+    each keeps its own source/date/doc — but summing both would double-count the real
+    money. Keep exactly one side per pair (first one seen), plus every other row."""
+    seen_pairs = set()
+    out = []
+    for r in rows:
+        if r.get("reconciled") and r.get("matched_id"):
+            pair_key = tuple(sorted([str(r.get("id")), str(r["matched_id"])]))
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+        out.append(r)
+    return out
+
+
 def finance_summary(tenant_id: str, project: str = None) -> dict:
     """Per-project totals (in/out/net) + budget-vs-actual, plus recent transactions."""
     try:
@@ -187,7 +214,7 @@ def finance_summary(tenant_id: str, project: str = None) -> dict:
         budgets = {}
 
     by_proj: dict = {}
-    for r in rows:
+    for r in _dedupe_reconciled(rows):
         p = r.get("project") or "(unassigned)"
         agg = by_proj.setdefault(p, {"project": p, "in": 0.0, "out": 0.0, "count": 0})
         amt = float(r.get("amount") or 0)
@@ -236,8 +263,9 @@ def project_financials(tenant_id: str, project: str) -> dict:
     except Exception:
         pass
     ledger = _match(ledger_rows)
-    paid_in = sum(float(r.get("amount") or 0) for r in ledger if r.get("direction") == "in")
-    paid_out = sum(float(r.get("amount") or 0) for r in ledger if r.get("direction") == "out")
+    dedup_ledger = _dedupe_reconciled(ledger)
+    paid_in = sum(float(r.get("amount") or 0) for r in dedup_ledger if r.get("direction") == "in")
+    paid_out = sum(float(r.get("amount") or 0) for r in dedup_ledger if r.get("direction") == "out")
 
     # Invoices linked to the project (guarded — column may not exist pre-migration 055).
     invoiced = invoiced_paid = 0.0
