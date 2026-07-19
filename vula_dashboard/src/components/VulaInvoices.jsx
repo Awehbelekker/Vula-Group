@@ -532,9 +532,11 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
     branch_code:        settings?.branch_code || '',
     account_number:     settings?.account_number || '',
     template_choice:    settings?.template_choice || 'classic',
+    menu_header_image_url: settings?.menu_header_image_url || '',
   })
   const [saving, setSaving] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [uploadingMenuImage, setUploadingMenuImage] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   async function uploadLogo(e) {
@@ -550,6 +552,21 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
         if (data?.publicUrl) set('logo_url', data.publicUrl)
       }
     } finally { setUploadingLogo(false) }
+  }
+
+  async function uploadMenuImage(e) {
+    const file = (e.target.files || [])[0]
+    if (!file) return
+    setUploadingMenuImage(true)
+    try {
+      const clean = file.name.replace(/[^a-zA-Z0-9.-]/g, '-').toLowerCase()
+      const path = `${tenantId}/menu-header/${Date.now()}-${clean}`
+      const { error } = await supabase.storage.from('product-images').upload(path, file, { cacheControl: '3600', upsert: true })
+      if (!error) {
+        const { data } = supabase.storage.from('product-images').getPublicUrl(path)
+        if (data?.publicUrl) set('menu_header_image_url', data.publicUrl)
+      }
+    } finally { setUploadingMenuImage(false) }
   }
 
   async function save() {
@@ -629,6 +646,21 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
         </div>
         <input placeholder="Account number" value={form.account_number}
           onChange={e => set('account_number', e.target.value)} style={s.fInput} />
+      </div>
+
+      <p style={s.sectionLabel}>WhatsApp menu</p>
+      <div style={s.formSection}>
+        <p style={{ fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', margin: '0 0 4px' }}>
+          Optional hero image sent right before the product menu when a customer messages you on WhatsApp.
+        </p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+            {uploadingMenuImage ? 'Uploading…' : (form.menu_header_image_url ? '↻ Replace image' : '📷 Upload menu image')}
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadMenuImage} style={{ display: 'none' }} />
+          </label>
+          {form.menu_header_image_url && <img src={form.menu_header_image_url} alt="menu header" style={{ maxHeight: 60, maxWidth: 200, objectFit: 'cover', borderRadius: 6 }} />}
+          {form.menu_header_image_url && <button type="button" onClick={() => set('menu_header_image_url', '')} style={{ background: 'none', border: 'none', color: '#8A8680', cursor: 'pointer', fontSize: 18 }}>×</button>}
+        </div>
       </div>
 
       <p style={s.sectionLabel}>Look &amp; feel</p>

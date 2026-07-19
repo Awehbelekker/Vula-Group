@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { downloadCsv } from '../lib/csv'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -39,6 +40,30 @@ export default function VulaCustomers({ tenantId }) {
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/detail`)
     const d = await r.json()
     setDetail(d); setNoteDraft(d.note || '')
+  }
+
+  const printStatement = async (phone, name) => {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/statement`)
+    const st = await r.json()
+    const R = c => `R${((c || 0) / 100).toFixed(2)}`
+    const rows = (st.invoices || []).map(inv =>
+      `<tr><td>${(inv.created_at || '').slice(0, 10)}</td><td>${inv.invoice_number || ''}</td><td>${inv.doc_type}</td>
+       <td>${inv.status}</td><td style="text-align:right">${R(inv.total_cents)}</td></tr>`).join('')
+    const w = window.open('', '_blank')
+    if (!w) return
+    w.document.write(`<html><head><title>Statement — ${name || phone}</title>
+      <style>body{font-family:system-ui;padding:24px;color:#1E1E1E}table{width:100%;border-collapse:collapse;margin-top:14px}
+      th,td{padding:6px 8px;border-bottom:1px solid #DDD8CE;text-align:left;font-size:13px}
+      h1{font-size:18px}.tot{font-weight:700}</style></head><body>
+      <h1>Statement of account</h1>
+      <p>${name || ''} · ${phone}</p>
+      <table><tr><th>Date</th><th>No.</th><th>Type</th><th>Status</th><th style="text-align:right">Amount</th></tr>${rows}</table>
+      <p class="tot">Total invoiced: ${R(st.total_invoiced_cents)}</p>
+      <p class="tot">Total paid: ${R(st.total_paid_cents)}</p>
+      ${st.total_credited_cents ? `<p class="tot">Credited: ${R(st.total_credited_cents)}</p>` : ''}
+      <p class="tot">Balance due: ${R(st.balance_due_cents)}</p>
+      </body></html>`)
+    w.document.close(); w.print()
   }
 
   const saveNote = async (phone) => {
@@ -105,6 +130,16 @@ export default function VulaCustomers({ tenantId }) {
           onChange={e => setSearch(e.target.value)}
           style={s.search}
         />
+        <button
+          onClick={() => downloadCsv('customers', rows, [
+            { key: 'name', label: 'Name' }, { key: 'phone', label: 'Phone' },
+            { key: 'channel', label: 'Channel' }, { key: 'orders', label: 'Orders' },
+            { label: 'Total spent (R)', get: c => ((c.total_spent_cents || 0) / 100).toFixed(2) },
+            { label: 'Last seen', get: c => c.last_order_at || c.last_seen_at || '' },
+          ])}
+          disabled={!rows.length}
+          style={{ ...s.seg, marginLeft: 'auto' }}
+        >⬇ Export CSV</button>
       </div>
 
       <p style={s.reach}>
@@ -140,12 +175,15 @@ export default function VulaCustomers({ tenantId }) {
                   ) : (
                     <>
                       {/* Stat cards */}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginBottom: 12 }}>
-                        <Stat label="Lifetime value" value={fmt(detail.stats?.lifetime_value_cents)} strong />
-                        <Stat label="Paid orders" value={detail.stats?.paid_order_count ?? 0} />
-                        <Stat label="Avg order" value={fmt(detail.stats?.avg_order_cents)} />
-                        {detail.stats?.invoice_outstanding_cents > 0 &&
-                          <Stat label="Owes (invoices)" value={fmt(detail.stats.invoice_outstanding_cents)} />}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, flex: 1 }}>
+                          <Stat label="Lifetime value" value={fmt(detail.stats?.lifetime_value_cents)} strong />
+                          <Stat label="Paid orders" value={detail.stats?.paid_order_count ?? 0} />
+                          <Stat label="Avg order" value={fmt(detail.stats?.avg_order_cents)} />
+                          {detail.stats?.invoice_outstanding_cents > 0 &&
+                            <Stat label="Owes (invoices)" value={fmt(detail.stats.invoice_outstanding_cents)} />}
+                        </div>
+                        <button onClick={() => printStatement(c.phone, c.name)} style={s.statementBtn}>📄 Statement</button>
                       </div>
                       {/* Profile line */}
                       <div style={{ fontSize: 12, color: '#8A8680', marginBottom: 10, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
@@ -166,6 +204,40 @@ export default function VulaCustomers({ tenantId }) {
                         />
                         {savingNote && <span style={{ fontSize: 11, color: '#8A8680' }}>saving…</span>}
                       </div>
+                      {/* Conversation — the actual WhatsApp exchange (Customer-360 depth) */}
+                      {(detail.conversation || []).length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={s.secLabel}>Conversation</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                            {detail.conversation.map((m, j) => (
+                              <div key={j} style={{
+                                alignSelf: m.role === 'user' ? 'flex-start' : 'flex-end',
+                                background: m.role === 'user' ? '#fff' : 'var(--accent-soft, rgba(44,85,69,.10))',
+                                border: '1px solid #E5DFCF', borderRadius: 10, padding: '6px 10px',
+                                fontSize: 12, maxWidth: '85%',
+                              }}>
+                                {m.text}
+                                <span style={{ display: 'block', fontSize: 10, color: '#8A8680', marginTop: 2 }}>{String(m.at || '').slice(5, 16).replace('T', ' ')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* Broadcast engagement */}
+                      {(detail.engagement || []).length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={s.secLabel}>Broadcast engagement</div>
+                          {detail.engagement.map((g, j) => (
+                            <div key={j} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '4px 0', alignItems: 'center' }}>
+                              <span>📢 {g.campaign}</span>
+                              <span style={{
+                                marginLeft: 'auto', fontSize: 11, fontWeight: 600,
+                                color: g.status === 'clicked' ? 'var(--accent, #2C5545)' : (g.status === 'failed' ? '#A23B2D' : '#8A8680'),
+                              }}>{g.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {/* Timeline */}
                       <div style={s.secLabel}>Interaction history</div>
                       {(detail.events || []).length === 0 && <div style={{ fontSize: 12.5, color: '#8A8680' }}>No recorded orders, invoices or chats yet.</div>}
@@ -203,6 +275,7 @@ function Stat({ label, value, strong }) {
 const s = {
   intro:     { marginBottom: 14 },
   secLabel:  { fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 8 },
+  statementBtn: { padding: '7px 12px', background: '#fff', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#3A3A3A', cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0, whiteSpace: 'nowrap' },
   h3:        { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: '0 0 4px' },
   sub:       { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
   segs:      { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 },

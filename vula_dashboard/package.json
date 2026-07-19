@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:puck-sync": "node scripts/check-puck-sync.mjs"
   },
   "dependencies": {
     "@measured/puck": "^0.20.2",
     "@supabase/supabase-js": "^2.106.2",
+    "leaflet": "^1.9.4",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-router-dom": "^6.23.0",

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { downloadCsv } from "../lib/csv";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
@@ -80,7 +81,7 @@ export default function VulaReports({ tenantId }) {
       {/* Period selector */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: C.text }}>Sales Reports</h2>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {[7, 14, 30, 90].map(n => (
             <button key={n} onClick={() => setDays(n)} style={{
               padding: "6px 14px", fontSize: 12, fontWeight: 600, borderRadius: 6,
@@ -89,6 +90,14 @@ export default function VulaReports({ tenantId }) {
               color: days === n ? C.green : C.muted, cursor: "pointer",
             }}>{n}d</button>
           ))}
+          <button
+            onClick={() => downloadCsv(`sales-report-${days}d`, data?.revenue_trend || [], [
+              { key: "date", label: "Date" }, { key: "orders", label: "Orders" },
+              { label: "Revenue (R)", get: d => (d.revenue_cents / 100).toFixed(2) },
+            ])}
+            disabled={!data?.revenue_trend?.length}
+            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 600, borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.muted, cursor: "pointer" }}
+          >⬇ Export CSV</button>
         </div>
       </div>
 

@@ -34,6 +34,38 @@ export function applyAccent(accent) {
   root.style.setProperty("--on-accent", contrastOn(accent));
 }
 
+/** Apply a tenant's ink (heading/body text) colour — part of the native brand kit (P3). */
+export function applyInk(ink) {
+  if (!ink || typeof document === "undefined") return;
+  document.documentElement.style.setProperty("--ink", ink);
+}
+
+// Curated display-font pairings — body stays Inter (already loaded) so only ONE extra Google
+// Fonts family needs fetching per pairing, never all of them for every tenant.
+export const FONT_PAIRINGS = {
+  vula:      { label: "Vula (Cormorant Garamond)", family: "Cormorant Garamond", weights: "500;600;700", fallback: "Georgia, serif" },
+  modern:    { label: "Modern (Poppins)",           family: "Poppins",           weights: "500;600;700", fallback: "system-ui, sans-serif" },
+  editorial: { label: "Editorial (Playfair Display)", family: "Playfair Display", weights: "500;600;700", fallback: "Georgia, serif" },
+  classic:   { label: "Classic (Merriweather)",     family: "Merriweather",      weights: "500;600;700", fallback: "Georgia, serif" },
+};
+
+/** Load (once) and apply a tenant's chosen display-font pairing. Falls back silently to the
+ * default Vula pairing (already loaded by index.css) for an unknown/blank key. */
+export function applyFontPairing(key) {
+  if (typeof document === "undefined") return;
+  const p = FONT_PAIRINGS[key] || FONT_PAIRINGS.vula;
+  if (p !== FONT_PAIRINGS.vula) {
+    const id = `font-pairing-${key}`;
+    if (!document.getElementById(id)) {
+      const link = document.createElement("link");
+      link.id = id; link.rel = "stylesheet";
+      link.href = `https://fonts.googleapis.com/css2?family=${p.family.replace(/ /g, "+")}:wght@${p.weights}&display=swap`;
+      document.head.appendChild(link);
+    }
+  }
+  document.documentElement.style.setProperty("--font-display", `'${p.family}', ${p.fallback}`);
+}
+
 function clamp(n) { return Math.max(0, Math.min(255, Math.round(n))); }
 function parseHex(hex) {
   const h = (hex || "").replace("#", "");

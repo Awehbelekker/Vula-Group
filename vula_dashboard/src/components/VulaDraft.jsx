@@ -13,8 +13,9 @@ const DOC_TYPES = [
   { id: "payment_certificate", label: "Payment Certificate" },
 ];
 
-export default function VulaDraft() {
-  const [tenantId, setTenantId] = useState("digg-demo");
+export default function VulaDraft({ tenantId: tenantIdProp }) {
+  const [tenantIdInput, setTenantIdInput] = useState("digg-demo");
+  const tenantId = tenantIdProp || tenantIdInput;
   const [docType, setDocType] = useState("fee_proposal");
   const [brief, setBrief] = useState("");
   const [projectName, setProjectName] = useState("");
@@ -65,10 +66,12 @@ export default function VulaDraft() {
 
       <div style={{ display: "grid", gap: 16, marginBottom: 24 }}>
         <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <label style={labelStyle}>Tenant ID</label>
-            <input style={inputStyle} value={tenantId} onChange={e => setTenantId(e.target.value)} />
-          </div>
+          {!tenantIdProp && (
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Tenant ID</label>
+              <input style={inputStyle} value={tenantIdInput} onChange={e => setTenantIdInput(e.target.value)} />
+            </div>
+          )}
           <div style={{ flex: 1 }}>
             <label style={labelStyle}>Document Type</label>
             <select style={inputStyle} value={docType} onChange={e => setDocType(e.target.value)}>

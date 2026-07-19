@@ -71,3 +71,39 @@ input, select, textarea { font-family: var(--font-body); }
 ::-webkit-scrollbar { height: 8px; width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── App shell (VulaShell.jsx) — sidebar navigation, UI overhaul Phase 2 ────── */
+.vshell { display: grid; grid-template-columns: 244px 1fr; min-height: 100vh; background: var(--bg); }
+.vshell-side { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; z-index: 300; }
+.vshell-brand { display: flex; align-items: center; gap: 10px; padding: 16px 14px 13px; border-bottom: 1px solid var(--border-soft); }
+.vshell-logo { width: 34px; height: 34px; border-radius: 10px; background: var(--accent); color: var(--on-accent, #fff); display: flex; align-items: center; justify-content: center; font-size: 17px; flex: none; }
+.vshell-logoimg { width: 34px; height: 34px; border-radius: 10px; object-fit: contain; background: var(--surface-alt); flex: none; }
+.vshell-brandtext b { font-family: var(--font-display); font-size: 16px; color: var(--ink); display: block; line-height: 1.15; letter-spacing: -0.01em; }
+.vshell-brandtext span { font-size: 10px; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
+.vshell-nav { padding: 8px 9px 4px; flex: 1; }
+.vshell-grp { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); padding: 13px 8px 4px; }
+.vshell-it { display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 8px; font-size: 13px; color: var(--text); border: none; background: none; width: 100%; text-align: left; cursor: pointer; font-family: var(--font-body); transition: background .15s; }
+.vshell-it:hover { background: var(--surface-alt); }
+.vshell-it.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.vshell-ic { width: 20px; text-align: center; flex: none; }
+.vshell-badge { margin-left: auto; font-size: 10.5px; background: var(--danger); color: #fff; border-radius: 999px; padding: 1px 6px; font-weight: 600; }
+.vshell-powered { padding: 13px 16px; border-top: 1px solid var(--border-soft); font-size: 11px; color: var(--muted); }
+.vshell-powered b { color: var(--text); }
+.vshell-main { display: flex; flex-direction: column; min-width: 0; }
+.vshell-top { display: flex; align-items: center; gap: 14px; padding: 12px 24px; border-bottom: 1px solid var(--border-soft); background: var(--surface); position: sticky; top: 0; z-index: 200; }
+.vshell-top h1 { font-family: var(--font-display); font-size: 20px; font-weight: 600; color: var(--ink); margin: 0; letter-spacing: -0.01em; }
+.vshell-topright { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.vshell-user { font-size: 12px; color: var(--muted); }
+.vshell-signout { padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; font-family: var(--font-body); }
+.vshell-content { padding: 0; min-width: 0; }
+.vshell-burger { display: none; }
+.vshell-scrim { display: none; }
+@media (max-width: 860px) {
+  .vshell { grid-template-columns: 1fr; }
+  .vshell-side { position: fixed; left: 0; top: 0; width: 250px; transform: translateX(-100%); transition: transform .2s ease; box-shadow: var(--shadow-lg); }
+  .vshell-side.open { transform: none; }
+  .vshell-burger { display: block; position: fixed; bottom: 16px; left: 16px; z-index: 400; width: 46px; height: 46px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 18px; box-shadow: var(--shadow-md); cursor: pointer; }
+  .vshell-scrim { display: block; position: fixed; inset: 0; background: rgba(20,20,18,.35); z-index: 290; }
+  .vshell-top { padding: 12px 14px; }
+  .vshell-user { display: none; }
+}

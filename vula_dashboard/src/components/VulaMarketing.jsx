@@ -3,7 +3,7 @@
  * "Write today's specials post / a product description / promo copy / a broadcast blast."
  * Grounded in the tenant's real catalogue. Backend: /v1/commerce/{tenant}/admin/marketing/generate
  */
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
@@ -16,7 +16,7 @@ const KINDS = [
 ];
 const TONES = ["warm & friendly", "playful", "premium", "urgent / limited-time", "professional"];
 
-export default function VulaMarketing({ tenantId }) {
+export default function VulaMarketing({ tenantId, onSendAsBroadcast }) {
   const [kind, setKind] = useState("specials");
   const [topic, setTopic] = useState("");
   const [tone, setTone] = useState("warm & friendly");
@@ -24,9 +24,20 @@ export default function VulaMarketing({ tenantId }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(-1);
+  const [saved, setSaved] = useState([]);
+  const [savedIdx, setSavedIdx] = useState(-1);
 
   const active = KINDS.find(k => k.id === kind);
   const needsTopic = kind === "product" || kind === "promo";
+
+  const loadSaved = useCallback(async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/marketing/saved`);
+      const d = await r.json();
+      setSaved(d.saved || []);
+    } catch {}
+  }, [tenantId]);
+  useEffect(() => { loadSaved(); }, [loadSaved]);
 
   const generate = async () => {
     setErr(""); setVariants([]); setLoading(true);
@@ -45,6 +56,23 @@ export default function VulaMarketing({ tenantId }) {
   const copy = (text, i) => {
     navigator.clipboard?.writeText(text);
     setCopied(i); setTimeout(() => setCopied(-1), 1500);
+  };
+
+  const saveVariant = async (text, i) => {
+    setSavedIdx(i);
+    try {
+      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/marketing/saved`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, topic, tone, body: text }),
+      });
+      loadSaved();
+    } catch {}
+    setTimeout(() => setSavedIdx(-1), 1200);
+  };
+
+  const deleteSaved = async (id) => {
+    setSaved(s => s.filter(x => x.id !== id));
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/marketing/saved/${id}`, { method: "DELETE" }).catch(() => {});
   };
 
   return (
@@ -87,10 +115,37 @@ export default function VulaMarketing({ tenantId }) {
             <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.5 }}>{v}</div>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button style={miniBtn} onClick={() => copy(v, i)}>{copied === i ? "Copied ✓" : "Copy"}</button>
+              <button style={miniBtn} onClick={() => saveVariant(v, i)}>{savedIdx === i ? "Saved ✓" : "💾 Save"}</button>
+              {onSendAsBroadcast && (
+                <button style={{ ...miniBtn, ...btnOn }} onClick={() => onSendAsBroadcast(v)}>📢 Send as broadcast</button>
+              )}
             </div>
           </div>
         ))}
       </div>
+
+      {saved.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <h4 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 10px" }}>📚 Saved copy</h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {saved.map(s => (
+              <div key={s.id} style={{ ...card, background: C.alt }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase" }}>
+                  {KINDS.find(k => k.id === s.kind)?.label || s.kind}{s.topic ? ` · ${s.topic}` : ""}
+                </div>
+                <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.5 }}>{s.body}</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button style={miniBtn} onClick={() => copy(s.body, `s${s.id}`)}>{copied === `s${s.id}` ? "Copied ✓" : "Copy"}</button>
+                  {onSendAsBroadcast && (
+                    <button style={{ ...miniBtn, ...btnOn }} onClick={() => onSendAsBroadcast(s.body)}>📢 Send as broadcast</button>
+                  )}
+                  <button style={{ ...miniBtn, marginLeft: "auto", color: "#C0392B" }} onClick={() => deleteSaved(s.id)}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

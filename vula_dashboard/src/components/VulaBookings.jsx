@@ -19,10 +19,18 @@ const DAYNAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 1..7
 const today = () => new Date().toISOString().slice(0, 10);
 const fmtR = (c) => `R${((c || 0) / 100).toFixed(2)}`;
 
+function mondayOf(d) {
+  const x = new Date(d + "T12:00:00");
+  const dow = x.getDay() || 7;   // Sun=0 → 7
+  x.setDate(x.getDate() - (dow - 1));
+  return x.toISOString().slice(0, 10);
+}
+
 export default function VulaBookings({ tenantId }) {
-  const [view, setView] = useState("day");     // day | services | settings
+  const [view, setView] = useState("day");     // day | week | services | settings
   const [date, setDate] = useState(today());
   const [bookings, setBookings] = useState([]);
+  const [weekBookings, setWeekBookings] = useState([]);
   const [services, setServices] = useState([]);
   const [avail, setAvail] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -42,6 +50,15 @@ export default function VulaBookings({ tenantId }) {
     setAvail(a);
   }, [tenantId, date]);
 
+  const weekStart = mondayOf(date);
+  const loadWeek = useCallback(async () => {
+    if (!tenantId) return;
+    const from = `${weekStart}T00:00:00+02:00`;
+    const b = await fetch(`${VULA_API}/v1/bookings/${tenantId}?from=${encodeURIComponent(from)}`).then(r => r.json()).catch(() => ({}));
+    const weekEnd = shift(weekStart, 7);
+    setWeekBookings((b.bookings || []).filter(x => (x.start_at || "").slice(0, 10) < weekEnd));
+  }, [tenantId, weekStart]);
+
   const loadServices = useCallback(async () => {
     const d = await fetch(`${VULA_API}/v1/bookings/${tenantId}/services?all=true`).then(r => r.json()).catch(() => ({}));
     setServices(d.services || []);
@@ -53,6 +70,7 @@ export default function VulaBookings({ tenantId }) {
   }, [tenantId]);
 
   useEffect(() => { loadDay(); }, [loadDay]);
+  useEffect(() => { if (view === "week") loadWeek(); }, [view, loadWeek]);
   useEffect(() => { loadServices(); }, [loadServices]);
   useEffect(() => { if (view === "settings") loadSettings(); }, [view, loadSettings]);
 
@@ -70,10 +88,10 @@ export default function VulaBookings({ tenantId }) {
     <div style={{ fontFamily: "system-ui", color: C.text }}>
       {/* Sub-nav */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        {["day", "services", "settings"].map(v => (
+        {["day", "week", "services", "settings"].map(v => (
           <button key={v} onClick={() => setView(v)} style={{
             ...btn, ...(view === v ? btnOn : {}),
-          }}>{v === "day" ? "📅 Calendar" : v === "services" ? "🧾 Services" : "⚙️ Availability"}</button>
+          }}>{v === "day" ? "📅 Day" : v === "week" ? "🗓️ Week" : v === "services" ? "🧾 Services" : "⚙️ Availability"}</button>
         ))}
         {msg && <span style={{ color: C.green, fontSize: 13 }}>{msg}</span>}
       </div>
@@ -115,6 +133,46 @@ export default function VulaBookings({ tenantId }) {
               </div>
             );
           })}
+        </>
+      )}
+
+      {view === "week" && (
+        <>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
+            <button style={btn} onClick={() => setDate(shift(weekStart, -7))}>← Prev week</button>
+            <span style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>
+              {weekStart} – {shift(weekStart, 6)}
+            </span>
+            <button style={btn} onClick={() => setDate(shift(weekStart, 7))}>Next week →</button>
+            <button style={btn} onClick={() => setDate(today())}>This week</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
+            {DAYNAMES.map((label, i) => {
+              const d = shift(weekStart, i);
+              const dayBookings = weekBookings.filter(b => (b.start_at || "").slice(0, 10) === d
+                || new Date(b.start_at).toISOString().slice(0, 10) === d);
+              const isToday = d === today();
+              return (
+                <div key={d} style={{ ...card, flexDirection: "column", alignItems: "stretch", gap: 6, cursor: "pointer",
+                  border: isToday ? `2px solid ${C.green}` : `1px solid ${C.border}`, minHeight: 140 }}
+                  onClick={() => { setDate(d); setView("day"); }}>
+                  <div style={{ fontWeight: 700, fontSize: 12.5 }}>{label} <span style={{ fontWeight: 400, color: C.muted }}>{d.slice(5)}</span></div>
+                  {dayBookings.length === 0
+                    ? <div style={{ fontSize: 11, color: C.muted }}>—</div>
+                    : dayBookings.slice(0, 5).map(b => {
+                      const st = STATUS[b.status] || { color: C.muted };
+                      const t = new Date(b.start_at).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg" });
+                      return (
+                        <div key={b.id} style={{ fontSize: 11, padding: "3px 6px", borderRadius: 5, background: C.alt, borderLeft: `3px solid ${st.color}` }}>
+                          <b>{t}</b> {b.customer_name || b.service_name || "—"}
+                        </div>
+                      );
+                    })}
+                  {dayBookings.length > 5 && <div style={{ fontSize: 10.5, color: C.muted }}>+{dayBookings.length - 5} more</div>}
+                </div>
+              );
+            })}
+          </div>
         </>
       )}
 

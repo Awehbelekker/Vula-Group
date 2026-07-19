@@ -26,14 +26,16 @@ const AUDIENCES = [
   { id: 'high_value',   label: 'High-value customers',    hint: 'Customers with total orders > R500' },
 ]
 
-export default function VulaBroadcast({ tenantId }) {
+export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
   const [broadcasts, setBroadcasts] = useState([])
+  const [funnelId, setFunnelId] = useState(null)   // expanded broadcast → funnel drawer (P3)
   const [loading, setLoading] = useState(true)
   const [template, setTemplate] = useState(TEMPLATES[0].id)
   const [audiences, setAudiences] = useState(['all'])
   const toggleAud = (id) => setAudiences(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   const [details, setDetails] = useState('')    // raw details Stacy types for the AI
   const [bodyText, setBodyText] = useState('')   // the actual message that gets sent
+  const [targetUrl, setTargetUrl] = useState('')  // optional link — click-tracked per recipient
   const [drafting, setDrafting] = useState(false)
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(null)       // live-send result {sent, failed, recipient_count}
@@ -48,6 +50,10 @@ export default function VulaBroadcast({ tenantId }) {
   const [counts, setCounts] = useState({ counts: {}, segments: {} })
   const [testPhone, setTestPhone] = useState('')
   const [testMsg, setTestMsg] = useState('')
+  const [realTemplates, setRealTemplates] = useState([])   // approved templates from the 📨 Templates tab
+  const [useApproved, setUseApproved] = useState(false)     // free text (default) vs. an approved template
+  const [approvedName, setApprovedName] = useState('')
+  const [headerImageUrl, setHeaderImageUrl] = useState('')  // real image for a template with an IMAGE header
 
   // Ask the AI assistant to write the broadcast from rough details
   async function writeWithAI() {
@@ -101,18 +107,39 @@ export default function VulaBroadcast({ tenantId }) {
     } catch {}
   }, [tenantId])
 
-  useEffect(() => { load(); loadCampaigns(); loadSegments(); loadCounts() }, [load, loadCampaigns, loadSegments, loadCounts])
+  const loadRealTemplates = useCallback(async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/wa-templates`)
+      const d = await r.json()
+      setRealTemplates((d.templates || []).filter(t => t.status === 'APPROVED'))
+    } catch {}
+  }, [tenantId])
+
+  useEffect(() => { load(); loadCampaigns(); loadSegments(); loadCounts(); loadRealTemplates() }, [load, loadCampaigns, loadSegments, loadCounts, loadRealTemplates])
+
+  // Marketing tab handed off a chosen copy variant — land it in the free-text body (P2.1).
+  useEffect(() => {
+    if (!draftBody) return
+    setUseApproved(false)
+    setBodyText(draftBody)
+    onConsumeDraft && onConsumeDraft()
+  }, [draftBody])  // eslint-disable-line
+
+  const approvedTpl = realTemplates.find(t => t.name === approvedName)
 
   // Send the message to your own number only — a live preview before broadcasting.
   async function sendTest() {
-    if (!bodyText.trim()) { setError('Write the message first.'); return }
+    if (useApproved && !approvedName) { setError('Pick an approved template first.'); return }
+    if (useApproved && approvedTpl?.header_type === 'IMAGE' && !headerImageUrl.trim()) { setError('This template has an image header — add an image URL.'); return }
+    if (!useApproved && !bodyText.trim()) { setError('Write the message first.'); return }
     if (!testPhone.trim()) { setError('Enter a phone number to test to.'); return }
     setTestMsg(''); setError(null)
     try {
-      const tpl = TEMPLATES.find(t => t.id === template)
+      const payload = useApproved
+        ? { template_name: approvedName, header_image_url: headerImageUrl || undefined, target_url: targetUrl || undefined, test_phone: testPhone, dry_run: false }
+        : { body: bodyText, target_url: targetUrl || undefined, test_phone: testPhone, dry_run: false }
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
-        method: 'POST', headers: H,
-        body: JSON.stringify({ body: bodyText, template_name: tpl?.id, test_phone: testPhone, dry_run: false }),
+        method: 'POST', headers: H, body: JSON.stringify(payload),
       })
       const d = await r.json()
       setTestMsg(r.ok && d.sent ? `✓ Test sent to ${testPhone}` : (d.detail || `Could not send test (${d.failed || 0} failed)`))
@@ -173,12 +200,15 @@ export default function VulaBroadcast({ tenantId }) {
 
   // Step 1 — preview (dry-run): who would this reach? No messages sent.
   async function previewBroadcast() {
-    if (!bodyText.trim()) { setError('Write the message first (type it or use ✨ Write with AI).'); return }
+    if (useApproved && !approvedName) { setError('Pick an approved template first.'); return }
+    if (!useApproved && !bodyText.trim()) { setError('Write the message first (type it or use ✨ Write with AI).'); return }
     setSending(true); setError(null); setSent(false); setPreview(null)
     try {
+      const payload = useApproved
+        ? { template_name: approvedName, audience_filter: (audiences.join(',') || 'all'), dry_run: true }
+        : { body: bodyText, audience_filter: (audiences.join(',') || 'all'), dry_run: true }
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
-        method: 'POST', headers: H,
-        body: JSON.stringify({ body: bodyText, audience_filter: (audiences.join(',') || 'all'), dry_run: true }),
+        method: 'POST', headers: H, body: JSON.stringify(payload),
       })
       const d = await r.json()
       if (r.ok) setPreview(d)
@@ -192,12 +222,15 @@ export default function VulaBroadcast({ tenantId }) {
 
   // Step 2 — confirmed live send.
   async function sendBroadcast() {
+    if (useApproved && approvedTpl?.header_type === 'IMAGE' && !headerImageUrl.trim()) { setError('This template has an image header — add an image URL.'); return }
     setSending(true); setError(null); setSent(false)
     try {
       const tpl = TEMPLATES.find(t => t.id === template)
+      const payload = useApproved
+        ? { template_name: approvedName, audience_filter: (audiences.join(',') || 'all'), name: approvedName, header_image_url: headerImageUrl || undefined, target_url: targetUrl || undefined, dry_run: false }
+        : { body: bodyText, audience_filter: (audiences.join(',') || 'all'), name: tpl?.label, target_url: targetUrl || undefined, dry_run: false }
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/send`, {
-        method: 'POST', headers: H,
-        body: JSON.stringify({ body: bodyText, audience_filter: (audiences.join(',') || 'all'), name: tpl?.label, dry_run: false }),
+        method: 'POST', headers: H, body: JSON.stringify(payload),
       })
       const d = await r.json()
       if (r.ok) { setSent(d); setPreview(null); setDetails(''); load() }
@@ -223,45 +256,85 @@ export default function VulaBroadcast({ tenantId }) {
 
       {/* Compose */}
       <div style={s.composeCard}>
-        <p style={s.sectionLabel}>Message template</p>
-        <div style={s.tplList}>
-          {TEMPLATES.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTemplate(t.id)}
-              style={{ ...s.tplBtn, ...(template === t.id ? s.tplBtnActive : {}) }}
-            >
-              <span style={s.tplLabel}>{t.label}</span>
-              <span style={s.tplHint}>{t.hint}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* AI writer — type rough details, let Vula write the message */}
-        <p style={s.sectionLabel}>Your details (let AI write it for you)</p>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <input
-            value={details}
-            onChange={e => setDetails(e.target.value)}
-            placeholder="e.g. yellowtail R180, snoek R95, kob R220, free delivery over R500"
-            style={{ ...s.input, flex: 1 }}
-            onKeyDown={e => { if (e.key === 'Enter') writeWithAI() }}
-          />
-          <button onClick={writeWithAI} disabled={drafting} style={drafting ? s.btnDisabled : s.aiBtn}>
-            {drafting ? 'Writing…' : '✨ Write with AI'}
+        {/* Free text (within 24h of a customer's last message) vs. an approved template
+            (works cold, and can carry a header image / buttons — see 📨 Templates tab) */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <button onClick={() => setUseApproved(false)} style={{ ...s.tplBtn, flex: 1, ...(!useApproved ? s.tplBtnActive : {}) }}>
+            <span style={s.tplLabel}>💬 Free text</span>
+            <span style={s.tplHint}>Only reaches customers active in the last 24h</span>
+          </button>
+          <button onClick={() => setUseApproved(true)} style={{ ...s.tplBtn, flex: 1, ...(useApproved ? s.tplBtnActive : {}) }}>
+            <span style={s.tplLabel}>📨 Approved template</span>
+            <span style={s.tplHint}>{realTemplates.length ? `${realTemplates.length} approved — works cold, supports images/buttons` : 'None approved yet — see 📨 Templates tab'}</span>
           </button>
         </div>
 
-        {/* The actual message — editable, whether typed or AI-written */}
-        <p style={s.sectionLabel}>Message to send (edit anything)</p>
-        <textarea
-          value={bodyText}
-          onChange={e => setBodyText(e.target.value)}
-          placeholder="Type your message here, or use ✨ Write with AI above. This is exactly what customers receive."
-          style={s.textarea}
-          rows={4}
-        />
-        <p style={s.charCount}>{bodyText.length} characters</p>
+        {useApproved ? (
+          <>
+            <p style={s.sectionLabel}>Which template</p>
+            <select value={approvedName} onChange={e => setApprovedName(e.target.value)} style={{ ...s.input, width: '100%', boxSizing: 'border-box' }}>
+              <option value="">Choose an approved template…</option>
+              {realTemplates.map(t => <option key={t.name} value={t.name}>{t.name} ({t.category})</option>)}
+            </select>
+            {approvedTpl && (
+              <div style={{ ...s.textarea, background: '#F8F7F2', color: '#5B5750', display: 'flex', alignItems: 'center' }}>
+                {approvedTpl.body_text}
+              </div>
+            )}
+            {approvedTpl?.header_type === 'IMAGE' && (
+              <input value={headerImageUrl} onChange={e => setHeaderImageUrl(e.target.value)}
+                placeholder="Image URL for this send (required — the template has an image header)"
+                style={{ ...s.input, width: '100%', boxSizing: 'border-box', marginTop: 6 }} />
+            )}
+          </>
+        ) : (
+          <>
+            <p style={s.sectionLabel}>Message template</p>
+            <div style={s.tplList}>
+              {TEMPLATES.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setTemplate(t.id)}
+                  style={{ ...s.tplBtn, ...(template === t.id ? s.tplBtnActive : {}) }}
+                >
+                  <span style={s.tplLabel}>{t.label}</span>
+                  <span style={s.tplHint}>{t.hint}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* AI writer — type rough details, let Vula write the message */}
+            <p style={s.sectionLabel}>Your details (let AI write it for you)</p>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <input
+                value={details}
+                onChange={e => setDetails(e.target.value)}
+                placeholder="e.g. yellowtail R180, snoek R95, kob R220, free delivery over R500"
+                style={{ ...s.input, flex: 1 }}
+                onKeyDown={e => { if (e.key === 'Enter') writeWithAI() }}
+              />
+              <button onClick={writeWithAI} disabled={drafting} style={drafting ? s.btnDisabled : s.aiBtn}>
+                {drafting ? 'Writing…' : '✨ Write with AI'}
+              </button>
+            </div>
+
+            {/* The actual message — editable, whether typed or AI-written */}
+            <p style={s.sectionLabel}>Message to send (edit anything)</p>
+            <textarea
+              value={bodyText}
+              onChange={e => setBodyText(e.target.value)}
+              placeholder="Type your message here, or use ✨ Write with AI above. This is exactly what customers receive."
+              style={s.textarea}
+              rows={4}
+            />
+            <p style={s.charCount}>{bodyText.length} characters</p>
+          </>
+        )}
+
+        {/* Optional trackable link — appended to free text, or fills a template's URL button */}
+        <input value={targetUrl} onChange={e => setTargetUrl(e.target.value)}
+          placeholder="Optional: link to track clicks on (e.g. https://offthehook.co.za/menu)"
+          style={{ ...s.input, width: '100%', boxSizing: 'border-box', marginTop: 6 }} />
 
         {/* Send a test to your own number before broadcasting */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
@@ -410,21 +483,70 @@ export default function VulaBroadcast({ tenantId }) {
       ) : (
         <div style={s.histList}>
           {broadcasts.map(b => (
-            <div key={b.id} style={s.histRow}>
-              <div style={{ flex: 1 }}>
-                <span style={s.histName}>{b.name || b.template_name}</span>
-                <span style={s.histMeta}>
-                  {b.audience_filter} · {b.status} · {new Date(b.created_at).toLocaleDateString('en-ZA')}
-                </span>
+            <div key={b.id}>
+              <div style={{ ...s.histRow, cursor: 'pointer' }}
+                   onClick={() => setFunnelId(funnelId === b.id ? null : b.id)}>
+                <div style={{ flex: 1 }}>
+                  <span style={s.histName}>{b.name || b.template_name}</span>
+                  <span style={s.histMeta}>
+                    {b.audience_filter} · {b.status} · {new Date(b.created_at).toLocaleDateString('en-ZA')}
+                  </span>
+                </div>
+                <div style={s.histStats}>
+                  {b.sent_count > 0 && <span style={s.statChip}>✉ {b.sent_count}</span>}
+                  {b.delivered_count > 0 && <span style={s.statChip}>✓ {b.delivered_count}</span>}
+                  {b.read_count > 0 && <span style={{ ...s.statChip, color: 'var(--accent, var(--accent))' }}>👁 {b.read_count}</span>}
+                  {b.clicked_count > 0 && <span style={{ ...s.statChip, color: 'var(--accent, var(--accent))' }}>🔗 {b.clicked_count}</span>}
+                  <span style={{ ...s.statChip, color: '#8A8680' }}>{funnelId === b.id ? '▴' : '▾'}</span>
+                </div>
               </div>
-              <div style={s.histStats}>
-                {b.sent_count > 0 && <span style={s.statChip}>✉ {b.sent_count}</span>}
-                {b.delivered_count > 0 && <span style={s.statChip}>✓ {b.delivered_count}</span>}
-                {b.read_count > 0 && <span style={{ ...s.statChip, color: 'var(--accent, var(--accent))' }}>👁 {b.read_count}</span>}
-              </div>
+              {funnelId === b.id && <BroadcastFunnel tenantId={tenantId} broadcastId={b.id} />}
             </div>
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+function BroadcastFunnel({ tenantId, broadcastId }) {
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/${broadcastId}/recipients`)
+      .then(r => r.json()).then(setData).catch(() => setData({ funnel: {}, recipients: [] }))
+  }, [tenantId, broadcastId])
+  if (!data) return <p style={{ fontSize: 12, color: '#8A8680', padding: '6px 12px' }}>Loading funnel…</p>
+  const f = data.funnel || {}
+  const stages = [
+    { label: 'Sent', n: f.sent || 0, color: '#8A8680' },
+    { label: 'Delivered', n: f.delivered || 0, color: 'var(--accent, #2C5545)' },
+    { label: 'Read', n: f.read || 0, color: 'var(--accent, #2C5545)' },
+    { label: 'Clicked', n: f.clicked || 0, color: 'var(--accent, #2C5545)' },
+    ...(f.failed ? [{ label: 'Failed', n: f.failed, color: '#A23B2D' }] : []),
+  ]
+  const max = Math.max(1, f.sent || 1)
+  const clickers = (data.recipients || []).filter(r => r.clicked_at)
+  const failures = (data.recipients || []).filter(r => r.status === 'failed')
+  return (
+    <div style={{ background: '#F0EDE5', borderRadius: 8, padding: '10px 14px', margin: '2px 0 8px' }}>
+      {stages.map(st => (
+        <div key={st.label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 12 }}>
+          <span style={{ width: 66, color: '#8A8680' }}>{st.label}</span>
+          <div style={{ flex: 1, height: 8, background: '#fff', borderRadius: 99, overflow: 'hidden' }}>
+            <div style={{ width: `${Math.round(100 * st.n / max)}%`, height: '100%', background: st.color, borderRadius: 99 }} />
+          </div>
+          <span style={{ width: 34, textAlign: 'right', fontFamily: 'monospace', color: '#1E1E1E' }}>{st.n}</span>
+        </div>
+      ))}
+      {clickers.length > 0 && (
+        <p style={{ fontSize: 11.5, color: '#8A8680', margin: '8px 0 0' }}>
+          🔗 Clicked: {clickers.slice(0, 8).map(r => r.phone).join(', ')}{clickers.length > 8 ? ` +${clickers.length - 8} more` : ''}
+        </p>
+      )}
+      {failures.length > 0 && (
+        <p style={{ fontSize: 11.5, color: '#A23B2D', margin: '6px 0 0' }}>
+          ⚠ Failed: {failures.slice(0, 5).map(r => `${r.phone}${r.error ? ` (${String(r.error).slice(0, 30)})` : ''}`).join(', ')}{failures.length > 5 ? ` +${failures.length - 5}` : ''}
+        </p>
       )}
     </div>
   )

@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import VulaImageUpload from './VulaImageUpload'
+import { downloadCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
 import VulaInvoices from './VulaInvoices'
 import VulaBookings from './VulaBookings'
@@ -26,6 +27,8 @@ import VulaRecurringOrders from './VulaRecurringOrders'
 import VulaAgentActivity from './VulaAgentActivity'
 import VulaBudget from './VulaBudget'
 import VulaBroadcast from './VulaBroadcast'
+import VulaWATemplates from './VulaWATemplates'
+import VulaScheduledJobs from './VulaScheduledJobs'
 import VulaCustomers from './VulaCustomers'
 import VulaAssistant from './VulaAssistant'
 import VulaInbox from './VulaInbox'
@@ -43,6 +46,12 @@ import VulaReports from './VulaReports'
 import VulaOrderWorkflow from './VulaOrderWorkflow'
 import VulaClientOnboarding from './VulaClientOnboarding'
 import VulaCSMetrics from './VulaCSMetrics'
+import VulaQS from './VulaQS'
+import VulaQSPro from './VulaQSPro'
+import VulaTakeoff from './VulaTakeoff'
+import VulaDraft from './VulaDraft'
+import VulaTraining from './VulaTraining'
+import VulaAutomations from './VulaAutomations'
 // Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
 const VulaPages = lazy(() => import('./VulaPages'))
 import VulaPayments from './VulaPayments'
@@ -77,8 +86,14 @@ const CATEGORY_LABELS = {
   extras:         'Extras',
 }
 
-export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullPage = false, access = [], full = true }) {
-  const [tab, setTab] = useState('orders')
+export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullPage = false, access = [], full = true, activeTab, onTabChange }) {
+  // Controlled mode (UI overhaul shell): the sidebar (VulaShell via App.jsx) owns navigation and
+  // passes activeTab/onTabChange — we skip our own header + tab strip. Uncontrolled mode keeps
+  // the original internal tabs (still used by the master "Manage tenant" modal).
+  const controlled = activeTab !== undefined
+  const [tabState, setTabState] = useState('orders')
+  const tab = controlled ? activeTab : tabState
+  const setTab = controlled ? (onTabChange || (() => {})) : setTabState
   // A member with a defined access list sees only those modules (+ overview). Owners/
   // managers (full) see everything including Team/Settings.
   const canSee = (id) => full || id === 'overview' || (access || []).includes(id)
@@ -86,11 +101,15 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
   useEffect(() => { if (!canSee(tab)) setTab('overview') }, [access, full])  // eslint-disable-line
   const [products, setProducts] = useState([])
   const [modules, setModules] = useState(null)   // tenant's enabled capability keys (control plane)
+  const [broadcastDraft, setBroadcastDraft] = useState(null)   // Marketing → "Send as broadcast" handoff (P2.1)
 
   // Tenant-level module gating (business-type driven). Always show core tabs; map a few
   // tab ids to their module key. null/empty modules = show everything (no config yet).
-  const CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'qsrates', 'pages', 'marketing', 'bank', 'books', 'labour', 'expenses', 'import'])
-  const MODMAP = { customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders' }
+  const CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'qsrates', 'pages', 'marketing', 'bank', 'books', 'labour', 'expenses', 'import', 'wa-templates', 'scheduling'])
+  const MODMAP = {
+    customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
+    qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft', training: 'training',
+  }
   const tenantHas = (id) => modules === null || !modules.length || CORE.has(id)
     || (modules || []).includes(MODMAP[id] || id)
 
@@ -105,24 +124,24 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
   // Inner content shared by modal + full-page modes.
   const inner = (
     <>
-        {/* Header */}
-        <div style={styles.header}>
+        {/* Header + tab strip — hidden in controlled mode (the shell provides both) */}
+        {!controlled && <div style={styles.header}>
           <div>
             <h2 style={styles.title}>{tenantName}</h2>
             <p style={styles.subtitle}>Merchant admin</p>
           </div>
           {!fullPage && <button onClick={onClose} style={styles.closeBtn}>×</button>}
-        </div>
+        </div>}
 
-        {/* Tabs — grouped for scannability, horizontally scrollable on mobile */}
-        <div style={styles.tabs}>
+        {!controlled && <div style={styles.tabs}>
           {(() => {
             const GROUPS = [
-              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'agentlog', label: '🧠 Agent' }, { id: 'inbox', label: '📥 Inbox' }],
+              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'agentlog', label: '🧠 Agent' }, { id: 'inbox', label: '📥 Inbox' }, { id: 'automations', label: '⚡ Automations' }],
               [{ id: 'orders', label: '📦 Orders' }, { id: 'subscriptions', label: '🔁 Subscriptions' }, { id: 'bookings', label: '📅 Bookings' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
               [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'bank', label: '🏦 Bank' }, { id: 'books', label: '📒 Books' }, { id: 'labour', label: '👷 Labour' }, { id: 'expenses', label: '💸 Expenses' }, { id: 'payments', label: '💳 Payments' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
-              [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'import', label: '📥 Import' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'marketing', label: '✨ Marketing' }, { id: 'pages', label: '🎨 Pages' }],
+              [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'import', label: '📥 Import' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'wa-templates', label: '📨 Templates' }, { id: 'scheduling', label: '⏰ Scheduling' }, { id: 'marketing', label: '✨ Marketing' }, { id: 'pages', label: '🎨 Pages' }],
               [{ id: 'workspace', label: '🗂️ Workspace' }, { id: 'projects', label: '🏗️ Projects' }, { id: 'fieldops', label: '👷 Field Ops' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
+              [{ id: 'qs', label: '🧮 Quick Cost' }, { id: 'qspro', label: '📐 QS Pro' }, { id: 'takeoff', label: '📏 Takeoff' }, { id: 'draft', label: '✍️ AI Draft' }, { id: 'training', label: '📚 Training KB' }],
               [...(full ? [{ id: 'team', label: '👥 Team' }, { id: 'settings', label: '⚙️ Settings' }] : [])],
             ]
             const items = []
@@ -141,10 +160,10 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
                 </button>
               ))
           })()}
-        </div>
+        </div>}
 
         {/* Content */}
-        <div style={styles.content}>
+        <div style={controlled ? styles.contentBare : styles.content}>
           {tab === 'overview'  && <OverviewTab tenantId={tenantId} setTab={setTab} />}
           {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
           {tab === 'agentlog'  && <VulaAgentActivity tenantId={tenantId} />}
@@ -167,8 +186,16 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'contacts'  && <VulaContacts      tenantId={tenantId} />}
           {tab === 'finances'  && <><VulaFinanceInsights tenantId={tenantId} /><VulaFinances tenantId={tenantId} /></>}
           {tab === 'followups' && <VulaFollowups     tenantId={tenantId} />}
-          {tab === 'broadcast' && <><VulaClientOnboarding tenantId={tenantId} /><VulaBroadcast tenantId={tenantId} /></>}
-          {tab === 'marketing' && <VulaMarketing tenantId={tenantId} />}
+          {tab === 'broadcast' && <><VulaClientOnboarding tenantId={tenantId} /><VulaBroadcast tenantId={tenantId} draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)} /></>}
+          {tab === 'wa-templates' && <VulaWATemplates tenantId={tenantId} />}
+          {tab === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} />}
+          {tab === 'marketing' && <VulaMarketing tenantId={tenantId} onSendAsBroadcast={(text) => { setBroadcastDraft(text); setTab('broadcast') }} />}
+          {tab === 'qs'       && <VulaQS />}
+          {tab === 'qspro'    && <VulaQSPro />}
+          {tab === 'takeoff'  && <VulaTakeoff />}
+          {tab === 'draft'    && <VulaDraft tenantId={tenantId} />}
+          {tab === 'training' && <VulaTraining />}
+          {tab === 'automations' && <VulaAutomations tenantId={tenantId} />}
           {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: '#8A8680' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
           {tab === 'projects'  && <VulaProjects      tenantId={tenantId} />}
           {tab === 'fieldops'  && <VulaFieldOps     tenantId={tenantId} />}
@@ -183,9 +210,11 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
     </>
   )
 
-  // Full-page mode (owner/staff dedicated admin) — no modal overlay.
+  // Full-page mode (owner/staff dedicated admin) — no modal overlay. In controlled/shell mode
+  // the shell already provides width + chrome, so no constraining wrapper — and the Puck page
+  // editor gets the FULL viewport (a 1100px clamp cripples a visual canvas).
   if (fullPage) {
-    return <div style={styles.fullPage}>{inner}</div>
+    return <div style={controlled ? (tab === 'pages' ? undefined : { maxWidth: 1100 }) : styles.fullPage}>{inner}</div>
   }
 
   // Modal mode (master clicking "Manage tenant" from the Commerce list).
@@ -220,6 +249,7 @@ function OverviewTab({ tenantId, setTab }) {
   const weekOrders = series.reduce((s, d) => s + (d.orders || 0), 0)
   const aov = stats.total_orders ? stats.total_revenue_cents / stats.total_orders : 0
   const alerts = [
+    { show: stats.open_escalations > 0,     label: 'Customer waiting on you', value: stats.open_escalations,   hint: (stats.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), tab: 'inbox', color: '#C0392B' },
     { show: stats.to_dispatch > 0,          label: 'To dispatch',      value: stats.to_dispatch,                hint: 'orders ready to send', tab: 'orders',   color: '#8b5cf6' },
     { show: stats.pending_payment > 0,      label: 'Awaiting payment', value: stats.pending_payment,            hint: 'unpaid orders',        tab: 'orders',   color: '#f59e0b' },
     { show: stats.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(stats.invoice_overdue_cents), hint: 'chase these',          tab: 'invoices', color: '#C0392B' },
@@ -255,6 +285,31 @@ function OverviewTab({ tenantId, setTab }) {
       ) : (
         <p style={{ ...ovS.sectionLabel, marginTop: 18 }}>✓ All caught up — nothing needs attention right now.</p>
       )}
+
+      {/* Glass-box AI + knowledge — what the assistant did and knows (UI overhaul P3) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14, marginTop: 18 }}>
+        {(stats.agent_recent || []).length > 0 && (
+          <div style={ovS.chartCard}>
+            <p style={ovS.sectionLabel}>🧠 Your assistant, recently <button onClick={() => setTab && setTab('agentlog')} style={{ float: 'right', border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>Watch it work →</button></p>
+            {(stats.agent_recent || []).map((a, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid #ECE8DF', alignItems: 'center' }}>
+                <span style={{ fontFamily: 'monospace', fontSize: 11.5, color: 'var(--accent)' }}>{a.tool}</span>
+                <span style={{ marginLeft: 'auto', color: '#8A8680', fontSize: 11 }}>{String(a.at || '').slice(11, 16)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {stats.knowledge && (stats.knowledge.learned_answers > 0 || stats.knowledge.taught > 0) && (
+          <div style={ovS.chartCard}>
+            <p style={ovS.sectionLabel}>📚 Knowledge pulling through</p>
+            <div style={{ display: 'flex', gap: 18, fontSize: 13 }}>
+              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{stats.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>learned answers</div></div>
+              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{stats.knowledge.taught}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>taught by you</div></div>
+            </div>
+            <p style={{ fontSize: 11.5, color: '#8A8680', margin: '10px 0 0' }}>Everything the assistant knows is visible and editable in the <button onClick={() => setTab && setTab('agentlog')} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11.5, padding: 0, fontWeight: 600 }}>Agent tab</button>.</p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -315,6 +370,7 @@ function OrdersTab({ tenantId }) {
   const [filter, setFilter] = useState('all')
   const [updating, setUpdating] = useState(null)
   const [detailId, setDetailId] = useState(null)
+  const [showManual, setShowManual] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -352,16 +408,28 @@ function OrdersTab({ tenantId }) {
   return (
     <div>
       {/* Filter chips */}
-      <div style={styles.chips}>
-        {filters.map(f => (
-          <button
-            key={f.id}
-            onClick={() => setFilter(f.id)}
-            style={{ ...styles.chip, ...(filter === f.id ? styles.chipActive : {}) }}
-          >
-            {f.label}
-          </button>
-        ))}
+      <div style={{ ...styles.chips, justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {filters.map(f => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              style={{ ...styles.chip, ...(filter === f.id ? styles.chipActive : {}) }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => downloadCsv('orders', orders, [
+            { key: 'display_id', label: 'Order' }, { key: 'customer_name', label: 'Customer' },
+            { key: 'customer_phone', label: 'Phone' }, { key: 'status', label: 'Status' },
+            { label: 'Total (R)', get: o => (o.total_cents / 100).toFixed(2) },
+            { key: 'delivery_slot', label: 'Slot' }, { key: 'channel', label: 'Channel' },
+            { key: 'created_at', label: 'Created' },
+          ])} style={styles.btnGhost} disabled={!orders.length}>⬇ Export CSV</button>
+          <button onClick={() => setShowManual(true)} style={styles.btnAction}>+ New order</button>
+        </div>
       </div>
 
       {loading && <p style={styles.loading}>Loading orders…</p>}
@@ -415,6 +483,152 @@ function OrdersTab({ tenantId }) {
       {detailId && (
         <OrderDetailDrawer tenantId={tenantId} orderId={detailId} onClose={() => setDetailId(null)} />
       )}
+
+      {showManual && (
+        <ManualOrderModal tenantId={tenantId} onClose={() => setShowManual(false)}
+          onCreated={() => { setShowManual(false); load() }} />
+      )}
+    </div>
+  )
+}
+
+// ── Manual order creation (P1.3) — phone/walk-in orders the admin captures directly ─────────
+
+function ManualOrderModal({ tenantId, onClose, onCreated }) {
+  const [products, setProducts] = useState([])
+  const [lines, setLines] = useState([])          // [{product_id, quantity}]
+  const [customerName, setCustomerName] = useState('')
+  const [customerPhone, setCustomerPhone] = useState('')
+  const [address, setAddress] = useState('')
+  const [slot, setSlot] = useState('morning')
+  const [paymentMethod, setPaymentMethod] = useState('cod')
+  const [markPaid, setMarkPaid] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`).then(r => r.json())
+      .then(d => setProducts((d.products || []).filter(p => !p.archived)))
+      .catch(() => {})
+  }, [tenantId])
+
+  const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
+  const priceOf = p => (p.sale_price_cents != null ? p.sale_price_cents : p.price_cents)
+
+  function addLine(productId) {
+    if (!productId) return
+    setLines(ls => {
+      const existing = ls.find(l => l.product_id === productId)
+      if (existing) return ls.map(l => l.product_id === productId ? { ...l, quantity: l.quantity + 1 } : l)
+      return [...ls, { product_id: productId, quantity: 1 }]
+    })
+  }
+  function setQty(productId, qty) {
+    const q = Math.max(0, parseFloat(qty) || 0)
+    setLines(ls => q === 0 ? ls.filter(l => l.product_id !== productId) : ls.map(l => l.product_id === productId ? { ...l, quantity: q } : l))
+  }
+  function removeLine(productId) { setLines(ls => ls.filter(l => l.product_id !== productId)) }
+
+  const total = lines.reduce((sum, l) => {
+    const p = products.find(pp => String(pp.id) === String(l.product_id))
+    return sum + (p ? priceOf(p) * l.quantity : 0)
+  }, 0)
+
+  async function submit() {
+    setError('')
+    if (!lines.length) return setError('Add at least one product.')
+    if (!customerName.trim() || !customerPhone.trim()) return setError('Customer name and phone are required.')
+    setSaving(true)
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/manual`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: lines, customer_name: customerName.trim(), customer_phone: customerPhone.trim(),
+          delivery_address: address.trim() || undefined, delivery_slot: slot,
+          payment_method: paymentMethod, mark_paid: markPaid,
+        }),
+      })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'Could not create order') }
+      onCreated()
+    } catch (e) {
+      setError(e.message || 'Could not create order')
+    }
+    setSaving(false)
+  }
+
+  const field = { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box', width: '100%' }
+
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={{ ...styles.panel, maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+        <div style={styles.header}>
+          <div>
+            <h2 style={styles.title}>+ New order</h2>
+            <p style={styles.subtitle}>Phone / walk-in — captured the same way as a storefront order</p>
+          </div>
+          <button onClick={onClose} style={styles.closeBtn}>×</button>
+        </div>
+
+        <div style={{ ...styles.content, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <select onChange={e => { addLine(e.target.value); e.target.value = '' }} defaultValue="" style={field}>
+            <option value="" disabled>+ Add a product…</option>
+            {products.map(p => (
+              <option key={p.id} value={p.id}>{p.name} — {fmt(priceOf(p))}{p.stock_quantity != null ? ` (${p.stock_quantity} in stock)` : ''}</option>
+            ))}
+          </select>
+
+          {lines.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {lines.map(l => {
+                const p = products.find(pp => String(pp.id) === String(l.product_id))
+                if (!p) return null
+                return (
+                  <div key={l.product_id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1, fontSize: 13 }}>{p.name}</span>
+                    <input type="number" min="0" step="0.5" value={l.quantity}
+                      onChange={e => setQty(l.product_id, e.target.value)}
+                      style={{ ...field, width: 64, padding: '6px 8px' }} />
+                    <span style={{ fontSize: 13, width: 80, textAlign: 'right' }}>{fmt(priceOf(p) * l.quantity)}</span>
+                    <button onClick={() => removeLine(l.product_id)} style={styles.btnDanger}>✕</button>
+                  </div>
+                )
+              })}
+              <div style={{ textAlign: 'right', fontWeight: 700, fontSize: 14, paddingTop: 4, borderTop: '1px solid #EDE9DF' }}>
+                Total: {fmt(total)}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input placeholder="Customer name" value={customerName} onChange={e => setCustomerName(e.target.value)} style={field} />
+            <input placeholder="Phone (WhatsApp)" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} style={field} />
+          </div>
+          <input placeholder="Delivery address (blank = collection)" value={address} onChange={e => setAddress(e.target.value)} style={field} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select value={slot} onChange={e => setSlot(e.target.value)} style={field}>
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+              <option value="evening">Evening</option>
+            </select>
+            <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} style={field}>
+              <option value="cod">Cash on delivery</option>
+              <option value="eft">EFT</option>
+              <option value="card">Card (in person)</option>
+            </select>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+            <input type="checkbox" checked={markPaid} onChange={e => setMarkPaid(e.target.checked)} />
+            Already paid — mark as paid now
+          </label>
+
+          {error && <p style={{ color: '#C0392B', fontSize: 13, margin: 0 }}>{error}</p>}
+
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 6 }}>
+            <button onClick={onClose} style={styles.btnGhost}>Cancel</button>
+            <button onClick={submit} disabled={saving} style={styles.btnAction}>{saving ? 'Creating…' : 'Create order'}</button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -423,11 +637,14 @@ function OrdersTab({ tenantId }) {
 
 function OrderDetailDrawer({ tenantId, orderId, onClose }) {
   const [order, setOrder] = useState(null)
+  const [depth, setDepth] = useState(null)   // timeline + WhatsApp exchange (UI overhaul P3)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/orders/${orderId}`)
       .then(r => r.json()).then(setOrder).catch(() => {}).finally(() => setLoading(false))
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/${orderId}/detail`)
+      .then(r => r.json()).then(setDepth).catch(() => {})
   }, [tenantId, orderId])
 
   const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
@@ -491,6 +708,41 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
               <div style={styles.detailTotal}>
                 <span>Total</span><span>{fmt(order.total_cents)}</span>
               </div>
+
+              {/* Timeline — how this order actually happened (UI overhaul P3) */}
+              {(depth?.timeline || []).length > 0 && (
+                <>
+                  <p style={styles.detailSection}>Timeline</p>
+                  <div style={{ borderLeft: '2px solid #ECE8DF', paddingLeft: 12, marginLeft: 4 }}>
+                    {depth.timeline.map((t, i) => (
+                      <div key={i} style={{ padding: '4px 0', fontSize: 12.5 }}>
+                        <b style={{ color: '#1E1E1E' }}>{t.label}</b>
+                        <span style={{ display: 'block', fontSize: 11, color: '#8A8680' }}>
+                          {String(t.at || '').slice(0, 16).replace('T', ' ')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* The WhatsApp exchange that produced it */}
+              {(depth?.conversation || []).length > 0 && (
+                <>
+                  <p style={styles.detailSection}>From the conversation</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {depth.conversation.map((m, i) => (
+                      <div key={i} style={{
+                        alignSelf: m.role === 'user' ? 'flex-start' : 'flex-end',
+                        background: m.role === 'user' ? '#F0EDE5' : 'var(--accent-soft, rgba(44,85,69,.10))',
+                        borderRadius: 10, padding: '6px 10px', fontSize: 12, maxWidth: '88%',
+                      }}>
+                        {m.text}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
 
               <button onClick={printSlip} style={{ ...styles.btnAction, width: '100%', marginTop: 14, padding: '12px' }}>
                 🖨 Print packing slip
@@ -626,11 +878,14 @@ function DeliveryTab({ tenantId }) {
 
 function ProductsTab({ tenantId }) {
   const [products, setProducts] = useState([])
+  const [categories, setCategories] = useState([])   // per-tenant (migration 073); fallback = legacy labels
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(null)
   const [editPrice, setEditPrice] = useState({}) // id → string
   const [expandedId, setExpandedId] = useState(null) // id of expanded product card
   const [showAdd, setShowAdd] = useState(false)
+  const [showCats, setShowCats] = useState(false)
+  const [newCat, setNewCat] = useState('')
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', price: '', category: 'extras', sold_by: 'pack', description: '' })
 
@@ -639,10 +894,26 @@ function ProductsTab({ tenantId }) {
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`)
     const d = await r.json()
     setProducts(d.products || [])
+    const rc = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/categories`).then(x => x.json()).catch(() => ({}))
+    setCategories(rc.categories || [])
     setLoading(false)
   }, [tenantId])
 
   useEffect(() => { load() }, [load])
+
+  // Per-tenant category labels with legacy fallback (pre-migration-073 tenants).
+  const catLabel = (key) => categories.find(c => c.key === key)?.label || CATEGORY_LABELS[key] || key
+  const catKeys = categories.length ? categories.map(c => c.key) : Object.keys(CATEGORY_LABELS)
+
+  async function addCategory() {
+    const label = newCat.trim()
+    if (!label) return
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/categories`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, sort_order: categories.length + 1 }),
+    })
+    setNewCat(''); await load()
+  }
 
   async function patch(productId, data) {
     setSaving(productId)
@@ -674,7 +945,7 @@ function ProductsTab({ tenantId }) {
   }
 
   async function deleteProduct(p) {
-    if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return
+    if (!confirm(`Remove "${p.name}" from the shop? (Products with order history are archived and can be restored.)`)) return
     setSaving(p.id)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${p.id}`, { method: 'DELETE' })
     await load()
@@ -702,10 +973,13 @@ function ProductsTab({ tenantId }) {
 
   return (
     <div>
-      {/* Add product */}
+      {/* Add product + category manager */}
       <div style={{ marginBottom: 16 }}>
         {!showAdd ? (
-          <button onClick={() => setShowAdd(true)} style={styles.btnAction}>+ Add product</button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => setShowAdd(true)} style={styles.btnAction}>+ Add product</button>
+            <button onClick={() => setShowCats(s => !s)} style={styles.btnGhost}>🏷 Categories</button>
+          </div>
         ) : (
           <form onSubmit={createProduct} style={styles.addProductForm}>
             <input placeholder="Product name" value={form.name} required
@@ -718,7 +992,7 @@ function ProductsTab({ tenantId }) {
                 <option value="kg">per kg</option>
               </select>
               <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={styles.apInput}>
-                {Object.keys(CATEGORY_LABELS).map(c => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+                {catKeys.map(c => <option key={c} value={c}>{catLabel(c)}</option>)}
               </select>
             </div>
             <textarea placeholder="Description (optional)" rows={2} value={form.description}
@@ -734,9 +1008,27 @@ function ProductsTab({ tenantId }) {
         )}
       </div>
 
+      {showCats && (
+        <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <p style={{ fontSize: 12.5, fontWeight: 600, fontFamily: 'system-ui', margin: '0 0 8px' }}>Your categories</p>
+          {(categories.length ? categories : Object.keys(CATEGORY_LABELS).map(k => ({ key: k, label: CATEGORY_LABELS[k] }))).map(c => (
+            <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontFamily: 'system-ui', background: '#F0EDE5', borderRadius: 999, padding: '4px 12px', margin: '0 6px 6px 0' }}>
+              {c.label}
+            </span>
+          ))}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input placeholder="New category (e.g. Smoked Fish)" value={newCat} onChange={e => setNewCat(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addCategory()}
+              style={{ flex: 1, padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui' }} />
+            <button onClick={addCategory} style={styles.btnAction}>Add</button>
+          </div>
+          {!categories.length && <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: '8px 0 0' }}>Adding your first category needs migration 073.</p>}
+        </div>
+      )}
+
       {Object.entries(grouped).map(([cat, items]) => (
         <div key={cat} style={{ marginBottom: 24 }}>
-          <h3 style={styles.catHeader}>{CATEGORY_LABELS[cat] || cat}</h3>
+          <h3 style={styles.catHeader}>{catLabel(cat)}</h3>
           <div style={styles.list}>
             {items.map(p => (
               <div key={p.id} style={{ ...styles.productCard, opacity: p.in_stock ? 1 : 0.6 }}>
@@ -792,56 +1084,160 @@ function ProductsTab({ tenantId }) {
                   </button>
                 </div>
 
-                {/* Expanded: image upload + description */}
+                {/* Expanded: full edit panel (migration 073 depth) */}
                 {expandedId === p.id && (
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #EDE9DF' }}>
-                    <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' }}>
-                      Product photos
-                    </p>
-                    <VulaImageUpload
-                      tenantId={tenantId}
-                      existingUrls={p.image_url ? [p.image_url] : []}
-                      maxFiles={3}
-                      onUploaded={(urls) => {
-                        if (urls.length > 0) patch(p.id, { image_url: urls[0] })
-                      }}
-                    />
-                    <div style={{ marginTop: 12 }}>
-                      <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 6px' }}>
-                        Description / notes
-                      </p>
-                      <textarea
-                        defaultValue={p.description || p.notes || ''}
-                        rows={3}
-                        onBlur={e => {
-                          const val = e.target.value.trim()
-                          if (val !== (p.description || p.notes || '')) {
-                            patch(p.id, { description: val })
-                          }
-                        }}
-                        style={{
-                          width: '100%', padding: '8px 10px',
-                          border: '1px solid #DDD8CE', borderRadius: 6,
-                          fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E',
-                          resize: 'vertical', boxSizing: 'border-box',
-                        }}
-                        placeholder="e.g. Skin-on, boneless, great for braaing"
-                      />
-                    </div>
-                    <button
-                      onClick={() => deleteProduct(p)}
-                      disabled={saving === p.id}
-                      style={styles.btnDeleteProduct}
-                    >
-                      🗑 Delete product
-                    </button>
-                  </div>
+                  <ProductEditPanel tenantId={tenantId} product={p} patch={patch} saving={saving}
+                    deleteProduct={deleteProduct} catKeys={catKeys} catLabel={catLabel} />
                 )}
               </div>
             ))}
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+// Deep product editor (UI e-commerce depth, 2026-07-17): name/category/sold-by editable
+// post-create, numeric stock, multi-image gallery (persists ALL urls to `images`, first =
+// cover), sale price with end date, weight/pack/serves, archive-aware delete.
+function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, catKeys, catLabel }) {
+  const [f, setF] = useState({
+    name: p.name || '', category: p.category || 'extras', sold_by: p.sold_by || 'pack',
+    stock: p.stock_quantity ?? '', sale: p.sale_price_cents != null ? (p.sale_price_cents / 100).toFixed(2) : '',
+    saleEnds: (p.sale_ends_at || '').slice(0, 10), weight: p.weight_grams ?? '', packSize: p.pack_size ?? '',
+    serves: p.serves ?? '',
+    reorderThreshold: p.reorder_threshold ?? '', reorderQty: p.reorder_qty ?? '',
+    defaultSupplierId: p.default_supplier_id || '',
+  })
+  const [suppliers, setSuppliers] = useState([])
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`).then(r => r.json())
+      .then(d => setSuppliers(d.suppliers || [])).catch(() => {})
+  }, [tenantId])
+  const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
+  const inp = { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  const lbl = { fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }
+
+  function saveDetails() {
+    const upd = { name: f.name.trim() || p.name, category: f.category, sold_by: f.sold_by }
+    if (f.stock !== '' && !isNaN(parseInt(f.stock))) upd.stock_quantity = parseInt(f.stock)
+    const saleC = f.sale === '' ? null : Math.round(parseFloat(f.sale) * 100)
+    upd.sale_price_cents = (saleC && saleC > 0) ? saleC : null
+    upd.sale_ends_at = f.saleEnds ? `${f.saleEnds}T23:59:59+02:00` : null
+    if (f.weight !== '') upd.weight_grams = parseInt(f.weight) || null
+    if (f.packSize !== '') upd.pack_size = f.packSize
+    if (f.serves !== '') upd.serves = parseInt(f.serves) || null
+    upd.reorder_threshold = f.reorderThreshold === '' ? null : parseInt(f.reorderThreshold) || null
+    upd.reorder_qty = f.reorderQty === '' ? null : parseInt(f.reorderQty) || null
+    upd.default_supplier_id = f.defaultSupplierId || null
+    patch(p.id, upd)
+  }
+
+  const gallery = (p.images && p.images.length) ? p.images : (p.image_url ? [p.image_url] : [])
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #EDE9DF', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {p.archived && (
+        <div style={{ fontSize: 12.5, fontFamily: 'system-ui', color: '#A23B2D' }}>
+          📦 Archived — hidden from the shop. <button onClick={() => patch(p.id, { archived: false })} style={{ ...styles.btnGhost, color: 'var(--accent)' }}>Restore</button>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <div><span style={lbl}>Name</span>
+          <input value={f.name} onChange={e => set('name', e.target.value)} style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Category</span>
+          <select value={f.category} onChange={e => set('category', e.target.value)} style={{ ...inp, width: '100%' }}>
+            {[...new Set([...catKeys, f.category])].map(c => <option key={c} value={c}>{catLabel(c)}</option>)}
+          </select></div>
+        <div><span style={lbl}>Sold by</span>
+          <select value={f.sold_by} onChange={e => set('sold_by', e.target.value)} style={{ ...inp, width: '100%' }}>
+            <option value="pack">per pack / item</option><option value="kg">per kg</option>
+          </select></div>
+        <div><span style={lbl}>Stock on hand (blank = untracked)</span>
+          <input type="number" value={f.stock} onChange={e => set('stock', e.target.value)} placeholder="e.g. 12" style={{ ...inp, width: '100%' }} /></div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <div><span style={lbl}>🔥 Sale price (R, blank = no sale)</span>
+          <input type="number" step="0.01" value={f.sale} onChange={e => set('sale', e.target.value)} placeholder="e.g. 169.00" style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Sale ends</span>
+          <input type="date" value={f.saleEnds} onChange={e => set('saleEnds', e.target.value)} style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Weight (g)</span>
+          <input type="number" value={f.weight} onChange={e => set('weight', e.target.value)} style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Pack size / serves</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={f.packSize} onChange={e => set('packSize', e.target.value)} placeholder="e.g. 4 per pack" style={{ ...inp, flex: 1, minWidth: 0 }} />
+            <input type="number" value={f.serves} onChange={e => set('serves', e.target.value)} placeholder="serves" style={{ ...inp, width: 70 }} />
+          </div></div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <div><span style={lbl}>🔔 Reorder when stock ≤</span>
+          <input type="number" value={f.reorderThreshold} onChange={e => set('reorderThreshold', e.target.value)} placeholder="e.g. 5" style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Reorder quantity</span>
+          <input type="number" value={f.reorderQty} onChange={e => set('reorderQty', e.target.value)} placeholder="e.g. 20" style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Default supplier</span>
+          <select value={f.defaultSupplierId} onChange={e => set('defaultSupplierId', e.target.value)} style={{ ...inp, width: '100%' }}>
+            <option value="">— none —</option>
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select></div>
+      </div>
+
+      <button onClick={saveDetails} disabled={saving === p.id} style={{ ...styles.btnAction, alignSelf: 'flex-start' }}>
+        {saving === p.id ? 'Saving…' : 'Save details'}
+      </button>
+
+      <div>
+        <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' }}>
+          Photo gallery <span style={{ fontWeight: 400, color: '#8A8680' }}>— first photo is the cover</span>
+        </p>
+        <VulaImageUpload
+          tenantId={tenantId}
+          existingUrls={gallery}
+          maxFiles={5}
+          onUploaded={(urls) => {
+            const all = [...gallery, ...urls]
+            patch(p.id, { images: all, image_url: all[0] })
+          }}
+        />
+        {gallery.length > 1 && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+            {gallery.map((u, i) => (
+              <div key={u} style={{ position: 'relative' }}>
+                <img src={u} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: i === 0 ? '2px solid var(--accent)' : '1px solid #DDD8CE' }} />
+                <button title={i === 0 ? 'Cover photo' : 'Make cover'} onClick={() => {
+                  const re = [u, ...gallery.filter(x => x !== u)]
+                  patch(p.id, { images: re, image_url: re[0] })
+                }} style={{ position: 'absolute', top: 2, left: 2, fontSize: 10, border: 'none', borderRadius: 4, background: 'rgba(255,255,255,.85)', cursor: 'pointer', padding: '1px 4px' }}>{i === 0 ? '★' : '☆'}</button>
+                <button title="Remove photo" onClick={() => {
+                  const re = gallery.filter(x => x !== u)
+                  patch(p.id, { images: re, image_url: re[0] || null })
+                }} style={{ position: 'absolute', top: 2, right: 2, fontSize: 10, border: 'none', borderRadius: 4, background: 'rgba(255,255,255,.85)', cursor: 'pointer', padding: '1px 4px', color: '#A23B2D' }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 6px' }}>Description</p>
+        <textarea
+          defaultValue={p.description || p.notes || ''}
+          rows={3}
+          onBlur={e => {
+            const val = e.target.value.trim()
+            if (val !== (p.description || p.notes || '')) patch(p.id, { description: val })
+          }}
+          style={{ width: '100%', padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', resize: 'vertical', boxSizing: 'border-box' }}
+          placeholder="e.g. Skin-on, boneless, great for braaing"
+        />
+      </div>
+
+      <button onClick={() => deleteProduct(p)} disabled={saving === p.id} style={styles.btnDeleteProduct}>
+        🗑 {p.archived ? 'Delete permanently' : 'Remove product'}
+      </button>
     </div>
   )
 }
@@ -986,6 +1382,112 @@ function SuppliersTab({ tenantId }) {
           ))}
         </div>
       )}
+
+      <PurchaseOrders tenantId={tenantId} />
+    </div>
+  )
+}
+
+// ── Purchase orders + auto-reorder (P3.3) ───────────────────────────────────
+
+function PurchaseOrders({ tenantId }) {
+  const [suggestions, setSuggestions] = useState([])
+  const [pos, setPos] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const [s, p] = await Promise.all([
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reorder-suggestions`).then(r => r.json()).catch(() => ({})),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders`).then(r => r.json()).catch(() => ({})),
+    ])
+    setSuggestions(s.groups || [])
+    setPos(p.purchase_orders || [])
+    setLoading(false)
+  }, [tenantId])
+  useEffect(() => { load() }, [load])
+
+  async function createFromSuggestion(group) {
+    setBusy(group.supplier_id || 'unassigned')
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        supplier_id: group.supplier_id, supplier_name: group.supplier_name,
+        items: group.items.map(it => ({
+          product_id: it.product_id, name: it.name, quantity: it.suggested_qty, unit_cost_cents: it.unit_cost_cents,
+        })),
+      }),
+    })
+    await load()
+    setBusy(null)
+  }
+
+  async function advance(po, status) {
+    setBusy(po.id)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders/${po.id}/status`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+    })
+    await load()
+    setBusy(null)
+  }
+
+  const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
+  const PO_STATUS = { draft: '📝 Draft', sent: '📤 Sent', received: '✅ Received', cancelled: '✕ Cancelled' }
+
+  if (loading) return <p style={styles.loading}>Loading purchase orders…</p>
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <p style={{ fontSize: 14, fontWeight: 700, fontFamily: 'system-ui', color: '#1E1E1E', margin: '0 0 10px' }}>
+        📋 Purchase orders
+      </p>
+
+      {suggestions.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <p style={{ fontSize: 12.5, fontFamily: 'system-ui', color: '#b45309', fontWeight: 600, margin: '0 0 8px' }}>
+            🔔 Low stock — suggested reorders
+          </p>
+          {suggestions.map((g, i) => (
+            <div key={i} style={{ ...styles.productCard, background: 'rgba(180,83,9,0.06)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <span style={styles.productName}>{g.supplier_name}</span>
+                <button onClick={() => createFromSuggestion(g)} disabled={busy === (g.supplier_id || 'unassigned')} style={styles.btnAction}>
+                  {busy === (g.supplier_id || 'unassigned') ? 'Creating…' : '+ Create PO'}
+                </button>
+              </div>
+              <div style={{ ...styles.statSub, marginTop: 4 }}>
+                {g.items.map(it => `${it.name} (${it.stock_quantity} left → order ${it.suggested_qty})`).join(' · ')}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pos.length === 0 ? (
+        <p style={{ fontSize: 13, color: '#8A8680', fontFamily: 'system-ui' }}>No purchase orders yet — set a reorder threshold on a product to get suggestions.</p>
+      ) : (
+        <div style={styles.list}>
+          {pos.map(po => (
+            <div key={po.id} style={styles.productCard}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <div>
+                  <span style={styles.productName}>{po.supplier_name || 'Unassigned'}</span>
+                  <span style={{ ...styles.statSub, marginLeft: 8 }}>{PO_STATUS[po.status] || po.status} · {fmt(po.total_cents)}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {po.status === 'draft' && <button disabled={busy === po.id} onClick={() => advance(po, 'sent')} style={styles.btnGhost}>Mark sent</button>}
+                  {po.status === 'sent' && <button disabled={busy === po.id} onClick={() => advance(po, 'received')} style={styles.btnAction}>Mark received</button>}
+                  {(po.status === 'draft' || po.status === 'sent') && <button disabled={busy === po.id} onClick={() => advance(po, 'cancelled')} style={styles.btnDanger}>Cancel</button>}
+                </div>
+              </div>
+              <div style={{ ...styles.statSub, marginTop: 4 }}>
+                {(po.items || []).map(it => `${it.name} ×${it.quantity}`).join(' · ')}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1005,6 +1507,7 @@ const styles = {
   tabActive:    { color:'var(--accent, var(--accent))', borderBottom:'2px solid var(--accent, var(--accent))', fontWeight:600 },
   tabDivider:   { width:1, height:18, background:'#DDD8CE', margin:'0 6px', flex:'0 0 auto' },
   content:      { padding:'20px 28px', flex:1, overflowY:'auto' },
+  contentBare:  { padding:'20px 24px', flex:1, minWidth:0 },  // controlled/shell mode — shell owns chrome
   loading:      { color:'#8A8680', fontSize:13, fontFamily:'system-ui' },
   empty:        { color:'#8A8680', fontSize:13, fontFamily:'system-ui', padding:'24px 0', textAlign:'center' },
   error:        { color:'#ef4444', fontSize:13, fontFamily:'system-ui' },

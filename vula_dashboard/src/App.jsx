@@ -21,9 +21,9 @@ import VulaProjectWorkspace from "./components/VulaProjectWorkspace";
 import VulaQuickLauncher from "./components/VulaQuickLauncher";
 import VulaReports from "./components/VulaReports";
 import VulaPayments from "./components/VulaPayments";
-import VulaTenants from "./components/VulaTenants";
+import VulaMasterPanel from "./components/VulaMasterPanel";
+import { VULA_API } from "./lib/authFetch";
 import VulaSubscriptions from "./components/VulaSubscriptions";
-import VulaAISpend from "./components/VulaAISpend";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
 import VulaCommerce from "./components/VulaCommerce";
@@ -33,8 +33,10 @@ import VulaInvoices from "./components/VulaInvoices";
 import VulaBudget from "./components/VulaBudget";
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 import VulaSmartScanner from "./components/VulaSmartScanner";
+import VulaShell from "./components/VulaShell";
+import { MERCHANT_GROUPS, MASTER_GROUPS, filterGroups, labelFor, merchantVisible } from "./navConfig";
 import { getTenantTheme, themeVars } from "./theme/tenantThemes";
-import { applyAccent } from "./theme/tokens";
+import { applyAccent, applyInk, applyFontPairing } from "./theme/tokens";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -62,14 +64,13 @@ const TABS = [
   { id: "team", label: "Team", component: VulaTeam },
   { id: "docs", label: "Documents", component: VulaDocuments },
   { id: "subscriptions", label: "Subscriptions", component: VulaSubscriptions },
-  { id: "aispend", label: "AI Spend", component: VulaAISpend },
   { id: "training", label: "Training KB", component: VulaTraining },
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },
   { id: "commerce", label: "Commerce", component: VulaCommerce },
   { id: "reports", label: "Reports", component: VulaReports },
   { id: "payments", label: "Payments", component: VulaPayments },
-  { id: "tenants", label: "Tenants", component: VulaTenants },
+  { id: "master", label: "🛠 Master", component: VulaMasterPanel },
   { id: "merchant", label: "Merchant", component: VulaMerchantAdmin },
   { id: "invoices", label: "Invoices", component: VulaInvoices },
   { id: "budget", label: "Budget", component: VulaBudget },
@@ -82,17 +83,30 @@ const TENANT_NAMES = {
   "awake-sa": "Awake South Africa",
 };
 
-// Tenants the master account can switch between.
-const MASTER_TENANTS = [
+// Fallback switcher list if /v1/tenants is unreachable — the live list is DB-driven.
+const MASTER_TENANTS_FALLBACK = [
   { id: "digg-demo", label: "DIGG Architecture" },
   { id: "off-the-hook", label: "Off the Hook" },
 ];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [merchTab, setMerchTab] = useState("overview");
   const [route, setRoute] = useState(window.location.hash);
   const [masterTenant, setMasterTenant] = useState("digg-demo");
+  const [masterTenants, setMasterTenants] = useState(MASTER_TENANTS_FALLBACK);
+  const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
+  const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const { user, role, tenantId, logout, access, full, setMember } = useAuthStore();
+
+  // DB-driven tenant switcher: every configured tenant, not a hardcoded pair.
+  useEffect(() => {
+    if (role !== "master") return;
+    fetch(`${VULA_API}/v1/tenants`).then(r => r.json()).then(d => {
+      const list = (d.tenants || []).map(t => ({ id: t.tenant_id, label: t.display_name || t.tenant_id }));
+      if (list.length) setMasterTenants(list);
+    }).catch(() => {});
+  }, [role]);
 
   // Track hash changes for public legal routes
   useEffect(() => {
@@ -101,27 +115,33 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Brand the whole portal in the tenant's accent: baseline from tenantThemes, then
-  // override from the DB (commerce_invoice_settings.accent_color) so a tenant's chosen
-  // brand colour drives buttons/tabs/borders everywhere — not just the invoice PDF.
+  // Brand the whole portal from the tenant's brand kit: baseline from tenantThemes, then
+  // override from the DB (commerce_invoice_settings — accent/ink/font) so a tenant's own choices
+  // drive buttons/tabs/borders/headings everywhere — not just the invoice PDF (P3 brand kit).
   useEffect(() => {
     const tid = (role === "master") ? masterTenant
       : (tenantId && tenantId !== "master" ? tenantId : "digg-demo");
-    const baseAccent = getTenantTheme(tid).accent;
-    applyAccent(baseAccent);
+    const baseTheme = getTenantTheme(tid);
+    applyAccent(baseTheme.accent);
+    applyInk(baseTheme.ink);
     let meta = document.querySelector('meta[name="theme-color"]');
     if (!meta) { meta = document.createElement("meta"); meta.name = "theme-color"; document.head.appendChild(meta); }
-    meta.content = baseAccent;
+    meta.content = baseTheme.accent;
 
     const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
     fetch(`${API}/v1/commerce/${tid}/admin/invoice-settings`)
       .then((r) => r.json())
       .then((d) => {
-        const c = d?.settings?.accent_color;
+        const s = d?.settings || {};
+        const c = s.accent_color;
         if (c && /^#?[0-9a-fA-F]{3,8}$/.test(c)) {
           const hex = c.startsWith("#") ? c : `#${c}`;
           applyAccent(hex); meta.content = hex;
         }
+        if (s.ink_color && /^#?[0-9a-fA-F]{3,8}$/.test(s.ink_color)) {
+          applyInk(s.ink_color.startsWith("#") ? s.ink_color : `#${s.ink_color}`);
+        }
+        if (s.font_pairing) applyFontPairing(s.font_pairing);
       })
       .catch(() => {});
   }, [role, tenantId, masterTenant]);
@@ -135,7 +155,32 @@ export default function App() {
       .then((r) => r.json())
       .then((d) => setMember({ access: d.access, full: d.full }))
       .catch(() => setMember({ access: [], full: true }));
+    // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
+    fetch(`${API}/v1/tenants/${tid}`)
+      .then((r) => r.json())
+      .then((d) => setTenantModules(d.modules || d.tenant?.modules || []))
+      .catch(() => setTenantModules([]));
   }, [user, role, tenantId, setMember]);
+
+  // Real Inbox badge (P0.4): count of open escalations waiting on a human — polled per
+  // effective tenant, for whichever shell (owner/staff or master-open-as-tenant) is live.
+  useEffect(() => {
+    if (!user || role === "master" && activeTab !== "merchant") return;
+    const tid = (role === "master") ? masterTenant
+      : (tenantId && tenantId !== "master" ? tenantId : "digg-demo");
+    const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+    const poll = () => fetch(`${API}/v1/commerce/${tid}/admin/escalations?status=open`)
+      .then(r => r.json())
+      .then(d => setOpenEscalations(d.open_count ?? (d.escalations || []).length ?? 0))
+      .catch(() => {});
+    poll();
+    const t = setInterval(poll, 20000);
+    return () => clearInterval(t);
+  }, [user, role, tenantId, masterTenant, activeTab]);
+
+  const withInboxBadge = (groups, count) => !count ? groups : groups.map(g => ({
+    ...g, items: g.items.map(it => it.id === "inbox" ? { ...it, badge: count > 99 ? "99+" : String(count) } : it),
+  }));
 
   // Public legal pages — no auth required (needed for Meta app publishing)
   if (route === "#/privacy") return <VulaPrivacy view="privacy" />;
@@ -165,148 +210,102 @@ export default function App() {
   }
 
   // ── Merchant owners/staff get a scoped, single-store admin ───────────────────
-  // No construction tools, no master Commerce view — just their shop, themed
-  // as their own brand (logo + accent), "Powered by Vula".
+  // Sidebar shell (UI overhaul Phase 2) themed as THEIR brand — logo + accent at the top,
+  // "Powered by Vula" at the bottom. Same VulaMerchantAdmin content, shell-controlled nav.
   if (role === "owner" || role === "staff") {
     const theme = getTenantTheme(effectiveTenantId);
     const tenantName = theme.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
+    const groups = withInboxBadge(filterGroups(MERCHANT_GROUPS,
+      merchantVisible({ full, access, modules: tenantModules })), openEscalations);
     return (
-      <div style={{ minHeight: "100vh", background: COLORS.bg, ...themeVars(theme) }}>
-        <nav style={{
-          background: COLORS.surface, borderBottom: `1px solid ${COLORS.border}`,
-          padding: "0 20px", display: "flex", alignItems: "center", gap: 12,
-          position: "sticky", top: 0, zIndex: 200, height: 56, boxSizing: "border-box",
-        }}>
-          {theme.logoUrl ? (
-            <img src={theme.logoUrl} alt={tenantName}
-                 style={{ height: 30, width: "auto", objectFit: "contain" }} />
-          ) : (
-            <div style={{
-              fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700,
-              color: "var(--ink)",
-            }}>
-              {tenantName}
-            </div>
-          )}
-          <span style={{
-            fontSize: 10, color: COLORS.muted, fontFamily: "system-ui",
-            border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "2px 8px",
-          }}>
-            Powered by Vula
-          </span>
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 12, color: COLORS.muted, fontFamily: "system-ui" }}>
-              {user.email}
-            </span>
-            <button
-              onClick={() => { logout(); }}
-              style={{
-                padding: "6px 14px", border: `1px solid ${COLORS.border}`,
-                borderRadius: 6, background: "transparent",
-                color: COLORS.muted, fontSize: 12, cursor: "pointer", fontFamily: "system-ui",
-              }}
-            >
-              Sign out
-            </button>
-          </div>
-        </nav>
-        <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} fullPage access={access} full={full} />
+      <div style={{ ...themeVars(theme) }}>
+        <VulaShell
+          brand={{ logoUrl: theme.logoUrl, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: theme.tagline || "Business admin" }}
+          groups={groups}
+          activeId={merchTab}
+          onSelect={setMerchTab}
+          title={labelFor(MERCHANT_GROUPS, merchTab) || "Home"}
+          userEmail={user.email}
+          onLogout={logout}
+        >
+          <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} fullPage
+            access={access} full={full} activeTab={merchTab} onTabChange={setMerchTab} />
+        </VulaShell>
         <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
       </div>
     );
   }
 
-  return (
-    <div style={{ minHeight: "100vh", background: COLORS.bg }}>
-      {/* Top nav */}
-      <nav style={{
-        background: COLORS.surface,
-        borderBottom: `1px solid ${COLORS.border}`,
-        padding: "0 24px",
-        display: "flex", alignItems: "center", gap: 0,
-        position: "sticky", top: 0, zIndex: 200,
-        overflowX: "auto", whiteSpace: "nowrap",
-      }}>
-        <div style={{
-          fontFamily: "'Cormorant Garamond', serif",
-          fontSize: 22, fontWeight: 700,
-          color: COLORS.charcoal, marginRight: 32,
-          padding: "16px 0",
-        }}>
-          Vula
-        </div>
-        {(() => {
-          const GROUP = {
-            dashboard: 'AI', agent: 'AI', workspace: 'AI', draft: 'AI',
-            qs: 'Estimating', qspro: 'Estimating', takeoff: 'Estimating',
-            projects: 'Knowledge', qsrates: 'Knowledge', docs: 'Knowledge', training: 'Knowledge',
-            contacts: 'Office', finances: 'Office', followups: 'Office', team: 'Office',
-            commerce: 'Commerce', merchant: 'Commerce', invoices: 'Commerce', budget: 'Commerce', scanner: 'Commerce', reports: 'Commerce', payments: 'Commerce',
-            onboard: 'Clients', admin: 'Clients', subscriptions: 'Clients',
-            field: 'Field',
+  // ── Master "Open as tenant": full merchant-shell takeover (P0.2) ─────────────
+  // Selecting Merchant previously rendered VulaMerchantAdmin in its MODAL branch (off-centre
+  // overlay + old tab strip). Now the master steps INTO the tenant's real shell — same
+  // experience the owner gets — with a "← Master HQ" way back.
+  if (activeTab === "merchant") {
+    const mTheme = getTenantTheme(effectiveTenantId);
+    const mName = mTheme.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
+    const mGroups = withInboxBadge(filterGroups(MERCHANT_GROUPS, () => true), openEscalations); // master sees every module
+    return (
+      <div style={{ ...themeVars(mTheme) }}>
+        <VulaShell
+          brand={{ logoUrl: mTheme.logoUrl, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
+          groups={mGroups}
+          activeId={merchTab}
+          onSelect={setMerchTab}
+          title={labelFor(MERCHANT_GROUPS, merchTab) || "Home"}
+          userEmail={user.email}
+          roleLabel="master"
+          onLogout={logout}
+          headerExtra={
+            <button onClick={() => setActiveTab("dashboard")}
+              style={{ padding: "6px 12px", border: `1px solid ${COLORS.border}`, borderRadius: 6,
+                       background: COLORS.surface, color: "var(--text, #2A2A2A)", fontSize: 12,
+                       cursor: "pointer", fontFamily: "system-ui", fontWeight: 600 }}>
+              ← Master HQ
+            </button>
           }
-          let prev = null
-          const out = []
-          TABS.forEach((t) => {
-            const g = GROUP[t.id]
-            if (prev !== null && g !== prev) {
-              out.push(<span key={`div-${t.id}`} style={{ width: 1, height: 18, background: COLORS.border, margin: "0 4px", flex: "0 0 auto" }} />)
-            }
-            prev = g
-            out.push(
-              <button key={t.id} onClick={() => setActiveTab(t.id)}
-                style={{
-                  padding: "18px 16px", border: "none", background: "none", cursor: "pointer",
-                  fontSize: 13, fontWeight: activeTab === t.id ? 600 : 400,
-                  color: activeTab === t.id ? COLORS.green : COLORS.muted,
-                  borderBottom: activeTab === t.id ? `2px solid ${COLORS.green}` : "2px solid transparent",
-                  fontFamily: "system-ui", transition: "all 0.15s", flex: "0 0 auto",
-                }}>
-                {t.label}
-              </button>
-            )
-          })
-          return out
-        })()}
+        >
+          <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={mName} fullPage
+            access={[]} full activeTab={merchTab} onTabChange={setMerchTab} />
+        </VulaShell>
+      </div>
+    );
+  }
 
-        {/* User + logout */}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12, paddingRight: 8 }}>
-          {role === "master" && (
-            <select
-              value={masterTenant}
-              onChange={(e) => setMasterTenant(e.target.value)}
-              title="Switch tenant"
-              style={{
-                padding: "6px 10px", border: `1px solid ${COLORS.border}`,
-                borderRadius: 6, background: COLORS.surface, color: COLORS.charcoal,
-                fontSize: 12, fontFamily: "system-ui", cursor: "pointer",
-              }}
-            >
-              {MASTER_TENANTS.map((t) => (
-                <option key={t.id} value={t.id}>{t.label}</option>
-              ))}
-            </select>
-          )}
-          <span style={{ fontSize: 12, color: COLORS.muted, fontFamily: "system-ui" }}>
-            {user.email} {role === "master" ? "· master" : ""}
-          </span>
-          <button
-            onClick={() => { logout(); }}
+  // ── Master (Vula operator) shell — grouped sidebar, tenant switcher in the top bar ──
+  return (
+    <>
+      <VulaShell
+        brand={{ logoEmoji: "◆", name: "Vula", sub: "Master · all tenants" }}
+        groups={MASTER_GROUPS}
+        activeId={activeTab}
+        onSelect={setActiveTab}
+        title={labelFor(MASTER_GROUPS, activeTab) || "Dashboard"}
+        userEmail={user.email}
+        roleLabel={role === "master" ? "master" : undefined}
+        onLogout={logout}
+        headerExtra={role === "master" ? (
+          <select
+            value={masterTenant}
+            onChange={(e) => setMasterTenant(e.target.value)}
+            title="Switch tenant"
             style={{
-              padding: "6px 14px", border: `1px solid ${COLORS.border}`,
-              borderRadius: 6, background: "transparent",
-              color: COLORS.muted, fontSize: 12, cursor: "pointer",
-              fontFamily: "system-ui",
+              padding: "6px 10px", border: `1px solid ${COLORS.border}`,
+              borderRadius: 6, background: COLORS.surface, color: "var(--text, #2A2A2A)",
+              fontSize: 12, fontFamily: "system-ui", cursor: "pointer",
             }}
           >
-            Sign out
-          </button>
+            {masterTenants.map((t) => (
+              <option key={t.id} value={t.id}>{t.label}</option>
+            ))}
+          </select>
+        ) : null}
+      >
+        <div style={{ padding: "4px 0 24px" }}>
+          <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
+            onOpenTenant={(tid) => { setMasterTenant(tid); setActiveTab("merchant"); }} />
         </div>
-      </nav>
-
-      {/* Active view — pass tenantId to every component that needs it */}
-      <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId} />
+      </VulaShell>
       <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
-    </div>
+    </>
   );
 }

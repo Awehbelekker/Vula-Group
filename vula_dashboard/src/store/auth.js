@@ -6,6 +6,7 @@
  */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { supabase } from '../lib/supabase'
 
 export const useAuthStore = create(
   persist(
@@ -18,7 +19,13 @@ export const useAuthStore = create(
 
       login: (user, tenantId, role) => set({ user, tenantId, role }),
       setMember: ({ access, full }) => set({ access: access || [], full: !!full }),
-      logout: () => set({ user: null, tenantId: null, role: null, access: [], full: true }),
+      // Sign-out must kill the SUPABASE session too — clearing only the store left the session
+      // alive, and the login screen's mount effect immediately logged the user back in
+      // (confirmed live 2026-07-17: sign-out was impossible).
+      logout: async () => {
+        try { await supabase.auth.signOut() } catch { /* still clear local state */ }
+        set({ user: null, tenantId: null, role: null, access: [], full: true })
+      },
     }),
     { name: 'vula-auth' }
   )

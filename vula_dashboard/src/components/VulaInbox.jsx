@@ -12,6 +12,7 @@ const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.
 
 export default function VulaInbox({ tenantId }) {
   const [convos, setConvos] = useState([])
+  const [escalations, setEscalations] = useState([])
   const [loading, setLoading] = useState(true)
   const [active, setActive] = useState(null)      // session_id of open thread
 
@@ -24,11 +25,21 @@ export default function VulaInbox({ tenantId }) {
     setLoading(false)
   }, [tenantId])
 
+  const loadEscalations = useCallback(async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations`)
+      const d = await r.json()
+      setEscalations(d.escalations || [])
+    } catch {}
+  }, [tenantId])
+
   useEffect(() => {
     load()
+    loadEscalations()
     const t = setInterval(load, 15000)   // refresh list every 15s
-    return () => clearInterval(t)
-  }, [load])
+    const te = setInterval(loadEscalations, 15000)
+    return () => { clearInterval(t); clearInterval(te) }
+  }, [load, loadEscalations])
 
   const since = ts => {
     if (!ts) return ''
@@ -49,6 +60,17 @@ export default function VulaInbox({ tenantId }) {
         <h3 style={s.h3}>📥 Inbox</h3>
         <p style={s.sub}>Every customer chat, live. Open one to read it — or take over from the AI.</p>
       </div>
+
+      {escalations.length > 0 && (
+        <div style={s.escWrap}>
+          <div style={s.escHeader}>❓ Waiting on you ({escalations.length})</div>
+          <div style={s.escList}>
+            {escalations.map(e => (
+              <EscalationRow key={e.id} tenantId={tenantId} esc={e} onDone={loadEscalations} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? <p style={s.muted}>Loading…</p> : convos.length === 0 ? (
         <p style={s.muted}>No conversations yet. When customers message your WhatsApp line, they'll appear here.</p>
@@ -72,6 +94,68 @@ export default function VulaInbox({ tenantId }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── One open escalation — answer or dismiss straight from the dashboard ───────
+
+function EscalationRow({ tenantId, esc, onDone }) {
+  const [answer, setAnswer] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const since = ts => {
+    if (!ts) return ''
+    const mins = Math.floor((Date.now() - new Date(ts)) / 60000)
+    if (mins < 1) return 'just now'
+    if (mins < 60) return `${mins}m ago`
+    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`
+    return `${Math.floor(mins / 1440)}d ago`
+  }
+
+  async function send() {
+    const text = answer.trim()
+    if (!text || busy) return
+    setBusy(true)
+    try {
+      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/answer`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answer: text }),
+      })
+      onDone()
+    } catch {}
+    setBusy(false)
+  }
+
+  async function dismiss() {
+    if (busy) return
+    setBusy(true)
+    try {
+      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/escalations/${esc.id}/dismiss`, { method: 'POST' })
+      onDone()
+    } catch {}
+    setBusy(false)
+  }
+
+  return (
+    <div style={s.escRow}>
+      <div style={s.escTop}>
+        <span style={s.name}>{esc.customer_phone}</span>
+        <span style={s.time}>{since(esc.created_at)}</span>
+      </div>
+      <div style={s.escQuestion}>{esc.question}</div>
+      <div style={s.escInputRow}>
+        <input
+          value={answer}
+          onChange={e => setAnswer(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && send()}
+          placeholder="Type the answer to send…"
+          style={s.escInput}
+          disabled={busy}
+        />
+        <button onClick={send} disabled={busy || !answer.trim()} style={s.escSendBtn}>Send</button>
+        <button onClick={dismiss} disabled={busy} style={s.escDismissBtn}>Dismiss</button>
+      </div>
     </div>
   )
 }
@@ -225,6 +309,16 @@ const s = {
   time:        { fontFamily: 'system-ui', fontSize: 11, color: '#B5B0A8', flexShrink: 0 },
   preview:     { fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   pausedBadge: { fontFamily: 'system-ui', fontSize: 11, fontWeight: 600, color: '#b45309', background: 'rgba(245,158,11,0.15)', padding: '3px 8px', borderRadius: 10, flexShrink: 0 },
+  escWrap:     { background: 'rgba(180,83,9,0.06)', border: '1px solid rgba(180,83,9,0.25)', borderRadius: 10, padding: 12, marginBottom: 14 },
+  escHeader:   { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: '#b45309', marginBottom: 8 },
+  escList:     { display: 'flex', flexDirection: 'column', gap: 8 },
+  escRow:      { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px' },
+  escTop:      { display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 },
+  escQuestion: { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', marginBottom: 8, lineHeight: 1.4 },
+  escInputRow: { display: 'flex', gap: 6 },
+  escInput:    { flex: 1, padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, boxSizing: 'border-box' },
+  escSendBtn:  { padding: '7px 12px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0 },
+  escDismissBtn: { padding: '7px 10px', background: 'transparent', color: '#8A8680', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0 },
   threadWrap:  { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 190px)', minHeight: 420 },
   threadHeader:{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10, borderBottom: '1px solid #EDE9DF' },
   backBtn:     { padding: '6px 12px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680', flexShrink: 0 },
