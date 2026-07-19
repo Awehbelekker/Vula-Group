@@ -67,7 +67,18 @@ def effective_price_cents(product: dict) -> int:
 
 
 async def list_products(tenant_id: str, category: Optional[str] = None, in_stock_only: bool = True,
-                        include_archived: bool = False) -> List[dict]:
+                        include_archived: bool = False,
+                        statuses: Optional[set] = None,
+                        with_variant_price_range: bool = False) -> List[dict]:
+    """statuses: when given, restrict to rows whose `status` is in this set — used by
+    public-facing reads (migration 085) so a draft/archived product is never surfaced outside
+    the merchant admin. None (the default) means no status filtering, i.e. admin call sites
+    keep seeing every product regardless of status, unchanged.
+
+    with_variant_price_range: when true, attaches `variant_price_range: {min, max}` (in cents)
+    to any product that has priced, non-archived variants — used by storefront grid views to
+    show "From R{x}" (migration 087, Phase 4). Opt-in and best-effort so the 20+ other call
+    sites of this function (WhatsApp assistant, marketing, admin) are unaffected."""
     q = _client().table("commerce_products").select("*").eq("tenant_id", tenant_id)
     if category:
         q = q.eq("category", category)
@@ -77,6 +88,25 @@ async def list_products(tenant_id: str, category: Optional[str] = None, in_stock
     rows = result.data or []
     if not include_archived:
         rows = [r for r in rows if not r.get("archived")]
+    if statuses is not None:
+        rows = [r for r in rows if (r.get("status") or "active") in statuses]
+    if with_variant_price_range and rows:
+        try:
+            ids = [r["id"] for r in rows]
+            vrows = (_client().table("commerce_product_variants")
+                     .select("product_id,price_cents,archived")
+                     .eq("tenant_id", tenant_id).in_("product_id", ids).execute().data or [])
+            by_product: dict = {}
+            for v in vrows:
+                if v.get("archived") or v.get("price_cents") is None:
+                    continue
+                by_product.setdefault(v["product_id"], []).append(v["price_cents"])
+            for r in rows:
+                prices = by_product.get(r["id"])
+                if prices:
+                    r["variant_price_range"] = {"min": min(prices), "max": max(prices)}
+        except Exception as exc:
+            logger.debug("variant price range skipped (run migration 087?): %s", exc)
     return rows
 
 
@@ -90,10 +120,16 @@ async def get_product(tenant_id: str, product_id: str) -> Optional[dict]:
         .single()
         .execute()
     )
-    return result.data
+    product = result.data
+    if product:
+        product["variants"] = await list_variants(tenant_id, product["id"], include_archived=False)
+    return product
 
 
-async def get_product_by_slug(tenant_id: str, slug: str) -> Optional[dict]:
+async def get_product_by_slug(tenant_id: str, slug: str,
+                              statuses: Optional[set] = None) -> Optional[dict]:
+    """statuses: when given, a product whose `status` isn't in this set is treated as not
+    found — see list_products' `statuses` param."""
     result = (
         _client()
         .table("commerce_products")
@@ -103,7 +139,12 @@ async def get_product_by_slug(tenant_id: str, slug: str) -> Optional[dict]:
         .single()
         .execute()
     )
-    return result.data
+    product = result.data
+    if product and statuses is not None and (product.get("status") or "active") not in statuses:
+        return None
+    if product:
+        product["variants"] = await list_variants(tenant_id, product["id"], include_archived=False)
+    return product
 
 
 async def create_product(tenant_id: str, data: dict) -> dict:
@@ -123,6 +164,14 @@ async def update_product_stock(tenant_id: str, product_id: str, quantity_delta: 
     _client().rpc(
         "decrement_product_stock",
         {"p_tenant_id": tenant_id, "p_product_id": product_id, "p_delta": quantity_delta},
+    ).execute()
+
+
+async def update_variant_stock(variant_id: str, quantity_delta: int) -> None:
+    """Variant equivalent of update_product_stock (migration 087)."""
+    _client().rpc(
+        "decrement_variant_stock",
+        {"p_variant_id": variant_id, "p_delta": quantity_delta},
     ).execute()
 
 
@@ -155,10 +204,15 @@ async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
         if qty <= 0:
             continue
         delta = -qty if restore else qty   # positive decrements; negative restores
+        vid = it.get("variant_id")
         try:
-            await update_product_stock(tenant_id, pid, delta)
+            if vid:
+                await update_variant_stock(vid, delta)
+            else:
+                await update_product_stock(tenant_id, pid, delta)
         except Exception as exc:
-            logger.warning("stock adjust failed for product %s (order %s): %s", pid, order_id, exc)
+            logger.warning("stock adjust failed for product %s variant %s (order %s): %s",
+                           pid, vid, order_id, exc)
     try:
         _client().table("commerce_orders").update(
             {"stock_adjusted": (not restore), "updated_at": _now()}
@@ -169,13 +223,26 @@ async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
     return True
 
 
+def _order_item_name(cart_item: dict) -> str:
+    """Product name for an order/receipt line — appends the variant's option values
+    (e.g. "Hake Fillets — Size: L") when the cart item is for a specific variant."""
+    name = cart_item.get("commerce_products", {}).get("name", "")
+    variant = cart_item.get("commerce_product_variants")
+    options = (variant or {}).get("option_values") or {}
+    if options:
+        suffix = ", ".join(f"{k}: {v}" for k, v in options.items())
+        return f"{name} — {suffix}" if name else suffix
+    return name
+
+
 # ── Cart ─────────────────────────────────────────────────────────────────────
 
 async def get_or_create_cart(tenant_id: str, session_id: str, customer_phone: Optional[str] = None) -> dict:
     result = (
         _client()
         .table("commerce_carts")
-        .select("*, commerce_cart_items(*, commerce_products(name, price_cents, image_url))")
+        .select("*, commerce_cart_items(*, commerce_products(name, price_cents, image_url), "
+                "commerce_product_variants(option_values, sku))")
         .eq("tenant_id", tenant_id)
         .eq("session_id", session_id)
         .eq("status", "active")
@@ -200,17 +267,19 @@ async def get_or_create_cart(tenant_id: str, session_id: str, customer_phone: Op
     return result.data[0]
 
 
-async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: float) -> dict:
-    # Check existing
-    existing = (
+async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: float,
+                      variant_id: Optional[str] = None) -> dict:
+    # Check existing — matched on (cart, product, variant) so different variants of the same
+    # product are separate lines, and non-variant items keep matching each other as before.
+    q = (
         _client()
         .table("commerce_cart_items")
         .select("*")
         .eq("cart_id", cart_id)
         .eq("product_id", product_id)
-        .limit(1)
-        .execute()
     )
+    q = q.eq("variant_id", variant_id) if variant_id else q.is_("variant_id", "null")
+    existing = q.limit(1).execute()
 
     if existing.data:
         row = existing.data[0]
@@ -237,10 +306,28 @@ async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: f
         raise ValueError(f"Product {product_id} not found for tenant {tenant_id}")
     unit_price = effective_price_cents(product.data)
 
+    if variant_id:
+        variant = (
+            _client()
+            .table("commerce_product_variants")
+            .select("price_cents,archived")
+            .eq("id", variant_id)
+            .eq("product_id", product_id)
+            .single()
+            .execute()
+        )
+        if not variant.data or variant.data.get("archived"):
+            raise ValueError(f"Variant {variant_id} not found for product {product_id}")
+        # A variant's own price is authoritative (no product-level sale layered on top) —
+        # a variant with no price of its own inherits the product's sale-aware price.
+        if variant.data.get("price_cents") is not None:
+            unit_price = int(variant.data["price_cents"])
+
     item = {
         "id": str(uuid.uuid4()),
         "cart_id": cart_id,
         "product_id": product_id,
+        "variant_id": variant_id,
         "quantity": quantity,
         "unit_price_cents": unit_price,
         "created_at": _now(),
@@ -321,7 +408,8 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
             "id": str(uuid.uuid4()),
             "order_id": order_id,
             "product_id": i["product_id"],
-            "product_name": i.get("commerce_products", {}).get("name", ""),
+            "variant_id": i.get("variant_id"),
+            "product_name": _order_item_name(i),
             "quantity": i["quantity"],
             "unit_price_cents": i["unit_price_cents"],
             "total_cents": int(round(i["quantity"] * i["unit_price_cents"])),
@@ -453,6 +541,51 @@ async def delete_product(tenant_id: str, product_id: str) -> None:
         .eq("id", product_id)
         .execute()
     )
+
+
+# ── Product variants (migration 087, Phase 4) ────────────────────────────────
+
+async def list_variants(tenant_id: str, product_id: str, include_archived: bool = True) -> List[dict]:
+    try:
+        q = (_client().table("commerce_product_variants").select("*")
+             .eq("tenant_id", tenant_id).eq("product_id", product_id))
+        if not include_archived:
+            q = q.eq("archived", False)
+        result = q.order("sort_order").execute()
+        return result.data or []
+    except Exception as exc:
+        logger.debug("variants list skipped (run migration 087?): %s", exc)
+        return []
+
+
+async def create_variant(tenant_id: str, product_id: str, data: dict) -> dict:
+    payload = {
+        "id": str(uuid.uuid4()), "tenant_id": tenant_id, "product_id": product_id,
+        "created_at": _now(), "updated_at": _now(), **data,
+    }
+    result = _client().table("commerce_product_variants").insert(payload).execute()
+    return result.data[0]
+
+
+async def update_variant(tenant_id: str, variant_id: str, data: dict) -> dict:
+    data["updated_at"] = _now()
+    result = (_client().table("commerce_product_variants").update(data)
+              .eq("tenant_id", tenant_id).eq("id", variant_id).execute())
+    return result.data[0] if result.data else {}
+
+
+async def delete_variant(tenant_id: str, variant_id: str) -> None:
+    (_client().table("commerce_product_variants").delete()
+     .eq("tenant_id", tenant_id).eq("id", variant_id).execute())
+
+
+async def find_by_barcode(tenant_id: str, barcode: str) -> Optional[dict]:
+    """Barcode scan lookup (Smart Scanner POS prep) — returns the variant plus its parent
+    product, or None if nothing matches."""
+    result = (_client().table("commerce_product_variants")
+              .select("*, commerce_products(*)")
+              .eq("tenant_id", tenant_id).eq("barcode", barcode).limit(1).execute())
+    return result.data[0] if result.data else None
 
 
 async def update_order_status(order_id: str, status: str, yoco_checkout_id: Optional[str] = None) -> None:

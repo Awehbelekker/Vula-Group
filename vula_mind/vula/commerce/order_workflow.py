@@ -22,11 +22,18 @@ _DEFAULTS = {
     "free_delivery_over_cents": None, "min_order_cents": None,
     # Marketplace-style geo coverage (migration 074): shop pin + radius.
     "origin_lat": None, "origin_lng": None, "origin_label": None, "delivery_radius_km": None,
+    # Storefront presentation (migration 084) — moved here from off_the_hook's own local
+    # store-settings.json when its admin was retired, so this content has one real home instead
+    # of living only on the storefront's own disk.
+    "hero_tagline": None, "hero_subtitle": None, "announcements": None,
+    "cutoff_time": None, "express_delivery_extra_cents": None, "featured_product_ids": None,
 }
 _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp",
            "payment_methods", "eft_details",
            "delivery_areas", "delivery_fee_cents", "free_delivery_over_cents", "min_order_cents",
-           "origin_lat", "origin_lng", "origin_label", "delivery_radius_km")
+           "origin_lat", "origin_lng", "origin_label", "delivery_radius_km",
+           "hero_tagline", "hero_subtitle", "announcements", "cutoff_time",
+           "express_delivery_extra_cents", "featured_product_ids")
 
 # Customer-facing labels for the payment methods.
 PAYMENT_LABELS = {"online": "Card / online payment", "cod": "Pay on delivery", "eft": "EFT / bank transfer"}

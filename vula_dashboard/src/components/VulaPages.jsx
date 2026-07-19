@@ -23,6 +23,14 @@ function norm(data) {
   };
 }
 
+// Preview viewport switcher (P4) — Puck renders its own Monitor/Tablet/Smartphone toolbar icons
+// once given a list, no custom UI needed.
+const PREVIEW_VIEWPORTS = [
+  { width: 1440, height: "auto", label: "Desktop", icon: "Monitor" },
+  { width: 768, height: "auto", label: "Tablet", icon: "Tablet" },
+  { width: 390, height: "auto", label: "Mobile", icon: "Smartphone" },
+];
+
 const btn = (bg) => ({ padding: "8px 14px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#fff", background: bg, cursor: "pointer" });
 const rowStyle = { textAlign: "left", padding: "10px 12px", border: `1px solid #DDD8CE`, borderRadius: 8, background: "#FAF9F6", cursor: "pointer" };
 const ghost = { padding: "8px 12px", border: `1px solid ${C.border}`, background: C.surface, color: C.text, borderRadius: 8, cursor: "pointer", fontSize: 13 };
@@ -66,7 +74,11 @@ export default function VulaPages({ tenantId }) {
   const [creating, setCreating] = useState(false);
   const [newForm, setNewForm] = useState({ title: "", template: "blank" });
   const [showSeo, setShowSeo] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [versions, setVersions] = useState(null);
   const [msg, setMsg] = useState("");
+  const [storeUrl, setStoreUrl] = useState(null);
+  const [showLivePreview, setShowLivePreview] = useState(false);
   const latestData = useRef(null);   // Puck's live document (survives re-renders/saves)
 
   // Live product blocks in the editor preview need the tenant + API globals.
@@ -74,6 +86,15 @@ export default function VulaPages({ tenantId }) {
     window.__VULA_PAGE_TENANT = tenantId;
     window.__VULA_API = VULA_API;
   }, [tenantId]);
+
+  // The tenant's actual live website — so "what does my site look like right now" is answerable
+  // without leaving the dashboard. Falls back to the Vula-hosted page renderer if no custom
+  // domain is configured yet.
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/tenants/${tenantId}`).then((r) => r.json())
+      .then((d) => setStoreUrl(d.store_url || null)).catch(() => setStoreUrl(null));
+  }, [tenantId]);
+  const liveUrl = storeUrl || `${window.location.origin}/#/page/${tenantId}/home`;
 
   const load = () =>
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages`)
@@ -133,6 +154,34 @@ export default function VulaPages({ tenantId }) {
     load();
   };
 
+  const move = async (index, dir) => {
+    const next = [...pages];
+    const j = index + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[index], next[j]] = [next[j], next[index]];
+    setPages(next);   // optimistic
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/reorder`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order: next.map((p) => p.slug) }),
+    }).catch(() => {});
+  };
+
+  const loadVersions = async () => {
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}/versions`)
+      .then((r) => r.json()).catch(() => ({}));
+    setVersions(d.versions || []);
+  };
+
+  const restoreVersion = async (versionId) => {
+    if (!window.confirm("Restore this version? It'll come back as a draft — review before publishing.")) return;
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}/versions/${versionId}/restore`, { method: "POST" }).catch(() => {});
+    const p = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}`).then((r) => r.json()).catch(() => ({}));
+    setEditing((e) => ({ ...e, data: norm(p.puck_data), status: p.status || "draft", title: p.title || e.title, seo: p.seo || {} }));
+    setShowHistory(false);
+    setMsg("Restored as draft ✓");
+    setTimeout(() => setMsg(""), 2000);
+  };
+
   if (editing) {
     const publicUrl = `${window.location.origin}/#/page/${tenantId}/${editing.slug}`;
     return (
@@ -149,9 +198,26 @@ export default function VulaPages({ tenantId }) {
           {msg && <span style={{ color: "#2C7A4B", fontSize: 12 }}>{msg}</span>}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
             <button onClick={() => setShowSeo(s => !s)} style={ghost}>🔍 SEO</button>
+            <button onClick={() => { setShowHistory(v => !v); if (!showHistory) loadVersions(); }} style={ghost}>🕐 History</button>
             <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>View live ↗</a>
           </div>
         </div>
+
+        {showHistory && (
+          <div style={{ margin: "0 0 10px", background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
+            {versions === null ? <span style={{ fontSize: 12, color: C.muted }}>Loading…</span> :
+              versions.length === 0 ? <span style={{ fontSize: 12, color: C.muted }}>No earlier versions yet — a snapshot is taken every time you publish over an existing page.</span> :
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {versions.map((v) => (
+                    <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                      <span style={{ color: C.muted, minWidth: 140 }}>{new Date(v.created_at).toLocaleString("en-ZA")}</span>
+                      <span style={{ flex: 1 }}>{v.title}</span>
+                      <button onClick={() => restoreVersion(v.id)} style={{ ...ghost, padding: "4px 10px", fontSize: 11 }}>Restore as draft</button>
+                    </div>
+                  ))}
+                </div>}
+          </div>
+        )}
 
         {showSeo && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px", background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
@@ -171,7 +237,8 @@ export default function VulaPages({ tenantId }) {
         </p>
         <div style={{ height: "74vh", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
           <Puck config={config} data={editing.data} onPublish={(data) => persist(data, "published")}
-            onChange={(data) => { latestData.current = data; }} />
+            onChange={(data) => { latestData.current = data; }}
+            viewports={PREVIEW_VIEWPORTS} />
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <button onClick={() => persist(latestData.current || editing.data, "draft")} style={ghost}>💾 Save draft</button>
@@ -194,6 +261,27 @@ export default function VulaPages({ tenantId }) {
         current catalog and prices. Published pages appear on your website automatically.
       </p>
 
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: showLivePreview ? 8 : 0 }}>
+          <button onClick={() => setShowLivePreview((v) => !v)} style={ghost}>
+            {showLivePreview ? "▲ Hide" : "▼ Show"} current live site
+          </button>
+          {storeUrl && <a href={liveUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Open in new tab ↗</a>}
+          {!storeUrl && <span style={{ fontSize: 11, color: C.muted }}>(no custom domain configured — previewing the Vula-hosted page)</span>}
+        </div>
+        {showLivePreview && (
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 480, background: "#FAF9F6" }}>
+            <iframe
+              key={liveUrl}
+              src={liveUrl}
+              title="Current live site"
+              style={{ width: "100%", height: "100%", border: "none" }}
+              onError={(e) => { e.target.style.display = "none"; }}
+            />
+          </div>
+        )}
+      </div>
+
       {creating && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
           <input placeholder="Page name (e.g. Winter Specials)" value={newForm.title} autoFocus
@@ -211,8 +299,14 @@ export default function VulaPages({ tenantId }) {
       {pages === null ? <p style={{ color: C.muted }}>Loading…</p> :
         pages.length === 0 ? <p style={{ color: C.muted }}>No pages yet — create your first one (try the "Store home" template).</p> :
           <div style={{ display: "grid", gap: 8 }}>
-            {pages.map((p) => (
+            {pages.map((p, i) => (
               <div key={p.slug} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <button onClick={() => move(i, -1)} disabled={i === 0} title="Move up"
+                    style={{ ...ghost, padding: "1px 8px", fontSize: 10, opacity: i === 0 ? 0.3 : 1, borderBottom: "none", borderRadius: "6px 6px 0 0" }}>▲</button>
+                  <button onClick={() => move(i, 1)} disabled={i === pages.length - 1} title="Move down"
+                    style={{ ...ghost, padding: "1px 8px", fontSize: 10, opacity: i === pages.length - 1 ? 0.3 : 1, borderRadius: "0 0 6px 6px" }}>▼</button>
+                </div>
                 <button onClick={() => open(p.slug, p.title)} style={{ ...rowStyle, flex: 1 }}>
                   <span style={{ fontWeight: 600, color: C.text }}>{p.title || p.slug}</span>
                   <span style={{ color: C.muted, fontSize: 12 }}>  /{p.slug}</span>

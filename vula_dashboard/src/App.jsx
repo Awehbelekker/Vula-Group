@@ -26,7 +26,6 @@ import { VULA_API } from "./lib/authFetch";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
-import VulaCommerce from "./components/VulaCommerce";
 import VulaDraft from "./components/VulaDraft";
 import VulaAgent from "./components/VulaAgent";
 import VulaInvoices from "./components/VulaInvoices";
@@ -67,7 +66,6 @@ const TABS = [
   { id: "training", label: "Training KB", component: VulaTraining },
   { id: "admin", label: "Signups", component: VulaAdmin },
   { id: "field", label: "Field Ops", component: VulaFieldOps },
-  { id: "commerce", label: "Commerce", component: VulaCommerce },
   { id: "reports", label: "Reports", component: VulaReports },
   { id: "payments", label: "Payments", component: VulaPayments },
   { id: "master", label: "🛠 Master", component: VulaMasterPanel },

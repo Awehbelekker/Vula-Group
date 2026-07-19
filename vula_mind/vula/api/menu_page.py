@@ -34,7 +34,7 @@ async def photo_menu(tenant_id: str) -> HTMLResponse:
     from vula.commerce import service as cs
 
     try:
-        products = await cs.list_products(tenant_id, in_stock_only=True)
+        products = await cs.list_products(tenant_id, in_stock_only=True, statuses={"active"})
     except Exception:
         products = []
     try:

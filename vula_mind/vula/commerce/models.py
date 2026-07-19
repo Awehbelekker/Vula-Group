@@ -125,6 +125,7 @@ class Cart(BaseModel):
 class AddToCartRequest(BaseModel):
     product_id: UUID
     quantity: int = 1
+    variant_id: Optional[UUID] = None
     customer_phone: Optional[str] = None
 
     @field_validator("quantity")

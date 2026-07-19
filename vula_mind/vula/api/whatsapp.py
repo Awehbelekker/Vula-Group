@@ -2660,7 +2660,7 @@ async def _send_category_products(phone: str, tenant_id: str, category: str) -> 
         return False
     try:
         from vula.commerce import service as _cs
-        prods = await _cs.list_products(tenant_id, category=category, in_stock_only=True)
+        prods = await _cs.list_products(tenant_id, category=category, in_stock_only=True, statuses={"active"})
     except Exception:
         prods = []
     rows = [{"id": f"prod_{p.get('id')}", "title": (p.get("name") or "Item")[:24],
@@ -2691,7 +2691,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     # Build the menu from the tenant's LIVE in-stock catalog.
     try:
         from vula.commerce import service as _cs
-        prods = await _cs.list_products(tenant_id, in_stock_only=True)
+        prods = await _cs.list_products(tenant_id, in_stock_only=True, statuses={"active"})
     except Exception as exc:
         logger.debug("welcome catalog fetch failed: %s", exc)
         prods = []

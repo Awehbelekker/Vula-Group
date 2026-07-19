@@ -20,3 +20,32 @@ export function downloadCsv(filename, rows, columns) {
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
 }
+
+/** Minimal RFC4180-ish CSV parser (quoted fields, escaped "", commas/newlines inside quotes).
+ * Returns an array of objects keyed by the header row. */
+export function parseCsv(text) {
+  const rows = []
+  let row = [], cell = '', inQuotes = false
+  const pushCell = () => { row.push(cell); cell = '' }
+  const pushRow = () => { pushCell(); rows.push(row); row = [] }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++ } else { inQuotes = false }
+      } else cell += c
+    } else if (c === '"') inQuotes = true
+    else if (c === ',') pushCell()
+    else if (c === '\n') pushRow()
+    else if (c === '\r') { /* skip, \n handles the line break */ }
+    else cell += c
+  }
+  if (cell !== '' || row.length) pushRow()
+  if (!rows.length) return []
+  const header = rows[0].map(h => h.trim())
+  return rows.slice(1).filter(r => r.some(v => v !== '')).map(r => {
+    const obj = {}
+    header.forEach((h, i) => { obj[h] = r[i] !== undefined ? r[i] : '' })
+    return obj
+  })
+}

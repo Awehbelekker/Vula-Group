@@ -69,7 +69,8 @@ async def master_tenants():
         s = signups.get(c["tenant_id"]) or {}
         out.append({
             **{k: c.get(k) for k in ("tenant_id", "display_name", "business_type", "modules",
-                                     "theme", "active", "plan") if k in c},
+                                     "theme", "active", "plan", "store_url",
+                                     "default_payment_provider") if k in c},
             "paid": s.get("paid"), "signup_status": s.get("status"),
             "trial_ends": s.get("trial_ends"), "signup_email": s.get("email"),
             "logins": user_counts.get(c["tenant_id"], 0),
@@ -81,7 +82,8 @@ async def master_tenants():
 async def master_update_tenant(tenant_id: str, body: dict,
                                identity: dict = Depends(require_master)):
     """Update a tenant's config (modules, display_name, theme, active). Audited."""
-    allowed = {"display_name", "business_type", "modules", "theme", "active", "plan"}
+    allowed = {"display_name", "business_type", "modules", "theme", "active", "plan",
+               "store_url", "default_payment_provider"}
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")

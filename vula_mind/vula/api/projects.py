@@ -259,6 +259,107 @@ async def update_task(tenant: str, task_id: str, body: TaskPatch) -> dict:
     return {"id": task_id, **patch}
 
 
+# ── Project board (Milanote-style cards, migration 089) ────────────────────────
+# A board is implicitly (tenant_id, project) — same simplification as brief/tasks
+# above. Cards are freely positioned (x/y/width/height) and hold loose JSONB
+# content shaped by card_type: note {text}, image {url,caption}, link {url,title},
+# checklist {items:[{text,done}]}.
+
+@router.get("/{tenant}/p/{project}/board")
+async def list_board_cards(tenant: str, project: str) -> dict:
+    try:
+        rows = (_client().table("vula_project_cards").select("*")
+                .eq("tenant_id", tenant).eq("project", project)
+                .order("z_index").order("created_at").limit(500).execute().data or [])
+    except Exception as exc:
+        log.debug("board list skipped (run migration 089?): %s", exc)
+        rows = []
+    return {"cards": rows}
+
+
+class CardIn(BaseModel):
+    card_type: str
+    x: float = 40
+    y: float = 40
+    width: float = 220
+    height: float = 160
+    z_index: int = 1
+    color: Optional[str] = None
+    content: dict = {}
+    created_by: Optional[str] = None
+
+
+@router.post("/{tenant}/p/{project}/board")
+async def add_board_card(tenant: str, project: str, body: CardIn) -> dict:
+    if body.card_type not in ("note", "image", "link", "checklist"):
+        return {"error": "card_type must be one of: note, image, link, checklist"}
+    row = {"tenant_id": tenant, "project": project, **body.model_dump()}
+    try:
+        res = _client().table("vula_project_cards").insert(row).execute()
+        return {"card": (res.data or [row])[0]}
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 089?)"}
+
+
+class CardPatch(BaseModel):
+    x: Optional[float] = None
+    y: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    z_index: Optional[int] = None
+    color: Optional[str] = None
+    content: Optional[dict] = None
+
+
+@router.patch("/{tenant}/board/{card_id}")
+async def update_board_card(tenant: str, card_id: str, body: CardPatch) -> dict:
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not patch:
+        return {"error": "nothing to update"}
+    patch["updated_at"] = "now()"
+    try:
+        _client().table("vula_project_cards").update(patch).eq("id", card_id).eq("tenant_id", tenant).execute()
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"id": card_id, **patch}
+
+
+@router.delete("/{tenant}/board/{card_id}")
+async def delete_board_card(tenant: str, card_id: str) -> dict:
+    try:
+        _client().table("vula_project_cards").delete().eq("id", card_id).eq("tenant_id", tenant).execute()
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"id": card_id, "deleted": True}
+
+
+class FetchTitleIn(BaseModel):
+    url: str
+
+
+@router.post("/{tenant}/board/fetch-title")
+async def fetch_link_title(tenant: str, body: FetchTitleIn) -> dict:
+    """Best-effort page-title lookup for a link card, so the user doesn't have to type one."""
+    import html as _html
+    import re as _re
+    import httpx
+    url = (body.url or "").strip()
+    if not url:
+        return {"error": "url is required"}
+    if not _re.match(r"^https?://", url, _re.I):
+        url = f"https://{url}"
+    ua = "VulaCommerce/1.0 (link preview; contact: awehbelekker@gmail.com)"
+    try:
+        async with httpx.AsyncClient(timeout=6.0, headers={"User-Agent": ua}, follow_redirects=True) as client:
+            resp = await client.get(url)
+        m = _re.search(r"<title[^>]*>(.*?)</title>", resp.text, _re.I | _re.S)
+        title = _html.unescape(_re.sub(r"\s+", " ", m.group(1)).strip()) if m else ""
+        return {"title": title[:200], "url": url}
+    except Exception as exc:
+        log.debug("link title fetch failed for %r: %s", url, exc)
+        return {"error": "Couldn't fetch that page's title", "url": url}
+
+
 # ── Projects ──────────────────────────────────────────────────────────────────
 
 class ProjectIn(BaseModel):

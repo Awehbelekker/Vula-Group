@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
@@ -81,7 +82,7 @@ export default function VulaInvoices({ tenantId, products = [] }) {
   // Open the customer's WhatsApp with a prefilled message + PDF download link.
   // Used as a fallback when the server-side document send is unavailable.
   function whatsAppLinkFallback(inv) {
-    const phone = (inv.customer_phone || '').replace(/[^\d]/g, '').replace(/^0/, '27')
+    const phone = toWhatsAppNumber(inv.customer_phone)
     const pdfUrl = `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`
     const msg = `Hi ${inv.customer_name}, here's your invoice ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
       (inv.due_date ? `Due ${inv.due_date}. ` : '') + `Download: ${pdfUrl}`
@@ -289,13 +290,32 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   const [savedClients, setSavedClients] = useState([])
   const [project, setProject] = useState('')
   const [projectList, setProjectList] = useState([])
+  const [catalogItems, setCatalogItems] = useState([])   // products & services quick-add catalog
+  const [showCatalog, setShowCatalog] = useState(false)
+
+  const loadCatalog = useCallback(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-items`)
+      .then(r => r.json()).then(d => setCatalogItems(d.items || [])).catch(() => {})
+  }, [tenantId])
 
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-clients`)
       .then(r => r.json()).then(d => setSavedClients(d.clients || [])).catch(() => {})
     fetch(`${VULA_API}/v1/projects/${tenantId}/labels`)
       .then(r => r.json()).then(d => setProjectList(d.projects || [])).catch(() => {})
-  }, [tenantId])
+    loadCatalog()
+  }, [tenantId, loadCatalog])
+
+  // Re-interpolate any line item whose description came from a catalog template containing
+  // {project} whenever the invoice's project changes, so it always names the current project.
+  useEffect(() => {
+    if (!project) return
+    setItems(prev => prev.map(it => (
+      it._tplDescription && it._tplDescription.includes('{project}')
+        ? { ...it, description: it._tplDescription.replaceAll('{project}', project) }
+        : it
+    )))
+  }, [project])
 
   function pickClient(id) {
     const c = savedClients.find(x => x.id === id)
@@ -316,10 +336,22 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       const next = { ...it, [field]: val }
       // Pick a product/service from the catalog → autofill price + unit (still fully editable).
       if (field === 'description') {
-        const p = products.find(pr => (pr.name || '').toLowerCase() === (val || '').toLowerCase())
-        if (p) {
-          next.unit_price = (p.price_cents / 100).toFixed(2)
-          if (!next.unit) next.unit = p.sold_by === 'kg' ? 'kg' : (p.sold_by === 'hour' ? 'hr' : '')
+        // Tenant-wide products & services catalog (migration 083) — its description may carry
+        // a {project} token, substituted with whichever project is selected on this invoice.
+        const ci = catalogItems.find(c => (c.name || '').toLowerCase() === (val || '').toLowerCase())
+        if (ci) {
+          next.unit_price = ((ci.unit_price_cents || 0) / 100).toFixed(2)
+          next.unit = ci.unit || next.unit
+          const tpl = ci.description || ci.name
+          next._tplDescription = tpl
+          next.description = project ? tpl.replaceAll('{project}', project) : tpl
+        } else {
+          delete next._tplDescription
+          const p = products.find(pr => (pr.name || '').toLowerCase() === (val || '').toLowerCase())
+          if (p) {
+            next.unit_price = (p.price_cents / 100).toFixed(2)
+            if (!next.unit) next.unit = p.sold_by === 'kg' ? 'kg' : (p.sold_by === 'hour' ? 'hr' : '')
+          }
         }
       }
       return next
@@ -372,6 +404,10 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
     onDone()
   }
 
+  if (showCatalog) {
+    return <InvoiceItemsCatalog tenantId={tenantId} onDone={() => { setShowCatalog(false); loadCatalog() }} />
+  }
+
   return (
     <div>
       <div style={s.topBar}>
@@ -394,7 +430,10 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
         {customer.name && <button type="button" onClick={saveClient} style={{ alignSelf: 'flex-start', padding: '5px 12px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' }}>💾 Save as client</button>}
       </div>
 
-      <p style={s.sectionLabel}>Line items</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0 6px' }}>
+        <p style={{ ...s.sectionLabel, margin: 0 }}>Line items</p>
+        <button type="button" onClick={() => setShowCatalog(true)} style={{ marginLeft: 'auto', padding: '4px 10px', background: 'transparent', border: '1px dashed #DDD8CE', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' }}>🧰 Products &amp; services</button>
+      </div>
       {items.map((it, i) => (
         <div key={i} style={s.itemRow}>
           <input list="prod-list" placeholder="Description / pick product or service" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: 2 }} />
@@ -406,8 +445,14 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
         </div>
       ))}
       <datalist id="prod-list">
+        {catalogItems.map(c => <option key={c.id} value={c.name}>{`${c.kind === 'product' ? '📦' : '🛠'} R${(c.unit_price_cents / 100).toFixed(2)}${c.unit ? `/${c.unit}` : ''}`}</option>)}
         {products.map(p => <option key={p.id} value={p.name}>{`R${(p.price_cents / 100).toFixed(2)}${p.sold_by === 'kg' ? '/kg' : ''}`}</option>)}
       </datalist>
+      {items.some(it => it._tplDescription) && !project && (
+        <p style={{ fontFamily: 'system-ui', fontSize: 11, color: '#a8780a', margin: '0 0 8px' }}>
+          ⓘ Pick a project below to fill it into the highlighted line item(s).
+        </p>
+      )}
       <datalist id="unit-list">
         {['ea', 'no.', 'item', 'kg', 'm', 'm²', 'm³', 'lin.m', 'hr', 'day', '%'].map(u => <option key={u} value={u} />)}
       </datalist>
@@ -446,12 +491,107 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   )
 }
 
+// ── Products & services catalog: quick-add items for line items ──────────────
+// A tenant-wide list of products/services with a default price. A service's description can
+// carry a literal {project} token — InvoiceCreate substitutes it with whichever project is
+// selected on the invoice, and re-substitutes it if the project is changed afterwards.
+
+function InvoiceItemsCatalog({ tenantId, onDone }) {
+  const [list, setList] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [form, setForm] = useState({ kind: 'service', name: '', description: '', unit: '', unit_price: '' })
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-items`).then(r => r.json()).catch(() => ({}))
+    setList(d.items || [])
+    setLoading(false)
+  }, [tenantId])
+  useEffect(() => { load() }, [load])
+
+  async function save() {
+    if (!form.name.trim()) return
+    setSaving(true)
+    try {
+      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-items`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: form.kind, name: form.name.trim(), description: form.description.trim(),
+          unit: form.unit.trim(), unit_price_cents: Math.round((parseFloat(form.unit_price) || 0) * 100),
+        }),
+      })
+      setForm({ kind: 'service', name: '', description: '', unit: '', unit_price: '' })
+      load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function del(id) {
+    if (!confirm('Remove this item from the catalog?')) return
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-items/${id}`, { method: 'DELETE' })
+    load()
+  }
+
+  return (
+    <div>
+      <div style={s.topBar}>
+        <button onClick={onDone} style={s.backBtn}>← Back</button>
+        <h3 style={s.formTitle}>Products &amp; services</h3>
+      </div>
+      <p style={s.muted}>
+        Quick-add items for line items. In a description, write <code>{'{project}'}</code> and it'll
+        be swapped for whichever project the invoice is for — and re-swapped if you change the project later.
+      </p>
+
+      <div style={s.formSection}>
+        <div style={s.fRow}>
+          <select value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })} style={{ ...s.fInput, flex: '0 0 110px' }}>
+            <option value="service">🛠 Service</option>
+            <option value="product">📦 Product</option>
+          </select>
+          <input placeholder="Name (quick-pick label)" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={s.fInput} />
+        </div>
+        <input placeholder={'Invoice description, e.g. "Site supervision — {project}"'} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} style={s.fInput} />
+        <div style={s.fRow}>
+          <input type="number" step="0.01" placeholder="Unit price R" value={form.unit_price} onChange={e => setForm({ ...form, unit_price: e.target.value })} style={s.fInput} />
+          <input list="cat-unit-list" placeholder="unit (ea/hr/day/m²…)" value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })} style={s.fInput} />
+          <datalist id="cat-unit-list">{['ea', 'no.', 'item', 'kg', 'm', 'm²', 'm³', 'lin.m', 'hr', 'day', '%'].map(u => <option key={u} value={u} />)}</datalist>
+        </div>
+        <button onClick={save} disabled={saving || !form.name.trim()} style={s.saveInvBtn}>
+          {saving ? 'Saving…' : '+ Add to catalog'}
+        </button>
+      </div>
+
+      <p style={s.sectionLabel}>Catalog</p>
+      {loading ? <p style={s.muted}>Loading…</p> : list.length === 0 ? <p style={s.muted}>No products or services yet.</p> : (
+        <div style={s.list}>
+          {list.map(it => (
+            <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 8, marginBottom: 8 }}>
+              <div>
+                <b>{it.kind === 'product' ? '📦' : '🛠'} {it.name}</b>
+                <div style={{ fontSize: 12, color: '#8A8680' }}>
+                  R{(it.unit_price_cents / 100).toFixed(2)}{it.unit ? `/${it.unit}` : ''}
+                  {it.description ? ` · ${it.description}` : ''}
+                </div>
+              </div>
+              <button onClick={() => del(it.id)} style={{ color: '#A23B2D', background: 'none', border: '1px solid #DDD8CE', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Invoice settings: onboarding wizard + look-and-feel ──────────────────────
 
 const TEMPLATES = [
   { id: 'classic', name: 'Classic', desc: 'Accent header, filled table — the original Vula look.', accent: 'var(--accent)' },
   { id: 'minimal', name: 'Minimal', desc: 'Monochrome, hairline rules, ink-light.', accent: '#222222' },
   { id: 'modern',  name: 'Modern',  desc: 'Bold colour band, rounded cards, high-contrast totals.', accent: '#0077b6' },
+  { id: 'digg',    name: 'Certified payment', desc: 'JBCC-style: description/amount table, bold running subtotals, banking details box. Built for construction certified-payment invoices.', accent: '#2C5545' },
   { id: 'branded', name: 'Branded', desc: 'Logo-forward: centred logo, accent rules, your brand front-and-centre.', accent: '#2C5545' },
 ]
 

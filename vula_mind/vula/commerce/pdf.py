@@ -159,12 +159,56 @@ _CSS_BRANDED = """
   .footer { margin: 0 18mm; border-top: 1px solid #e4e8ec; padding-top: 10px; font-size: 8.5pt; color: #9aa1ad; text-align: center; line-height: 1.6; }
 """
 
+# DIGG — certified-payment (JBCC) invoice look: hairline rules, black table header bar,
+# plain (unboxed) party block, muted subtotal rows building up to a bold TOTAL DUE. Modelled
+# on DIGG's actual HPC interim-payment-certificate invoices.
+_CSS_DIGG = """
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 10.5pt; color: #1E1E1E; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; padding-bottom: 14px; border-bottom: 2px solid {{ accent }}; }
+  .brand img { margin-bottom: 8px; display: block; }
+  .brand h1 { font-size: 17pt; font-weight: 800; color: {{ accent }}; margin-bottom: 2px; }
+  .brand p  { font-size: 8.5pt; color: #666; line-height: 1.55; }
+  .doc-title { text-align: right; }
+  .doc-title h2 { font-size: 13pt; font-weight: 700; color: #1E1E1E; text-transform: uppercase; letter-spacing: 2px; }
+  .doc-title .num { font-size: 10.5pt; color: {{ accent }}; margin-top: 4px; font-weight: 700; }
+  .doc-title .dates { font-size: 8.5pt; color: #666; margin-top: 6px; line-height: 1.6; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 7.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; background: {{ accent }}; color: #fff; }
+  .parties { margin-bottom: 22px; }
+  .party { padding: 0; }
+  .party h3 { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-bottom: 6px; font-weight: 700; }
+  .party p  { font-size: 10pt; line-height: 1.6; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 22px; }
+  thead th { background: #1E1E1E; color: #fff; padding: 8px 10px; font-size: 8.5pt; text-align: left; text-transform: uppercase; letter-spacing: 0.5px; }
+  thead th:last-child { text-align: right; }
+  tbody td { padding: 7px 10px; font-size: 9.5pt; border-bottom: 1px solid #eee; vertical-align: top; }
+  tbody td:last-child { text-align: right; }
+  tbody tr.cert-bold td { font-weight: 700; border-top: 1.5px solid #1E1E1E; border-bottom: 1.5px solid #1E1E1E; }
+  .totals { width: 300px; margin-left: auto; margin-bottom: 24px; }
+  .totals tr td { padding: 4px 8px; font-size: 9.5pt; color: #555; }
+  .totals tr td:last-child { text-align: right; font-weight: 500; }
+  .totals .muted-row td { color: #999; font-size: 8.5pt; }
+  .totals .total-row td { font-weight: 800; font-size: 12pt; color: #1E1E1E; border-top: 2px solid {{ accent }}; padding-top: 8px; }
+  .notes { padding: 12px 0; margin-bottom: 22px; font-size: 8.5pt; line-height: 1.65; color: #555; border-top: 1px solid #eee; }
+  .notes strong { color: #1E1E1E; text-transform: uppercase; letter-spacing: 0.5px; font-size: 8pt; }
+  .payment { background: #fafafa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 14px 16px; margin-bottom: 22px; font-size: 9.5pt; line-height: 1.7; }
+  .payment h3 { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.8px; color: #888; margin-bottom: 8px; font-weight: 700; }
+  .footer { border-top: 1px solid #ddd; padding-top: 10px; font-size: 8pt; color: #999; text-align: center; line-height: 1.6; }
+"""
+
 _TEMPLATE_CSS: dict[str, str] = {
     "classic": _CSS_CLASSIC,
     "minimal": _CSS_MINIMAL,
     "modern": _CSS_MODERN,
     "branded": _CSS_BRANDED,
+    "digg": _CSS_DIGG,
 }
+
+# template_choice values that use the certified-payment (JBCC) layout: a plain description +
+# amount table (no qty/unit/price columns), bold running-subtotal rows, and a
+# Subtotal/VAT-N-A/TOTAL DUE totals block instead of the standard discount/VAT breakdown.
+_CERT_STYLE_TEMPLATES = {"digg"}
 
 # Shared document skeleton. ``__TEMPLATE_CSS__`` is replaced with the chosen
 # theme before a single Jinja render pass resolves all values.
@@ -209,6 +253,24 @@ _DOC_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+{% if cert_style %}
+<table>
+  <thead>
+    <tr>
+      <th style="width:78%">Description</th>
+      <th style="width:22%">Amount (ZAR)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in line_items %}
+    <tr{% if item.bold %} class="cert-bold"{% endif %}>
+      <td>{{ item.description }}</td>
+      <td>{{ "-" if item.total_cents < 0 else "" }}R{{ "%.2f" | format(item.total_cents | abs / 100) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
 <table>
   <thead>
     <tr>
@@ -231,23 +293,30 @@ _DOC_HTML = """<!DOCTYPE html>
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
 
 <table class="totals">
+  {% if cert_style %}
+  <tr class="muted-row"><td>Subtotal (excl. VAT)</td><td>R{{ "%.2f" | format(subtotal_cents / 100) }}</td></tr>
+  <tr class="muted-row"><td>VAT</td><td>{% if vat_registered == false %}N/A — not VAT registered{% else %}R{{ "%.2f" | format(vat_cents / 100) }}{% endif %}</td></tr>
+  <tr class="total-row"><td>{% if deposit_cents %}TOTAL{% else %}TOTAL DUE{% endif %}</td><td>R{{ "%.2f" | format(total_cents / 100) }}</td></tr>
+  {% else %}
   <tr><td>Subtotal</td><td>R{{ "%.2f" | format(subtotal_cents / 100) }}</td></tr>
   {% if discount_cents %}<tr><td>Discount</td><td>−R{{ "%.2f" | format(discount_cents / 100) }}</td></tr>{% endif %}
   <tr><td>VAT ({{ vat_rate | int }}%)</td><td>R{{ "%.2f" | format(vat_cents / 100) }}</td></tr>
   <tr class="total-row"><td>{% if deposit_cents %}TOTAL{% else %}TOTAL DUE{% endif %}</td><td>R{{ "%.2f" | format(total_cents / 100) }}</td></tr>
+  {% endif %}
   {% if deposit_cents %}<tr><td>Deposit paid</td><td>−R{{ "%.2f" | format(deposit_cents / 100) }}</td></tr>
   <tr class="total-row"><td>BALANCE DUE</td><td>R{{ "%.2f" | format((total_cents - deposit_cents) / 100) }}</td></tr>{% endif %}
 </table>
 
 {% if notes %}
-<div class="notes"><strong>Notes:</strong> {{ notes }}</div>
+<div class="notes"><strong>{% if cert_style %}Terms &amp; Notes{% else %}Notes:{% endif %}</strong><br>{{ notes | replace("\\n", "<br>") | safe }}</div>
 {% endif %}
 
 {% if payment_info %}
 <div class="payment">
-  <h3>Payment Details</h3>
+  <h3>{% if cert_style %}Banking Details{% else %}Payment Details{% endif %}</h3>
   {{ payment_info | replace("\\n", "<br>") | safe }}
   {% if pay_url %}<p style="margin-top:8px;"><a href="{{ pay_url }}" style="display:inline-block;background:{{ accent }};color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:700;">💳 Pay now online</a></p>{% endif %}
 </div>
@@ -381,6 +450,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
             item["total_cents"] = int(round(float(item.get("quantity", 1) or 1) * int(item.get("unit_price_cents", 0))))
 
     doc_type = invoice.get("doc_type", "invoice")
+    choice = branding.get("template_choice") or "classic"
 
     ctx: dict[str, Any] = {
         # Tenant branding
@@ -417,11 +487,12 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "total_cents": int(invoice.get("total_cents") or 0),
         "deposit_cents": int(invoice.get("deposit_cents") or 0),
         "notes": invoice.get("notes") or "",
+        "vat_registered": branding.get("vat_registered", True),
+        "cert_style": choice in _CERT_STYLE_TEMPLATES,
     }
 
     # Pick the layout template; substitute its CSS before the single render pass
     # so the accent colour (and any other Jinja value in the CSS) resolves too.
-    choice = branding.get("template_choice") or "classic"
     css = _TEMPLATE_CSS.get(choice, _TEMPLATE_CSS["classic"])
     template_html = _DOC_HTML.replace("__TEMPLATE_CSS__", css)
 

@@ -2,7 +2,8 @@
  * VulaMerchantAdmin.jsx
  *
  * Merchant-facing admin for a single Vula Commerce tenant.
- * Opened from VulaCommerce when clicking "Manage tenant →".
+ * Opened via master's "Open as tenant" (a full VulaShell takeover), the owner/staff's own
+ * dedicated shell, or the legacy "Manage tenant" modal.
  *
  * Tabs:
  *   📊 Overview — daily revenue, orders to dispatch, pending payments
@@ -12,7 +13,7 @@
 
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import VulaImageUpload from './VulaImageUpload'
-import { downloadCsv } from '../lib/csv'
+import { downloadCsv, parseCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
 import VulaInvoices from './VulaInvoices'
 import VulaBookings from './VulaBookings'
@@ -888,6 +889,10 @@ function ProductsTab({ tenantId }) {
   const [newCat, setNewCat] = useState('')
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', price: '', category: 'extras', sold_by: 'pack', description: '' })
+  const [importRows, setImportRows] = useState(null) // parsed CSV preview rows, or null when closed
+  const [importing, setImporting] = useState(false)
+  const [importResults, setImportResults] = useState(null)
+  const fileInputRef = useRef(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -952,6 +957,57 @@ function ProductsTab({ tenantId }) {
     setSaving(null)
   }
 
+  const PRODUCT_CSV_COLUMNS = [
+    { key: 'name', label: 'name' }, { key: 'slug', label: 'slug' },
+    { label: 'price_cents', get: p => p.price_cents }, { key: 'category', label: 'category' },
+    { key: 'sold_by', label: 'sold_by' }, { key: 'description', label: 'description' },
+    { key: 'image_url', label: 'image_url' }, { key: 'in_stock', label: 'in_stock' },
+    { key: 'is_daily_catch', label: 'is_daily_catch' }, { key: 'status', label: 'status' },
+    { key: 'pricing_mode', label: 'pricing_mode' }, { key: 'price_per_kg_cents', label: 'price_per_kg_cents' },
+    { key: 'min_weight_g', label: 'min_weight_g' }, { key: 'max_weight_g', label: 'max_weight_g' },
+    { key: 'reference_weight_g', label: 'reference_weight_g' }, { key: 'weight_grams', label: 'weight_grams' },
+    { key: 'stock_quantity', label: 'stock_quantity' }, { key: 'catch_source', label: 'catch_source' },
+    { key: 'fisherman_name', label: 'fisherman_name' },
+    { label: 'seo_title', get: p => p.seo?.title || '' }, { label: 'seo_description', get: p => p.seo?.description || '' },
+  ]
+
+  function exportCsv() {
+    downloadCsv(`${tenantId}-products`, products, PRODUCT_CSV_COLUMNS)
+  }
+
+  function onImportFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const rows = parseCsv(String(reader.result || ''))
+      setImportResults(null)
+      setImportRows(rows)
+    }
+    reader.readAsText(file)
+    e.target.value = '' // allow re-selecting the same file
+  }
+
+  function validateImportRow(row) {
+    const errors = []
+    if (!row.name?.trim()) errors.push('missing name')
+    const price = parseFloat(row.price_cents)
+    if (!row.price_cents || isNaN(price) || price <= 0) errors.push('missing/invalid price_cents')
+    return errors
+  }
+
+  async function commitImport() {
+    setImporting(true)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/import`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: importRows }),
+    })
+    const d = await r.json()
+    setImportResults(d)
+    setImporting(false)
+    await load()
+  }
+
   async function savePrice(p) {
     const raw = editPrice[p.id]
     if (!raw) return
@@ -979,6 +1035,9 @@ function ProductsTab({ tenantId }) {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={() => setShowAdd(true)} style={styles.btnAction}>+ Add product</button>
             <button onClick={() => setShowCats(s => !s)} style={styles.btnGhost}>🏷 Categories</button>
+            <button onClick={exportCsv} style={styles.btnGhost} disabled={!products.length}>⬇ Export CSV</button>
+            <button onClick={() => fileInputRef.current?.click()} style={styles.btnGhost}>⬆ Import CSV</button>
+            <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={onImportFile} style={{ display: 'none' }} />
           </div>
         ) : (
           <form onSubmit={createProduct} style={styles.addProductForm}>
@@ -1023,6 +1082,63 @@ function ProductsTab({ tenantId }) {
             <button onClick={addCategory} style={styles.btnAction}>Add</button>
           </div>
           {!categories.length && <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: '8px 0 0' }}>Adding your first category needs migration 073.</p>}
+        </div>
+      )}
+
+      {importRows && (
+        <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <p style={{ fontSize: 12.5, fontWeight: 600, fontFamily: 'system-ui', margin: '0 0 8px' }}>
+            Import preview — {importRows.length} row{importRows.length === 1 ? '' : 's'}
+          </p>
+          <div style={{ maxHeight: 260, overflow: 'auto', border: '1px solid #EDE9DF', borderRadius: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'system-ui' }}>
+              <thead>
+                <tr style={{ background: '#F7F5EF', textAlign: 'left' }}>
+                  <th style={{ padding: '6px 10px' }}>#</th>
+                  <th style={{ padding: '6px 10px' }}>Name</th>
+                  <th style={{ padding: '6px 10px' }}>Price (c)</th>
+                  <th style={{ padding: '6px 10px' }}>Category</th>
+                  <th style={{ padding: '6px 10px' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importRows.map((row, i) => {
+                  const errors = validateImportRow(row)
+                  const isNewCat = row.category && ![...catKeys].includes(row.category)
+                  return (
+                    <tr key={i} style={{ borderTop: '1px solid #EDE9DF', background: errors.length ? 'rgba(162,59,45,0.06)' : undefined }}>
+                      <td style={{ padding: '6px 10px', color: '#8A8680' }}>{i + 1}</td>
+                      <td style={{ padding: '6px 10px' }}>{row.name || <em style={{ color: '#A23B2D' }}>missing</em>}</td>
+                      <td style={{ padding: '6px 10px' }}>{row.price_cents || <em style={{ color: '#A23B2D' }}>missing</em>}</td>
+                      <td style={{ padding: '6px 10px' }}>{row.category || 'extras'}{isNewCat && <span style={{ color: '#8A8680' }}> (new)</span>}</td>
+                      <td style={{ padding: '6px 10px' }}>
+                        {errors.length ? <span style={{ color: '#A23B2D' }}>⚠ {errors.join(', ')}</span> : <span style={{ color: '#2C7A4B' }}>OK</span>}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {importResults ? (
+            <p style={{ fontSize: 12.5, fontFamily: 'system-ui', margin: '10px 0 0' }}>
+              ✅ {importResults.created} created · {importResults.updated} updated
+              {importResults.errors > 0 && <span style={{ color: '#A23B2D' }}> · {importResults.errors} failed</span>}
+              {importResults.results?.filter(r => r.status === 'error').map((r, i) => (
+                <span key={i} style={{ display: 'block', color: '#A23B2D', marginTop: 4 }}>Row {r.row + 1} ({r.slug}): {r.error}</span>
+              ))}
+            </p>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button onClick={commitImport} disabled={importing || importRows.every(r => validateImportRow(r).length)} style={styles.btnAction}>
+                {importing ? 'Importing…' : `Import ${importRows.length} product${importRows.length === 1 ? '' : 's'}`}
+              </button>
+              <button onClick={() => { setImportRows(null); setImportResults(null) }} style={styles.btnGhost}>Cancel</button>
+            </div>
+          )}
+          {importResults && (
+            <button onClick={() => { setImportRows(null); setImportResults(null) }} style={{ ...styles.btnGhost, marginTop: 10 }}>Close</button>
+          )}
         </div>
       )}
 
@@ -1109,6 +1225,12 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
     serves: p.serves ?? '',
     reorderThreshold: p.reorder_threshold ?? '', reorderQty: p.reorder_qty ?? '',
     defaultSupplierId: p.default_supplier_id || '',
+    pricingMode: p.pricing_mode || 'fixed',
+    pricePerKg: p.price_per_kg_cents != null ? (p.price_per_kg_cents / 100).toFixed(2) : '',
+    minWeight: p.min_weight_g ?? '', maxWeight: p.max_weight_g ?? '', referenceWeight: p.reference_weight_g ?? '',
+    catchSource: p.catch_source || '', fishermanName: p.fisherman_name || '',
+    seoTitle: (p.seo && p.seo.title) || '', seoDescription: (p.seo && p.seo.description) || '',
+    status: p.status || (p.archived ? 'archived' : 'active'),
   })
   const [suppliers, setSuppliers] = useState([])
   useEffect(() => {
@@ -1131,6 +1253,17 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
     upd.reorder_threshold = f.reorderThreshold === '' ? null : parseInt(f.reorderThreshold) || null
     upd.reorder_qty = f.reorderQty === '' ? null : parseInt(f.reorderQty) || null
     upd.default_supplier_id = f.defaultSupplierId || null
+    upd.pricing_mode = f.pricingMode
+    const byWeight = f.pricingMode === 'by_weight'
+    upd.price_per_kg_cents = (byWeight && f.pricePerKg !== '') ? Math.round(parseFloat(f.pricePerKg) * 100) || null : null
+    upd.min_weight_g = (byWeight && f.minWeight !== '') ? parseInt(f.minWeight) || null : null
+    upd.max_weight_g = (byWeight && f.maxWeight !== '') ? parseInt(f.maxWeight) || null : null
+    upd.reference_weight_g = (byWeight && f.referenceWeight !== '') ? parseInt(f.referenceWeight) || null : null
+    upd.catch_source = f.catchSource.trim() || null
+    upd.fisherman_name = f.fishermanName.trim() || null
+    upd.seo = { title: f.seoTitle.trim() || undefined, description: f.seoDescription.trim() || undefined }
+    upd.status = f.status
+    upd.archived = f.status === 'archived'
     patch(p.id, upd)
   }
 
@@ -1157,6 +1290,13 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
           </select></div>
         <div><span style={lbl}>Stock on hand (blank = untracked)</span>
           <input type="number" value={f.stock} onChange={e => set('stock', e.target.value)} placeholder="e.g. 12" style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Status</span>
+          <select value={f.status} onChange={e => set('status', e.target.value)} style={{ ...inp, width: '100%' }}>
+            <option value="active">Active — visible everywhere</option>
+            <option value="draft">Draft — hidden, in progress</option>
+            <option value="unlisted">Unlisted — direct link only</option>
+            <option value="archived">Archived — removed from sale</option>
+          </select></div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
@@ -1171,6 +1311,32 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
             <input value={f.packSize} onChange={e => set('packSize', e.target.value)} placeholder="e.g. 4 per pack" style={{ ...inp, flex: 1, minWidth: 0 }} />
             <input type="number" value={f.serves} onChange={e => set('serves', e.target.value)} placeholder="serves" style={{ ...inp, width: 70 }} />
           </div></div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <div><span style={lbl}>Pricing</span>
+          <select value={f.pricingMode} onChange={e => set('pricingMode', e.target.value)} style={{ ...inp, width: '100%' }}>
+            <option value="fixed">Fixed price</option>
+            <option value="by_weight">By weight (per kg)</option>
+          </select></div>
+        {f.pricingMode === 'by_weight' && (<>
+          <div><span style={lbl}>Price per kg (R)</span>
+            <input type="number" step="0.01" value={f.pricePerKg} onChange={e => set('pricePerKg', e.target.value)} placeholder="e.g. 290.00" style={{ ...inp, width: '100%' }} /></div>
+          <div><span style={lbl}>Weight range (g)</span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input type="number" value={f.minWeight} onChange={e => set('minWeight', e.target.value)} placeholder="min" style={{ ...inp, flex: 1, minWidth: 0 }} />
+              <input type="number" value={f.maxWeight} onChange={e => set('maxWeight', e.target.value)} placeholder="max" style={{ ...inp, flex: 1, minWidth: 0 }} />
+            </div></div>
+          <div><span style={lbl}>Typical/reference weight (g)</span>
+            <input type="number" value={f.referenceWeight} onChange={e => set('referenceWeight', e.target.value)} placeholder="e.g. 500" style={{ ...inp, width: '100%' }} /></div>
+        </>)}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <div><span style={lbl}>Catch source</span>
+          <input value={f.catchSource} onChange={e => set('catchSource', e.target.value)} placeholder="e.g. Line-caught, Hout Bay" style={{ ...inp, width: '100%' }} /></div>
+        <div><span style={lbl}>Fisherman / supplier name</span>
+          <input value={f.fishermanName} onChange={e => set('fishermanName', e.target.value)} placeholder="e.g. Skipper Jan" style={{ ...inp, width: '100%' }} /></div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
@@ -1235,9 +1401,256 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         />
       </div>
 
+      <div>
+        <VariantsEditor
+          tenantId={tenantId}
+          productId={p.id}
+          basePriceCents={p.price_cents}
+          options={p.options}
+          suppliers={suppliers}
+          onOptionsChange={(names) => patch(p.id, { options: names })}
+        />
+      </div>
+
+      <div>
+        <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' }}>
+          🔍 SEO <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, improves search/social sharing</span>
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <input value={f.seoTitle} onChange={e => set('seoTitle', e.target.value)}
+                 placeholder="SEO title (browser tab / Google)" style={{ ...inp, width: '100%' }} />
+          <textarea value={f.seoDescription} onChange={e => set('seoDescription', e.target.value)} rows={2}
+                    placeholder="SEO description (search result snippet)"
+                    style={{ ...inp, width: '100%', resize: 'vertical', fontFamily: 'system-ui' }} />
+        </div>
+      </div>
+
       <button onClick={() => deleteProduct(p)} disabled={saving === p.id} style={styles.btnDeleteProduct}>
         🗑 {p.archived ? 'Delete permanently' : 'Remove product'}
       </button>
+    </div>
+  )
+}
+
+// ── Product variants (migration 087, Phase 4 — SKU/barcode, per-variant price/stock) ─────────
+
+function VariantsEditor({ tenantId, productId, basePriceCents, options, suppliers, onOptionsChange }) {
+  const [variants, setVariants] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(null)
+  const [optionsInput, setOptionsInput] = useState((options || []).join(', '))
+  const [showAdd, setShowAdd] = useState(false)
+  const [newVariant, setNewVariant] = useState({})
+  const [bulkStock, setBulkStock] = useState('')
+  const [error, setError] = useState(null)
+  const optionNames = options || []
+  const inp = { padding: '6px 8px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12.5, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  const lbl = { fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 2 }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants`)
+    const d = await r.json()
+    setVariants(d.variants || [])
+    setLoading(false)
+  }, [tenantId, productId])
+
+  useEffect(() => { load() }, [load])
+
+  async function patchVariant(id, data) {
+    setSaving(id)
+    setError(null)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    })
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      setError(d.detail || 'Could not save that change.')
+    }
+    await load()
+    setSaving(null)
+  }
+
+  async function deleteVariant(id) {
+    if (!confirm('Remove this variant?')) return
+    setSaving(id)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${id}`, { method: 'DELETE' })
+    await load()
+    setSaving(null)
+  }
+
+  async function addVariant() {
+    setError(null)
+    const option_values = {}
+    optionNames.forEach(name => { if (newVariant[name]) option_values[name] = newVariant[name] })
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        option_values,
+        sku: newVariant.sku || null,
+        barcode: newVariant.barcode || null,
+        price_cents: newVariant.price ? Math.round(parseFloat(newVariant.price) * 100) || null : null,
+        stock_quantity: (newVariant.stock !== undefined && newVariant.stock !== '') ? parseInt(newVariant.stock) : null,
+      }),
+    })
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      setError(d.detail || 'Could not add that variant.')
+      return
+    }
+    setNewVariant({})
+    setShowAdd(false)
+    await load()
+  }
+
+  async function applyBulkStock() {
+    const qty = parseInt(bulkStock)
+    if (bulkStock === '' || isNaN(qty)) return
+    await Promise.all(variants.map(v => fetch(
+      `${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${v.id}`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stock_quantity: qty }) }
+    )))
+    setBulkStock('')
+    await load()
+  }
+
+  function saveOptions() {
+    const names = optionsInput.split(',').map(s => s.trim()).filter(Boolean)
+    const changed = names.length !== optionNames.length || names.some((n, i) => n !== optionNames[i])
+    if (changed && variants.length > 0) {
+      if (!confirm(
+        `${variants.length} existing variant${variants.length === 1 ? '' : 's'} use the current option names. ` +
+        `Changing them won't delete those variants, but customers won't be able to pick them until you update ` +
+        `each variant's option values below. Continue?`
+      )) return
+    }
+    onOptionsChange(names)
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 12, fontWeight: 600, fontFamily: 'system-ui', color: '#1E1E1E', margin: '0 0 8px' }}>
+        🧩 Variants <span style={{ fontWeight: 400, color: '#8A8680' }}>— e.g. Size, Colour — each gets its own SKU/barcode/price/stock</span>
+      </p>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+        <input value={optionsInput} onChange={e => setOptionsInput(e.target.value)} placeholder="Option names, e.g. Size, Colour"
+               style={{ ...inp, flex: 1 }} />
+        <button onClick={saveOptions} style={styles.btnGhost}>Save options</button>
+      </div>
+      {error && <p style={{ fontSize: 12, color: '#A23B2D', fontFamily: 'system-ui', margin: '0 0 10px' }}>⚠ {error}</p>}
+
+      {loading ? <p style={styles.loading}>Loading variants…</p> : (
+        <>
+          {variants.length > 0 && (
+            <div style={{ overflowX: 'auto', marginBottom: 10 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'system-ui' }}>
+                <thead>
+                  <tr style={{ background: '#F7F5EF', textAlign: 'left' }}>
+                    <th style={{ padding: '5px 8px' }}>Options</th>
+                    <th style={{ padding: '5px 8px' }}>SKU</th>
+                    <th style={{ padding: '5px 8px' }}>Barcode</th>
+                    <th style={{ padding: '5px 8px' }}>Price (R)</th>
+                    <th style={{ padding: '5px 8px' }}>Stock</th>
+                    <th style={{ padding: '5px 8px' }}>Reorder ≤</th>
+                    <th style={{ padding: '5px 8px' }}>Supplier</th>
+                    <th style={{ padding: '5px 8px' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {variants.map(v => (
+                    <tr key={v.id} style={{ borderTop: '1px solid #EDE9DF', opacity: v.archived ? 0.5 : 1 }}>
+                      <td style={{ padding: '5px 8px' }}>
+                        {Object.entries(v.option_values || {}).map(([k, val]) => `${k}: ${val}`).join(', ') || '—'}
+                      </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        <input defaultValue={v.sku || ''} disabled={saving === v.id}
+                               onBlur={e => e.target.value !== (v.sku || '') && patchVariant(v.id, { sku: e.target.value || null })}
+                               style={{ ...inp, width: 80 }} />
+                      </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        <input defaultValue={v.barcode || ''} disabled={saving === v.id}
+                               onBlur={e => e.target.value !== (v.barcode || '') && patchVariant(v.id, { barcode: e.target.value || null })}
+                               style={{ ...inp, width: 100 }} />
+                      </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        <input type="number" step="0.01" disabled={saving === v.id}
+                               defaultValue={v.price_cents != null ? (v.price_cents / 100).toFixed(2) : ''}
+                               placeholder={basePriceCents != null ? (basePriceCents / 100).toFixed(2) : ''}
+                               onBlur={e => {
+                                 const val = e.target.value === '' ? null : Math.round(parseFloat(e.target.value) * 100)
+                                 patchVariant(v.id, { price_cents: (val && val > 0) ? val : null })
+                               }}
+                               style={{ ...inp, width: 70 }} />
+                      </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        <input type="number" disabled={saving === v.id} defaultValue={v.stock_quantity ?? ''}
+                               onBlur={e => patchVariant(v.id, { stock_quantity: e.target.value === '' ? null : parseInt(e.target.value) })}
+                               style={{ ...inp, width: 60 }} />
+                      </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        <input type="number" disabled={saving === v.id} defaultValue={v.reorder_threshold ?? ''}
+                               onBlur={e => patchVariant(v.id, { reorder_threshold: e.target.value === '' ? null : parseInt(e.target.value) })}
+                               style={{ ...inp, width: 55 }} />
+                      </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        <select defaultValue={v.default_supplier_id || ''} disabled={saving === v.id}
+                                onChange={e => patchVariant(v.id, { default_supplier_id: e.target.value || null })}
+                                style={{ ...inp, width: 110 }}>
+                          <option value="">— none —</option>
+                          {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => patchVariant(v.id, { archived: !v.archived })} disabled={saving === v.id} style={styles.btnGhost}>
+                          {v.archived ? 'Restore' : 'Archive'}
+                        </button>
+                        <button onClick={() => deleteVariant(v.id)} disabled={saving === v.id} style={{ ...styles.btnGhost, color: '#A23B2D' }}>✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {variants.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+              <input type="number" value={bulkStock} onChange={e => setBulkStock(e.target.value)}
+                     placeholder="Set all variants' stock to…" style={{ ...inp, width: 170 }} />
+              <button onClick={applyBulkStock} style={styles.btnGhost}>Apply to all</button>
+            </div>
+          )}
+
+          {!showAdd ? (
+            <button onClick={() => setShowAdd(true)} style={styles.btnGhost} disabled={!optionNames.length}>
+              + Add variant
+            </button>
+          ) : (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              {optionNames.map(name => (
+                <div key={name}><span style={lbl}>{name}</span>
+                  <input value={newVariant[name] || ''} onChange={e => setNewVariant(prev => ({ ...prev, [name]: e.target.value }))}
+                         style={{ ...inp, width: 80 }} /></div>
+              ))}
+              <div><span style={lbl}>SKU</span>
+                <input value={newVariant.sku || ''} onChange={e => setNewVariant(prev => ({ ...prev, sku: e.target.value }))} style={{ ...inp, width: 80 }} /></div>
+              <div><span style={lbl}>Barcode</span>
+                <input value={newVariant.barcode || ''} onChange={e => setNewVariant(prev => ({ ...prev, barcode: e.target.value }))} style={{ ...inp, width: 100 }} /></div>
+              <div><span style={lbl}>Price (R, blank = inherit)</span>
+                <input type="number" step="0.01" value={newVariant.price || ''} onChange={e => setNewVariant(prev => ({ ...prev, price: e.target.value }))} style={{ ...inp, width: 70 }} /></div>
+              <div><span style={lbl}>Stock</span>
+                <input type="number" value={newVariant.stock || ''} onChange={e => setNewVariant(prev => ({ ...prev, stock: e.target.value }))} style={{ ...inp, width: 60 }} /></div>
+              <button onClick={addVariant} style={styles.btnAction}>Add</button>
+              <button onClick={() => { setShowAdd(false); setNewVariant({}) }} style={styles.btnGhost}>Cancel</button>
+            </div>
+          )}
+          {!optionNames.length && (
+            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: '6px 0 0' }}>
+              Set option names above (e.g. "Size, Colour") before adding variants.
+            </p>
+          )}
+        </>
+      )}
     </div>
   )
 }

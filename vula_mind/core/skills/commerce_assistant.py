@@ -169,6 +169,40 @@ def _line_cents(qty, unit_price_cents) -> int:
     return int(round(float(qty) * float(unit_price_cents or 0)))
 
 
+def _match_variant(variants: List[Dict[str, Any]], option_names: List[str], text: str):
+    """Resolve a customer's free-text option choice (e.g. 'large', 'size L red') to a single
+    variant. Returns (variant, unresolved_option_names): variant is set only on an exact single
+    match; otherwise unresolved_option_names lists which option(s) still need an answer, scoped
+    to whatever the text has already narrowed down (so a second turn only needs to ask about the
+    remaining option, not restart from scratch)."""
+    active = [v for v in variants if not v.get("archived")]
+    text = (text or "").lower()
+    tokens = [t.strip() for t in re.split(r"[,/]|\s+and\s+", text) if t.strip()]
+
+    def mentioned(value: Optional[str]) -> bool:
+        v = (value or "").lower()
+        if not v:
+            return False
+        return any(v in tok or tok in v for tok in tokens)
+
+    candidates = active
+    if tokens:
+        # Score each variant by how many of ITS OWN option values are mentioned (not just any),
+        # so "large red" prefers the variant matching both axes over one matching only one.
+        scored = [(v, sum(1 for name in option_names if mentioned((v.get("option_values") or {}).get(name))))
+                  for v in active]
+        best = max((score for _, score in scored), default=0)
+        if best > 0:
+            candidates = [v for v, score in scored if score == best]
+
+    if len(candidates) == 1:
+        return candidates[0], []
+
+    unresolved = [name for name in option_names
+                  if len({(v.get("option_values") or {}).get(name) for v in candidates} - {None}) > 1]
+    return None, (unresolved or option_names)
+
+
 # OpenAI-style function specs — used by litellm for both Ollama and OpenRouter.
 TOOL_SPECS: List[Dict[str, Any]] = [
     {
@@ -189,12 +223,17 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "add_to_cart",
-            "description": "Add a product to the customer's cart by name or slug.",
+            "description": "Add a product to the customer's cart by name or slug. Some products come in "
+                           "options (e.g. Size, Colour) — if the result asks you to choose, ask the customer "
+                           "a short natural question and call this again with their answer in `variant`. "
+                           "Never guess an option or add a plain product to the cart when it has options "
+                           "and none were given.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "product": {"type": "string", "description": "Product name or slug."},
                     "quantity": {"type": "number", "description": "Amount to add. For products priced per kg, this is the number of kilograms (decimals allowed, e.g. 1.5). For packs, the number of packs. Default 1."},
+                    "variant": {"type": "string", "description": "The customer's chosen option(s) for a product that has variants, in their own words (e.g. 'large', 'red', 'size L red'). Omit for products with no options."},
                 },
                 "required": ["product"],
             },
@@ -909,7 +948,8 @@ class CommerceAssistantSkill(BaseSkill):
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
         products = await service.list_products(
-            tenant_id, category=args.get("category"), in_stock_only=True
+            tenant_id, category=args.get("category"), in_stock_only=True, statuses={"active"},
+            with_variant_price_range=True,
         )
         search = (args.get("search") or "").lower().strip()
         if search:
@@ -917,12 +957,20 @@ class CommerceAssistantSkill(BaseSkill):
                 p for p in products
                 if search in p["name"].lower() or search in (p.get("description") or "").lower()
             ]
+
+        def _price(p):
+            rng = p.get("variant_price_range")
+            if rng:
+                return f"From R{rng['min'] / 100:.2f}" if rng["min"] != rng["max"] else f"R{rng['min'] / 100:.2f}"
+            return f"R{p['price_cents'] / 100:.2f}"
+
         return [
             {
                 "slug": p["slug"],
                 "name": p["name"],
-                "price": f"R{p['price_cents'] / 100:.2f}",
+                "price": _price(p),
                 "category": p.get("category"),
+                **({"options": p["options"]} if p.get("options") else {}),
             }
             for p in products[:20]
         ]
@@ -933,22 +981,55 @@ class CommerceAssistantSkill(BaseSkill):
         name = (args.get("product") or "").strip()
         product = None
         if re.match(r"^[a-z0-9-]+$", name):
-            product = await service.get_product_by_slug(tenant_id, name)
+            product = await service.get_product_by_slug(tenant_id, name, statuses={"active", "unlisted"})
         if not product:
-            candidates = await service.list_products(tenant_id, in_stock_only=True)
+            candidates = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
             product = next((p for p in candidates if name.lower() in p["name"].lower()), None)
         if not product:
             return {"error": f"No in-stock product matching '{name}'."}
+
+        option_names = product.get("options") or []
+        variant = None
+        if option_names:
+            # get_product_by_slug already attaches non-archived variants; the fuzzy-name match
+            # above (via list_products) does not, so fetch them here if still missing.
+            variants = product.get("variants")
+            if variants is None:
+                variants = await service.list_variants(tenant_id, product["id"], include_archived=False)
+            if not variants:
+                return {"error": f"'{product['name']}' has no available options right now."}
+            variant, unresolved = _match_variant(variants, option_names, args.get("variant") or "")
+            if not variant:
+                choices = {
+                    name: sorted({(v.get("option_values") or {}).get(name)
+                                 for v in variants if not v.get("archived")} - {None})
+                    for name in unresolved
+                }
+                return {
+                    "needs_selection": True,
+                    "product": product["name"],
+                    "choices": choices,
+                    "message": "Ask the customer which " + " and ".join(unresolved) +
+                               f" they'd like for {product['name']}, offering: " +
+                               "; ".join(f"{k}: {', '.join(v)}" for k, v in choices.items()),
+                }
+            if not variant.get("in_stock", True):
+                return {"error": f"That option of '{product['name']}' is currently out of stock."}
+
+        unit_price_cents = variant.get("price_cents") if variant and variant.get("price_cents") is not None else product["price_cents"]
         # Decimal amount for kg products (e.g. 1.5 kg), whole packs otherwise.
         qty = _norm_qty(product, args.get("quantity", 1))
         cart = await service.get_or_create_cart(tenant_id, session_id, phone)
-        await service.add_to_cart(tenant_id, cart["id"], product["id"], qty)
+        await service.add_to_cart(tenant_id, cart["id"], product["id"], qty,
+                                  variant_id=variant["id"] if variant else None)
         unit = "/kg" if _is_kg(product) else ""
+        variant_label = (", ".join(f"{k}: {v}" for k, v in (variant.get("option_values") or {}).items())
+                        if variant else None)
         return {
-            "added": product["name"],
+            "added": f"{product['name']} ({variant_label})" if variant_label else product["name"],
             "quantity": _fmt_qty(product, qty),
-            "unit_price": f"R{product['price_cents'] / 100:.2f}{unit}",
-            "line_total": f"R{_line_cents(qty, product['price_cents']) / 100:.2f}",
+            "unit_price": f"R{unit_price_cents / 100:.2f}{unit}",
+            "line_total": f"R{_line_cents(qty, unit_price_cents) / 100:.2f}",
         }
 
     async def _exec_view_cart(
@@ -959,10 +1040,14 @@ class CommerceAssistantSkill(BaseSkill):
         lines, subtotal = [], 0
         for it in items:
             prod = it.get("commerce_products") or {}
+            variant = it.get("commerce_product_variants")
+            options = (variant or {}).get("option_values") or {}
+            label = ", ".join(f"{k}: {v}" for k, v in options.items())
             line_total = _line_cents(it["quantity"], it["unit_price_cents"])
             subtotal += line_total
             lines.append(
-                {"name": prod.get("name"), "quantity": _fmt_qty(prod, it["quantity"]),
+                {"name": f"{prod.get('name')} ({label})" if label else prod.get("name"),
+                 "quantity": _fmt_qty(prod, it["quantity"]),
                  "line_total": f"R{line_total / 100:.2f}"}
             )
         delivery = cart.get("delivery_cents", 8000)
@@ -994,7 +1079,7 @@ class CommerceAssistantSkill(BaseSkill):
     async def _exec_get_daily_catch(self, tenant_id: str) -> Dict[str, Any]:
         """Return products flagged as today's catch + any fresh fish in stock."""
         try:
-            all_products = await service.list_products(tenant_id, in_stock_only=True)
+            all_products = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
         except Exception as exc:
             return {"error": f"Could not load products: {exc}"}
 
@@ -1030,7 +1115,7 @@ class CommerceAssistantSkill(BaseSkill):
 
         # Fetch catalog so we know what's actually available
         try:
-            products = await service.list_products(tenant_id, in_stock_only=True)
+            products = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
             catalog_names = [p["name"] for p in products]
             catalog_str = ", ".join(catalog_names[:40])
         except Exception:
@@ -1125,10 +1210,10 @@ class CommerceAssistantSkill(BaseSkill):
         if not name:
             return None
         if re.match(r"^[a-z0-9-]+$", name):
-            product = await service.get_product_by_slug(tenant_id, name)
+            product = await service.get_product_by_slug(tenant_id, name, statuses={"active", "unlisted"})
             if product:
                 return product
-        candidates = await service.list_products(tenant_id, in_stock_only=True)
+        candidates = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
         return next((p for p in candidates if name.lower() in p["name"].lower()), None)
 
     async def _exec_create_quote(
@@ -1469,7 +1554,7 @@ class CommerceAssistantSkill(BaseSkill):
         model, api_key, api_base = await resolve_generation_route()
 
         try:
-            products = await service.list_products(inp.tenant_id, in_stock_only=True)
+            products = await service.list_products(inp.tenant_id, in_stock_only=True, statuses={"active"})
             catalog = "\n".join(
                 f"- {p['name']} ({p['slug']}): R{p['price_cents'] / 100:.2f}" for p in products[:30]
             )

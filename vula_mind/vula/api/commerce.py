@@ -42,13 +42,14 @@ async def list_products(
     category: Optional[str] = Query(None),
     in_stock_only: bool = Query(True),
 ):
-    products = await service.list_products(tenant_id, category=category, in_stock_only=in_stock_only)
+    products = await service.list_products(tenant_id, category=category, in_stock_only=in_stock_only,
+                                           statuses={"active"}, with_variant_price_range=True)
     return {"tenant_id": tenant_id, "products": products, "count": len(products)}
 
 
 @router.get("/{tenant_id}/products/{slug}")
 async def get_product(tenant_id: str, slug: str):
-    product = await service.get_product_by_slug(tenant_id, slug)
+    product = await service.get_product_by_slug(tenant_id, slug, statuses={"active", "unlisted"})
     if not product:
         raise HTTPException(status_code=404, detail=f"Product '{slug}' not found")
     return product
@@ -98,11 +99,21 @@ async def admin_list_pages(tenant_id: str):
     """All pages (draft + published) for the store editor."""
     try:
         rows = (service._client().table("vula_pages")
-                .select("id,slug,title,status,updated_at")
-                .eq("tenant_id", tenant_id).order("updated_at", desc=True).execute().data or [])
+                .select("id,slug,title,status,updated_at,sort_order")
+                .eq("tenant_id", tenant_id).order("sort_order").order("updated_at", desc=True)
+                .execute().data or [])
     except Exception as exc:
         return {"tenant_id": tenant_id, "pages": [], "error": f"{exc} (run migration 041?)"}
     return {"tenant_id": tenant_id, "pages": rows}
+
+
+@router.post("/{tenant_id}/admin/pages/reorder")
+async def admin_reorder_pages(tenant_id: str, body: dict):
+    """Set the display order of pages — body: {order: [slug, slug, ...]} (P4)."""
+    db = service._client()
+    for i, slug in enumerate((body or {}).get("order") or []):
+        db.table("vula_pages").update({"sort_order": i}).eq("tenant_id", tenant_id).eq("slug", slug).execute()
+    return {"ok": True}
 
 
 @router.get("/{tenant_id}/admin/pages/{slug}")
@@ -114,15 +125,27 @@ async def admin_get_page(tenant_id: str, slug: str):
 
 @router.put("/{tenant_id}/admin/pages/{slug}")
 async def upsert_page(tenant_id: str, slug: str, body: PageIn):
-    """Create or update a page (store editor / Puck save)."""
+    """Create or update a page (store editor / Puck save). Publishing an existing page snapshots
+    its PRE-update state into vula_page_versions first (P4 revision history), so there's always
+    something to restore even though this endpoint itself only ever holds the current version."""
     row = {"tenant_id": tenant_id, "slug": slug, "title": body.title,
            "puck_data": body.puck_data or {}, "seo": body.seo or {},
            "status": body.status or "draft", "updated_at": service._now()}
     db = service._client()
     try:
-        existing = (db.table("vula_pages").select("id")
+        existing = (db.table("vula_pages").select("*")
                     .eq("tenant_id", tenant_id).eq("slug", slug).limit(1).execute().data or [])
         if existing:
+            if (body.status or "draft") == "published":
+                try:
+                    prev = existing[0]
+                    db.table("vula_page_versions").insert({
+                        "page_id": prev["id"], "title": prev.get("title"),
+                        "puck_data": prev.get("puck_data"), "seo": prev.get("seo"),
+                        "status": prev.get("status"),
+                    }).execute()
+                except Exception as exc:
+                    log.debug("page version snapshot skipped (run migration 081?): %s", exc)
             db.table("vula_pages").update(row).eq("id", existing[0]["id"]).execute()
             row["id"] = existing[0]["id"]
         else:
@@ -130,6 +153,43 @@ async def upsert_page(tenant_id: str, slug: str, body: PageIn):
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"{exc} (run migration 041?)")
     return {"page": row}
+
+
+@router.get("/{tenant_id}/admin/pages/{slug}/versions")
+async def admin_list_page_versions(tenant_id: str, slug: str):
+    """Recent published-version snapshots for this page (P4 revision history)."""
+    db = service._client()
+    page = (db.table("vula_pages").select("id")
+            .eq("tenant_id", tenant_id).eq("slug", slug).limit(1).execute().data or [])
+    if not page:
+        return {"versions": []}
+    try:
+        rows = (db.table("vula_page_versions").select("id,title,status,created_at")
+                .eq("page_id", page[0]["id"]).order("created_at", desc=True).limit(20).execute().data or [])
+    except Exception as exc:
+        return {"versions": [], "error": f"{exc} (run migration 081?)"}
+    return {"versions": rows}
+
+
+@router.post("/{tenant_id}/admin/pages/{slug}/versions/{version_id}/restore")
+async def admin_restore_page_version(tenant_id: str, slug: str, version_id: str):
+    """Bring back an earlier version — restored into DRAFT so it can be reviewed before
+    re-publishing, never auto-published over the current live version."""
+    db = service._client()
+    page = (db.table("vula_pages").select("id")
+            .eq("tenant_id", tenant_id).eq("slug", slug).limit(1).execute().data or [])
+    if not page:
+        raise HTTPException(status_code=404, detail="page not found")
+    version = (db.table("vula_page_versions").select("*")
+               .eq("id", version_id).eq("page_id", page[0]["id"]).limit(1).execute().data or [])
+    if not version:
+        raise HTTPException(status_code=404, detail="version not found")
+    v = version[0]
+    db.table("vula_pages").update({
+        "title": v.get("title"), "puck_data": v.get("puck_data"), "seo": v.get("seo"),
+        "status": "draft", "updated_at": service._now(),
+    }).eq("id", page[0]["id"]).execute()
+    return {"restored": version_id}
 
 
 @router.delete("/{tenant_id}/admin/pages/{slug}")
@@ -152,6 +212,27 @@ async def put_order_settings_ep(tenant_id: str, body: dict):
     return {"settings": upsert_order_settings(tenant_id, body or {})}
 
 
+@router.get("/{tenant_id}/settings")
+async def public_store_settings(tenant_id: str):
+    """Public, read-only storefront presentation settings (hero copy, announcements,
+    delivery fees, cutoff time) — the one real source for any storefront's own homepage/
+    layout rendering, replacing what used to live only in off_the_hook's local
+    data/store-settings.json (migrations 084/086, store-admin-reconciliation plan)."""
+    from vula.commerce.order_workflow import get_order_settings
+    cfg = get_order_settings(tenant_id)
+    raw = {
+        "announcements": cfg.get("announcements"),
+        "delivery_fee_cents": cfg.get("delivery_fee_cents"),
+        "free_delivery_threshold_cents": cfg.get("free_delivery_over_cents"),
+        "express_delivery_extra_cents": cfg.get("express_delivery_extra_cents"),
+        "cutoff_time": cfg.get("cutoff_time"),
+        "hero_tagline": cfg.get("hero_tagline"),
+        "hero_subtitle": cfg.get("hero_subtitle"),
+        "featured_product_ids": cfg.get("featured_product_ids"),
+    }
+    return {"settings": {k: v for k, v in raw.items() if v is not None}}
+
+
 # ── Cart ─────────────────────────────────────────────────────────────────────
 
 @router.get("/{tenant_id}/cart/{session_id}")
@@ -163,7 +244,8 @@ async def get_cart(tenant_id: str, session_id: str, phone: Optional[str] = Query
 @router.post("/{tenant_id}/cart/{session_id}/add")
 async def add_to_cart(tenant_id: str, session_id: str, body: AddToCartRequest):
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
-    item = await service.add_to_cart(tenant_id, cart["id"], str(body.product_id), body.quantity)
+    item = await service.add_to_cart(tenant_id, cart["id"], str(body.product_id), body.quantity,
+                                     variant_id=str(body.variant_id) if body.variant_id else None)
     return {"cart_id": cart["id"], "item": item}
 
 
@@ -177,6 +259,7 @@ async def remove_from_cart(tenant_id: str, session_id: str, item_id: str):
 class CartSyncItem(BaseModel):
     product_id: str
     quantity: float
+    variant_id: Optional[str] = None
 
 
 class CartSyncRequest(BaseModel):
@@ -198,7 +281,8 @@ async def sync_cart(tenant_id: str, session_id: str, body: CartSyncRequest):
     for it in body.items:
         if it.quantity and it.quantity > 0:
             try:
-                added.append(await service.add_to_cart(tenant_id, cart["id"], it.product_id, it.quantity))
+                added.append(await service.add_to_cart(tenant_id, cart["id"], it.product_id, it.quantity,
+                                                        variant_id=it.variant_id))
             except Exception as exc:
                 log.warning("cart sync item skipped (%s): %s", it.product_id, exc)
     return {"cart_id": cart["id"], "items": len(added)}
@@ -349,7 +433,9 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict):
                "is_daily_catch", "stock_quantity", "image_url", "category", "sold_by",
                "images", "sale_price_cents", "sale_ends_at", "sort_order", "archived",
                "pack_size", "weight_grams", "serves",
-               "reorder_threshold", "reorder_qty", "default_supplier_id"}
+               "reorder_threshold", "reorder_qty", "default_supplier_id",
+               "pricing_mode", "price_per_kg_cents", "min_weight_g", "max_weight_g",
+               "reference_weight_g", "catch_source", "fisherman_name", "seo", "status", "options"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
@@ -448,6 +534,112 @@ async def admin_create_product(tenant_id: str, body: dict):
     return await service.create_product(tenant_id, payload)
 
 
+def _csv_bool(v, default: bool) -> bool:
+    if v is None or v == "":
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "y")
+
+
+@router.post("/{tenant_id}/admin/products/import")
+async def admin_import_products(tenant_id: str, body: dict):
+    """Bulk CSV product import (P3.2). The client does the CSV parse + dry-run preview; this
+    endpoint commits the rows it's given. Upserts on (tenant_id, slug) — mirrors the
+    commerce_categories upsert pattern. Unknown categories are auto-created rather than
+    rejected (matches the platform's low-friction onboarding ethos). Returns a per-row result
+    so one bad row doesn't fail the whole batch."""
+    import re as _re
+    rows = body.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=400, detail="rows required")
+
+    try:
+        known = {c["key"] for c in (service._client().table("commerce_categories")
+                 .select("key").eq("tenant_id", tenant_id).execute().data or [])}
+    except Exception:
+        known = set()
+    known |= {"fresh_fish", "fresh_chicken", "frozen_chicken", "frozen_seafood", "extras"}
+
+    existing = {p["slug"]: p for p in
+                await service.list_products(tenant_id, in_stock_only=False, include_archived=True)}
+
+    NUMERIC_FIELDS = ("price_per_kg_cents", "min_weight_g", "max_weight_g", "reference_weight_g",
+                      "weight_grams", "stock_quantity")
+    results = []
+    for i, row in enumerate(rows):
+        row = row or {}
+        slug_for_report = (row.get("slug") or row.get("name") or f"row {i + 1}")
+        try:
+            name = (row.get("name") or "").strip()
+            if not name:
+                raise ValueError("name is required")
+            try:
+                price_cents = int(round(float(row.get("price_cents") or 0)))
+            except (TypeError, ValueError):
+                raise ValueError("price_cents must be a number")
+            if price_cents <= 0:
+                raise ValueError("price_cents must be a positive number")
+
+            slug = (row.get("slug") or "").strip() or _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "product"
+            slug_for_report = slug
+
+            category = (row.get("category") or "extras").strip() or "extras"
+            if category not in known:
+                try:
+                    cat_row = {"tenant_id": tenant_id, "key": category,
+                               "label": category.replace("_", " ").title(), "sort_order": 0}
+                    service._client().table("commerce_categories").upsert(
+                        cat_row, on_conflict="tenant_id,key").execute()
+                    known.add(category)
+                except Exception:
+                    pass  # categories table may not exist (pre-migration-073) — keep the string anyway
+
+            warning = None
+            image_url = (row.get("image_url") or "").strip() or None
+            if image_url and not image_url.startswith(("http://", "https://")):
+                warning = f"image_url '{image_url}' doesn't look like a URL — skipped"
+                image_url = None
+
+            payload = {
+                "name": name, "slug": slug, "price_cents": price_cents, "category": category,
+                "sold_by": row.get("sold_by") if row.get("sold_by") in ("kg", "pack") else "pack",
+                "description": row.get("description") or "",
+                "image_url": image_url,
+                "in_stock": _csv_bool(row.get("in_stock"), True),
+                "is_daily_catch": _csv_bool(row.get("is_daily_catch"), False),
+                "pricing_mode": row.get("pricing_mode") if row.get("pricing_mode") in ("fixed", "by_weight") else "fixed",
+                "catch_source": (row.get("catch_source") or "").strip() or None,
+                "fisherman_name": (row.get("fisherman_name") or "").strip() or None,
+                "status": row.get("status") if row.get("status") in ("active", "draft", "unlisted", "archived") else "active",
+            }
+            seo_title = (row.get("seo_title") or "").strip()
+            seo_description = (row.get("seo_description") or "").strip()
+            if seo_title or seo_description:
+                payload["seo"] = {k: v for k, v in {"title": seo_title or None, "description": seo_description or None}.items() if v}
+            for f in NUMERIC_FIELDS:
+                if row.get(f) not in (None, ""):
+                    try:
+                        payload[f] = int(round(float(row[f])))
+                    except (TypeError, ValueError):
+                        pass
+
+            if slug in existing:
+                await service.update_product(tenant_id, existing[slug]["id"], payload)
+                results.append({"row": i, "slug": slug, "status": "updated", "warning": warning})
+            else:
+                created = await service.create_product(tenant_id, payload)
+                existing[slug] = created
+                results.append({"row": i, "slug": slug, "status": "created", "warning": warning})
+        except Exception as exc:
+            results.append({"row": i, "slug": slug_for_report, "status": "error", "error": str(exc)})
+
+    return {
+        "results": results,
+        "created": sum(1 for r in results if r["status"] == "created"),
+        "updated": sum(1 for r in results if r["status"] == "updated"),
+        "errors": sum(1 for r in results if r["status"] == "error"),
+    }
+
+
 @router.delete("/{tenant_id}/admin/products/{product_id}")
 async def admin_delete_product(tenant_id: str, product_id: str):
     """Delete a product — but ARCHIVE instead when any order references it, so order history
@@ -463,6 +655,64 @@ async def admin_delete_product(tenant_id: str, product_id: str):
         return {"archived": product_id}
     await service.delete_product(tenant_id, product_id)
     return {"deleted": product_id}
+
+
+# ── Product variants (migration 087, Phase 4) ─────────────────────────────────
+
+VARIANT_FIELDS = {"option_values", "sku", "barcode", "price_cents", "stock_quantity",
+                  "in_stock", "sort_order", "archived", "reorder_threshold", "reorder_qty",
+                  "default_supplier_id"}
+
+
+@router.get("/{tenant_id}/admin/products/{product_id}/variants")
+async def admin_list_variants(tenant_id: str, product_id: str):
+    variants = await service.list_variants(tenant_id, product_id, include_archived=True)
+    return {"variants": variants}
+
+
+def _variant_barcode_conflict(exc: Exception, barcode) -> HTTPException:
+    """Turn the raw unique-constraint error (migration 087's per-tenant barcode index) into a
+    message a merchant can act on, instead of a bare 500."""
+    if "idx_variants_tenant_barcode" in str(exc) or "23505" in str(exc):
+        return HTTPException(status_code=400, detail=f"Barcode '{barcode}' is already used by another variant.")
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/variants")
+async def admin_create_variant(tenant_id: str, product_id: str, body: dict):
+    data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
+    try:
+        return await service.create_variant(tenant_id, product_id, data)
+    except Exception as exc:
+        raise _variant_barcode_conflict(exc, data.get("barcode"))
+
+
+@router.patch("/{tenant_id}/admin/products/{product_id}/variants/{variant_id}")
+async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str, body: dict):
+    data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
+    if not data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    try:
+        return await service.update_variant(tenant_id, variant_id, data)
+    except Exception as exc:
+        raise _variant_barcode_conflict(exc, data.get("barcode"))
+
+
+@router.delete("/{tenant_id}/admin/products/{product_id}/variants/{variant_id}")
+async def admin_delete_variant(tenant_id: str, product_id: str, variant_id: str):
+    await service.delete_variant(tenant_id, variant_id)
+    return {"deleted": variant_id}
+
+
+@router.get("/{tenant_id}/admin/products/lookup")
+async def admin_lookup_barcode(tenant_id: str, barcode: str = Query(...)):
+    """Barcode scan lookup — Smart Scanner POS prep (not yet consumed by anything; adding it
+    now means the future scanner integration is a pure consumer, not another schema change)."""
+    match = await service.find_by_barcode(tenant_id, barcode)
+    if not match:
+        raise HTTPException(status_code=404, detail=f"No variant found for barcode '{barcode}'")
+    product = match.pop("commerce_products", None)
+    return {"variant": match, "product": product}
 
 
 # ── In-portal admin assistant (chat to Vula from the dashboard) ───────────────
@@ -1369,6 +1619,91 @@ async def admin_reports(tenant_id: str, days: int = 30):
     top = sorted(agg.values(), key=lambda x: x["revenue_cents"], reverse=True)[:10]
     return {"days": days, "revenue_trend": trend, "top_products": top,
             "total_revenue_cents": sum(o["total_cents"] for o in paid), "total_orders": len(paid)}
+
+
+# ── Products & services catalog (quick-add on invoices/quotes, migration 083) ──
+# Distinct from commerce_products (OTH's storefront/stock catalog): no slug/stock, and the
+# description may carry a {project} token the invoice UI substitutes at add-time.
+
+@router.get("/{tenant_id}/admin/invoice-items")
+async def admin_list_invoice_items(tenant_id: str):
+    try:
+        rows = (service._client().table("commerce_invoice_items").select("*")
+                .eq("tenant_id", tenant_id).eq("active", True)
+                .order("sort").order("name").execute().data or [])
+    except Exception as exc:
+        log.debug("invoice items list skipped (run migration 083?): %s", exc)
+        rows = []
+    return {"items": rows, "count": len(rows)}
+
+
+@router.post("/{tenant_id}/admin/invoice-items")
+async def admin_create_invoice_item(tenant_id: str, body: dict):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    kind = body.get("kind") if body.get("kind") in ("product", "service") else "service"
+    try:
+        price_cents = int(body.get("unit_price_cents") or 0)
+    except (TypeError, ValueError):
+        price_cents = 0
+    payload = {
+        "tenant_id": tenant_id, "kind": kind, "name": name,
+        "description": (body.get("description") or "").strip() or None,
+        "unit": (body.get("unit") or "").strip() or None,
+        "unit_price_cents": price_cents,
+        "sort": int(body.get("sort") or 0),
+    }
+    try:
+        res = service._client().table("commerce_invoice_items").upsert(
+            payload, on_conflict="tenant_id,name").execute()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{exc} (run migration 083?)")
+    row = res.data[0] if res.data else payload
+    await _ingest_invoice_item_kb(tenant_id, row)
+    return row
+
+
+@router.patch("/{tenant_id}/admin/invoice-items/{item_id}")
+async def admin_update_invoice_item(tenant_id: str, item_id: str, body: dict):
+    allowed = {"name", "description", "unit", "unit_price_cents", "kind", "active", "sort"}
+    update = {k: v for k, v in body.items() if k in allowed}
+    if not update:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    res = (service._client().table("commerce_invoice_items").update(update)
+           .eq("tenant_id", tenant_id).eq("id", item_id).execute())
+    row = res.data[0] if res.data else {"id": item_id, **update}
+    if row.get("active", True):
+        await _ingest_invoice_item_kb(tenant_id, row)
+    return row
+
+
+@router.delete("/{tenant_id}/admin/invoice-items/{item_id}")
+async def admin_delete_invoice_item(tenant_id: str, item_id: str):
+    service._client().table("commerce_invoice_items").delete() \
+        .eq("tenant_id", tenant_id).eq("id", item_id).execute()
+    return {"deleted": item_id}
+
+
+async def _ingest_invoice_item_kb(tenant_id: str, item: dict) -> None:
+    """Mirror a product/service into the tenant's KB so the AI assistant can answer questions
+    about rates/services (same pattern as the master code library, projects.py:add_code)."""
+    if not item.get("id"):
+        return
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        price = f"R{(item.get('unit_price_cents') or 0) / 100:.2f}"
+        if item.get("unit"):
+            price += f"/{item['unit']}"
+        text = f"{item.get('name')} ({item.get('kind', 'service')}) — {price}"
+        if item.get("description"):
+            text += f"\n{item['description']}"
+        doc_id = f"invoice_item_{item['id']}"
+        await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
+            content=text, filename=f"{doc_id}.txt", doc_id=doc_id, source_type="reference",
+        )
+    except Exception as exc:
+        log.debug("invoice item KB ingest skipped for %s: %s", item.get("id"), exc)
 
 
 # ── Invoice endpoints ─────────────────────────────────────────────────────────
@@ -2607,7 +2942,7 @@ async def job_overdue_invoices(tenant_id: str):
 async def job_weekly_specials(tenant_id: str):
     """Fire the weekly specials broadcast."""
     # This logic matches OTH-05: Monday 07:00
-    products = await service.list_products(tenant_id, in_stock_only=True)
+    products = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
     specials = [p for p in products if p.get("is_daily_catch")]
     # Fire n8n broadcast
     return {"ok": True, "specials_count": len(specials)}
@@ -3599,26 +3934,47 @@ async def admin_delete_supplier(tenant_id: str, supplier_id: str):
 
 @router.get("/{tenant_id}/admin/reorder-suggestions")
 async def admin_reorder_suggestions(tenant_id: str):
-    """Products at/below their reorder threshold, grouped by default supplier — the 'what
-    should I order' view. Products without a threshold set are never suggested."""
+    """Products (or, for a variant product, each individual variant) at/below their reorder
+    threshold, grouped by default supplier — the 'what should I order' view. Anything without
+    a threshold set is never suggested."""
     products = await service.list_products(tenant_id, in_stock_only=False, include_archived=False)
-    low = [p for p in products
-           if p.get("reorder_threshold") is not None
-           and (p.get("stock_quantity") or 0) <= p["reorder_threshold"]]
+    low = []
+    for p in products:
+        variants = await service.list_variants(tenant_id, p["id"], include_archived=False)
+        if variants:
+            for v in variants:
+                if v.get("reorder_threshold") is None:
+                    continue
+                if (v.get("stock_quantity") or 0) <= v["reorder_threshold"]:
+                    opts = v.get("option_values") or {}
+                    suffix = ", ".join(f"{k}: {val}" for k, val in opts.items())
+                    low.append({
+                        "product_id": p["id"], "variant_id": v["id"],
+                        "name": f"{p['name']} ({suffix})" if suffix else p["name"],
+                        "stock_quantity": v.get("stock_quantity") or 0,
+                        "reorder_threshold": v["reorder_threshold"], "suggested_qty": v.get("reorder_qty") or 10,
+                        "unit_cost_cents": v.get("price_cents") or p.get("price_cents") or 0,
+                        "default_supplier_id": v.get("default_supplier_id"),
+                    })
+        elif (p.get("reorder_threshold") is not None
+              and (p.get("stock_quantity") or 0) <= p["reorder_threshold"]):
+            low.append({
+                "product_id": p["id"], "variant_id": None, "name": p["name"],
+                "stock_quantity": p.get("stock_quantity") or 0,
+                "reorder_threshold": p["reorder_threshold"], "suggested_qty": p.get("reorder_qty") or 10,
+                "unit_cost_cents": p.get("price_cents") or 0,
+                "default_supplier_id": p.get("default_supplier_id"),
+            })
     suppliers = {s["id"]: s for s in await service.list_suppliers(tenant_id)}
     groups: dict = {}
-    for p in low:
-        sid = p.get("default_supplier_id") or "unassigned"
+    for item in low:
+        sid = item.pop("default_supplier_id") or "unassigned"
         g = groups.setdefault(sid, {
             "supplier_id": None if sid == "unassigned" else sid,
             "supplier_name": suppliers.get(sid, {}).get("name") if sid != "unassigned" else "No default supplier",
             "items": [],
         })
-        g["items"].append({
-            "product_id": p["id"], "name": p["name"], "stock_quantity": p.get("stock_quantity") or 0,
-            "reorder_threshold": p["reorder_threshold"], "suggested_qty": p.get("reorder_qty") or 10,
-            "unit_cost_cents": p.get("price_cents") or 0,
-        })
+        g["items"].append(item)
     return {"groups": list(groups.values()), "count": len(low)}
 
 
@@ -3785,7 +4141,8 @@ async def admin_create_manual_order(tenant_id: str, body: dict):
         try:
             qty = float(it.get("quantity") or 1)
             if qty > 0:
-                await service.add_to_cart(tenant_id, cart["id"], str(it.get("product_id")), qty)
+                await service.add_to_cart(tenant_id, cart["id"], str(it.get("product_id")), qty,
+                                          variant_id=it.get("variant_id"))
                 added += 1
         except Exception as exc:
             log.warning("manual order item skipped: %s", exc)

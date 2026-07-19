@@ -257,19 +257,31 @@ function TenantsPanel({ onError, onOpenTenant, prefill, onConsumePrefill }) {
 function ManageTenantRow({ tenant, registry, onSave }) {
   const [modules, setModules] = useState(tenant.modules || [])
   const [plan, setPlan] = useState(tenant.plan || 'starter')
+  const [storeUrl, setStoreUrl] = useState(tenant.store_url || '')
+  const [gateway, setGateway] = useState(tenant.default_payment_provider || '')
   const allModules = registry.modules || []
 
   const toggle = (id) => setModules(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id])
 
   return (
     <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <b style={{ fontSize: 12.5 }}>Plan</b>
-        <select value={plan} onChange={e => setPlan(e.target.value)} style={input}>
-          <option value="starter">Starter</option>
-          <option value="growth">Growth</option>
-          <option value="business">Business</option>
-        </select>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <b style={{ fontSize: 12.5 }}>Plan</b>
+          <select value={plan} onChange={e => setPlan(e.target.value)} style={input}>
+            <option value="starter">Starter</option>
+            <option value="growth">Growth</option>
+            <option value="business">Business</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <b style={{ fontSize: 12.5 }}>Store URL</b>
+          <input value={storeUrl} onChange={e => setStoreUrl(e.target.value)} placeholder="https://…" style={{ ...input, flex: 1 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <b style={{ fontSize: 12.5 }}>Default gateway</b>
+          <input value={gateway} onChange={e => setGateway(e.target.value)} placeholder="yoco / payfast / …" style={{ ...input, flex: 1 }} />
+        </div>
       </div>
       <div>
         <b style={{ fontSize: 12.5, display: 'block', marginBottom: 6 }}>Modules</b>
@@ -283,7 +295,7 @@ function ManageTenantRow({ tenant, registry, onSave }) {
         </div>
       </div>
       <button style={{ ...btn, ...btnOn, alignSelf: 'flex-start' }}
-        onClick={() => onSave({ modules, plan })}>Save changes</button>
+        onClick={() => onSave({ modules, plan, store_url: storeUrl, default_payment_provider: gateway })}>Save changes</button>
     </div>
   )
 }

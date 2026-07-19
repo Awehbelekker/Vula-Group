@@ -52,7 +52,7 @@ async def _context(tenant_id: str) -> Dict[str, Any]:
 
     products: List[dict] = []
     try:
-        products = await service.list_products(tenant_id, in_stock_only=True)
+        products = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
     except Exception as exc:
         log.debug("marketing: product load skipped: %s", exc)
 

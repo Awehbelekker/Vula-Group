@@ -410,9 +410,15 @@ function LiveProducts({ title, category, count, linkBase, mode }) {
                 <div style={{ padding: "10px 12px" }}>
                   <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 4 }}>{p.name}</div>
                   <div style={{ fontSize: 14 }}>
-                    <span style={{ fontWeight: 700, color: ACCENT }}>{R(pr.now)}</span>
-                    {pr.was ? <span style={{ marginLeft: 6, color: "#999", textDecoration: "line-through", fontSize: 12.5 }}>{R(pr.was)}</span> : null}
-                    <span style={{ color: "#888", fontSize: 12 }}>{p.sold_by === "kg" ? " /kg" : ""}</span>
+                    {p.variant_price_range ? (
+                      <span style={{ fontWeight: 700, color: ACCENT }}>
+                        {p.variant_price_range.min === p.variant_price_range.max ? R(p.variant_price_range.min) : `From ${R(p.variant_price_range.min)}`}
+                      </span>
+                    ) : (<>
+                      <span style={{ fontWeight: 700, color: ACCENT }}>{R(pr.now)}</span>
+                      {pr.was ? <span style={{ marginLeft: 6, color: "#999", textDecoration: "line-through", fontSize: 12.5 }}>{R(pr.was)}</span> : null}
+                      <span style={{ color: "#888", fontSize: 12 }}>{p.sold_by === "kg" ? " /kg" : ""}</span>
+                    </>)}
                   </div>
                 </div>
               </a>

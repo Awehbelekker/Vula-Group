@@ -93,7 +93,6 @@ export const MASTER_GROUPS = [
     { id: "onboard", icon: "🚀", label: "Onboard Client" },
     { id: "admin", icon: "📝", label: "Signups" },
     { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
-    { id: "commerce", icon: "🛒", label: "Commerce" },
     { id: "merchant", icon: "🏪", label: "Merchant" },
   ]},
 ];

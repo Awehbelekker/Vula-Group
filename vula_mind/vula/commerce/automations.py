@@ -147,16 +147,36 @@ async def _check_low_stock(tenant_id: str, automation: dict) -> int:
     except Exception as exc:
         log.debug("low_stock automation check skipped: %s", exc)
         return 0
-    low = [p for p in products if p.get("reorder_threshold") is not None
-           and (p.get("stock_quantity") or 0) <= p["reorder_threshold"]]
+
+    # Variant-aware (migration 087): a product with variants can't be judged by its own
+    # reorder_threshold (Size L might be out while Size M has 50 units) — check each variant's
+    # own threshold instead, and only fall back to the product-level fields when it has none.
+    low = []
+    for p in products:
+        variants = await service.list_variants(tenant_id, p["id"], include_archived=False)
+        if variants:
+            for v in variants:
+                if v.get("reorder_threshold") is None:
+                    continue
+                if (v.get("stock_quantity") or 0) <= v["reorder_threshold"]:
+                    opts = v.get("option_values") or {}
+                    suffix = ", ".join(f"{k}: {val}" for k, val in opts.items())
+                    low.append({
+                        "key": v["id"], "name": f"{p.get('name')} ({suffix})" if suffix else p.get("name"),
+                        "stock": v.get("stock_quantity") or 0, "threshold": v["reorder_threshold"],
+                    })
+        elif (p.get("reorder_threshold") is not None
+              and (p.get("stock_quantity") or 0) <= p["reorder_threshold"]):
+            low.append({"key": p["id"], "name": p.get("name"),
+                       "stock": p.get("stock_quantity") or 0, "threshold": p["reorder_threshold"]})
+
     from datetime import date
     fired = 0
-    for p in low:
-        key = f"{p['id']}:{date.today().isoformat()}"   # once per product per day
+    for item in low:
+        key = f"{item['key']}:{date.today().isoformat()}"   # once per product/variant per day
         if _already_fired(automation["id"], key):
             continue
-        ctx = {"product_name": p.get("name"), "stock": p.get("stock_quantity") or 0,
-               "threshold": p["reorder_threshold"]}
+        ctx = {"product_name": item["name"], "stock": item["stock"], "threshold": item["threshold"]}
         if await _run_action(tenant_id, automation, ctx):
             fired += 1
         _mark_fired(automation["id"], key)

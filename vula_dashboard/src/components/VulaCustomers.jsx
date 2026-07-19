@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { downloadCsv } from '../lib/csv'
+import { whatsAppLink } from '../lib/phone'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -93,10 +94,7 @@ export default function VulaCustomers({ tenantId }) {
   }, [load, search])
 
   const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
-  const waLink = phone => {
-    const n = (phone || '').replace(/[^\d]/g, '').replace(/^0/, '27')
-    return `https://wa.me/${n}`
-  }
+  const waLink = phone => whatsAppLink(phone)
   const since = ts => {
     if (!ts) return '—'
     const d = new Date(ts)
