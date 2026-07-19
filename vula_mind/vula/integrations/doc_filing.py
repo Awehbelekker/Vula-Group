@@ -302,11 +302,25 @@ async def file_document(
         "status": status, "filed_by": filed_by,
     }
     try:
-        ins = _client().table("vula_filed_documents").insert(row).execute()
+        # ignore_duplicates=True (Postgres ON CONFLICT DO NOTHING) against the unique
+        # (tenant_id, source, filename) constraint (migration 081): with two worker processes
+        # racing the same email-sync poll or WhatsApp attachment, whichever insert lands first
+        # wins and the other is a silent no-op — never a second row, and never clobbers an
+        # already-resolved row's project/status back to unfiled.
+        ins = _client().table("vula_filed_documents").upsert(
+            row, on_conflict="tenant_id,source,filename", ignore_duplicates=True
+        ).execute()
         if ins.data:
             row["id"] = ins.data[0].get("id")
+        else:
+            # Lost the race — fetch the row the winner created so the caller still gets an id.
+            existing = (_client().table("vula_filed_documents").select("*")
+                       .eq("tenant_id", tenant_id).eq("source", source).eq("filename", filename)
+                       .limit(1).execute().data or [])
+            if existing:
+                row = existing[0]
     except Exception as exc:
-        logger.warning("vula_filed_documents insert failed (run migration 015?): %s", exc)
+        logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc)
     return row
 
 

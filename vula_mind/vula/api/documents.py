@@ -102,4 +102,23 @@ async def assign_project(doc_id: str, body: AssignIn) -> dict:
         }).eq("id", doc_id).execute()
     except Exception as exc:
         return {"error": str(exc)}
-    return {"id": doc_id, "project": body.project, "clickup_attached": bool(clickup_task_id)}
+
+    # Same two follow-ups the WhatsApp-reply resolution path already does (doc_filing.py's
+    # resolve_pending_document) — this dashboard path was missing both, so a document assigned
+    # here never contributed to the project's finances and never taught the auto-filer.
+    learned = None
+    try:
+        from vula.integrations.doc_filing import learn_filing_rule
+        learned = learn_filing_rule(doc["tenant_id"], doc.get("fields") or {}, body.project)
+    except Exception as exc:
+        log.debug("learn filing rule (assign) skipped: %s", exc)
+    try:
+        from vula.integrations.finances import post_finance_from_doc
+        post_finance_from_doc(doc["tenant_id"], body.project, doc.get("fields") or {},
+                              doc.get("doc_id"), doc.get("filename") or "",
+                              doc.get("summary") or "", doc.get("category") or "")
+    except Exception as exc:
+        log.debug("finance post (assign) skipped: %s", exc)
+
+    return {"id": doc_id, "project": body.project, "clickup_attached": bool(clickup_task_id),
+            "learned_signals": learned}
