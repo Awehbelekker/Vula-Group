@@ -18,8 +18,10 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+
+from vula.api.master_auth import require_master
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["tenants"])
@@ -51,22 +53,25 @@ MODULES: dict[str, str] = {
     "followups":  "Follow-ups",
     "workspace":  "Workspace",
     "team":       "Team",
+    "estimating": "Estimating (Quick Cost / QS Pro / Takeoff)",
+    "ai_draft":   "AI Draft",
+    "training":   "Training KB",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
 BUSINESS_TYPES: dict[str, dict] = {
     "food":     {"label": "Food / Restaurant / Takeaway",
                  "modules": ["products", "orders", "payments", "invoices", "delivery",
-                             "crm", "reports", "broadcasts", "marketing", "inbox", "team"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
     "retail":   {"label": "Retail / E-commerce",
                  "modules": ["products", "orders", "payments", "invoices", "pages",
-                             "crm", "reports", "broadcasts", "marketing", "inbox", "team"]},
+                             "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
     "services": {"label": "Professional services (architecture, agency, consulting)",
                  "modules": ["invoices", "bookings", "projects", "documents", "finances", "fieldops",
-                             "followups", "reports", "team"]},
+                             "followups", "reports", "team", "estimating", "ai_draft", "training", "workspace"]},
     "trades":   {"label": "Trades / Construction / Field work",
                  "modules": ["invoices", "fieldops", "projects", "budget", "scanner",
-                             "finances", "followups", "team"]},
+                             "finances", "followups", "team", "estimating", "ai_draft", "training", "workspace"]},
     "health":   {"label": "Health / Wellness / Bookings",
                  "modules": ["bookings", "invoices", "crm", "followups", "broadcasts", "marketing",
                              "inbox", "reports", "pages", "team"]},
@@ -151,9 +156,10 @@ async def registry() -> dict:
     }
 
 
-@router.get("/ai-spend")
+@router.get("/ai-spend", dependencies=[Depends(require_master)])
 async def ai_spend(days: int = 14) -> dict:
-    """AI/LLM spend (COGS) across all tenants — from vula_ai_usage. Master view."""
+    """AI/LLM spend (COGS) across all tenants — from vula_ai_usage. Master-only (verified JWT)
+    since 2026-07-16 — was previously open to any caller."""
     from datetime import datetime, timezone, timedelta
     since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
     try:
@@ -207,8 +213,9 @@ class TenantIn(BaseModel):
 
 @router.post("")
 @router.post("/")
-async def create_tenant(body: TenantIn) -> dict:
-    """Seed a tenant from a business type — modules auto-enabled from the preset."""
+async def create_tenant(body: TenantIn, identity: dict = Depends(require_master)) -> dict:
+    """Seed a tenant from a business type — modules auto-enabled from the preset. Master-only
+    (verified JWT) since 2026-07-16 — was previously open to any caller."""
     preset = BUSINESS_TYPES.get(body.business_type or "other", BUSINESS_TYPES["other"])
     row = {
         "tenant_id": body.tenant_id, "display_name": body.display_name or body.tenant_id,
@@ -226,6 +233,11 @@ async def create_tenant(body: TenantIn) -> dict:
     except Exception as exc:
         return {"error": f"{exc} (run migration 040?)"}
     _CACHE.pop(body.tenant_id, None)
+    try:
+        from vula.api.master import audit
+        audit(identity, "tenant_created", body.tenant_id, business_type=body.business_type)
+    except Exception:
+        pass
     return {"tenant": _public(row)}
 
 
@@ -243,7 +255,9 @@ class TenantPatch(BaseModel):
 
 
 @router.patch("/{tenant_id}")
-async def patch_tenant(tenant_id: str, body: TenantPatch) -> dict:
+async def patch_tenant(tenant_id: str, body: TenantPatch,
+                       identity: dict = Depends(require_master)) -> dict:
+    """Master-only (verified JWT) since 2026-07-16 — was previously open to any caller."""
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
     if not patch:
         return {"tenant": _public(get_config(tenant_id, fresh=True))}
@@ -253,4 +267,9 @@ async def patch_tenant(tenant_id: str, body: TenantPatch) -> dict:
     except Exception as exc:
         return {"error": f"{exc} (run migration 040?)"}
     _CACHE.pop(tenant_id, None)
+    try:
+        from vula.api.master import audit
+        audit(identity, "tenant_updated", tenant_id, patch=patch)
+    except Exception:
+        pass
     return {"tenant": _public(get_config(tenant_id, fresh=True))}

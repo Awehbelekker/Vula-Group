@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Security, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Security, UploadFile, File, Form
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, EmailStr, field_validator
 
@@ -38,13 +38,24 @@ router = APIRouter(tags=["onboarding"])
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def _require_admin(api_key: str | None = Security(_api_key_header)) -> None:
-    """Admin endpoints require API key even when the main API is open."""
+async def _require_admin(api_key: str | None = Security(_api_key_header),
+                         authorization: str = Header(default="")) -> None:
+    """Admin endpoints: X-API-Key OR a verified master login (2026-07-17 — the dashboard signs
+    in with Supabase now, so the master's JWT is accepted instead of shipping the shared
+    API key to the browser)."""
     import secrets as _secrets
     if not settings.api_key:
         return
-    if not api_key or not _secrets.compare_digest(api_key, settings.api_key):
-        raise HTTPException(status_code=401, detail="Admin access requires X-API-Key header.")
+    if api_key and _secrets.compare_digest(api_key, settings.api_key):
+        return
+    if authorization:
+        try:
+            from vula.api.master_auth import require_master
+            await require_master(authorization)
+            return
+        except HTTPException:
+            pass
+    raise HTTPException(status_code=401, detail="Admin access requires X-API-Key or a master login.")
 
 # ─── Tier definitions ─────────────────────────────────────────────────────────
 
@@ -613,7 +624,7 @@ async def list_signups(limit: int = 20) -> dict:
             resp = await client.get(
                 f"{settings.supabase_url}/rest/v1/vula_tenants"
                 f"?order=created_at.desc&limit={limit}"
-                f"&select=company_name,contact_name,email,whatsapp,plan,industry,status,paid,trial_ends,created_at",
+                f"&select=tenant_id,company_name,contact_name,email,whatsapp,plan,industry,status,paid,trial_ends,created_at",
                 headers={
                     "apikey": settings.supabase_service_key,
                     "Authorization": f"Bearer {settings.supabase_service_key}",

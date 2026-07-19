@@ -31,8 +31,10 @@ _yoco_creds_cache: dict[str, dict] = {}
 # Format: tenant_id → list of (name, phone_e164, role)
 _TENANT_TEAM: dict[str, list[tuple[str, str, str]]] = {
     "off-the-hook": [
-        ("Stacy", "27722684085", "owner"),
-        ("Roland", "27721822828", "operations"),
+        ("Stacy", "27737815979", "owner"),
+    ],
+    "digg-demo": [
+        ("Judy", "27827077080", "owner"),
     ],
 }
 

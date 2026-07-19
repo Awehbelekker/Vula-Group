@@ -174,6 +174,36 @@ async def remove_from_cart(tenant_id: str, session_id: str, item_id: str):
     return {"removed": item_id}
 
 
+class CartSyncItem(BaseModel):
+    product_id: str
+    quantity: float
+
+
+class CartSyncRequest(BaseModel):
+    items: list[CartSyncItem]
+    customer_phone: Optional[str] = None
+
+
+@router.post("/{tenant_id}/cart/{session_id}/sync")
+async def sync_cart(tenant_id: str, session_id: str, body: CartSyncRequest):
+    """Replace the server cart with the client's current state (P0 fix 2026-07-17): the
+    storefront edits its cart locally, but checkout charges from the SERVER cart — before this
+    endpoint, removals/quantity changes never reached the server, so a customer could be
+    charged for items they removed. The storefront now calls this on every edit AND right
+    before checkout as a final reconcile."""
+    cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
+    db = service._client()
+    db.table("commerce_cart_items").delete().eq("cart_id", cart["id"]).execute()
+    added = []
+    for it in body.items:
+        if it.quantity and it.quantity > 0:
+            try:
+                added.append(await service.add_to_cart(tenant_id, cart["id"], it.product_id, it.quantity))
+            except Exception as exc:
+                log.warning("cart sync item skipped (%s): %s", it.product_id, exc)
+    return {"cart_id": cart["id"], "items": len(added)}
+
+
 # ── Checkout ─────────────────────────────────────────────────────────────────
 
 class CheckoutRequest(BaseModel):
@@ -306,21 +336,76 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
 
 @router.get("/{tenant_id}/admin/products")
 async def admin_list_products(tenant_id: str):
-    """List all products including out-of-stock — for merchant product management."""
-    products = await service.list_products(tenant_id, in_stock_only=False)
+    """List all products including out-of-stock AND archived — merchant product management."""
+    products = await service.list_products(tenant_id, in_stock_only=False, include_archived=True)
     return {"products": products, "count": len(products)}
 
 
 @router.patch("/{tenant_id}/admin/products/{product_id}")
 async def admin_update_product(tenant_id: str, product_id: str, body: dict):
-    """Patch product — toggle stock, update price, edit name/description."""
+    """Patch product — everything the merchant may edit (widened for migration 073 depth:
+    gallery images, sale pricing, pack/weight/serves, archive, ordering)."""
     allowed = {"in_stock", "price_cents", "name", "description", "notes",
-               "is_daily_catch", "stock_quantity", "image_url", "category", "sold_by"}
+               "is_daily_catch", "stock_quantity", "image_url", "category", "sold_by",
+               "images", "sale_price_cents", "sale_ends_at", "sort_order", "archived",
+               "pack_size", "weight_grams", "serves",
+               "reorder_threshold", "reorder_qty", "default_supplier_id"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    # Keep the cover in sync: first gallery image becomes image_url unless explicitly set.
+    if "images" in update and update["images"] and "image_url" not in update:
+        update["image_url"] = update["images"][0]
     result = await service.update_product(tenant_id, product_id, update)
     return result
+
+
+@router.post("/{tenant_id}/admin/geo/geocode")
+async def admin_geocode(tenant_id: str, body: dict):
+    """Find coordinates for an address/suburb (Delivery settings map picker, migration 074)."""
+    from vula.commerce import geo
+    q = (body or {}).get("query") or ""
+    result = await geo.geocode(q)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Couldn't find '{q}' — try a suburb + city.")
+    return result
+
+
+# ── Per-tenant categories (migration 073 — replaces the hardcoded CHECK constraint) ──
+
+@router.get("/{tenant_id}/admin/categories")
+async def admin_list_categories(tenant_id: str):
+    try:
+        rows = (service._client().table("commerce_categories").select("*")
+                .eq("tenant_id", tenant_id).order("sort_order").execute().data or [])
+    except Exception as exc:
+        log.debug("categories list skipped (run migration 073?): %s", exc)
+        rows = []
+    return {"categories": rows}
+
+
+@router.post("/{tenant_id}/admin/categories")
+async def admin_upsert_category(tenant_id: str, body: dict):
+    import re as _re
+    label = (body.get("label") or "").strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="label required")
+    key = (body.get("key") or "").strip() or _re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+    row = {"tenant_id": tenant_id, "key": key, "label": label,
+           "sort_order": int(body.get("sort_order") or 0)}
+    try:
+        res = (service._client().table("commerce_categories")
+               .upsert(row, on_conflict="tenant_id,key").execute())
+        return res.data[0] if res.data else row
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{exc} (run migration 073?)")
+
+
+@router.delete("/{tenant_id}/admin/categories/{key}")
+async def admin_delete_category(tenant_id: str, key: str):
+    service._client().table("commerce_categories").delete() \
+        .eq("tenant_id", tenant_id).eq("key", key).execute()
+    return {"deleted": key}
 
 
 @router.post("/{tenant_id}/admin/products")
@@ -365,7 +450,17 @@ async def admin_create_product(tenant_id: str, body: dict):
 
 @router.delete("/{tenant_id}/admin/products/{product_id}")
 async def admin_delete_product(tenant_id: str, product_id: str):
-    """Delete a product."""
+    """Delete a product — but ARCHIVE instead when any order references it, so order history
+    keeps its product links intact (migration 073). Archived products vanish from the
+    storefront/menu but stay restorable in the admin."""
+    try:
+        refs = (service._client().table("commerce_order_items").select("id")
+                .eq("product_id", product_id).limit(1).execute().data or [])
+    except Exception:
+        refs = []
+    if refs:
+        await service.update_product(tenant_id, product_id, {"archived": True, "in_stock": False})
+        return {"archived": product_id}
     await service.delete_product(tenant_id, product_id)
     return {"deleted": product_id}
 
@@ -499,6 +594,38 @@ async def admin_marketing_generate(tenant_id: str, body: MarketingRequest):
     return await marketing.generate(
         tenant_id, kind=body.kind, topic=body.topic, tone=body.tone, variants=body.variants,
     )
+
+
+# ── Saved marketing copy library (P2.1, 2026-07-19) ──────────────────────────
+
+@router.get("/{tenant_id}/admin/marketing/saved")
+async def admin_list_saved_copy(tenant_id: str):
+    try:
+        rows = (service._client().table("commerce_saved_copy").select("*")
+                .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(100).execute().data or [])
+    except Exception as exc:
+        log.debug("saved copy list skipped (run migration 075?): %s", exc)
+        rows = []
+    return {"saved": rows}
+
+
+@router.post("/{tenant_id}/admin/marketing/saved")
+async def admin_save_copy(tenant_id: str, body: dict):
+    b = body or {}
+    text = (b.get("body") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="body required")
+    row = {"tenant_id": tenant_id, "kind": b.get("kind") or "broadcast",
+           "topic": b.get("topic"), "tone": b.get("tone"), "body": text}
+    res = service._client().table("commerce_saved_copy").insert(row).execute()
+    return res.data[0] if res.data else {"error": "insert failed"}
+
+
+@router.delete("/{tenant_id}/admin/marketing/saved/{copy_id}")
+async def admin_delete_saved_copy(tenant_id: str, copy_id: str):
+    service._client().table("commerce_saved_copy").delete() \
+        .eq("tenant_id", tenant_id).eq("id", copy_id).execute()
+    return {"deleted": copy_id}
 
 
 @router.get("/{tenant_id}/admin/finances/insights")
@@ -663,11 +790,10 @@ async def admin_bank_recategorize(tenant_id: str):
 @router.post("/{tenant_id}/admin/bank/review/start")
 async def admin_bank_review_start(tenant_id: str):
     """Start the WhatsApp review loop: sends the owner the first unallocated transaction as a
-    question; their replies allocate + teach, one at a time. Unmatched money-IN (which order/
-    customer paid this?) goes first — more time-sensitive than a category cleanup question."""
+    question; their replies allocate + teach, one at a time."""
     from vula.commerce import bank_review
     from vula.integrations.notify import notify_team
-    q = bank_review.start_client_review(tenant_id) or bank_review.start_review(tenant_id)
+    q = bank_review.start_review(tenant_id)
     if not q:
         return {"started": False, "note": "nothing needs review"}
     sent = await notify_team(tenant_id, "bank_review", q)
@@ -1133,6 +1259,42 @@ async def admin_stats(tenant_id: str):
     except Exception:
         low_stock_count = 0
 
+    # Escalations waiting on a human — the customer is literally waiting; surface it on Home.
+    open_escalations, oldest_escalation = 0, None
+    try:
+        esc = (db.table("vula_escalations").select("question,created_at")
+               .eq("tenant_id", tenant_id).eq("status", "open")
+               .order("created_at").limit(10).execute().data or [])
+        open_escalations = len(esc)
+        if esc:
+            oldest_escalation = {"question": (esc[0].get("question") or "")[:120],
+                                 "created_at": esc[0].get("created_at")}
+    except Exception:
+        pass
+
+    # Knowledge pulling through — make what the assistant knows VISIBLE (UI overhaul Phase 3).
+    knowledge = {}
+    try:
+        learned = (db.table("vula_learned_answers").select("source")
+                   .eq("tenant_id", tenant_id).limit(1000).execute().data or [])
+        knowledge = {
+            "learned_answers": len(learned),
+            "taught": sum(1 for r in learned if (r.get("source") or "") != "escalation"),
+        }
+    except Exception:
+        pass
+
+    # What the assistant did recently (glass-box AI) — tool calls from the telemetry sink.
+    agent_recent = []
+    try:
+        rows = (db.table("vula_reasoning_telemetry").select("task,outcome,created_at")
+                .eq("tenant_id", tenant_id).eq("system", "vula-agent-tool")
+                .order("created_at", desc=True).limit(6).execute().data or [])
+        agent_recent = [{"tool": r.get("task"), "skill": r.get("outcome"),
+                         "at": r.get("created_at")} for r in rows]
+    except Exception:
+        pass
+
     return {
         "total_orders": len(paid),
         "total_revenue_cents": sum(o["total_cents"] for o in paid),
@@ -1145,6 +1307,10 @@ async def admin_stats(tenant_id: str):
         "invoice_paid_month_cents": invoice_paid_month,
         "low_stock_count": low_stock_count,
         "daily_revenue": series,
+        "open_escalations": open_escalations,
+        "oldest_escalation": oldest_escalation,
+        "knowledge": knowledge,
+        "agent_recent": agent_recent,
     }
 
 
@@ -1204,6 +1370,27 @@ async def admin_create_invoice(tenant_id: str, body: InvoiceCreate):
     """Create an invoice, quote, or proforma. Totals computed server-side."""
     created = await service.create_invoice(tenant_id, body.model_dump(mode="json"))
     return created
+
+
+@router.get("/{tenant_id}/admin/customers/{phone}/statement")
+async def admin_customer_statement(tenant_id: str, phone: str):
+    """One customer's invoice history + running balance (P2.4) — what an accountant/customer
+    asks for as a 'statement of account'."""
+    import re as _re
+    digits = _re.sub(r"\D", "", phone or "")
+    rows = (service._client().table("commerce_invoices").select("*")
+            .eq("tenant_id", tenant_id).eq("direction", "outbound")
+            .order("created_at").execute().data or [])
+    mine = [r for r in rows if _re.sub(r"\D", "", r.get("customer_phone") or "") == digits]
+    invoiced = sum(r.get("total_cents") or 0 for r in mine if r.get("doc_type") == "invoice")
+    paid = sum(r.get("total_cents") or 0 for r in mine if r.get("doc_type") == "invoice" and r.get("status") == "paid")
+    credited = sum(r.get("total_cents") or 0 for r in mine if r.get("doc_type") == "credit_note")
+    return {
+        "phone": digits, "customer_name": (mine[0].get("customer_name") if mine else None),
+        "invoices": mine,
+        "total_invoiced_cents": invoiced, "total_paid_cents": paid, "total_credited_cents": credited,
+        "balance_due_cents": invoiced - paid - credited,
+    }
 
 
 @router.patch("/{tenant_id}/admin/invoices/{invoice_id}")
@@ -1422,6 +1609,22 @@ async def admin_upsert_invoice_settings(tenant_id: str, body: dict):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"settings": settings}
+
+
+@router.get("/{tenant_id}/brand")
+async def public_brand(tenant_id: str):
+    """Public, read-only, non-secret brand fields — deliberately OUTSIDE the /admin/ path so the
+    tenant-auth guard never blocks it (public storefront pages have no login). Single source of
+    truth for brand: the same commerce_invoice_settings row the dashboard's Brand Kit card writes,
+    replacing the old split where the storefront read a separate, never-updated tenant_config.theme."""
+    settings = await service.get_invoice_settings(tenant_id) or {}
+    return {
+        "name": settings.get("trading_as") or settings.get("company_name"),
+        "logo_url": settings.get("logo_url"),
+        "accent_color": settings.get("accent_color"),
+        "ink_color": settings.get("ink_color"),
+        "font_pairing": settings.get("font_pairing"),
+    }
 
 
 # ── Saved clients / suppliers (invoicing) ─────────────────────────────────────
@@ -1672,8 +1875,21 @@ def _suppressed_phones(tenant_id: str) -> set[str]:
         return set()
 
 
-def record_inbound_consent(tenant_id: str, phone: str) -> None:
-    """Record implied opt-in on first inbound. Never overrides an existing opt-out."""
+def _log_consent_event(tenant_id: str, phone: str, action: str, source: str) -> None:
+    """Append-only audit trail (migration 064) — POPIA enforcement wants proof of WHEN/HOW consent
+    changed, not just current state. Never overwritten, never deleted. Best-effort — a logging
+    failure must never block the actual opt-in/opt-out from taking effect."""
+    try:
+        service._client().table("commerce_consent_log").insert({
+            "tenant_id": tenant_id, "phone": phone, "action": action, "source": source}).execute()
+    except Exception as exc:
+        log.debug("consent audit log skipped (run migration 064?): %s", exc)
+
+
+def record_inbound_consent(tenant_id: str, phone: str, source: str = "inbound") -> None:
+    """Record opt-in. Never overrides an existing opt-out. `source` distinguishes implied
+    single-reply consent ('inbound') from an explicit double-opt-in confirmation
+    ('onboarding_double_optin_confirmed') in the audit trail — see commerce_consent_log."""
     p = _norm_phone(phone)
     if not tenant_id or not p:
         return
@@ -1681,10 +1897,16 @@ def record_inbound_consent(tenant_id: str, phone: str) -> None:
         db = service._client()
         existing = (db.table("commerce_consent").select("status")
                     .eq("tenant_id", tenant_id).eq("phone", p).limit(1).execute().data or [])
-        if existing:
-            return
-        db.table("commerce_consent").insert({
-            "tenant_id": tenant_id, "phone": p, "status": "opted_in", "source": "inbound"}).execute()
+        existing_status = existing[0]["status"] if existing else None
+        if existing_status == "opted_out":
+            return  # never override an explicit opt-out
+        if not existing:
+            db.table("commerce_consent").insert({
+                "tenant_id": tenant_id, "phone": p, "status": "opted_in", "source": source}).execute()
+        # Always log the event, even if the current-state row already says opted_in — an
+        # explicit re-confirmation (e.g. double opt-in) is a real audit-worthy event on its
+        # own, distinct from whether it changes the derived current-state row.
+        _log_consent_event(tenant_id, p, "opted_in", source)
     except Exception as exc:
         log.debug("consent record skipped (run migration 020?): %s", exc)
 
@@ -1698,6 +1920,7 @@ def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> 
         service._client().table("commerce_consent").upsert({
             "tenant_id": tenant_id, "phone": p, "status": "opted_out",
             "source": source, "updated_at": "now()"}, on_conflict="tenant_id,phone").execute()
+        _log_consent_event(tenant_id, p, "opted_out", source)
     except Exception as exc:
         log.debug("opt-out record skipped: %s", exc)
 
@@ -1727,6 +1950,46 @@ def record_message_status(wamid: str, status: str, error: Optional[str] = None) 
             "delivered_count": delivered, "read_count": read, "failed_count": failed}).eq("id", bid).execute()
     except Exception as exc:
         log.debug("record_message_status skipped: %s", exc)
+
+
+# ── WhatsApp template management (create/submit/track/delete via Graph API) ───
+# Plain dict body (not a Pydantic model) — Optional[List[str]] fields have repeatedly hit a
+# Pydantic "TypeAdapter ... is not fully defined" schema-build error in this codebase (same
+# issue hit earlier with ImportCommitIn); a dict sidesteps it entirely.
+@router.get("/{tenant_id}/admin/wa-templates")
+async def admin_list_wa_templates(tenant_id: str):
+    from vula.commerce import wa_templates
+    return {"templates": await wa_templates.list_templates(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/wa-templates")
+async def admin_create_wa_template(tenant_id: str, body: dict):
+    from vula.commerce import wa_templates
+    name = (body or {}).get("name") or ""
+    body_text = (body or {}).get("body_text") or ""
+    if not name or not body_text:
+        raise HTTPException(status_code=400, detail="name and body_text are required")
+    result = await wa_templates.create_template(
+        tenant_id, name, body_text,
+        category=(body or {}).get("category") or "UTILITY",
+        language=(body or {}).get("language") or "en",
+        example_params=(body or {}).get("example_params"),
+        created_by=(body or {}).get("created_by"),
+        header_type=(body or {}).get("header_type"),
+        header_example_url=(body or {}).get("header_example_url"),
+        buttons=(body or {}).get("buttons"))
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.delete("/{tenant_id}/admin/wa-templates/{name}")
+async def admin_delete_wa_template(tenant_id: str, name: str):
+    from vula.commerce import wa_templates
+    result = await wa_templates.delete_template(tenant_id, name)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @router.post("/{tenant_id}/admin/broadcasts/send")
@@ -1820,6 +2083,13 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     # Channel resolution: Meta (templates) preferred; Twilio fallback for
     # free-text broadcasts (works within the 24h customer session window).
     body_text = body.get("body", "")  # free-text alternative to a Meta template
+    # Optional trackable link — one short code per recipient, so a click can be attributed to
+    # who clicked (not just "someone did"). On free text the link is embedded directly; on a
+    # Meta template it fills a URL button's dynamic {{1}} suffix (the button's own URL must be
+    # authored as "{public_base_url}/l/{{1}}" at template-creation time for this to redirect
+    # through Vula's tracker — see wa_templates.py / the 📨 Templates tab help text).
+    target_url = (body.get("target_url") or "").strip()
+    header_image_url = (body.get("header_image_url") or "").strip()
     from vula.api.whatsapp import _get_tenant_wa_creds
     creds = await _get_tenant_wa_creds(tenant_id)
     use_twilio = (not creds) and bool(
@@ -1834,6 +2104,21 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
             detail="No WhatsApp channel configured (connect Meta or set Twilio creds).",
         )
 
+    # Rich-media metadata for the selected template (header image, buttons needing a dynamic
+    # parameter) — looked up once, not per-recipient.
+    tpl_row = None
+    if not use_twilio and template:
+        try:
+            tpl_row = (db.table("commerce_wa_templates").select("header_type,buttons")
+                       .eq("tenant_id", tenant_id).eq("name", template)
+                       .limit(1).execute().data or [None])[0]
+        except Exception:
+            tpl_row = None
+    tpl_needs_button_param = bool(
+        tpl_row and tpl_row.get("buttons") and
+        any("{{1}}" in (b.get("url") or "") for b in tpl_row["buttons"] if b.get("type") == "URL")
+    )
+
     log_id = str(uuid4())
     db.table("commerce_broadcast_logs").insert({
         "id": log_id, "tenant_id": tenant_id, "name": name,
@@ -1844,9 +2129,17 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     sent = failed = 0
     errors: list[str] = []
     recipient_rows: list[dict] = []
+    # Pace sends — Meta's Cloud API throughput cap (~80 msg/s on standard tier) and per-recipient
+    # pair-rate limits mean a tight unthrottled loop risks silent throttling/blocking at real list
+    # sizes (confirmed gap, 2026-07-15: this loop had zero pacing before). 10/s is comfortably under
+    # every published tier while still finishing a 1,000-contact batch in under 2 minutes.
+    import asyncio as _asyncio
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for c in recipients:
+        for i, c in enumerate(recipients):
+            if i:
+                await _asyncio.sleep(0.1)
             number = _norm_phone(c.get("phone"))
+            short_code = None
             try:
                 if use_twilio:
                     # Twilio free-text broadcast
@@ -1854,6 +2147,9 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                     if not from_addr.startswith("whatsapp:"):
                         from_addr = f"whatsapp:{from_addr}"
                     msg = body_text or f"Hi from {name}!"
+                    if target_url:
+                        short_code = uuid4().hex[:10]
+                        msg = f"{msg}\n\n{settings.public_base_url.rstrip('/')}/l/{short_code}"
                     resp = await client.post(
                         f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json",
                         auth=(settings.twilio_account_sid, settings.twilio_auth_token),
@@ -1861,6 +2157,17 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                     )
                 else:
                     # Meta template broadcast (compliant for proactive sends)
+                    tpl_components: list[dict] = []
+                    if tpl_row and tpl_row.get("header_type") == "IMAGE" and header_image_url:
+                        tpl_components.append({"type": "header", "parameters": [
+                            {"type": "image", "image": {"link": header_image_url}}]})
+                    if tpl_needs_button_param and target_url:
+                        short_code = uuid4().hex[:10]
+                        tpl_components.append({"type": "button", "sub_type": "url", "index": "0",
+                                               "parameters": [{"type": "text", "text": short_code}]})
+                    tpl_payload: dict = {"name": template, "language": {"code": language}}
+                    if tpl_components:
+                        tpl_payload["components"] = tpl_components
                     resp = await client.post(
                         f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
                         headers={"Authorization": f"Bearer {creds['token']}",
@@ -1869,7 +2176,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                             "messaging_product": "whatsapp",
                             "to": number,
                             "type": "template",
-                            "template": {"name": template, "language": {"code": language}},
+                            "template": tpl_payload,
                         },
                     )
                 if resp.is_success:
@@ -1882,8 +2189,12 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                             wamid = (resp.json().get("messages") or [{}])[0].get("id")
                     except Exception:
                         wamid = None
-                    recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
-                                           "phone": number, "wamid": wamid, "status": "sent"})
+                    row = {"tenant_id": tenant_id, "broadcast_id": log_id,
+                          "phone": number, "wamid": wamid, "status": "sent"}
+                    if short_code:
+                        row["short_code"] = short_code
+                        row["target_url"] = target_url
+                    recipient_rows.append(row)
                 else:
                     failed += 1
                     recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
@@ -1903,7 +2214,14 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         try:
             db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
         except Exception as exc:
-            log.debug("recipient rows insert skipped (run migration 020?): %s", exc)
+            log.debug("recipient rows insert retrying without click-tracking cols (run migration 064?): %s", exc)
+            for r in recipient_rows:
+                r.pop("short_code", None)
+                r.pop("target_url", None)
+            try:
+                db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
+            except Exception as exc2:
+                log.debug("recipient rows insert skipped (run migration 020?): %s", exc2)
 
     db.table("commerce_broadcast_logs").update({
         "status": "sent" if sent else "failed",
@@ -2052,6 +2370,76 @@ async def process_due_campaigns() -> int:
 async def cron_process_campaigns():
     """Backstop trigger for the scheduler (also runs in-process every 60s)."""
     return {"processed": await process_due_campaigns()}
+
+
+# ── Scheduled system jobs (⏰ Scheduling tab) ─────────────────────────────────
+# Per-tenant config for the 5 built-in WhatsApp jobs (delivery briefing, unpaid chase,
+# low stock, weekly specials reminder, sales summary) — template + fire time were Python
+# constants until migration 069. Body is a plain dict, same reason as wa-templates above.
+
+@router.get("/{tenant_id}/admin/scheduled-jobs")
+async def admin_list_scheduled_jobs(tenant_id: str):
+    """All 5 system jobs' effective config (defaults where unset) + the tenant's APPROVED
+    templates so the UI can offer a valid picker in one round trip."""
+    from vula.commerce import job_config, wa_templates
+    approved = []
+    try:
+        approved = [t["name"] for t in await wa_templates.list_templates(tenant_id)
+                    if t.get("status") == "APPROVED"]
+    except Exception as exc:
+        log.debug("approved template list skipped: %s", exc)
+    return {"tenant_id": tenant_id,
+            "jobs": list(job_config.get_configs(tenant_id).values()),
+            "approved_templates": approved}
+
+
+@router.post("/{tenant_id}/admin/scheduled-jobs")
+async def admin_upsert_scheduled_job(tenant_id: str, body: dict):
+    """Update one job's schedule/template/enabled state. template_name must be one of the
+    tenant's APPROVED templates (or null to use the built-in default)."""
+    from vula.commerce import job_config, wa_templates
+    b = body or {}
+    job_type = (b.get("job_type") or "").strip()
+    if job_type not in job_config.JOB_TYPES:
+        raise HTTPException(status_code=400,
+                            detail=f"job_type must be one of {sorted(job_config.JOB_TYPES)}")
+    kind = job_config.JOB_TYPES[job_type]["kind"]
+    patch: dict = {}
+    if "enabled" in b:
+        patch["enabled"] = bool(b["enabled"])
+    if "template_name" in b:
+        tpl = (b.get("template_name") or "").strip() or None
+        if tpl:
+            try:
+                approved = {t["name"] for t in await wa_templates.list_templates(tenant_id)
+                            if t.get("status") == "APPROVED"}
+            except Exception:
+                approved = set()
+            if tpl not in approved:
+                raise HTTPException(status_code=400,
+                                    detail=f"'{tpl}' is not an APPROVED template for this tenant")
+        patch["template_name"] = tpl
+    for field, lo, hi, kinds in (("hour", 0, 23, ("daily", "weekly")),
+                                 ("minute", 0, 59, ("daily", "weekly")),
+                                 ("day_of_week", 0, 6, ("weekly",)),
+                                 ("interval_minutes", 5, 1440, ("interval",))):
+        if field in b and b[field] is not None:
+            if kind not in kinds:
+                raise HTTPException(status_code=400,
+                                    detail=f"{field} does not apply to a {kind} job")
+            try:
+                v = int(b[field])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+            if not (lo <= v <= hi):
+                raise HTTPException(status_code=400, detail=f"{field} must be {lo}–{hi}")
+            patch[field] = v
+    if not patch:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    result = job_config.upsert_config(tenant_id, job_type, patch)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 # ── Custom audience segments ──────────────────────────────────────────────────
@@ -2540,6 +2928,40 @@ async def admin_customer_detail(tenant_id: str, phone: str):
         pass
     name = next((o.get("customer_name") for o in orders if o.get("customer_name")), None) or sess_name
     email = next((o.get("customer_email") for o in orders if o.get("customer_email")), None)
+
+    # The actual WhatsApp conversation (last few turns) — Customer-360 depth (UI overhaul P3).
+    conversation = []
+    try:
+        s2 = (db.table("commerce_conversation_sessions").select("id")
+              .eq("tenant_id", tenant_id).eq("customer_phone", phone).limit(1).execute().data or [])
+        if s2:
+            msgs = (db.table("commerce_conversation_messages").select("role,content,created_at")
+                    .eq("session_id", s2[0]["id"]).order("created_at", desc=True)
+                    .limit(8).execute().data or [])
+            conversation = [{"role": m.get("role"), "text": (m.get("content") or "")[:300],
+                             "at": m.get("created_at")} for m in reversed(msgs)]
+    except Exception:
+        pass
+
+    # Broadcast engagement — delivered/read/clicked per campaign this customer received.
+    engagement = []
+    try:
+        recs = (db.table("commerce_broadcast_recipients")
+                .select("broadcast_id,status,clicked_at,created_at")
+                .eq("tenant_id", tenant_id).eq("phone", phone)
+                .order("created_at", desc=True).limit(6).execute().data or [])
+        b_ids = list({r["broadcast_id"] for r in recs if r.get("broadcast_id")})
+        names = {}
+        if b_ids:
+            logs = (db.table("commerce_broadcast_logs").select("id,name")
+                    .in_("id", b_ids).execute().data or [])
+            names = {l["id"]: l.get("name") for l in logs}
+        engagement = [{"campaign": names.get(r.get("broadcast_id")) or "Broadcast",
+                       "status": "clicked" if r.get("clicked_at") else (r.get("status") or "sent"),
+                       "at": r.get("created_at")} for r in recs]
+    except Exception:
+        pass
+
     return {
         "profile": {"name": name, "phone": phone, "email": email,
                     "preferred_language": lang,
@@ -2551,7 +2973,70 @@ async def admin_customer_detail(tenant_id: str, phone: str):
                   "invoice_outstanding_cents": inv_outstanding},
         "note": note or "",
         "events": _customer_timeline(db, tenant_id, phone),
+        "conversation": conversation,
+        "engagement": engagement,
     }
+
+
+@router.get("/{tenant_id}/admin/orders/{order_id}/detail")
+async def admin_order_detail(tenant_id: str, order_id: str):
+    """Order drawer (UI overhaul P3): items + status timeline + the WhatsApp exchange around it."""
+    db = service._client()
+    rows = (db.table("commerce_orders").select("*")
+            .eq("tenant_id", tenant_id).eq("id", order_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="order not found")
+    o = rows[0]
+    try:
+        items = (db.table("commerce_order_items").select("product_name,quantity,unit_price_cents")
+                 .eq("order_id", order_id).execute().data or [])
+    except Exception:
+        items = []
+
+    timeline = [{"label": f"Order placed via {o.get('channel') or 'web'}", "at": o.get("created_at")}]
+    if o.get("status") not in ("pending_payment", "cancelled"):
+        timeline.append({"label": f"Payment — {o.get('payment_method') or 'recorded'}",
+                         "at": o.get("paid_at") or o.get("updated_at") or o.get("created_at")})
+    if o.get("stock_adjusted"):
+        timeline.append({"label": "Stock adjusted", "at": o.get("updated_at")})
+    if o.get("followup_sent_at"):
+        timeline.append({"label": "Payment chase sent to customer", "at": o["followup_sent_at"]})
+    if o.get("status") in ("dispatched", "delivered"):
+        timeline.append({"label": o["status"].capitalize(), "at": o.get("updated_at")})
+    if o.get("status") in ("cancelled", "refunded"):
+        timeline.append({"label": o["status"].capitalize(), "at": o.get("updated_at")})
+
+    conversation = []
+    try:
+        s2 = (db.table("commerce_conversation_sessions").select("id")
+              .eq("tenant_id", tenant_id).eq("customer_phone", o.get("customer_phone"))
+              .limit(1).execute().data or [])
+        if s2:
+            msgs = (db.table("commerce_conversation_messages").select("role,content,created_at")
+                    .eq("session_id", s2[0]["id"]).lte("created_at", o.get("created_at") or "9999")
+                    .order("created_at", desc=True).limit(4).execute().data or [])
+            conversation = [{"role": m.get("role"), "text": (m.get("content") or "")[:240],
+                             "at": m.get("created_at")} for m in reversed(msgs)]
+    except Exception:
+        pass
+
+    return {"order": o, "items": items, "timeline": timeline, "conversation": conversation}
+
+
+@router.get("/{tenant_id}/admin/broadcasts/{broadcast_id}/recipients")
+async def admin_broadcast_recipients(tenant_id: str, broadcast_id: str):
+    """Broadcast funnel drawer (UI overhaul P3): per-recipient delivery/read/click outcomes."""
+    db = service._client()
+    recs = (db.table("commerce_broadcast_recipients")
+            .select("phone,status,error,clicked_at,click_count")
+            .eq("tenant_id", tenant_id).eq("broadcast_id", broadcast_id)
+            .limit(1000).execute().data or [])
+    funnel = {"sent": len(recs),
+              "delivered": sum(1 for r in recs if r.get("status") in ("delivered", "read")),
+              "read": sum(1 for r in recs if r.get("status") == "read"),
+              "clicked": sum(1 for r in recs if r.get("clicked_at")),
+              "failed": sum(1 for r in recs if r.get("status") == "failed")}
+    return {"funnel": funnel, "recipients": recs}
 
 
 @router.post("/{tenant_id}/admin/customers/{phone}/note")
@@ -3084,6 +3569,122 @@ async def admin_delete_supplier(tenant_id: str, supplier_id: str):
     return {"ok": True, "deleted": supplier_id}
 
 
+# ── Purchase orders + auto-reorder (P3.3, 2026-07-19) ────────────────────────
+# Suppliers previously existed only for bill-matching. This closes the loop: see what's low,
+# order more from the right supplier, receive it, stock updates.
+
+@router.get("/{tenant_id}/admin/reorder-suggestions")
+async def admin_reorder_suggestions(tenant_id: str):
+    """Products at/below their reorder threshold, grouped by default supplier — the 'what
+    should I order' view. Products without a threshold set are never suggested."""
+    products = await service.list_products(tenant_id, in_stock_only=False, include_archived=False)
+    low = [p for p in products
+           if p.get("reorder_threshold") is not None
+           and (p.get("stock_quantity") or 0) <= p["reorder_threshold"]]
+    suppliers = {s["id"]: s for s in await service.list_suppliers(tenant_id)}
+    groups: dict = {}
+    for p in low:
+        sid = p.get("default_supplier_id") or "unassigned"
+        g = groups.setdefault(sid, {
+            "supplier_id": None if sid == "unassigned" else sid,
+            "supplier_name": suppliers.get(sid, {}).get("name") if sid != "unassigned" else "No default supplier",
+            "items": [],
+        })
+        g["items"].append({
+            "product_id": p["id"], "name": p["name"], "stock_quantity": p.get("stock_quantity") or 0,
+            "reorder_threshold": p["reorder_threshold"], "suggested_qty": p.get("reorder_qty") or 10,
+            "unit_cost_cents": p.get("price_cents") or 0,
+        })
+    return {"groups": list(groups.values()), "count": len(low)}
+
+
+@router.get("/{tenant_id}/admin/purchase-orders")
+async def admin_list_purchase_orders(tenant_id: str, status: Optional[str] = None):
+    q = (service._client().table("commerce_purchase_orders").select("*")
+         .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(100))
+    if status:
+        q = q.eq("status", status)
+    return {"purchase_orders": q.execute().data or []}
+
+
+@router.post("/{tenant_id}/admin/purchase-orders")
+async def admin_create_purchase_order(tenant_id: str, body: dict):
+    b = body or {}
+    items = b.get("items") or []
+    if not items:
+        raise HTTPException(status_code=400, detail="At least one item is required")
+    total = sum(int(it.get("quantity") or 0) * int(it.get("unit_cost_cents") or 0) for it in items)
+    row = {
+        "tenant_id": tenant_id, "supplier_id": b.get("supplier_id"), "supplier_name": b.get("supplier_name"),
+        "items": items, "total_cents": total, "notes": b.get("notes"), "status": "draft",
+    }
+    res = service._client().table("commerce_purchase_orders").insert(row).execute()
+    return res.data[0] if res.data else {"error": "insert failed"}
+
+
+@router.patch("/{tenant_id}/admin/purchase-orders/{po_id}/status")
+async def admin_update_po_status(tenant_id: str, po_id: str, body: dict):
+    """draft → sent → received (bumps stock_quantity for every line item) | cancelled."""
+    status = (body or {}).get("status")
+    if status not in ("draft", "sent", "received", "cancelled"):
+        raise HTTPException(status_code=400, detail="invalid status")
+    db = service._client()
+    rows = (db.table("commerce_purchase_orders").select("*")
+            .eq("tenant_id", tenant_id).eq("id", po_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="purchase order not found")
+    po = rows[0]
+    patch: dict = {"status": status}
+    if status == "sent":
+        patch["sent_at"] = service._now()
+    if status == "received" and po["status"] != "received":
+        patch["received_at"] = service._now()
+        for it in (po.get("items") or []):
+            try:
+                prod = (db.table("commerce_products").select("stock_quantity")
+                        .eq("id", it["product_id"]).limit(1).execute().data or [None])[0]
+                if prod is not None:
+                    new_qty = (prod.get("stock_quantity") or 0) + int(it.get("quantity") or 0)
+                    db.table("commerce_products").update({"stock_quantity": new_qty}).eq("id", it["product_id"]).execute()
+            except Exception as exc:
+                log.warning("PO receive stock bump failed for %s: %s", it.get("product_id"), exc)
+    result = db.table("commerce_purchase_orders").update(patch).eq("tenant_id", tenant_id).eq("id", po_id).execute()
+    return result.data[0] if result.data else {}
+
+
+# ── Automations builder (P3, 2026-07-19) ─────────────────────────────────────
+# Lean trigger→action rules: order reaches a status / product hits its reorder threshold →
+# WhatsApp the customer or the team helper. Evaluated by a poller (vula.commerce.automations),
+# not hooked into every write path.
+
+@router.get("/{tenant_id}/admin/automations")
+async def admin_list_automations(tenant_id: str):
+    from vula.commerce import automations
+    return {"automations": automations.list_automations(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/automations")
+async def admin_create_automation(tenant_id: str, body: dict):
+    from vula.commerce import automations
+    try:
+        return automations.create_automation(tenant_id, body or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.patch("/{tenant_id}/admin/automations/{automation_id}")
+async def admin_update_automation(tenant_id: str, automation_id: str, body: dict):
+    from vula.commerce import automations
+    return automations.update_automation(tenant_id, automation_id, body or {})
+
+
+@router.delete("/{tenant_id}/admin/automations/{automation_id}")
+async def admin_delete_automation(tenant_id: str, automation_id: str):
+    from vula.commerce import automations
+    automations.delete_automation(tenant_id, automation_id)
+    return {"deleted": automation_id}
+
+
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/match-supplier")
 async def admin_match_invoice_supplier(tenant_id: str, invoice_id: str):
     """Run tiered supplier auto-detection against a stored inbound invoice.
@@ -3134,6 +3735,100 @@ async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
     if not result.data:
         raise HTTPException(status_code=404, detail="Expense not found")
     return result.data[0]
+
+
+# ── Manual order creation (P1.3, 2026-07-18) ─────────────────────────────────
+# Phone/walk-in orders could not be captured at all before — the only ways in were the web
+# storefront and the WhatsApp assistant.
+
+
+@router.post("/{tenant_id}/admin/orders/manual")
+async def admin_create_manual_order(tenant_id: str, body: dict):
+    """Create an order on a customer's behalf: items [{product_id, quantity}], customer
+    name/phone, address, slot, payment_method, mark_paid. Uses the same cart→order path as
+    the storefront so sale pricing and stock behave identically."""
+    b = body or {}
+    items = b.get("items") or []
+    phone = (b.get("customer_phone") or "").strip()
+    name = (b.get("customer_name") or "").strip()
+    if not items or not phone or not name:
+        raise HTTPException(status_code=400, detail="items, customer_name and customer_phone required")
+    from uuid import uuid4
+    session_id = f"manual-{uuid4().hex[:12]}"
+    cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=phone)
+    added = 0
+    for it in items:
+        try:
+            qty = float(it.get("quantity") or 1)
+            if qty > 0:
+                await service.add_to_cart(tenant_id, cart["id"], str(it.get("product_id")), qty)
+                added += 1
+        except Exception as exc:
+            log.warning("manual order item skipped: %s", exc)
+    if not added:
+        raise HTTPException(status_code=400, detail="no valid items")
+    cart = await service.get_or_create_cart(tenant_id, session_id)  # re-read with items joined
+    order = await service.create_order(tenant_id, cart, {
+        "customer_phone": phone, "customer_name": name,
+        "customer_email": b.get("customer_email"),
+        "delivery_address": b.get("delivery_address") or "Collection / to arrange",
+        "delivery_slot": b.get("delivery_slot") or "morning",
+        "delivery_notes": b.get("delivery_notes"),
+        "channel": "manual", "payment_method": b.get("payment_method") or "cod",
+    })
+    if b.get("mark_paid"):
+        await service.update_order_status(order["id"], "paid")
+        try:
+            await service.apply_order_stock(order["id"], restore=False)
+        except Exception:
+            pass
+        order["status"] = "paid"
+    return {"order": order}
+
+
+# ── Escalation inbox (P1.1, 2026-07-18) ──────────────────────────────────────
+# Open customer questions previously lived ONLY on the helper's WhatsApp. These endpoints put
+# them in the dashboard: view, answer (same relay+learn path as a WhatsApp reply), or dismiss.
+
+
+@router.get("/{tenant_id}/admin/escalations")
+async def admin_list_escalations(tenant_id: str, status: str = "open", limit: int = 50):
+    try:
+        rows = (service._client().table("vula_escalations").select("*")
+                .eq("tenant_id", tenant_id).eq("status", status)
+                .order("created_at", desc=True).limit(min(limit, 200)).execute().data or [])
+    except Exception as exc:
+        log.debug("escalations list skipped (run migration 042?): %s", exc)
+        rows = []
+    return {"escalations": rows, "open_count": len(rows) if status == "open" else None}
+
+
+@router.post("/{tenant_id}/admin/escalations/{esc_id}/answer")
+async def admin_answer_escalation(tenant_id: str, esc_id: str, body: dict):
+    """Answer from the dashboard — identical effect to the helper replying on WhatsApp:
+    the customer gets the relay, and the answer is learned for next time."""
+    answer = ((body or {}).get("answer") or "").strip()
+    if not answer:
+        raise HTTPException(status_code=400, detail="answer required")
+    db = service._client()
+    rows = (db.table("vula_escalations").select("*")
+            .eq("tenant_id", tenant_id).eq("id", esc_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="escalation not found")
+    from vula import escalation as esc_mod
+    info = esc_mod.answer_escalation(rows[0], answer)
+    if not info:
+        raise HTTPException(status_code=409, detail="already answered")
+    from vula.api.whatsapp import _send_reply
+    await _send_reply(info["customer_phone"], f"About your question — {answer}", tenant_id=tenant_id)
+    return {"answered": esc_id}
+
+
+@router.post("/{tenant_id}/admin/escalations/{esc_id}/dismiss")
+async def admin_dismiss_escalation(tenant_id: str, esc_id: str):
+    service._client().table("vula_escalations").update({"status": "expired"}) \
+        .eq("tenant_id", tenant_id).eq("id", esc_id).execute()
+    return {"dismissed": esc_id}
 
 
 # ── Shared Inbox ──────────────────────────────────────────────────────────────

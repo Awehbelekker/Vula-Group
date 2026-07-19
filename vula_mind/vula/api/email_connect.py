@@ -115,6 +115,34 @@ async def list_contacts(tenant_id: str, kind: Optional[str] = None) -> dict:
             "co_workers": internal, "external": external}
 
 
+@router.post("/contacts/{tenant_id}/import")
+async def import_contacts(tenant_id: str, body: dict) -> dict:
+    """Bulk CSV import (P2.5) — rows: [{email, name?, kind?}]. Upserts on (tenant_id, email),
+    same table email sync writes to, so imported + synced contacts live side by side."""
+    rows = (body or {}).get("contacts") or []
+    imported, skipped = 0, 0
+    db = _client()
+    for r in rows:
+        email = (r.get("email") or "").strip().lower()
+        if not email or "@" not in email:
+            skipped += 1
+            continue
+        try:
+            existing = (db.table("vula_email_contacts").select("id")
+                        .eq("tenant_id", tenant_id).eq("email", email).limit(1).execute().data or [])
+            row = {"tenant_id": tenant_id, "email": email, "name": (r.get("name") or "").strip() or None,
+                   "kind": r.get("kind") or "external", "domain": email.split("@")[-1]}
+            if existing:
+                db.table("vula_email_contacts").update(row).eq("id", existing[0]["id"]).execute()
+            else:
+                db.table("vula_email_contacts").insert(row).execute()
+            imported += 1
+        except Exception as exc:
+            log.warning("contact import row failed (%s): %s", email, exc)
+            skipped += 1
+    return {"imported": imported, "skipped": skipped}
+
+
 class ContactKindIn(BaseModel):
     kind: str
 

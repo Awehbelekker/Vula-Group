@@ -16,9 +16,17 @@ _DEFAULTS = {
     "require_approval": False, "dispatch_channel": "whatsapp",
     "fulfillment_email": None, "fulfillment_whatsapp": None,
     "payment_methods": ["online", "cod", "eft"], "eft_details": None,
+    # Delivery coverage + fee rules (migration 070). None = unconfigured: the assistant is told
+    # it does NOT know the delivery area and must check with the team (escalate), never guess.
+    "delivery_areas": None, "delivery_fee_cents": None,
+    "free_delivery_over_cents": None, "min_order_cents": None,
+    # Marketplace-style geo coverage (migration 074): shop pin + radius.
+    "origin_lat": None, "origin_lng": None, "origin_label": None, "delivery_radius_km": None,
 }
 _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp",
-           "payment_methods", "eft_details")
+           "payment_methods", "eft_details",
+           "delivery_areas", "delivery_fee_cents", "free_delivery_over_cents", "min_order_cents",
+           "origin_lat", "origin_lng", "origin_label", "delivery_radius_km")
 
 # Customer-facing labels for the payment methods.
 PAYMENT_LABELS = {"online": "Card / online payment", "cod": "Pay on delivery", "eft": "EFT / bank transfer"}

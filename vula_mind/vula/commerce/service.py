@@ -47,14 +47,37 @@ def _now() -> str:
 
 # ── Products ─────────────────────────────────────────────────────────────────
 
-async def list_products(tenant_id: str, category: Optional[str] = None, in_stock_only: bool = True) -> List[dict]:
+def effective_price_cents(product: dict) -> int:
+    """The price actually charged right now: sale price while a sale is active (migration 073),
+    else the regular price. Single source of truth — used at cart-add time so sales charge
+    correctly everywhere (web, WhatsApp assistant, admin)."""
+    from datetime import datetime, timezone
+    base = int(product.get("price_cents") or 0)
+    sale = product.get("sale_price_cents")
+    if not sale:
+        return base
+    ends = product.get("sale_ends_at")
+    if ends:
+        try:
+            if datetime.fromisoformat(str(ends).replace("Z", "+00:00")) < datetime.now(timezone.utc):
+                return base  # sale expired
+        except Exception:
+            pass
+    return int(sale)
+
+
+async def list_products(tenant_id: str, category: Optional[str] = None, in_stock_only: bool = True,
+                        include_archived: bool = False) -> List[dict]:
     q = _client().table("commerce_products").select("*").eq("tenant_id", tenant_id)
     if category:
         q = q.eq("category", category)
     if in_stock_only:
         q = q.eq("in_stock", True)
     result = q.order("is_daily_catch", desc=True).order("name").execute()
-    return result.data or []
+    rows = result.data or []
+    if not include_archived:
+        rows = [r for r in rows if not r.get("archived")]
+    return rows
 
 
 async def get_product(tenant_id: str, product_id: str) -> Optional[dict]:
@@ -200,11 +223,11 @@ async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: f
         )
         return result.data[0]
 
-    # Fetch product to verify it belongs to tenant and get price
+    # Fetch product to verify it belongs to tenant and get the EFFECTIVE price (sale-aware).
     product = (
         _client()
         .table("commerce_products")
-        .select("price_cents")
+        .select("price_cents,sale_price_cents,sale_ends_at")
         .eq("tenant_id", tenant_id)
         .eq("id", product_id)
         .single()
@@ -212,7 +235,7 @@ async def add_to_cart(tenant_id: str, cart_id: str, product_id: str, quantity: f
     )
     if not product.data:
         raise ValueError(f"Product {product_id} not found for tenant {tenant_id}")
-    unit_price = product.data["price_cents"]
+    unit_price = effective_price_cents(product.data)
 
     item = {
         "id": str(uuid.uuid4()),
@@ -243,6 +266,18 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
     subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
     delivery = cart.get("delivery_cents", 8000)
+    # Tenant delivery-fee rules (migration 070) override the cart's snapshotted default:
+    # configured standard fee, and free delivery at/above the configured subtotal.
+    try:
+        from vula.commerce.order_workflow import get_order_settings
+        _cfg = get_order_settings(tenant_id)
+        if _cfg.get("delivery_fee_cents") is not None:
+            delivery = int(_cfg["delivery_fee_cents"])
+        free_over = _cfg.get("free_delivery_over_cents")
+        if free_over and subtotal >= int(free_over):
+            delivery = 0
+    except Exception:
+        pass
     total = subtotal + delivery
     display_id = await _next_order_display_id(tenant_id)
 
@@ -1053,7 +1088,8 @@ _INVOICE_SETTINGS_FIELDS = (
     "company_name", "trading_as", "logo_url", "company_email", "company_phone", "company_reg",
     "vat_number", "registered_address", "vat_registered", "prices_include_vat",
     "account_name", "bank_name", "branch_code", "account_number",
-    "template_choice", "accent_color", "onboarded",
+    "template_choice", "accent_color", "onboarded", "menu_header_image_url",
+    "ink_color", "font_pairing",
 )
 _TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded")
 
@@ -1071,11 +1107,18 @@ async def get_invoice_settings(tenant_id: str) -> Optional[dict]:
     return result.data[0] if (result and result.data) else None
 
 
+_INVOICE_SETTINGS_078_FIELDS = ("ink_color", "font_pairing")  # only exist once migration 078 runs
+
+
 async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
     """Create or update the tenant's invoice settings (one row per tenant).
 
     Only whitelisted fields are persisted. ``template_choice`` is validated
     against the known templates. Every write is tenant-scoped.
+
+    If migration 078 (ink_color/font_pairing) hasn't run yet, those two keys would make the
+    WHOLE write fail with an unknown-column error — degrade gracefully instead: drop them and
+    retry once, so the rest of the brand kit (logo/accent/etc.) still saves.
     """
     patch = {k: data[k] for k in _INVOICE_SETTINGS_FIELDS if k in data}
     choice = patch.get("template_choice")
@@ -1084,19 +1127,37 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
 
     db = _client()
     existing = await get_invoice_settings(tenant_id)
-    if existing:
-        patch["updated_at"] = _now()
-        result = (
-            db.table("commerce_invoice_settings")
-            .update(patch)
-            .eq("tenant_id", tenant_id)
-            .execute()
-        )
-        return result.data[0] if result.data else {**existing, **patch}
+    try:
+        if existing:
+            write_patch = {**patch, "updated_at": _now()}
+            result = (
+                db.table("commerce_invoice_settings")
+                .update(write_patch)
+                .eq("tenant_id", tenant_id)
+                .execute()
+            )
+            return result.data[0] if result.data else {**existing, **write_patch}
 
-    row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
-    result = db.table("commerce_invoice_settings").insert(row).execute()
-    return result.data[0] if result.data else row
+        row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
+        result = db.table("commerce_invoice_settings").insert(row).execute()
+        return result.data[0] if result.data else row
+    except Exception as exc:
+        if not any(f in patch for f in _INVOICE_SETTINGS_078_FIELDS):
+            raise
+        logger.warning("invoice-settings write failed with 078 fields present (run migration 078?): %s", exc)
+        patch = {k: v for k, v in patch.items() if k not in _INVOICE_SETTINGS_078_FIELDS}
+        if existing:
+            patch["updated_at"] = _now()
+            result = (
+                db.table("commerce_invoice_settings")
+                .update(patch)
+                .eq("tenant_id", tenant_id)
+                .execute()
+            )
+            return result.data[0] if result.data else {**existing, **patch}
+        row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
+        result = db.table("commerce_invoice_settings").insert(row).execute()
+        return result.data[0] if result.data else row
 
 
 # ── Saved clients / suppliers directory (for invoicing) ───────────────────────

@@ -36,11 +36,10 @@ def _tenant_has_bookings(tenant_id: str) -> bool:
         return False
 
 # Known tool names — so we only treat text as a tool call when it actually names one of ours.
-_TOOL_NAMES = {"list_products", "add_to_cart", "view_cart", "start_checkout", "track_order",
-               "get_daily_catch", "suggest_recipe", "create_quote", "place_order", "review_order",
-               "remove_from_cart", "change_order",
-               "list_availability", "book_appointment", "cancel_appointment",
-               "create_subscription"}
+# Populated from TOOL_SPECS + BOOKING_TOOL_SPECS after they're defined (end of module) — was a
+# hand-maintained set that silently drifted: cancel_order was added to TOOL_SPECS but not here,
+# so its text tool-call leaked raw JSON to a real customer (confirmed live 2026-07-16).
+_TOOL_NAMES: set = set()
 
 
 def _parse_text_toolcall(text: str):
@@ -94,6 +93,54 @@ def _parse_text_toolcall(text: str):
                 args = {}
         return m.group(1), args
     return None
+
+
+def _as_json_dict(text: str) -> Optional[dict]:
+    """The whole reply parsed as a JSON object (fences stripped), or None. Any reply that
+    parses here is machine output, never customer-facing prose."""
+    if not text or not text.strip().startswith("{"):
+        return None
+    s = re.sub(r"^\s*```(?:json)?|```\s*$", "", text.strip(), flags=re.IGNORECASE).strip()
+    try:
+        d = json.loads(s)
+    except Exception:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def _extract_message_leak(text: str) -> Optional[str]:
+    """Some models, instead of writing prose, echo a tool RESULT's shape back as the final
+    answer verbatim (e.g. {"message": "Today's catch highlights: ..."}) — distinct from the
+    tool-CALL leak _parse_text_toolcall catches. Unwrap the human-readable field so the
+    customer gets the message text instead of raw JSON. Returns None if `text` isn't this
+    specific leak shape."""
+    d = _as_json_dict(text)
+    if not d:
+        return None
+    msg = d.get("message") or d.get("reply") or d.get("text")
+    return msg.strip() if isinstance(msg, str) and msg.strip() else None
+
+
+# A code-level backstop for place_order: the system prompt tells the model "only call this
+# after the customer replies CONFIRM", but that's a prompt instruction, not an enforced rule —
+# a local model placed a real order after a customer said "No, I just want 1kg" (a correction,
+# not a confirmation). This requires the CURRENT turn's raw text to contain an explicit
+# affirmative before place_order is allowed to run at all.
+#
+# Covers English, Afrikaans, isiZulu, isiXhosa and Sesotho — the assistant's system prompt
+# promises to reply in whichever of these the customer uses, so the confirm-gate must recognise
+# "yes" in all of them too, or it silently blocks real confirmations from those customers instead
+# of just from English/Afrikaans ones. Short words (ee, ja) are still \b-bounded to whole tokens
+# to avoid matching inside unrelated text — a missed match just asks the customer to confirm
+# again (safe), so this leans inclusive rather than risking a false negative.
+_CONFIRM_RE = re.compile(
+    r"\b(confirm(ed)?|yes|yep|yea|yeah|correct|sounds good|go ahead|place it|place the order|"
+    r"bevestig|ja|reg so|plaas dit|"                       # Afrikaans
+    r"yebo|kulungile|ngiyavuma|"                            # isiZulu: yes / it's fine / I agree
+    r"ewe|kulungile|ndiyavuma|"                             # isiXhosa: yes / it's fine / I agree
+    r"ee|ho lokile|kea dumela)\b",                          # Sesotho: yes / it's fine / I agree
+    re.IGNORECASE)
+
 
 def _is_kg(product) -> bool:
     return str((product or {}).get("sold_by") or "").lower() == "kg"
@@ -331,6 +378,39 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "ask_team",
+            "description": (
+                "Ask the shop's human team a question you CANNOT answer from your facts or other "
+                "tools — e.g. whether we deliver to an area not in your delivery facts, special/"
+                "custom requests, opening hours you don't know. The team is pinged on WhatsApp and "
+                "their answer goes to the customer directly. ALWAYS use this instead of guessing "
+                "or inventing business facts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"question": {"type": "string",
+                                            "description": "The customer's question, as asked."}},
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_order",
+            "description": (
+                "The customer wants to cancel an order they've ALREADY placed (placed = after "
+                "place_order ran, they have an order number). Flags it to the shop team to confirm "
+                "and process the cancellation (a paid order may need a refund, which is a human "
+                "step). NEVER tell the customer their order IS cancelled — only that the team has "
+                "been asked to cancel it and will confirm."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_subscription",
             "description": (
                 "Set up a recurring/standing order from the customer's CURRENT cart (e.g. 'send me "
@@ -399,6 +479,10 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
     },
 ]
 
+# Derived from the specs so the leak guard can never drift out of sync with the real tool list
+# again (see _TOOL_NAMES comment at the top of the module).
+_TOOL_NAMES.update(s["function"]["name"] for s in TOOL_SPECS + BOOKING_TOOL_SPECS)
+
 
 class CommerceAssistantSkill(BaseSkill):
     name = "commerce_assistant"
@@ -418,6 +502,7 @@ class CommerceAssistantSkill(BaseSkill):
             ),
             "customer_phone": inp.metadata.get("customer_phone"),
             "bookings": _tenant_has_bookings(inp.tenant_id),
+            "current_message": inp.question,
         }
         kb_context, sources = await self._retrieve_kb(inp)
         system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"))
@@ -450,6 +535,37 @@ class CommerceAssistantSkill(BaseSkill):
                 )
         except Exception:
             pass
+        # Delivery coverage + fee rules as HARD FACTS — without these the model has invented
+        # coverage ("Ja, ons lewer na Timbuktu", live 2026-07-16) instead of escalating.
+        delivery_block = ""
+        try:
+            from vula.commerce.order_workflow import get_order_settings
+            cfg = get_order_settings(tenant_id)
+            areas = cfg.get("delivery_areas") or []
+            lines = []
+            if areas:
+                lines.append("We ONLY deliver to these areas: " + ", ".join(str(a) for a in areas) + ". "
+                             "If a customer asks about delivery ANYWHERE else, do NOT say yes or no — "
+                             "call ask_team with their question.")
+            else:
+                lines.append("You do NOT know this business's delivery area — if asked whether we "
+                             "deliver somewhere, do NOT guess, and do NOT answer yes OR no: call "
+                             "ask_team with their question.")
+            if cfg.get("delivery_fee_cents") is not None:
+                lines.append(f"Standard delivery fee: R{cfg['delivery_fee_cents'] / 100:.2f}.")
+            if cfg.get("free_delivery_over_cents"):
+                lines.append(f"Delivery is FREE for orders of R{cfg['free_delivery_over_cents'] / 100:.2f} or more.")
+            if cfg.get("min_order_cents"):
+                lines.append(f"Minimum order: R{cfg['min_order_cents'] / 100:.2f} — politely decline "
+                             "smaller orders and suggest adding something.")
+            if cfg.get("delivery_radius_km") and cfg.get("origin_lat") is not None:
+                lines.append(f"We deliver within {cfg['delivery_radius_km']:g} km of "
+                             f"{cfg.get('origin_label') or 'the shop'}. If a customer shares their "
+                             "location PIN, you'll be told the exact distance — trust that verdict. "
+                             "They can also just share a pin to check instantly.")
+            delivery_block = "\n\nDELIVERY FACTS (authoritative — never contradict or invent beyond these):\n- " + "\n- ".join(lines)
+        except Exception:
+            pass
         booking_block = ""
         if _tenant_has_bookings(tenant_id):
             booking_block = (
@@ -467,6 +583,10 @@ class CommerceAssistantSkill(BaseSkill):
             "Afrikaans, isiZulu, isiXhosa, Sesotho and more — mirror their language naturally and "
             "warmly. If they mix languages, follow their lead; if unsure, use English.\n"
             "- Use real tools for products, cart and orders — never invent prices or stock.\n"
+            "- If you can't answer a question about the BUSINESS itself (delivery coverage, "
+            "opening hours, custom/special requests), call *ask_team* with the customer's "
+            "question — a real person is asked on WhatsApp and the customer gets the answer. "
+            "Never invent business facts, and never answer yes/no when you don't know.\n"
             "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly.\n"
             "- CART DISCIPLINE (important): only add a product to the cart when the customer has "
             "clearly named THAT specific item AND a quantity. NEVER add several products at once, and "
@@ -495,8 +615,12 @@ class CommerceAssistantSkill(BaseSkill):
             "- If a customer wants the same order repeated regularly ('every Friday', 'weekly'), "
             "add the items to their cart, then call create_subscription with the cadence.\n"
             "- If a customer wants to change an order they ALREADY placed, call change_order.\n"
+            "- If a customer wants to CANCEL an order they already placed, call cancel_order — "
+            "never say an order is cancelled without calling it, and never claim it's fully done; "
+            "the team confirms the actual cancellation (a paid order may need a refund).\n"
             "- Only use start_checkout if the customer specifically wants to pay on the website.\n"
             "- For a price quote without ordering, call create_quote and share the number and total."
+            + delivery_block
             + lang_block
             + booking_block
             + kb_block
@@ -577,6 +701,31 @@ class CommerceAssistantSkill(BaseSkill):
                         f"(system: the {tname} tool returned: {json.dumps(result, default=str)[:1500]}. "
                         f"Now reply to the customer in plain, friendly language — never output JSON.)"})
                     continue
+                leaked_msg = _extract_message_leak(answer)
+                if leaked_msg:
+                    logger.warning(
+                        "commerce_assistant: model echoed raw tool-result JSON as final answer "
+                        "(model=%s) — unwrapped 'message' field instead of sending JSON", model)
+                    return leaked_msg
+                # Catch-ALL for any other machine-JSON shape (a third leak variant,
+                # {"type":"function","name":"cancel_order"}, reached a real customer
+                # 2026-07-16 because it matched neither guard above): a JSON object is
+                # NEVER a valid customer reply. Nudge the model to answer in prose —
+                # escalating a local model to cloud first, which reliably complies.
+                if _as_json_dict(answer) is not None:
+                    logger.warning(
+                        "commerce_assistant: suppressed unrecognised raw-JSON final answer "
+                        "(model=%s): %.120s", model, answer)
+                    if model.startswith("ollama/"):
+                        esc = escalate_to_cloud("local_json_leak", run_id=run_id, task_type="commerce_chat")
+                        if esc:
+                            model, api_key, api_base = esc
+                    messages.append({"role": "assistant", "content": answer})
+                    messages.append({"role": "user", "content":
+                        "(system: that reply was raw JSON, which must never be shown to the "
+                        "customer. Answer the customer's question in plain, friendly language — "
+                        "if you can't help with it, say so honestly.)"})
+                    continue
                 # Requirement (b): a weak local final answer escalates to cloud (tool turns stay local).
                 if model.startswith("ollama/") and looks_unreliable(answer):
                     esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="commerce_chat")
@@ -626,7 +775,13 @@ class CommerceAssistantSkill(BaseSkill):
             api_key=api_key,
             api_base=api_base,
         )
-        return (resp.choices[0].message.content or "").strip()
+        final_answer = (resp.choices[0].message.content or "").strip()
+        leaked = _extract_message_leak(final_answer)
+        if leaked:
+            return leaked
+        if _as_json_dict(final_answer) is not None:  # same never-send-JSON rule as the main loop
+            return "Sorry — I got a bit tangled up there. Could you ask me that again? 🙏"
+        return final_answer
 
     # ── Tool dispatch + executors ────────────────────────────────────────────
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
@@ -658,8 +813,12 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_remove_from_cart(tid, sid, phone, args)
         if name == "change_order":
             return await self._exec_change_order(tid, phone, args)
+        if name == "cancel_order":
+            return await self._exec_cancel_order(tid, phone)
+        if name == "ask_team":
+            return await self._exec_ask_team(tid, phone, args)
         if name == "place_order":
-            return await self._exec_place_order(tid, sid, phone, args)
+            return await self._exec_place_order(tid, sid, phone, args, ctx)
         if name == "list_availability":
             return await self._exec_list_availability(tid, args)
         if name == "book_appointment":
@@ -1097,13 +1256,79 @@ class CommerceAssistantSkill(BaseSkill):
                 "message": f"Got it — I've asked the team to update order {order['display_id']}. "
                            f"They'll confirm the change with you shortly."}
 
+    async def _exec_ask_team(self, tenant_id: str, phone: Optional[str],
+                             args: Dict[str, Any]) -> Dict[str, Any]:
+        """Deterministic escalation: the model CALLS this instead of having to phrase 'I'm not
+        sure' in a way a regex can detect — which a local model failed to do live 2026-07-16
+        (it confidently deflected a delivery question and escalation never fired). Reuses the
+        same escalate-and-learn plumbing as the phrasing-based path in vula/api/whatsapp.py."""
+        question = (args.get("question") or "").strip()
+        if not question:
+            return {"error": "Pass the customer's actual question to ask_team."}
+        try:
+            from vula import escalation as esc
+            learned = esc.find_learned_answer(tenant_id, question)
+            if learned:
+                return {"answer_from_team": learned,
+                        "instruction_to_assistant": "The team has answered this exact question "
+                                                    "before — relay this answer to the customer."}
+            row = esc.create_escalation(tenant_id, phone or "", question)
+            if not row:
+                return {"error": "No team helper is configured for this business — tell the "
+                                 "customer you'll find out and someone will get back to them."}
+            from vula.api.whatsapp import _send_reply
+            await _send_reply(
+                row["helper_phone"],
+                f"❓ A customer asked:\n\n\"{question}\"\n\nReply to this message with the "
+                f"answer — I'll send it to them and remember it.",
+                tenant_id=tenant_id)
+            return {"escalated": True,
+                    "instruction_to_assistant": "Tell the customer (in their language) that "
+                    "you're checking with the team and will get back to them shortly. Do NOT "
+                    "invent an answer in the meantime."}
+        except Exception as exc:
+            return {"error": f"could not reach the team right now: {exc}"}
+
+    async def _exec_cancel_order(self, tenant_id: str, phone: Optional[str]) -> Dict[str, Any]:
+        """Customer wants to cancel order(s) they've already placed. Flags every live order to
+        the shop team — never marks it cancelled directly, since a paid order may need a real
+        refund (a human step), and this codebase had no cancel path at all before (the assistant
+        was previously just improvising a reply with no actual effect)."""
+        digits = "".join(c for c in (phone or "") if c.isdigit())
+        orders = await service.list_orders(tenant_id, limit=30)
+        live = [o for o in orders
+                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:] or "x")
+                and o.get("status") not in ("delivered", "cancelled", "refunded")]
+        if not live:
+            return {"error": "I couldn't find a live order to cancel — could be already delivered."}
+        try:
+            from vula.commerce import order_workflow as ow
+            for order in live:
+                await ow.dispatch_order(tenant_id, order["id"],
+                                        f"❌ CANCEL REQUEST on {order['display_id']}",
+                                        order.get("customer_name") or "")
+        except Exception as exc:
+            logger.warning("cancel_order notify failed: %s", exc)
+        numbers = ", ".join(o["display_id"] for o in live)
+        return {"order_numbers": numbers,
+                "message": f"Got it — I've asked the team to cancel {numbers}. They'll confirm "
+                           f"with you shortly (a refund may be needed if it was already paid)."}
+
     async def _exec_place_order(
-        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
+        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any],
+        ctx: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Turn the current cart into a confirmed order with a chosen payment method, and
         return an itemised confirmation (the customer's quotation). Handles online card
         (pay-link if a gateway is connected), pay-on-delivery, and EFT/bank transfer."""
         from vula.commerce import order_workflow as ow
+
+        current_msg = ((ctx or {}).get("current_message") or "").strip()
+        if not _CONFIRM_RE.search(current_msg):
+            return {"error": "The customer has NOT explicitly confirmed in their latest message — "
+                              "do not place the order. Call review_order to show them the itemised "
+                              "total first, then wait for them to reply CONFIRM (or a clear yes) "
+                              "before calling place_order again."}
 
         cfg = ow.get_order_settings(tenant_id)
         enabled = [str(m).lower() for m in (cfg.get("payment_methods") or ["online", "cod", "eft"])]
@@ -1117,7 +1342,17 @@ class CommerceAssistantSkill(BaseSkill):
         address = (args.get("delivery_address") or "").strip()
         if not address:
             return {"error": "Need a delivery address before placing the order — ask the customer for it."}
-        name = (args.get("customer_name") or "Customer").strip()
+        # Prefer the verified on-file contact name over whatever the model supplied — a local
+        # model has invented generic placeholders ("Customer's", "Klient") instead of using the
+        # real name already captured during onboarding.
+        contact_name = ""
+        try:
+            from vula.commerce import onboarding as _onb
+            contact = _onb.get_contact(tenant_id, phone or "")
+            contact_name = (contact or {}).get("name") or ""
+        except Exception:
+            pass
+        name = (contact_name or args.get("customer_name") or "Customer").strip()
         slot = (args.get("delivery_slot") or "morning").strip().lower()
         if slot not in ("morning", "afternoon", "express"):
             slot = "morning"

@@ -18,8 +18,11 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 # Phrases that mean "the agent couldn't really answer" (escalate even if confidence looks ok).
+# Covers Afrikaans too — the assistant replies in the customer's language, so an Afrikaans
+# "ek weet nie" previously sailed past this English-only check and never escalated.
 _NO_ANSWER = re.compile(
-    r"(i (don'?t|do not) (know|have)|not sure|couldn'?t find|can'?t help|no (info|information|record)|unable to|i'?m not able)",
+    r"(i (don'?t|do not) (know|have)|not sure|couldn'?t find|can'?t help|no (info|information|record)|unable to|i'?m not able"
+    r"|ek (weet|het) nie|nie seker nie|kan nie help nie|ek sal (met die span|eers) (kyk|vra)|laat ek uitvind)",
     re.IGNORECASE,
 )
 
@@ -83,21 +86,54 @@ def _pick_helper(tenant_id: str) -> Optional[dict]:
 
 
 def open_escalation_for_helper(helper_phone: str) -> Optional[dict]:
-    """The oldest open escalation assigned to this helper (their next text is the answer)."""
+    """The oldest FRESH open escalation assigned to this helper (their next text is the answer).
+
+    Escalations older than 48h are expired on sight instead of returned — confirmed live
+    2026-07-16: a 2-week-old open escalation swallowed the helper's unrelated "Hi" (sent for a
+    completely different reason), relayed it to the customer as "the answer", and stored it as
+    a learned answer. A helper who hasn't replied within 2 days is not going to — the customer
+    conversation has long moved on."""
+    from datetime import timedelta
     digits = re.sub(r"\D", "", helper_phone or "")
     if not digits:
         return None
     try:
         rows = (_client().table("vula_escalations").select("*")
                 .eq("helper_phone", digits).eq("status", "open")
-                .order("created_at", desc=False).limit(1).execute().data or [])
+                .order("created_at", desc=False).limit(5).execute().data or [])
     except Exception:
         return None
-    return rows[0] if rows else None
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    fresh = []
+    for r in rows:
+        if (r.get("created_at") or "") < cutoff:
+            try:
+                _client().table("vula_escalations").update(
+                    {"status": "expired"}).eq("id", r["id"]).eq("status", "open").execute()
+            except Exception:
+                pass
+        else:
+            fresh.append(r)
+    return fresh[0] if fresh else None
 
 
 def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Optional[dict]:
-    """Record an escalation and pick a helper. Returns the row (+ helper) or None if no helper."""
+    """Record an escalation and pick a helper. Returns the row (+ helper) or None if no helper.
+
+    Dedup (2026-07-17): one OPEN escalation per customer at a time — the ask_team tool AND the
+    phrase-based detector both fired on the same message, creating two escalations and pinging
+    the helper twice. If the customer already has an open one, return None (no new row, no
+    second ping) — the helper's single reply resolves it."""
+    digits = re.sub(r"\D", "", customer_phone or "")
+    try:
+        existing = (_client().table("vula_escalations").select("id")
+                    .eq("tenant_id", tenant_id).eq("customer_phone", digits)
+                    .eq("status", "open").limit(1).execute().data or [])
+        if existing:
+            log.info("escalation dedup: %s already has an open escalation", digits)
+            return None
+    except Exception:
+        pass
     helper = _pick_helper(tenant_id)
     if not helper:
         return None
@@ -117,15 +153,23 @@ def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Opt
     return row
 
 
-def answer_escalation(escalation: dict, answer: str) -> dict:
-    """Mark answered, store the learned answer, return who to reply to."""
+def answer_escalation(escalation: dict, answer: str) -> Optional[dict]:
+    """Mark answered, store the learned answer, return who to reply to.
+
+    The status update is a CONDITIONAL claim (only wins while still 'open') — returns None if
+    another worker/webhook-retry already answered it. Confirmed live 2026-07-16: Meta redelivered
+    the helper's message after a container restart wiped the in-memory msg-id dedup, and both
+    deliveries answered the same escalation → the customer got the relay twice."""
     db = _client()
     try:
-        db.table("vula_escalations").update(
+        claim = (db.table("vula_escalations").update(
             {"status": "answered", "answer": answer, "answered_at": _now()}
-        ).eq("id", escalation["id"]).execute()
+        ).eq("id", escalation["id"]).eq("status", "open").execute())
+        if not claim.data:
+            return None  # someone else already answered it — don't relay again
     except Exception as exc:
         log.warning("escalation update failed: %s", exc)
+        return None
     try:
         import uuid
         db.table("vula_learned_answers").insert({

@@ -4,18 +4,26 @@ vula/commerce/onboarding.py — Staci-controlled opt-in / intro campaign for imp
 Flow (state lives in commerce_contacts.onboarding_state, migration 047):
     invited            → nothing sent yet (import default)
     awaiting_reply     → intro template sent, waiting for them to reply
-    collecting_name    → they replied (opted in); ask name
+    confirming_optin   → they replied once; DOUBLE OPT-IN — asked to confirm explicitly before
+                          consent_status flips to opted_in (new state value, no migration needed —
+                          onboarding_state is a plain text column, see migration 047)
+    collecting_name    → confirmed opted in; ask name
     collecting_address → ask delivery address
     collecting_email   → ask email (optional, SKIP allowed)
     complete           → onboarded; hand to normal ordering
-    opted_out          → replied STOP
+    opted_out          → replied STOP (at any stage)
 
-Consent: replying opts them in (consent_status='opted_in'); STOP opts out. Nothing is sent
-proactively except the batch the merchant explicitly triggers — and only to consent='unknown'
-contacts — so the WhatsApp number is never blasted. Marketing broadcasts target opted_in only.
+Consent: DOUBLE opt-in — the first reply only advances the conversation, it does NOT set
+consent_status. A second reply (any non-STOP reply, made after seeing the explicit consent
+question) is what marks consent_status='opted_in'; this is the stronger proof-of-consent pattern
+(GDPR/Meta best practice, see project memory) versus the earlier single-reply design. STOP opts
+out at any point. Nothing is sent proactively except the batch the merchant explicitly triggers —
+and only to consent='unknown' contacts — so the WhatsApp number is never blasted. Marketing
+broadcasts target opted_in only.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -27,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 _STOP_RE = re.compile(r"^\s*(stop|unsubscribe|opt\s*out|cancel)\b", re.IGNORECASE)
 _SKIP_RE = re.compile(r"^\s*(skip|no|none|n/?a)\s*$", re.IGNORECASE)
-ACTIVE_STATES = ("awaiting_reply", "collecting_name", "collecting_address", "collecting_email")
+ACTIVE_STATES = ("awaiting_reply", "confirming_optin", "collecting_name", "collecting_address", "collecting_email")
 
 
 def _client():
@@ -97,12 +105,22 @@ async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]
         return "No problem — you won't get marketing messages from us. You can still order anytime. 🐟"
 
     if state == "awaiting_reply":
-        # First reply = opt-in.
+        # First reply — DOUBLE OPT-IN: this only advances the conversation, it does NOT set
+        # consent yet. Ask an explicit confirmation question; consent is recorded only on the
+        # NEXT reply (confirming_optin below), which is the stronger proof-of-consent step.
+        _update(tenant_id, phone, {"onboarding_state": "confirming_optin"})
+        return ("Hi! 👋 Just confirming — reply to this message if you'd like to receive order "
+                "updates and specials from *Off the Hook* here on WhatsApp. Reply *STOP* anytime "
+                "to opt out.")
+
+    if state == "confirming_optin":
+        # Second reply = explicit confirmation. This is what actually flips consent — the first
+        # reply above only got them here, it was never recorded as consent.
         _update(tenant_id, phone, {"onboarding_state": "collecting_name",
                                    "consent_status": "opted_in", "consent_at": _now()})
         try:
             from vula.api.commerce import record_inbound_consent
-            record_inbound_consent(tenant_id, phone)
+            record_inbound_consent(tenant_id, phone, source="onboarding_double_optin_confirmed")
         except Exception:
             pass
         return ("🎉 Welcome to *Off the Hook* on WhatsApp! Let's set up your account so ordering is "
@@ -110,7 +128,8 @@ async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]
 
     if state == "collecting_name":
         _update(tenant_id, phone, {"name": body[:80], "onboarding_state": "collecting_address"})
-        return f"Thanks {first_name(body)}! 📍 What's your *delivery address*?"
+        return (f"Thanks {first_name(body)}! 📍 What's your *delivery address*? You can type it, "
+                "or tap the 📎 attach icon and share your *location* pin instead.")
 
     if state == "collecting_address":
         _update(tenant_id, phone, {"address": body[:250], "onboarding_state": "collecting_email"})
@@ -160,6 +179,7 @@ def onboarding_stats(tenant_id: str) -> dict:
         "total": len(rows),
         "invited": st.get("invited", 0),
         "awaiting_reply": st.get("awaiting_reply", 0),
+        "confirming_optin": st.get("confirming_optin", 0),
         "in_progress": st.get("collecting_name", 0) + st.get("collecting_address", 0) + st.get("collecting_email", 0),
         "complete": st.get("complete", 0),
         "opted_out": st.get("opted_out", 0),
@@ -170,8 +190,10 @@ def onboarding_stats(tenant_id: str) -> dict:
 async def send_batch(tenant_id: str, *, template: str, language: str = "en",
                      limit: int = 50, test_phone: Optional[str] = None) -> dict:
     """Send the intro template to the next `limit` un-invited contacts (or just test_phone),
-    filling {{1}} with the first name, and mark them awaiting_reply. Throttled by the caller's
-    choice of batch size — Staci sends a batch at a time, so the number ramps gently."""
+    filling {{1}} with the first name, and mark them awaiting_reply. `limit` caps batch SIZE
+    (Staci sends a batch at a time so the number ramps gently) — the sends within a batch are
+    additionally PACED at 10/s to stay under Meta's throughput/pair-rate limits (confirmed gap,
+    2026-07-15: this loop previously fired unthrottled)."""
     from vula.api.whatsapp import _get_tenant_wa_creds
     creds = await _get_tenant_wa_creds(tenant_id)
     if not creds:
@@ -186,7 +208,9 @@ async def send_batch(tenant_id: str, *, template: str, language: str = "en",
 
     sent = failed = 0
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for c in targets:
+        for i, c in enumerate(targets):
+            if i:
+                await asyncio.sleep(0.1)
             number = _digits(c.get("phone"))
             if not number:
                 continue

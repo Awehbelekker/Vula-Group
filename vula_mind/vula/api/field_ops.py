@@ -29,7 +29,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from vula.api.whatsapp import _send_reply
+from vula.api.whatsapp import _send_reply, _send_wa_template
 from vula.models.field_ops import get_field_ops_db
 
 logger = logging.getLogger(__name__)
@@ -184,15 +184,13 @@ async def assign_task(body: TaskAssignIn) -> dict:
 
     wa_sent = False
     if body.send_whatsapp:
-        due = f" (due {task.due_date})" if task.due_date else ""
-        notes = f"\nNotes: {task.notes}" if task.notes else ""
-        message = (
-            f"Hi {contractor.name}, you've been assigned a task on project {task.project_id}:\n\n"
-            f"*{task.title}*{due}{notes}\n\n"
-            f"Reply *DONE* when complete, or send photos as evidence. "
-            f"Reply with any questions and I'll help."
-        )
-        wa_sent = await _send_reply(contractor.phone, message)
+        # Task assignment is a proactive/business-initiated send — must use an approved template
+        # (free text fails with 'Re-engagement message' unless the contractor messaged in the last
+        # 24h). Due date/notes go in the log; the contractor opens Vula or asks once they reply.
+        logger.info("Task assigned: %s -> %s (project %s, due=%s, notes=%s)",
+                    task.title, contractor.name, task.project_id, task.due_date, task.notes)
+        wa_sent = await _send_wa_template(contractor.tenant_id, contractor.phone, "digg_task_assigned",
+                                          contractor.name, task.project_id, task.title)
 
     return {
         "task_id": task.id,
@@ -217,11 +215,13 @@ async def request_completion(task_id: str, body: CompleteRequestIn) -> dict:
     if not contractor:
         raise HTTPException(status_code=404, detail="Assigned contractor not found")
 
-    message = body.custom_message or (
-        f"Hi {contractor.name}, just checking in on task *{task.title}*. "
-        f"Is it complete? Reply *DONE* to confirm, or send photos if sign-off is required."
-    )
-    sent = await _send_reply(contractor.phone, message)
+    if body.custom_message:
+        # A custom message can't ride the fixed-text template — best-effort free text (works if
+        # the contractor has messaged Vula in the last 24h, same as any normal reply).
+        sent = await _send_reply(contractor.phone, body.custom_message, contractor.tenant_id)
+    else:
+        sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
+                                       "digg_task_chase", contractor.name, task.title)
     return {"task_id": task_id, "contractor_name": contractor.name, "whatsapp_sent": sent}
 
 
@@ -273,13 +273,12 @@ async def start_walkthrough(body: WalkthroughStartIn) -> dict:
     wt = db.create_walkthrough(body.tenant_id, body.project_id, body.title, body.items)
     db.update_walkthrough_status(wt.id, "in_progress")
 
+    # Checklist is unbounded length (can't fit a template) — filed in the log; the approved
+    # template just kicks off the walkthrough, contractor opens Vula for the item list.
     numbered = "\n".join(f"{i+1}. {item}" for i, item in enumerate(body.items))
-    message = (
-        f"Hi {contractor.name}, please do a site walkthrough for *{body.title}*.\n\n"
-        f"Send photos for each item below:\n{numbered}\n\n"
-        f"Reply *DONE* when all photos are sent."
-    )
-    sent = await _send_reply(contractor.phone, message)
+    logger.info("Walkthrough started: %s (%s) — checklist:\n%s", body.title, contractor.name, numbered)
+    sent = await _send_wa_template(contractor.tenant_id, contractor.phone,
+                                   "digg_walkthrough_start", contractor.name, body.title)
 
     return {
         "walkthrough_id": wt.id,
@@ -306,10 +305,10 @@ async def approve_walkthrough(walkthrough_id: str, body: WalkthroughApproveIn) -
     contractors = [m for m in team if m["role"] == "contractor"]
     for c in contractors:
         if body.decision == "approved":
-            await _send_reply(c["phone"], f"Walkthrough *{wt.title}* has been approved by the architect. Great work!")
+            await _send_wa_template(wt.tenant_id, c["phone"], "digg_walkthrough_approved", wt.title)
         else:
             reason = body.notes or "no reason given"
-            await _send_reply(c["phone"], f"Walkthrough *{wt.title}* needs attention: {reason}. Please address and re-submit.")
+            await _send_wa_template(wt.tenant_id, c["phone"], "digg_walkthrough_rejected", wt.title, reason)
 
     return {
         "walkthrough_id": walkthrough_id,
@@ -361,17 +360,15 @@ async def dispatch_daily_briefings(tenant_id: str) -> dict:
         if not contractor or not contractor.phone:
             continue
 
+        # Itemized task list is unbounded (can't fit a template) — filed in the log; the approved
+        # template carries a count only, contractor opens Vula for the full list.
         task_lines = "\n".join(
             f"  • {t.title} (project {t.project_id})"
             for t in contractor_tasks
         )
-        message = (
-            f"Good morning {contractor.name}! 👷\n\n"
-            f"Today's tasks:\n{task_lines}\n\n"
-            f"Reply *DONE* when each task is complete, or send photos as evidence. "
-            f"Reply with any questions."
-        )
-        ok = await _send_reply(contractor.phone, message)
+        logger.info("Daily briefing for %s: %d task(s)\n%s", contractor.name, len(contractor_tasks), task_lines)
+        ok = await _send_wa_template(contractor.tenant_id, contractor.phone, "digg_daily_tasks",
+                                     contractor.name, str(len(contractor_tasks)))
         if ok:
             sent_count += 1
         results.append({

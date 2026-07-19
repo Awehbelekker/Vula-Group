@@ -79,6 +79,7 @@ from vula.skills.web_scraper import VulaWebScraper
 from vula.takeoff.api import router as takeoff_router
 from vula.api.onboarding import router as onboarding_router
 from vula.api.whatsapp import router as whatsapp_router
+from vula.api.whatsapp import _send_wa_template
 from vula.api.training import router as training_router
 from vula.api.chat import router as chat_router
 from vula.api.field_ops import router as field_ops_router
@@ -103,6 +104,9 @@ from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.draft import router as draft_router
 from vula.api.agent import router as agent_router
 from vula.api.twilio_whatsapp import router as twilio_router
+from vula.api.links import router as links_router
+from vula.api.master import router as master_router
+from vula.api.menu_page import router as menu_page_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -200,137 +204,146 @@ async def _daily_trial_expiry_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
-async def _daily_delivery_briefing_loop() -> None:
-    """Send morning delivery list to Off the Hook team at 06:30 SAST daily."""
+# ── Commerce scheduled-job generalization ──────────────────────────────────────
+# The 5 jobs below (delivery briefing, unpaid-order chase, low stock, Friday catch reminder,
+# sales summary) were originally hardcoded to tenant_id="off-the-hook" with Stacy's phone number
+# baked in. Onboarding a second retail/food tenant would have needed a code change for each job —
+# this makes them DB-driven instead, so a new commerce tenant just needs team members configured
+# (vula_team_members, already DB-driven — see vula.api.yoco._tenant_team) and its own approved
+# WhatsApp templates; no code change. WhatsApp template content needs Meta approval PER TENANT'S
+# WABA, so template NAMES stay tenant-specific — _COMMERCE_TEMPLATE_PREFIX maps a tenant to its
+# approved prefix (e.g. "oth"); add one line here once a new tenant's templates are approved.
+_COMMERCE_TEMPLATE_PREFIX: dict[str, str] = {"off-the-hook": "oth"}
+
+
+def _commerce_template_name(tenant_id: str, suffix: str) -> str:
+    prefix = _COMMERCE_TEMPLATE_PREFIX.get(tenant_id) or tenant_id.replace("-", "_")
+    return f"{prefix}_{suffix}"
+
+
+async def _commerce_tenant_ids() -> list[str]:
+    """Every tenant with the 'orders' module enabled (i.e. runs a WhatsApp shop) — DB-driven so
+    a new retail/food tenant is picked up automatically. Falls back to just off-the-hook if the
+    config table isn't reachable, so today's only real commerce tenant keeps working either way."""
+    try:
+        from vula.commerce import service as _cs
+        rows = (_cs._client().table("vula_tenant_config").select("tenant_id,modules")
+                .execute().data or [])
+        ids = [r["tenant_id"] for r in rows if "orders" in (r.get("modules") or [])]
+        if ids:
+            return ids
+    except Exception as exc:
+        log.debug("commerce tenant list fetch failed, falling back: %s", exc)
+    return ["off-the-hook"]
+
+
+def _commerce_notify_phones(tenant_id: str) -> list[str]:
+    """WhatsApp numbers for this tenant's owner/operations staff — DB-driven (vula_team_members)
+    with the static _TENANT_TEAM map as fallback, same source of truth as order-paid alerts."""
+    try:
+        from vula.api.yoco import _tenant_team
+        return [phone for _, phone, role in _tenant_team(tenant_id) if role in ("owner", "operations")]
+    except Exception as exc:
+        log.debug("commerce notify phones lookup failed for %s: %s", tenant_id, exc)
+        return []
+
+
+async def _run_commerce_job(tenant_id: str, job_type: str, tpl: str) -> None:
+    """Dispatch one claimed job run for one tenant (called only by the poller below)."""
+    if job_type == "delivery_briefing":
+        await _send_oth_delivery_briefing(only_tenant=tenant_id, template_override=tpl)
+    elif job_type == "unpaid_order_chase":
+        await _chase_unpaid_orders(only_tenant=tenant_id, template_override=tpl)
+    elif job_type == "low_stock_alert":
+        await _send_low_stock_alert(only_tenant=tenant_id, template_override=tpl)
+    elif job_type == "friday_catch_reminder":
+        await _send_friday_catch_reminder(only_tenant=tenant_id, template_override=tpl)
+    elif job_type == "sales_summary":
+        await _send_oth_sales_summary(only_tenant=tenant_id, template_override=tpl)
+
+
+async def _commerce_jobs_scheduler_loop() -> None:
+    """Config-driven scheduler for the 5 system WhatsApp jobs (replaces the five fixed
+    wall-clock loops, migration 069). Polls every 5 minutes; per tenant + job it checks the
+    ⏰ Scheduling tab's config (defaults where unset), and claim_run() atomically decides
+    "due now AND not already fired this window" — so times/templates are admin-editable and
+    a leader handover can't double-send. Only the scheduler-lock leader runs this at all."""
     import asyncio as _asyncio
-    from datetime import datetime, timezone, timedelta
+    from vula.commerce import job_config
 
-    # Wait until next 06:30 SAST (UTC+2) before first run
-    async def _seconds_until_next_630() -> float:
-        now = datetime.now(timezone.utc)
-        sast = now + timedelta(hours=2)
-        target = sast.replace(hour=6, minute=30, second=0, microsecond=0)
-        if sast >= target:
-            target += timedelta(days=1)
-        return (target - sast).total_seconds()
-
-    await _asyncio.sleep(await _seconds_until_next_630())
-
+    await _asyncio.sleep(90)  # let the app settle on boot
     while True:
         try:
-            await _send_oth_delivery_briefing()
+            for tenant_id in await _commerce_tenant_ids():
+                cfgs = job_config.get_configs(tenant_id)
+                for job_type, cfg in cfgs.items():
+                    if not cfg.get("enabled", True):
+                        continue
+                    if not job_config.claim_run(tenant_id, job_type, cfg):
+                        continue
+                    tpl = cfg.get("template_name") or _commerce_template_name(
+                        tenant_id, cfg["default_template_suffix"])
+                    try:
+                        await _run_commerce_job(tenant_id, job_type, tpl)
+                    except Exception as exc:
+                        log.warning("commerce job %s/%s failed: %s", tenant_id, job_type, exc)
         except Exception as exc:
-            log.warning("OTH delivery briefing failed: %s", exc)
-        await _asyncio.sleep(24 * 3600)
+            log.warning("commerce jobs scheduler tick failed: %s", exc)
+        await _asyncio.sleep(300)
 
 
-async def _send_oth_delivery_briefing() -> None:
-    """Build and WhatsApp the day's delivery list to Stacy and Roland."""
+async def _send_oth_delivery_briefing(only_tenant: str | None = None,
+                                      template_override: str | None = None) -> None:
+    """Build and WhatsApp the day's delivery list to each commerce tenant's team.
+    only_tenant/template_override are set by the config-driven scheduler (migration 069);
+    the bare call (manual trigger endpoints) does every tenant with defaults."""
     if not settings.whatsapp_token:
         return
 
     from datetime import date
     from vula.commerce import service as _commerce
 
-    tenant_id = "off-the-hook"
     today = date.today().isoformat()
 
-    try:
-        orders = await _commerce.get_delivery_list(tenant_id, date_str=today)
-    except Exception as exc:
-        log.warning("OTH delivery list fetch failed: %s", exc)
-        return
+    for tenant_id in ([only_tenant] if only_tenant else await _commerce_tenant_ids()):
+        phones = _commerce_notify_phones(tenant_id)
+        if not phones:
+            continue
+        try:
+            orders = await _commerce.get_delivery_list(tenant_id, date_str=today)
+        except Exception as exc:
+            log.warning("%s delivery list fetch failed: %s", tenant_id, exc)
+            continue
 
-    if not orders:
-        msg = f"Good morning! No orders to deliver today ({today}). Have a great day!"
-    else:
         _PAID = {"paid", "confirmed", "packing", "dispatched", "delivered"}
         paid_orders   = [o for o in orders if o["status"] in _PAID]
         unpaid_orders = [o for o in orders if o["status"] == "pending_payment"]
 
-        lines = [f"Good morning! Delivery list for {today}\n"]
-        for i, o in enumerate(orders, 1):
-            slot = (o.get("delivery_slot") or "?").upper()
-            paid_tag = "PAID" if o["status"] in _PAID else "NOT PAID - collect before delivery"
-            items = o.get("commerce_order_items") or []
-            item_lines = ", ".join(
-                f"{it['product_name']} x{it['quantity']}" for it in items[:5]
-            ) or "no items"
-            lines.append(
-                f"{i}. {o['display_id']} — {slot}\n"
-                f"   {o['customer_name']} | {o['customer_phone']}\n"
-                f"   {o['delivery_address']}\n"
-                f"   {item_lines}\n"
-                f"   R{o['total_cents'] / 100:.2f} — {paid_tag}"
-            )
+        # Full itemized breakdown is filed in the log for reference; the WhatsApp send itself
+        # must be a template (proactive/scheduled — free text to someone who hasn't messaged
+        # recently fails with 'Re-engagement message', confirmed 2026-07-15), so it can only
+        # carry a short summary — staff open Vula for the itemized list.
+        log.info("%s delivery briefing %s: %d orders (%d paid, %d unpaid)",
+                 tenant_id, today, len(orders), len(paid_orders), len(unpaid_orders))
 
-        paid_rev   = sum(o["total_cents"] for o in paid_orders)
-        unpaid_rev = sum(o["total_cents"] for o in unpaid_orders)
-        lines.append(
-            f"\nTotal: {len(orders)} order{'s' if len(orders) != 1 else ''} | "
-            f"{len(paid_orders)} paid (R{paid_rev / 100:.2f}) | "
-            f"{len(unpaid_orders)} unpaid (R{unpaid_rev / 100:.2f})"
-        )
-        msg = "\n".join(lines)
-
-    # Send to Stacy and Roland via OTH business number
-    phone_id = await _oth_phone_id()
-    team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
-
-    import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=10.0) as client:
-        for name, number in team:
-            try:
-                await client.post(
-                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-                    headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": number,
-                        "type": "text",
-                        "text": {"body": msg[:4096]},
-                    },
-                )
-                log.info("OTH delivery briefing sent to %s (%s)", name, number)
-            except Exception as exc:
-                log.warning("OTH briefing to %s failed: %s", name, exc)
+        tpl = template_override or _commerce_template_name(tenant_id, "delivery_briefing")
+        for phone in phones:
+            ok = await _send_wa_template(tenant_id, phone, tpl,
+                                         str(len(orders)), today, str(len(paid_orders)), str(len(unpaid_orders)))
+            log.info("%s delivery briefing to %s: %s", tenant_id, phone, "sent" if ok else "FAILED")
 
 
-async def _unpaid_order_followup_loop() -> None:
-    """Every 30 min, WhatsApp customers whose orders are still pending_payment after 2h."""
-    import asyncio as _asyncio
-    await _asyncio.sleep(120)  # Let server settle on boot
-    while True:
-        try:
-            await _chase_unpaid_orders()
-        except Exception as exc:
-            log.warning("Unpaid order chase failed: %s", exc)
-        await _asyncio.sleep(30 * 60)  # run every 30 minutes
-
-
-async def _oth_phone_id() -> str:
-    """OTH's current live WhatsApp phone_id, looked up from vula_whatsapp_accounts (never
-    hardcode a number here again — the old number was retired and silently 400'd every send
-    for weeks before this lookup replaced it)."""
-    try:
-        from vula.api.whatsapp import _get_tenant_wa_creds
-        creds = await _get_tenant_wa_creds("off-the-hook")
-        if creds and creds.get("phone_id"):
-            return creds["phone_id"]
-    except Exception as exc:
-        log.debug("OTH phone_id lookup failed, using known-good fallback: %s", exc)
-    return "1216487374874418"   # +27 79 178 3933 — current OTH number (as of 2026-07)
-
-
-async def _chase_unpaid_orders() -> None:
-    """Find orders pending_payment for 2-4h and send a WhatsApp nudge (once per order)."""
+async def _chase_unpaid_orders(only_tenant: str | None = None,
+                               template_override: str | None = None) -> None:
+    """Find orders pending_payment for 2-4h, across every commerce tenant, and send a WhatsApp
+    nudge (once per order) to the CUSTOMER — this one was already tenant-scoped per-order via
+    customer_phone, it just needed the tenant filter itself to stop being hardcoded."""
     if not settings.whatsapp_token:
         return
 
     from datetime import datetime, timezone, timedelta
 
-    tenant_id = "off-the-hook"
-    phone_id = await _oth_phone_id()
+    tenant_ids = [only_tenant] if only_tenant else await _commerce_tenant_ids()
 
     try:
         from supabase import create_client as _sb_client
@@ -344,8 +357,8 @@ async def _chase_unpaid_orders() -> None:
 
         result = (
             client.table("commerce_orders")
-            .select("id,display_id,customer_name,customer_phone,total_cents")
-            .eq("tenant_id", tenant_id)
+            .select("id,tenant_id,display_id,customer_name,customer_phone,total_cents")
+            .in_("tenant_id", tenant_ids)
             .eq("status", "pending_payment")
             .gte("created_at", four_hours_ago)
             .lte("created_at", two_hours_ago)
@@ -360,276 +373,128 @@ async def _chase_unpaid_orders() -> None:
     if not orders:
         return
 
-    import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=10.0) as http:
-        for o in orders:
-            phone = (o.get("customer_phone") or "").strip().lstrip("+").replace(" ", "")
-            if phone.startswith("0"):
-                phone = "27" + phone[1:]
-            if not phone or len(phone) < 9:
-                continue
-            name = (o.get("customer_name") or "there").split()[0]
-            amount = f"R{o['total_cents'] / 100:.2f}"
-            try:
-                await http.post(
-                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-                    headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": phone,
-                        "type": "text",
-                        "text": {
-                            "body": (
-                                f"Hi {name}! Just checking in — your Off the Hook order "
-                                f"{o['display_id']} ({amount}) is still waiting for payment. "
-                                f"Complete your payment to confirm your delivery slot. "
-                                f"Reply here if you need help or want to cancel."
-                            )
-                        },
-                    },
-                )
-                # Mark as followed-up so we don't chase again
-                try:
-                    client.table("commerce_orders") \
-                        .update({"followup_sent_at": datetime.now(timezone.utc).isoformat()}) \
-                        .eq("id", o["id"]) \
-                        .execute()
-                except Exception:
-                    pass
-                log.info("Unpaid follow-up sent: %s → %s", o["display_id"], phone)
-            except Exception as exc:
-                log.warning("Unpaid follow-up failed for %s: %s", o["display_id"], exc)
-
-
-async def _daily_low_stock_loop() -> None:
-    """Check stock levels at 07:00 SAST and alert Roland if anything is running low."""
-    import asyncio as _asyncio
-    from datetime import datetime, timezone, timedelta
-
-    async def _seconds_until_next_0700() -> float:
-        now = datetime.now(timezone.utc)
-        sast = now + timedelta(hours=2)
-        target = sast.replace(hour=7, minute=0, second=0, microsecond=0)
-        if sast >= target:
-            target += timedelta(days=1)
-        return (target - sast).total_seconds()
-
-    await _asyncio.sleep(await _seconds_until_next_0700())
-    while True:
+    for o in orders:
+        tenant_id = o["tenant_id"]
+        phone = (o.get("customer_phone") or "").strip().lstrip("+").replace(" ", "")
+        if phone.startswith("0"):
+            phone = "27" + phone[1:]
+        if not phone or len(phone) < 9:
+            continue
+        # Claim the row atomically BEFORE sending — uvicorn runs this loop once per worker
+        # (WEB_CONCURRENCY=2, see start.py), so two workers can both fetch the same
+        # "un-followed-up" order in the same 30-min tick. Whichever worker's conditional
+        # UPDATE actually matches a row (followup_sent_at still NULL) wins the claim; the
+        # other gets zero rows back and skips the send — confirmed duplicate-send bug fixed.
         try:
-            await _send_low_stock_alert()
+            claim = (
+                client.table("commerce_orders")
+                .update({"followup_sent_at": datetime.now(timezone.utc).isoformat()})
+                .eq("id", o["id"])
+                .is_("followup_sent_at", "null")
+                .execute()
+            )
         except Exception as exc:
-            log.warning("Low stock alert failed: %s", exc)
-        await _asyncio.sleep(24 * 3600)
+            log.warning("Unpaid follow-up claim failed for %s: %s", o["display_id"], exc)
+            continue
+        if not claim.data:
+            continue  # another worker already claimed + is sending this one
+        name = (o.get("customer_name") or "there").split()[0]
+        amount = f"R{o['total_cents'] / 100:.2f}"
+        tpl = template_override or _commerce_template_name(tenant_id, "unpaid_order_chase")
+        try:
+            await _send_wa_template(tenant_id, phone, tpl, name, o["display_id"], amount)
+            log.info("Unpaid follow-up sent: %s → %s", o["display_id"], phone)
+        except Exception as exc:
+            log.warning("Unpaid follow-up failed for %s: %s", o["display_id"], exc)
 
 
-async def _send_low_stock_alert() -> None:
-    """WhatsApp Roland if any product has stock_quantity below 5."""
+async def _send_low_stock_alert(only_tenant: str | None = None,
+                                template_override: str | None = None) -> None:
+    """WhatsApp each commerce tenant's team if any product has stock_quantity below 5."""
     if not settings.whatsapp_token:
         return
     from vula.commerce import service as _commerce
 
-    tenant_id = "off-the-hook"
-    phone_id = await _oth_phone_id()
-    roland = "27721822828"
-
-    try:
-        low = await _commerce.get_low_stock_products(tenant_id, threshold=5)
-    except Exception as exc:
-        log.warning("Low stock query failed: %s", exc)
-        return
-
-    if not low:
-        return
-
-    lines = ["Low stock alert:"]
-    for p in low:
-        qty = p.get("stock_quantity")
-        qty_str = f"{qty} left" if qty is not None else "qty not set"
-        lines.append(f"  - {p['name']}: {qty_str}")
-    lines.append("\nUpdate stock in Vula Products tab.")
-    msg = "\n".join(lines)
-
-    import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=10.0) as client:
+    for tenant_id in ([only_tenant] if only_tenant else await _commerce_tenant_ids()):
+        phones = _commerce_notify_phones(tenant_id)
+        if not phones:
+            continue
         try:
-            await client.post(
-                f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": roland,
-                    "type": "text",
-                    "text": {"body": msg[:4096]},
-                },
-            )
-            log.info("Low stock alert sent to Roland: %d items", len(low))
+            low = await _commerce.get_low_stock_products(tenant_id, threshold=5)
         except Exception as exc:
-            log.warning("Low stock WhatsApp failed: %s", exc)
+            log.warning("%s low stock query failed: %s", tenant_id, exc)
+            continue
+        if not low:
+            continue
+
+        # Itemized list filed in the log (unbounded length, can't fit a template); WhatsApp
+        # gets a count-only summary via the approved template — staff open Vula for which items.
+        log.info("%s low stock alert: %s", tenant_id,
+                 ", ".join(f"{p['name']} ({p.get('stock_quantity')})" for p in low))
+        tpl = template_override or _commerce_template_name(tenant_id, "low_stock_alert")
+        for phone in phones:
+            ok = await _send_wa_template(tenant_id, phone, tpl, str(len(low)))
+            log.info("%s low stock alert to %s: %s (%d items)",
+                     tenant_id, phone, "sent" if ok else "FAILED", len(low))
 
 
-async def _weekly_friday_catch_reminder_loop() -> None:
-    """Every Friday at 08:00 SAST, remind Stacy to update the daily catch for the week."""
-    import asyncio as _asyncio
-    from datetime import datetime, timezone, timedelta
-
-    async def _seconds_until_next_friday_0800() -> float:
-        now = datetime.now(timezone.utc)
-        sast = now + timedelta(hours=2)
-        # weekday() 4 = Friday
-        days_ahead = (4 - sast.weekday()) % 7
-        target = (sast + timedelta(days=days_ahead)).replace(hour=8, minute=0, second=0, microsecond=0)
-        if target <= sast:
-            target += timedelta(weeks=1)
-        return (target - sast).total_seconds()
-
-    await _asyncio.sleep(await _seconds_until_next_friday_0800())
-    while True:
-        try:
-            await _send_friday_catch_reminder()
-        except Exception as exc:
-            log.warning("Friday catch reminder failed: %s", exc)
-        await _asyncio.sleep(7 * 24 * 3600)
-
-
-async def _send_friday_catch_reminder() -> None:
-    """Remind Stacy to update the weekly catch of the day specials."""
+async def _send_friday_catch_reminder(only_tenant: str | None = None,
+                                      template_override: str | None = None) -> None:
+    """Remind each commerce tenant's team to update their weekly specials."""
     if not settings.whatsapp_token:
         return
 
-    phone_id = await _oth_phone_id()
-    stacy = "27722684085"
-    msg = (
-        "Happy Friday Stacy! Quick reminder to update this week's catch of the day "
-        "specials in Vula Products tab before the weekend. "
-        "Mark the fresh fish as 'Catch of the day' so the AI can recommend them to customers. "
-        "Have a great weekend!"
-    )
-
-    import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            await client.post(
-                f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": stacy,
-                    "type": "text",
-                    "text": {"body": msg},
-                },
-            )
-            log.info("Friday catch reminder sent to Stacy")
-        except Exception as exc:
-            log.warning("Friday catch reminder WhatsApp failed: %s", exc)
+    for tenant_id in ([only_tenant] if only_tenant else await _commerce_tenant_ids()):
+        phones = _commerce_notify_phones(tenant_id)
+        if not phones:
+            continue
+        tpl = template_override or _commerce_template_name(tenant_id, "friday_catch_reminder")
+        for phone in phones:
+            ok = await _send_wa_template(tenant_id, phone, tpl)
+            log.info("%s Friday catch reminder to %s: %s", tenant_id, phone, "sent" if ok else "FAILED")
 
 
-async def _daily_sales_summary_loop() -> None:
-    """Send evening sales summary to Off the Hook team at 18:00 SAST daily."""
-    import asyncio as _asyncio
-    from datetime import datetime, timezone, timedelta
-
-    async def _seconds_until_next_1800() -> float:
-        now = datetime.now(timezone.utc)
-        sast = now + timedelta(hours=2)
-        target = sast.replace(hour=18, minute=0, second=0, microsecond=0)
-        if sast >= target:
-            target += timedelta(days=1)
-        return (target - sast).total_seconds()
-
-    await _asyncio.sleep(await _seconds_until_next_1800())
-
-    while True:
-        try:
-            await _send_oth_sales_summary()
-        except Exception as exc:
-            log.warning("OTH sales summary failed: %s", exc)
-        await _asyncio.sleep(24 * 3600)
-
-
-async def _send_oth_sales_summary() -> None:
-    """Build and WhatsApp the day's sales summary to Stacy and Roland at 18:00."""
+async def _send_oth_sales_summary(only_tenant: str | None = None,
+                                  template_override: str | None = None) -> None:
+    """Build and WhatsApp each commerce tenant's team their day's sales summary at 18:00."""
     if not settings.whatsapp_token:
         return
 
     from datetime import date
     from vula.commerce import service as _commerce
 
-    tenant_id = "off-the-hook"
     today = date.today().isoformat()
 
-    try:
-        orders = await _commerce.get_delivery_list(tenant_id, date_str=today)
-    except Exception as exc:
-        log.warning("OTH sales summary fetch failed: %s", exc)
-        return
+    for tenant_id in ([only_tenant] if only_tenant else await _commerce_tenant_ids()):
+        phones = _commerce_notify_phones(tenant_id)
+        if not phones:
+            continue
+        try:
+            orders = await _commerce.get_delivery_list(tenant_id, date_str=today)
+        except Exception as exc:
+            log.warning("%s sales summary fetch failed: %s", tenant_id, exc)
+            continue
 
-    _PAID = {"paid", "confirmed", "packing", "dispatched", "delivered"}
+        _PAID = {"paid", "confirmed", "packing", "dispatched", "delivered"}
+        paid_orders = [o for o in orders if o["status"] in _PAID]
+        total_rev    = sum(o["total_cents"] for o in paid_orders)
 
-    if not orders:
-        msg = f"End of day {today}: no orders today. See you tomorrow!"
-    else:
-        paid_orders   = [o for o in orders if o["status"] in _PAID]
-        unpaid_orders = [o for o in orders if o["status"] == "pending_payment"]
-        total_rev     = sum(o["total_cents"] for o in paid_orders)
-        unpaid_total  = sum(o["total_cents"] for o in unpaid_orders)
-
-        # Top products by quantity
+        # Top sellers + unpaid detail filed in the log (unbounded, can't fit a template); the
+        # approved template carries the summary numbers only — staff open Vula for the breakdown.
         product_counts: dict[str, int] = {}
         for o in orders:
             for it in (o.get("commerce_order_items") or []):
                 name = it.get("product_name", "Unknown")
                 product_counts[name] = product_counts.get(name, 0) + it.get("quantity", 1)
         top = sorted(product_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        log.info("%s sales summary %s: %d orders, %d paid, R%.2f — top: %s",
+                 tenant_id, today, len(orders), len(paid_orders), total_rev / 100, top)
 
-        lines = [f"End of day summary — {today}\n"]
-        lines.append(f"Orders: {len(orders)} total | {len(paid_orders)} paid | {len(unpaid_orders)} unpaid")
-        lines.append(f"Revenue collected: R{total_rev / 100:.2f}")
-        if unpaid_total:
-            lines.append(f"Still to collect: R{unpaid_total / 100:.2f}")
-        if top:
-            lines.append("\nTop sellers today:")
-            for name, qty in top:
-                lines.append(f"  - {name} x{qty}")
-        if unpaid_orders:
-            lines.append("\nUnpaid orders:")
-            for o in unpaid_orders[:5]:
-                lines.append(
-                    f"  {o['display_id']} — {o['customer_name']} "
-                    f"R{o['total_cents'] / 100:.2f}"
-                )
-        lines.append("\nGreat work today!")
-        msg = "\n".join(lines)
-
-    phone_id = await _oth_phone_id()
-    team = [("Stacy", "27722684085"), ("Roland", "27721822828")]
-
-    import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=10.0) as client:
-        for name, number in team:
-            try:
-                resp = await client.post(
-                    f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-                    headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": number,
-                        "type": "text",
-                        "text": {"body": msg[:4096]},
-                    },
-                )
-                if resp.is_success:
-                    log.info("OTH sales summary sent to %s (%s)", name, number)
-                else:
-                    # Free-text to an owner only delivers inside the 24h service
-                    # window. Outside it, Meta returns 400/131047 — this needs an
-                    # approved business-initiated TEMPLATE to deliver reliably.
-                    log.warning(
-                        "OTH summary to %s NOT delivered (HTTP %s): %s",
-                        name, resp.status_code, resp.text[:200],
-                    )
-            except Exception as exc:
-                log.warning("OTH summary to %s failed: %s", name, exc)
+        tpl = template_override or _commerce_template_name(tenant_id, "sales_summary")
+        for phone in phones:
+            ok = await _send_wa_template(tenant_id, phone, tpl,
+                                         today, str(len(orders)), str(len(paid_orders)), f"{total_rev / 100:.2f}")
+            log.info("%s sales summary to %s: %s", tenant_id, phone, "sent" if ok else "FAILED")
 
 
 async def _scheduled_campaigns_loop() -> None:
@@ -645,6 +510,21 @@ async def _scheduled_campaigns_loop() -> None:
         except Exception as exc:
             log.warning("Campaign scheduler loop error: %s", exc)
         await _asyncio.sleep(60)
+
+
+async def _automations_loop() -> None:
+    """Evaluate every enabled automation rule every 5 minutes (P3 automations builder)."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(45)  # let the app settle on boot
+    while True:
+        try:
+            from vula.commerce.automations import process_due_automations
+            fired = await process_due_automations()
+            if fired:
+                log.info("Automations loop fired %d action(s)", fired)
+        except Exception as exc:
+            log.warning("Automations loop error: %s", exc)
+        await _asyncio.sleep(300)
 
 
 async def _daily_commerce_jobs_loop() -> None:
@@ -743,6 +623,109 @@ async def _infra_snapshot_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+_SCHEDULER_LOCK_NAME = "main"
+_SCHEDULER_LEASE_SECONDS = 180
+_SCHEDULER_RENEW_SECONDS = 60
+
+
+def _scheduler_holder_id() -> str:
+    import os, socket
+    return f"{socket.gethostname()}-{os.getpid()}"
+
+
+async def _try_acquire_or_renew_scheduler_lock() -> bool:
+    """Compare-and-swap claim on the single scheduler lock row. Returns True if THIS process
+    holds the lock after the call (either newly acquired, renewed, or taken over from a dead
+    holder whose lease expired) — see migration 067 for why this exists."""
+    from datetime import datetime, timezone, timedelta
+    from supabase import create_client as _sb_client
+
+    holder = _scheduler_holder_id()
+    client = _sb_client(settings.supabase_url,
+                        settings.supabase_service_role_key or settings.supabase_service_key)
+    now = datetime.now(timezone.utc)
+    expires = (now + timedelta(seconds=_SCHEDULER_LEASE_SECONDS)).isoformat()
+
+    try:
+        existing = (client.table("vula_scheduler_lock").select("holder,expires_at")
+                    .eq("lock_name", _SCHEDULER_LOCK_NAME).limit(1).execute().data or [])
+    except Exception as exc:
+        log.warning("scheduler lock check failed: %s", exc)
+        return False
+
+    if not existing:
+        try:
+            client.table("vula_scheduler_lock").insert({
+                "lock_name": _SCHEDULER_LOCK_NAME, "holder": holder, "expires_at": expires,
+            }).execute()
+            return True
+        except Exception:
+            return False  # another worker's row won the race
+
+    row = existing[0]
+    is_mine = row.get("holder") == holder
+    expired = (row.get("expires_at") or "") < now.isoformat()
+    if not (is_mine or expired):
+        return False
+
+    # Conditional update: only succeeds if `holder` is still what we last read — if another
+    # worker already took over an expired lease, this update matches zero rows and we lose.
+    try:
+        res = (client.table("vula_scheduler_lock")
+               .update({"holder": holder, "expires_at": expires})
+               .eq("lock_name", _SCHEDULER_LOCK_NAME).eq("holder", row["holder"]).execute())
+        return bool(res.data)
+    except Exception as exc:
+        log.warning("scheduler lock renew failed: %s", exc)
+        return False
+
+
+def _start_scheduled_job_tasks() -> None:
+    """All periodic background jobs — started exactly once, only by the worker holding the
+    scheduler lock (see _scheduler_leadership_loop). Never call this directly."""
+    import asyncio as _asyncio
+    _asyncio.create_task(_seed_training_on_boot())
+    _asyncio.create_task(_infra_snapshot_loop())
+    _asyncio.create_task(_recurring_invoices_loop())
+    _asyncio.create_task(_scheduled_campaigns_loop())
+    _asyncio.create_task(_automations_loop())
+    _asyncio.create_task(_subscriptions_loop())
+    _asyncio.create_task(_recurring_bills_loop())
+    _asyncio.create_task(_daily_commerce_jobs_loop())
+    _asyncio.create_task(_email_sync_loop())
+    _asyncio.create_task(_weekly_rates_loop())
+    _asyncio.create_task(_daily_trial_expiry_loop())
+    # One config-driven poller replaces the five fixed wall-clock loops (delivery briefing,
+    # sales summary, unpaid chase, low stock, Friday reminder) — see migration 069 + the
+    # ⏰ Scheduling tab. Needs the commerce_scheduled_job_config table to fire anything.
+    _asyncio.create_task(_commerce_jobs_scheduler_loop())
+
+
+async def _scheduler_leadership_loop() -> None:
+    """Runs in EVERY worker (start.py runs uvicorn with WEB_CONCURRENCY=2). Without this, every
+    periodic job above started once per worker with no coordination — confirmed 2026-07-16 as the
+    cause of duplicate delivery briefings, sales summaries, and unpaid-order chase messages, all
+    sent twice. Only the worker holding the DB lease starts the job tasks, and only once; it
+    renews the lease well before it expires, so a dead leader is replaced within ~3 minutes
+    without needing a manual restart."""
+    import asyncio as _asyncio
+    is_leader = False
+    while True:
+        try:
+            got_lock = await _try_acquire_or_renew_scheduler_lock()
+        except Exception as exc:
+            log.warning("scheduler leadership check failed: %s", exc)
+            got_lock = False
+        if got_lock and not is_leader:
+            is_leader = True
+            log.info("Scheduler leadership acquired (%s) — starting periodic jobs", _scheduler_holder_id())
+            _start_scheduled_job_tasks()
+        elif not got_lock and is_leader:
+            log.warning("Scheduler leadership lost unexpectedly (%s)", _scheduler_holder_id())
+            is_leader = False
+        await _asyncio.sleep(_SCHEDULER_RENEW_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio as _asyncio
@@ -752,21 +735,7 @@ async def lifespan(app: FastAPI):
         install_metering()
     except Exception as exc:
         log.warning("metering install skipped: %s", exc)
-    _asyncio.create_task(_seed_training_on_boot())
-    _asyncio.create_task(_infra_snapshot_loop())
-    _asyncio.create_task(_recurring_invoices_loop())
-    _asyncio.create_task(_scheduled_campaigns_loop())
-    _asyncio.create_task(_subscriptions_loop())
-    _asyncio.create_task(_recurring_bills_loop())
-    _asyncio.create_task(_daily_commerce_jobs_loop())
-    _asyncio.create_task(_email_sync_loop())
-    _asyncio.create_task(_weekly_rates_loop())
-    _asyncio.create_task(_daily_trial_expiry_loop())
-    _asyncio.create_task(_daily_delivery_briefing_loop())
-    _asyncio.create_task(_daily_sales_summary_loop())
-    _asyncio.create_task(_unpaid_order_followup_loop())
-    _asyncio.create_task(_daily_low_stock_loop())
-    _asyncio.create_task(_weekly_friday_catch_reminder_loop())
+    _asyncio.create_task(_scheduler_leadership_loop())
     yield
 
 
@@ -837,6 +806,40 @@ async def request_middleware(request: Request, call_next):
     response.headers["X-Latency-Ms"] = str(latency_ms)
     return response
 
+
+# Tenant-scoped authorization guard (2026-07-17) — closes the "any caller who knows a tenant
+# slug can hit its admin endpoints" gap. Enforced only when ENFORCE_TENANT_AUTH=true so the
+# dashboard's token-attach wrapper can ship first (dark rollout, env-flip to arm — rollback is
+# flipping it back, no redeploy).
+_TENANT_GUARD_RES = [
+    re.compile(r"^/v1/commerce/([^/]+)/admin(?:/|$)"),
+    re.compile(r"^/v1/team/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/users/([^/]+)(?:/|$)"),
+]
+
+
+@app.middleware("http")
+async def tenant_admin_guard(request, call_next):
+    if settings.enforce_tenant_auth and request.method != "OPTIONS":
+        path = request.url.path
+        for rx in _TENANT_GUARD_RES:
+            m = rx.match(path)
+            if not m:
+                continue
+            from fastapi.responses import JSONResponse
+            auth_header = request.headers.get("authorization", "")
+            if not auth_header:
+                return JSONResponse({"detail": "Sign in required."}, status_code=401)
+            from vula.api.tenant_auth import is_tenant_member
+            if not await is_tenant_member(auth_header, m.group(1)):
+                return JSONResponse(
+                    {"detail": "You don't have access to this workspace."}, status_code=403)
+            break
+    return await call_next(request)
+
+app.include_router(links_router)  # no prefix — public /l/{code} redirect for broadcast click tracking
+app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} photo menu
+app.include_router(master_router, prefix="/v1/master")  # ALL endpoints require verified master JWT
 app.include_router(takeoff_router, prefix="/takeoff")
 app.include_router(onboarding_router, prefix="/v1")
 app.include_router(whatsapp_router, prefix="/v1/whatsapp")
@@ -872,15 +875,27 @@ UPLOAD_DIR = settings.upload_dir
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def require_auth(api_key: str | None = Security(_api_key_header)) -> None:
-    """Require X-API-Key header when API_KEY is set in config."""
+async def require_auth(api_key: str | None = Security(_api_key_header),
+                       request: Request = None) -> None:
+    """Require X-API-Key when API_KEY is set — OR a verified master login (2026-07-17: the
+    dashboard authenticates with Supabase, so the master's JWT works without exposing the
+    shared API key to the browser)."""
     if not settings.api_key:
         return  # no key configured — open (dev mode only)
-    if not api_key or not secrets.compare_digest(api_key, settings.api_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key. Set X-API-Key header.",
-        )
+    if api_key and secrets.compare_digest(api_key, settings.api_key):
+        return
+    auth_header = request.headers.get("authorization", "") if request is not None else ""
+    if auth_header:
+        try:
+            from vula.api.master_auth import require_master
+            await require_master(auth_header)
+            return
+        except HTTPException:
+            pass
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or missing API key. Set X-API-Key header or sign in as master.",
+    )
 
 
 # ─── Tenant validation ────────────────────────────────────────────────────────
@@ -915,7 +930,7 @@ async def trigger_evening_summary():
 
 @app.post("/v1/oth/briefing/low-stock", tags=["oth"])
 async def trigger_low_stock_alert():
-    """Manually fire the low stock alert to Roland."""
+    """Manually fire the low stock alert to Stacy."""
     await _send_low_stock_alert()
     return {"sent": True, "briefing": "low_stock"}
 

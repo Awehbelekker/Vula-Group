@@ -75,10 +75,6 @@ class Settings(BaseSettings):
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     vula_base_url: str = "https://app.vula.ai"
-    # Ian's own WhatsApp number — a tenant owner/team message that sounds like a question about
-    # the Vula PLATFORM itself (not their business) gets forwarded here (vula/integrations/
-    # platform_support.py). Blank = feature is a no-op (never blocks normal routing).
-    platform_support_phone: str = ""
 
     # ── Cloud LLM fallback (used on Railway where local Ollama is unavailable) ──
     # Set OPENROUTER_API_KEY to enable cloud inference via OpenRouter.
@@ -136,6 +132,12 @@ class Settings(BaseSettings):
     clickup_client_secret: str = ""
     # Public base URL the OAuth redirect comes back to (defaults to Railway prod)
     public_base_url: str = "https://vula-group-production.up.railway.app"
+
+    # Tenant-scoped auth enforcement (2026-07-17): when true, /v1/commerce/{t}/admin/*,
+    # /v1/team/{t}/* and /v1/users/{t}/* require a verified Supabase JWT belonging to that
+    # tenant (or master). Shipped dark (false) so the dashboard's token-attach wrapper can be
+    # verified first, then flipped via env — same env-flip rollout as the verification layer.
+    enforce_tenant_auth: bool = False
 
     # ── Google OAuth app (one app for all tenants — Drive + Gmail) ──────────
     # Create in Google Cloud Console; redirect URI = <api>/v1/google/oauth/callback
