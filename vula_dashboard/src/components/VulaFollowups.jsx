@@ -39,13 +39,15 @@ export default function VulaFollowups({ tenantId }) {
           return (
             <div key={r.id} style={{ padding: "12px 16px", borderTop: `1px solid ${C.alt}`, display: "flex", gap: 12, alignItems: "flex-start" }}>
               <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 3 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 3, flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 600, color: C.text, fontSize: 13.5 }}>{r.sender_name || r.sender}</span>
                   <span style={{ fontSize: 10.5, color: re.color, fontWeight: 600 }}>{re.label}</span>
+                  {r.urgency === "high" && <span style={{ fontSize: 10.5, color: "#A23B2D", fontWeight: 700, background: "rgba(162,59,45,0.1)", padding: "1px 7px", borderRadius: 8 }}>🔥 Urgent</span>}
+                  {r.tone && <span style={{ fontSize: 10.5, color: C.muted, fontStyle: "italic" }}>{r.tone}</span>}
                   {d >= 2 && <span style={{ fontSize: 10.5, color: "#A23B2D", fontWeight: 600 }}>{d}d waiting</span>}
                 </div>
                 <div style={{ fontSize: 13, color: C.text }}>{r.subject || "(no subject)"}</div>
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{(r.preview || "").slice(0, 110)}</div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.summary || (r.preview || "").slice(0, 110)}</div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                 <button onClick={() => setStatus(r.id, "done")} style={{ padding: "5px 10px", background: C.green, color: "#fff", border: "none", borderRadius: 6, fontSize: 11.5, cursor: "pointer" }}>Done</button>

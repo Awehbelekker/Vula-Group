@@ -65,18 +65,73 @@ def _needs_reply(em: dict, own_domain: str):
     return None
 
 
-def _track_followup(db, tenant_id: str, em: dict, reason: str) -> None:
+_SUMMARY_SYSTEM = (
+    "You triage a small business inbox. Given an email's subject and body, judge its tone "
+    "and urgency and write one skimmable sentence of what the sender wants or said. "
+    'Reply with strict JSON only: {"summary": "<one sentence, <=160 chars>", '
+    '"urgency": "high"|"normal"|"low", "tone": "<one or two words, e.g. frustrated, friendly, '
+    'formal, urgent, casual>"}. urgency=high only for genuine time pressure, anger, or an '
+    "explicit deadline/complaint — most business email is normal. Never invent details not in the email."
+)
+
+
+async def _summarize_followup(subject: str, body: str) -> dict:
+    """Cheap-tier LLM read of tone/urgency + a one-sentence skim summary. Best-effort —
+    only called for emails that already passed _needs_reply, so this runs on a small
+    subset of synced mail, not every message."""
+    import json as _json
+    import litellm
+    from core.llm_router import resolve_generation_route
+
+    if not (subject or "").strip() and not (body or "").strip():
+        return {}
+    text = f"Subject: {subject or ''}\n\n{body or ''}"[:3000]
+    litellm.drop_params = True
+    try:
+        model, api_key, api_base = await resolve_generation_route(task_type="email_summary")
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "system", "content": _SUMMARY_SYSTEM},
+                      {"role": "user", "content": text}],
+            temperature=0, max_tokens=150, api_key=api_key, api_base=api_base,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as exc:
+        logger.debug("email summary skipped: %s", exc)
+        return {}
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+    i, j = raw.find("{"), raw.rfind("}")
+    if i < 0 or j < 0:
+        return {}
+    try:
+        d = _json.loads(raw[i:j + 1])
+    except Exception:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    urgency = str(d.get("urgency") or "normal").strip().lower()
+    if urgency not in ("high", "normal", "low"):
+        urgency = "normal"
+    return {"summary": str(d.get("summary") or "").strip()[:200],
+            "urgency": urgency, "tone": str(d.get("tone") or "").strip()[:40]}
+
+
+async def _track_followup(db, tenant_id: str, em: dict, reason: str) -> None:
     try:
         name = ""
         frm = em.get("from") or ""
         if "<" in frm:
             name = frm.split("<")[0].strip().strip('"')
-        db.table("vula_email_followups").upsert({
+        row = {
             "tenant_id": tenant_id, "email_uid": em.get("uid"),
             "sender": frm, "sender_name": name or None, "subject": em.get("subject"),
             "preview": (em.get("body") or "")[:240], "received_at": em.get("when"),
             "reason": reason, "status": "open",
-        }, on_conflict="tenant_id,email_uid").execute()
+        }
+        row.update(await _summarize_followup(em.get("subject") or "", em.get("body") or ""))
+        db.table("vula_email_followups").upsert(
+            row, on_conflict="tenant_id,email_uid").execute()
     except Exception as exc:
         logger.debug("followup track skipped (run migration 028?): %s", exc)
 
@@ -255,7 +310,7 @@ async def _do_email_sync(tenant_id: str, max_emails: int, from_uid: Optional[int
         # Track emails that look like they need a reply.
         reason = _needs_reply(em, own_domain)
         if reason:
-            _track_followup(db, tenant_id, em, reason)
+            await _track_followup(db, tenant_id, em, reason)
 
     try:
         db.table("vula_email_accounts").update({
