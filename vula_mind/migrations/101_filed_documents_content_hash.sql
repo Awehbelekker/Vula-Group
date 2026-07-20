@@ -1,4 +1,5 @@
--- 092_filed_documents_content_hash.sql — fixes a real bug found auditing digg-demo's HPC
+-- 101_filed_documents_content_hash.sql (renumbered from 092 — collided with
+-- 092_email_followup_summary.sql) — fixes a real bug found auditing digg-demo's HPC
 -- documents: three distinct bank payment notifications (Solid Cape R50k, Edison R44k, Bauxite
 -- R27,292.48), all named literally "Payment Notification.pdf" by the bank/WhatsApp forward,
 -- silently failed to file at all. Migration 081's UNIQUE(tenant_id, source, filename) was built

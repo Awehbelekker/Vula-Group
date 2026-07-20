@@ -1,5 +1,6 @@
 -- ============================================================
--- Vula Group — Migration 048: team inbox essentials (assignment, notes, tags, canned replies)
+-- Vula Group — Migration 097: team inbox essentials (assignment, notes, tags, canned replies)
+-- (renumbered from 048 — that number collided with 048_inbox_handoff.sql)
 -- Closes the biggest gap vs dedicated CS platforms (Cue): multi-agent handling. Run in Supabase.
 -- ============================================================
 

@@ -1,4 +1,5 @@
--- 074_delivery_geo.sql — Facebook-Marketplace-style delivery location: the tenant drops a pin
+-- 098_delivery_geo.sql (renumbered from 074 — collided with 074_bank_matched_order.sql) —
+-- Facebook-Marketplace-style delivery location: the tenant drops a pin
 -- on their shop and sets a delivery radius (km). Complements the named-areas list from 070:
 -- radius gives a deterministic yes/no for shared location pins and geocodable addresses;
 -- the areas list stays as the human-readable grounding for the assistant.

@@ -1,4 +1,5 @@
--- 081_pages_depth.sql — Pages editor depth (P4): reordering + revision history.
+-- 100_pages_depth.sql (renumbered from 081 — collided with 081_dedupe_filed_documents.sql) —
+-- Pages editor depth (P4): reordering + revision history.
 -- The Puck builder had draft/publish/SEO/templates/18 blocks but no way to reorder pages in the
 -- list, and publishing overwrote a page with no way back to yesterday's version.
 
