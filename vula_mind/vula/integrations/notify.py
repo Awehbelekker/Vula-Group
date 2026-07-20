@@ -44,9 +44,12 @@ def _members(tenant_id: str) -> list:
 
 
 def _fallback_phone(tenant_id: str) -> Optional[str]:
+    """A tenant can have several connected mailboxes (migration 093) — fall back to the
+    primary account's notify_phone, so this stays well-defined instead of picking an
+    arbitrary connected account."""
     try:
         row = (_client().table("vula_email_accounts").select("notify_phone")
-               .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0]
+               .eq("tenant_id", tenant_id).eq("is_primary", True).limit(1).execute().data or [{}])[0]
         return row.get("notify_phone")
     except Exception:
         return None

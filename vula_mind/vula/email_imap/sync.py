@@ -24,15 +24,21 @@ logger = logging.getLogger(__name__)
 import asyncio as _asyncio
 _sync_locks: dict = {}
 
-def _lock_for(tenant_id: str) -> "_asyncio.Lock":
-    lk = _sync_locks.get(tenant_id)
+def _lock_for(account_id: str) -> "_asyncio.Lock":
+    """One lock per mailbox (not per tenant) — a tenant's several connected accounts sync
+    independently rather than serializing behind each other."""
+    lk = _sync_locks.get(account_id)
     if lk is None:
-        lk = _sync_locks[tenant_id] = _asyncio.Lock()
+        lk = _sync_locks[account_id] = _asyncio.Lock()
     return lk
 
 _NOISE = re.compile(r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notification|mailer|newsletter|"
                     r"bounce|postmaster|marketing|updates?@|alerts?@)", re.IGNORECASE)
 _MAX_ATTACH_BYTES = 15 * 1024 * 1024
+# Consecutive failed sync attempts (each ~15 min apart, see server.py's _email_sync_loop)
+# before flagging a mailbox as broken — enough to ride out a single transient blip without
+# nagging, short enough that a real outage (revoked password, host change) surfaces same-day.
+_FAIL_NOTIFY_THRESHOLD = 3
 
 _SCHEDULE_KW = ("schedule", "meeting", "meet ", "available", "availability", "calendar",
                 "appointment", "site visit", "what time", "when can", "set up a call")
@@ -117,23 +123,75 @@ async def _summarize_followup(subject: str, body: str) -> dict:
             "urgency": urgency, "tone": str(d.get("tone") or "").strip()[:40]}
 
 
-async def _track_followup(db, tenant_id: str, em: dict, reason: str) -> None:
+async def _notify_urgent_followup(tenant_id: str, row: dict) -> None:
+    """A high-urgency email gets pinged immediately rather than waiting for the daily
+    digest (which batches everything and skips itself entirely within 20h of the last
+    send) — reuses the same followup_digest subscription/opt-out, just a separate,
+    un-batched message."""
+    try:
+        from vula.integrations.notify import notify_team
+        who = row.get("sender_name") or row.get("sender") or "someone"
+        msg = (f"🔥 Urgent-looking email from {who}: {row.get('subject') or '(no subject)'}\n"
+              f"{row.get('summary') or ''}\n\nOpen Vula → Follow-ups to reply.")
+        await notify_team(tenant_id, "followup_digest", msg)
+    except Exception as exc:
+        logger.debug("urgent followup notify skipped: %s", exc)
+
+
+async def _track_followup(db, tenant_id: str, account_id: str, em: dict, reason: str) -> None:
     try:
         name = ""
         frm = em.get("from") or ""
         if "<" in frm:
             name = frm.split("<")[0].strip().strip('"')
         row = {
-            "tenant_id": tenant_id, "email_uid": em.get("uid"),
+            "tenant_id": tenant_id, "account_id": account_id, "email_uid": em.get("uid"),
             "sender": frm, "sender_name": name or None, "subject": em.get("subject"),
             "preview": (em.get("body") or "")[:240], "received_at": em.get("when"),
             "reason": reason, "status": "open",
+            "message_id": em.get("message_id") or None,  # for reply-detection (migration 096)
         }
         row.update(await _summarize_followup(em.get("subject") or "", em.get("body") or ""))
+        # email_uid is only unique WITHIN a mailbox (migration 093) — the same uid from two
+        # different connected accounts must not collide/overwrite each other.
         db.table("vula_email_followups").upsert(
-            row, on_conflict="tenant_id,email_uid").execute()
+            row, on_conflict="tenant_id,account_id,email_uid").execute()
+        # Fires at most once per real email — a given UID is only ever synced once, since the
+        # cursor advances past it (a from_uid=0 backfill re-running is the only exception, an
+        # explicit/rare operator action, not a normal-operation double-fire risk).
+        if row.get("urgency") == "high":
+            await _notify_urgent_followup(tenant_id, row)
     except Exception as exc:
-        logger.debug("followup track skipped (run migration 028?): %s", exc)
+        logger.debug("followup track skipped (run migration 093?): %s", exc)
+
+
+async def backfill_followup_summaries(tenant_id: str, limit: int = 20) -> int:
+    """Retry AI summarization for open follow-ups that missed it the first time — a
+    transient local-LLM blip at sync time otherwise leaves summary/urgency/tone null
+    forever, since _track_followup only ever runs once per email. Called once per tenant
+    per sync cycle (see process_all_email_sync), so this catches up within a cycle or two
+    rather than needing a manual fix."""
+    db = _client()
+    try:
+        rows = (db.table("vula_email_followups").select("id,subject,preview,sender,sender_name")
+                .eq("tenant_id", tenant_id).eq("status", "open")
+                .is_("summary", "null").limit(limit).execute().data or [])
+    except Exception as exc:
+        logger.debug("summary backfill lookup skipped (run migration 092?): %s", exc)
+        return 0
+    n = 0
+    for r in rows:
+        fields = await _summarize_followup(r.get("subject") or "", r.get("preview") or "")
+        if not fields:
+            continue
+        try:
+            db.table("vula_email_followups").update(fields).eq("id", r["id"]).execute()
+            n += 1
+            if fields.get("urgency") == "high":
+                await _notify_urgent_followup(tenant_id, {**r, **fields})
+        except Exception as exc:
+            logger.debug("summary backfill write failed: %s", exc)
+    return n
 
 
 async def send_followup_reminders(tenant_id: str, notify_phone: str = None) -> int:
@@ -163,7 +221,8 @@ async def send_followup_reminders(tenant_id: str, notify_phone: str = None) -> i
         who = r.get("sender_name") or r.get("sender") or "someone"
         lines.append(f"• {who}: {(r.get('subject') or '(no subject)')[:50]}")
     msg = (f"📬 You have {len(rows)} email(s) awaiting a reply:\n" + "\n".join(lines) +
-           "\n\nReply in your inbox, or open Vula → Follow-ups.")
+           "\n\nReply in your inbox, or open Vula → Follow-ups."
+           "\n(Reply 'stop follow-up emails' anytime to turn these off.)")
     try:
         from vula.integrations.notify import notify_team
         sent = await notify_team(tenant_id, "followup_digest", msg)
@@ -190,17 +249,44 @@ def _extract_msg_bytes(md) -> Optional[bytes]:
     return None
 
 
-def _fetch_new(creds: dict, last_uid: int, max_emails: int) -> dict:
-    """[blocking] Fetch the most-recent NEW emails (UID > last_uid). Returns
-    {emails: [...], max_uid: int}. Each email carries parsed contacts + real attachments."""
+# Sent folder name varies by provider (Gmail nests it under "[Gmail]/", most others don't) —
+# same trial-list approach service.py already uses to find Drafts.
+_SENT_FOLDER_CANDIDATES = ("Sent", "INBOX.Sent", "[Gmail]/Sent Mail", "Sent Items", "Sent Messages")
+
+
+def _fetch_new(creds: dict, last_uid: int, max_emails: int, folder: str = "INBOX",
+               folder_candidates: Optional[tuple] = None) -> dict:
+    """[blocking] Fetch new emails (UID > last_uid) from one folder, OLDEST first. Returns
+    {emails: [...], max_uid: int, folder: <resolved name> | None, oversized: [...]}. Each
+    email carries parsed contacts + real attachments. `folder_candidates`, if given, tries
+    each name in turn and uses whichever one the server actually SELECTs (for Sent, whose
+    name isn't standardised); `folder` alone is used as-is otherwise (INBOX needs no
+    guessing).
+
+    Oldest-first matters: the cursor advances to max(batch) after every call, so if a mailbox
+    ever gets more than `max_emails` new messages between syncs, taking the NEWEST batch would
+    permanently strand the older ones behind the advanced cursor — they'd never be fetched.
+    Oldest-first means a backlog gets caught up over successive syncs instead of silently
+    losing whatever didn't fit in one batch."""
     m = _imap_login(creds)
     try:
-        m.select("INBOX")
+        resolved = None
+        for name in (folder_candidates or (folder,)):
+            try:
+                typ, _sel = m.select(name)
+                if typ == "OK":
+                    resolved = name
+                    break
+            except Exception:
+                continue
+        if not resolved:
+            return {"emails": [], "max_uid": last_uid, "folder": None, "oversized": []}
         typ, data = m.uid("search", None, "ALL")
         uids = [int(u) for u in (data[0].split() if data and data[0] else [])]
         new = sorted(u for u in uids if u > last_uid)
-        batch = new[-max_emails:]  # most-recent new ones
+        batch = new[:max_emails]  # oldest-first — see docstring
         out = []
+        oversized = []
         for u in batch:
             typ, md = m.uid("fetch", str(u).encode(), "(RFC822)")
             raw = _extract_msg_bytes(md)
@@ -223,15 +309,29 @@ def _fetch_new(creds: dict, last_uid: int, max_emails: int) -> dict:
                         body = ""
                 elif _is_real_attachment(part):
                     payload = part.get_payload(decode=True)
+                    name = _hdr(part.get_filename()) or f"attachment-{u}"
                     if payload and len(payload) <= _MAX_ATTACH_BYTES:
-                        attachments.append({"name": _hdr(part.get_filename()) or f"attachment-{u}",
-                                            "data": payload,
+                        attachments.append({"name": name, "data": payload,
                                             "mime": part.get_content_type() or "application/octet-stream"})
+                    elif payload:
+                        # Previously dropped with no trace — now surfaced so the team knows
+                        # something didn't get auto-filed, instead of it just vanishing.
+                        oversized.append({"name": name, "size_mb": round(len(payload) / 1024 / 1024, 1),
+                                          "subject": _hdr(msg.get("Subject")) or "(no subject)",
+                                          "from": _hdr(msg.get("From"))})
             out.append({"uid": u, "when": when, "subject": _hdr(msg.get("Subject")) or "(no subject)",
                         "from": _hdr(msg.get("From")), "people": people, "body": body[:2000],
                         "attachments": attachments,
-                        "bulk": bool(msg.get("List-Unsubscribe"))})
-        return {"emails": out, "max_uid": max(batch) if batch else last_uid}
+                        "bulk": bool(msg.get("List-Unsubscribe")),
+                        # Threading headers — captured on every email (cheap), used for
+                        # reply-detection: an inbound message's own Message-ID gets stored on
+                        # the follow-up it creates; an outbound (Sent) message's In-Reply-To/
+                        # References name the message(s) it's replying to.
+                        "message_id": (msg.get("Message-ID") or "").strip(),
+                        "in_reply_to": (msg.get("In-Reply-To") or "").strip(),
+                        "references": (msg.get("References") or "").strip()})
+        return {"emails": out, "max_uid": max(batch) if batch else last_uid, "folder": resolved,
+                "oversized": oversized}
     finally:
         try: m.logout()
         except Exception: pass
@@ -258,43 +358,202 @@ def _upsert_contact(db, tenant_id: str, addr: str, name: str, kind: str, when: s
         logger.debug("contact upsert skipped (run migration 024?): %s", exc)
 
 
-async def process_email_sync(tenant_id: str, max_emails: int = 20,
+async def process_email_sync(tenant_id: str, account_id: str, max_emails: int = 20,
                              from_uid: Optional[int] = None) -> dict:
-    """Sync one tenant: build contacts + file work attachments from new mail.
+    """Sync one connected mailbox: build contacts + file work attachments from new mail.
     `from_uid` overrides the stored cursor (from_uid=0 → historical backfill of the most-recent
     `max_emails`), so we can catch Vula up on a mailbox's back-history in one controlled pass."""
-    lock = _lock_for(tenant_id)
+    lock = _lock_for(account_id)
     if lock.locked():
         return {"synced": 0, "skipped": "sync already running"}
     async with lock:
-        return await _do_email_sync(tenant_id, max_emails, from_uid)
+        return await _do_email_sync(tenant_id, account_id, max_emails, from_uid)
 
 
-async def _do_email_sync(tenant_id: str, max_emails: int, from_uid: Optional[int] = None) -> dict:
+async def process_tenant_email_sync(tenant_id: str, max_emails: int = 20,
+                                    from_uid: Optional[int] = None) -> dict:
+    """Sync every connected mailbox for a tenant (manual 'sync now' / backfill from the
+    dashboard, where the caller thinks in terms of a tenant, not a specific account)."""
+    from vula.email_imap.credentials import list_email_accounts
+    accounts = list_email_accounts(tenant_id)
+    if not accounts:
+        return {"synced": 0, "accounts": 0}
+    results = {}
+    total = 0
+    for acct in accounts:
+        r = await process_email_sync(tenant_id, acct["id"], max_emails, from_uid)
+        results[acct["email"]] = r
+        total += r.get("synced", 0)
+    return {"synced": total, "accounts": len(accounts), "by_account": results}
+
+
+def _normalize_subject(subject: str) -> str:
+    """Strip reply/forward prefixes — repeatedly, so "Re: Re: Fwd: Quote for deck" and "Quote
+    for deck" compare equal — used only as the fallback matcher below, when threading headers
+    don't line up."""
+    s = (subject or "").strip()
+    while True:
+        stripped = re.sub(r"^\s*(re|fwd?|fw)\s*:\s*", "", s, flags=re.IGNORECASE)
+        if stripped == s:
+            return s.lower()
+        s = stripped
+
+
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+async def _resolve_replied_followups(db, tenant_id: str, sent_emails: list) -> int:
+    """Mark open follow-ups 'done' when a Sent-folder email turns out to be the reply. Matched
+    by Message-ID first (an outbound reply's In-Reply-To/References name the message it's
+    replying to — reliable, since mail clients set these automatically) — falling back to
+    same-counterparty + normalized-subject for the rarer case where those headers are missing
+    (some webmail composers drop them). Cross-account on purpose: a reply sent from ANY of the
+    tenant's connected mailboxes should resolve a follow-up that arrived in any other."""
+    if not sent_emails:
+        return 0
+    try:
+        open_rows = (db.table("vula_email_followups")
+                     .select("id,message_id,sender,subject").eq("tenant_id", tenant_id)
+                     .eq("status", "open").execute().data or [])
+    except Exception as exc:
+        logger.debug("followup resolve lookup skipped (run migration 096?): %s", exc)
+        return 0
+    if not open_rows:
+        return 0
+    by_msgid = {r["message_id"]: r for r in open_rows if r.get("message_id")}
+
+    resolved = {}
+    for em in sent_emails:
+        candidates = set()
+        if em.get("in_reply_to"):
+            candidates.add(em["in_reply_to"])
+        candidates.update((em.get("references") or "").split())
+        match = next((by_msgid[c] for c in candidates if c in by_msgid), None)
+        if not match:
+            to_addrs = {a.lower() for _, a in em.get("people", [])}
+            subj = _normalize_subject(em.get("subject"))
+            if subj:
+                for r in open_rows:
+                    if r["id"] in resolved:
+                        continue
+                    m = _EMAIL_RE.search((r.get("sender") or "").lower())
+                    addr = m.group(0) if m else ""
+                    if addr and addr in to_addrs and _normalize_subject(r.get("subject")) == subj:
+                        match = r
+                        break
+        if match:
+            resolved[match["id"]] = True
+
+    if resolved:
+        try:
+            db.table("vula_email_followups").update({"status": "done"}).in_(
+                "id", list(resolved.keys())).execute()
+        except Exception as exc:
+            logger.debug("followup auto-resolve write failed: %s", exc)
+            return 0
+    return len(resolved)
+
+
+async def _record_sync_failure(db, tenant_id: str, account_id: str, email_addr: str,
+                               prior_fail_count: int, error: str) -> None:
+    """Bump the consecutive-failure streak. Only notify AT the threshold crossing, not every
+    run after — otherwise a mailbox down for a week nags every 15 minutes forever."""
+    new_count = prior_fail_count + 1
+    update = {"sync_fail_count": new_count, "last_error": error}
+    try:
+        if new_count == _FAIL_NOTIFY_THRESHOLD:
+            update["status"] = "error"
+            db.table("vula_email_accounts").update(update).eq("id", account_id).execute()
+            from vula.integrations.notify import notify_team
+            await notify_team(tenant_id, "email_sync_broken",
+                              f"⚠️ {email_addr} has failed to sync {new_count} times in a row and looks "
+                              f"disconnected ({error[:100]}). Check its password/connection in Email settings.")
+        else:
+            db.table("vula_email_accounts").update(update).eq("id", account_id).execute()
+    except Exception as exc:
+        logger.debug("sync failure record skipped: %s", exc)
+
+
+async def _record_sync_recovery(db, tenant_id: str, account_id: str, email_addr: str, was_error: bool) -> None:
+    try:
+        db.table("vula_email_accounts").update(
+            {"sync_fail_count": 0, "last_error": None, "status": "connected"}).eq("id", account_id).execute()
+        if was_error:
+            from vula.integrations.notify import notify_team
+            await notify_team(tenant_id, "email_sync_broken", f"✅ {email_addr} is syncing again.")
+    except Exception as exc:
+        logger.debug("sync recovery record skipped: %s", exc)
+
+
+async def _notify_oversized(tenant_id: str, items: list) -> None:
+    try:
+        from vula.integrations.notify import notify_team
+        lines = [f"• {it['name']} ({it['size_mb']}MB) from {it['from']} — \"{it['subject'][:40]}\""
+                for it in items[:5]]
+        msg = (f"📎 {len(items)} attachment(s) were too large to auto-file (over 15MB) — "
+               f"you'll need to grab these from the mailbox directly:\n" + "\n".join(lines))
+        await notify_team(tenant_id, "oversized_attachment", msg)
+    except Exception as exc:
+        logger.debug("oversized attachment notify skipped: %s", exc)
+
+
+async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
+                         from_uid: Optional[int] = None) -> dict:
     import asyncio
-    creds = get_email_creds(tenant_id)
+    creds = get_email_creds(tenant_id, account_id)
     if not creds:
         return {"synced": 0}
     db = _client()
     try:
-        row = (db.table("vula_email_accounts").select("last_sync_uid,auto_sync,notify_phone")
-               .eq("tenant_id", tenant_id).limit(1).execute().data or [{}])[0]
+        row = (db.table("vula_email_accounts")
+               .select("last_sync_uid,last_sync_uid_sent,auto_sync,sync_sent,notify_phone,"
+                       "status,sync_fail_count")
+               .eq("id", account_id).limit(1).execute().data or [{}])[0]
     except Exception:
         return {"synced": 0}
     if row.get("auto_sync") is False and from_uid is None:
         return {"synced": 0}
-    # Backfill (from_uid given) scans from that floor; normal sync continues from the stored cursor.
-    last_uid = int(from_uid) if from_uid is not None else int(row.get("last_sync_uid") or 0)
     notify_phone = row.get("notify_phone")
     own_domain = creds["email"].split("@")[-1].lower()
+    fail_count = int(row.get("sync_fail_count") or 0)
 
+    # Backfill (from_uid given) scans from that floor for BOTH folders; normal sync continues
+    # from each folder's own stored cursor — UIDs are only unique within a folder, so Inbox
+    # and Sent can't share one.
+    inbox_last = int(from_uid) if from_uid is not None else int(row.get("last_sync_uid") or 0)
     try:
-        result = await asyncio.to_thread(_fetch_new, creds, last_uid, max_emails)
+        inbox_result = await asyncio.to_thread(_fetch_new, creds, inbox_last, max_emails)
     except Exception as exc:
-        logger.warning("email sync fetch failed for %s: %s", tenant_id, exc)
+        logger.warning("email sync fetch (INBOX) failed for %s/%s: %s", tenant_id, creds["email"], exc)
+        await _record_sync_failure(db, tenant_id, account_id, creds["email"], fail_count, str(exc)[:200])
         return {"synced": 0, "error": str(exc)[:120]}
+    # A successful fetch means the connection itself is fine — clear any prior failure streak,
+    # and if this mailbox had been flagged broken, tell the team it's back.
+    if fail_count or row.get("status") == "error":
+        await _record_sync_recovery(db, tenant_id, account_id, creds["email"], was_error=row.get("status") == "error")
+    for em in inbox_result["emails"]:
+        em["is_sent"] = False
 
-    emails = result["emails"]
+    sent_result = {"emails": [], "max_uid": int(row.get("last_sync_uid_sent") or 0), "folder": None, "oversized": []}
+    if row.get("sync_sent") is not False:
+        sent_last = int(from_uid) if from_uid is not None else int(row.get("last_sync_uid_sent") or 0)
+        try:
+            sent_result = await asyncio.to_thread(
+                _fetch_new, creds, sent_last, max_emails, folder_candidates=_SENT_FOLDER_CANDIDATES)
+        except Exception as exc:
+            logger.debug("email sync fetch (Sent) skipped for %s/%s: %s", tenant_id, creds["email"], exc)
+        for em in sent_result["emails"]:
+            em["is_sent"] = True
+
+    oversized = inbox_result.get("oversized", []) + sent_result.get("oversized", [])
+    if oversized:
+        await _notify_oversized(tenant_id, oversized)
+
+    # Outbound mail this sync picked up might BE the reply to something still tracked as
+    # open — close that loop before processing this batch's own new follow-ups below.
+    resolved_followups = await _resolve_replied_followups(db, tenant_id, sent_result["emails"])
+
+    emails = inbox_result["emails"] + sent_result["emails"]
     contacts_seen, filed = set(), 0
     for em in emails:
         for name, addr in em["people"]:
@@ -307,18 +566,26 @@ async def _do_email_sync(tenant_id: str, max_emails: int, from_uid: Optional[int
                 filed += 1
             except Exception as exc:
                 logger.debug("attachment file failed: %s", exc)
-        # Track emails that look like they need a reply.
-        reason = _needs_reply(em, own_domain)
-        if reason:
-            await _track_followup(db, tenant_id, em, reason)
+        # Track emails that look like they need a reply — mail the tenant SENT never needs
+        # one from them, so skip Sent-folder items outright rather than rely on _needs_reply's
+        # own-domain check to filter them out incidentally.
+        if not em["is_sent"]:
+            reason = _needs_reply(em, own_domain)
+            if reason:
+                await _track_followup(db, tenant_id, account_id, em, reason)
 
     try:
-        db.table("vula_email_accounts").update({
-            "last_sync_uid": result["max_uid"], "last_sync_at": "now()"}).eq("tenant_id", tenant_id).execute()
+        # Scoped to this ONE account's row — with several mailboxes per tenant, filtering by
+        # tenant_id alone here would overwrite every account's cursor with this account's uid.
+        update = {"last_sync_uid": inbox_result["max_uid"], "last_sync_at": "now()"}
+        if sent_result["folder"]:  # only advance the Sent cursor if a Sent folder was actually found
+            update["last_sync_uid_sent"] = sent_result["max_uid"]
+        db.table("vula_email_accounts").update(update).eq("id", account_id).execute()
     except Exception:
         pass
     return {"synced": len(emails), "contacts": len(contacts_seen), "filed_attachments": filed,
-            "last_uid": result["max_uid"]}
+            "last_uid": inbox_result["max_uid"], "sent_folder": sent_result["folder"],
+            "sent_last_uid": sent_result["max_uid"], "resolved_followups": resolved_followups}
 
 
 async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: str = None) -> None:
@@ -470,21 +737,27 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
 
 
 async def process_all_email_sync() -> int:
-    """Sync every connected mailbox (called by the background loop)."""
+    """Sync every connected mailbox, tenant or not (called by the background loop). Each
+    connected account is its own row now (migration 093) — iterate rows directly rather than
+    tenant_id, which would otherwise sync the same tenant's several mailboxes redundantly."""
     try:
-        rows = (_client().table("vula_email_accounts").select("tenant_id")
+        rows = (_client().table("vula_email_accounts").select("id,tenant_id,notify_phone")
                 .eq("status", "connected").execute().data or [])
     except Exception:
         return 0
     total = 0
+    reminded_tenants = set()
     for r in rows:
+        tenant_id, account_id = r["tenant_id"], r["id"]
         try:
-            res = await process_email_sync(r["tenant_id"])
+            res = await process_email_sync(tenant_id, account_id)
             total += res.get("synced", 0)
-            # Daily nudge for emails still awaiting a reply.
-            acct = (_client().table("vula_email_accounts").select("notify_phone")
-                    .eq("tenant_id", r["tenant_id"]).limit(1).execute().data or [{}])[0]
-            await send_followup_reminders(r["tenant_id"], acct.get("notify_phone"))
+            # Daily nudge for emails still awaiting a reply — once per tenant, not once per
+            # mailbox, since the digest already lists every open followup for that tenant.
+            if tenant_id not in reminded_tenants:
+                reminded_tenants.add(tenant_id)
+                await backfill_followup_summaries(tenant_id)
+                await send_followup_reminders(tenant_id, r.get("notify_phone"))
         except Exception as exc:
-            logger.warning("email sync failed for %s: %s", r.get("tenant_id"), exc)
+            logger.warning("email sync failed for %s/%s: %s", tenant_id, account_id, exc)
     return total

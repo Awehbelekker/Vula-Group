@@ -30,19 +30,23 @@ def _now():
     return service._now()
 
 
-# ── Statement password (encrypted, per tenant) ────────────────────────────────
+# ── Statement password (encrypted, on the primary mailbox) ─────────────────────
+# A tenant can have several connected mailboxes (migration 093) — bank statements are
+# assumed to arrive at whichever one is marked primary. Scoping both read and write to
+# is_primary=True (not just tenant_id) matters now: without it, the UPDATE below would
+# silently overwrite this field on every connected account, not just one.
 
 def set_statement_password(tenant_id: str, password: str, bank: str = "Capitec") -> None:
     from vula.email_imap.credentials import encrypt_secret
     _client().table("vula_email_accounts").update(
         {"statement_password": encrypt_secret(password), "bank": bank}
-    ).eq("tenant_id", tenant_id).execute()
+    ).eq("tenant_id", tenant_id).eq("is_primary", True).execute()
 
 
 def get_statement_password(tenant_id: str) -> Optional[str]:
     try:
         rows = (_client().table("vula_email_accounts").select("statement_password")
-                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+                .eq("tenant_id", tenant_id).eq("is_primary", True).limit(1).execute().data or [])
         enc = rows[0].get("statement_password") if rows else None
         if not enc:
             return None

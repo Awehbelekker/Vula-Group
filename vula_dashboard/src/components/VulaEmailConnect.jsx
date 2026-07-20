@@ -1,6 +1,11 @@
 /**
- * VulaEmailConnect.jsx — connect any IMAP/SMTP mailbox (GoDaddy, cPanel, Zoho…).
+ * VulaEmailConnect.jsx — connect one or more IMAP/SMTP mailboxes (GoDaddy, cPanel, Zoho, Gmail…).
  * Credentials form (not OAuth). Presets autofill common hosts. Draft-only by default.
+ *
+ * A tenant can connect several mailboxes (migration 093) — e.g. admin@ and sales@ and a
+ * personal Gmail, all feeding the same KB/contacts/document filing. Exactly one is "primary",
+ * used by the handful of features that only make sense against one mailbox (the AI email
+ * skill's default, bank-statement password handling).
  */
 import { useState, useEffect, useCallback } from 'react'
 
@@ -16,18 +21,22 @@ const PRESETS = {
 const blank = { email: '', password: '', from_name: '', imap_host: '', imap_port: 993, smtp_host: '', smtp_port: 465, send_mode: 'draft' }
 
 export default function VulaEmailConnect({ tenantId, adminEmail }) {
-  const [status, setStatus] = useState(null)
-  const [account, setAccount] = useState(null)
+  const [accounts, setAccounts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(blank)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [busyAccountId, setBusyAccountId] = useState(null)
 
   const loadStatus = useCallback(async () => {
     if (!tenantId) return
     try {
       const r = await fetch(`${VULA_API}/v1/email/status/${tenantId}`)
-      const d = await r.json(); setStatus(d.status); setAccount(d)
-    } catch { setStatus('error') }
+      const d = await r.json()
+      setAccounts(d.accounts || [])
+    } catch { setAccounts([]) }
+    setLoading(false)
   }, [tenantId])
   useEffect(() => { loadStatus() }, [loadStatus])
 
@@ -43,14 +52,31 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
           imap_port: Number(form.imap_port), smtp_port: Number(form.smtp_port) }),
       })
       const d = await r.json()
-      if (d.status === 'connected') { setForm(blank); loadStatus() }
+      if (d.status === 'connected') { setForm(blank); setShowForm(false); loadStatus() }
       else setError(d.error || 'Could not connect — check the host, port and (app) password.')
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
-  const disconnect = async () => {
+
+  const disconnect = async (accountId) => {
     if (!confirm('Disconnect this mailbox?')) return
-    await fetch(`${VULA_API}/v1/email/disconnect/${tenantId}`, { method: 'DELETE' })
-    setStatus('not_connected'); setAccount(null)
+    setBusyAccountId(accountId)
+    await fetch(`${VULA_API}/v1/email/disconnect/${tenantId}/${accountId}`, { method: 'DELETE' })
+    setBusyAccountId(null)
+    loadStatus()
+  }
+
+  const setPrimary = async (accountId) => {
+    setBusyAccountId(accountId)
+    await fetch(`${VULA_API}/v1/email/set-primary/${tenantId}/${accountId}`, { method: 'POST' })
+    setBusyAccountId(null)
+    loadStatus()
+  }
+
+  const backfill = async (accountId) => {
+    setBusyAccountId(accountId)
+    await fetch(`${VULA_API}/v1/email/backfill/${tenantId}?account_id=${accountId}`, { method: 'POST' })
+    setBusyAccountId(null)
+    alert('Backfill started in the background — check Contacts/Documents in a few minutes.')
   }
 
   const inp = { width: '100%', padding: '9px 11px', border: '1px solid #2a2a2a', borderRadius: 6, fontSize: 13, color: '#f5f2ec', background: '#0a0a0a', boxSizing: 'border-box' }
@@ -60,21 +86,45 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
       <div style={styles.header}>
         <div style={styles.icon}>✉️</div>
         <div><h3 style={styles.title}>Email (IMAP / SMTP)</h3>
-          <p style={styles.subtitle}>GoDaddy, cPanel, Zoho — any mailbox</p></div>
-        <span style={{ ...styles.badge, color: status === 'connected' ? '#22c55e' : '#6b7280',
-          background: status === 'connected' ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)' }}>
-          {status === 'connected' ? 'Connected' : 'Not connected'}</span>
+          <p style={styles.subtitle}>Connect as many mailboxes as you need — admin@, sales@, a personal Gmail…</p></div>
+        <span style={{ ...styles.badge, color: accounts.length ? '#22c55e' : '#6b7280',
+          background: accounts.length ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)' }}>
+          {accounts.length ? `${accounts.length} connected` : 'None connected'}</span>
       </div>
 
-      {status === 'connected' && account ? (
-        <div>
-          <div style={styles.info}><span style={styles.label}>Mailbox</span><span style={styles.value}>{account.email}</span></div>
-          <div style={styles.info}><span style={styles.label}>Mode</span><span style={styles.value}>{account.send_mode === 'send' ? 'Sends directly' : 'Draft-only (you send)'}</span></div>
-          <button onClick={disconnect} style={styles.btnDanger}>Disconnect</button>
+      {loading ? <p style={styles.desc}>Loading…</p> : accounts.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          {accounts.map(a => (
+            <div key={a.id} style={styles.acctRow}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={styles.value}>{a.email}</span>
+                  {a.is_primary && <span style={styles.primaryBadge}>Primary</span>}
+                </div>
+                <div style={styles.subvalue}>
+                  {a.send_mode === 'send' ? 'Sends directly' : 'Draft-only (you send)'}
+                  {a.last_sync_at ? ` · last synced ${new Date(a.last_sync_at).toLocaleString()}` : ' · not yet synced'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                {!a.is_primary && (
+                  <button onClick={() => setPrimary(a.id)} disabled={busyAccountId === a.id} style={styles.btnSmall}>Make primary</button>
+                )}
+                <button onClick={() => backfill(a.id)} disabled={busyAccountId === a.id} style={styles.btnSmall}>Backfill</button>
+                <button onClick={() => disconnect(a.id)} disabled={busyAccountId === a.id} style={styles.btnDangerSmall}>Disconnect</button>
+              </div>
+            </div>
+          ))}
         </div>
+      )}
+
+      {!showForm ? (
+        <button onClick={() => setShowForm(true)} style={styles.btn}>
+          {accounts.length ? '+ Connect another mailbox' : '🔗 Connect a mailbox'}
+        </button>
       ) : (
         <div>
-          <p style={styles.desc}>Use an <strong>app password</strong> (not your main login) where your provider supports it — it's revocable and scoped.</p>
+          <p style={styles.desc}>Use an <strong>app password</strong> (not your main login) where your provider supports it — it's revocable and scoped. Gmail requires one if 2FA is on.</p>
           <select onChange={e => applyPreset(e.target.value)} style={{ ...inp, marginBottom: 8 }} defaultValue="">
             <option value="" disabled>Quick setup (autofill hosts)…</option>
             {Object.keys(PRESETS).map(p => <option key={p} value={p}>{p}</option>)}
@@ -96,9 +146,12 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
             </select>
           </div>
           {error && <div style={styles.errorBox}>{error}</div>}
-          <button onClick={connect} disabled={busy} style={busy ? styles.btnDisabled : styles.btn}>
-            {busy ? 'Testing connection…' : '🔗 Connect mailbox'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={connect} disabled={busy} style={busy ? styles.btnDisabled : styles.btn}>
+              {busy ? 'Testing connection…' : '🔗 Connect mailbox'}
+            </button>
+            <button onClick={() => { setShowForm(false); setError(null); setForm(blank) }} style={styles.btnCancel}>Cancel</button>
+          </div>
         </div>
       )}
     </div>
@@ -110,12 +163,16 @@ const styles = {
   header: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 },
   icon: { fontSize: 32 }, title: { margin: 0, color: '#f5f2ec', fontSize: 18, fontWeight: 600 },
   subtitle: { margin: '2px 0 0', color: '#6b7280', fontSize: 13 },
-  badge: { marginLeft: 'auto', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 },
-  info: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #1a1a1a' },
+  badge: { marginLeft: 'auto', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
+  acctRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid #1a1a1a' },
+  primaryBadge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: '#C4861A', background: 'rgba(196,134,26,0.15)', padding: '2px 6px', borderRadius: 4 },
   label: { color: '#6b7280', fontSize: 13 }, value: { color: '#f5f2ec', fontSize: 13, fontWeight: 500 },
+  subvalue: { color: '#6b7280', fontSize: 11.5, marginTop: 2 },
   desc: { color: '#9ca3af', fontSize: 13, lineHeight: 1.5, margin: '0 0 12px' },
   errorBox: { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 10 },
   btn: { background: '#C4861A', color: '#fff', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', width: '100%' },
   btnDisabled: { background: '#2a2a2a', color: '#6b7280', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
-  btnDanger: { marginTop: 14, background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' },
+  btnCancel: { background: 'transparent', color: '#6b7280', border: '1px solid #2a2a2a', borderRadius: 6, padding: '12px 18px', fontSize: 13, cursor: 'pointer' },
+  btnSmall: { background: 'transparent', color: '#9ca3af', border: '1px solid #2a2a2a', borderRadius: 6, padding: '5px 10px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap' },
+  btnDangerSmall: { background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '5px 10px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap' },
 }

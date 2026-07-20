@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vula.email_imap.sync import _summarize_followup, _track_followup
+from vula.email_imap.sync import (
+    _summarize_followup,
+    _track_followup,
+    backfill_followup_summaries,
+)
 
 
 def _mock_llm(content: str):
@@ -78,7 +82,7 @@ async def test_track_followup_upserts_summary_fields():
         patch("core.llm_router.resolve_generation_route",
               new=AsyncMock(return_value=("test-model", "key", "base"))),
     ):
-        await _track_followup(mock_db, "digg-demo", em, "schedule")
+        await _track_followup(mock_db, "digg-demo", "acct1", em, "schedule")
 
     mock_table.upsert.assert_called_once()
     row = mock_table.upsert.call_args[0][0]
@@ -86,3 +90,87 @@ async def test_track_followup_upserts_summary_fields():
     assert row["urgency"] == "normal"
     assert row["tone"] == "friendly"
     assert row["sender_name"] == "Jane Client"
+
+
+@pytest.mark.asyncio
+async def test_track_followup_pings_immediately_when_urgent():
+    content = '{"summary": "Angry about a missed deadline.", "urgency": "high", "tone": "angry"}'
+    mock_table = MagicMock()
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    em = {"uid": 9, "from": "client@example.com", "subject": "Where is my order?!",
+          "body": "This is now three days late, I need an answer today.", "when": "2026-07-20T00:00:00Z"}
+
+    with (
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm(content))),
+        patch("core.llm_router.resolve_generation_route",
+              new=AsyncMock(return_value=("test-model", "key", "base"))),
+        patch("vula.integrations.notify.notify_team", new=AsyncMock(return_value=1)) as mock_notify,
+    ):
+        await _track_followup(mock_db, "off-the-hook", "acct1", em, "request")
+
+    mock_notify.assert_awaited_once()
+    args, _ = mock_notify.call_args
+    assert args[0] == "off-the-hook"
+    assert args[1] == "followup_digest"
+    assert "🔥" in args[2]
+
+
+@pytest.mark.asyncio
+async def test_track_followup_normal_urgency_does_not_ping():
+    content = '{"summary": "Routine question about pricing.", "urgency": "normal", "tone": "neutral"}'
+    mock_table = MagicMock()
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    em = {"uid": 10, "from": "client@example.com", "subject": "Pricing",
+          "body": "What's the cost for a dozen?", "when": "2026-07-20T00:00:00Z"}
+
+    with (
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm(content))),
+        patch("core.llm_router.resolve_generation_route",
+              new=AsyncMock(return_value=("test-model", "key", "base"))),
+        patch("vula.integrations.notify.notify_team", new=AsyncMock(return_value=1)) as mock_notify,
+    ):
+        await _track_followup(mock_db, "off-the-hook", "acct1", em, "request")
+
+    mock_notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_summaries_updates_null_rows():
+    content = '{"summary": "Needs a quote for tiling.", "urgency": "normal", "tone": "polite"}'
+    stuck_row = {"id": "f1", "subject": "Quote?", "preview": "Could you send a quote?",
+                "sender": "client@example.com", "sender_name": "Client"}
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.eq.return_value.is_.return_value \
+        .limit.return_value.execute.return_value = MagicMock(data=[stuck_row])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    with (
+        patch("vula.email_imap.sync._client", return_value=mock_db),
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm(content))),
+        patch("core.llm_router.resolve_generation_route",
+              new=AsyncMock(return_value=("test-model", "key", "base"))),
+    ):
+        n = await backfill_followup_summaries("digg-demo")
+
+    assert n == 1
+    mock_table.update.assert_called_once()
+    updated = mock_table.update.call_args[0][0]
+    assert updated["summary"] == "Needs a quote for tiling."
+
+
+@pytest.mark.asyncio
+async def test_backfill_summaries_returns_zero_when_nothing_stuck():
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.eq.return_value.is_.return_value \
+        .limit.return_value.execute.return_value = MagicMock(data=[])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    with patch("vula.email_imap.sync._client", return_value=mock_db):
+        n = await backfill_followup_summaries("digg-demo")
+
+    assert n == 0
+    mock_table.update.assert_not_called()
