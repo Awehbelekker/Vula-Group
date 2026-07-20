@@ -3546,43 +3546,10 @@ _SCAN_PROMPTS = {
 }
 
 
-def _scan_quality_ok(ex: dict) -> bool:
-    """Heuristic: did the vision model produce a usable financial extraction?
-
-    Used to decide whether to escalate a weak local read to the cloud model.
-    Fails on the common local-model failure modes:
-      - parse error / self-reported low confidence
-      - missing money total or no line items (llava)
-      - line-item totals that don't reconcile with the stated total (qwen often
-        reads the structure correctly but grabs the wrong number as the total,
-        while still reporting "high" confidence — so we can't trust confidence
-        alone; we cross-check the arithmetic instead).
-    """
-    if not ex or ex.get("raw"):
-        return False
-    if str(ex.get("confidence") or "").lower() == "low":
-        return False
-    total = ex.get("total_cents") or 0
-    items = ex.get("line_items") or []
-    if not total or not items:
-        return False
-
-    # Reconciliation: sum of line totals should be within ~30% of the stated
-    # total (allowing for VAT, delivery, rounding). A gross mismatch means the
-    # model misread at least one money figure → escalate.
-    line_sum = 0
-    for it in items:
-        lt = it.get("total_cents")
-        if lt is None:  # fall back to qty × unit price
-            q = it.get("quantity") or 0
-            up = it.get("unit_price_cents") or 0
-            lt = q * up
-        line_sum += int(lt or 0)
-    if line_sum > 0:
-        ratio = line_sum / total
-        if ratio > 1.3 or ratio < 0.7:
-            return False
-    return True
+# Moved to vula/commerce/extraction_quality.py (migration 102 follow-on) so the email/WhatsApp
+# document pipeline can share the same arithmetic-verification heuristic — kept as a local alias
+# so every existing call site below is unchanged.
+from vula.commerce.extraction_quality import scan_quality_ok as _scan_quality_ok
 
 
 @router.post("/{tenant_id}/admin/scan")
@@ -3714,207 +3681,22 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
 @router.post("/{tenant_id}/admin/scan/commit")
 async def admin_scan_commit(tenant_id: str, body: dict):
     """
-    Commit a smart-scan result into the books:
-
-    1. Match supplier name against commerce_suppliers → get payment_terms_days
-    2. Calculate due_date = date + payment_terms_days
-    3. For receipts / petty cash → create commerce_expense
-       For invoices / delivery_notes → create commerce_invoice (direction=inbound)
-    4. Ingest the document image into the tenant KB so the AI learns from it
-    5. Return the created record + a "due in X days" message
+    Commit a smart-scan result into the books — a thin wrapper around
+    service.commit_inbound_document(), the shared commit path also used by the
+    email/WhatsApp/dashboard-upload document pipelines (migration 102).
 
     Body:
         extracted:    the JSON from /admin/scan
         image_base64: optional — if provided, ingests into KB as text
         auto_commit:  bool (default true) — if false, returns preview only
     """
-    import json as _j
-    from uuid import uuid4
-    from datetime import date, timedelta
-
     extracted = body.get("extracted", {})
     auto_commit = body.get("auto_commit", True)
-
     if not extracted:
         raise HTTPException(status_code=400, detail="No extracted data provided.")
-
-    db = service._client()
-    today = date.today()
-
-    # ── 1. Supplier lookup & payment terms (tiered auto-detection) ───────────
-    supplier_name = extracted.get("supplier") or ""
-    tax_id = extracted.get("tax_id") or ""
-    layout_signature = service.compute_layout_signature(extracted)
-    payment_terms_days = 30  # default
-    supplier_row = None
-
-    supplier_match = await service.match_supplier(
-        tenant_id,
-        name=supplier_name or None,
-        tax_id=tax_id or None,
-        layout_signature=layout_signature,
+    return await service.commit_inbound_document(
+        tenant_id, extracted, auto_commit=auto_commit, source="scanner",
     )
-    # Only auto-apply payment terms for a high-confidence match; weaker matches
-    # are surfaced (supplier_match in the preview) for the owner to confirm.
-    if supplier_match and supplier_match["auto_apply"]:
-        supplier_row = supplier_match["supplier"]
-        payment_terms_days = supplier_row.get("payment_terms_days", 30)
-
-    # ── 2. Resolve dates ────────────────────────────────────────────────────
-    doc_date = today
-    if extracted.get("date"):
-        try:
-            doc_date = date.fromisoformat(extracted["date"])
-        except ValueError:
-            pass
-
-    due_date = None
-    if extracted.get("due_date"):
-        try:
-            due_date = date.fromisoformat(extracted["due_date"])
-        except ValueError:
-            pass
-
-    if not due_date and payment_terms_days is not None:
-        due_date = doc_date + timedelta(days=payment_terms_days)
-
-    days_until_due = (due_date - today).days if due_date else None
-
-    # ── 3. Determine record type ────────────────────────────────────────────
-    doc_type = extracted.get("doc_type", "receipt")
-    is_invoice = doc_type in ("invoice", "delivery_note")
-    total_cents = int(extracted.get("total_cents") or 0)
-    vat_cents = int(extracted.get("vat_cents") or 0)
-
-    # ── 4. Preview mode ─────────────────────────────────────────────────────
-    preview = {
-        "supplier": supplier_name,
-        "supplier_known": supplier_row is not None,
-        "supplier_match": (
-            {
-                "tier": supplier_match["tier"],
-                "confidence": supplier_match["confidence"],
-                "auto_applied": supplier_match["auto_apply"],
-                "supplier_id": supplier_match["supplier"].get("id"),
-                "supplier_name": supplier_match["supplier"].get("name"),
-            }
-            if supplier_match else None
-        ),
-        "payment_terms_days": payment_terms_days,
-        "doc_date": str(doc_date),
-        "due_date": str(due_date) if due_date else None,
-        "days_until_due": days_until_due,
-        "total_cents": total_cents,
-        "doc_type": doc_type,
-        "record_type": "invoice" if is_invoice else "expense",
-    }
-
-    if not auto_commit:
-        return {"ok": True, "preview": preview, "committed": False}
-
-    # ── 5. Write to books ───────────────────────────────────────────────────
-    record_id = str(uuid4())
-    committed_record = None
-
-    if is_invoice:
-        row = {
-            "id": record_id,
-            "tenant_id": tenant_id,
-            "direction": "inbound",
-            "doc_type": doc_type,
-            "status": "draft",
-            "supplier": supplier_name,
-            "date": str(doc_date),
-            "due_date": str(due_date) if due_date else None,
-            "payment_terms_days": payment_terms_days,
-            "subtotal_cents": total_cents - vat_cents,
-            "vat_cents": vat_cents,
-            "total_cents": total_cents,
-            "line_items": _j.dumps(extracted.get("line_items", [])),
-            "notes": extracted.get("notes"),
-            "source": "scanner",
-            "scan_confidence": extracted.get("confidence"),
-        }
-        result = db.table("commerce_invoices").insert(row).execute()
-        committed_record = result.data[0] if result.data else row
-    else:
-        row = {
-            "id": record_id,
-            "tenant_id": tenant_id,
-            "date": str(doc_date),
-            "due_date": str(due_date) if due_date else None,
-            "category": extracted.get("category") or "supplies",
-            "description": f"{supplier_name or 'Unknown'} — {doc_type}",
-            "amount_cents": total_cents,
-            "supplier": supplier_name,
-            "payment_terms_days": payment_terms_days,
-            "status": "pending",
-            "source": "scanner",
-            "doc_type": doc_type,
-            "line_items": _j.dumps(extracted.get("line_items", [])),
-            "scan_confidence": extracted.get("confidence"),
-        }
-        result = db.table("commerce_expenses").insert(row).execute()
-        committed_record = result.data[0] if result.data else row
-
-    # ── 5b. Learn this supplier's layout signature on a confident match ──────
-    if supplier_row and layout_signature and not supplier_row.get("layout_signature"):
-        try:
-            await service.learn_supplier_signature(tenant_id, supplier_row.get("id"), layout_signature)
-        except Exception as sig_exc:
-            log.warning("Failed to learn supplier signature for %s: %s", record_id, sig_exc)
-
-    # ── 6. Ingest into KB so the AI learns from it ──────────────────────────
-    kb_chunks = 0
-    try:
-        from vula.ingestion.pipeline import VulaIngestionPipeline
-        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
-
-        # Convert extracted data to readable text for KB
-        lines = [f"Document type: {doc_type}", f"Supplier: {supplier_name}", f"Date: {doc_date}"]
-        if due_date:
-            lines.append(f"Due date: {due_date} ({payment_terms_days} day terms)")
-        lines.append(f"Total: R{total_cents/100:.2f} (incl VAT R{vat_cents/100:.2f})")
-        if extracted.get("line_items"):
-            lines.append("Line items:")
-            for item in extracted["line_items"][:20]:
-                lines.append(f"  - {item.get('description','')} {item.get('quantity','')} {item.get('unit','')} @ R{(item.get('unit_price_cents',0) or 0)/100:.2f}")
-        if extracted.get("notes"):
-            lines.append(f"Notes: {extracted['notes']}")
-
-        doc_text = "\n".join(lines)
-        ingest_result = await pipeline.ingest_text(
-            content=doc_text,
-            filename=f"{doc_type}_{supplier_name.replace(' ','_')}_{doc_date}.txt",
-        )
-        kb_chunks = getattr(ingest_result, "chunks_stored", 0)
-    except Exception as kb_exc:
-        log.warning("KB ingest failed for scan commit %s: %s", record_id, kb_exc)
-
-    # ── 7. Build human-readable message ────────────────────────────────────
-    if due_date:
-        if days_until_due < 0:
-            msg = f"⚠️ OVERDUE by {abs(days_until_due)} days — R{total_cents/100:.0f} to {supplier_name or 'supplier'}"
-        elif days_until_due == 0:
-            msg = f"🔴 DUE TODAY — R{total_cents/100:.0f} to {supplier_name or 'supplier'}"
-        elif days_until_due <= 7:
-            msg = f"🟡 Due in {days_until_due} days (by {due_date}) — R{total_cents/100:.0f}"
-        else:
-            msg = f"✅ Captured — R{total_cents/100:.0f} due {due_date} ({days_until_due} days)"
-    else:
-        msg = f"✅ Captured — R{total_cents/100:.0f} (no due date)"
-
-    return {
-        "ok": True,
-        "committed": True,
-        "record_type": "invoice" if is_invoice else "expense",
-        "record_id": record_id,
-        "record": committed_record,
-        "supplier_match": preview["supplier_match"],
-        "preview": preview,
-        "kb_chunks_added": kb_chunks,
-        "message": msg,
-    }
 
 
 @router.get("/{tenant_id}/admin/expenses/due")

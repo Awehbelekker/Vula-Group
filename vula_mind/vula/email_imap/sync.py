@@ -688,7 +688,11 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
         # Learned rules (from past corrections) win — they're high-confidence by definition.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
-        confident = bool(match and match.get("confidence") == "high")
+        # Auto-file on ANY non-ambiguous match with a resolved project — not just the old
+        # "high" string, which silently discarded a real (if less certain) project guess and
+        # asked a human unnecessarily. Only a genuine absence of signal, or an unresolved tie
+        # between multiple plausible projects (match.get("ambiguous")), should ask.
+        confident = bool(match and not match.get("ambiguous") and match.get("project"))
 
         # Only auto-file on a CONFIDENT match. Anything weaker (no match, or a single
         # coincidental token) → ask the team on WhatsApp rather than risk mis-filing.

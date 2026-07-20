@@ -78,45 +78,64 @@ def _field_projects(tenant_id: str) -> list[str]:
 def match_project(tenant_id: str, text: str) -> Optional[dict]:
     """Match free text (caption + summary + extracted fields) to a project.
 
-    Returns {project, clickup_list_id, confidence} or None when nothing matches.
-    ClickUp lists are tried first; field-ops projects, then the canonical project
-    register, are the fallback.
+    Returns {project, clickup_list_id, confidence, ambiguous} or None when nothing matches at
+    all. ClickUp lists are tried first; field-ops projects, then the canonical project register,
+    are the fallback. `confidence` is numeric (1.0 = a strong multi-token ClickUp match, 0.6 = a
+    single-token/field-ops match, 0.5 = the canonical-register fallback) — kept comparable
+    across tiers instead of the old opaque "high"/"medium" strings, and directly storable in
+    vula_filed_documents.match_confidence (migration 102).
+
+    `ambiguous=True` (project=None) means multiple equally-plausible DIFFERENT projects matched
+    within a tier and neither won clearly — modeled on bank_rec.py's _match_by_amount, which
+    already treats an unresolved tie as "leave for review" rather than silently guessing. The
+    old code picked an arbitrary winner on a tie (`best is None or cand > best`); this is the
+    fix for that.
     """
     if not (text or "").strip():
         return None
     text_tokens = _tokens(text)
 
     if text_tokens:
-        best = None  # (score, -len(label), project, list_id)
+        # ── ClickUp lists — highest-priority tier, can also attach the file into the list ──
+        scored = []  # [(score, label, list_id)]
         for lid, lname in _clickup_candidates(tenant_id):
             overlap = _tokens(lname) & text_tokens
-            if not overlap:
-                continue
-            label = _project_label(lname)
-            cand = (len(overlap), -len(label), label, lid)
-            if best is None or cand > best:
-                best = cand
-        if best:
-            return {"project": best[2], "clickup_list_id": best[3],
-                    "confidence": "high" if best[0] >= 2 else "medium"}
+            if overlap:
+                scored.append((len(overlap), _project_label(lname), lid))
+        if scored:
+            best_score = max(s for s, _, _ in scored)
+            top = [c for c in scored if c[0] == best_score]
+            distinct_labels = {label for _, label, _ in top}
+            if len(distinct_labels) > 1:
+                return {"project": None, "clickup_list_id": None, "confidence": float(best_score),
+                       "ambiguous": True, "candidates": sorted(distinct_labels)}
+            # One winning label (possibly several phase-sub-lists under it) — deterministic pick.
+            _, label, lid = min(top, key=lambda c: (len(c[1]), c[2]))
+            return {"project": label, "clickup_list_id": lid,
+                    "confidence": 1.0 if best_score >= 2 else 0.6, "ambiguous": False}
 
-        # Fallback: field-ops project ids (no ClickUp list to attach to).
-        for pid in _field_projects(tenant_id):
-            if _tokens(pid) & text_tokens:
-                return {"project": pid, "clickup_list_id": None, "confidence": "medium"}
+        # ── Fallback: field-ops project ids (no ClickUp list to attach to) ──
+        field_matches = sorted({pid for pid in _field_projects(tenant_id) if _tokens(pid) & text_tokens})
+        if len(field_matches) > 1:
+            return {"project": None, "clickup_list_id": None, "confidence": 0.6,
+                   "ambiguous": True, "candidates": field_matches}
+        if field_matches:
+            return {"project": field_matches[0], "clickup_list_id": None,
+                    "confidence": 0.6, "ambiguous": False}
 
-    # Fallback: the canonical project register (vula_projects + prior expense/invoice
+    # ── Fallback: the canonical project register (vula_projects + prior expense/invoice
     # projects — see vula.commerce.expenses.known_projects), matched with the same loose
     # substring/token rules used when allocating an EXPENSE to a project. This tier exists
     # because _tokens()'s >=4-char filter (tuned for noisy ClickUp list-name overlap) makes
     # a short real project name/acronym like "HPC" unmatchable above, even though the exact
     # same reply already resolves correctly for expenses — a document reply of "HPC" must
-    # resolve the same project a claim reply of "HPC" does.
+    # resolve the same project a claim reply of "HPC" does. expenses.match_project() already
+    # does its own best-single-match resolution, so no separate ambiguity check here.
     try:
         from vula.commerce import expenses as _expenses
         canonical = _expenses.match_project(tenant_id, text)
         if canonical:
-            return {"project": canonical, "clickup_list_id": None, "confidence": "medium"}
+            return {"project": canonical, "clickup_list_id": None, "confidence": 0.5, "ambiguous": False}
     except Exception as exc:
         logger.debug("canonical project register fallback skipped: %s", exc)
     return None
@@ -179,8 +198,11 @@ def lookup_learned_project(tenant_id: str, fields: dict) -> Optional[dict]:
     except Exception:
         return None
     if rows:
+        # A previously-confirmed learned signal is definitionally not ambiguous — a human
+        # already resolved this exact case once. Numeric confidence matches match_project()'s
+        # convention (1.0 = strong match) so both are directly comparable/storable.
         return {"project": rows[0]["project"], "clickup_list_id": None,
-                "confidence": "high", "learned": rows[0]["signal"]}
+                "confidence": 1.0, "ambiguous": False, "learned": rows[0]["signal"]}
     return None
 
 
@@ -418,11 +440,17 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         return {"skipped": True, "filename": doc.get("filename")}
 
     match = match_project(tenant_id, text)
-    if not match:
+    # A match with no `project` (either no candidate at all, or an unresolved tie between
+    # several plausible projects — match.get("ambiguous")) is treated identically: re-ask
+    # rather than silently filing under a null project.
+    if not match or not match.get("project"):
         # Don't hijack an unrelated question — only re-ask for short answers.
         if len(text) > 60 or text.strip().endswith("?"):
             return None
-        return {"unmatched": True, "filename": doc.get("filename")}
+        result = {"unmatched": True, "filename": doc.get("filename")}
+        if match and match.get("candidates"):
+            result["candidates"] = match["candidates"]
+        return result
 
     # Same file already filed under this project → drop the pending dup, point at it.
     existing = _existing_filed_doc(tenant_id, match["project"], doc.get("filename") or "",

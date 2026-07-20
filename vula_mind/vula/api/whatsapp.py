@@ -553,9 +553,14 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
                 phone, f"👍 Left '{pending['filename']}' unfiled — you can file it "
                 f"anytime from the dashboard.", tenant_id=tenant_id)
         else:  # unmatched
-            await _send_reply(
-                phone, "I couldn't match that to a project. Reply with the exact "
-                "project name, or 'skip' to leave it unfiled.", tenant_id=tenant_id)
+            candidates = pending.get("candidates") or []
+            if candidates:
+                msg = ("That could be more than one project — " + " / ".join(candidates) +
+                      ". Reply with the exact project name, or 'skip' to leave it unfiled.")
+            else:
+                msg = ("I couldn't match that to a project. Reply with the exact "
+                      "project name, or 'skip' to leave it unfiled.")
+            await _send_reply(phone, msg, tenant_id=tenant_id)
         return
 
     # admin and staff get full RAG
@@ -1056,15 +1061,21 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
     Returns a WhatsApp note: either 'Filed under X' or a 'which project?' question.
     """
     try:
-        from vula.integrations.doc_filing import match_project, file_document, project_examples
+        from vula.integrations.doc_filing import (match_project, file_document, project_examples,
+                                                  lookup_learned_project)
         data = local_path.read_bytes()
         ctype = mime_type or "application/octet-stream"
         hint = " ".join([
             result.filename or "", summary or "",
             " ".join(str(v) for v in (fields or {}).values() if isinstance(v, (str, int, float))),
         ])
-        match = match_project(tenant_id, hint)
-        if match:
+        # Learned rules first (from past corrections — same convergence as the email pipeline
+        # in sync.py::_file_attachment), then the general matcher. Only a non-ambiguous match
+        # with a resolved project auto-files — this used to auto-file on ANY truthy match,
+        # including a single coincidental token, with no ambiguity check at all.
+        match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
+        confident = bool(match and not match.get("ambiguous") and match.get("project"))
+        if confident:
             row = await file_document(
                 tenant_id, filename=result.filename, data=data, content_type=ctype,
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,
@@ -1075,12 +1086,16 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             if row.get("clickup_task_id"):
                 note += " Added to ClickUp."
             return note
-        # No confident match — store as pending and ask which project.
+        # No confident match (none at all, or an unresolved tie) — store as pending and ask.
         await file_document(
             tenant_id, filename=result.filename, data=data, content_type=ctype,
             category=category, summary=summary, fields=fields, doc_id=result.doc_id,
             source="whatsapp", filed_by=phone, status="pending_project",
         )
+        candidates = match.get("candidates") if match else None
+        if candidates:
+            return ("📂 That could be more than one project — " + " / ".join(candidates) +
+                    ". Reply with the exact project name (or 'skip').")
         ex = project_examples(tenant_id)
         hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
         return (f"📂 Which project is this for?{hint_txt} "
@@ -1099,6 +1114,11 @@ _DOC_CATEGORIES = [
     "Meeting Minutes", "Programme / Schedule", "Report", "Tender Document",
     "General Document",
 ]
+
+# Categories whose `fields` are extracted in the Smart-Scanner-aligned money shape
+# (supplier/tax_id/total_cents/vat_cents/line_items) and are therefore both arithmetic-
+# checkable (extraction_quality.scan_quality_ok) and eligible for commit_inbound_document().
+_FINANCIAL_DOC_CATEGORIES = {"Invoice", "Quote / Estimate", "Bill of Quantities (BOQ)"}
 
 
 def _sanitize_json_string(raw: str) -> str:
@@ -1168,6 +1188,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
         import json as _json
         import litellm
         from core.llm_router import resolve_cheap_route, resolve_cloud_route
+        from vula.commerce.extraction_quality import scan_quality_ok
         litellm.drop_params = True
         model, api_key, api_base = await resolve_cheap_route()
 
@@ -1177,10 +1198,19 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
                     "You are Vula's document analyst for a South African construction/business. "
                     "Read the document and return STRICT JSON only (no prose) with keys: "
                     f"category (one of: {cats}), summary (1-2 sentences), and fields (an object of "
-                    "the key structured data for that category — e.g. invoice: vendor, invoice_no, "
-                    "date, subtotal, vat, total; BOQ/quote: client, total, and items as a list of "
-                    "{description, qty, unit, rate, amount}; fee proposal: client, stages, total; "
-                    "contract: parties, value, dates. Money as numbers in ZAR. Use null when unknown)."},
+                    "the key structured data for that category). For Invoice, Quote / Estimate, or "
+                    "Bill of Quantities (BOQ), fields MUST use this exact shape: "
+                    '{"supplier": string|null, "tax_id": string|null, "date": "YYYY-MM-DD"|null, '
+                    '"due_date": "YYYY-MM-DD"|null, "total_cents": integer|null, '
+                    '"vat_cents": integer|null, "confidence": "high"|"medium"|"low", '
+                    '"line_items": [{"description": string, "quantity": number, '
+                    '"unit_price_cents": integer|null, "total_cents": integer|null}]} — money in '
+                    "CENTS (Rands × 100), never Rand floats — this is the same shape/units the "
+                    "Smart Scanner already uses, so both pipelines can be verified and booked the "
+                    "same way. For every other category (fee proposal, contract, drawing, "
+                    "specification, etc.), use whatever key structured data best fits — e.g. fee "
+                    "proposal: client, stages, total; contract: parties, value, dates. Use null "
+                    "when unknown."},
                 {"role": "user", "content": f"Filename: {filename}\n\nDocument:\n{text}\n\nJSON:"},
         ]
 
@@ -1212,6 +1242,18 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
             return {"category": cat, "summary": (data.get("summary") or "").strip(),
                     "fields": data.get("fields") or {}}
 
+        def _needs_escalation(result: Optional[dict]) -> bool:
+            """Empty/failed read → escalate (unchanged). NEW: for a financial category, also
+            never trust a self-reported confidence alone — cross-check the extracted line-item
+            arithmetic against the stated total (same heuristic the Smart Scanner already
+            uses), and escalate on a mismatch too."""
+            if not (result and (result.get("summary") or result.get("fields"))):
+                return True
+            if result.get("category") in _FINANCIAL_DOC_CATEGORIES:
+                if not scan_quality_ok(result.get("fields") or {}):
+                    return True
+            return False
+
         # Cheap pass first (free local via tunnel / gemini-flash).
         result = None
         try:
@@ -1221,8 +1263,9 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
         except Exception as exc:
             logger.debug("Doc analyze cheap pass failed: %s", exc)
 
-        # Escalate to the 70B only if the cheap pass failed or came back empty.
-        if not (result and (result.get("summary") or result.get("fields"))):
+        # Escalate to the 70B on an empty/failed read, OR (financial categories only) on a
+        # weak/arithmetically-inconsistent extraction — not just on the model's own say-so.
+        if _needs_escalation(result):
             cloud = resolve_cloud_route()
             if cloud:
                 try:
@@ -1230,7 +1273,11 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
                     _cm, _ck, _cb = cloud
                     resp = await litellm.acompletion(model=_cm, messages=_msgs, temperature=0.1,
                         max_tokens=900, api_key=_ck, api_base=_cb)
-                    result = _parse(resp)
+                    cloud_result = _parse(resp)
+                    # Keep the cloud result if it's usable at all — even one that still fails
+                    # the arithmetic check is a better fallback than a totally empty local read.
+                    if cloud_result and (cloud_result.get("summary") or cloud_result.get("fields")):
+                        result = cloud_result
                 except Exception as exc2:
                     logger.warning("Doc analyze escalation failed for %s: %s", filename, exc2)
         return result

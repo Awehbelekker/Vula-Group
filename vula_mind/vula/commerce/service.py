@@ -1338,6 +1338,209 @@ async def delete_supplier(tenant_id: str, supplier_id: str) -> None:
     )
 
 
+async def commit_inbound_document(
+    tenant_id: str, extracted: dict, *, auto_commit: bool = True, source: str = "scanner",
+    filed_document_id: Optional[str] = None,
+) -> dict:
+    """Commit an extracted inbound document (invoice/quote/delivery_note/receipt) into the
+    books: supplier match (or auto-create for a genuinely new supplier), due-date calc,
+    commerce_invoices/commerce_expenses insert, KB ingest. The single commit path shared by
+    the Smart Scanner (admin_scan_commit, migration 009-era) and, from migration 102 onward,
+    the email/WhatsApp/dashboard-upload document pipelines — one path for every intake channel.
+
+    Supplier resolution (store-admin-reconciliation follow-on plan):
+    - Tier 1/2/3-at-or-above-auto-apply match → applied directly, no human involved.
+    - No match at all, but a usable supplier name on a real B2B document (invoice/quote/
+      delivery_note, not a petty-cash receipt — a random till slip is rarely a repeat supplier
+      and would just pollute the directory) → a brand-new supplier has nothing to disambiguate
+      against, so it's created SILENTLY (no WhatsApp notification — visible anytime in the
+      Suppliers tab).
+    - A weaker match (fuzzy below the auto-apply threshold, or a layout-signature-only match)
+      → genuine ambiguity: `needs_review=True` is set (and, when `filed_document_id` is given,
+      written to that row) rather than guessing or creating a possible duplicate supplier. This
+      is the one case that should route to human approval (see vula/commerce/approvals.py).
+    """
+    import json as _j
+    from uuid import uuid4
+    from datetime import date, timedelta
+
+    db = _client()
+    today = date.today()
+
+    supplier_name = (extracted.get("supplier") or "").strip()
+    tax_id = (extracted.get("tax_id") or "").strip()
+    layout_signature = compute_layout_signature(extracted)
+    total_cents = int(extracted.get("total_cents") or 0)
+
+    doc_type = extracted.get("doc_type", "receipt")
+    # "quote" added here (migration 102's doc_type CHECK already allows it) — the Smart
+    # Scanner never produced this doc_type, but the email/WhatsApp document pipeline's
+    # "Quote / Estimate" category needs a real commerce_invoices home too.
+    is_invoice = doc_type in ("invoice", "delivery_note", "quote")
+
+    payment_terms_days = 30
+    supplier_row = None
+    needs_review = False
+
+    supplier_match = await match_supplier(
+        tenant_id, name=supplier_name or None, tax_id=tax_id or None, layout_signature=layout_signature,
+    )
+    if supplier_match and supplier_match["auto_apply"]:
+        supplier_row = supplier_match["supplier"]
+        payment_terms_days = supplier_row.get("payment_terms_days", 30)
+    elif supplier_match:
+        needs_review = True
+    elif supplier_name and total_cents > 0 and is_invoice:
+        supplier_row = await upsert_supplier(tenant_id, {
+            "name": supplier_name, "tax_id": tax_id or None,
+            "contact_email": extracted.get("supplier_email") or extracted.get("contact_email"),
+            "contact_phone": extracted.get("supplier_phone") or extracted.get("contact_phone"),
+            "layout_signature": layout_signature,
+        })
+        supplier_match = {"supplier": supplier_row, "tier": "auto_created",
+                          "confidence": 1.0, "auto_apply": True}
+        payment_terms_days = supplier_row.get("payment_terms_days", 30)
+
+    doc_date = today
+    if extracted.get("date"):
+        try:
+            doc_date = date.fromisoformat(extracted["date"])
+        except ValueError:
+            pass
+    due_date = None
+    if extracted.get("due_date"):
+        try:
+            due_date = date.fromisoformat(extracted["due_date"])
+        except ValueError:
+            pass
+    if not due_date and payment_terms_days is not None:
+        due_date = doc_date + timedelta(days=payment_terms_days)
+    days_until_due = (due_date - today).days if due_date else None
+    vat_cents = int(extracted.get("vat_cents") or 0)
+
+    preview = {
+        "supplier": supplier_name,
+        "supplier_known": supplier_row is not None,
+        "supplier_match": (
+            {
+                "tier": supplier_match["tier"], "confidence": supplier_match["confidence"],
+                "auto_applied": supplier_match["auto_apply"],
+                "supplier_id": supplier_match["supplier"].get("id"),
+                "supplier_name": supplier_match["supplier"].get("name"),
+            } if supplier_match else None
+        ),
+        "needs_review": needs_review,
+        "payment_terms_days": payment_terms_days,
+        "doc_date": str(doc_date), "due_date": str(due_date) if due_date else None,
+        "days_until_due": days_until_due, "total_cents": total_cents, "doc_type": doc_type,
+        "record_type": "invoice" if is_invoice else "expense",
+    }
+
+    if not auto_commit:
+        return {"ok": True, "preview": preview, "committed": False}
+
+    record_id = str(uuid4())
+    supplier_id = supplier_row.get("id") if supplier_row else None
+
+    if is_invoice:
+        # customer_name is NOT NULL on commerce_invoices, designed for the outbound case
+        # (who WE are billing) — for an inbound bill there's no real "customer", so the
+        # tenant's own name goes there instead (semantically: who this bill is addressed to).
+        try:
+            from vula.api.tenants import get_config as _get_tenant_config
+            tenant_name = (_get_tenant_config(tenant_id) or {}).get("display_name") or tenant_id
+        except Exception:
+            tenant_name = tenant_id
+        row = {
+            "id": record_id, "tenant_id": tenant_id, "direction": "inbound", "doc_type": doc_type,
+            "invoice_number": await _next_invoice_number(tenant_id, doc_type),
+            "customer_name": tenant_name,
+            "status": "draft", "supplier": supplier_name, "supplier_id": supplier_id,
+            "issue_date": str(doc_date), "due_date": str(due_date) if due_date else None,
+            "payment_terms_days": payment_terms_days,
+            "subtotal_cents": total_cents - vat_cents, "vat_rate": 15.0, "vat_cents": vat_cents,
+            "total_cents": total_cents, "discount_cents": 0, "deposit_cents": 0,
+            "line_items": _j.dumps(extracted.get("line_items", [])),
+            "notes": extracted.get("notes"), "source": source,
+            "scan_confidence": extracted.get("confidence"),
+        }
+        result = db.table("commerce_invoices").insert(row).execute()
+        committed_record = result.data[0] if result.data else row
+    else:
+        row = {
+            "id": record_id, "tenant_id": tenant_id, "date": str(doc_date),
+            "due_date": str(due_date) if due_date else None,
+            "category": extracted.get("category") or "supplies",
+            "description": f"{supplier_name or 'Unknown'} — {doc_type}",
+            "amount_cents": total_cents, "supplier": supplier_name, "supplier_id": supplier_id,
+            "payment_terms_days": payment_terms_days, "status": "pending", "source": source,
+            "doc_type": doc_type, "line_items": _j.dumps(extracted.get("line_items", [])),
+            "scan_confidence": extracted.get("confidence"),
+        }
+        result = db.table("commerce_expenses").insert(row).execute()
+        committed_record = result.data[0] if result.data else row
+
+    if supplier_row and layout_signature and not supplier_row.get("layout_signature"):
+        try:
+            await learn_supplier_signature(tenant_id, supplier_row.get("id"), layout_signature)
+        except Exception as sig_exc:
+            logger.warning("Failed to learn supplier signature for %s: %s", record_id, sig_exc)
+
+    if filed_document_id:
+        try:
+            db.table("vula_filed_documents").update({
+                "commerce_invoice_id": record_id if is_invoice else None,
+                "supplier_id": supplier_id,
+                "match_confidence": supplier_match.get("confidence") if supplier_match else None,
+                "supplier_match_tier": supplier_match.get("tier") if supplier_match else "none",
+                "needs_review": needs_review,
+            }).eq("id", filed_document_id).execute()
+        except Exception as exc:
+            logger.warning("Failed to bridge filed_document %s to commit result: %s", filed_document_id, exc)
+
+    kb_chunks = 0
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        lines = [f"Document type: {doc_type}", f"Supplier: {supplier_name}", f"Date: {doc_date}"]
+        if due_date:
+            lines.append(f"Due date: {due_date} ({payment_terms_days} day terms)")
+        lines.append(f"Total: R{total_cents/100:.2f} (incl VAT R{vat_cents/100:.2f})")
+        if extracted.get("line_items"):
+            lines.append("Line items:")
+            for item in extracted["line_items"][:20]:
+                lines.append(f"  - {item.get('description','')} {item.get('quantity','')} "
+                            f"{item.get('unit','')} @ R{(item.get('unit_price_cents',0) or 0)/100:.2f}")
+        if extracted.get("notes"):
+            lines.append(f"Notes: {extracted['notes']}")
+        doc_text = "\n".join(lines)
+        ingest_result = await pipeline.ingest_text(
+            content=doc_text, filename=f"{doc_type}_{supplier_name.replace(' ','_')}_{doc_date}.txt",
+        )
+        kb_chunks = getattr(ingest_result, "chunks_stored", 0)
+    except Exception as kb_exc:
+        logger.warning("KB ingest failed for scan commit %s: %s", record_id, kb_exc)
+
+    if due_date:
+        if days_until_due < 0:
+            msg = f"⚠️ OVERDUE by {abs(days_until_due)} days — R{total_cents/100:.0f} to {supplier_name or 'supplier'}"
+        elif days_until_due == 0:
+            msg = f"🔴 DUE TODAY — R{total_cents/100:.0f} to {supplier_name or 'supplier'}"
+        elif days_until_due <= 7:
+            msg = f"🟡 Due in {days_until_due} days (by {due_date}) — R{total_cents/100:.0f}"
+        else:
+            msg = f"✅ Captured — R{total_cents/100:.0f} due {due_date} ({days_until_due} days)"
+    else:
+        msg = f"✅ Captured — R{total_cents/100:.0f} (no due date)"
+
+    return {
+        "ok": True, "committed": True, "record_type": "invoice" if is_invoice else "expense",
+        "record_id": record_id, "record": committed_record,
+        "supplier_match": preview["supplier_match"], "needs_review": needs_review,
+        "preview": preview, "kb_chunks_added": kb_chunks, "message": msg,
+    }
+
+
 # ── Invoice settings (onboarding + look-and-feel) ─────────────────────────────
 
 # Fields a tenant may set via the onboarding wizard / settings panel.
