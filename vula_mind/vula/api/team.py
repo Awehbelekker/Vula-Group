@@ -113,4 +113,5 @@ async def me(tenant: str, email: str = "") -> dict:
             "full": (m.get("role") in ("owner", "manager")) or not (m.get("access") or [])}
 
 
-_EVENTS = ("which_project", "followup_digest", "payment_received", "new_invoice", "new_order", "low_stock")
+_EVENTS = ("which_project", "followup_digest", "payment_received", "new_invoice", "new_order",
+          "low_stock", "help_request", "procurement_done")

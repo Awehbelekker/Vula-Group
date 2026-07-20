@@ -87,3 +87,57 @@ def team_member_for_phone(tenant_id: str, phone: str) -> Optional[dict]:
         if _digits(m.get("whatsapp")) == p:
             return m
     return None
+
+
+# ── Self-service preference commands ("stop sending me follow-up emails") ─────────
+
+_EVENT_KEYWORDS = {
+    "followup_digest": ("follow up", "follow-up", "followup", "email digest",
+                        "outstanding email", "email reminder"),
+    "which_project": ("which project", "which-project", "project question"),
+    "payment_received": ("payment received", "payments"),
+    "new_invoice": ("new invoice", "invoices"),
+    "new_order": ("new order", "orders"),
+    "low_stock": ("low stock", "stock alert"),
+    "help_request": ("help request", "escalation"),
+    "procurement_done": ("procurement", "stock ordering", "stock order"),
+}
+# Deliberately requires more than a bare trigger word so this never shadows the exact-match
+# POPIA opt-out phrases ("stop", "unsubscribe" alone) handled earlier in the WhatsApp pipeline.
+_OFF_RE = re.compile(r"\b(stop|turn off|don'?t send|no more|unsubscribe)\b", re.IGNORECASE)
+_ON_RE = re.compile(r"\b(turn on|send me|start sending|resubscribe|subscribe)\b", re.IGNORECASE)
+
+
+def handle_preference_command(tenant_id: str, phone: str, text: str) -> Optional[str]:
+    """A team member managing their own WhatsApp notification preferences by message —
+    e.g. 'stop sending me follow-up emails' or 'turn on low stock alerts'. Only ever acts
+    on the sender's own subscriptions (never a customer's). Returns a confirmation reply
+    if this message was a preference command, else None so the caller falls through to
+    normal handling."""
+    member = team_member_for_phone(tenant_id, phone)
+    if not member:
+        return None
+    t = (text or "").lower().strip()
+    off = bool(_OFF_RE.search(t))
+    on = bool(_ON_RE.search(t)) if not off else False
+    if not off and not on:
+        return None
+    matched = [key for key, kws in _EVENT_KEYWORDS.items() if any(kw in t for kw in kws)]
+    if not matched:
+        return None
+
+    notify = list(member.get("notify") or [])
+    if off:
+        notify = [n for n in notify if n not in matched]
+    else:
+        notify = list(dict.fromkeys(notify + matched))
+    try:
+        _client().table("vula_team_members").update({"notify": notify}).eq("id", member["id"]).execute()
+    except Exception as exc:
+        logger.debug("preference update failed: %s", exc)
+        return None
+
+    labels = ", ".join(k.replace("_", " ") for k in matched)
+    verb = "off" if off else "on"
+    return (f"Got it — turned {verb} *{labels}* notifications for you. "
+            "Reply anytime to change this, or manage it in the dashboard under Team.")

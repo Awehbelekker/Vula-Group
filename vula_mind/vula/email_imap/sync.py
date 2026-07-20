@@ -39,15 +39,25 @@ _SCHEDULE_KW = ("schedule", "meeting", "meet ", "available", "availability", "ca
 _REQUEST_KW = ("please", "could you", "can you", "kindly", "let me know", "would you",
                "need ", "requesting", "request ", "awaiting", "send me", "advise", "confirm",
                "feedback", "approve", "quote", "quotation")
+# Request-y phrasing ("please confirm", "kindly advise") is exactly how phishing/scam mail
+# reads too — these phrases are specific enough to phishing/promo copy that a genuine business
+# follow-up essentially never needs them, so their presence overrides a request-keyword match.
+_SPAM_KW = ("unsubscribe", "view in browser", "verify your account", "account has been suspended",
+            "account will be suspended", "click here to", "claim your", "you have won",
+            "you've won", "congratulations you", "wire transfer", "gift card", "bitcoin",
+            "crypto", "inheritance", "lottery", "urgent action required", "act now",
+            "risk-free", "% off", "limited time offer", "security alert")
 
 
 def _needs_reply(em: dict, own_domain: str):
     """Best-guess whether an inbound external email is awaiting a reply. Returns
     (reason, ) or None. Heuristic — cheap, runs on every synced email."""
     frm = (em.get("from") or "").lower()
-    if own_domain in frm or _NOISE.search(frm):
-        return None                                    # our own mail / bulk senders
+    if own_domain in frm or _NOISE.search(frm) or em.get("bulk"):
+        return None           # our own mail / bulk senders / has a List-Unsubscribe header
     blob = f"{em.get('subject','')} {em.get('body','')}".lower()
+    if any(k in blob for k in _SPAM_KW):
+        return None            # phishing/promo phrasing, however request-y it reads
     if any(k in blob for k in _SCHEDULE_KW):
         return "schedule"
     if "?" in blob or any(k in blob for k in _REQUEST_KW):
@@ -164,7 +174,8 @@ def _fetch_new(creds: dict, last_uid: int, max_emails: int) -> dict:
                                             "mime": part.get_content_type() or "application/octet-stream"})
             out.append({"uid": u, "when": when, "subject": _hdr(msg.get("Subject")) or "(no subject)",
                         "from": _hdr(msg.get("From")), "people": people, "body": body[:2000],
-                        "attachments": attachments})
+                        "attachments": attachments,
+                        "bulk": bool(msg.get("List-Unsubscribe"))})
         return {"emails": out, "max_uid": max(batch) if batch else last_uid}
     finally:
         try: m.logout()

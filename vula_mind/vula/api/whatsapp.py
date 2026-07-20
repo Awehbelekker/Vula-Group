@@ -488,6 +488,12 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         if _rev:
             await _send_reply(phone, _rev, tenant_id)
             return
+        # A team member managing their own notification prefs ("stop follow-up emails").
+        from vula.integrations.notify import handle_preference_command
+        _pref = handle_preference_command(tenant_id, phone, text)
+        if _pref:
+            await _send_reply(phone, _pref, tenant_id)
+            return
 
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
@@ -2265,6 +2271,13 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
     if _rev:
         await _send_reply(phone, _rev, tenant_id)
+        return
+
+    # A team member managing their own notification prefs ("stop follow-up emails").
+    from vula.integrations.notify import handle_preference_command
+    _pref = handle_preference_command(tenant_id, phone, text)
+    if _pref:
+        await _send_reply(phone, _pref, tenant_id)
         return
 
     # Onboarding capture: if this contact is mid opt-in/intro flow, their message is part of
