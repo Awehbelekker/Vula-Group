@@ -52,6 +52,7 @@ export default function VulaFollowups({ tenantId }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                 <button onClick={() => setStatus(r.id, "done")} style={{ padding: "5px 10px", background: C.green, color: "#fff", border: "none", borderRadius: 6, fontSize: 11.5, cursor: "pointer" }}>Done</button>
                 <button onClick={() => setStatus(r.id, "snoozed")} style={{ padding: "5px 10px", background: C.surface, color: C.muted, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11.5, cursor: "pointer" }}>Dismiss</button>
+                <button onClick={() => setStatus(r.id, "spam")} title="Not a real follow-up — helps Vula's spam filter improve" style={{ padding: "5px 10px", background: C.surface, color: "#A23B2D", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11.5, cursor: "pointer" }}>🚫 Not relevant</button>
               </div>
             </div>
           );

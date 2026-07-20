@@ -27,7 +27,7 @@ async def test_file_document_upserts_with_ignore_duplicates_on_the_unique_key():
 
     mock_table.upsert.assert_called_once()
     _, kwargs = mock_table.upsert.call_args
-    assert kwargs.get("on_conflict") == "tenant_id,source,filename"
+    assert kwargs.get("on_conflict") == "tenant_id,source,filename,content_hash"
     assert kwargs.get("ignore_duplicates") is True
     assert row["id"] == "row1"
 
@@ -35,10 +35,11 @@ async def test_file_document_upserts_with_ignore_duplicates_on_the_unique_key():
 @pytest.mark.asyncio
 async def test_file_document_fetches_winner_row_when_it_loses_the_race():
     """ignore_duplicates=True returns no data on conflict — the loser must fetch the row the
-    winner actually created, not silently return an id-less row."""
+    winner actually created, not silently return an id-less row. No data/content_hash here,
+    so the lookup falls back to IS NULL on content_hash rather than an equality match."""
     mock_table = MagicMock()
     mock_table.upsert.return_value.execute.return_value = MagicMock(data=None)
-    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value \
+    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.is_.return_value \
         .limit.return_value.execute.return_value = MagicMock(data=[{"id": "winner-row", "project": "Bokaap"}])
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
