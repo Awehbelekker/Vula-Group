@@ -110,6 +110,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
   const MODMAP = {
     customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
     qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft', training: 'training',
+    discounts: 'products',
   }
   const tenantHas = (id) => modules === null || !modules.length || CORE.has(id)
     || (modules || []).includes(MODMAP[id] || id)
@@ -138,7 +139,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {(() => {
             const GROUPS = [
               [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'agentlog', label: '🧠 Agent' }, { id: 'inbox', label: '📥 Inbox' }, { id: 'automations', label: '⚡ Automations' }],
-              [{ id: 'orders', label: '📦 Orders' }, { id: 'subscriptions', label: '🔁 Subscriptions' }, { id: 'bookings', label: '📅 Bookings' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'suppliers', label: '🚚 Suppliers' }],
+              [{ id: 'orders', label: '📦 Orders' }, { id: 'subscriptions', label: '🔁 Subscriptions' }, { id: 'bookings', label: '📅 Bookings' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'discounts', label: '🏷️ Discounts' }, { id: 'suppliers', label: '🚚 Suppliers' }],
               [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'bank', label: '🏦 Bank' }, { id: 'books', label: '📒 Books' }, { id: 'labour', label: '👷 Labour' }, { id: 'expenses', label: '💸 Expenses' }, { id: 'payments', label: '💳 Payments' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
               [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'import', label: '📥 Import' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'wa-templates', label: '📨 Templates' }, { id: 'scheduling', label: '⏰ Scheduling' }, { id: 'marketing', label: '✨ Marketing' }, { id: 'pages', label: '🎨 Pages' }],
               [{ id: 'workspace', label: '🗂️ Workspace' }, { id: 'projects', label: '🏗️ Projects' }, { id: 'fieldops', label: '👷 Field Ops' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
@@ -174,6 +175,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
           {tab === 'delivery'  && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
           {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
+          {tab === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
           {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} />}
           {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
           {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} />}
@@ -1650,6 +1652,196 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
             </p>
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+// ── Discount codes (migration 091) ────────────────────────────────────────────
+
+const BLANK_DISCOUNT = {
+  code: '', type: 'percent', value: '', min_order_cents: '', starts_at: '', ends_at: '',
+  usage_limit: '', active: true,
+}
+
+function DiscountCodesTab({ tenantId }) {
+  const [codes, setCodes] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [editing, setEditing] = useState(null) // null | {} (new) | code row
+  const [form, setForm] = useState(BLANK_DISCOUNT)
+  const [error, setError] = useState(null)
+  const inp = { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes`)
+    const d = await r.json()
+    setCodes(d.discount_codes || [])
+    setLoading(false)
+  }, [tenantId])
+
+  useEffect(() => { load() }, [load])
+
+  function startEdit(c) {
+    setForm({
+      code: c.code || '', type: c.type || 'percent',
+      value: c.value != null ? (c.type === 'fixed' ? (c.value / 100).toFixed(2) : String(c.value)) : '',
+      min_order_cents: c.min_order_cents != null ? (c.min_order_cents / 100).toFixed(2) : '',
+      starts_at: (c.starts_at || '').slice(0, 10), ends_at: (c.ends_at || '').slice(0, 10),
+      usage_limit: c.usage_limit ?? '', active: c.active !== false,
+    })
+    setEditing(c)
+    setError(null)
+  }
+  function startNew() { setForm(BLANK_DISCOUNT); setEditing({}); setError(null) }
+  function cancel() { setEditing(null); setForm(BLANK_DISCOUNT); setError(null) }
+
+  async function save(e) {
+    e.preventDefault()
+    if (!form.code.trim()) return
+    setSaving(true)
+    setError(null)
+    const payload = {
+      code: form.code.trim(),
+      type: form.type,
+      value: form.type === 'fixed'
+        ? Math.round(parseFloat(form.value || 0) * 100)
+        : (parseInt(form.value, 10) || 0),
+      min_order_cents: form.min_order_cents !== '' ? Math.round(parseFloat(form.min_order_cents) * 100) : null,
+      starts_at: form.starts_at ? `${form.starts_at}T00:00:00+02:00` : null,
+      ends_at: form.ends_at ? `${form.ends_at}T23:59:59+02:00` : null,
+      usage_limit: form.usage_limit !== '' ? parseInt(form.usage_limit, 10) : null,
+      active: form.active,
+    }
+    const isEdit = editing && editing.id
+    const r = await fetch(
+      `${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes${isEdit ? `/${editing.id}` : ''}`,
+      { method: isEdit ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+    )
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      setError(d.detail || 'Could not save that code.')
+      setSaving(false)
+      return
+    }
+    cancel()
+    setSaving(false)
+    await load()
+  }
+
+  async function remove(c) {
+    if (!confirm(`Delete code "${c.code}"?`)) return
+    setSaving(true)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, { method: 'DELETE' })
+    await load()
+    setSaving(false)
+  }
+
+  async function toggleActive(c) {
+    setSaving(true)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !c.active }),
+    })
+    await load()
+    setSaving(false)
+  }
+
+  function valueLabel(c) {
+    if (c.type === 'percent') return `${c.value}% off`
+    if (c.type === 'fixed') return `R${(c.value / 100).toFixed(2)} off`
+    return 'Free shipping'
+  }
+
+  if (loading) return <p style={styles.loading}>Loading discount codes…</p>
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        {!editing ? (
+          <button onClick={startNew} style={styles.btnAction}>+ Add discount code</button>
+        ) : (
+          <form onSubmit={save} style={styles.addProductForm}>
+            {error && <p style={{ fontSize: 12, color: '#A23B2D', fontFamily: 'system-ui', margin: '0 0 4px' }}>⚠ {error}</p>}
+            <input placeholder="Code, e.g. SUMMER20" value={form.code} required
+                   onChange={e => setForm({ ...form, code: e.target.value.toUpperCase() })} style={inp} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={{ ...inp, flex: 1 }}>
+                <option value="percent">Percent off</option>
+                <option value="fixed">Fixed amount off</option>
+                <option value="free_shipping">Free shipping</option>
+              </select>
+              {form.type !== 'free_shipping' && (
+                <input type="number" step={form.type === 'fixed' ? '0.01' : '1'}
+                       placeholder={form.type === 'fixed' ? 'Amount (R)' : 'Percent (1-100)'}
+                       value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} style={{ ...inp, flex: 1 }} />
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="number" step="0.01" placeholder="Minimum order (R, optional)" value={form.min_order_cents}
+                     onChange={e => setForm({ ...form, min_order_cents: e.target.value })} style={{ ...inp, flex: 1 }} />
+              <input type="number" placeholder="Usage limit (optional)" value={form.usage_limit}
+                     onChange={e => setForm({ ...form, usage_limit: e.target.value })} style={{ ...inp, flex: 1 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <span style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }}>Starts (optional)</span>
+                <input type="date" value={form.starts_at} onChange={e => setForm({ ...form, starts_at: e.target.value })} style={{ ...inp, width: '100%' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <span style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }}>Ends (optional)</span>
+                <input type="date" value={form.ends_at} onChange={e => setForm({ ...form, ends_at: e.target.value })} style={{ ...inp, width: '100%' }} />
+              </div>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'system-ui' }}>
+              <input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} />
+              Active
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="submit" disabled={saving} style={styles.btnAction}>
+                {saving ? 'Saving…' : (editing.id ? 'Save changes' : 'Add code')}
+              </button>
+              <button type="button" onClick={cancel} style={styles.btnGhost}>Cancel</button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {codes.length === 0 ? (
+        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: '#FFFFFF', border: '1px solid #DDD8CE', borderRadius: 12, padding: 32 }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🏷️</div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', marginBottom: 6 }}>No discount codes yet</div>
+          <p style={{ fontSize: 13, color: '#8A8680', lineHeight: 1.55, margin: '0 0 16px' }}>
+            Create a code customers can type at checkout — percent off, a fixed amount, or free shipping.
+          </p>
+          {!editing && <button onClick={startNew} style={styles.btnAction}>+ Add your first code</button>}
+        </div>
+      ) : (
+        <div style={styles.list}>
+          {codes.map(c => (
+            <div key={c.id} style={{ ...styles.productCard, opacity: c.active ? 1 : 0.55 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <div>
+                  <span style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 14 }}>{c.code}</span>
+                  <span style={{ marginLeft: 10, fontSize: 13, color: '#2C7A4B', fontFamily: 'system-ui' }}>{valueLabel(c)}</span>
+                </div>
+                <button onClick={() => toggleActive(c)} disabled={saving} style={c.active ? styles.btnStock : styles.btnStockOff}>
+                  {c.active ? '✓ Active' : '✗ Inactive'}
+                </button>
+              </div>
+              <div style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', marginTop: 6 }}>
+                {c.min_order_cents ? `Min order R${(c.min_order_cents / 100).toFixed(2)} · ` : ''}
+                Used {c.usage_count || 0}{c.usage_limit ? ` / ${c.usage_limit}` : ''}
+                {c.starts_at ? ` · from ${c.starts_at.slice(0, 10)}` : ''}
+                {c.ends_at ? ` · until ${c.ends_at.slice(0, 10)}` : ''}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button onClick={() => startEdit(c)} style={styles.btnGhost}>Edit</button>
+                <button onClick={() => remove(c)} disabled={saving} style={{ ...styles.btnGhost, color: '#A23B2D' }}>Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )

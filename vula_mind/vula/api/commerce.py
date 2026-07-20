@@ -299,6 +299,75 @@ class CheckoutRequest(BaseModel):
     delivery_slot: DeliverySlot = DeliverySlot.morning
     delivery_notes: Optional[str] = None
     channel: str = "web"
+    discount_code: Optional[str] = None
+
+
+# ── Discount codes (migration 091) ────────────────────────────────────────────
+
+DISCOUNT_CODE_FIELDS = {"code", "type", "value", "min_order_cents", "starts_at", "ends_at",
+                        "usage_limit", "active"}
+
+
+@router.get("/{tenant_id}/admin/discount-codes")
+async def admin_list_discount_codes(tenant_id: str):
+    return {"discount_codes": await service.list_discount_codes(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/discount-codes")
+async def admin_create_discount_code(tenant_id: str, body: dict):
+    data = {k: v for k, v in (body or {}).items() if k in DISCOUNT_CODE_FIELDS}
+    if not (data.get("code") or "").strip():
+        raise HTTPException(status_code=400, detail="code is required")
+    if data.get("type") not in ("percent", "fixed", "free_shipping"):
+        raise HTTPException(status_code=400, detail="type must be percent, fixed, or free_shipping")
+    try:
+        return await service.create_discount_code(tenant_id, data)
+    except Exception as exc:
+        if "idx_discount_codes_tenant_code" in str(exc) or "23505" in str(exc):
+            raise HTTPException(status_code=400, detail=f"Code '{data['code']}' already exists.")
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.patch("/{tenant_id}/admin/discount-codes/{code_id}")
+async def admin_update_discount_code(tenant_id: str, code_id: str, body: dict):
+    data = {k: v for k, v in (body or {}).items() if k in DISCOUNT_CODE_FIELDS}
+    if not data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    try:
+        return await service.update_discount_code(tenant_id, code_id, data)
+    except Exception as exc:
+        if "idx_discount_codes_tenant_code" in str(exc) or "23505" in str(exc):
+            raise HTTPException(status_code=400, detail=f"Code '{data.get('code')}' already exists.")
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/{tenant_id}/admin/discount-codes/{code_id}")
+async def admin_delete_discount_code(tenant_id: str, code_id: str):
+    await service.delete_discount_code(tenant_id, code_id)
+    return {"deleted": code_id}
+
+
+class ValidateDiscountRequest(BaseModel):
+    code: str
+    subtotal_cents: int
+
+
+@router.post("/{tenant_id}/discount-codes/validate")
+async def public_validate_discount_code(tenant_id: str, body: ValidateDiscountRequest):
+    """Public preview — lets the storefront show 'code applied, -R50' before checkout. The
+    actual charge always re-validates inside create_order; this never touches usage_count."""
+    try:
+        resolved = await service.resolve_discount_code(tenant_id, body.code, body.subtotal_cents)
+    except service.DiscountError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        log.warning("discount code validate failed (migration 091 not run?): %s", exc)
+        raise HTTPException(status_code=400, detail=f"'{body.code}' isn't a valid code.")
+    return {
+        "code": resolved["code_row"]["code"],
+        "discount_cents": resolved["discount_cents"],
+        "free_shipping": resolved["free_shipping"],
+    }
 
 
 @router.post("/{tenant_id}/checkout")

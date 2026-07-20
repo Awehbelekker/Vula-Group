@@ -346,6 +346,96 @@ async def clear_cart(cart_id: str) -> None:
     _client().table("commerce_carts").update({"status": "converted", "updated_at": _now()}).eq("id", cart_id).execute()
 
 
+# ── Discount codes (migration 091) ────────────────────────────────────────────
+# Customer-facing storefront promo codes — distinct from the invoice-level discount_pct
+# (migrations 041/053) which is a staff-entered B2B quote/invoice discount.
+
+class DiscountError(ValueError):
+    """Raised by resolve_discount_code with a customer-facing reason."""
+
+
+async def list_discount_codes(tenant_id: str) -> List[dict]:
+    result = (_client().table("commerce_discount_codes").select("*")
+              .eq("tenant_id", tenant_id).order("created_at", desc=True).execute())
+    return result.data or []
+
+
+async def create_discount_code(tenant_id: str, data: dict) -> dict:
+    payload = {
+        "id": str(uuid.uuid4()), "tenant_id": tenant_id,
+        "created_at": _now(), "updated_at": _now(), **data,
+    }
+    payload["code"] = (payload.get("code") or "").strip().upper()
+    result = _client().table("commerce_discount_codes").insert(payload).execute()
+    return result.data[0]
+
+
+async def update_discount_code(tenant_id: str, code_id: str, data: dict) -> dict:
+    data = dict(data)
+    data["updated_at"] = _now()
+    if "code" in data:
+        data["code"] = (data["code"] or "").strip().upper()
+    result = (_client().table("commerce_discount_codes").update(data)
+              .eq("tenant_id", tenant_id).eq("id", code_id).execute())
+    return result.data[0] if result.data else {}
+
+
+async def delete_discount_code(tenant_id: str, code_id: str) -> None:
+    _client().table("commerce_discount_codes").delete().eq("tenant_id", tenant_id).eq("id", code_id).execute()
+
+
+async def resolve_discount_code(tenant_id: str, code: str, subtotal_cents: int) -> dict:
+    """Validate a discount code against a cart subtotal. Returns
+    {code_row, discount_cents, free_shipping}. Raises DiscountError with a message safe to
+    show the customer verbatim on any failure. Called both for a storefront's "apply code"
+    preview AND again, authoritatively, inside create_order — never trust a client-computed
+    discount for the amount actually charged."""
+    code = (code or "").strip()
+    if not code:
+        raise DiscountError("Enter a discount code.")
+    rows = (_client().table("commerce_discount_codes").select("*")
+            .eq("tenant_id", tenant_id).ilike("code", code).limit(1).execute().data or [])
+    if not rows:
+        raise DiscountError(f"'{code}' isn't a valid code.")
+    row = rows[0]
+    if not row.get("active"):
+        raise DiscountError(f"'{code}' is no longer active.")
+
+    now = datetime.now(timezone.utc)
+    starts = row.get("starts_at")
+    if starts and datetime.fromisoformat(str(starts).replace("Z", "+00:00")) > now:
+        raise DiscountError(f"'{code}' isn't active yet.")
+    ends = row.get("ends_at")
+    if ends and datetime.fromisoformat(str(ends).replace("Z", "+00:00")) < now:
+        raise DiscountError(f"'{code}' has expired.")
+
+    limit = row.get("usage_limit")
+    if limit is not None and (row.get("usage_count") or 0) >= limit:
+        raise DiscountError(f"'{code}' has reached its usage limit.")
+
+    min_order = row.get("min_order_cents")
+    if min_order and subtotal_cents < min_order:
+        raise DiscountError(f"'{code}' needs a minimum order of R{min_order / 100:.2f}.")
+
+    dtype = row.get("type")
+    if dtype == "percent":
+        discount_cents = int(round(subtotal_cents * (row.get("value") or 0) / 100.0))
+        free_shipping = False
+    elif dtype == "fixed":
+        discount_cents = min(int(row.get("value") or 0), subtotal_cents)
+        free_shipping = False
+    else:  # free_shipping
+        discount_cents = 0
+        free_shipping = True
+    return {"code_row": row, "discount_cents": discount_cents, "free_shipping": free_shipping}
+
+
+async def increment_discount_usage(code_id: str) -> None:
+    """Race-safe usage increment (mirrors update_product_stock's RPC pattern) — a raw
+    read-then-write here could undercount usage under concurrent checkouts."""
+    _client().rpc("increment_discount_code_usage", {"p_code_id": code_id}).execute()
+
+
 # ── Orders ───────────────────────────────────────────────────────────────────
 
 async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
@@ -365,7 +455,29 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
             delivery = 0
     except Exception:
         pass
-    total = subtotal + delivery
+
+    # Discount code (migration 091) — resolved authoritatively here regardless of any
+    # client-side preview, since the actual amount charged must never trust the client.
+    discount_cents, discount_code, code_row = 0, None, None
+    raw_code = (checkout_data.get("discount_code") or "").strip()
+    if raw_code:
+        try:
+            resolved = await resolve_discount_code(tenant_id, raw_code, subtotal)
+            code_row = resolved["code_row"]
+            discount_cents = resolved["discount_cents"]
+            discount_code = code_row["code"]
+            if resolved["free_shipping"]:
+                delivery = 0
+        except DiscountError as exc:
+            logger.info("discount code '%s' rejected at checkout: %s", raw_code, exc)
+        except Exception as exc:
+            # A bad/missing discount_codes table (migration 091 not run yet) or any other DB
+            # hiccup must never break checkout itself — the purchase proceeds without the
+            # discount rather than crashing.
+            logger.warning("discount code lookup failed at checkout, proceeding without it (%s): %s",
+                           raw_code, exc)
+
+    total = max(0, subtotal - discount_cents) + delivery
     display_id = await _next_order_display_id(tenant_id)
 
     order = {
@@ -380,6 +492,8 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
         "delivery_notes": checkout_data.get("delivery_notes"),
         "subtotal_cents": subtotal,
         "delivery_cents": delivery,
+        "discount_code": discount_code,
+        "discount_cents": discount_cents,
         "total_cents": total,
         "status": "pending_payment",
         "channel": checkout_data.get("channel", "web"),
@@ -392,15 +506,25 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     try:
         result = _client().table("commerce_orders").insert(order).execute()
     except Exception as exc:
-        # payment_method column may not exist yet (migration 044 not run) — fold the
-        # method into delivery_notes and retry so ordering never breaks on a missing column.
+        # Any of these newer optional columns might not exist yet on an un-migrated DB
+        # (payment_method: migration 044; discount_code/discount_cents: migration 091) —
+        # strip them and retry so ordering never breaks on a missing column.
         method = order.pop("payment_method", None)
+        order.pop("discount_code", None)
+        order.pop("discount_cents", None)
         if method:
             note = order.get("delivery_notes") or ""
             order["delivery_notes"] = (f"[pay:{method}] " + note).strip()
-        logger.warning("order insert retried without payment_method (%s): %s", method, exc)
+        logger.warning("order insert retried without payment_method/discount fields (%s): %s", method, exc)
         result = _client().table("commerce_orders").insert(order).execute()
+        code_row = None  # discount_cents column didn't exist -> don't count usage below
     order_id = result.data[0]["id"]
+
+    if code_row:
+        try:
+            await increment_discount_usage(code_row["id"])
+        except Exception as exc:
+            logger.warning("discount usage increment failed for code %s: %s", code_row["id"], exc)
 
     # Insert order items
     order_items = [
