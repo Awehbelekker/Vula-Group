@@ -103,6 +103,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
   const [products, setProducts] = useState([])
   const [modules, setModules] = useState(null)   // tenant's enabled capability keys (control plane)
   const [broadcastDraft, setBroadcastDraft] = useState(null)   // Marketing → "Send as broadcast" handoff (P2.1)
+  const [invoiceSupplierFilter, setInvoiceSupplierFilter] = useState(null)  // Suppliers → Invoices click-through
 
   // Tenant-level module gating (business-type driven). Always show core tabs; map a few
   // tab ids to their module key. null/empty modules = show everything (no config yet).
@@ -176,9 +177,9 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullP
           {tab === 'delivery'  && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
           {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
           {tab === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
-          {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} />}
+          {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); setTab('invoices') }} />}
           {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
-          {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} />}
+          {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={() => setInvoiceSupplierFilter(null)} />}
           {tab === 'bank'      && <VulaBankRec      tenantId={tenantId} />}
           {tab === 'books'     && <VulaAccounting  tenantId={tenantId} />}
           {tab === 'labour'    && <VulaLabour      tenantId={tenantId} />}
@@ -1854,7 +1855,7 @@ const BLANK_SUPPLIER = {
   contact_phone: '', contact_email: '', account_number: '', tax_id: '', notes: '',
 }
 
-function SuppliersTab({ tenantId }) {
+function SuppliersTab({ tenantId, onViewInvoices }) {
   const [suppliers, setSuppliers] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -1970,6 +1971,7 @@ function SuppliersTab({ tenantId }) {
                   <span style={{ ...styles.statSub, marginLeft: 8 }}>{s.payment_terms_days ?? 30} day terms</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
+                  {onViewInvoices && <button onClick={() => onViewInvoices(s.id)} style={styles.btnGhost}>🧾 Invoices</button>}
                   <button onClick={() => startEdit(s)} style={styles.btnGhost}>Edit</button>
                   <button onClick={() => remove(s)} disabled={saving} style={styles.btnDanger}>Delete</button>
                 </div>

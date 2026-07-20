@@ -25,13 +25,19 @@ def _client():
 
 
 @router.get("/{tenant_id}/filed")
-async def list_filed(tenant_id: str, project: Optional[str] = None) -> dict:
-    """Filed documents for a tenant (newest first), optionally filtered by project."""
+async def list_filed(
+    tenant_id: str, project: Optional[str] = None, commerce_invoice_id: Optional[str] = None,
+) -> dict:
+    """Filed documents for a tenant (newest first), optionally filtered by project or by the
+    commerce_invoices row they were promoted into (migration 102's bridge column) — lets the
+    Invoices tab link an inbound invoice back to the real scanned/emailed document it came from."""
     try:
         q = (_client().table("vula_filed_documents").select("*")
              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(500))
         if project:
             q = q.eq("project", project)
+        if commerce_invoice_id:
+            q = q.eq("commerce_invoice_id", commerce_invoice_id)
         rows = q.execute().data or []
     except Exception as exc:
         log.warning("documents list failed (run migration 015?): %s", exc)

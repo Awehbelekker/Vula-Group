@@ -21,11 +21,17 @@ const STATUS = {
   cancelled: { label: 'Cancelled', color: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
 }
 
-export default function VulaInvoices({ tenantId, products = [] }) {
+export default function VulaInvoices({ tenantId, products = [], initialSupplierId = null, onClearSupplierFilter }) {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(null) // null | 'invoice' | 'quote'
   const [docType, setDocType] = useState('invoice')
+  // 'outbound' = we sent it to a client (the tab's original behaviour). 'inbound' = a supplier
+  // sent it to us — booked by the Smart Scanner / email / WhatsApp / dashboard-upload intake
+  // pipelines, but invisible until now because the backend defaulted to outbound with no toggle.
+  const [direction, setDirection] = useState(initialSupplierId ? 'inbound' : 'outbound')
+  // Deep-linked from the Suppliers tab's "🧾 Invoices" button — filters to that one supplier.
+  const [supplierFilter, setSupplierFilter] = useState(initialSupplierId)
   const [matchResults, setMatchResults] = useState({})  // { [invId]: result }
   const [matchingId, setMatchingId] = useState(null)     // id currently matching
   const [settings, setSettings] = useState(null)         // commerce_invoice_settings row
@@ -33,10 +39,25 @@ export default function VulaInvoices({ tenantId, products = [] }) {
   const [showRecurring, setShowRecurring] = useState(false)
   const autoOpened = useRef(false)                       // first-run wizard opened once
 
+  // A fresh deep-link (e.g. clicking a different supplier while already on this tab) —
+  // re-sync local state to match.
+  useEffect(() => {
+    if (initialSupplierId && initialSupplierId !== supplierFilter) {
+      setSupplierFilter(initialSupplierId)
+      setDirection('inbound')
+    }
+  }, [initialSupplierId])  // eslint-disable-line
+
+  function clearSupplierFilter() {
+    setSupplierFilter(null)
+    if (onClearSupplierFilter) onClearSupplierFilter()
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
+    const supplierQs = supplierFilter ? `&supplier_id=${supplierFilter}` : ''
     const [d, sr] = await Promise.all([
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?doc_type=${docType}`).then(r => r.json()),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?doc_type=${docType}&direction=${direction}${supplierQs}`).then(r => r.json()),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`).then(r => r.json()).catch(() => null),
     ])
     setInvoices(d.invoices || [])
@@ -49,7 +70,7 @@ export default function VulaInvoices({ tenantId, products = [] }) {
       }
     }
     setLoading(false)
-  }, [tenantId, docType])
+  }, [tenantId, docType, direction, supplierFilter])
 
   useEffect(() => { load() }, [load])
 
@@ -127,8 +148,35 @@ export default function VulaInvoices({ tenantId, products = [] }) {
     }
   }
 
-  function downloadPdf(inv) {
-    window.open(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`, '_blank')
+  // A raw window.open() against this admin endpoint 401s with "Sign in required" — it's a plain
+  // browser navigation, so it never carries the Authorization header the installAuthFetch()
+  // patch attaches to fetch() calls. Fetch it as an authenticated request instead and open the
+  // resulting bytes as a blob URL.
+  async function downloadPdf(inv) {
+    try {
+      const resp = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`)
+      if (!resp.ok) { alert('Could not open the PDF — please try again.'); return }
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } catch {
+      alert('Could not open the PDF — please try again.')
+    }
+  }
+
+  // The real document a supplier sent (scanned/emailed/WhatsApp'd) — linked via migration 102's
+  // vula_filed_documents.commerce_invoice_id bridge. file_url is a direct Supabase Storage link
+  // (not behind the admin auth guard), so it opens with a plain window.open().
+  async function openFiledDocument(inv) {
+    try {
+      const d = await fetch(`${VULA_API}/v1/documents/${tenantId}/filed?commerce_invoice_id=${inv.id}`).then(r => r.json())
+      const doc = (d.documents || [])[0]
+      if (doc?.file_url) window.open(doc.file_url, '_blank')
+      else alert('No original document linked to this invoice.')
+    } catch {
+      alert('Could not look up the original document.')
+    }
   }
 
   async function creditNote(inv) {
@@ -199,21 +247,33 @@ export default function VulaInvoices({ tenantId, products = [] }) {
 
   return (
     <div>
+      <div style={s.dirTabs}>
+        <button onClick={() => { setDirection('outbound'); clearSupplierFilter() }} style={{...s.dirTab, ...(direction === 'outbound' ? s.dirTabActive : {})}}>📤 Sent to clients</button>
+        <button onClick={() => setDirection('inbound')} style={{...s.dirTab, ...(direction === 'inbound' ? s.dirTabActive : {})}}>📥 Received from suppliers</button>
+        {supplierFilter && (
+          <button onClick={clearSupplierFilter} style={s.dirFilterChip}>Filtered by supplier · ✕ clear</button>
+        )}
+      </div>
+
       <div style={s.tabs}>
         <button onClick={() => setDocType('invoice')} style={{...s.tab, ...(docType === 'invoice' ? s.tabActive : {})}}>Invoices</button>
         <button onClick={() => setDocType('quote')} style={{...s.tab, ...(docType === 'quote' ? s.tabActive : {})}}>Quotes</button>
-        <button onClick={() => setDocType('credit_note')} style={{...s.tab, ...(docType === 'credit_note' ? s.tabActive : {})}}>Credit Notes</button>
+        {direction === 'outbound' && <button onClick={() => setDocType('credit_note')} style={{...s.tab, ...(docType === 'credit_note' ? s.tabActive : {})}}>Credit Notes</button>}
       </div>
 
       <div style={s.topBar}>
         <p style={s.count}>{invoices.length} {docType}{invoices.length !== 1 ? 's' : ''}</p>
-        <button onClick={() => setShowRecurring(true)} style={s.brandBtn}>🔁 Recurring</button>
+        {direction === 'outbound' && <button onClick={() => setShowRecurring(true)} style={s.brandBtn}>🔁 Recurring</button>}
         <button onClick={() => setShowSettings(true)} style={s.brandBtn}>⚙ Branding</button>
-        {docType !== 'credit_note' && <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>}
+        {direction === 'outbound' && docType !== 'credit_note' && <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>}
       </div>
 
       {loading ? <p style={s.muted}>Loading…</p> : invoices.length === 0 ? (
-        <p style={s.muted}>No {docType}s yet. Create one, or scan an existing document with the Smart Scanner.</p>
+        <p style={s.muted}>
+          {direction === 'inbound'
+            ? `No ${docType}s from suppliers yet — they'll appear here once scanned, emailed, or WhatsApp'd in.`
+            : `No ${docType}s yet. Create one, or scan an existing document with the Smart Scanner.`}
+        </p>
       ) : (
         <div style={s.list}>
           {invoices.map(inv => {
@@ -227,32 +287,55 @@ export default function VulaInvoices({ tenantId, products = [] }) {
                   </div>
                   <span style={s.amount}>{fmt(inv.total_cents)}</span>
                 </div>
-                <p style={s.cust}>{inv.customer_name}{inv.customer_phone ? ` · ${inv.customer_phone}` : ''}</p>
+                <p style={s.cust}>
+                  {inv.direction === 'inbound' ? (inv.supplier || inv.customer_name) : inv.customer_name}
+                  {inv.customer_phone ? ` · ${inv.customer_phone}` : ''}
+                  {inv.direction === 'inbound' && <span style={s.supplierBadge}>{inv.supplier_id ? '🔗 supplier matched' : '⚠ needs review'}</span>}
+                </p>
                 <p style={s.dates}>
                   {inv.doc_type === 'quote' ? 'Quoted' : 'Issued'} {inv.issue_date}
                   {inv.due_date ? ` · Due ${inv.due_date}` : ''}
                   {inv.valid_until ? ` · Valid until ${inv.valid_until}` : ''}
+                  {inv.project ? ` · ${inv.project}` : ''}
                 </p>
                 <div style={s.cardActions}>
-                  {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
-                  <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
-                  {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
-                  {inv.doc_type === 'invoice' && inv.status !== 'paid' && <button onClick={() => payLink(inv)} style={s.actPaid}>💳 Pay link</button>}
-                  {inv.doc_type === 'invoice' && <button onClick={() => creditNote(inv)} style={s.actMatch}>↩️ Credit note</button>}
-                  {inv.doc_type === 'invoice' && (
-                    <button
-                      onClick={() => matchSupplier(inv)}
-                      disabled={matchingId === inv.id}
-                      style={s.actMatch}
-                    >
-                      {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
-                    </button>
-                  )}
-                  {inv.doc_type === 'quote' && inv.status !== 'accepted' && (
-                    <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
-                  )}
-                  {inv.doc_type === 'invoice' && inv.status !== 'paid' && (
-                    <button onClick={() => setStatus(inv, 'paid')} style={s.actPaid}>✓ Mark paid</button>
+                  {inv.direction === 'inbound' ? (
+                    <>
+                      <button onClick={() => openFiledDocument(inv)} style={s.actPdf}>📎 Original document</button>
+                      <button
+                        onClick={() => matchSupplier(inv)}
+                        disabled={matchingId === inv.id}
+                        style={s.actMatch}
+                      >
+                        {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
+                      </button>
+                      {inv.status !== 'paid' && (
+                        <button onClick={() => setStatus(inv, 'paid')} style={s.actPaid}>✓ Mark paid</button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
+                      <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
+                      {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
+                      {inv.doc_type === 'invoice' && inv.status !== 'paid' && <button onClick={() => payLink(inv)} style={s.actPaid}>💳 Pay link</button>}
+                      {inv.doc_type === 'invoice' && <button onClick={() => creditNote(inv)} style={s.actMatch}>↩️ Credit note</button>}
+                      {inv.doc_type === 'invoice' && (
+                        <button
+                          onClick={() => matchSupplier(inv)}
+                          disabled={matchingId === inv.id}
+                          style={s.actMatch}
+                        >
+                          {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
+                        </button>
+                      )}
+                      {inv.doc_type === 'quote' && inv.status !== 'accepted' && (
+                        <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
+                      )}
+                      {inv.doc_type === 'invoice' && inv.status !== 'paid' && (
+                        <button onClick={() => setStatus(inv, 'paid')} style={s.actPaid}>✓ Mark paid</button>
+                      )}
+                    </>
                   )}
                   <button onClick={() => del(inv.id)} style={s.actDel}>Delete</button>
                 </div>
@@ -826,6 +909,11 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
 }
 
 const s = {
+  dirTabs:    { display: 'flex', gap: 8, marginBottom: 12 },
+  dirTab:     { padding: '8px 16px', background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
+  dirTabActive:{ background: 'var(--accent, var(--accent))', borderColor: 'var(--accent, var(--accent))', color: '#fff' },
+  dirFilterChip:{ padding: '8px 14px', background: 'rgba(212,160,23,0.12)', border: '1px solid rgba(212,160,23,0.35)', borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#a8780a' },
+  supplierBadge:{ marginLeft: 8, padding: '1px 8px', borderRadius: 10, fontSize: 10, fontWeight: 600, background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))' },
   tabs:       { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #DDD8CE', paddingBottom: 8 },
   tab:        { padding: '6px 16px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
   tabActive:  { background: 'rgba(44,85,69,0.1)', color: 'var(--accent, var(--accent))' },

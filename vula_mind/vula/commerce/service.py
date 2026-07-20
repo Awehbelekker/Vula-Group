@@ -1051,6 +1051,7 @@ async def list_invoices(
     doc_type: Optional[str] = None,
     status: Optional[str] = None,
     direction: Optional[str] = None,
+    supplier_id: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> List[dict]:
@@ -1066,6 +1067,8 @@ async def list_invoices(
         q = q.eq("status", status)
     if direction:
         q = q.eq("direction", direction)
+    if supplier_id:
+        q = q.eq("supplier_id", supplier_id)
     result = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
     return result.data or []
 
