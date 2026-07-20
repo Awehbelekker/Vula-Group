@@ -1340,13 +1340,17 @@ async def delete_supplier(tenant_id: str, supplier_id: str) -> None:
 
 async def commit_inbound_document(
     tenant_id: str, extracted: dict, *, auto_commit: bool = True, source: str = "scanner",
-    filed_document_id: Optional[str] = None,
+    filed_document_id: Optional[str] = None, project: Optional[str] = None,
 ) -> dict:
     """Commit an extracted inbound document (invoice/quote/delivery_note/receipt) into the
     books: supplier match (or auto-create for a genuinely new supplier), due-date calc,
     commerce_invoices/commerce_expenses insert, KB ingest. The single commit path shared by
     the Smart Scanner (admin_scan_commit, migration 009-era) and, from migration 102 onward,
     the email/WhatsApp/dashboard-upload document pipelines — one path for every intake channel.
+
+    `project` (which job/site this bill is for) and supplier (who sent it, resolved internally
+    below) are orthogonal and both get set on the committed row when known — the Smart Scanner
+    never had a project concept, so this is optional and None by default.
 
     Supplier resolution (store-admin-reconciliation follow-on plan):
     - Tier 1/2/3-at-or-above-auto-apply match → applied directly, no human involved.
@@ -1456,6 +1460,7 @@ async def commit_inbound_document(
             "invoice_number": await _next_invoice_number(tenant_id, doc_type),
             "customer_name": tenant_name,
             "status": "draft", "supplier": supplier_name, "supplier_id": supplier_id,
+            "project": project,
             "issue_date": str(doc_date), "due_date": str(due_date) if due_date else None,
             "payment_terms_days": payment_terms_days,
             "subtotal_cents": total_cents - vat_cents, "vat_rate": 15.0, "vat_cents": vat_cents,
@@ -1473,6 +1478,7 @@ async def commit_inbound_document(
             "category": extracted.get("category") or "supplies",
             "description": f"{supplier_name or 'Unknown'} — {doc_type}",
             "amount_cents": total_cents, "supplier": supplier_name, "supplier_id": supplier_id,
+            "project": project,
             "payment_terms_days": payment_terms_days, "status": "pending", "source": source,
             "doc_type": doc_type, "line_items": _j.dumps(extracted.get("line_items", [])),
             "scan_confidence": extracted.get("confidence"),

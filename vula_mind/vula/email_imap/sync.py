@@ -704,7 +704,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         # file_document() does what this used to hand-roll, plus the two things it was
         # missing: a durable Supabase Storage copy (file_url) and — when the match carries
         # a ClickUp list — attaching the file into that project's ClickUp task.
-        await file_document(
+        filed_row = await file_document(
             tenant_id, filename=att["name"], data=att["data"],
             content_type=att.get("mime") or "application/octet-stream",
             category=category, summary=summary, fields=fields,
@@ -724,6 +724,28 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
                                       summary or "", category, owner_names=[em.get("from", "")])
             except Exception as exc:
                 logger.debug("finance post skipped: %s", exc)
+
+        # A real B2B bill/quote (not already handled as a bank statement/POP above) gets
+        # committed into the books via the same shared path the Smart Scanner uses —
+        # supplier match/auto-create, due-date calc, commerce_invoices/expenses row.
+        try:
+            from vula.api.whatsapp import _FINANCIAL_DOC_CATEGORIES, _CATEGORY_TO_DOC_TYPE
+            if category in _FINANCIAL_DOC_CATEGORIES and not payment_matched:
+                from vula.commerce import service as commerce_service
+                # _analyze_document's fields never set doc_type (only the Smart Scanner's
+                # vision-scan schema does) — commit_inbound_document defaults a missing
+                # doc_type to "receipt", which would silently misfile every real inbound
+                # invoice/quote as an expense. Map the deep-analysis category across.
+                commit_fields = dict(fields or {})
+                commit_fields.setdefault("doc_type", _CATEGORY_TO_DOC_TYPE.get(category, "invoice"))
+                await commerce_service.commit_inbound_document(
+                    tenant_id, commit_fields, auto_commit=True, source="email",
+                    filed_document_id=filed_row.get("id") if filed_row else None,
+                    project=match["project"] if match else None,
+                )
+        except Exception as exc:
+            logger.warning("commit_inbound_document failed for email attachment %s: %s",
+                           att.get("name"), exc)
 
         if ask:
             try:

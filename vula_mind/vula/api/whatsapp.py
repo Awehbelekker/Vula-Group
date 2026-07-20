@@ -770,6 +770,10 @@ async def _handle_document_ingest(
         # PDFs that look like supplier invoices → auto-scan → commit to books (photos are
         # handled as expense claims below, off the reliable deep-analysis fields).
         scan_msg = ""
+        # True once the vision-scan shortcut below has already committed this PDF to
+        # commerce_invoices/expenses — tells _file_uploaded_document not to commit it again
+        # (e.g. via a deep-analysis "Quote / Estimate" category the shortcut doesn't cover).
+        already_committed = False
         if role == "admin" and local_path.suffix.lower() == ".pdf":
             try:
                 import base64, httpx as _httpx
@@ -804,6 +808,7 @@ async def _handle_document_ingest(
                             if commit_resp.status_code == 200:
                                 commit_data = commit_resp.json()
                                 scan_msg = f"\n\n📊 {commit_data.get('message', '')}"
+                                already_committed = True
             except Exception as scan_exc:
                 logger.debug("Auto-scan skipped for %s: %s", filename, scan_exc)
 
@@ -871,10 +876,12 @@ async def _handle_document_ingest(
             doc_category = _classify_document(result.filename, local_path)
             summary, fields, breakdown = "", {}, ""
 
-        # File the document: durable copy + project link + ClickUp attachment.
+        # File the document: durable copy + project link + ClickUp attachment. Also books it
+        # via the shared commit path (same as email/Smart Scanner) unless the vision-scan
+        # shortcut above already committed it.
         file_note = await _file_uploaded_document(
             tenant_id, phone, result, local_path, mime_type,
-            doc_category, summary, fields,
+            doc_category, summary, fields, already_committed=already_committed,
         )
 
         if scan_msg and any(k in scan_msg for k in ("💳", "♻️", "📦", "⚠️")):
@@ -947,11 +954,23 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
             tenant_id, card_last4=scan_data.get("card_last4"),
             payment_method=scan_data.get("payment_method"))
         project = expenses.match_project(tenant_id, scan_data.get("notes") or "")
+        # Read-only supplier lookup — a receipt is a reimbursement event, not a bill, so it
+        # never auto-creates a new supplier; it only links supplier_id when this genuinely
+        # matches a supplier Vula already knows (same tiered match the Smart Scanner uses).
+        supplier_id = None
+        if supplier:
+            try:
+                from vula.commerce import service as commerce_service
+                sm = await commerce_service.match_supplier(tenant_id, name=supplier)
+                if sm and sm.get("auto_apply"):
+                    supplier_id = (sm.get("supplier") or {}).get("id")
+            except Exception:
+                pass
         claim = await expenses.create_claim(
             tenant_id, amount_cents=total,
             description=(scan_data.get("notes") or supplier or "Receipt"),
-            supplier=supplier, date=scan_data.get("date"), vat_cents=vat, project=project,
-            paid_by=phone, paid_by_name=name, reimbursable=reimbursable,
+            supplier=supplier, supplier_id=supplier_id, date=scan_data.get("date"), vat_cents=vat,
+            project=project, paid_by=phone, paid_by_name=name, reimbursable=reimbursable,
             paid_with=paid_with, card_last4=scan_data.get("card_last4"),
             channel="whatsapp", receipt_doc_id=doc_id)
         if claim.get("duplicate"):
@@ -1056,8 +1075,11 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
 
 
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
-                                  category, summary, fields) -> str:
+                                  category, summary, fields, already_committed=False,
+                                  source="whatsapp") -> str:
     """Match the document to a project and file it (durable copy + record + ClickUp).
+    Also books it via the shared commit path (same as email/Smart Scanner) when it's a
+    financial category the vision-scan shortcut hasn't already committed.
     Returns a WhatsApp note: either 'Filed under X' or a 'which project?' question.
     """
     try:
@@ -1079,27 +1101,47 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             row = await file_document(
                 tenant_id, filename=result.filename, data=data, content_type=ctype,
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,
-                source="whatsapp", filed_by=phone, project=match["project"],
+                source=source, filed_by=phone, project=match["project"],
                 clickup_list_id=match.get("clickup_list_id"), status="filed",
             )
             note = f"📂 Filed under *{match['project']}*."
             if row.get("clickup_task_id"):
                 note += " Added to ClickUp."
-            return note
-        # No confident match (none at all, or an unresolved tie) — store as pending and ask.
-        await file_document(
-            tenant_id, filename=result.filename, data=data, content_type=ctype,
-            category=category, summary=summary, fields=fields, doc_id=result.doc_id,
-            source="whatsapp", filed_by=phone, status="pending_project",
-        )
-        candidates = match.get("candidates") if match else None
-        if candidates:
-            return ("📂 That could be more than one project — " + " / ".join(candidates) +
-                    ". Reply with the exact project name (or 'skip').")
-        ex = project_examples(tenant_id)
-        hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
-        return (f"📂 Which project is this for?{hint_txt} "
-                f"Reply with the project name and I'll file it (or 'skip').")
+        else:
+            # No confident match (none at all, or an unresolved tie) — store as pending and ask.
+            row = await file_document(
+                tenant_id, filename=result.filename, data=data, content_type=ctype,
+                category=category, summary=summary, fields=fields, doc_id=result.doc_id,
+                source=source, filed_by=phone, status="pending_project",
+            )
+            candidates = match.get("candidates") if match else None
+            if candidates:
+                note = ("📂 That could be more than one project — " + " / ".join(candidates) +
+                        ". Reply with the exact project name (or 'skip').")
+            else:
+                ex = project_examples(tenant_id)
+                hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
+                note = (f"📂 Which project is this for?{hint_txt} "
+                        f"Reply with the project name and I'll file it (or 'skip').")
+
+        if not already_committed and category in _FINANCIAL_DOC_CATEGORIES:
+            try:
+                from vula.commerce import service as commerce_service
+                # _analyze_document's extraction never sets doc_type (only the Smart Scanner's
+                # vision-scan schema does) — commit_inbound_document defaults a missing doc_type
+                # to "receipt", which would silently misfile every real invoice/quote as an
+                # expense. Map the deep-analysis category across explicitly.
+                commit_fields = dict(fields or {})
+                commit_fields.setdefault("doc_type", _CATEGORY_TO_DOC_TYPE.get(category, "invoice"))
+                await commerce_service.commit_inbound_document(
+                    tenant_id, commit_fields, auto_commit=True, source=source,
+                    filed_document_id=row.get("id") if row else None,
+                    project=match["project"] if confident else None,
+                )
+            except Exception as exc:
+                logger.warning("commit_inbound_document failed for %s: %s", result.filename, exc)
+
+        return note
     except Exception as exc:
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
         return ""
@@ -1119,6 +1161,15 @@ _DOC_CATEGORIES = [
 # (supplier/tax_id/total_cents/vat_cents/line_items) and are therefore both arithmetic-
 # checkable (extraction_quality.scan_quality_ok) and eligible for commit_inbound_document().
 _FINANCIAL_DOC_CATEGORIES = {"Invoice", "Quote / Estimate", "Bill of Quantities (BOQ)"}
+
+# commit_inbound_document()'s doc_type vocabulary ("invoice" | "quote" | "delivery_note" | ...)
+# doesn't match _analyze_document's category labels — map across explicitly. A BOQ is priced
+# and sent like a quote, so it maps to "quote" too (there's no separate doc_type for it).
+_CATEGORY_TO_DOC_TYPE = {
+    "Invoice": "invoice",
+    "Quote / Estimate": "quote",
+    "Bill of Quantities (BOQ)": "quote",
+}
 
 
 def _sanitize_json_string(raw: str) -> str:

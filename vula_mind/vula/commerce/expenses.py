@@ -141,6 +141,7 @@ async def create_claim(
     amount_cents: int,
     description: str,
     supplier: Optional[str] = None,
+    supplier_id: Optional[str] = None,
     date: Optional[str] = None,
     vat_cents: Optional[int] = None,
     category: Optional[str] = None,
@@ -231,7 +232,7 @@ async def create_claim(
         "date": _d,
         "description": description or (supplier or "Expense"),
         "amount_cents": amount_cents, "vat_cents": int(vat_cents or 0),
-        "supplier": supplier, "category": category, "account_code": account_code,
+        "supplier": supplier, "supplier_id": supplier_id, "category": category, "account_code": account_code,
         "project": project, "paid_by": paid_by, "paid_by_name": paid_by_name,
         "reimbursable": bool(reimbursable), "status": "submitted",
         "paid_with": paid_with, "card_last4": re.sub(r"\D", "", card_last4 or "")[-4:] or None,
@@ -244,7 +245,7 @@ async def create_claim(
     except Exception as exc:
         log.warning("expense insert retry (pre-060/061?): %s", exc)
         for k in ("paid_by", "paid_by_name", "reimbursable", "channel", "paid_with",
-                  "card_last4", "receipt_doc_id", "notes", "updated_at"):
+                  "card_last4", "receipt_doc_id", "notes", "updated_at", "supplier_id"):
             row.pop(k, None)
         res = db.table("commerce_expenses").insert(row).execute()
     out = (res.data or [row])[0]

@@ -1004,6 +1004,26 @@ class ScrapeRequest(BaseModel):
 
 # ─── Document Ingestion ───────────────────────────────────────────────────────
 
+async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type: Optional[str]) -> None:
+    """Bring the dashboard upload dropzone up to the same standard as the email/WhatsApp
+    intake channels: classify, extract structured fields, match a project, and — for a
+    financial category — commit it into the books via the shared commit_inbound_document
+    path. Previously this channel only embedded text into the KB. Best-effort: a failure
+    here never affects the (already-succeeded) KB ingestion or the response already sent."""
+    try:
+        from vula.api.whatsapp import _analyze_document, _file_uploaded_document
+        analysis = await _analyze_document(tenant_id, result.filename, file_path)
+        if not analysis:
+            return
+        await _file_uploaded_document(
+            tenant_id, "dashboard", result, file_path, mime_type,
+            analysis["category"], analysis.get("summary", ""), analysis.get("fields", {}),
+            source="dashboard",
+        )
+    except Exception as exc:
+        log.warning("Dashboard-upload analysis/filing failed for %s: %s", result.filename, exc)
+
+
 @app.post("/ingest", dependencies=[Depends(require_auth)])
 @limiter.limit("20/minute")
 async def ingest_document(
@@ -1024,11 +1044,14 @@ async def ingest_document(
     tenant_dir.mkdir(parents=True, exist_ok=True)
     file_path = tenant_dir / file.filename
     file_path.write_bytes(content)
+    mime_type = file.content_type
 
     async def _ingest() -> None:
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
         result = await pipeline.ingest_file(file_path)
         log.info("Ingestion complete: %s → %d chunks (%s)", result.filename, result.chunks_stored, result.status)
+        if result.status in ("success", "done"):
+            await _analyze_and_file_upload(tenant_id, result, file_path, mime_type)
 
     background_tasks.add_task(_ingest)
 
@@ -1072,11 +1095,14 @@ async def ingest_documents_batch(
 
             file_path = tenant_dir / file.filename
             file_path.write_bytes(content)
+            mime_type = file.content_type
 
-            async def _ingest_one(path=file_path, name=file.filename) -> None:
+            async def _ingest_one(path=file_path, name=file.filename, mime=mime_type) -> None:
                 pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
                 result = await pipeline.ingest_file(path)
                 log.info("Batch ingest: %s → %d chunks (%s)", name, result.chunks_stored, result.status)
+                if result.status in ("success", "done"):
+                    await _analyze_and_file_upload(tenant_id, result, path, mime)
 
             background_tasks.add_task(_ingest_one)
             results.append({"filename": file.filename, "status": "queued", "size_mb": round(size_mb, 2)})
