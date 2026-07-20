@@ -228,15 +228,22 @@ def _existing_project_task(tenant_id: str, project: str) -> Optional[tuple]:
     return None
 
 
-def _existing_filed_doc(tenant_id: str, project: str, filename: str) -> Optional[dict]:
-    """Newest already-filed row with the same tenant+project+filename, or None."""
+def _existing_filed_doc(tenant_id: str, project: str, filename: str,
+                        content_hash: Optional[str] = None) -> Optional[dict]:
+    """Newest already-filed row with the same tenant+project+filename, or None.
+
+    content_hash, when given, narrows the match to the SAME bytes (migration 092) — a generic,
+    reused filename (e.g. a bank's "Payment Notification.pdf") is not a reliable proxy for "same
+    file", so without this a second distinct document sharing that name would be silently
+    treated as a re-file of the first and never get its own row."""
     if not project or not filename:
         return None
     try:
-        res = (_client().table("vula_filed_documents").select("*")
-               .eq("tenant_id", tenant_id).eq("project", project)
-               .eq("filename", filename).eq("status", "filed")
-               .order("created_at", desc=True).limit(1).execute())
+        q = (_client().table("vula_filed_documents").select("*")
+             .eq("tenant_id", tenant_id).eq("project", project)
+             .eq("filename", filename).eq("status", "filed"))
+        q = q.eq("content_hash", content_hash) if content_hash else q.is_("content_hash", "null")
+        res = q.order("created_at", desc=True).limit(1).execute()
         rows = res.data or []
     except Exception:
         return None
@@ -281,9 +288,14 @@ async def file_document(
     given and we have bytes) attach the file into ClickUp. Returns the row dict
     plus `clickup_task_id` when attached.
     """
+    # Content hash (migration 092) computed up front — used both for the skip-duplicate check
+    # below and the row itself, so a second distinct file sharing a generic name never gets
+    # mistaken for a re-file of the first.
+    content_hash = hashlib.sha256(data).hexdigest() if data else None
+
     # Skip-duplicate: same file already filed under this project → update, don't re-attach.
     if status == "filed" and project:
-        dup = _existing_filed_doc(tenant_id, project, filename)
+        dup = _existing_filed_doc(tenant_id, project, filename, content_hash)
         if dup:
             try:
                 _client().table("vula_filed_documents").update({
@@ -311,14 +323,6 @@ async def file_document(
                                         filename, data, content_type)
         clickup_list_id = att.get("clickup_list_id") or clickup_list_id
         clickup_task_id = att.get("clickup_task_id")
-
-    # Content hash (migration 092): a generic, bank/system-reused filename like
-    # "Payment Notification.pdf" is NOT a reliable proxy for "same file" — three distinct real
-    # payment notifications sharing that exact name were silently dropped by the old
-    # filename-only uniqueness check before this existed. Hashing the actual bytes lets two
-    # different files that happen to share a name both file correctly, while true duplicates
-    # (identical bytes — e.g. a webhook redelivery) still dedupe exactly as before.
-    content_hash = hashlib.sha256(data).hexdigest() if data else None
 
     row = {
         "tenant_id": tenant_id, "project": project, "clickup_list_id": clickup_list_id,
@@ -348,7 +352,26 @@ async def file_document(
             if existing:
                 row = existing[0]
     except Exception as exc:
-        logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc)
+        # migration 092 not run yet — content_hash column/index don't exist. Retry against the
+        # OLD (tenant_id, source, filename) constraint so filing keeps working in the meantime
+        # (accepting the pre-092 generic-filename-collision limitation) rather than breaking
+        # every document filing outright.
+        logger.warning("vula_filed_documents insert retried without content_hash (run migration 092?): %s", exc)
+        row.pop("content_hash", None)
+        try:
+            ins = _client().table("vula_filed_documents").upsert(
+                row, on_conflict="tenant_id,source,filename", ignore_duplicates=True
+            ).execute()
+            if ins.data:
+                row["id"] = ins.data[0].get("id")
+            else:
+                existing = (_client().table("vula_filed_documents").select("*")
+                           .eq("tenant_id", tenant_id).eq("source", source)
+                           .eq("filename", filename).limit(1).execute().data or [])
+                if existing:
+                    row = existing[0]
+        except Exception as exc2:
+            logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc2)
     return row
 
 
@@ -402,7 +425,8 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         return {"unmatched": True, "filename": doc.get("filename")}
 
     # Same file already filed under this project → drop the pending dup, point at it.
-    existing = _existing_filed_doc(tenant_id, match["project"], doc.get("filename") or "")
+    existing = _existing_filed_doc(tenant_id, match["project"], doc.get("filename") or "",
+                                   doc.get("content_hash"))
     if existing and existing.get("id") != doc["id"]:
         try:
             _client().table("vula_filed_documents").delete().eq("id", doc["id"]).execute()
