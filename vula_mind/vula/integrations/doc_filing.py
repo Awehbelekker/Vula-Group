@@ -12,6 +12,7 @@ fallback. No confident match → the caller asks the user on WhatsApp.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import uuid
@@ -78,29 +79,46 @@ def match_project(tenant_id: str, text: str) -> Optional[dict]:
     """Match free text (caption + summary + extracted fields) to a project.
 
     Returns {project, clickup_list_id, confidence} or None when nothing matches.
-    ClickUp lists are tried first; field-ops projects are the fallback.
+    ClickUp lists are tried first; field-ops projects, then the canonical project
+    register, are the fallback.
     """
-    text_tokens = _tokens(text)
-    if not text_tokens:
+    if not (text or "").strip():
         return None
+    text_tokens = _tokens(text)
 
-    best = None  # (score, -len(label), project, list_id)
-    for lid, lname in _clickup_candidates(tenant_id):
-        overlap = _tokens(lname) & text_tokens
-        if not overlap:
-            continue
-        label = _project_label(lname)
-        cand = (len(overlap), -len(label), label, lid)
-        if best is None or cand > best:
-            best = cand
-    if best:
-        return {"project": best[2], "clickup_list_id": best[3],
-                "confidence": "high" if best[0] >= 2 else "medium"}
+    if text_tokens:
+        best = None  # (score, -len(label), project, list_id)
+        for lid, lname in _clickup_candidates(tenant_id):
+            overlap = _tokens(lname) & text_tokens
+            if not overlap:
+                continue
+            label = _project_label(lname)
+            cand = (len(overlap), -len(label), label, lid)
+            if best is None or cand > best:
+                best = cand
+        if best:
+            return {"project": best[2], "clickup_list_id": best[3],
+                    "confidence": "high" if best[0] >= 2 else "medium"}
 
-    # Fallback: field-ops project ids (no ClickUp list to attach to).
-    for pid in _field_projects(tenant_id):
-        if _tokens(pid) & text_tokens:
-            return {"project": pid, "clickup_list_id": None, "confidence": "medium"}
+        # Fallback: field-ops project ids (no ClickUp list to attach to).
+        for pid in _field_projects(tenant_id):
+            if _tokens(pid) & text_tokens:
+                return {"project": pid, "clickup_list_id": None, "confidence": "medium"}
+
+    # Fallback: the canonical project register (vula_projects + prior expense/invoice
+    # projects — see vula.commerce.expenses.known_projects), matched with the same loose
+    # substring/token rules used when allocating an EXPENSE to a project. This tier exists
+    # because _tokens()'s >=4-char filter (tuned for noisy ClickUp list-name overlap) makes
+    # a short real project name/acronym like "HPC" unmatchable above, even though the exact
+    # same reply already resolves correctly for expenses — a document reply of "HPC" must
+    # resolve the same project a claim reply of "HPC" does.
+    try:
+        from vula.commerce import expenses as _expenses
+        canonical = _expenses.match_project(tenant_id, text)
+        if canonical:
+            return {"project": canonical, "clickup_list_id": None, "confidence": "medium"}
+    except Exception as exc:
+        logger.debug("canonical project register fallback skipped: %s", exc)
     return None
 
 
@@ -294,29 +312,39 @@ async def file_document(
         clickup_list_id = att.get("clickup_list_id") or clickup_list_id
         clickup_task_id = att.get("clickup_task_id")
 
+    # Content hash (migration 092): a generic, bank/system-reused filename like
+    # "Payment Notification.pdf" is NOT a reliable proxy for "same file" — three distinct real
+    # payment notifications sharing that exact name were silently dropped by the old
+    # filename-only uniqueness check before this existed. Hashing the actual bytes lets two
+    # different files that happen to share a name both file correctly, while true duplicates
+    # (identical bytes — e.g. a webhook redelivery) still dedupe exactly as before.
+    content_hash = hashlib.sha256(data).hexdigest() if data else None
+
     row = {
         "tenant_id": tenant_id, "project": project, "clickup_list_id": clickup_list_id,
         "clickup_task_id": clickup_task_id, "category": category, "summary": summary,
         "fields": fields or {}, "filename": filename, "file_url": file_url,
         "mime": content_type, "doc_id": doc_id, "source": source,
-        "status": status, "filed_by": filed_by,
+        "status": status, "filed_by": filed_by, "content_hash": content_hash,
     }
     try:
         # ignore_duplicates=True (Postgres ON CONFLICT DO NOTHING) against the unique
-        # (tenant_id, source, filename) constraint (migration 081): with two worker processes
-        # racing the same email-sync poll or WhatsApp attachment, whichever insert lands first
-        # wins and the other is a silent no-op — never a second row, and never clobbers an
-        # already-resolved row's project/status back to unfiled.
+        # (tenant_id, source, filename, content_hash) index (migrations 081 + 092): with two
+        # worker processes racing the same email-sync poll or WhatsApp attachment, whichever
+        # insert lands first wins and the other is a silent no-op — never a second row for the
+        # SAME bytes, and never clobbers an already-resolved row's project/status back to
+        # unfiled. Different bytes under the same filename are a different row, correctly.
         ins = _client().table("vula_filed_documents").upsert(
-            row, on_conflict="tenant_id,source,filename", ignore_duplicates=True
+            row, on_conflict="tenant_id,source,filename,content_hash", ignore_duplicates=True
         ).execute()
         if ins.data:
             row["id"] = ins.data[0].get("id")
         else:
             # Lost the race — fetch the row the winner created so the caller still gets an id.
-            existing = (_client().table("vula_filed_documents").select("*")
-                       .eq("tenant_id", tenant_id).eq("source", source).eq("filename", filename)
-                       .limit(1).execute().data or [])
+            q = (_client().table("vula_filed_documents").select("*")
+                 .eq("tenant_id", tenant_id).eq("source", source).eq("filename", filename))
+            q = q.eq("content_hash", content_hash) if content_hash else q.is_("content_hash", "null")
+            existing = q.limit(1).execute().data or []
             if existing:
                 row = existing[0]
     except Exception as exc:
