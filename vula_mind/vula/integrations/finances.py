@@ -113,7 +113,8 @@ def post_finance_from_doc(tenant_id: str, project: Optional[str], fields: dict,
         return None
     f = fields or {}
     kind = _kind(category, summary)
-    counterparty = f.get("payee") or f.get("supplier") or f.get("payer") or f.get("client")
+    from vula.commerce.party import resolve_party_name
+    counterparty = resolve_party_name(f, order=("payee", "supplier", "payer", "client"))
     reference = f.get("reference")
     account = str(f.get("account_number") or f.get("account") or f.get("beneficiary_account") or "").strip()
     row = {

@@ -851,11 +851,12 @@ async def _handle_document_ingest(
                     # Dedup on the image CONTENT — a re-sent photo has identical bytes even though
                     # it gets a new media id, so this catches re-sends AND Meta redeliveries.
                     import hashlib
+                    from vula.commerce.party import resolve_party_name
                     img_ref = "img:" + hashlib.sha256(local_path.read_bytes()).hexdigest()[:40]
                     scan_msg = await _log_expense_claim(tenant_id, phone, {
                         "total_cents": round(total_r * 100),
                         "vat_cents": round(vat_r * 100),
-                        "supplier": fin.get("vendor"),
+                        "supplier": resolve_party_name(fin, order=("vendor", "supplier")),
                         "date": fin.get("date"),
                         "notes": summary,
                         "card_last4": fin.get("card_last4"),

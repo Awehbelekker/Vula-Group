@@ -141,24 +141,33 @@ def match_project(tenant_id: str, text: str) -> Optional[dict]:
     return None
 
 
-# Specific signals only — NOT 'payer' (usually the internal owner who pays everything).
-# A bank account number is the strongest: unique to a beneficiary, immune to name spelling.
-_SIGNAL_KEYS = (("account_number", "account"), ("account", "account"),
-                ("beneficiary_account", "account"),
-                ("reference", "reference"), ("payee", "payee"),
-                ("supplier", "supplier"), ("vendor", "supplier"), ("client", "client"))
+# Non-party structural signals only — a bank account number is the strongest: unique to a
+# beneficiary, immune to name spelling. Party-name signals (supplier/vendor/payee/
+# counterparty/beneficiary/client) are resolved separately below via party.resolve_party_name,
+# which centralises the alias list this used to hand-roll here.
+_ACCOUNT_SIGNAL_KEYS = (("account_number", "account"), ("account", "account"),
+                        ("beneficiary_account", "account"), ("reference", "reference"))
 
 
 def _signals_from(fields: dict) -> list:
     """Extract (signal_type, normalised_value) learning signals from a doc's fields."""
+    from vula.commerce.party import resolve_party_name
+
     out, seen = [], set()
-    for key, stype in _SIGNAL_KEYS:
+    for key, stype in _ACCOUNT_SIGNAL_KEYS:
         v = (fields or {}).get(key)
         if isinstance(v, str):
             val = v.strip().lower()
             if len(val) >= 3 and val not in seen:
                 seen.add(val)
                 out.append((stype, val))
+    # 'payer' excluded — usually the tenant's own name (who paid), not who sent the document,
+    # and would pollute learned rules with a signal that matches almost every doc.
+    party = resolve_party_name(fields, exclude=("payer",))
+    if party:
+        val = party.lower()
+        if len(val) >= 3 and val not in seen:
+            out.append(("supplier", val))
     return out
 
 
