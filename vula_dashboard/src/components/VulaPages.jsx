@@ -10,7 +10,9 @@
 import { useState, useEffect, useRef } from "react";
 import { Puck } from "@measured/puck";
 import "@measured/puck/puck.css";
-import { config } from "../puck/config";
+import { config, VULA_PUCK_STYLES } from "../puck/config";
+import { getTenantTheme } from "../theme/tenantThemes";
+import { FONT_PAIRINGS } from "../theme/tokens";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", text: "#2A2A2A", muted: "#8A8680" };
@@ -80,12 +82,55 @@ export default function VulaPages({ tenantId }) {
   const [storeUrl, setStoreUrl] = useState(null);
   const [showLivePreview, setShowLivePreview] = useState(false);
   const latestData = useRef(null);   // Puck's live document (survives re-renders/saves)
+  const [brand, setBrand] = useState(() => getTenantTheme(tenantId));
 
   // Live product blocks in the editor preview need the tenant + API globals.
   useEffect(() => {
     window.__VULA_PAGE_TENANT = tenantId;
     window.__VULA_API = VULA_API;
   }, [tenantId]);
+
+  // Real tenant brand for the editor canvas (2026-07-21) — previously only the public renderer
+  // (VulaPageRender.jsx) fetched this, so a tenant editing their page always saw the hardcoded
+  // teal/black fallback instead of their actual colors while working. Same source, same shape.
+  useEffect(() => {
+    setBrand(getTenantTheme(tenantId));
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/brand`)
+      .then((r) => r.json())
+      .then((b) => {
+        setBrand((prev) => ({
+          ...prev,
+          accent: b.accent_color || prev.accent,
+          ink: b.ink_color || prev.ink,
+          logoUrl: b.logo_url || prev.logoUrl,
+          fontPairing: b.font_pairing || null,
+        }));
+        if (b.font_pairing && FONT_PAIRINGS[b.font_pairing] && b.font_pairing !== "vula") {
+          const p = FONT_PAIRINGS[b.font_pairing];
+          const id = `font-pairing-${b.font_pairing}`;
+          if (!document.getElementById(id)) {
+            const link = document.createElement("link");
+            link.id = id; link.rel = "stylesheet";
+            link.href = `https://fonts.googleapis.com/css2?family=${p.family.replace(/ /g, "+")}:wght@${p.weights}&display=swap`;
+            document.head.appendChild(link);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [tenantId]);
+  const fontDef = (brand.fontPairing && FONT_PAIRINGS[brand.fontPairing]) || null;
+  // Puck's editor canvas renders inside an iframe (its AutoFrame helper) — it mirrors <style>/
+  // <link rel="stylesheet"> ELEMENTS it finds in the host document into that iframe (confirmed
+  // directly in @measured/puck's bundled source: collectStyles() + a MutationObserver that keeps
+  // mirroring on change), but it has no way to see an inline `style={{...}}` attribute on a host
+  // div — that never reaches the iframe at all. So the brand vars have to be actual CSS text
+  // inside a <style> tag, not inline styles, unlike VulaPageRender.jsx's non-iframed <Render>.
+  const brandCss = `:root {
+    --brand-accent: ${brand.accent || "#2C5545"};
+    --brand-accent-fg: #FFFFFF;
+    --brand-ink: ${brand.ink || "#1E1E1E"};
+    ${fontDef ? `--brand-font-display: '${fontDef.family}', ${fontDef.fallback};` : ""}
+  }`;
 
   // The tenant's actual live website — so "what does my site look like right now" is answerable
   // without leaving the dashboard. Falls back to the Vula-hosted page renderer if no custom
@@ -236,6 +281,10 @@ export default function VulaPages({ tenantId }) {
           <strong> Publish</strong> makes it live, or use <strong>Save draft</strong> below to keep working privately.
         </p>
         <div style={{ height: "74vh", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+          {/* Both get mirrored into Puck's canvas iframe (see brandCss comment above) — this is
+              the only way animation/depth CSS and the tenant's real brand colors reach the
+              live preview while editing. */}
+          <style>{VULA_PUCK_STYLES}{brandCss}</style>
           <Puck config={config} data={editing.data} onPublish={(data) => persist(data, "published")}
             onChange={(data) => { latestData.current = data; }}
             viewports={PREVIEW_VIEWPORTS} />

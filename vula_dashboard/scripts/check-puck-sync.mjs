@@ -27,6 +27,26 @@ const FILES = {
   kelp: path.join(__dirname, "../../kelp/kelp-board-bags/puck.config.tsx"),
 };
 
+/** If `source[i]` starts a line comment or a block comment, return the index just past it — else
+ * null. Needed because the three scanners below are naive quote-trackers: without this, an
+ * apostrophe inside an ordinary English comment reads as opening a string literal, which then
+ * swallows real code, including its braces, until some later quote closes it, permanently
+ * desyncing the brace-depth count for the rest of the file. Comments must be skipped before
+ * quote-detection ever sees them. */
+function skipComment(source, i) {
+  if (source[i] === "/" && source[i + 1] === "/") {
+    let j = i + 2;
+    while (j < source.length && source[j] !== "\n") j += 1;
+    return j;
+  }
+  if (source[i] === "/" && source[i + 1] === "*") {
+    let j = i + 2;
+    while (j < source.length && !(source[j] === "*" && source[j + 1] === "/")) j += 1;
+    return Math.min(j + 2, source.length);
+  }
+  return null;
+}
+
 /** Scan a `{ ... }` body (source, with `openBraceIdx` pointing AT the opening `{`) and return
  * the top-level (depth-1) member keys plus the index just past the matching closing `}`. */
 function scanTopLevelKeys(source, openBraceIdx) {
@@ -46,6 +66,8 @@ function scanTopLevelKeys(source, openBraceIdx) {
         continue;
       }
     }
+    const skip = skipComment(source, i);
+    if (skip !== null) { i = skip; continue; }
     const ch = source[i];
     if (ch === "{" || ch === "(" || ch === "[") depth += (ch === "{" ? 1 : 0), i += 1, atMemberStart = false;
     else if (ch === "}") { depth -= 1; i += 1; atMemberStart = depth === 1; }
@@ -85,6 +107,8 @@ function extractComponents(source) {
         continue;
       }
     }
+    const skip = skipComment(source, i);
+    if (skip !== null) { i = skip; continue; }
     const ch = source[i];
     if (ch === "{") { depth += 1; i += 1; atMemberStart = false; }
     else if (ch === "}") { depth -= 1; i += 1; atMemberStart = depth === 1; }
@@ -116,6 +140,8 @@ function scanFieldsOf(source, blockBraceIdx) {
         continue;
       }
     }
+    const skip = skipComment(source, i);
+    if (skip !== null) { i = skip; continue; }
     const ch = source[i];
     if (ch === "{") { depth += 1; i += 1; }
     else if (ch === "}") { depth -= 1; i += 1; }

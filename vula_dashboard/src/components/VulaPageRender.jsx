@@ -10,7 +10,7 @@
 import { useState, useEffect } from "react";
 import { Render } from "@measured/puck";
 import "@measured/puck/puck.css";
-import { config } from "../puck/config";
+import { config, VULA_PUCK_STYLES } from "../puck/config";
 import { getTenantTheme } from "../theme/tenantThemes";
 import { FONT_PAIRINGS } from "../theme/tokens";
 
@@ -81,6 +81,7 @@ export default function VulaPageRender({ tenant, slug }) {
   };
   return (
     <div style={{ minHeight: "100vh", background: "#fff", ...brandVars }} data-vula-tenant={tenant}>
+      <style>{VULA_PUCK_STYLES}</style>
       <Render config={config} data={data} />
     </div>
   );
