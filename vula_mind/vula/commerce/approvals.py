@@ -39,6 +39,24 @@ def _digits(phone: str) -> str:
     return "27" + d[1:] if d.startswith("0") and len(d) == 10 else d
 
 
+async def tenant_admin_approvers(tenant_id: str) -> list[dict]:
+    """Default approvers for an internal (non-client-facing) approval — the tenant's own
+    admin/owner team. Unlike an outbound invoice (an external architect/QS/client picks who
+    signs off), there's no one to choose for "is this really Supplier X?" — it's always the
+    tenant's own team confirming their own books."""
+    from vula.integrations.notify import _members, _fallback_phone
+    approvers = [
+        {"phone": m["whatsapp"], "name": m.get("name", ""), "role": m.get("role", "admin")}
+        for m in _members(tenant_id)
+        if m.get("whatsapp") and m.get("role") in ("admin", "owner")
+    ]
+    if not approvers:
+        fb = _fallback_phone(tenant_id)
+        if fb:
+            approvers = [{"phone": fb, "name": "", "role": "admin"}]
+    return approvers
+
+
 async def create_approval(
     tenant_id: str, entity_type: str, entity_id: str, title: str,
     approvers: list[dict], requested_by: str = "", deliver_via: str = "", meta: dict | None = None,
@@ -162,6 +180,35 @@ async def _on_approved(approval: dict) -> None:
         await dispatch_order(approval["tenant_id"], approval["entity_id"],
                              meta.get("summary") or approval.get("title", ""),
                              meta.get("customer_name", ""))
+    elif approval["entity_type"] == "inbound_invoice":
+        await _apply_supplier_match(approval)
+
+
+async def _apply_supplier_match(approval: dict) -> None:
+    """A tenant admin confirmed an ambiguous supplier match (commit_inbound_document's
+    needs_review case) — link the candidate supplier onto the invoice row and clear
+    needs_review on the source filed document, same fields commit_inbound_document itself
+    would have set had the match been confident enough to auto-apply."""
+    meta = approval.get("meta") or {}
+    supplier_id = meta.get("candidate_supplier_id")
+    if not supplier_id:
+        return
+    sb = _client()
+    tenant_id, invoice_id = approval["tenant_id"], approval["entity_id"]
+    try:
+        sb.table("commerce_invoices").update(
+            {"supplier_id": supplier_id}
+        ).eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+    except Exception as exc:
+        logger.warning("Failed to apply approved supplier match to invoice %s: %s", invoice_id, exc)
+    filed_document_id = meta.get("filed_document_id")
+    if filed_document_id:
+        try:
+            sb.table("vula_filed_documents").update(
+                {"supplier_id": supplier_id, "needs_review": False}
+            ).eq("id", filed_document_id).execute()
+        except Exception as exc:
+            logger.warning("Failed to clear needs_review on filed_document %s: %s", filed_document_id, exc)
 
 
 async def _deliver_invoice(approval: dict) -> None:

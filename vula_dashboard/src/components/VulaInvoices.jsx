@@ -148,6 +148,30 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     }
   }
 
+  // A fuzzy/layout match isn't confident enough to apply automatically — route it to the
+  // tenant's own admin team as a yes/no over WhatsApp instead of silently guessing.
+  async function requestSupplierApproval(inv) {
+    const m = matchResults[inv.id]
+    if (!m?.matched) return
+    try {
+      const r = await fetch(
+        `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/request-supplier-approval`,
+        {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            candidate_supplier_id: m.supplier?.id, candidate_supplier_name: m.supplier?.name,
+            tier: m.tier, confidence: m.confidence,
+          }),
+        }
+      )
+      const d = await r.json().catch(() => ({}))
+      if (r.ok) alert(`Sent to ${d.approvers} admin${d.approvers !== 1 ? 's' : ''} on WhatsApp for confirmation.`)
+      else alert(d.detail || 'Could not request approval.')
+    } catch {
+      alert('Could not request approval.')
+    }
+  }
+
   // A raw window.open() against this admin endpoint 401s with "Sign in required" — it's a plain
   // browser navigation, so it never carries the Authorization header the installAuthFetch()
   // patch attaches to fetch() calls. Fetch it as an authenticated request instead and open the
@@ -345,9 +369,14 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                     {' · '}{matchResults[inv.id].supplier?.payment_terms_days ?? 30} day terms
                     {' · '}via {matchResults[inv.id].tier}
                     {' ('}{Math.round((matchResults[inv.id].confidence || 0) * 100)}%{')'}
-                    {matchResults[inv.id].auto_apply
-                      ? ' — applied automatically'
-                      : ' — confirm to apply'}
+                    {matchResults[inv.id].auto_apply ? ' — applied automatically' : (
+                      <>
+                        {' — not confident enough to apply automatically. '}
+                        <button onClick={() => requestSupplierApproval(inv)} style={s.actMatch}>
+                          📨 Ask admin team on WhatsApp
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

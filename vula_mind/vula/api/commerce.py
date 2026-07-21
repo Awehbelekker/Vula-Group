@@ -3956,6 +3956,49 @@ async def admin_match_invoice_supplier(tenant_id: str, invoice_id: str):
     }
 
 
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/request-supplier-approval")
+async def admin_request_supplier_approval(tenant_id: str, invoice_id: str, body: dict):
+    """Manually route a match-supplier suggestion to the tenant's own admin team for a
+    yes/no over WhatsApp — the dashboard counterpart to the automatic approval
+    commit_inbound_document() raises for a genuinely ambiguous match (migration 102 plan,
+    Phase 5). Mirrors request-approval's shape but needs no explicit approvers: unlike an
+    outbound invoice sent to a client, there's no external stakeholder to pick here.
+
+    body: {"candidate_supplier_id": "...", "candidate_supplier_name": "...",
+           "tier": "fuzzy_name", "confidence": 0.82}   # from match-supplier's response
+    """
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    candidate_id = body.get("candidate_supplier_id")
+    if not candidate_id:
+        raise HTTPException(status_code=400, detail="candidate_supplier_id is required")
+
+    from vula.commerce.approvals import create_approval, tenant_admin_approvers
+    approvers = await tenant_admin_approvers(tenant_id)
+    if not approvers:
+        raise HTTPException(status_code=400, detail="No admin team member has a WhatsApp number on file to approve this.")
+
+    filed = (service._client().table("vula_filed_documents").select("id")
+             .eq("tenant_id", tenant_id).eq("commerce_invoice_id", invoice_id)
+             .limit(1).execute().data or [{}])
+    total = (invoice.get("total_cents") or 0) / 100
+    label = (f"Supplier match: is *{body.get('candidate_supplier_name', 'this supplier')}* who sent "
+             f"{invoice.get('doc_type', 'invoice')} {invoice.get('invoice_number', invoice_id)} "
+             f"for R{total:,.2f}?")
+    approval = await create_approval(
+        tenant_id=tenant_id, entity_type="inbound_invoice", entity_id=invoice_id,
+        title=label, approvers=approvers,
+        meta={
+            "filed_document_id": filed[0].get("id") if filed else None,
+            "candidate_supplier_id": candidate_id,
+            "candidate_supplier_name": body.get("candidate_supplier_name"),
+            "match_tier": body.get("tier"), "confidence": body.get("confidence"),
+        },
+    )
+    return {"approval_id": approval["id"], "status": "pending", "approvers": len(approvers)}
+
+
 @router.patch("/{tenant_id}/admin/expenses/{expense_id}/pay")
 async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
     """Mark an expense as paid — removes it from the Due view."""

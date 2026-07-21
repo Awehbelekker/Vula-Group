@@ -1507,6 +1507,32 @@ async def commit_inbound_document(
         except Exception as exc:
             logger.warning("Failed to bridge filed_document %s to commit result: %s", filed_document_id, exc)
 
+    # Genuine ambiguity (Tier 3 fuzzy-below-auto-apply or Tier 4 layout-only) on a real
+    # supplier bill — route the candidate match to the tenant's own admin team for a yes/no,
+    # reusing the existing WhatsApp APPROVE/REJECT approval engine (vula/commerce/approvals.py)
+    # rather than silently guessing or leaving it unresolved with no path to close it out.
+    if needs_review and is_invoice and supplier_match:
+        try:
+            from vula.commerce.approvals import create_approval, tenant_admin_approvers
+            approvers = await tenant_admin_approvers(tenant_id)
+            if approvers:
+                candidate = supplier_match.get("supplier") or {}
+                label = (f"Supplier match: is *{candidate.get('name', 'this supplier')}* who sent "
+                         f"{doc_type} for R{total_cents/100:,.2f}?")
+                await create_approval(
+                    tenant_id=tenant_id, entity_type="inbound_invoice", entity_id=record_id,
+                    title=label, approvers=approvers,
+                    meta={
+                        "filed_document_id": filed_document_id,
+                        "candidate_supplier_id": candidate.get("id"),
+                        "candidate_supplier_name": candidate.get("name"),
+                        "match_tier": supplier_match.get("tier"),
+                        "confidence": supplier_match.get("confidence"),
+                    },
+                )
+        except Exception as exc:
+            logger.warning("Failed to create supplier-match approval for %s: %s", record_id, exc)
+
     kb_chunks = 0
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
