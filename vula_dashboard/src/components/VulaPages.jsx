@@ -310,6 +310,29 @@ export default function VulaPages({ tenantId }) {
         current catalog and prices. Published pages appear on your website automatically.
       </p>
 
+      {/* Editing "a new page" doesn't obviously connect to "the homepage I already have live" —
+          this makes that connection explicit and one click, instead of requiring the tenant to
+          know that naming a page exactly "Home" is what makes it take over the site's homepage. */}
+      {pages !== null && !pages.some((p) => p.slug === "home") && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, padding: 12,
+          background: "var(--accent-soft, rgba(44,85,69,0.08))", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          <span style={{ fontSize: 20 }}>🏠</span>
+          <div style={{ flex: 1 }}>
+            <strong style={{ fontSize: 13, color: C.text }}>Want to customize your homepage?</strong>
+            <p style={{ fontSize: 12, color: C.muted, margin: "2px 0 0" }}>
+              Your site is currently using Vula's default homepage design. Start from it below —
+              nothing changes on your live site until you hit <strong>Publish</strong>.
+            </p>
+          </div>
+          <button
+            onClick={() => setEditing({ slug: "home", title: "Home", data: norm(TEMPLATES.home.data), status: "draft", seo: {} })}
+            style={btn("var(--accent)")}
+          >
+            ✎ Customize homepage
+          </button>
+        </div>
+      )}
+
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: showLivePreview ? 8 : 0 }}>
           <button onClick={() => setShowLivePreview((v) => !v)} style={ghost}>
