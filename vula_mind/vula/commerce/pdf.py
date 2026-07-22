@@ -222,7 +222,7 @@ _DOC_HTML = """<!DOCTYPE html>
 
 <div class="header">
   <div class="brand">
-    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:60px;max-width:200px;margin-bottom:8px;display:block;">{% endif %}
+    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:76px;max-width:240px;margin-bottom:10px;display:block;">{% endif %}
     <h1>{{ tenant_name }}{% if trading_as %} <span style="font-size:0.58em;color:#888;font-weight:400;">t/a {{ trading_as }}</span>{% endif %}</h1>
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
@@ -535,7 +535,7 @@ __TEMPLATE_CSS__
 
 <div class="header">
   <div class="brand">
-    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:60px;max-width:200px;margin-bottom:8px;display:block;">{% endif %}
+    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:76px;max-width:240px;margin-bottom:10px;display:block;">{% endif %}
     <h1>{{ tenant_name }}{% if trading_as %} <span style="font-size:0.58em;color:#888;font-weight:400;">t/a {{ trading_as }}</span>{% endif %}</h1>
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}

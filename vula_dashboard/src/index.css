@@ -76,8 +76,8 @@ input, select, textarea { font-family: var(--font-body); }
 .vshell { display: grid; grid-template-columns: 244px 1fr; min-height: 100vh; background: var(--bg); }
 .vshell-side { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; z-index: 300; }
 .vshell-brand { display: flex; align-items: center; gap: 10px; padding: 16px 14px 13px; border-bottom: 1px solid var(--border-soft); }
-.vshell-logo { width: 34px; height: 34px; border-radius: 10px; background: var(--accent); color: var(--on-accent, #fff); display: flex; align-items: center; justify-content: center; font-size: 17px; flex: none; }
-.vshell-logoimg { width: 34px; height: 34px; border-radius: 10px; object-fit: contain; background: var(--surface-alt); flex: none; }
+.vshell-logo { width: 40px; height: 40px; border-radius: 10px; background: var(--accent); color: var(--on-accent, #fff); display: flex; align-items: center; justify-content: center; font-size: 19px; flex: none; }
+.vshell-logoimg { max-width: 96px; max-height: 42px; width: auto; height: auto; object-fit: contain; flex: none; }
 .vshell-brandtext b { font-family: var(--font-display); font-size: 16px; color: var(--ink); display: block; line-height: 1.15; letter-spacing: -0.01em; }
 .vshell-brandtext span { font-size: 10px; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
 .vshell-zone-switch { display: flex; gap: 3px; padding: 10px 9px 0; }
