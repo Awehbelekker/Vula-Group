@@ -1207,6 +1207,18 @@ def _norm_tax(s: str) -> str:
     return re.sub(r"[^0-9a-z]", "", (s or "").lower())
 
 
+def _norm_phone(p: Optional[str]) -> str:
+    """Normalize a phone number to digits-only E.164-ish (SA: 0xx -> 27xx) — same shape as
+    vula.api.commerce's copy (not imported directly: that module already imports this one, so
+    importing back would be circular)."""
+    if not p:
+        return ""
+    n = "".join(ch for ch in p if ch.isdigit())
+    if n.startswith("0"):
+        n = "27" + n[1:]
+    return n
+
+
 def compute_layout_signature(extracted: dict) -> Optional[str]:
     """Deterministic fingerprint of a supplier document from its line-item
     catalogue. Stable across scans of the same supplier's invoices; used as a
@@ -1314,6 +1326,40 @@ async def match_supplier(
             if s.get("layout_signature") and s["layout_signature"] == layout_signature:
                 return {"supplier": s, "tier": "layout", "confidence": 0.85, "auto_apply": False}
 
+    return None
+
+
+async def match_invoice_item(tenant_id: str, description: str) -> Optional[dict]:
+    """Tiered catalog-item auto-detection for `commerce_invoice_items`, tenant-scoped — same
+    exact/fuzzy cascade as match_supplier, adapted to item names instead of supplier names
+    (catalog-from-scan, migration 083's per-tenant invoice-line-item quick-pick list).
+
+    Returns ``{"item", "tier", "confidence", "auto_apply"}`` or ``None``.
+    """
+    nn = _norm_name(description)
+    if not nn:
+        return None
+    items = (_client().table("commerce_invoice_items").select("*")
+             .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+    if not items:
+        return None
+
+    # Tier 1 — exact normalized name
+    for it in items:
+        if _norm_name(it.get("name", "")) == nn:
+            return {"item": it, "tier": "exact_name", "confidence": 1.0, "auto_apply": True}
+
+    # Tier 2 — fuzzy name
+    best, best_score = None, 0.0
+    for it in items:
+        score = difflib.SequenceMatcher(None, nn, _norm_name(it.get("name", ""))).ratio()
+        if score > best_score:
+            best, best_score = it, score
+    if best and best_score >= FUZZY_MIN:
+        return {
+            "item": best, "tier": "fuzzy_name",
+            "confidence": round(best_score, 3), "auto_apply": best_score >= FUZZY_AUTO,
+        }
     return None
 
 
@@ -1489,6 +1535,30 @@ async def commit_inbound_document(
         result = db.table("commerce_expenses").insert(row).execute()
         committed_record = result.data[0] if result.data else row
 
+    # Catalog-from-scan — auto-populate the tenant's reusable invoice-item quick-pick list
+    # (commerce_invoice_items, migration 083) from this document's line items, so a future
+    # invoice/quote can pick them instead of retyping. Matches against the existing catalog first
+    # (same fuzzy cascade as supplier matching) so re-scanning a near-identical document never
+    # creates duplicates — and the upsert's on_conflict=tenant_id,name is a second safety net even
+    # if the fuzzy match missed. Best-effort: never blocks the document commit above.
+    catalog_items_added = 0
+    try:
+        for li in extracted.get("line_items", []) or []:
+            desc = (li.get("description") or "").strip()
+            if not desc:
+                continue
+            item_match = await match_invoice_item(tenant_id, desc)
+            if item_match and item_match["auto_apply"]:
+                continue  # already in the catalog
+            db.table("commerce_invoice_items").upsert({
+                "tenant_id": tenant_id, "kind": "product", "name": desc[:200],
+                "unit": (li.get("unit") or "").strip() or None,
+                "unit_price_cents": int(li.get("unit_price_cents") or 0), "active": True,
+            }, on_conflict="tenant_id,name").execute()
+            catalog_items_added += 1
+    except Exception as cat_exc:
+        logger.warning("Catalog-from-scan failed for %s: %s", record_id, cat_exc)
+
     if supplier_row and layout_signature and not supplier_row.get("layout_signature"):
         try:
             await learn_supplier_signature(tenant_id, supplier_row.get("id"), layout_signature)
@@ -1572,7 +1642,8 @@ async def commit_inbound_document(
         "ok": True, "committed": True, "record_type": "invoice" if is_invoice else "expense",
         "record_id": record_id, "record": committed_record,
         "supplier_match": preview["supplier_match"], "needs_review": needs_review,
-        "preview": preview, "kb_chunks_added": kb_chunks, "message": msg,
+        "preview": preview, "kb_chunks_added": kb_chunks, "catalog_items_added": catalog_items_added,
+        "message": msg,
     }
 
 
@@ -1585,8 +1656,9 @@ _INVOICE_SETTINGS_FIELDS = (
     "account_name", "bank_name", "branch_code", "account_number",
     "template_choice", "accent_color", "onboarded", "menu_header_image_url",
     "ink_color", "font_pairing",
+    "footer_text", "show_vat_breakdown", "show_company_reg", "logo_size", "logo_align",
 )
-_TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded")
+_TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded", "digg")
 
 
 async def get_invoice_settings(tenant_id: str) -> Optional[dict]:
@@ -1603,6 +1675,10 @@ async def get_invoice_settings(tenant_id: str) -> Optional[dict]:
 
 
 _INVOICE_SETTINGS_078_FIELDS = ("ink_color", "font_pairing")  # only exist once migration 078 runs
+_INVOICE_SETTINGS_103_FIELDS = (  # only exist once migration 103 runs
+    "footer_text", "show_vat_breakdown", "show_company_reg", "logo_size", "logo_align",
+)
+_INVOICE_SETTINGS_OPTIONAL_FIELDS = _INVOICE_SETTINGS_078_FIELDS + _INVOICE_SETTINGS_103_FIELDS
 
 
 async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
@@ -1611,9 +1687,9 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
     Only whitelisted fields are persisted. ``template_choice`` is validated
     against the known templates. Every write is tenant-scoped.
 
-    If migration 078 (ink_color/font_pairing) hasn't run yet, those two keys would make the
-    WHOLE write fail with an unknown-column error — degrade gracefully instead: drop them and
-    retry once, so the rest of the brand kit (logo/accent/etc.) still saves.
+    Fields added by a migration that hasn't run yet in this environment would make the WHOLE
+    write fail with an unknown-column error — degrade gracefully instead: drop every optional
+    (migration-gated) field and retry once, so the rest of the settings still save.
     """
     patch = {k: data[k] for k in _INVOICE_SETTINGS_FIELDS if k in data}
     choice = patch.get("template_choice")
@@ -1637,10 +1713,10 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
         result = db.table("commerce_invoice_settings").insert(row).execute()
         return result.data[0] if result.data else row
     except Exception as exc:
-        if not any(f in patch for f in _INVOICE_SETTINGS_078_FIELDS):
+        if not any(f in patch for f in _INVOICE_SETTINGS_OPTIONAL_FIELDS):
             raise
-        logger.warning("invoice-settings write failed with 078 fields present (run migration 078?): %s", exc)
-        patch = {k: v for k, v in patch.items() if k not in _INVOICE_SETTINGS_078_FIELDS}
+        logger.warning("invoice-settings write failed with migration-gated fields present (run migrations 078/103?): %s", exc)
+        patch = {k: v for k, v in patch.items() if k not in _INVOICE_SETTINGS_OPTIONAL_FIELDS}
         if existing:
             patch["updated_at"] = _now()
             result = (
@@ -1669,15 +1745,28 @@ async def list_invoice_clients(tenant_id: str, kind: Optional[str] = None) -> Li
 
 
 async def upsert_invoice_client(tenant_id: str, data: dict) -> dict:
+    """Create or update a saved invoice client. Dedups on phone when no ``id`` is given — without
+    this, typing the same customer's details on two different invoices (the common case: nobody
+    remembers to explicitly pick them from the dropdown every time) silently created a second,
+    disconnected record for the same person."""
     patch = {k: data[k] for k in _CLIENT_FIELDS if k in data}
     if not patch.get("name"):
         raise ValueError("name is required")
     db = _client()
-    if data.get("id"):
+    client_id = data.get("id")
+    if not client_id:
+        np = _norm_phone(patch.get("phone"))
+        if np:
+            existing = (db.table("commerce_invoice_clients").select("id,phone")
+                        .eq("tenant_id", tenant_id).execute().data or [])
+            match = next((e for e in existing if _norm_phone(e.get("phone")) == np), None)
+            if match:
+                client_id = match["id"]
+    if client_id:
         patch["updated_at"] = _now()
         res = (db.table("commerce_invoice_clients").update(patch)
-               .eq("id", data["id"]).eq("tenant_id", tenant_id).execute())
-        return res.data[0] if res.data else {**patch, "id": data["id"]}
+               .eq("id", client_id).eq("tenant_id", tenant_id).execute())
+        return res.data[0] if res.data else {**patch, "id": client_id}
     row = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, **patch}
     res = db.table("commerce_invoice_clients").insert(row).execute()
     return res.data[0] if res.data else row

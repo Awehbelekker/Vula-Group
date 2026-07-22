@@ -2118,6 +2118,35 @@ async def admin_upsert_invoice_settings(tenant_id: str, body: dict):
     return {"settings": settings}
 
 
+@router.post("/{tenant_id}/admin/invoice-settings/preview")
+async def admin_preview_invoice_settings(tenant_id: str, body: dict):
+    """Render a sample invoice PDF against IN-PROGRESS, UNSAVED branding settings — never touches
+    the DB (no read or write of the real commerce_invoice_settings row, no real invoice created).
+    Lets the dashboard show a live preview while a tenant is still adjusting the form, before
+    they've hit Save."""
+    from vula.commerce.pdf import render_invoice_pdf, merge_branding
+    sample_invoice = {
+        "tenant_id": tenant_id, "direction": "outbound", "doc_type": "invoice",
+        "invoice_number": "SAMPLE-001", "status": "sent", "issue_date": service._now()[:10],
+        "customer_name": "Sample Customer", "customer_email": "customer@example.com",
+        "customer_phone": "082 123 4567", "customer_address": "1 Example Street\nCape Town",
+        "line_items": [
+            {"description": "Sample product", "quantity": 2, "unit_price_cents": 15000, "unit": "each"},
+            {"description": "Sample service", "quantity": 1, "unit_price_cents": 45000, "unit": "job"},
+        ],
+        "subtotal_cents": 75000, "vat_cents": 11250, "total_cents": 86250,
+        "notes": "This is a live preview using sample data — nothing here is a real invoice.",
+    }
+    try:
+        pdf_bytes = render_invoice_pdf(sample_invoice, merge_branding(tenant_id, body or {}))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        log.error("Invoice settings preview render failed for %s: %s", tenant_id, exc)
+        raise HTTPException(status_code=500, detail="Preview generation failed")
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
 @router.get("/{tenant_id}/brand")
 async def public_brand(tenant_id: str):
     """Public, read-only, non-secret brand fields — deliberately OUTSIDE the /admin/ path so the

@@ -16,6 +16,26 @@ from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
+# Font pairing (migration 078's font_pairing setting, previously dashboard/storefront-only —
+# never reached the PDF). Keys match vula_dashboard/src/theme/tokens.js's FONT_PAIRINGS; family
+# names are duplicated here (not imported — that file is JS) since pdf.py can't share it directly.
+# "" (unset) keeps today's hardcoded fallback so existing tenants render identically.
+_FONT_STACKS = {
+    "":          "'Helvetica Neue', Arial, sans-serif",
+    "vula":      "'Cormorant Garamond', Georgia, serif",
+    "modern":    "'Poppins', system-ui, sans-serif",
+    "editorial": "'Playfair Display', Georgia, serif",
+    "classic":   "'Merriweather', Georgia, serif",
+}
+# Google Fonts CSS2 family+weight query string per pairing — WeasyPrint fetches remote
+# stylesheets/fonts by default, same as a browser, so a <link> in the document head is enough.
+_FONT_IMPORTS = {
+    "vula":      "Cormorant+Garamond:wght@500;600;700",
+    "modern":    "Poppins:wght@500;600;700",
+    "editorial": "Playfair+Display:wght@500;600;700",
+    "classic":   "Merriweather:wght@500;600;700",
+}
+
 # ── Jinja2 templates ──────────────────────────────────────────────────────────
 # One shared body markup, themed by three interchangeable CSS blocks. The chosen
 # CSS is substituted into the document skeleton before rendering, so the accent
@@ -24,7 +44,7 @@ log = logging.getLogger(__name__)
 _CSS_CLASSIC = """
   @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 11pt; color: #1a1a1a; }
+  body { font-family: {{ font_family }}; font-size: 11pt; color: #1a1a1a; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; }
   .brand h1 { font-size: 22pt; font-weight: 800; color: {{ accent }}; margin-bottom: 2px; }
   .brand p  { font-size: 9pt; color: #555; line-height: 1.5; }
@@ -62,7 +82,7 @@ _CSS_CLASSIC = """
 _CSS_MINIMAL = """
   @page { size: A4; margin: 20mm 18mm 22mm 18mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 10.5pt; color: #222; }
+  body { font-family: {{ font_family }}; font-size: 10.5pt; color: #222; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 16px; border-bottom: 1px solid #222; }
   .brand h1 { font-size: 18pt; font-weight: 600; color: #111; margin-bottom: 2px; letter-spacing: 0.5px; }
   .brand p  { font-size: 8.5pt; color: #777; line-height: 1.5; }
@@ -94,7 +114,7 @@ _CSS_MINIMAL = """
 _CSS_MODERN = """
   @page { size: A4; margin: 0 0 18mm 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 11pt; color: #1a1a1a; }
+  body { font-family: {{ font_family }}; font-size: 11pt; color: #1a1a1a; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin: 0 0 28px; padding: 28px 18mm 22px; background: {{ accent }}; color: #fff; }
   .brand h1 { font-size: 24pt; font-weight: 800; color: #fff; margin-bottom: 2px; }
   .brand p  { font-size: 9pt; color: rgba(255,255,255,0.85); line-height: 1.5; }
@@ -128,7 +148,7 @@ _CSS_MODERN = """
 _CSS_BRANDED = """
   @page { size: A4; margin: 16mm 0 18mm 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 11pt; color: #1f2430; }
+  body { font-family: {{ font_family }}; font-size: 11pt; color: #1f2430; }
   .header { text-align: center; padding: 0 18mm 18px; border-bottom: 3px solid {{ accent }}; margin: 0 0 26px; }
   .brand img { margin: 0 auto 8px; }
   .brand h1 { font-size: 21pt; font-weight: 800; color: {{ accent }}; letter-spacing: -0.5px; }
@@ -165,7 +185,7 @@ _CSS_BRANDED = """
 _CSS_DIGG = """
   @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 10.5pt; color: #1E1E1E; }
+  body { font-family: {{ font_family }}; font-size: 10.5pt; color: #1E1E1E; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; padding-bottom: 14px; border-bottom: 2px solid {{ accent }}; }
   .brand img { margin-bottom: 8px; display: block; }
   .brand h1 { font-size: 17pt; font-weight: 800; color: {{ accent }}; margin-bottom: 2px; }
@@ -216,18 +236,19 @@ _DOC_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+{% if font_import_url %}<link rel="stylesheet" href="{{ font_import_url }}">{% endif %}
 <style>__TEMPLATE_CSS__</style>
 </head>
 <body>
 
 <div class="header">
-  <div class="brand">
-    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:76px;max-width:240px;margin-bottom:10px;display:block;">{% endif %}
+  <div class="brand"{% if logo_align == 'center' %} style="text-align:center;"{% endif %}>
+    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:{{ '56px' if logo_size == 'sm' else ('100px' if logo_size == 'lg' else '76px') }};max-width:{{ '180px' if logo_size == 'sm' else ('320px' if logo_size == 'lg' else '240px') }};margin-bottom:10px;display:block;{% if logo_align == 'center' %}margin-left:auto;margin-right:auto;{% endif %}">{% endif %}
     <h1>{{ tenant_name }}{% if trading_as %} <span style="font-size:0.58em;color:#888;font-weight:400;">t/a {{ trading_as }}</span>{% endif %}</h1>
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
     {% if tenant_phone %}<p>{{ tenant_phone }}</p>{% endif %}
-    {% if tenant_reg %}<p>Reg: {{ tenant_reg }}</p>{% endif %}
+    {% if tenant_reg and show_company_reg %}<p>Reg: {{ tenant_reg }}</p>{% endif %}
     {% if tenant_vat %}<p>VAT No: {{ tenant_vat }}</p>{% endif %}
   </div>
   <div class="doc-title">
@@ -298,12 +319,12 @@ _DOC_HTML = """<!DOCTYPE html>
 <table class="totals">
   {% if cert_style %}
   <tr class="muted-row"><td>Subtotal (excl. VAT)</td><td>R{{ "%.2f" | format(subtotal_cents / 100) }}</td></tr>
-  <tr class="muted-row"><td>VAT</td><td>{% if vat_registered == false %}N/A — not VAT registered{% else %}R{{ "%.2f" | format(vat_cents / 100) }}{% endif %}</td></tr>
+  {% if show_vat_breakdown %}<tr class="muted-row"><td>VAT</td><td>{% if vat_registered == false %}N/A — not VAT registered{% else %}R{{ "%.2f" | format(vat_cents / 100) }}{% endif %}</td></tr>{% endif %}
   <tr class="total-row"><td>{% if deposit_cents %}TOTAL{% else %}TOTAL DUE{% endif %}</td><td>R{{ "%.2f" | format(total_cents / 100) }}</td></tr>
   {% else %}
   <tr><td>Subtotal</td><td>R{{ "%.2f" | format(subtotal_cents / 100) }}</td></tr>
   {% if discount_cents %}<tr><td>Discount</td><td>−R{{ "%.2f" | format(discount_cents / 100) }}</td></tr>{% endif %}
-  <tr><td>VAT ({{ vat_rate | int }}%)</td><td>R{{ "%.2f" | format(vat_cents / 100) }}</td></tr>
+  {% if show_vat_breakdown %}<tr><td>VAT ({{ vat_rate | int }}%)</td><td>R{{ "%.2f" | format(vat_cents / 100) }}</td></tr>{% endif %}
   <tr class="total-row"><td>{% if deposit_cents %}TOTAL{% else %}TOTAL DUE{% endif %}</td><td>R{{ "%.2f" | format(total_cents / 100) }}</td></tr>
   {% endif %}
   {% if deposit_cents %}<tr><td>Deposit paid</td><td>−R{{ "%.2f" | format(deposit_cents / 100) }}</td></tr>
@@ -326,7 +347,7 @@ _DOC_HTML = """<!DOCTYPE html>
 
 <div class="footer">
   {{ tenant_name }} &mdash; {{ tenant_address | replace("\\n", " | ") | safe }}<br>
-  Thank you for your business.
+  {{ footer_text if footer_text else "Thank you for your business." }}
 </div>
 </body>
 </html>"""
@@ -408,7 +429,27 @@ def merge_branding(tenant_id: str, settings: Optional[dict]) -> dict:
     if payment_info:
         branding["payment_info"] = payment_info
     branding["template_choice"] = settings.get("template_choice") or "classic"
+    # Depth pass (migration 103) — footer text, per-field visibility, logo size/align, font. All
+    # default to today's fixed behavior when unset, so existing tenants render identically.
+    branding["footer_text"] = settings.get("footer_text") or ""
+    branding["show_vat_breakdown"] = settings.get("show_vat_breakdown", True)
+    branding["show_company_reg"] = settings.get("show_company_reg", True)
+    branding["logo_size"] = settings.get("logo_size") or "md"
+    branding["logo_align"] = settings.get("logo_align") or "left"
+    branding["font_pairing"] = settings.get("font_pairing") or ""
     return branding
+
+
+def _font_ctx(branding: dict) -> dict:
+    """Resolve a branding dict's font_pairing into the two Jinja values every template/letter
+    needs: the CSS font-family stack, and (if the pairing needs a Google Font) the stylesheet URL
+    to link in <head> — WeasyPrint fetches remote stylesheets/fonts the same way a browser does."""
+    pairing = branding.get("font_pairing") or ""
+    query = _FONT_IMPORTS.get(pairing)
+    return {
+        "font_family": _FONT_STACKS.get(pairing, _FONT_STACKS[""]),
+        "font_import_url": f"https://fonts.googleapis.com/css2?family={query}&display=swap" if query else None,
+    }
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -452,16 +493,46 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
     doc_type = invoice.get("doc_type", "invoice")
     choice = branding.get("template_choice") or "classic"
 
+    # Inbound documents (a supplier billing US, filed via Smart Scanner/email/WhatsApp intake) store
+    # the tenant's own name in customer_name as a workaround — that column is NOT NULL and there's
+    # no real "customer" on a bill we received (see commit_inbound_document). Rendered as-is via the
+    # outbound letterhead/Bill-To mapping, that put the tenant's own name in BOTH the letterhead and
+    # Bill To, and the actual supplier never appeared anywhere. For inbound, swap the mapping: the
+    # supplier's name (the only supplier field actually captured — no address/email/vat exist for
+    # inbound docs) becomes the "From" party in the letterhead position; the tenant's own full
+    # branding (data we do reliably have) becomes the "Bill To" party.
+    inbound = invoice.get("direction") == "inbound"
+    if inbound:
+        header_name, header_trading_as, header_logo = invoice.get("supplier") or "Unknown supplier", "", ""
+        header_address = header_email = header_phone = header_reg = header_vat = ""
+        bill_name = branding.get("name", tenant_id.replace("-", " ").title())
+        bill_address = branding.get("address", "")
+        bill_email = branding.get("email", "")
+        bill_phone = branding.get("phone", "")
+    else:
+        header_name = branding.get("name", tenant_id.replace("-", " ").title())
+        header_trading_as = branding.get("trading_as", "")
+        header_logo = branding.get("logo_url", "")
+        header_address = branding.get("address", "")
+        header_email = branding.get("email", "")
+        header_phone = branding.get("phone", "")
+        header_reg = branding.get("reg") or ""
+        header_vat = branding.get("vat") or ""
+        bill_name = invoice.get("customer_name", "")
+        bill_address = invoice.get("customer_address", "")
+        bill_email = invoice.get("customer_email", "")
+        bill_phone = invoice.get("customer_phone", "")
+
     ctx: dict[str, Any] = {
-        # Tenant branding
-        "tenant_name": branding.get("name", tenant_id.replace("-", " ").title()),
-        "trading_as": branding.get("trading_as", ""),
-        "tenant_logo": branding.get("logo_url", ""),
-        "tenant_address": branding.get("address", ""),
-        "tenant_email": branding.get("email", ""),
-        "tenant_phone": branding.get("phone", ""),
-        "tenant_reg": branding.get("reg") or "",
-        "tenant_vat": branding.get("vat") or "",
+        # Tenant branding (outbound) / supplier identity (inbound) — see comment above
+        "tenant_name": header_name,
+        "trading_as": header_trading_as,
+        "tenant_logo": header_logo,
+        "tenant_address": header_address,
+        "tenant_email": header_email,
+        "tenant_phone": header_phone,
+        "tenant_reg": header_reg,
+        "tenant_vat": header_vat,
         "accent": branding.get("accent", "#1a7a4a"),
         "payment_info": branding.get("payment_info", ""),
         "pay_url": invoice.get("pay_url", ""),
@@ -473,11 +544,11 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "issue_date": (invoice.get("issue_date") or "")[:10],
         "due_date": (invoice.get("due_date") or "")[:10] or None,
         "valid_until": (invoice.get("valid_until") or "")[:10] or None,
-        # Customer
-        "customer_name": invoice.get("customer_name", ""),
-        "customer_email": invoice.get("customer_email", ""),
-        "customer_phone": invoice.get("customer_phone", ""),
-        "customer_address": invoice.get("customer_address", ""),
+        # "Bill To" party — the customer (outbound) / the tenant itself (inbound)
+        "customer_name": bill_name,
+        "customer_email": bill_email,
+        "customer_phone": bill_phone,
+        "customer_address": bill_address,
         # Financials — always integer cents, never floats in storage
         "line_items": line_items,
         "subtotal_cents": int(invoice.get("subtotal_cents") or 0),
@@ -489,6 +560,13 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "notes": invoice.get("notes") or "",
         "vat_registered": branding.get("vat_registered", True),
         "cert_style": choice in _CERT_STYLE_TEMPLATES,
+        # Branding depth (migration 103) — all default to today's fixed behavior when unset.
+        "footer_text": branding.get("footer_text") or "",
+        "show_vat_breakdown": branding.get("show_vat_breakdown", True),
+        "show_company_reg": branding.get("show_company_reg", True),
+        "logo_size": branding.get("logo_size") or "md",
+        "logo_align": branding.get("logo_align") or "left",
+        **_font_ctx(branding),
     }
 
     # Pick the layout template; substitute its CSS before the single render pass
@@ -515,6 +593,7 @@ _LETTER_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+{% if font_import_url %}<link rel="stylesheet" href="{{ font_import_url }}">{% endif %}
 <style>
 __TEMPLATE_CSS__
 .letter-date { text-align: right; font-size: 9.5pt; color: #666; margin-bottom: 22px; }
@@ -635,6 +714,7 @@ def render_letter_pdf(
         "body_html": body_html,
         "body_paragraphs": paragraphs,
         "sign_off": sign_off or "",
+        **_font_ctx(branding),
     }
 
     choice = branding.get("template_choice") or "classic"
