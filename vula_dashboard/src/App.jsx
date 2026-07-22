@@ -96,6 +96,7 @@ export default function App() {
   const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
+  const [brandLogoUrl, setBrandLogoUrl] = useState(null); // live logo_url from Settings, overrides tenantThemes' static fallback
   const { user, role, tenantId, logout, access, full, setMember } = useAuthStore();
 
   // DB-driven tenant switcher: every configured tenant, not a hardcoded pair.
@@ -128,6 +129,7 @@ export default function App() {
     meta.content = baseTheme.accent;
 
     const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+    setBrandLogoUrl(null); // reset on tenant switch so a stale logo never flashes for the wrong tenant
     fetch(`${API}/v1/commerce/${tid}/admin/invoice-settings`)
       .then((r) => r.json())
       .then((d) => {
@@ -141,6 +143,7 @@ export default function App() {
           applyInk(s.ink_color.startsWith("#") ? s.ink_color : `#${s.ink_color}`);
         }
         if (s.font_pairing) applyFontPairing(s.font_pairing);
+        if (s.logo_url) setBrandLogoUrl(s.logo_url);
       })
       .catch(() => {});
   }, [role, tenantId, masterTenant]);
@@ -219,7 +222,7 @@ export default function App() {
     return (
       <div style={{ ...themeVars(theme) }}>
         <VulaShell
-          brand={{ logoUrl: theme.logoUrl, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: theme.tagline || "Business admin" }}
+          brand={{ logoUrl: brandLogoUrl || theme.logoUrl, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: theme.tagline || "Business admin" }}
           groups={groups}
           activeId={merchTab}
           onSelect={setMerchTab}
@@ -246,7 +249,7 @@ export default function App() {
     return (
       <div style={{ ...themeVars(mTheme) }}>
         <VulaShell
-          brand={{ logoUrl: mTheme.logoUrl, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
+          brand={{ logoUrl: brandLogoUrl || mTheme.logoUrl, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
           groups={mGroups}
           activeId={merchTab}
           onSelect={setMerchTab}
