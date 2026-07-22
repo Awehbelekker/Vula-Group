@@ -119,6 +119,27 @@ function useStaggerReveal() {
 }
 const staggerDelay = (i) => ({ animationDelay: `${Math.min(i, 6) * 80}ms` });
 
+// Per-block animation choice (2026-07-22 depth pass): every single-entrance block previously
+// hardcoded which of the 5 reveal styles it used — a tenant could turn animation on/off for the
+// whole page (root `pageAnimations`) but never pick "this block slides in" vs "that one fades."
+// `ANIM_FIELD`/`useBlockReveal` are the shared plumbing so every block wires this the same way.
+// `animation` defaults to undefined on already-published pages (saved before this field existed)
+// — useBlockReveal treats that identically to the block's original hardcoded animation, so no
+// existing page changes appearance until the tenant deliberately picks something else.
+const ANIM_FIELD = {
+  type: "select", label: "Entrance animation",
+  options: [
+    { label: "Fade up", value: "fadeUp" }, { label: "Fade in", value: "fadeIn" },
+    { label: "Scale in", value: "scaleIn" }, { label: "Slide from left", value: "slideInLeft" },
+    { label: "Slide from right", value: "slideInRight" }, { label: "None", value: "none" },
+  ],
+};
+function useBlockReveal(animation, fallbackAnim) {
+  const anim = animation === "none" ? null : (animation || fallbackAnim);
+  const ref = useReveal(anim || fallbackAnim);
+  return anim ? { ref, className: "vula-reveal" } : {};
+}
+
 // Custom Puck field: real image UPLOAD (to the tenant's Supabase bucket) instead of a bare URL
 // text box — with URL paste still available as a fallback. Dashboard editor only; the storefront
 // config copies keep plain text fields (they only render, never edit).
@@ -164,23 +185,36 @@ export const config = {
       fields: {
         title: { type: "text" }, subtitle: { type: "textarea" },
         image: imageField("Background image"),
-        ctaText: { type: "text", label: "Button text" }, ctaHref: { type: "text", label: "Button link" },
+        overlayOpacity: { type: "number", label: "Dark overlay strength 0-100" },
+        ctaText: { type: "text", label: "Primary button text" }, ctaHref: { type: "text", label: "Primary button link" },
+        ctaText2: { type: "text", label: "Second button text (optional)" }, ctaHref2: { type: "text", label: "Second button link" },
+        animation: ANIM_FIELD,
       },
-      defaultProps: { title: "Your headline", subtitle: "A short supporting line.", image: "", ctaText: "Shop now", ctaHref: "/shop" },
-      render: ({ title, subtitle, image, ctaText, ctaHref }) => {
-        const ref = useReveal("fadeIn");
+      defaultProps: { title: "Your headline", subtitle: "A short supporting line.", image: "", overlayOpacity: 55,
+        ctaText: "Shop now", ctaHref: "/shop", ctaText2: "", ctaHref2: "" },
+      render: ({ title, subtitle, image, overlayOpacity, ctaText, ctaHref, ctaText2, ctaHref2, animation }) => {
+        const reveal = useBlockReveal(animation, "fadeIn");
+        const overlay = overlayOpacity ?? 55;
         return (
-          <section ref={ref} className="vula-reveal" style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
+          <section {...reveal} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
             textAlign: "center", color: "#fff", minHeight: 420, backgroundColor: ACCENT,
             backgroundImage: image ? `url(${image})` : undefined, backgroundSize: "cover", backgroundPosition: "center" }}>
-            <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(180deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.55) 100%)" }} />
+            <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(180deg, rgba(0,0,0,${Math.min(overlay, 100) * 0.27 / 100}) 0%, rgba(0,0,0,${Math.min(overlay, 100) / 100}) 100%)` }} />
             <div style={{ position: "relative", zIndex: 1, maxWidth: 760, padding: "80px 16px" }}>
               <h1 style={{ fontSize: 44, fontWeight: 800, marginBottom: 16, fontFamily: FONT_DISPLAY }}>{title}</h1>
               {subtitle ? <p style={{ fontSize: 18, opacity: 0.9, marginBottom: 24 }}>{subtitle}</p> : null}
-              {ctaText ? (
-                <a href={ctaHref || "#"} className="vula-btn-lift" style={{ display: "inline-block", borderRadius: 999, padding: "12px 28px",
-                  fontWeight: 600, background: ACCENT_FG, color: INK, textDecoration: "none", boxShadow: SHADOW_MD }}>{ctaText}</a>
-              ) : null}
+              {(ctaText || ctaText2) && (
+                <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+                  {ctaText ? (
+                    <a href={ctaHref || "#"} className="vula-btn-lift" style={{ display: "inline-block", borderRadius: 999, padding: "12px 28px",
+                      fontWeight: 600, background: ACCENT_FG, color: INK, textDecoration: "none", boxShadow: SHADOW_MD }}>{ctaText}</a>
+                  ) : null}
+                  {ctaText2 ? (
+                    <a href={ctaHref2 || "#"} className="vula-btn-lift" style={{ display: "inline-block", borderRadius: 999, padding: "12px 28px",
+                      fontWeight: 600, border: "1px solid rgba(255,255,255,0.7)", color: "#fff", textDecoration: "none" }}>{ctaText2}</a>
+                  ) : null}
+                </div>
+              )}
             </div>
           </section>
         );
@@ -192,14 +226,15 @@ export const config = {
         text: { type: "text" },
         level: { type: "select", options: [{ label: "H1", value: "h1" }, { label: "H2", value: "h2" }, { label: "H3", value: "h3" }] },
         align: { type: "select", options: [{ label: "Left", value: "left" }, { label: "Center", value: "center" }] },
+        animation: ANIM_FIELD,
       },
       defaultProps: { text: "Section heading", level: "h2", align: "left" },
-      render: ({ text, level, align }) => {
+      render: ({ text, level, align, animation }) => {
         const size = level === "h1" ? 40 : level === "h2" ? 30 : 24;
         const Tag = level || "h2";
-        const ref = useReveal("fadeUp");
+        const reveal = useBlockReveal(animation, "fadeUp");
         return (
-          <div ref={ref} className="vula-reveal" style={{ ...wrap, padding: "24px 16px" }}>
+          <div {...reveal} style={{ ...wrap, padding: "24px 16px" }}>
             <Tag style={{ fontSize: size, fontWeight: 800, textAlign: align === "center" ? "center" : "left", color: INK, margin: 0, fontFamily: FONT_DISPLAY }}>{text}</Tag>
           </div>
         );
@@ -210,12 +245,13 @@ export const config = {
       fields: {
         text: { type: "textarea" },
         align: { type: "select", options: [{ label: "Left", value: "left" }, { label: "Center", value: "center" }] },
+        animation: ANIM_FIELD,
       },
       defaultProps: { text: "Write your content here.", align: "left" },
-      render: ({ text, align }) => {
-        const ref = useReveal("fadeUp");
+      render: ({ text, align, animation }) => {
+        const reveal = useBlockReveal(animation, "fadeUp");
         return (
-          <div ref={ref} className="vula-reveal" style={{ ...wrap, padding: "12px 16px" }}>
+          <div {...reveal} style={{ ...wrap, padding: "12px 16px" }}>
             <p style={{ lineHeight: 1.7, whiteSpace: "pre-line", maxWidth: 760, color: "#555",
               margin: align === "center" ? "0 auto" : 0, textAlign: align === "center" ? "center" : "left" }}>{text}</p>
           </div>
@@ -227,12 +263,13 @@ export const config = {
       fields: {
         src: imageField("Image"), alt: { type: "text" },
         rounded: { type: "radio", options: [{ label: "Rounded", value: true }, { label: "Square", value: false }] },
+        animation: ANIM_FIELD,
       },
       defaultProps: { src: "", alt: "", rounded: true },
-      render: ({ src, alt, rounded }) => {
-        const ref = useReveal("scaleIn");
+      render: ({ src, alt, rounded, animation }) => {
+        const reveal = useBlockReveal(animation, "scaleIn");
         return (
-          <div ref={ref} className="vula-reveal" style={{ ...wrap, padding: "24px 16px" }}>
+          <div {...reveal} style={{ ...wrap, padding: "24px 16px" }}>
             {src ? <img src={src} alt={alt} style={{ width: "100%", objectFit: "cover", borderRadius: rounded ? 16 : 0, boxShadow: SHADOW_SM }} />
                  : <div style={{ height: 192, background: "#f1f1f1", borderRadius: rounded ? 16 : 0 }} />}
           </div>
@@ -244,12 +281,13 @@ export const config = {
       fields: {
         text: { type: "text" }, href: { type: "text" },
         variant: { type: "select", options: [{ label: "Solid", value: "solid" }, { label: "Outline", value: "outline" }] },
+        animation: ANIM_FIELD,
       },
       defaultProps: { text: "Get in touch", href: "/contact", variant: "solid" },
-      render: ({ text, href, variant }) => {
-        const ref = useReveal("fadeUp");
+      render: ({ text, href, variant, animation }) => {
+        const reveal = useBlockReveal(animation, "fadeUp");
         return (
-          <div ref={ref} className="vula-reveal" style={{ ...wrap, padding: "20px 16px", textAlign: "center" }}>
+          <div {...reveal} style={{ ...wrap, padding: "20px 16px", textAlign: "center" }}>
             <a href={href || "#"} className="vula-btn-lift" style={{ display: "inline-block", borderRadius: 999, padding: "12px 28px",
               fontWeight: 600, border: `1px solid ${ACCENT}`, textDecoration: "none", boxShadow: SHADOW_SM,
               ...(variant === "solid" ? { background: ACCENT, color: ACCENT_FG } : { color: ACCENT }) }}>{text}</a>
@@ -436,15 +474,15 @@ export const config = {
     },
     VideoEmbed: {
       label: "Video",
-      fields: { url: { type: "text", label: "YouTube / Vimeo / direct video URL" }, caption: { type: "text" } },
+      fields: { url: { type: "text", label: "YouTube / Vimeo / direct video URL" }, caption: { type: "text" }, animation: ANIM_FIELD },
       defaultProps: { url: "", caption: "" },
-      render: ({ url, caption }) => {
+      render: ({ url, caption, animation }) => {
         const yt = (url || "").match(/(?:youtu\.be\/|youtube\.com\/watch\?v=|youtube\.com\/embed\/)([\w-]+)/);
         const vimeo = (url || "").match(/vimeo\.com\/(\d+)/);
         const embedSrc = yt ? `https://www.youtube.com/embed/${yt[1]}` : vimeo ? `https://player.vimeo.com/video/${vimeo[1]}` : null;
-        const ref = useReveal("fadeUp");
+        const reveal = useBlockReveal(animation, "fadeUp");
         return (
-          <section ref={ref} className="vula-reveal" style={{ ...wrap, padding: "40px 16px" }}>
+          <section {...reveal} style={{ ...wrap, padding: "40px 16px" }}>
             <div style={{ position: "relative", paddingTop: "56.25%", borderRadius: 14, overflow: "hidden", background: "#000", boxShadow: SHADOW_MD }}>
               {embedSrc ? (
                 <iframe src={embedSrc} title={caption || "Video"} allowFullScreen
@@ -466,14 +504,15 @@ export const config = {
         phone: { type: "text", label: "Phone (27…, no +)" },
         message: { type: "text", label: "Pre-filled message" },
         buttonText: { type: "text" },
+        animation: ANIM_FIELD,
       },
       defaultProps: { phone: "", message: "Hi! I'd like to order.", buttonText: "💬 Chat on WhatsApp" },
-      render: ({ phone, message, buttonText }) => {
+      render: ({ phone, message, buttonText, animation }) => {
         const n = (phone || "").replace(/\D/g, "");
         const href = n ? `https://wa.me/${n}${message ? `?text=${encodeURIComponent(message)}` : ""}` : "#";
-        const ref = useReveal("fadeUp");
+        const reveal = useBlockReveal(animation, "fadeUp");
         return (
-          <div ref={ref} className="vula-reveal" style={{ ...wrap, padding: "24px 16px", textAlign: "center" }}>
+          <div {...reveal} style={{ ...wrap, padding: "24px 16px", textAlign: "center" }}>
             <a href={href} target="_blank" rel="noreferrer" className="vula-btn-lift" style={{ display: "inline-block", borderRadius: 999, padding: "14px 32px",
               fontWeight: 700, background: "#25D366", color: "#fff", textDecoration: "none", fontSize: 16, boxShadow: SHADOW_MD }}>{buttonText}</a>
           </div>
@@ -486,12 +525,13 @@ export const config = {
         title: { type: "text" },
         phone: { type: "text" }, email: { type: "text" },
         address: { type: "textarea" }, hours: { type: "textarea" },
+        animation: ANIM_FIELD,
       },
       defaultProps: { title: "Get in touch", phone: "", email: "", address: "", hours: "" },
-      render: ({ title, phone, email, address, hours }) => {
-        const ref = useReveal("fadeUp");
+      render: ({ title, phone, email, address, hours, animation }) => {
+        const reveal = useBlockReveal(animation, "fadeUp");
         return (
-          <section ref={ref} className="vula-reveal" style={{ ...wrap, padding: "40px 16px" }}>
+          <section {...reveal} style={{ ...wrap, padding: "40px 16px" }}>
             <div className="vula-card-lift" style={{ borderRadius: 16, border: "1px solid #e5e5e5", padding: 28, maxWidth: 420, margin: "0 auto", boxShadow: SHADOW_SM, background: "#fff" }}>
               {title ? <h3 style={{ fontSize: 22, fontWeight: 800, color: INK, marginBottom: 14 }}>{title}</h3> : null}
               {phone ? <p style={{ margin: "6px 0", color: "#444" }}>📞 <a href={`tel:${phone}`} style={{ color: "#444" }}>{phone}</a></p> : null}
@@ -542,22 +582,23 @@ export const config = {
           { label: "Medium", value: "md" }, { label: "Large", value: "lg" },
         ] },
         tinted: { type: "radio", label: "Tint", options: [{ label: "Light brand tint", value: true }, { label: "Plain", value: false }] },
+        animation: ANIM_FIELD,
         content: { type: "slot" },
       },
       defaultProps: {
         background: "none", backgroundColor: "", backgroundImage: "", overlayOpacity: 40,
         padding: "md", tinted: false, content: [],
       },
-      render: ({ background, backgroundColor, backgroundImage, overlayOpacity, padding, tinted, content: Content }) => {
+      render: ({ background, backgroundColor, backgroundImage, overlayOpacity, padding, tinted, animation, content: Content }) => {
         const padPx = padding === "none" ? 0 : padding === "sm" ? 24 : padding === "lg" ? 96 : 48;
         const bgStyle =
           background === "solid" ? { backgroundColor: backgroundColor || ACCENT } :
           background === "gradient" ? { backgroundImage: `linear-gradient(135deg, ${backgroundColor || ACCENT} 0%, ${INK} 100%)` } :
           background === "image" && backgroundImage ? { backgroundImage: `url(${backgroundImage})`, backgroundSize: "cover", backgroundPosition: "center" } :
           tinted ? { background: "color-mix(in srgb, var(--brand-accent, #0E7C7B) 6%, white)" } : {};
-        const ref = useReveal("fadeIn");
+        const reveal = useBlockReveal(animation, "fadeIn");
         return (
-          <section ref={ref} className="vula-reveal" style={{ position: "relative", padding: `${padPx}px 16px`, ...bgStyle }}>
+          <section {...reveal} style={{ position: "relative", padding: `${padPx}px 16px`, ...bgStyle }}>
             {background === "image" && backgroundImage ? (
               <div style={{ position: "absolute", inset: 0, background: `rgba(0,0,0,${(overlayOpacity ?? 40) / 100})` }} />
             ) : null}
