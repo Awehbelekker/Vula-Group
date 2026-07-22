@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
+import { FONT_PAIRINGS } from '../theme/tokens'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -440,6 +441,7 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   const [deposit, setDeposit] = useState('')           // deposit already paid (rands)
   const [saving, setSaving] = useState(false)
   const [savedClients, setSavedClients] = useState([])
+  const [crmCustomers, setCrmCustomers] = useState([])  // real order/WhatsApp history — the larger, phone-deduplicated list
   const [project, setProject] = useState('')
   const [projectList, setProjectList] = useState([])
   const [catalogItems, setCatalogItems] = useState([])   // products & services quick-add catalog
@@ -453,10 +455,23 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-clients`)
       .then(r => r.json()).then(d => setSavedClients(d.clients || [])).catch(() => {})
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers`)
+      .then(r => r.json()).then(d => setCrmCustomers(d.customers || [])).catch(() => {})
     fetch(`${VULA_API}/v1/projects/${tenantId}/labels`)
       .then(r => r.json()).then(d => setProjectList(d.projects || [])).catch(() => {})
     loadCatalog()
   }, [tenantId, loadCatalog])
+
+  // Real customers (order/WhatsApp history, phone-deduplicated) come first — commerce_invoice_clients
+  // is only for one-off invoice clients who never actually ordered (e.g. a construction client),
+  // so it's filtered down to just those not already represented in the CRM list, to avoid ever
+  // listing the same person twice under two different identities.
+  const pickerOptions = [
+    ...crmCustomers.map(c => ({ id: `crm:${c.phone}`, name: c.name || c.phone, phone: c.phone, email: '', address: '' })),
+    ...savedClients
+      .filter(c => !crmCustomers.some(cc => cc.phone && c.phone && toWhatsAppNumber(cc.phone) === toWhatsAppNumber(c.phone)))
+      .map(c => ({ id: c.id, name: c.name, phone: c.phone, email: c.email, address: c.address })),
+  ]
 
   // Re-interpolate any line item whose description came from a catalog template containing
   // {project} whenever the invoice's project changes, so it always names the current project.
@@ -470,7 +485,7 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   }, [project])
 
   function pickClient(id) {
-    const c = savedClients.find(x => x.id === id)
+    const c = pickerOptions.find(x => x.id === id)
     if (c) setCustomer({ name: c.name || '', phone: c.phone || '', email: c.email || '', address: c.address || '' })
   }
   async function saveClient() {
@@ -568,10 +583,10 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       </div>
 
       <div style={s.formSection}>
-        {savedClients.length > 0 && (
+        {pickerOptions.length > 0 && (
           <select onChange={e => pickClient(e.target.value)} defaultValue="" style={{ ...s.fInput, color: 'var(--muted, #8A8680)' }}>
-            <option value="">📇 Pick a saved client…</option>
-            {savedClients.map(c => <option key={c.id} value={c.id} style={{ color: '#2A2A2A' }}>{c.name}{c.phone ? ` · ${c.phone}` : ''}</option>)}
+            <option value="">📇 Pick an existing customer…</option>
+            {pickerOptions.map(c => <option key={c.id} value={c.id} style={{ color: '#2A2A2A' }}>{c.name}{c.phone ? ` · ${c.phone}` : ''}</option>)}
           </select>
         )}
         <input placeholder="Customer name" value={customer.name} onChange={e => setCustomer({ ...customer, name: e.target.value })} style={s.fInput} />
@@ -825,6 +840,14 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
     account_number:     settings?.account_number || '',
     template_choice:    settings?.template_choice || 'classic',
     menu_header_image_url: settings?.menu_header_image_url || '',
+    accent_color:       /^#[0-9a-fA-F]{6}$/.test(settings?.accent_color || '') ? settings.accent_color : '#2C5545',
+    ink_color:          /^#[0-9a-fA-F]{6}$/.test(settings?.ink_color || '') ? settings.ink_color : '#1E1E1E',
+    font_pairing:       settings?.font_pairing || 'vula',
+    footer_text:        settings?.footer_text || '',
+    show_vat_breakdown: settings?.show_vat_breakdown ?? true,
+    show_company_reg:   settings?.show_company_reg ?? true,
+    logo_size:          settings?.logo_size || 'md',
+    logo_align:         settings?.logo_align || 'left',
   })
   const [saving, setSaving] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -970,9 +993,106 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
         })}
       </div>
 
+      {/* Colour/font used to live only in general Settings' Brand Kit — same underlying row,
+          duplicated here so the template swatches above actually mean something without leaving
+          this screen. Editing either place stays in sync (both read/write commerce_invoice_settings). */}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', margin: '10px 0' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8A8680' }}>Accent</span>
+          <input type="color" value={form.accent_color} onChange={e => set('accent_color', e.target.value)} style={{ width: 34, height: 30, padding: 2, border: '1px solid #DDD8CE', borderRadius: 6 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8A8680' }}>Text</span>
+          <input type="color" value={form.ink_color} onChange={e => set('ink_color', e.target.value)} style={{ width: 34, height: 30, padding: 2, border: '1px solid #DDD8CE', borderRadius: 6 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8A8680' }}>Heading font</span>
+          <select value={form.font_pairing} onChange={e => set('font_pairing', e.target.value)} style={{ ...s.fInput, flex: 'none', width: 180 }}>
+            {Object.entries(FONT_PAIRINGS).map(([key, p]) => <option key={key} value={key}>{p.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <p style={s.sectionLabel}>Logo</p>
+      <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 14px' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8A8680' }}>Size</span>
+          <select value={form.logo_size} onChange={e => set('logo_size', e.target.value)} style={{ ...s.fInput, flex: 'none', width: 110 }}>
+            <option value="sm">Small</option><option value="md">Medium</option><option value="lg">Large</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8A8680' }}>Position</span>
+          <select value={form.logo_align} onChange={e => set('logo_align', e.target.value)} style={{ ...s.fInput, flex: 'none', width: 110 }}>
+            <option value="left">Left</option><option value="center">Centered</option>
+          </select>
+        </div>
+      </div>
+
+      <p style={s.sectionLabel}>Footer &amp; visibility</p>
+      <div style={s.formSection}>
+        <textarea placeholder="Custom footer note (blank = &quot;Thank you for your business.&quot;)" value={form.footer_text}
+          onChange={e => set('footer_text', e.target.value)} style={{ ...s.fInput, minHeight: 50, resize: 'vertical' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#2A2A2A', fontFamily: 'system-ui' }}>
+          <input type="checkbox" checked={!!form.show_vat_breakdown} onChange={e => set('show_vat_breakdown', e.target.checked)} />
+          Show VAT breakdown on the invoice
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#2A2A2A', fontFamily: 'system-ui' }}>
+          <input type="checkbox" checked={!!form.show_company_reg} onChange={e => set('show_company_reg', e.target.checked)} />
+          Show company registration number
+        </label>
+      </div>
+
+      <InvoicePreviewPane tenantId={tenantId} form={form} />
+
       <button onClick={save} disabled={saving} style={s.saveInvBtn}>
         {saving ? 'Saving…' : firstRun ? 'Save & start invoicing' : 'Save branding'}
       </button>
+    </div>
+  )
+}
+
+// ── Live PDF preview (2026-07-22 branding depth) — debounced re-render of the in-progress,
+// UNSAVED settings against a fixed sample invoice, so a tenant sees the effect of every change
+// (template/colour/font/logo/footer/visibility) before committing to Save. ────────────────────
+function InvoicePreviewPane({ tenantId, form }) {
+  const [url, setUrl] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const urlRef = useRef(null)
+  const timerRef = useRef(null)
+
+  useEffect(() => {
+    clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings/preview`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form),
+        })
+        if (!r.ok) return
+        const blob = await r.blob()
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+        const next = URL.createObjectURL(blob)
+        urlRef.current = next
+        setUrl(next)
+      } catch { /* preview is best-effort — never blocks saving */ }
+      setLoading(false)
+    }, 600)
+    return () => clearTimeout(timerRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, JSON.stringify(form)])
+
+  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current) }, [])
+
+  return (
+    <div style={{ margin: '4px 0 18px' }}>
+      <p style={s.sectionLabel}>Live preview {loading && <span style={{ color: '#8A8680', fontWeight: 400 }}>— updating…</span>}</p>
+      <div style={{ border: '1px solid #DDD8CE', borderRadius: 8, overflow: 'hidden', height: 420, background: '#FAF9F6' }}>
+        {url
+          ? <embed src={url} type="application/pdf" style={{ width: '100%', height: '100%' }} />
+          : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8680', fontSize: 13 }}>Preview loading…</div>}
+      </div>
     </div>
   )
 }

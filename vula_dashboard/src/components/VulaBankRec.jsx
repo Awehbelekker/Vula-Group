@@ -210,7 +210,7 @@ export default function VulaBankRec({ tenantId }) {
 }
 
 const Stat = ({ label, value, sub, color }) => (
-  <div style={card}>
+  <div style={{ ...card, flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
     <div style={{ fontSize: 10, textTransform: "uppercase", color: C.muted, marginBottom: 3 }}>{label}</div>
     <div style={{ fontSize: 18, fontWeight: 700, color: color || C.text }}>{value}</div>
     {sub && <div style={{ fontSize: 10, color: C.muted }}>{sub}</div>}
