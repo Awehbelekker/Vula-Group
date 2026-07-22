@@ -762,7 +762,7 @@ app.add_middleware(
         r"https://([a-z0-9-]+\.)*(vula-ai\.com|offthehook\.co\.za|digg-ct\.co\.za|vercel\.app)"
         r"|http://localhost:[0-9]+"
     ),
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     allow_credentials=True,
 )
