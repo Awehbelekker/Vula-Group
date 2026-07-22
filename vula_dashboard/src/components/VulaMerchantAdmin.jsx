@@ -437,6 +437,11 @@ function StatCard({ label, value, sub, accent = '#6b7280' }) {
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 
+// Only orders that never became real fulfilment can be deleted — mirrors the backend guard on
+// DELETE/bulk-delete (pending_payment/cancelled only), so the UI never offers a delete that would
+// just 400. Anything past this needs cancel/refund first, same as before.
+const ORDER_DELETABLE = new Set(['pending_payment', 'cancelled'])
+
 function OrdersTab({ tenantId }) {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
@@ -444,6 +449,8 @@ function OrdersTab({ tenantId }) {
   const [updating, setUpdating] = useState(null)
   const [detailId, setDetailId] = useState(null)
   const [showManual, setShowManual] = useState(false)
+  const [selected, setSelected] = useState(new Set())
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -453,6 +460,7 @@ function OrdersTab({ tenantId }) {
     const r = await fetch(url)
     const d = await r.json()
     setOrders(d.orders || [])
+    setSelected(new Set())
     setLoading(false)
   }, [tenantId, filter])
 
@@ -467,6 +475,35 @@ function OrdersTab({ tenantId }) {
     })
     await load()
     setUpdating(null)
+  }
+
+  function toggleSelect(orderId) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(orderId) ? next.delete(orderId) : next.add(orderId)
+      return next
+    })
+  }
+
+  async function deleteOne(order) {
+    if (!confirm(`Delete order ${order.display_id}? This can't be undone.`)) return
+    setUpdating(order.id)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/${order.id}`, { method: 'DELETE' })
+    await load()
+    setUpdating(null)
+  }
+
+  async function deleteSelected() {
+    const ids = [...selected]
+    if (!ids.length) return
+    if (!confirm(`Delete ${ids.length} selected order${ids.length === 1 ? '' : 's'}? This can't be undone.`)) return
+    setDeleting(true)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/bulk-delete`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_ids: ids }),
+    })
+    await load()
+    setDeleting(false)
   }
 
   const filters = [
@@ -505,6 +542,17 @@ function OrdersTab({ tenantId }) {
         </div>
       </div>
 
+      {selected.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(162,59,45,0.06)',
+          border: '1px solid rgba(162,59,45,0.25)', borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontFamily: 'system-ui' }}>{selected.size} selected</span>
+          <button onClick={deleteSelected} disabled={deleting} style={styles.btnDanger}>
+            {deleting ? 'Deleting…' : `🗑 Delete ${selected.size} selected`}
+          </button>
+          <button onClick={() => setSelected(new Set())} style={{ ...styles.btnGhost, marginLeft: 'auto' }}>Clear</button>
+        </div>
+      )}
+
       {loading && <p style={styles.loading}>Loading orders…</p>}
       {!loading && orders.length === 0 && <p style={styles.empty}>No orders found.</p>}
 
@@ -513,10 +561,15 @@ function OrdersTab({ tenantId }) {
           const s = STATUS_LABELS[o.status] || STATUS_LABELS.pending_payment
           const nextStatuses = NEXT_STATUSES[o.status] || []
           const fmt = cents => `R${(cents / 100).toFixed(2)}`
+          const canDelete = ORDER_DELETABLE.has(o.status)
           return (
             <div key={o.id} style={styles.orderCard}>
               <div style={styles.orderTop}>
-                <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {canDelete && (
+                    <input type="checkbox" checked={selected.has(o.id)} onChange={() => toggleSelect(o.id)}
+                      title="Select for bulk delete" style={{ cursor: 'pointer' }} />
+                  )}
                   <span style={styles.orderId}>{o.display_id}</span>
                   <span style={{ ...styles.badge, color: s.color, background: s.bg }}>
                     {s.label}
@@ -547,6 +600,11 @@ function OrdersTab({ tenantId }) {
                     {updating === o.id ? '…' : `→ ${STATUS_LABELS[ns]?.label || ns}`}
                   </button>
                 ))}
+                {canDelete && (
+                  <button disabled={updating === o.id} onClick={() => deleteOne(o)} style={styles.btnDanger}>
+                    {updating === o.id ? '…' : '🗑 Delete'}
+                  </button>
+                )}
               </div>
             </div>
           )

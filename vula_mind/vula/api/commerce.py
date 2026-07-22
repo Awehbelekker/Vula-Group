@@ -487,6 +487,55 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
     return {"order_id": order_id, "status": new_status}
 
 
+_ORDER_DELETABLE_STATUSES = ("pending_payment", "cancelled")
+
+
+async def _delete_order_if_safe(tenant_id: str, order_id: str) -> Optional[str]:
+    """Delete one order + its items if it never became real fulfilment. Returns an error string
+    on failure/skip, or None on success — so callers (single + bulk) share one guard."""
+    order = await service.get_order(order_id)
+    if not order or order.get("tenant_id") != tenant_id:
+        return "not found"
+    if order.get("status") not in _ORDER_DELETABLE_STATUSES:
+        return f"status is '{order.get('status')}' — only pending/cancelled orders can be deleted"
+    db = service._client()
+    db.table("commerce_order_items").delete().eq("order_id", order_id).execute()
+    db.table("commerce_orders").delete().eq("id", order_id).execute()
+    return None
+
+
+@router.delete("/{tenant_id}/admin/orders/{order_id}")
+async def admin_delete_order(tenant_id: str, order_id: str):
+    """Permanently remove an order — restricted to orders that never became real fulfilment
+    (pending_payment/cancelled only), so a paid/dispatched/delivered order can never be deleted
+    this way, only cancelled or refunded first. Exists for clearing out test/duplicate orders
+    without a manual DB delete every time."""
+    err = await _delete_order_if_safe(tenant_id, order_id)
+    if err == "not found":
+        raise HTTPException(status_code=404, detail="Order not found")
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    return {"deleted": order_id}
+
+
+@router.post("/{tenant_id}/admin/orders/bulk-delete")
+async def admin_bulk_delete_orders(tenant_id: str, body: dict):
+    """Delete multiple orders in one call — same pending/cancelled-only guard as the single
+    endpoint, applied independently per order so one ineligible order in the batch doesn't block
+    the rest. Returns which ids were actually removed vs skipped and why."""
+    order_ids = [str(x) for x in (body.get("order_ids") or [])]
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="order_ids is required")
+    deleted, skipped = [], []
+    for oid in order_ids:
+        err = await _delete_order_if_safe(tenant_id, oid)
+        if err:
+            skipped.append({"order_id": oid, "reason": err})
+        else:
+            deleted.append(oid)
+    return {"deleted": deleted, "skipped": skipped}
+
+
 @router.get("/{tenant_id}/admin/products")
 async def admin_list_products(tenant_id: str):
     """List all products including out-of-stock AND archived — merchant product management."""
@@ -1847,6 +1896,34 @@ async def admin_delete_invoice(tenant_id: str, invoice_id: str):
     service._client().table("commerce_invoices") \
         .delete().eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
     return {"deleted": invoice_id}
+
+
+@router.post("/{tenant_id}/admin/quotes/bulk-delete")
+async def admin_bulk_delete_quotes(tenant_id: str, body: dict):
+    """Delete multiple quotes at once — restricted to doc_type='quote' with status draft/sent, so
+    a quote the customer already accepted/declined (or one already converted to a real invoice,
+    which would fail on the source_quote_id FK anyway) can't be silently removed this way."""
+    quote_ids = [str(x) for x in (body.get("quote_ids") or [])]
+    if not quote_ids:
+        raise HTTPException(status_code=400, detail="quote_ids is required")
+    db = service._client()
+    deleted, skipped = [], []
+    for qid in quote_ids:
+        rows = (db.table("commerce_invoices").select("id,doc_type,status")
+                .eq("tenant_id", tenant_id).eq("id", qid).limit(1).execute().data or [])
+        row = rows[0] if rows else None
+        if not row:
+            skipped.append({"quote_id": qid, "reason": "not found"}); continue
+        if row.get("doc_type") != "quote":
+            skipped.append({"quote_id": qid, "reason": "not a quote"}); continue
+        if row.get("status") not in ("draft", "sent"):
+            skipped.append({"quote_id": qid, "reason": f"status is '{row.get('status')}' — only draft/sent quotes can be deleted"}); continue
+        try:
+            db.table("commerce_invoices").delete().eq("tenant_id", tenant_id).eq("id", qid).execute()
+            deleted.append(qid)
+        except Exception as exc:
+            skipped.append({"quote_id": qid, "reason": f"already converted to an invoice ({exc})"})
+    return {"deleted": deleted, "skipped": skipped}
 
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/request-approval")

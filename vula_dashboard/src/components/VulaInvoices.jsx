@@ -38,6 +38,8 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   const [showSettings, setShowSettings] = useState(false)
   const [showRecurring, setShowRecurring] = useState(false)
   const autoOpened = useRef(false)                       // first-run wizard opened once
+  const [selectedQuotes, setSelectedQuotes] = useState(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   // A fresh deep-link (e.g. clicking a different supplier while already on this tab) —
   // re-sync local state to match.
@@ -61,6 +63,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`).then(r => r.json()).catch(() => null),
     ])
     setInvoices(d.invoices || [])
+    setSelectedQuotes(new Set())
     if (sr) {
       setSettings(sr.settings || null)
       // First visit: open the setup wizard once if the tenant hasn't onboarded.
@@ -98,6 +101,27 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     if (!confirm('Delete this invoice?')) return
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${id}`, { method: 'DELETE' })
     load()
+  }
+
+  function toggleQuoteSelect(id) {
+    setSelectedQuotes(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  async function deleteSelectedQuotes() {
+    const ids = [...selectedQuotes]
+    if (!ids.length) return
+    if (!confirm(`Delete ${ids.length} selected quote${ids.length === 1 ? '' : 's'}? This can't be undone.`)) return
+    setBulkDeleting(true)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/quotes/bulk-delete`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quote_ids: ids }),
+    })
+    await load()
+    setBulkDeleting(false)
   }
 
   // Open the customer's WhatsApp with a prefilled message + PDF download link.
@@ -292,6 +316,17 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
         {direction === 'outbound' && docType !== 'credit_note' && <button onClick={() => setShowCreate(docType)} style={s.newBtn}>+ New {docType}</button>}
       </div>
 
+      {docType === 'quote' && selectedQuotes.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(162,59,45,0.06)',
+          border: '1px solid rgba(162,59,45,0.25)', borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontFamily: 'system-ui' }}>{selectedQuotes.size} selected</span>
+          <button onClick={deleteSelectedQuotes} disabled={bulkDeleting} style={s.actDel}>
+            {bulkDeleting ? 'Deleting…' : `🗑 Delete ${selectedQuotes.size} selected`}
+          </button>
+          <button onClick={() => setSelectedQuotes(new Set())} style={{ ...s.actMatch, marginLeft: 'auto' }}>Clear</button>
+        </div>
+      )}
+
       {loading ? <p style={s.muted}>Loading…</p> : invoices.length === 0 ? (
         <p style={s.muted}>
           {direction === 'inbound'
@@ -302,10 +337,15 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
         <div style={s.list}>
           {invoices.map(inv => {
             const st = STATUS[inv.status] || STATUS.draft
+            const quoteDeletable = inv.doc_type === 'quote' && (inv.status === 'draft' || inv.status === 'sent')
             return (
               <div key={inv.id} style={s.card}>
                 <div style={s.cardTop}>
-                  <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {quoteDeletable && (
+                      <input type="checkbox" checked={selectedQuotes.has(inv.id)} onChange={() => toggleQuoteSelect(inv.id)}
+                        title="Select for bulk delete" style={{ cursor: 'pointer' }} />
+                    )}
                     <span style={s.invNum}>{inv.invoice_number}</span>
                     <span style={{ ...s.badge, color: st.color, background: st.bg }}>{st.label}</span>
                   </div>
