@@ -81,6 +81,7 @@ export default function VulaPages({ tenantId }) {
   const [msg, setMsg] = useState("");
   const [storeUrl, setStoreUrl] = useState(null);
   const [showLivePreview, setShowLivePreview] = useState(false);
+  const [storeSettings, setStoreSettings] = useState(null); // real hero copy — seeds "Customize homepage" with truth, not placeholder text
   const latestData = useRef(null);   // Puck's live document (survives re-renders/saves)
   const [brand, setBrand] = useState(() => getTenantTheme(tenantId));
 
@@ -138,6 +139,8 @@ export default function VulaPages({ tenantId }) {
   useEffect(() => {
     fetch(`${VULA_API}/v1/tenants/${tenantId}`).then((r) => r.json())
       .then((d) => setStoreUrl(d.store_url || null)).catch(() => setStoreUrl(null));
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/settings`).then((r) => r.json())
+      .then((d) => setStoreSettings(d.settings || null)).catch(() => setStoreSettings(null));
   }, [tenantId]);
   const liveUrl = storeUrl || `${window.location.origin}/#/page/${tenantId}/home`;
 
@@ -149,6 +152,27 @@ export default function VulaPages({ tenantId }) {
   const open = async (slug, title) => {
     const p = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${slug}`).then((r) => r.json()).catch(() => ({}));
     setEditing({ slug, title: p.title || title || slug, data: norm(p.puck_data), status: p.status || "draft", seo: p.seo || {} });
+  };
+
+  // The "Customize homepage" starter used flat placeholder copy ("Fresh from the harbour")
+  // regardless of what's actually live, which made the editor feel disconnected from reality.
+  // The FeaturedProducts/CategoryNav blocks already fetch live data at render time so they're
+  // never stale, but Hero's title/subtitle were hardcoded text — swap in the tenant's real
+  // hero_tagline/hero_subtitle (same source their live homepage reads) when available.
+  const homeSeed = () => {
+    const tpl = TEMPLATES.home.data;
+    if (!storeSettings?.hero_tagline && !storeSettings?.hero_subtitle) return tpl;
+    return {
+      ...tpl,
+      content: tpl.content.map((block) => block.type !== "Hero" ? block : {
+        ...block,
+        props: {
+          ...block.props,
+          title: storeSettings.hero_tagline || block.props.title,
+          subtitle: storeSettings.hero_subtitle || block.props.subtitle,
+        },
+      }),
+    };
   };
 
   const createNew = () => {
@@ -244,10 +268,22 @@ export default function VulaPages({ tenantId }) {
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
             <button onClick={() => setShowSeo(s => !s)} style={ghost}>🔍 SEO</button>
             <button onClick={() => { setShowHistory(v => !v); if (!showHistory) loadVersions(); }} style={ghost}>🕐 History</button>
-            {storeUrl && <a href={storeUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: C.muted }}>Current site ↗</a>}
+            {storeUrl && (
+              <button onClick={() => setShowLivePreview((v) => !v)} style={ghost}>
+                {showLivePreview ? "▲ Hide current site" : "👁 Current site"}
+              </button>
+            )}
             {editing.status === "published" && <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>View live ↗</a>}
           </div>
         </div>
+
+        {/* So editing never feels disconnected from what's actually live — was previously only a
+            new-tab link, meaning there was no way to see the real site *while* dragging blocks. */}
+        {showLivePreview && storeUrl && (
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 320, marginBottom: 10, background: "#FAF9F6" }}>
+            <iframe src={storeUrl} title="Current live site" style={{ width: "100%", height: "100%", border: "none" }} />
+          </div>
+        )}
 
         {showHistory && (
           <div style={{ margin: "0 0 10px", background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
@@ -326,7 +362,7 @@ export default function VulaPages({ tenantId }) {
             </p>
           </div>
           <button
-            onClick={() => setEditing({ slug: "home", title: "Home", data: norm(TEMPLATES.home.data), status: "draft", seo: {} })}
+            onClick={() => setEditing({ slug: "home", title: "Home", data: norm(homeSeed()), status: "draft", seo: {} })}
             style={btn("var(--accent)")}
           >
             ✎ Customize homepage
