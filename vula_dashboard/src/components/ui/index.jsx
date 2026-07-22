@@ -76,6 +76,25 @@ export const inputStyle = {
   fontSize: 13.5, fontFamily: T.body, color: T.text, background: T.surface, boxSizing: "border-box",
 };
 
+/** The one "sub-tab strip" primitive for a section with depth — pair with useSectionTabs. */
+export function SectionTabs({ tabs, active, onChange }) {
+  if (!tabs?.length) return null;
+  return (
+    <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: `1px solid ${T.border}`, paddingBottom: 8, flexWrap: "wrap" }}>
+      {tabs.map((t) => (
+        <button key={t.id} onClick={() => onChange(t.id)} style={{
+          padding: "6px 14px", border: "none", borderRadius: T.rPill, fontSize: 13, fontWeight: 600,
+          cursor: "pointer", fontFamily: T.body,
+          background: active === t.id ? T.accentSoft : "transparent",
+          color: active === t.id ? T.accent : T.muted,
+        }}>
+          {t.icon ? `${t.icon} ` : ""}{t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function SectionTitle({ children, sub }) {
   return (
     <div style={{ marginBottom: 16 }}>

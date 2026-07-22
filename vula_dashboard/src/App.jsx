@@ -33,7 +33,7 @@ import VulaBudget from "./components/VulaBudget";
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 import VulaSmartScanner from "./components/VulaSmartScanner";
 import VulaShell from "./components/VulaShell";
-import { MERCHANT_GROUPS, MASTER_GROUPS, filterGroups, labelFor, merchantVisible } from "./navConfig";
+import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible } from "./navConfig";
 import { getTenantTheme, themeVars } from "./theme/tenantThemes";
 import { applyAccent, applyInk, applyFontPairing } from "./theme/tokens";
 
@@ -93,6 +93,7 @@ export default function App() {
   const [route, setRoute] = useState(window.location.hash);
   const [masterTenant, setMasterTenant] = useState("digg-demo");
   const [masterTenants, setMasterTenants] = useState(MASTER_TENANTS_FALLBACK);
+  const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const { user, role, tenantId, logout, access, full, setMember } = useAuthStore();
@@ -226,7 +227,7 @@ export default function App() {
           userEmail={user.email}
           onLogout={logout}
         >
-          <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} fullPage
+          <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} navGroups={groups}
             access={access} full={full} activeTab={merchTab} onTabChange={setMerchTab} />
         </VulaShell>
         <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
@@ -254,7 +255,10 @@ export default function App() {
           roleLabel="master"
           onLogout={logout}
           headerExtra={
-            <button onClick={() => setActiveTab("dashboard")}
+            // Returns to Master (not "dashboard") — masterSubTab was never touched while
+            // visiting the tenant, so this naturally restores whichever Master sub-tab
+            // (Tenants/Health/Usage/...) the operator was on before "Open as tenant".
+            <button onClick={() => setActiveTab("master")}
               style={{ padding: "6px 12px", border: `1px solid ${COLORS.border}`, borderRadius: 6,
                        background: COLORS.surface, color: "var(--text, #2A2A2A)", fontSize: 12,
                        cursor: "pointer", fontFamily: "system-ui", fontWeight: 600 }}>
@@ -262,7 +266,7 @@ export default function App() {
             </button>
           }
         >
-          <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={mName} fullPage
+          <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={mName} navGroups={mGroups}
             access={[]} full activeTab={merchTab} onTabChange={setMerchTab} />
         </VulaShell>
       </div>
@@ -274,7 +278,9 @@ export default function App() {
     <>
       <VulaShell
         brand={{ logoEmoji: "◆", name: "Vula", sub: "Master · all tenants" }}
-        groups={MASTER_GROUPS}
+        zones={MASTER_ZONES}
+        activeZoneId={masterZone}
+        onZoneChange={setMasterZone}
         activeId={activeTab}
         onSelect={setActiveTab}
         title={labelFor(MASTER_GROUPS, activeTab) || "Dashboard"}
@@ -300,7 +306,8 @@ export default function App() {
       >
         <div style={{ padding: "4px 0 24px" }}>
           <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
-            onOpenTenant={(tid) => { setMasterTenant(tid); setActiveTab("merchant"); }} />
+            onOpenTenant={(tid) => { setMasterTenant(tid); setActiveTab("merchant"); }}
+            {...(activeTab === "master" ? { activeTab: masterSubTab, onTabChange: setMasterSubTab } : {})} />
         </div>
       </VulaShell>
       <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />

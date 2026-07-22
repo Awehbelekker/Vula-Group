@@ -11,6 +11,11 @@ import { useState } from "react";
 export default function VulaShell({
   brand,          // { logoUrl?, logoEmoji?, name, sub }
   groups,         // [{label, items:[{id, icon, label, badge?}]}] — pre-filtered
+  zones,          // optional: [{id, label, groups}] — a segmented switch above the nav, each
+                   // with its own `groups` shape; when present, `groups`/above is ignored and the
+                   // active zone's groups render instead (Master's Platform Ops vs Vula's Business)
+  activeZoneId,
+  onZoneChange,
   activeId,
   onSelect,
   title,          // top-bar heading (defaults to active item's label)
@@ -21,6 +26,8 @@ export default function VulaShell({
   children,
 }) {
   const [open, setOpen] = useState(false); // mobile drawer state
+  const activeZone = zones?.find((z) => z.id === activeZoneId) || zones?.[0];
+  const renderedGroups = zones ? (activeZone?.groups || []) : groups;
 
   return (
     <div className="vshell">
@@ -37,8 +44,18 @@ export default function VulaShell({
             {brand?.sub && <span>{brand.sub}</span>}
           </div>
         </div>
+        {zones && (
+          <div className="vshell-zone-switch">
+            {zones.map((z) => (
+              <button key={z.id} className={"vshell-zone-btn" + (z.id === activeZone?.id ? " on" : "")}
+                onClick={() => onZoneChange?.(z.id)}>
+                {z.label}
+              </button>
+            ))}
+          </div>
+        )}
         <nav className="vshell-nav">
-          {groups.map((g, gi) => (
+          {renderedGroups.map((g, gi) => (
             <div key={gi}>
               {g.label && <div className="vshell-grp">{g.label}</div>}
               {g.items.map(it => (

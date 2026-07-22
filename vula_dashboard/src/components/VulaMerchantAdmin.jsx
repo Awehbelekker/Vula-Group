@@ -12,6 +12,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import { SectionTabs } from './ui/index.jsx'
+import { useSectionTabs } from '../hooks/useSectionTabs'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
@@ -87,153 +89,218 @@ const CATEGORY_LABELS = {
   extras:         'Extras',
 }
 
-export default function VulaMerchantAdmin({ tenantId, tenantName, onClose, fullPage = false, access = [], full = true, activeTab, onTabChange }) {
-  // Controlled mode (UI overhaul shell): the sidebar (VulaShell via App.jsx) owns navigation and
-  // passes activeTab/onTabChange — we skip our own header + tab strip. Uncontrolled mode keeps
-  // the original internal tabs (still used by the master "Manage tenant" modal).
-  const controlled = activeTab !== undefined
-  const [tabState, setTabState] = useState('orders')
-  const tab = controlled ? activeTab : tabState
-  const setTab = controlled ? (onTabChange || (() => {})) : setTabState
+// Look up a top-level section's (already access/module-filtered) subtabs from navGroups —
+// the same data App.jsx already computed for the sidebar, so a "Money" etc. section shows
+// exactly the sub-tabs this tenant/member is actually allowed to see, with zero extra fetch.
+function subtabsFor(navGroups, sectionId) {
+  for (const g of navGroups || []) {
+    const hit = g.items.find(it => it.id === sectionId)
+    if (hit?.subtabs) return hit.subtabs
+  }
+  return null
+}
+
+// Always controlled + full-page: the sidebar (VulaShell via App.jsx) owns navigation and passes
+// activeTab/onTabChange, for both the owner/staff shell and master's "Open as tenant" takeover —
+// confirmed the only two real callers, both always pass these. (The old uncontrolled/modal mode,
+// with its own hand-rolled tab strip and gating, was dead code superseded by that shell takeover
+// — deleted 2026-07-21 rather than kept as an unused second nav path to drift out of sync again.)
+export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, activeTab, onTabChange }) {
+  const tab = activeTab
+  const setTab = onTabChange
   // A member with a defined access list sees only those modules (+ overview). Owners/
-  // managers (full) see everything including Team/Settings.
+  // managers (full) see everything including Team/Settings. Module-level (business-type) gating
+  // now lives once, in navConfig.jsx, driving the sidebar itself — this is just the access-list
+  // safety net for a tab a signed-in staff member shouldn't be on.
   const canSee = (id) => full || id === 'overview' || (access || []).includes(id)
   // If the current tab isn't visible to this member, fall back to a safe default.
   useEffect(() => { if (!canSee(tab)) setTab('overview') }, [access, full])  // eslint-disable-line
   const [products, setProducts] = useState([])
-  const [modules, setModules] = useState(null)   // tenant's enabled capability keys (control plane)
   const [broadcastDraft, setBroadcastDraft] = useState(null)   // Marketing → "Send as broadcast" handoff (P2.1)
   const [invoiceSupplierFilter, setInvoiceSupplierFilter] = useState(null)  // Suppliers → Invoices click-through
+  // Generic cross-section handoff (IA overhaul 2026-07-22): a click somewhere in one section
+  // (e.g. Suppliers, inside Sell) that should land the user on a SPECIFIC sub-tab of ANOTHER
+  // section (e.g. Invoices, inside Money) now switches the top-level tab AND records which
+  // sub-tab that section should open on — each Section wrapper below consumes+clears this once.
+  const [pendingNav, setPendingNav] = useState(null)   // { subtab } for whichever section `tab` is about to become
+  const navigateTo = (section, subtab) => { setPendingNav(subtab ? { subtab } : null); setTab(section) }
 
-  // Tenant-level module gating (business-type driven). Always show core tabs; map a few
-  // tab ids to their module key. null/empty modules = show everything (no config yet).
-  const CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'qsrates', 'pages', 'marketing', 'bank', 'books', 'labour', 'expenses', 'import', 'wa-templates', 'scheduling'])
-  const MODMAP = {
-    customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
-    qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft', training: 'training',
-    discounts: 'products',
-  }
-  const tenantHas = (id) => modules === null || !modules.length || CORE.has(id)
-    || (modules || []).includes(MODMAP[id] || id)
-
-  // Load products + tenant modules
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`)
       .then(r => r.json()).then(d => setProducts(d.products || [])).catch(() => {})
-    fetch(`${VULA_API}/v1/tenants/${tenantId}`)
-      .then(r => r.json()).then(d => setModules(d.modules || [])).catch(() => setModules([]))
   }, [tenantId])
 
-  // Inner content shared by modal + full-page modes.
   const inner = (
     <>
-        {/* Header + tab strip — hidden in controlled mode (the shell provides both) */}
-        {!controlled && <div style={styles.header}>
-          <div>
-            <h2 style={styles.title}>{tenantName}</h2>
-            <p style={styles.subtitle}>Merchant admin</p>
-          </div>
-          {!fullPage && <button onClick={onClose} style={styles.closeBtn}>×</button>}
-        </div>}
-
-        {!controlled && <div style={styles.tabs}>
-          {(() => {
-            const GROUPS = [
-              [{ id: 'overview', label: '📊 Overview' }, { id: 'reports', label: '📈 Reports' }, { id: 'assistant', label: '💬 Assistant' }, { id: 'agentlog', label: '🧠 Agent' }, { id: 'inbox', label: '📥 Inbox' }, { id: 'automations', label: '⚡ Automations' }],
-              [{ id: 'orders', label: '📦 Orders' }, { id: 'subscriptions', label: '🔁 Subscriptions' }, { id: 'bookings', label: '📅 Bookings' }, { id: 'delivery', label: '🛵 Delivery' }, { id: 'products', label: '🐟 Products' }, { id: 'discounts', label: '🏷️ Discounts' }, { id: 'suppliers', label: '🚚 Suppliers' }],
-              [{ id: 'invoices', label: '🧾 Invoices' }, { id: 'bank', label: '🏦 Bank' }, { id: 'books', label: '📒 Books' }, { id: 'labour', label: '👷 Labour' }, { id: 'expenses', label: '💸 Expenses' }, { id: 'payments', label: '💳 Payments' }, { id: 'budget', label: '💰 Budget' }, { id: 'scanner', label: '📷 Scanner' }],
-              [{ id: 'customers', label: '👥 Customers' }, { id: 'contacts', label: '📇 Contacts' }, { id: 'import', label: '📥 Import' }, { id: 'followups', label: '📬 Follow-ups' }, { id: 'broadcast', label: '📢 Broadcast' }, { id: 'wa-templates', label: '📨 Templates' }, { id: 'scheduling', label: '⏰ Scheduling' }, { id: 'marketing', label: '✨ Marketing' }, { id: 'pages', label: '🎨 Pages' }],
-              [{ id: 'workspace', label: '🗂️ Workspace' }, { id: 'projects', label: '🏗️ Projects' }, { id: 'fieldops', label: '👷 Field Ops' }, { id: 'qsrates', label: '📐 QS Rates' }, { id: 'finances', label: '💵 Finances' }, { id: 'documents', label: '📂 Documents' }],
-              [{ id: 'qs', label: '🧮 Quick Cost' }, { id: 'qspro', label: '📐 QS Pro' }, { id: 'takeoff', label: '📏 Takeoff' }, { id: 'draft', label: '✍️ AI Draft' }, { id: 'training', label: '📚 Training KB' }],
-              [...(full ? [{ id: 'team', label: '👥 Team' }, { id: 'settings', label: '⚙️ Settings' }] : [])],
-            ]
-            const items = []
-            GROUPS.forEach((g) => {
-              const visible = g.filter(t => canSee(t.id) && tenantHas(t.id))
-              if (!visible.length) return
-              if (items.length) items.push({ divider: true, key: `d${items.length}` })
-              visible.forEach(t => items.push(t))
-            })
-            return items.map(t => t.divider
-              ? <span key={t.key} style={styles.tabDivider} />
-              : (
-                <button key={t.id} onClick={() => setTab(t.id)}
-                  style={{ ...styles.tab, ...(tab === t.id ? styles.tabActive : {}) }}>
-                  {t.label}
-                </button>
-              ))
-          })()}
-        </div>}
-
         {/* Content */}
-        <div style={controlled ? styles.contentBare : styles.content}>
-          {tab === 'overview'  && <OverviewTab tenantId={tenantId} setTab={setTab} />}
-          {tab === 'assistant' && <VulaAssistant    tenantId={tenantId} />}
-          {tab === 'agentlog'  && <VulaAgentActivity tenantId={tenantId} />}
+        <div style={styles.contentBare}>
+          {tab === 'overview'  && <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />}
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}
-          {tab === 'orders'    && <OrdersTab   tenantId={tenantId} />}
-          {tab === 'bookings'  && <VulaBookings tenantId={tenantId} />}
-          {tab === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
-          {tab === 'delivery'  && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
-          {tab === 'products'  && <ProductsTab tenantId={tenantId} />}
-          {tab === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
-          {tab === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); setTab('invoices') }} />}
-          {tab === 'scanner'   && <VulaSmartScanner tenantId={tenantId} products={products} />}
-          {tab === 'invoices'  && <VulaInvoices     tenantId={tenantId} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={() => setInvoiceSupplierFilter(null)} />}
-          {tab === 'bank'      && <VulaBankRec      tenantId={tenantId} />}
-          {tab === 'books'     && <VulaAccounting  tenantId={tenantId} />}
-          {tab === 'labour'    && <VulaLabour      tenantId={tenantId} />}
-          {tab === 'expenses'  && <VulaExpenses    tenantId={tenantId} />}
-          {tab === 'import'    && <VulaImport      tenantId={tenantId} />}
-          {tab === 'budget'    && <VulaBudget        tenantId={tenantId} />}
-          {tab === 'customers' && <VulaCustomers     tenantId={tenantId} />}
-          {tab === 'contacts'  && <VulaContacts      tenantId={tenantId} />}
-          {tab === 'finances'  && <><VulaFinanceInsights tenantId={tenantId} /><VulaFinances tenantId={tenantId} /></>}
-          {tab === 'followups' && <VulaFollowups     tenantId={tenantId} />}
-          {tab === 'broadcast' && <><VulaClientOnboarding tenantId={tenantId} /><VulaBroadcast tenantId={tenantId} draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)} /></>}
-          {tab === 'wa-templates' && <VulaWATemplates tenantId={tenantId} />}
-          {tab === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} />}
-          {tab === 'marketing' && <VulaMarketing tenantId={tenantId} onSendAsBroadcast={(text) => { setBroadcastDraft(text); setTab('broadcast') }} />}
-          {tab === 'qs'       && <VulaQS />}
-          {tab === 'qspro'    && <VulaQSPro />}
-          {tab === 'takeoff'  && <VulaTakeoff />}
-          {tab === 'draft'    && <VulaDraft tenantId={tenantId} />}
-          {tab === 'training' && <VulaTraining />}
-          {tab === 'automations' && <VulaAutomations tenantId={tenantId} />}
+          {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
+          {tab === 'sell' && <SellSection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'sell')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
+            onViewInvoices={(supplierId) => { setInvoiceSupplierFilter(supplierId); navigateTo('money', 'invoices') }} />}
+          {tab === 'money' && <MoneySection tenantId={tenantId} products={products} subtabs={subtabsFor(navGroups, 'money')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
+            invoiceSupplierFilter={invoiceSupplierFilter} onClearSupplierFilter={() => setInvoiceSupplierFilter(null)} />}
+          {tab === 'people' && <PeopleSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'people')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
+          {tab === 'marketing-hub' && <MarketingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'marketing-hub')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
+            draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)}
+            onSendAsBroadcast={(text) => { setBroadcastDraft(text); navigateTo('marketing-hub', 'broadcast') }} />}
           {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: '#8A8680' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
-          {tab === 'projects'  && <VulaProjects      tenantId={tenantId} />}
-          {tab === 'fieldops'  && <VulaFieldOps     tenantId={tenantId} />}
-          {tab === 'reports'   && <><VulaFinanceInsights tenantId={tenantId} /><VulaReports tenantId={tenantId} /></>}
-          {tab === 'payments'  && <VulaPayments     tenantId={tenantId} />}
-          {tab === 'qsrates'   && <VulaQSRates       tenantId={tenantId} />}
-          {tab === 'documents' && <VulaDocuments     tenantId={tenantId} />}
-          {tab === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
+          {tab === 'operate' && <OperateSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'operate')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
+          {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'team'      && <VulaTeam          tenantId={tenantId} />}
           {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail="" />}
         </div>
     </>
   )
 
-  // Full-page mode (owner/staff dedicated admin) — no modal overlay. In controlled/shell mode
-  // the shell already provides width + chrome, so no constraining wrapper — and the Puck page
-  // editor gets the FULL viewport (a 1100px clamp cripples a visual canvas).
-  if (fullPage) {
-    return <div style={controlled ? (tab === 'pages' ? undefined : { maxWidth: 1100 }) : styles.fullPage}>{inner}</div>
-  }
+  // The shell (VulaShell via App.jsx) already provides width + chrome, so no constraining wrapper
+  // — except the Puck page editor, which needs the FULL viewport (a 1100px clamp cripples it).
+  return <div style={tab === 'pages' ? undefined : { maxWidth: 1100 }}>{inner}</div>
+}
 
-  // Modal mode (master clicking "Manage tenant" from the Commerce list).
+// ── Section wrappers (IA overhaul 2026-07-22) ─────────────────────────────────
+// Each mirrors VulaMasterPanel's own established pattern (one sidebar entry -> an inner
+// useSectionTabs/SectionTabs strip) via the shared primitive, rather than a bespoke one-off.
+// `subtabs` is the already access/module-filtered list from navConfig (via subtabsFor above) —
+// these components never re-derive gating themselves.
+
+function AssistantSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'assistant' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.panel} onClick={e => e.stopPropagation()}>
-        {inner}
-      </div>
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'assistant' && <VulaAssistant tenantId={tenantId} />}
+      {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} />}
+      {active === 'automations' && <VulaAutomations tenantId={tenantId} />}
+    </div>
+  )
+}
+
+function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, onViewInvoices }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'orders' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
+  return (
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'orders' && <OrdersTab tenantId={tenantId} />}
+      {active === 'products' && <ProductsTab tenantId={tenantId} />}
+      {active === 'discounts' && <DiscountCodesTab tenantId={tenantId} />}
+      {active === 'subscriptions' && <VulaRecurringOrders tenantId={tenantId} />}
+      {active === 'delivery' && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
+      {active === 'bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
+      {active === 'import' && <VulaImport tenantId={tenantId} />}
+    </div>
+  )
+}
+
+function MoneySection({ tenantId, products, subtabs, pendingSubtab, onConsumePendingNav, invoiceSupplierFilter, onClearSupplierFilter }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'invoices' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
+  return (
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'invoices' && <VulaInvoices tenantId={tenantId} products={products} initialSupplierId={invoiceSupplierFilter} onClearSupplierFilter={onClearSupplierFilter} />}
+      {active === 'expenses' && <VulaExpenses tenantId={tenantId} />}
+      {active === 'bank' && <VulaBankRec tenantId={tenantId} />}
+      {active === 'books' && <VulaAccounting tenantId={tenantId} />}
+      {active === 'payments' && <VulaPayments tenantId={tenantId} />}
+      {active === 'budget' && <VulaBudget tenantId={tenantId} />}
+      {active === 'scanner' && <VulaSmartScanner tenantId={tenantId} products={products} />}
+      {active === 'finances' && <FinancesSubsection tenantId={tenantId} />}
+    </div>
+  )
+}
+
+// Reports+Finances double-mount fix: VulaFinanceInsights mounted once, then an Insights/Ledger
+// toggle underneath — previously two competing top-level tabs each mounted VulaFinanceInsights
+// a second time alongside a different sibling (VulaReports vs VulaFinances).
+const FINANCES_INNER_TABS = [{ id: 'insights', label: 'Insights' }, { id: 'ledger', label: 'Ledger' }]
+function FinancesSubsection({ tenantId }) {
+  const { tabs, active, setActive } = useSectionTabs(FINANCES_INNER_TABS, { defaultTabId: 'insights' })
+  return (
+    <div>
+      <VulaFinanceInsights tenantId={tenantId} />
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'insights' && <VulaReports tenantId={tenantId} />}
+      {active === 'ledger' && <VulaFinances tenantId={tenantId} />}
+    </div>
+  )
+}
+
+function PeopleSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'customers' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
+  return (
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'customers' && <VulaCustomers tenantId={tenantId} />}
+      {active === 'contacts' && <VulaContacts tenantId={tenantId} />}
+      {active === 'followups' && <VulaFollowups tenantId={tenantId} />}
+    </div>
+  )
+}
+
+// Broadcast tab bug fix: this used to render VulaClientOnboarding then VulaBroadcast glued
+// together under one "📢 Broadcast" label — two unrelated features, now two real sub-tabs.
+function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav, draftBody, onConsumeDraft, onSendAsBroadcast }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'broadcast' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
+  return (
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} />}
+      {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
+      {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} />}
+      {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} />}
+      {active === 'marketing' && <VulaMarketing tenantId={tenantId} onSendAsBroadcast={onSendAsBroadcast} />}
+    </div>
+  )
+}
+
+function OperateSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'projects' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
+  return (
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'projects' && <VulaProjects tenantId={tenantId} />}
+      {active === 'workspace' && <VulaProjectWorkspace tenantId={tenantId} />}
+      {active === 'fieldops' && <VulaFieldOps tenantId={tenantId} />}
+      {active === 'labour' && <VulaLabour tenantId={tenantId} />}
+      {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
+      {active === 'documents' && <VulaDocuments tenantId={tenantId} />}
+    </div>
+  )
+}
+
+function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'qs' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
+  return (
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'qs' && <VulaQS />}
+      {active === 'qspro' && <VulaQSPro />}
+      {active === 'takeoff' && <VulaTakeoff />}
+      {active === 'draft' && <VulaDraft tenantId={tenantId} />}
+      {active === 'training' && <VulaTraining />}
     </div>
   )
 }
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 
-function OverviewTab({ tenantId, setTab }) {
+function OverviewTab({ tenantId, onNavigate }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -252,12 +319,14 @@ function OverviewTab({ tenantId, setTab }) {
   const series = stats.daily_revenue || []
   const weekOrders = series.reduce((s, d) => s + (d.orders || 0), 0)
   const aov = stats.total_orders ? stats.total_revenue_cents / stats.total_orders : 0
+  // { section, subtab } pairs now that Orders/Invoices/Products live nested inside Sell/Money —
+  // was a flat `tab` id before the IA overhaul (2026-07-22).
   const alerts = [
-    { show: stats.open_escalations > 0,     label: 'Customer waiting on you', value: stats.open_escalations,   hint: (stats.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), tab: 'inbox', color: '#C0392B' },
-    { show: stats.to_dispatch > 0,          label: 'To dispatch',      value: stats.to_dispatch,                hint: 'orders ready to send', tab: 'orders',   color: '#8b5cf6' },
-    { show: stats.pending_payment > 0,      label: 'Awaiting payment', value: stats.pending_payment,            hint: 'unpaid orders',        tab: 'orders',   color: '#f59e0b' },
-    { show: stats.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(stats.invoice_overdue_cents), hint: 'chase these',          tab: 'invoices', color: '#C0392B' },
-    { show: stats.low_stock_count > 0,      label: 'Low stock',        value: stats.low_stock_count,            hint: 'items running out',    tab: 'products', color: '#C0392B' },
+    { show: stats.open_escalations > 0,     label: 'Customer waiting on you', value: stats.open_escalations,   hint: (stats.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), section: 'inbox', color: '#C0392B' },
+    { show: stats.to_dispatch > 0,          label: 'To dispatch',      value: stats.to_dispatch,                hint: 'orders ready to send', section: 'sell',  subtab: 'orders',   color: '#8b5cf6' },
+    { show: stats.pending_payment > 0,      label: 'Awaiting payment', value: stats.pending_payment,            hint: 'unpaid orders',        section: 'sell',  subtab: 'orders',   color: '#f59e0b' },
+    { show: stats.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(stats.invoice_overdue_cents), hint: 'chase these',          section: 'money', subtab: 'invoices', color: '#C0392B' },
+    { show: stats.low_stock_count > 0,      label: 'Low stock',        value: stats.low_stock_count,            hint: 'items running out',    section: 'sell',  subtab: 'products', color: '#C0392B' },
   ].filter(a => a.show)
 
   return (
@@ -278,7 +347,7 @@ function OverviewTab({ tenantId, setTab }) {
           <p style={ovS.sectionLabel}>Needs attention</p>
           <div style={ovS.alertRow}>
             {alerts.map(a => (
-              <button key={a.label} onClick={() => setTab && setTab(a.tab)} style={ovS.alertCard}>
+              <button key={a.label} onClick={() => onNavigate && onNavigate(a.section, a.subtab)} style={ovS.alertCard}>
                 <span style={{ ...ovS.alertValue, color: a.color }}>{a.value}</span>
                 <span style={ovS.alertLabel}>{a.label}</span>
                 <span style={ovS.alertHint}>{a.hint} →</span>
@@ -294,7 +363,7 @@ function OverviewTab({ tenantId, setTab }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14, marginTop: 18 }}>
         {(stats.agent_recent || []).length > 0 && (
           <div style={ovS.chartCard}>
-            <p style={ovS.sectionLabel}>🧠 Your assistant, recently <button onClick={() => setTab && setTab('agentlog')} style={{ float: 'right', border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>Watch it work →</button></p>
+            <p style={ovS.sectionLabel}>🧠 Your assistant, recently <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ float: 'right', border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>Watch it work →</button></p>
             {(stats.agent_recent || []).map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid #ECE8DF', alignItems: 'center' }}>
                 <span style={{ fontFamily: 'monospace', fontSize: 11.5, color: 'var(--accent)' }}>{a.tool}</span>
@@ -310,7 +379,7 @@ function OverviewTab({ tenantId, setTab }) {
               <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{stats.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>learned answers</div></div>
               <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{stats.knowledge.taught}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>taught by you</div></div>
             </div>
-            <p style={{ fontSize: 11.5, color: '#8A8680', margin: '10px 0 0' }}>Everything the assistant knows is visible and editable in the <button onClick={() => setTab && setTab('agentlog')} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11.5, padding: 0, fontWeight: 600 }}>Agent tab</button>.</p>
+            <p style={{ fontSize: 11.5, color: '#8A8680', margin: '10px 0 0' }}>Everything the assistant knows is visible and editable in the <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11.5, padding: 0, fontWeight: 600 }}>Agent tab</button>.</p>
           </div>
         )}
       </div>
@@ -2104,17 +2173,12 @@ function PurchaseOrders({ tenantId }) {
 const styles = {
   overlay:      { position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200, display:'flex', justifyContent:'flex-end' },
   panel:        { width:'100%', maxWidth:680, background:'#F7F4EE', overflowY:'auto', display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.15)' },
-  fullPage:     { maxWidth:980, margin:'0 auto', background:'#F7F4EE', minHeight:'calc(100vh - 56px)', display:'flex', flexDirection:'column' },
   header:       { display:'flex', alignItems:'flex-start', justifyContent:'space-between', padding:'24px 28px 0', borderBottom:'1px solid #DDD8CE', paddingBottom:16 },
   title:        { fontFamily:"'Cormorant Garamond', serif", fontSize:26, fontWeight:700, color:'#1E1E1E', margin:0 },
   subtitle:     { fontFamily:'system-ui', fontSize:12, color:'#8A8680', margin:'2px 0 0' },
   closeBtn:     { background:'transparent', border:'none', fontSize:28, cursor:'pointer', color:'#8A8680', lineHeight:1 },
-  tabs:         { display:'flex', alignItems:'center', borderBottom:'1px solid #DDD8CE', padding:'0 28px', overflowX:'auto', whiteSpace:'nowrap' },
-  tab:          { padding:'12px 14px', border:'none', background:'transparent', cursor:'pointer', fontFamily:'system-ui', fontSize:13, color:'#8A8680', borderBottom:'2px solid transparent', flex:'0 0 auto' },
-  tabActive:    { color:'var(--accent, var(--accent))', borderBottom:'2px solid var(--accent, var(--accent))', fontWeight:600 },
-  tabDivider:   { width:1, height:18, background:'#DDD8CE', margin:'0 6px', flex:'0 0 auto' },
   content:      { padding:'20px 28px', flex:1, overflowY:'auto' },
-  contentBare:  { padding:'20px 24px', flex:1, minWidth:0 },  // controlled/shell mode — shell owns chrome
+  contentBare:  { padding:'20px 24px', flex:1, minWidth:0 },  // shell mode — shell owns chrome
   loading:      { color:'#8A8680', fontSize:13, fontFamily:'system-ui' },
   empty:        { color:'#8A8680', fontSize:13, fontFamily:'system-ui', padding:'24px 0', textAlign:'center' },
   error:        { color:'#ef4444', fontSize:13, fontFamily:'system-ui' },

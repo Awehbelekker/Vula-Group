@@ -7,40 +7,48 @@
  */
 import { useEffect, useState, Fragment } from 'react'
 import { authFetch } from '../lib/authFetch'
+import { SectionTabs } from './ui/index.jsx'
+import { useSectionTabs } from '../hooks/useSectionTabs'
+import VulaMasterTenantDetail from './VulaMasterTenantDetail'
 
 const C = { surface: '#FFFFFF', border: '#DDD8CE', green: 'var(--accent)', red: '#A23B2D', amber: '#B7791F', text: '#2A2A2A', muted: '#8A8680', alt: '#F0EDE5' }
 
 const SUBTABS = [
-  { id: 'tenants', label: '🏢 Tenants' },
-  { id: 'onboard', label: '🚀 Onboard' },
-  { id: 'health', label: '💓 Health' },
-  { id: 'usage', label: '💰 Usage' },
-  { id: 'users', label: '👤 Users' },
-  { id: 'audit', label: '📜 Audit' },
+  { id: 'tenants', label: 'Tenants', icon: '🏢' },
+  { id: 'onboard', label: 'Onboard', icon: '🚀' },
+  { id: 'health', label: 'Health', icon: '💓' },
+  { id: 'usage', label: 'Usage', icon: '💰' },
+  { id: 'users', label: 'Users', icon: '👤' },
+  { id: 'audit', label: 'Audit', icon: '📜' },
 ]
 
-export default function VulaMasterPanel({ onOpenTenant }) {
-  const [tab, setTab] = useState('health')   // Health is the real operator landing (P1.4)
+// activeTab/onTabChange: optional external control (App.jsx lifts this in Phase 5 so returning
+// from a tenant visit restores the sub-tab the operator was on) — uncontrolled by default.
+export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }) {
+  const { tabs, active: tab, setActive: setTab } = useSectionTabs(SUBTABS, {
+    defaultTabId: 'health',   // Health is the real operator landing (P1.4)
+    active: activeTab, onChange: onTabChange,
+  })
   const [err, setErr] = useState('')
   const [prefill, setPrefill] = useState(null)   // signup → pre-filled "+ New tenant" form (P1.4)
+  // Lightweight per-tenant drill-in (IA overhaul 2026-07-22) — replaces the whole panel body
+  // while active, same convention VulaMerchantAdmin uses for its own showCreate/showSettings.
+  const [detailTenant, setDetailTenant] = useState(null)
+
+  if (detailTenant) {
+    return <VulaMasterTenantDetail tenantId={detailTenant} onOpenTenant={onOpenTenant} onBack={() => setDetailTenant(null)} />
+  }
 
   return (
     <div style={{ fontFamily: 'system-ui', color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
-      <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: `1px solid ${C.border}`, paddingBottom: 8, flexWrap: 'wrap' }}>
-        {SUBTABS.map(t => (
-          <button key={t.id} onClick={() => { setTab(t.id); setErr('') }}
-            style={{ padding: '6px 14px', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', background: tab === t.id ? 'rgba(44,85,69,0.1)' : 'transparent', color: tab === t.id ? C.green : C.muted }}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
-      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} prefill={prefill} onConsumePrefill={() => setPrefill(null)} />}
+      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={setDetailTenant} prefill={prefill} onConsumePrefill={() => setPrefill(null)} />}
       {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }} />}
-      {tab === 'health' && <HealthPanel onError={setErr} />}
-      {tab === 'usage' && <UsagePanel onError={setErr} />}
+      {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={setDetailTenant} />}
+      {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={setDetailTenant} />}
       {tab === 'users' && <UsersPanel onError={setErr} />}
-      {tab === 'audit' && <AuditPanel onError={setErr} />}
+      {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={setDetailTenant} />}
     </div>
   )
 }
@@ -138,7 +146,7 @@ function OnboardPanel({ onError, onOpenTenant, onProvision }) {
 }
 
 /* ── Tenants & provisioning ─────────────────────────────────────────────────── */
-function TenantsPanel({ onError, onOpenTenant, prefill, onConsumePrefill }) {
+function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumePrefill }) {
   const [rows, setRows] = useState([])
   const [registry, setRegistry] = useState({ business_types: [], modules: [] })
   const [creating, setCreating] = useState(false)
@@ -230,6 +238,7 @@ function TenantsPanel({ onError, onOpenTenant, prefill, onConsumePrefill }) {
                   <td style={td}>{t.logins}</td>
                   <td style={{ ...td, color: t.active === false ? C.red : C.green, fontWeight: 600 }}>{t.active === false ? 'Suspended' : 'Active'}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    {onViewDetail && <button style={{ ...miniBtn, marginRight: 6 }} onClick={() => onViewDetail(t.tenant_id)}>Details</button>}
                     {onOpenTenant && <button style={{ ...miniBtn, marginRight: 6, color: C.green, fontWeight: 600 }} onClick={() => onOpenTenant(t.tenant_id)}>Open →</button>}
                     <button style={{ ...miniBtn, marginRight: 6 }} onClick={() => setManaging(managing === t.tenant_id ? null : t.tenant_id)}>
                       {managing === t.tenant_id ? 'Close' : 'Manage'}
@@ -254,7 +263,9 @@ function TenantsPanel({ onError, onOpenTenant, prefill, onConsumePrefill }) {
 }
 
 /* ── Inline module + plan editor for one tenant (P1.4) ─────────────────────── */
-function ManageTenantRow({ tenant, registry, onSave }) {
+// Exported (2026-07-22) so VulaMasterTenantDetail.jsx's Overview sub-tab can reuse it too,
+// instead of duplicating the plan/store-url/gateway/modules editor a second time.
+export function ManageTenantRow({ tenant, registry, onSave }) {
   const [modules, setModules] = useState(tenant.modules || [])
   const [plan, setPlan] = useState(tenant.plan || 'starter')
   const [storeUrl, setStoreUrl] = useState(tenant.store_url || '')
@@ -301,7 +312,7 @@ function ManageTenantRow({ tenant, registry, onSave }) {
 }
 
 /* ── Platform health ───────────────────────────────────────────────────────── */
-function HealthPanel({ onError }) {
+function HealthPanel({ onError, onViewDetail }) {
   const [h, setH] = useState(null)
   useEffect(() => { authFetch('/v1/master/health').then(setH).catch(e => onError(e.message)) }, [])
   if (!h) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
@@ -313,7 +324,9 @@ function HealthPanel({ onError }) {
         <h4 style={h4}>📱 WhatsApp lines</h4>
         {(Array.isArray(h.whatsapp) ? h.whatsapp : []).map(w => (
           <div key={w.tenant_id} style={{ display: 'flex', gap: 10, fontSize: 12.5, padding: '4px 0', flexWrap: 'wrap' }}>
-            <b style={{ minWidth: 110 }}>{w.tenant_id}</b>
+            {onViewDetail
+              ? <button onClick={() => onViewDetail(w.tenant_id)} style={{ ...miniBtn, minWidth: 110, textAlign: 'left', fontWeight: 700 }}>{w.tenant_id}</button>
+              : <b style={{ minWidth: 110 }}>{w.tenant_id}</b>}
             <span style={{ fontFamily: 'monospace' }}>{w.phone_number}</span>
             <span style={{ color: w.status === 'connected' ? C.green : C.red, fontWeight: 600 }}>{w.status}</span>
             <span style={{ color: C.muted }}>{w.webhook_registered ? 'webhook ✓' : 'webhook ✗'}</span>
@@ -392,7 +405,7 @@ function HealthPanel({ onError }) {
 }
 
 /* ── Usage & billing ───────────────────────────────────────────────────────── */
-function UsagePanel({ onError }) {
+function UsagePanel({ onError, onViewDetail }) {
   const [u, setU] = useState(null)
   useEffect(() => { authFetch('/v1/master/usage?days=14').then(setU).catch(e => onError(e.message)) }, [])
   if (!u) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
@@ -406,7 +419,9 @@ function UsagePanel({ onError }) {
         <tbody>
           {tenants.map(([tid, t]) => (
             <tr key={tid} style={{ borderTop: `1px solid ${C.border}` }}>
-              <td style={{ ...td, fontWeight: 600 }}>{tid}</td>
+              <td style={{ ...td, fontWeight: 600 }}>
+                {onViewDetail ? <button onClick={() => onViewDetail(tid)} style={miniBtn}>{tid}</button> : tid}
+              </td>
               <td style={td}>{t.calls}</td>
               <td style={td}>${(t.ai_cost_usd || 0).toFixed(2)}</td>
               <td style={td}>${(t.infra_cost_usd || 0).toFixed(2)}</td>
@@ -530,7 +545,7 @@ function UsersPanel({ onError }) {
 }
 
 /* ── Audit ─────────────────────────────────────────────────────────────────── */
-function AuditPanel({ onError }) {
+function AuditPanel({ onError, onViewDetail }) {
   const [events, setEvents] = useState(null)
   useEffect(() => { authFetch('/v1/master/audit?limit=100').then(d => setEvents(d.events || [])).catch(e => onError(e.message)) }, [])
   if (!events) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
@@ -546,11 +561,17 @@ function AuditPanel({ onError }) {
               <td style={{ ...td, color: C.muted, whiteSpace: 'nowrap' }}>{(e.created_at || '').slice(0, 16).replace('T', ' ')}</td>
               <td style={td}>{e.actor_email || e.actor_id}</td>
               <td style={{ ...td, fontWeight: 600 }}>{e.action}</td>
-              <td style={{ ...td, fontFamily: 'monospace', fontSize: 11.5 }}>{e.tenant_id || '—'}</td>
+              <td style={{ ...td, fontFamily: 'monospace', fontSize: 11.5 }}>
+                {e.tenant_id
+                  ? (onViewDetail ? <button onClick={() => onViewDetail(e.tenant_id)} style={miniBtn}>{e.tenant_id}</button> : e.tenant_id)
+                  : '—'}
+              </td>
               <td style={{ ...td, color: C.muted, fontSize: 11.5, maxWidth: 320, whiteSpace: 'normal' }}>{JSON.stringify(e.detail)}</td>
             </tr>
           ))}
-          {!events.length && <tr><td style={td} colSpan={5}>No admin actions recorded yet (run migration 072).</td></tr>}
+          {/* Real gap: no admin actions logged yet, distinct from migration 072 not being applied
+              at all — that specific case already has its own card in HealthPanel above. */}
+          {!events.length && <tr><td style={td} colSpan={5}>No admin actions recorded yet — actions you take here (suspend, edit modules, create users) will show up in this trail.</td></tr>}
         </tbody>
       </table>
     </div>
