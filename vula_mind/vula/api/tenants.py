@@ -120,8 +120,20 @@ def store_url(tenant_id: str) -> Optional[str]:
     return settings.store_urls.get(tenant_id)
 
 
+def _effective_modules(cfg: dict) -> list:
+    """A tenant's configured modules, plus `pages` whenever they have a live Vula-built site —
+    `pages` is a factual capability (you either have one or you don't), not a business-type
+    judgment call, so it shouldn't depend on which preset a tenant happened to onboard under
+    (the `food` preset never included it, which is why off-the-hook's Storefront tab was
+    invisible despite offthehook.co.za being a real, fully Puck-editable Vula site)."""
+    mods = list(cfg.get("modules") or [])
+    if cfg.get("store_url") and "pages" not in mods:
+        mods.append("pages")
+    return mods
+
+
 def enabled_modules(tenant_id: str) -> list:
-    return get_config(tenant_id).get("modules") or []
+    return _effective_modules(get_config(tenant_id))
 
 
 def _public(cfg: dict) -> dict:
@@ -129,7 +141,7 @@ def _public(cfg: dict) -> dict:
     return {
         "tenant_id": cfg.get("tenant_id"), "display_name": cfg.get("display_name"),
         "business_type": cfg.get("business_type"), "theme": cfg.get("theme") or {},
-        "store_url": cfg.get("store_url"), "modules": cfg.get("modules") or [],
+        "store_url": cfg.get("store_url"), "modules": _effective_modules(cfg),
         "default_payment_provider": cfg.get("default_payment_provider"),
         "status": cfg.get("status"),
     }

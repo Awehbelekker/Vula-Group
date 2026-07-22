@@ -1263,12 +1263,14 @@ function ProductsTab({ tenantId }) {
                     {p.is_daily_catch ? 'Remove catch' : 'Mark catch of day'}
                   </button>
 
-                  {/* Expand for image upload */}
+                  {/* Expand for the full editor — stock, sale price, weight/pack, supplier,
+                      SEO, photos, delete. Labelled "Edit" (not "Photos") since that undersold
+                      how much lives behind this one button. */}
                   <button
                     onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
                     style={styles.btnGhost}
                   >
-                    {expandedId === p.id ? '▲ Less' : '📷 Photos'}
+                    {expandedId === p.id ? '▲ Less' : '✎ Edit'}
                   </button>
                 </div>
 
@@ -1283,6 +1285,17 @@ function ProductsTab({ tenantId }) {
         </div>
       ))}
     </div>
+  )
+}
+
+// Small caps section header — groups the edit panel's ~20 fields into named clusters (Basics /
+// Pricing & sale / Origin & story / Stock & reordering / Photo gallery / Description / SEO) so it
+// reads as organized instead of one long wall of inputs.
+function SectionLabel({ children }) {
+  return (
+    <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '4px 0 0' }}>
+      {children}
+    </p>
   )
 }
 
@@ -1349,6 +1362,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         </div>
       )}
 
+      <SectionLabel>Basics</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>Name</span>
           <input value={f.name} onChange={e => set('name', e.target.value)} style={{ ...inp, width: '100%' }} /></div>
@@ -1371,6 +1385,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
           </select></div>
       </div>
 
+      <SectionLabel>Pricing &amp; sale</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>🔥 Sale price (R, blank = no sale)</span>
           <input type="number" step="0.01" value={f.sale} onChange={e => set('sale', e.target.value)} placeholder="e.g. 169.00" style={{ ...inp, width: '100%' }} /></div>
@@ -1383,9 +1398,6 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
             <input value={f.packSize} onChange={e => set('packSize', e.target.value)} placeholder="e.g. 4 per pack" style={{ ...inp, flex: 1, minWidth: 0 }} />
             <input type="number" value={f.serves} onChange={e => set('serves', e.target.value)} placeholder="serves" style={{ ...inp, width: 70 }} />
           </div></div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>Pricing</span>
           <select value={f.pricingMode} onChange={e => set('pricingMode', e.target.value)} style={{ ...inp, width: '100%' }}>
             <option value="fixed">Fixed price</option>
@@ -1404,6 +1416,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         </>)}
       </div>
 
+      <SectionLabel>Origin &amp; story <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, shown on the product page</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>Catch source</span>
           <input value={f.catchSource} onChange={e => set('catchSource', e.target.value)} placeholder="e.g. Line-caught, Hout Bay" style={{ ...inp, width: '100%' }} /></div>
@@ -1411,6 +1424,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
           <input value={f.fishermanName} onChange={e => set('fishermanName', e.target.value)} placeholder="e.g. Skipper Jan" style={{ ...inp, width: '100%' }} /></div>
       </div>
 
+      <SectionLabel>Stock &amp; reordering <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, for your own supply planning</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>🔔 Reorder when stock ≤</span>
           <input type="number" value={f.reorderThreshold} onChange={e => set('reorderThreshold', e.target.value)} placeholder="e.g. 5" style={{ ...inp, width: '100%' }} /></div>
@@ -1428,9 +1442,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       </button>
 
       <div>
-        <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' }}>
-          Photo gallery <span style={{ fontWeight: 400, color: '#8A8680' }}>— first photo is the cover</span>
-        </p>
+        <SectionLabel>Photo gallery <span style={{ fontWeight: 400, color: '#8A8680' }}>— first photo is the cover</span></SectionLabel>
         <VulaImageUpload
           tenantId={tenantId}
           existingUrls={gallery}
@@ -1460,7 +1472,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       </div>
 
       <div>
-        <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 6px' }}>Description</p>
+        <SectionLabel>Description</SectionLabel>
         <textarea
           defaultValue={p.description || p.notes || ''}
           rows={3}
@@ -1485,9 +1497,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       </div>
 
       <div>
-        <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '0 0 8px' }}>
-          🔍 SEO <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, improves search/social sharing</span>
-        </p>
+        <SectionLabel>🔍 SEO <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, improves search/social sharing</span></SectionLabel>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <input value={f.seoTitle} onChange={e => set('seoTitle', e.target.value)}
                  placeholder="SEO title (browser tab / Google)" style={{ ...inp, width: '100%' }} />
