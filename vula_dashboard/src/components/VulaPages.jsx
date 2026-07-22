@@ -244,7 +244,8 @@ export default function VulaPages({ tenantId }) {
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
             <button onClick={() => setShowSeo(s => !s)} style={ghost}>🔍 SEO</button>
             <button onClick={() => { setShowHistory(v => !v); if (!showHistory) loadVersions(); }} style={ghost}>🕐 History</button>
-            <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>View live ↗</a>
+            {storeUrl && <a href={storeUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: C.muted }}>Current site ↗</a>}
+            {editing.status === "published" && <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>View live ↗</a>}
           </div>
         </div>
 
