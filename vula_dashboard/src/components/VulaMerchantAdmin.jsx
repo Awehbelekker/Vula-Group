@@ -1799,7 +1799,7 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
 
 const BLANK_DISCOUNT = {
   code: '', type: 'percent', value: '', min_order_cents: '', starts_at: '', ends_at: '',
-  usage_limit: '', active: true,
+  usage_limit: '', active: true, first_order_only: false, per_customer_limit: '',
 }
 
 function DiscountCodesTab({ tenantId }) {
@@ -1828,6 +1828,7 @@ function DiscountCodesTab({ tenantId }) {
       min_order_cents: c.min_order_cents != null ? (c.min_order_cents / 100).toFixed(2) : '',
       starts_at: (c.starts_at || '').slice(0, 10), ends_at: (c.ends_at || '').slice(0, 10),
       usage_limit: c.usage_limit ?? '', active: c.active !== false,
+      first_order_only: c.first_order_only || false, per_customer_limit: c.per_customer_limit ?? '',
     })
     setEditing(c)
     setError(null)
@@ -1851,6 +1852,8 @@ function DiscountCodesTab({ tenantId }) {
       ends_at: form.ends_at ? `${form.ends_at}T23:59:59+02:00` : null,
       usage_limit: form.usage_limit !== '' ? parseInt(form.usage_limit, 10) : null,
       active: form.active,
+      first_order_only: form.first_order_only,
+      per_customer_limit: form.per_customer_limit !== '' ? parseInt(form.per_customer_limit, 10) : null,
     }
     const isEdit = editing && editing.id
     const r = await fetch(
@@ -1922,6 +1925,15 @@ function DiscountCodesTab({ tenantId }) {
                      onChange={e => setForm({ ...form, usage_limit: e.target.value })} style={{ ...inp, flex: 1 }} />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              <input type="number" placeholder="Max uses per customer (optional)" value={form.per_customer_limit}
+                     onChange={e => setForm({ ...form, per_customer_limit: e.target.value })} style={{ ...inp, flex: 1 }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'system-ui', flex: 1 }}>
+                <input type="checkbox" checked={form.first_order_only}
+                       onChange={e => setForm({ ...form, first_order_only: e.target.checked })} />
+                First order only
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
                 <span style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }}>Starts (optional)</span>
                 <input type="date" value={form.starts_at} onChange={e => setForm({ ...form, starts_at: e.target.value })} style={{ ...inp, width: '100%' }} />
@@ -1972,6 +1984,8 @@ function DiscountCodesTab({ tenantId }) {
                 Used {c.usage_count || 0}{c.usage_limit ? ` / ${c.usage_limit}` : ''}
                 {c.starts_at ? ` · from ${c.starts_at.slice(0, 10)}` : ''}
                 {c.ends_at ? ` · until ${c.ends_at.slice(0, 10)}` : ''}
+                {c.first_order_only ? ' · first order only' : ''}
+                {c.per_customer_limit ? ` · max ${c.per_customer_limit}/customer` : ''}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <button onClick={() => startEdit(c)} style={styles.btnGhost}>Edit</button>

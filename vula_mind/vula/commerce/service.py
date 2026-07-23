@@ -384,12 +384,17 @@ async def delete_discount_code(tenant_id: str, code_id: str) -> None:
     _client().table("commerce_discount_codes").delete().eq("tenant_id", tenant_id).eq("id", code_id).execute()
 
 
-async def resolve_discount_code(tenant_id: str, code: str, subtotal_cents: int) -> dict:
+async def resolve_discount_code(tenant_id: str, code: str, subtotal_cents: int,
+                                customer_phone: str = "") -> dict:
     """Validate a discount code against a cart subtotal. Returns
     {code_row, discount_cents, free_shipping}. Raises DiscountError with a message safe to
     show the customer verbatim on any failure. Called both for a storefront's "apply code"
     preview AND again, authoritatively, inside create_order — never trust a client-computed
-    discount for the amount actually charged."""
+    discount for the amount actually charged.
+
+    customer_phone (migration 105) powers first_order_only and per_customer_limit — pass ""
+    (the preview path, before checkout has a confirmed phone) to skip those two checks; they
+    still get enforced authoritatively inside create_order, which always has the phone."""
     code = (code or "").strip()
     if not code:
         raise DiscountError("Enter a discount code.")
@@ -416,6 +421,23 @@ async def resolve_discount_code(tenant_id: str, code: str, subtotal_cents: int) 
     min_order = row.get("min_order_cents")
     if min_order and subtotal_cents < min_order:
         raise DiscountError(f"'{code}' needs a minimum order of R{min_order / 100:.2f}.")
+
+    if customer_phone:
+        if row.get("first_order_only"):
+            prior = (_client().table("commerce_orders").select("id")
+                     .eq("tenant_id", tenant_id).eq("customer_phone", customer_phone)
+                     .limit(1).execute().data or [])
+            if prior:
+                raise DiscountError(f"'{code}' is only valid on your first order.")
+
+        per_customer_limit = row.get("per_customer_limit")
+        if per_customer_limit is not None:
+            res = (_client().table("commerce_orders").select("id", count="exact")
+                   .eq("tenant_id", tenant_id).eq("customer_phone", customer_phone)
+                   .ilike("discount_code", code).execute())
+            used = res.count if res.count is not None else len(res.data or [])
+            if used >= per_customer_limit:
+                raise DiscountError(f"'{code}' has already been used the maximum number of times on your account.")
 
     dtype = row.get("type")
     if dtype == "percent":
@@ -487,7 +509,8 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     raw_code = (checkout_data.get("discount_code") or "").strip()
     if raw_code:
         try:
-            resolved = await resolve_discount_code(tenant_id, raw_code, subtotal)
+            resolved = await resolve_discount_code(
+                tenant_id, raw_code, subtotal, checkout_data.get("customer_phone") or "")
             code_row = resolved["code_row"]
             discount_cents = resolved["discount_cents"]
             discount_code = code_row["code"]
