@@ -438,6 +438,31 @@ async def increment_discount_usage(code_id: str) -> None:
 
 # ── Orders ───────────────────────────────────────────────────────────────────
 
+_ATTRIBUTION_WINDOW_DAYS = 7
+
+
+async def _attribute_broadcast(tenant_id: str, phone: str) -> Optional[str]:
+    """Last-click attribution: if this customer clicked a broadcast link within the last
+    7 days, the order about to be placed credits that broadcast (migration 104) — closes
+    the "no broadcast->order attribution" gap flagged in the marketing capability audit.
+    Best-effort: a lookup failure or missing migration must never block checkout."""
+    digits = _norm_phone(phone)
+    if not digits:
+        return None
+    try:
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(days=_ATTRIBUTION_WINDOW_DAYS)).isoformat()
+        rows = (_client().table("commerce_broadcast_recipients")
+                .select("broadcast_id,clicked_at")
+                .eq("tenant_id", tenant_id).eq("phone", digits)
+                .gte("clicked_at", since)
+                .order("clicked_at", desc=True).limit(1).execute().data or [])
+        return rows[0]["broadcast_id"] if rows else None
+    except Exception as exc:
+        logger.debug("broadcast attribution lookup skipped (run migration 064?): %s", exc)
+        return None
+
+
 async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     items = cart.get("commerce_cart_items", [])
     # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
@@ -479,6 +504,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
 
     total = max(0, subtotal - discount_cents) + delivery
     display_id = await _next_order_display_id(tenant_id)
+    attributed_broadcast_id = await _attribute_broadcast(tenant_id, checkout_data["customer_phone"])
 
     order = {
         "id": str(uuid.uuid4()),
@@ -498,6 +524,7 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
         "status": "pending_payment",
         "channel": checkout_data.get("channel", "web"),
         "payment_method": checkout_data.get("payment_method"),  # online | cod | eft (migration 044)
+        "attributed_broadcast_id": attributed_broadcast_id,      # migration 104
         "cart_id": cart["id"],
         "created_at": _now(),
         "updated_at": _now(),
@@ -507,15 +534,17 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
         result = _client().table("commerce_orders").insert(order).execute()
     except Exception as exc:
         # Any of these newer optional columns might not exist yet on an un-migrated DB
-        # (payment_method: migration 044; discount_code/discount_cents: migration 091) —
-        # strip them and retry so ordering never breaks on a missing column.
+        # (payment_method: migration 044; discount_code/discount_cents: migration 091;
+        # attributed_broadcast_id: migration 104) — strip them and retry so ordering
+        # never breaks on a missing column.
         method = order.pop("payment_method", None)
         order.pop("discount_code", None)
         order.pop("discount_cents", None)
+        order.pop("attributed_broadcast_id", None)
         if method:
             note = order.get("delivery_notes") or ""
             order["delivery_notes"] = (f"[pay:{method}] " + note).strip()
-        logger.warning("order insert retried without payment_method/discount fields (%s): %s", method, exc)
+        logger.warning("order insert retried without payment_method/discount/attribution fields (%s): %s", method, exc)
         result = _client().table("commerce_orders").insert(order).execute()
         code_row = None  # discount_cents column didn't exist -> don't count usage below
     order_id = result.data[0]["id"]

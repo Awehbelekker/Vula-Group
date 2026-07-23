@@ -561,6 +561,12 @@ function BroadcastFunnel({ tenantId, broadcastId }) {
           <span style={{ width: 34, textAlign: 'right', fontFamily: 'monospace', color: '#1E1E1E' }}>{st.n}</span>
         </div>
       ))}
+      {f.attributed_orders > 0 && (
+        <p style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontWeight: 600, margin: '10px 0 0' }}>
+          💰 R{((f.attributed_revenue_cents || 0) / 100).toFixed(2)} from {f.attributed_orders} order{f.attributed_orders !== 1 ? 's' : ''}
+          <span style={{ fontWeight: 400, color: '#8A8680' }}> — placed within 7 days of a click</span>
+        </p>
+      )}
       {clickers.length > 0 && (
         <p style={{ fontSize: 11.5, color: '#8A8680', margin: '8px 0 0' }}>
           🔗 Clicked: {clickers.slice(0, 8).map(r => r.phone).join(', ')}{clickers.length > 8 ? ` +${clickers.length - 8} more` : ''}

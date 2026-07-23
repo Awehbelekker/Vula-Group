@@ -3585,7 +3585,9 @@ async def admin_order_detail(tenant_id: str, order_id: str):
 
 @router.get("/{tenant_id}/admin/broadcasts/{broadcast_id}/recipients")
 async def admin_broadcast_recipients(tenant_id: str, broadcast_id: str):
-    """Broadcast funnel drawer (UI overhaul P3): per-recipient delivery/read/click outcomes."""
+    """Broadcast funnel drawer (UI overhaul P3): per-recipient delivery/read/click outcomes,
+    plus attributed revenue (migration 104) — orders placed by a customer within 7 days of
+    clicking this broadcast's link (service.py:_attribute_broadcast, set at order creation)."""
     db = service._client()
     recs = (db.table("commerce_broadcast_recipients")
             .select("phone,status,error,clicked_at,click_count")
@@ -3596,6 +3598,19 @@ async def admin_broadcast_recipients(tenant_id: str, broadcast_id: str):
               "read": sum(1 for r in recs if r.get("status") == "read"),
               "clicked": sum(1 for r in recs if r.get("clicked_at")),
               "failed": sum(1 for r in recs if r.get("status") == "failed")}
+
+    try:
+        orders = (db.table("commerce_orders").select("total_cents,status")
+                  .eq("tenant_id", tenant_id).eq("attributed_broadcast_id", broadcast_id)
+                  .limit(1000).execute().data or [])
+        counted = [o for o in orders if o.get("status") not in ("pending_payment", "cancelled", "refunded")]
+        funnel["attributed_orders"] = len(counted)
+        funnel["attributed_revenue_cents"] = sum(int(o.get("total_cents") or 0) for o in counted)
+    except Exception as exc:
+        log.debug("broadcast attribution rollup skipped (run migration 104?): %s", exc)
+        funnel["attributed_orders"] = 0
+        funnel["attributed_revenue_cents"] = 0
+
     return {"funnel": funnel, "recipients": recs}
 
 
