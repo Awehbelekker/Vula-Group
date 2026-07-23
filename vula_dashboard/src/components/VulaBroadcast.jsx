@@ -26,6 +26,11 @@ const AUDIENCES = [
   { id: 'high_value',   label: 'High-value customers',    hint: 'Customers with total orders > R500' },
 ]
 
+const SEG_LANGUAGES = {
+  en: 'English', af: 'Afrikaans', zu: 'isiZulu', xh: 'isiXhosa', st: 'Sesotho',
+  nso: 'Sepedi', tn: 'Setswana', ts: 'Xitsonga', ve: 'Tshivenda', ss: 'siSwati', nr: 'isiNdebele',
+}
+
 export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
   const [broadcasts, setBroadcasts] = useState([])
   const [funnelId, setFunnelId] = useState(null)   // expanded broadcast → funnel drawer (P3)
@@ -46,7 +51,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
   const [campaigns, setCampaigns] = useState([])
   const [segments, setSegments] = useState([])
   const [showSeg, setShowSeg] = useState(false)
-  const [segForm, setSegForm] = useState({ name: '', not_ordered_within_days: '', min_spend: '', channel: '' })
+  const [segForm, setSegForm] = useState({ name: '', not_ordered_within_days: '', min_spend: '', channel: '', tags: '', area: '', language: '' })
   const [counts, setCounts] = useState({ counts: {}, segments: {} })
   const [testPhone, setTestPhone] = useState('')
   const [testMsg, setTestMsg] = useState('')
@@ -154,6 +159,9 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
     cr.min_spend != null && `spend ≥ R${cr.min_spend}`,
     cr.min_orders != null && `≥ ${cr.min_orders} orders`,
     cr.channel && cr.channel,
+    cr.tags?.length && `🏷 ${cr.tags.join(', ')}`,
+    cr.area && `📍 ${cr.area}`,
+    cr.language && `🗣️ ${SEG_LANGUAGES[cr.language] || cr.language}`,
   ].filter(Boolean).join(' · ')
 
   async function createSegment() {
@@ -161,11 +169,14 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
     if (segForm.not_ordered_within_days) c.not_ordered_within_days = Number(segForm.not_ordered_within_days)
     if (segForm.min_spend) c.min_spend = Number(segForm.min_spend)
     if (segForm.channel) c.channel = segForm.channel
+    if (segForm.tags.trim()) c.tags = segForm.tags.split(',').map(t => t.trim()).filter(Boolean)
+    if (segForm.area.trim()) c.area = segForm.area.trim()
+    if (segForm.language) c.language = segForm.language
     if (!segForm.name.trim() || Object.keys(c).length === 0) { setError('Segment needs a name + at least one rule.'); return }
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/segments`, {
       method: 'POST', headers: H, body: JSON.stringify({ name: segForm.name, criteria: c }),
     })
-    setSegForm({ name: '', not_ordered_within_days: '', min_spend: '', channel: '' }); setShowSeg(false); loadSegments()
+    setSegForm({ name: '', not_ordered_within_days: '', min_spend: '', channel: '', tags: '', area: '', language: '' }); setShowSeg(false); loadSegments()
   }
   async function deleteSegment(id) {
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/segments/${id}`, { method: 'DELETE' })
@@ -386,6 +397,18 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
             <select value={segForm.channel} onChange={e => setSegForm({ ...segForm, channel: e.target.value })}
               style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12 }}>
               <option value="">any channel</option><option value="whatsapp">WhatsApp</option><option value="web">Web</option>
+            </select>
+            <input placeholder="tags (comma-separated)" value={segForm.tags}
+              onChange={e => setSegForm({ ...segForm, tags: e.target.value })}
+              title="Matches a customer with ANY of these tags — set tags per-customer in the Customers tab"
+              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 170 }} />
+            <input placeholder="area" value={segForm.area}
+              onChange={e => setSegForm({ ...segForm, area: e.target.value })}
+              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 110 }} />
+            <select value={segForm.language} onChange={e => setSegForm({ ...segForm, language: e.target.value })}
+              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12 }}>
+              <option value="">any language</option>
+              {Object.entries(SEG_LANGUAGES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
             </select>
             <button onClick={createSegment} style={s.sendBtn}>Save segment</button>
           </div>

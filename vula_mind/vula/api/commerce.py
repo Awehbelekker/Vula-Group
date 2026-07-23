@@ -3197,7 +3197,7 @@ async def _aggregate_customers(tenant_id: str, use_cache: bool = True) -> dict[s
     # Conversation sessions → contacts who messaged in (cap to recent)
     sessions = (
         db.table("commerce_conversation_sessions")
-        .select("customer_phone,customer_name,channel,updated_at,session_key")
+        .select("customer_phone,customer_name,channel,updated_at,session_key,preferred_language")
         .eq("tenant_id", tenant_id)
         .order("updated_at", desc=True)
         .limit(5000)
@@ -3217,6 +3217,11 @@ async def _aggregate_customers(tenant_id: str, use_cache: bool = True) -> dict[s
         if s.get("channel"):
             c["channel"] = s["channel"]
         c["last_seen_at"] = s.get("updated_at")
+        # First (newest, since sessions are queried newest-first) non-empty value wins —
+        # captured so segments can target by language (migration 052 already stores it per
+        # customer, just wasn't pulled into the aggregate used for segmentation until now).
+        if s.get("preferred_language") and not c.get("preferred_language"):
+            c["preferred_language"] = s["preferred_language"]
 
     # Imported contact book (existing clients) → merged in, deduped by phone. Guarded so a
     # missing table (migration 046 not yet run) never breaks the Customers tab or broadcasts.
@@ -3265,7 +3270,11 @@ def _days_since(c, now):
 
 def _apply_criteria(rows: list[dict], crit: dict) -> list[dict]:
     """Filter customers by a custom segment's criteria (all ANDed). Keys: ordered_within_days,
-    not_ordered_within_days, min_spend, max_spend, min_orders, channel."""
+    not_ordered_within_days, min_spend, max_spend, min_orders, channel, tags (list — matches if
+    the customer has ANY of the given tags), area, language (both exact match, case-insensitive).
+    tags/area come from the imported contact book (commerce_contacts); language from
+    commerce_conversation_sessions.preferred_language — both already merged into each customer
+    row by _aggregate_customers."""
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
@@ -3284,6 +3293,13 @@ def _apply_criteria(rows: list[dict], crit: dict) -> list[dict]:
         if (v := crit.get("min_orders")) is not None and (c.get("orders") or 0) < v:
             continue
         if (v := crit.get("channel")) and c.get("channel") != v:
+            continue
+        if (v := crit.get("tags")) and not (set(t.lower() for t in v) &
+                                            set(t.lower() for t in (c.get("tags") or []))):
+            continue
+        if (v := crit.get("area")) and (c.get("area") or "").strip().lower() != v.strip().lower():
+            continue
+        if (v := crit.get("language")) and (c.get("preferred_language") or "").strip().lower() != v.strip().lower():
             continue
         out.append(c)
     return out
@@ -3581,6 +3597,26 @@ async def admin_broadcast_recipients(tenant_id: str, broadcast_id: str):
               "clicked": sum(1 for r in recs if r.get("clicked_at")),
               "failed": sum(1 for r in recs if r.get("status") == "failed")}
     return {"funnel": funnel, "recipients": recs}
+
+
+@router.post("/{tenant_id}/admin/customers/{phone}/tags")
+async def admin_customer_tags(tenant_id: str, phone: str, body: dict):
+    """Set a customer's tags + area — the data segments actually filter on (_apply_criteria).
+    Writes to commerce_contacts (the imported contact book), upserting on (tenant_id, phone)
+    so this works even for a customer who never came from an import (order/chat-only)."""
+    tags = [str(t).strip() for t in (body or {}).get("tags") or [] if str(t).strip()]
+    area = ((body or {}).get("area") or "").strip() or None
+    digits = _norm_phone(phone)
+    if not digits:
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+    try:
+        service._client().table("commerce_contacts").upsert(
+            {"tenant_id": tenant_id, "phone": digits, "tags": tags, "area": area},
+            on_conflict="tenant_id,phone",
+        ).execute()
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 046?)"}
+    return {"ok": True, "tags": tags, "area": area}
 
 
 @router.post("/{tenant_id}/admin/customers/{phone}/note")

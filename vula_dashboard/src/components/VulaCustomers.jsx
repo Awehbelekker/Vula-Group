@@ -34,11 +34,15 @@ export default function VulaCustomers({ tenantId }) {
   const [detail, setDetail] = useState(null)
   const [noteDraft, setNoteDraft] = useState('')
   const [savingNote, setSavingNote] = useState(false)
+  const [tagsDraft, setTagsDraft] = useState('')
+  const [areaDraft, setAreaDraft] = useState('')
+  const [savingTags, setSavingTags] = useState(false)
 
-  const openHistory = async (phone) => {
-    if (openPhone === phone) { setOpenPhone(null); return }
-    setOpenPhone(phone); setDetail(null); setNoteDraft('')
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/detail`)
+  const openHistory = async (c) => {
+    if (openPhone === c.phone) { setOpenPhone(null); return }
+    setOpenPhone(c.phone); setDetail(null); setNoteDraft('')
+    setTagsDraft((c.tags || []).join(', ')); setAreaDraft(c.area || '')
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(c.phone)}/detail`)
     const d = await r.json()
     setDetail(d); setNoteDraft(d.note || '')
   }
@@ -74,6 +78,17 @@ export default function VulaCustomers({ tenantId }) {
       body: JSON.stringify({ note: noteDraft }),
     }).catch(() => {})
     setSavingNote(false)
+  }
+
+  const saveTags = async (phone) => {
+    setSavingTags(true)
+    const tags = tagsDraft.split(',').map(t => t.trim()).filter(Boolean)
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/customers/${encodeURIComponent(phone)}/tags`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags, area: areaDraft }),
+    }).catch(() => {})
+    setSavingTags(false)
+    load()   // refresh so the row + segment counts reflect the change
   }
 
   const load = useCallback(async () => {
@@ -134,6 +149,8 @@ export default function VulaCustomers({ tenantId }) {
             { key: 'channel', label: 'Channel' }, { key: 'orders', label: 'Orders' },
             { label: 'Total spent (R)', get: c => ((c.total_spent_cents || 0) / 100).toFixed(2) },
             { label: 'Last seen', get: c => c.last_order_at || c.last_seen_at || '' },
+            { key: 'area', label: 'Area' },
+            { label: 'Tags', get: c => (c.tags || []).join('; ') },
           ])}
           disabled={!rows.length}
           style={{ ...s.seg, marginLeft: 'auto' }}
@@ -150,7 +167,7 @@ export default function VulaCustomers({ tenantId }) {
         <div style={s.list}>
           {rows.map((c, i) => (
             <div key={i}>
-              <div style={{ ...s.row, cursor: 'pointer' }} onClick={() => openHistory(c.phone)}>
+              <div style={{ ...s.row, cursor: 'pointer' }} onClick={() => openHistory(c)}>
                 <div style={s.avatar}>{(c.name || c.phone || '?').charAt(0).toUpperCase()}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <span style={s.name}>{c.name || 'Unknown'}</span>
@@ -158,6 +175,8 @@ export default function VulaCustomers({ tenantId }) {
                     {c.phone} · {c.channel === 'whatsapp' ? '💬 WhatsApp' : '🌐 Web'}
                     {c.orders > 0 ? ` · ${c.orders} order${c.orders !== 1 ? 's' : ''}` : ' · no orders yet'}
                     {' · seen '}{since(c.last_order_at || c.last_seen_at)}
+                    {c.area ? ` · 📍 ${c.area}` : ''}
+                    {(c.tags || []).length > 0 ? ` · 🏷 ${c.tags.join(', ')}` : ''}
                   </span>
                 </div>
                 <div style={s.right}>
@@ -201,6 +220,30 @@ export default function VulaCustomers({ tenantId }) {
                           style={{ width: '100%', minHeight: 48, boxSizing: 'border-box', padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 12.5, resize: 'vertical', background: '#fff' }}
                         />
                         {savingNote && <span style={{ fontSize: 11, color: '#8A8680' }}>saving…</span>}
+                      </div>
+                      {/* Tags + area — the data segments actually filter on (see Broadcast → New segment) */}
+                      <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 160 }}>
+                          <div style={s.secLabel}>Tags</div>
+                          <input
+                            value={tagsDraft}
+                            onChange={e => setTagsDraft(e.target.value)}
+                            onBlur={() => saveTags(c.phone)}
+                            placeholder="vip, wholesale, allergy-nuts…"
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 12.5, background: '#fff' }}
+                          />
+                        </div>
+                        <div style={{ width: 150 }}>
+                          <div style={s.secLabel}>Area</div>
+                          <input
+                            value={areaDraft}
+                            onChange={e => setAreaDraft(e.target.value)}
+                            onBlur={() => saveTags(c.phone)}
+                            placeholder="e.g. Tableview"
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 12.5, background: '#fff' }}
+                          />
+                        </div>
+                        {savingTags && <span style={{ fontSize: 11, color: '#8A8680', alignSelf: 'flex-end' }}>saving…</span>}
                       </div>
                       {/* Conversation — the actual WhatsApp exchange (Customer-360 depth) */}
                       {(detail.conversation || []).length > 0 && (
