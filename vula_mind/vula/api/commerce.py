@@ -422,6 +422,14 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     yoco_data = resp.json()
     await service.update_order_status(order["id"], "pending_payment", yoco_checkout_id=yoco_data["id"])
 
+    # Fire-and-forget — the customer is waiting to be redirected to pay, so PDF render +
+    # WhatsApp media upload (a couple of seconds) must not sit in this response's critical
+    # path. Same asyncio.create_task convention already used elsewhere in this file for
+    # background side-effects (statement ingestion jobs).
+    import asyncio
+    from vula.commerce.service import send_order_invoice
+    asyncio.create_task(send_order_invoice(tenant_id, order["id"]))
+
     return {
         "order_id": order["id"],
         "display_id": order["display_id"],

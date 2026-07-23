@@ -1033,6 +1033,77 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     return result.data[0]
 
 
+async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
+    """Auto-generate an invoice for a just-placed order and WhatsApp it to the customer —
+    the invoice doubles as the payment request, not a post-payment receipt. Self-contained
+    and safe to call fire-and-forget: never raises, so a PDF/WhatsApp hiccup can never break
+    order placement itself. The invoice row is always created first (the accounting paper
+    trail) and only marked 'sent' if the WhatsApp delivery actually succeeds — if it
+    doesn't, the invoice still sits as a draft in the dashboard for an admin to send
+    manually via the existing button, rather than being silently lost.
+    """
+    try:
+        order = await get_order(order_id)
+    except Exception as exc:
+        logger.warning("send_order_invoice: order lookup failed for %s: %s", order_id, exc)
+        return None
+    if not order:
+        logger.warning("send_order_invoice: order %s not found", order_id)
+        return None
+    phone = (order.get("customer_phone") or "").strip()
+    if not phone:
+        logger.info("send_order_invoice: order %s has no customer_phone, skipping", order_id)
+        return None
+
+    line_items = [
+        {"description": it.get("product_name") or "Item", "quantity": it["quantity"],
+         "unit_price_cents": it["unit_price_cents"], "product_id": it.get("product_id")}
+        for it in (order.get("commerce_order_items") or [])
+    ]
+    delivery_cents = int(order.get("delivery_cents") or 0)
+    if delivery_cents > 0:
+        line_items.append({"description": "Delivery", "quantity": 1,
+                           "unit_price_cents": delivery_cents})
+
+    try:
+        invoice = await create_invoice(tenant_id, {
+            "doc_type": "invoice",
+            "customer_name": order.get("customer_name"),
+            "customer_phone": phone,
+            "customer_email": order.get("customer_email"),
+            "customer_address": order.get("delivery_address"),
+            "line_items": line_items,
+            "order_id": order["id"],
+            "notes": f"Auto-generated for order {order.get('display_id')}",
+        })
+    except Exception as exc:
+        logger.warning("send_order_invoice: invoice creation failed for order %s: %s", order_id, exc)
+        return None
+
+    try:
+        from vula.commerce.pdf import render_invoice_pdf, merge_branding
+        from vula.api.whatsapp import _send_invoice_document
+
+        branding = merge_branding(tenant_id, await get_invoice_settings(tenant_id))
+        pdf_bytes = render_invoice_pdf(invoice, branding)
+
+        tenant_name = branding.get("name") or tenant_id.replace("-", " ").title()
+        number = invoice.get("invoice_number", invoice["id"])
+        total = f"R{(int(invoice.get('total_cents') or 0) / 100):.2f}"
+        caption = (
+            f"Hi {invoice.get('customer_name', 'there')}, here is your invoice {number} "
+            f"for {total} from {tenant_name}. Thank you for your order!"
+        )
+        sent = await _send_invoice_document(phone, pdf_bytes, f"{number}.pdf", caption, tenant_id)
+        if sent:
+            await update_invoice_status(tenant_id, invoice["id"], "sent")
+    except Exception as exc:
+        logger.warning("send_order_invoice: PDF render/send failed for order %s (invoice %s "
+                       "stays draft): %s", order_id, invoice.get("id"), exc)
+
+    return invoice
+
+
 async def get_invoice(tenant_id: str, invoice_id: str) -> Optional[dict]:
     result = (
         _client()

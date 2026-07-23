@@ -1482,6 +1482,12 @@ class CommerceAssistantSkill(BaseSkill):
 
         await self._notify_shop_new_order(tenant_id, order, lines, method, name)
 
+        try:
+            from vula.commerce.service import send_order_invoice
+            await send_order_invoice(tenant_id, order["id"])
+        except Exception as exc:
+            logger.debug("auto invoice send skipped: %s", exc)
+
         item_lines = "\n".join(f"• {l['quantity']} × {l['name']} — {l['line_total']}" for l in lines)
         confirmation = (
             f"✅ *Order {order['display_id']} confirmed*\n{item_lines}\n"
