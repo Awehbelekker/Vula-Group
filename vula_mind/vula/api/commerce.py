@@ -94,6 +94,53 @@ async def get_page(tenant_id: str, slug: str):
     return rows[0]
 
 
+@router.get("/{tenant_id}/sitemap.xml")
+async def page_sitemap(tenant_id: str):
+    """XML sitemap of every published page, under the tenant's REAL public domain
+    (store_url) — not Vula's own hash-routed page renderer, which isn't a URL shape
+    search engines should index. Ready to use once wired into that domain's hosting
+    (e.g. a rewrite from offthehook.co.za/sitemap.xml to this endpoint) — that wiring
+    lives in the tenant's own storefront repo, outside Vula's."""
+    from fastapi.responses import Response
+    from vula.api import tenants as _tenants
+
+    base = _tenants.store_url(tenant_id)
+    if not base:
+        xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>'
+        return Response(content=xml, media_type="application/xml")
+
+    try:
+        rows = (service._client().table("vula_pages").select("slug,updated_at")
+                .eq("tenant_id", tenant_id).eq("status", "published")
+                .order("updated_at", desc=True).execute().data or [])
+    except Exception as exc:
+        log.debug("sitemap generation skipped (run migration 041?): %s", exc)
+        rows = []
+
+    base = base.rstrip("/")
+    entries = "\n".join(
+        f"  <url><loc>{base}/p/{r['slug']}</loc><lastmod>{(r.get('updated_at') or '')[:10]}</lastmod></url>"
+        for r in rows if r.get("slug")
+    )
+    xml = (f'<?xml version="1.0" encoding="UTF-8"?>\n'
+           f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{entries}\n</urlset>')
+    return Response(content=xml, media_type="application/xml")
+
+
+@router.get("/{tenant_id}/robots.txt")
+async def page_robots(tenant_id: str):
+    """robots.txt pointing at the sitemap above — same wiring caveat: useful once a
+    rewrite on the tenant's real domain forwards /robots.txt here."""
+    from fastapi.responses import Response
+    from vula.api import tenants as _tenants
+
+    base = _tenants.store_url(tenant_id)
+    lines = ["User-agent: *", "Allow: /"]
+    if base:
+        lines.append(f"Sitemap: {base.rstrip('/')}/sitemap.xml")
+    return Response(content="\n".join(lines) + "\n", media_type="text/plain")
+
+
 @router.get("/{tenant_id}/admin/pages")
 async def admin_list_pages(tenant_id: str):
     """All pages (draft + published) for the store editor."""

@@ -309,6 +309,9 @@ export default function VulaPages({ tenantId }) {
             <input placeholder="SEO description (search result snippet)" value={editing.seo?.description || ""}
               onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, description: e.target.value } }))}
               style={{ flex: 2, minWidth: 260, padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13 }} />
+            <input placeholder="Share image URL (WhatsApp / social link preview)" value={editing.seo?.image || ""}
+              onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, image: e.target.value } }))}
+              style={{ flex: 2, minWidth: 260, padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13 }} />
             <span style={{ fontSize: 11, color: C.muted, alignSelf: "center" }}>Saved with the page on Publish / Save draft.</span>
           </div>
         )}

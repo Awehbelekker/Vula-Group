@@ -36,6 +36,7 @@ export default function VulaPageRender({ tenant, slug }) {
       .then((b) => {
         setBrand((prev) => ({
           ...prev,
+          name: b.name || prev.name,
           accent: b.accent_color || prev.accent,
           ink: b.ink_color || prev.ink,
           logoUrl: b.logo_url || prev.logoUrl,
@@ -55,17 +56,57 @@ export default function VulaPageRender({ tenant, slug }) {
       .catch(() => {});
   }, [tenant, slug]);
 
-  // SEO: apply the stored seo jsonb (title/description) once the page loads.
+  // SEO: title/description, canonical URL, Open Graph + Twitter Card (drives the rich
+  // preview WhatsApp/Facebook/Twitter show when a page link is shared — the single
+  // highest-leverage piece of "SEO" for a WhatsApp-first platform), and JSON-LD
+  // Organization data using the same brand fetch above. All client-side DOM mutation —
+  // there's no server-side rendering here, so this only helps crawlers that execute JS
+  // (Google/WhatsApp do; some don't), not a substitute for SSR.
   useEffect(() => {
     if (!page) return;
     const seo = page.seo || {};
-    document.title = seo.title || page.title || "Vula";
-    if (seo.description) {
-      let meta = document.querySelector('meta[name="description"]');
-      if (!meta) { meta = document.createElement("meta"); meta.name = "description"; document.head.appendChild(meta); }
-      meta.content = seo.description;
+    const title = seo.title || page.title || "Vula";
+    const description = seo.description || "";
+    const image = seo.image || brand.logoUrl || "";
+    const url = window.location.href;
+    document.title = title;
+
+    const setMeta = (selector, attrs) => {
+      let el = document.querySelector(selector);
+      if (!el) {
+        el = document.createElement(attrs.tag || "meta");
+        delete attrs.tag;
+        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        document.head.appendChild(el);
+      }
+      return el;
+    };
+
+    if (description) setMeta('meta[name="description"]', { name: "description" }).setAttribute("content", description);
+    setMeta('link[rel="canonical"]', { tag: "link", rel: "canonical" }).setAttribute("href", url);
+    setMeta('meta[property="og:title"]', { property: "og:title" }).setAttribute("content", title);
+    setMeta('meta[property="og:type"]', { property: "og:type" }).setAttribute("content", "website");
+    setMeta('meta[property="og:url"]', { property: "og:url" }).setAttribute("content", url);
+    if (description) setMeta('meta[property="og:description"]', { property: "og:description" }).setAttribute("content", description);
+    if (image) {
+      setMeta('meta[property="og:image"]', { property: "og:image" }).setAttribute("content", image);
+      setMeta('meta[name="twitter:card"]', { name: "twitter:card" }).setAttribute("content", "summary_large_image");
+      setMeta('meta[name="twitter:image"]', { name: "twitter:image" }).setAttribute("content", image);
     }
-  }, [page]);
+
+    // JSON-LD Organization block — id'd so it's replaced, not duplicated, on slug changes.
+    let ld = document.getElementById("vula-jsonld-org");
+    if (!ld) {
+      ld = document.createElement("script");
+      ld.id = "vula-jsonld-org";
+      ld.type = "application/ld+json";
+      document.head.appendChild(ld);
+    }
+    ld.textContent = JSON.stringify({
+      "@context": "https://schema.org", "@type": "Organization",
+      name: brand.name || tenant, ...(brand.logoUrl ? { logo: brand.logoUrl } : {}), url,
+    });
+  }, [page, brand, tenant]);
 
   if (page === undefined) return <div style={centre}>Loading…</div>;
   if (page === null) return <div style={centre}>Page not found.</div>;
