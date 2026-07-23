@@ -2340,6 +2340,85 @@ async def admin_list_broadcasts(tenant_id: str, limit: int = Query(50)):
     return {"broadcasts": result.data or [], "count": len(result.data or [])}
 
 
+@router.get("/{tenant_id}/admin/broadcasts/analytics")
+async def admin_broadcast_analytics(tenant_id: str, days: int = Query(90)):
+    """Aggregated marketing analytics — rolls up every broadcast in the window into totals,
+    a weekly reach trend, and a best-performing ranking, plus attributed revenue (migration
+    104). Per-broadcast funnels (admin_broadcast_recipients) and per-customer engagement
+    already existed; nothing summarized them across campaigns — the gap flagged in the
+    marketing capability audit."""
+    from datetime import datetime, timedelta, timezone
+
+    db = service._client()
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    logs = (db.table("commerce_broadcast_logs").select("*")
+            .eq("tenant_id", tenant_id).gte("created_at", since)
+            .order("created_at").limit(500).execute().data or [])
+
+    totals = {
+        "broadcasts": len(logs),
+        "sent": sum(int(l.get("sent_count") or 0) for l in logs),
+        "delivered": sum(int(l.get("delivered_count") or 0) for l in logs),
+        "read": sum(int(l.get("read_count") or 0) for l in logs),
+        "clicked": sum(int(l.get("clicked_count") or 0) for l in logs),
+        "failed": sum(int(l.get("failed_count") or 0) for l in logs),
+    }
+    totals["open_rate"] = round(100 * totals["read"] / totals["delivered"], 1) if totals["delivered"] else 0
+    totals["click_rate"] = round(100 * totals["clicked"] / totals["delivered"], 1) if totals["delivered"] else 0
+
+    # Attributed revenue across every broadcast in the window, one query rather than N.
+    broadcast_ids = [l["id"] for l in logs]
+    attributed_orders, attributed_revenue_cents = 0, 0
+    if broadcast_ids:
+        try:
+            orders = (db.table("commerce_orders").select("total_cents,status,attributed_broadcast_id")
+                      .eq("tenant_id", tenant_id).in_("attributed_broadcast_id", broadcast_ids)
+                      .limit(2000).execute().data or [])
+            counted = [o for o in orders if o.get("status") not in ("pending_payment", "cancelled", "refunded")]
+            attributed_orders = len(counted)
+            attributed_revenue_cents = sum(int(o.get("total_cents") or 0) for o in counted)
+        except Exception as exc:
+            log.debug("broadcast analytics attribution rollup skipped (run migration 104?): %s", exc)
+    totals["attributed_orders"] = attributed_orders
+    totals["attributed_revenue_cents"] = attributed_revenue_cents
+
+    # Best-performing by click rate — require a minimum of 3 delivered so a single-recipient
+    # test send can't top the list off a 100% rate.
+    def _click_rate(l):
+        delivered = int(l.get("delivered_count") or 0)
+        return (int(l.get("clicked_count") or 0) / delivered) if delivered else 0
+
+    ranked = sorted((l for l in logs if int(l.get("delivered_count") or 0) >= 3),
+                    key=_click_rate, reverse=True)
+    best_performing = [
+        {"id": l["id"], "name": l.get("name") or l.get("template_name"),
+         "sent": l.get("sent_count") or 0, "clicked": l.get("clicked_count") or 0,
+         "click_rate": round(100 * _click_rate(l), 1), "sent_at": l.get("sent_at") or l.get("created_at")}
+        for l in ranked[:5]
+    ]
+
+    # Weekly reach trend — buckets by the Monday of the week each broadcast was created.
+    trend_map: dict[str, dict] = {}
+    for l in logs:
+        created = l.get("created_at")
+        if not created:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        week_start = (dt - timedelta(days=dt.weekday())).date().isoformat()
+        bucket = trend_map.setdefault(week_start, {"week": week_start, "sent": 0, "delivered": 0,
+                                                    "read": 0, "clicked": 0})
+        bucket["sent"] += int(l.get("sent_count") or 0)
+        bucket["delivered"] += int(l.get("delivered_count") or 0)
+        bucket["read"] += int(l.get("read_count") or 0)
+        bucket["clicked"] += int(l.get("clicked_count") or 0)
+    trend = sorted(trend_map.values(), key=lambda b: b["week"])
+
+    return {"totals": totals, "best_performing": best_performing, "trend": trend, "days": days}
+
+
 @router.post("/{tenant_id}/admin/broadcasts/draft")
 async def admin_draft_broadcast(tenant_id: str, body: dict):
     """AI-write a WhatsApp broadcast from rough details the owner provides.

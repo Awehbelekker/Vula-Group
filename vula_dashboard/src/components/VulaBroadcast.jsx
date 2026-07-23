@@ -56,6 +56,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
   const [testPhone, setTestPhone] = useState('')
   const [testMsg, setTestMsg] = useState('')
   const [realTemplates, setRealTemplates] = useState([])   // approved templates from the 📨 Templates tab
+  const [analytics, setAnalytics] = useState(null)   // aggregated marketing analytics rollup
   const [useApproved, setUseApproved] = useState(false)     // free text (default) vs. an approved template
   const [approvedName, setApprovedName] = useState('')
   const [headerImageUrl, setHeaderImageUrl] = useState('')  // real image for a template with an IMAGE header
@@ -120,7 +121,14 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
     } catch {}
   }, [tenantId])
 
-  useEffect(() => { load(); loadCampaigns(); loadSegments(); loadCounts(); loadRealTemplates() }, [load, loadCampaigns, loadSegments, loadCounts, loadRealTemplates])
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/analytics`)
+      setAnalytics(await r.json())
+    } catch {}
+  }, [tenantId])
+
+  useEffect(() => { load(); loadCampaigns(); loadSegments(); loadCounts(); loadRealTemplates(); loadAnalytics() }, [load, loadCampaigns, loadSegments, loadCounts, loadRealTemplates, loadAnalytics])
 
   // Marketing tab handed off a chosen copy variant — land it in the free-text body (P2.1).
   useEffect(() => {
@@ -499,6 +507,14 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
         </div>
       )}
 
+      {/* Aggregated analytics — rolls up every campaign in the window (default 90 days) */}
+      {analytics && analytics.totals?.broadcasts > 0 && (
+        <>
+          <p style={s.sectionLabel}>📊 Marketing analytics <span style={{ fontWeight: 400, color: '#8A8680' }}>— last {analytics.days} days</span></p>
+          <BroadcastAnalytics analytics={analytics} />
+        </>
+      )}
+
       {/* History */}
       <p style={s.sectionLabel}>Broadcast history</p>
       {loading ? <p style={s.muted}>Loading…</p> : broadcasts.length === 0 ? (
@@ -524,6 +540,60 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
                 </div>
               </div>
               {funnelId === b.id && <BroadcastFunnel tenantId={tenantId} broadcastId={b.id} />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BroadcastAnalytics({ analytics }) {
+  const t = analytics.totals || {}
+  const best = analytics.best_performing || []
+  const trend = analytics.trend || []
+  const maxTrend = Math.max(1, ...trend.map(w => w.sent))
+  const tiles = [
+    { label: 'Broadcasts sent', value: t.broadcasts },
+    { label: 'Total reach', value: t.sent },
+    { label: 'Open rate', value: `${t.open_rate}%` },
+    { label: 'Click rate', value: `${t.click_rate}%` },
+    { label: 'Attributed revenue', value: `R${((t.attributed_revenue_cents || 0) / 100).toFixed(2)}`,
+      hint: t.attributed_orders ? `${t.attributed_orders} order${t.attributed_orders !== 1 ? 's' : ''}` : null },
+  ]
+  return (
+    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 16, marginBottom: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: trend.length > 1 ? 16 : 0 }}>
+        {tiles.map(tile => (
+          <div key={tile.label} style={{ background: '#F7F4EE', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 3 }}>{tile.label}</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent, #2C5545)' }}>{tile.value}</div>
+            {tile.hint && <div style={{ fontSize: 10.5, color: '#8A8680' }}>{tile.hint}</div>}
+          </div>
+        ))}
+      </div>
+
+      {trend.length > 1 && (
+        <div style={{ marginBottom: best.length > 0 ? 16 : 0 }}>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 6 }}>Weekly reach</div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 48 }}>
+            {trend.map(w => (
+              <div key={w.week} title={`Week of ${w.week}: ${w.sent} sent, ${w.clicked} clicked`}
+                style={{ flex: 1, height: `${Math.max(4, Math.round(44 * w.sent / maxTrend))}px`,
+                  background: 'var(--accent, #2C5545)', borderRadius: 3, opacity: 0.75 }} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {best.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 6 }}>Best performing</div>
+          {best.map((b, i) => (
+            <div key={b.id} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '4px 0', alignItems: 'center' }}>
+              <span style={{ color: '#8A8680', width: 14 }}>{i + 1}.</span>
+              <span style={{ flex: 1, color: '#1E1E1E' }}>{b.name}</span>
+              <span style={{ color: 'var(--accent, #2C5545)', fontWeight: 600 }}>{b.click_rate}% clicked</span>
             </div>
           ))}
         </div>
