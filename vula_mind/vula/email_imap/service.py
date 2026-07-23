@@ -225,3 +225,48 @@ def _send(creds: dict, to: str, subject: str, body: str) -> dict:
 
 async def send(creds: dict, to: str, subject: str, body: str) -> dict:
     return await asyncio.to_thread(_send, creds, to, subject, body)
+
+
+def _send_batch(creds: dict, messages: list[dict]) -> list[dict]:
+    """[blocking] Send several emails over ONE SMTP connection/login — a campaign send
+    reconnecting per-recipient would be slow and risk the provider treating rapid repeat
+    logins as abuse. Returns [{to, sent, error}] in the same order as `messages`."""
+    host, port = creds.get("smtp_host"), int(creds.get("smtp_port") or 465)
+    if not host:
+        return [{"to": m["to"], "sent": False, "error": "no SMTP host configured"} for m in messages]
+    ctx = ssl.create_default_context()
+    try:
+        if port == 587:
+            s = smtplib.SMTP(host, port, timeout=20)
+            s.starttls(context=ctx)
+        else:
+            s = smtplib.SMTP_SSL(host, port, timeout=20, context=ctx)
+    except Exception as exc:
+        err = str(exc)[:200]
+        return [{"to": m["to"], "sent": False, "error": err} for m in messages]
+
+    results = []
+    try:
+        s.login(creds["email"], creds["password"])
+    except Exception as exc:
+        err = str(exc)[:200]
+        try: s.quit()
+        except Exception: pass
+        return [{"to": m["to"], "sent": False, "error": err} for m in messages]
+
+    try:
+        for m in messages:
+            try:
+                msg = _build(creds, m["to"], m["subject"], m["body"])
+                s.send_message(msg)
+                results.append({"to": m["to"], "sent": True})
+            except Exception as exc:
+                results.append({"to": m["to"], "sent": False, "error": str(exc)[:200]})
+    finally:
+        try: s.quit()
+        except Exception: pass
+    return results
+
+
+async def send_batch(creds: dict, messages: list[dict]) -> list[dict]:
+    return await asyncio.to_thread(_send_batch, creds, messages)

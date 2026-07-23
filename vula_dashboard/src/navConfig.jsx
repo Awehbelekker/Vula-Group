@@ -65,6 +65,7 @@ export const MERCHANT_GROUPS = [
     { id: "marketing-hub", icon: "✨", label: "Marketing", subtabs: [
       { id: "onboarding", icon: "🎉", label: "Client Onboarding" },
       { id: "broadcast", icon: "📢", label: "Broadcast" },
+      { id: "email-campaigns", icon: "✉️", label: "Email" },
       { id: "wa-templates", icon: "📨", label: "Templates" },
       { id: "scheduling", icon: "⏰", label: "Scheduling" },
       { id: "marketing", icon: "✨", label: "Campaigns" },
@@ -155,6 +156,7 @@ const MERCHANT_MODMAP = {
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft', training: 'training',
   discounts: 'products',
   onboarding: 'broadcasts',  // rides the same module key it was invisibly bundled under before the Broadcast/Onboarding split
+  'email-campaigns': 'broadcasts',  // same gate as WhatsApp broadcast — both are bulk-outreach features
 };
 
 /** Visibility predicate for merchant nav items: member access + tenant modules. Operates on a

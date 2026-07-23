@@ -107,6 +107,7 @@ from vula.api.twilio_whatsapp import router as twilio_router
 from vula.api.links import router as links_router
 from vula.api.master import router as master_router
 from vula.api.menu_page import router as menu_page_router
+from vula.api.email_public import router as email_public_router
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -838,6 +839,7 @@ async def tenant_admin_guard(request, call_next):
     return await call_next(request)
 
 app.include_router(links_router)  # no prefix — public /l/{code} redirect for broadcast click tracking
+app.include_router(email_public_router)  # no prefix — public /email/unsubscribe for campaigns
 app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} photo menu
 app.include_router(master_router, prefix="/v1/master")  # ALL endpoints require verified master JWT
 app.include_router(takeoff_router, prefix="/takeoff")

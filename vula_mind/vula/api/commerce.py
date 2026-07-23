@@ -2575,6 +2575,145 @@ def record_message_status(wamid: str, status: str, error: Optional[str] = None) 
         log.debug("record_message_status skipped: %s", exc)
 
 
+# ── Email campaigns (migration 106) ────────────────────────────────────────────
+# Bulk/campaign email, distinct from the 1:1 business correspondence in vula/email_imap.
+# Reuses the exact same audience targeting as WhatsApp broadcasts — a customer's email is
+# already merged into _aggregate_customers, so no separate segmentation logic is needed.
+
+def _suppressed_emails(tenant_id: str) -> set[str]:
+    """Normalized (lowercased) emails the tenant must NOT campaign to (opted out)."""
+    try:
+        rows = (service._client().table("commerce_email_consent").select("email")
+                .eq("tenant_id", tenant_id).eq("status", "opted_out").execute().data or [])
+        return {(r["email"] or "").strip().lower() for r in rows}
+    except Exception:
+        return set()
+
+
+@router.get("/{tenant_id}/admin/email-campaigns")
+async def admin_list_email_campaigns(tenant_id: str, limit: int = Query(50)):
+    db = service._client()
+    result = (db.table("commerce_email_campaigns").select("*")
+              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(limit).execute())
+    return {"campaigns": result.data or [], "count": len(result.data or [])}
+
+
+@router.post("/{tenant_id}/admin/email-campaigns/send")
+async def admin_send_email_campaign(tenant_id: str, body: dict):
+    """
+    Bulk/campaign email — sent via the tenant's connected mailbox (one SMTP connection
+    for the whole batch, vula/email_imap/service.py:send_batch), reusing the exact same
+    audience targeting as WhatsApp broadcasts.
+
+    Body:
+        subject:          required
+        body:             required (plain text — an unsubscribe footer is appended)
+        audience_filter:  all | active_30d | high_value | seg:<id> | comma-joined multi-select
+        dry_run:          bool, DEFAULT TRUE — preview the audience without sending
+        name:             campaign label
+        test_email:       send only to this address (skips audience + suppression)
+    """
+    from urllib.parse import quote
+    from uuid import uuid4
+    from config import settings as _settings
+    from vula.email_imap import service as email_service
+    from vula.email_imap.credentials import get_email_creds
+
+    db = service._client()
+    subject = (body.get("subject") or "").strip()
+    msg_body = body.get("body") or ""
+    audience = body.get("audience_filter", "all")
+    dry_run = body.get("dry_run", True)
+    name = body.get("name") or subject
+    test_email = (body.get("test_email") or "").strip().lower()
+
+    if not subject or not msg_body:
+        raise HTTPException(status_code=400, detail="subject and body are required")
+
+    # Resolve the exact audience (same source as the Customers tab / WhatsApp broadcasts);
+    # audience may be a built-in, a saved segment ('seg:<id>'), or a comma-joined multi-select.
+    customers = await _aggregate_customers(tenant_id)
+    if isinstance(audience, list):
+        toks = [str(t).strip() for t in audience if str(t).strip()]
+    else:
+        toks = [t.strip() for t in str(audience or "all").split(",") if t.strip()]
+    toks = toks or ["all"]
+    audience = ",".join(toks)
+    seen: set = set()
+    rows = []
+    for t in toks:
+        for c in _filter_audience(customers, _resolve_audience(tenant_id, t)):
+            em = (c.get("email") or "").strip().lower()
+            if em and em not in seen:
+                seen.add(em)
+                rows.append(c)
+    # Only contacts with a usable email; same opt-in-first posture as WhatsApp broadcasts
+    # (imported contacts who haven't opted in yet are excluded).
+    recipients = [c for c in rows if c.get("consent") != "unknown"]
+
+    suppressed = _suppressed_emails(tenant_id)
+    suppressed_count = 0
+    if suppressed:
+        before = len(recipients)
+        recipients = [c for c in recipients if (c.get("email") or "").strip().lower() not in suppressed]
+        suppressed_count = before - len(recipients)
+
+    if test_email:
+        recipients = [{"name": "Test", "email": test_email}]
+        suppressed_count = 0
+        audience = "test"
+        name = f"{name} (test)"
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "audience": audience,
+            "recipient_count": len(recipients),
+            "suppressed_count": suppressed_count,
+            "sample": [{"name": c.get("name") or "Unknown", "email": c.get("email")} for c in recipients[:10]],
+            "note": "Preview only — no emails sent. Send with dry_run=false to go live.",
+        }
+
+    if not recipients:
+        return {"sent": 0, "failed": 0, "recipient_count": 0}
+
+    creds = get_email_creds(tenant_id)
+    if not creds:
+        raise HTTPException(status_code=503, detail="No email account connected — connect one in Settings.")
+
+    campaign_id = str(uuid4())
+    base = (getattr(_settings, "public_base_url", "") or "").rstrip("/")
+    messages = []
+    for c in recipients:
+        em = c["email"]
+        full_body = msg_body
+        if base:
+            unsub = f"{base}/email/unsubscribe?tenant={quote(tenant_id)}&email={quote(em)}"
+            full_body = f"{msg_body}\n\n---\nDon't want these emails? Unsubscribe: {unsub}"
+        messages.append({"to": em, "subject": subject, "body": full_body})
+
+    results = await email_service.send_batch(creds, messages)
+    sent = sum(1 for r in results if r.get("sent"))
+    failed = len(results) - sent
+
+    try:
+        db.table("commerce_email_campaigns").insert({
+            "id": campaign_id, "tenant_id": tenant_id, "name": name, "subject": subject,
+            "body": msg_body, "audience_filter": audience, "recipient_count": len(recipients),
+            "sent_count": sent, "failed_count": failed,
+            "status": "sent" if sent > 0 else "failed", "sent_at": "now()",
+        }).execute()
+        rec_rows = [{"tenant_id": tenant_id, "campaign_id": campaign_id, "email": r["to"],
+                    "status": "sent" if r.get("sent") else "failed", "error": r.get("error")}
+                   for r in results]
+        if rec_rows:
+            db.table("commerce_email_campaign_recipients").insert(rec_rows).execute()
+    except Exception as exc:
+        log.warning("email campaign log write failed (run migration 106?): %s", exc)
+
+    return {"sent": sent, "failed": failed, "recipient_count": len(recipients), "campaign_id": campaign_id}
+
+
 # ── WhatsApp template management (create/submit/track/delete via Graph API) ───
 # Plain dict body (not a Pydantic model) — Optional[List[str]] fields have repeatedly hit a
 # Pydantic "TypeAdapter ... is not fully defined" schema-build error in this codebase (same

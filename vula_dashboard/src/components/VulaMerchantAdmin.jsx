@@ -30,6 +30,7 @@ import VulaRecurringOrders from './VulaRecurringOrders'
 import VulaAgentActivity from './VulaAgentActivity'
 import VulaBudget from './VulaBudget'
 import VulaBroadcast from './VulaBroadcast'
+import VulaEmailCampaigns from './VulaEmailCampaigns'
 import VulaWATemplates from './VulaWATemplates'
 import VulaScheduledJobs from './VulaScheduledJobs'
 import VulaCustomers from './VulaCustomers'
@@ -260,6 +261,7 @@ function MarketingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'onboarding' && <VulaClientOnboarding tenantId={tenantId} />}
       {active === 'broadcast' && <VulaBroadcast tenantId={tenantId} draftBody={draftBody} onConsumeDraft={onConsumeDraft} />}
+      {active === 'email-campaigns' && <VulaEmailCampaigns tenantId={tenantId} />}
       {active === 'wa-templates' && <VulaWATemplates tenantId={tenantId} />}
       {active === 'scheduling' && <VulaScheduledJobs tenantId={tenantId} />}
       {active === 'marketing' && <VulaMarketing tenantId={tenantId} onSendAsBroadcast={onSendAsBroadcast} />}
