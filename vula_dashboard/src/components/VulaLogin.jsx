@@ -20,6 +20,7 @@ import { resolveTenantFromHost, getTenantTheme } from '../theme/tenantThemes'
 // If reached via a tenant subdomain (offthehook.vula-ai.com), brand the login.
 const LOGIN_TENANT = resolveTenantFromHost()
 const LOGIN_THEME = LOGIN_TENANT ? getTenantTheme(LOGIN_TENANT) : null
+const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const COLORS = {
   bg: '#F7F4EE',
@@ -40,7 +41,21 @@ export default function VulaLogin({ onSuccess }) {
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [loading, setLoading] = useState(false)
+  const [brandLogoUrl, setBrandLogoUrl] = useState(null)
   const { login } = useAuthStore()
+
+  // Real logo (2026-07-24) — LOGIN_THEME's logoUrl is a static fallback in tenantThemes.js that
+  // goes stale the moment a tenant uploads their own (confirmed: off-the-hook's real logo_url in
+  // commerce_invoice_settings is a completely different file). Same fix already applied to the
+  // post-login sidebar (App.jsx) — this is the pre-auth screen that never got it. Uses the public
+  // /brand endpoint (not /admin/invoice-settings) since nobody is signed in yet at this screen.
+  useEffect(() => {
+    if (!LOGIN_TENANT) return
+    fetch(`${VULA_API}/v1/commerce/${LOGIN_TENANT}/brand`)
+      .then((r) => r.json())
+      .then((b) => { if (b?.logo_url) setBrandLogoUrl(b.logo_url) })
+      .catch(() => {})
+  }, [])
 
   // Resolve tenant/role for a signed-in user (any method) and enter the app.
   async function resolveAndLogin(user) {
@@ -191,8 +206,8 @@ export default function VulaLogin({ onSuccess }) {
         <div style={s.logoWrap}>
           {LOGIN_THEME ? (
             <>
-              {LOGIN_THEME.logoUrl ? (
-                <img src={LOGIN_THEME.logoUrl} alt={LOGIN_THEME.name}
+              {(brandLogoUrl || LOGIN_THEME.logoUrl) ? (
+                <img src={brandLogoUrl || LOGIN_THEME.logoUrl} alt={LOGIN_THEME.name}
                      style={{ height: 96, width: 'auto', maxWidth: '100%', objectFit: 'contain', marginBottom: 10 }} />
               ) : (
                 <span style={{ ...s.logoText, color: LOGIN_THEME.accent }}>{LOGIN_THEME.name}</span>
