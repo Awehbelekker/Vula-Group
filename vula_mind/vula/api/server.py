@@ -525,6 +525,13 @@ async def _automations_loop() -> None:
                 log.info("Automations loop fired %d action(s)", fired)
         except Exception as exc:
             log.warning("Automations loop error: %s", exc)
+        try:
+            from vula.api.whatsapp import check_and_nudge_quiet_team_members
+            nudged = await check_and_nudge_quiet_team_members()
+            if nudged:
+                log.info("Keep-window-open nudge sent to %d team member(s)", nudged)
+        except Exception as exc:
+            log.warning("Window-nudge check error: %s", exc)
         await _asyncio.sleep(300)
 
 

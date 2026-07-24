@@ -2199,6 +2199,19 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
             )
             if not resp.is_success:
                 logger.warning("template send failed (%s -> %s): %s", template, to, resp.text[:200])
+            elif tenant_id:
+                # Stamp last_notified_at for a recognized team member (keep-window-open nudge,
+                # migration 108) — single hook point covers every proactive template send across
+                # every tenant/call site (server.py's OTH schedules, field_ops.py's DIGG sends,
+                # any future one), not just the nudge feature's own sends. Best-effort.
+                try:
+                    from datetime import datetime, timezone
+                    from vula.commerce import service as _cs_stamp
+                    _cs_stamp._client().table("vula_team_members").update(
+                        {"last_notified_at": datetime.now(timezone.utc).isoformat()}
+                    ).eq("tenant_id", tenant_id).eq("whatsapp", number).execute()
+                except Exception as exc:
+                    logger.debug("last_notified_at stamp skipped (run migration 108?): %s", exc)
             return resp.is_success
     except Exception as exc:
         logger.warning("template send failed (%s -> %s): %s", template, to, exc)
@@ -2420,6 +2433,21 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     except Exception:
         pass
 
+    # Stamp last_message_at for a recognized team member (keep-window-open nudge, migration 108) —
+    # ANY reply resets their 24h window, so this is what lets the nudge check (see whatsapp.py's
+    # scheduled poller hook) know a member is still reachable via free text and skip nudging them.
+    # Best-effort, never blocks the actual reply logic below.
+    try:
+        from datetime import datetime, timezone
+        _digits = "".join(c for c in (phone or "") if c.isdigit())
+        _digits = "27" + _digits[1:] if _digits.startswith("0") else _digits
+        from vula.commerce import service as _cs_stamp
+        _cs_stamp._client().table("vula_team_members").update(
+            {"last_message_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("tenant_id", tenant_id).eq("whatsapp", _digits).eq("active", True).execute()
+    except Exception as exc:
+        logger.debug("last_message_at stamp skipped (run migration 108?): %s", exc)
+
     # Human handoff: if an owner/agent has taken over this conversation from the
     # shared inbox, the bot stays quiet — but we still log the customer's message
     # so the agent sees it in the inbox thread.
@@ -2572,6 +2600,63 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
     except Exception as exc:
         logger.debug("owner welcome skipped: %s", exc)
         return False
+
+
+# Nudge fires once a member's window has been quiet this long since our last message to them —
+# comfortably inside the 24h cutoff so the nudge itself still lands as free text-equivalent (it's
+# a template, so it always lands, but this margin means it's sent well before the cutoff, not
+# racing it) while not being trigger-happy on every proactive send.
+_NUDGE_AFTER_HOURS = 20
+
+
+async def check_and_nudge_quiet_team_members() -> int:
+    """Keep-the-window-open nudge (migration 108), generalized across every tenant/team member —
+    not hardcoded to one person. Any team member we've sent a proactive template to, who hasn't
+    replied since, and whose 24h window is now approaching its close, gets a check-in template
+    ("anything you need?") — since ANY reply resets the window, this is what lets Vula keep
+    reaching them via free text afterward instead of hitting the template wall on every follow-up.
+
+    No separate dedup ledger needed: sending the nudge itself goes through _send_wa_template,
+    which stamps last_notified_at to "now" (see that function) — so the next poller pass naturally
+    sees a fresh window and won't re-fire until ANOTHER ~20h of silence passes. Self-limiting by
+    construction, not by a separate log table.
+
+    Called from the same 5-minute automations poller (server.py's _automations_loop) as everything
+    else in this reliability arc — no new asyncio task.
+    """
+    from datetime import datetime, timezone, timedelta
+    from vula.commerce import service as _cs
+    db = _cs._client()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=_NUDGE_AFTER_HOURS)).isoformat()
+
+    try:
+        candidates = (db.table("vula_team_members").select("id,tenant_id,name,whatsapp,last_message_at,last_notified_at")
+                      .eq("active", True).not_.is_("last_notified_at", "null")
+                      .lte("last_notified_at", cutoff).execute().data or [])
+    except Exception as exc:
+        logger.debug("nudge candidate query skipped (run migration 108?): %s", exc)
+        return 0
+
+    sent = 0
+    for m in candidates:
+        # Already replied since our last message — window is open on its own, no nudge needed.
+        if m.get("last_message_at") and m["last_message_at"] > m["last_notified_at"]:
+            continue
+        tenant_id, whatsapp = m.get("tenant_id"), m.get("whatsapp")
+        if not (tenant_id and whatsapp):
+            continue
+        try:
+            from vula.commerce import service as _cs2
+            inv = await _cs2.get_invoice_settings(tenant_id)
+            shop_name = (inv or {}).get("trading_as") or (inv or {}).get("company_name") or tenant_id.replace("-", " ").title()
+        except Exception:
+            shop_name = tenant_id.replace("-", " ").title()
+        first_name = (m.get("name") or "there").split()[0]
+        ok = await _send_wa_template(tenant_id, whatsapp, "vula_owner_checkin_nudge", first_name, shop_name)
+        if ok:
+            sent += 1
+            logger.info("Sent keep-window-open nudge to %s (%s)", whatsapp, tenant_id)
+    return sent
 
 
 async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
