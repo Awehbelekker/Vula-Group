@@ -205,6 +205,28 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
     } catch (e) { onError(e.message) }
   }
 
+  const markPaid = async (t) => {
+    try { await authFetch(`/v1/master/tenants/${t.tenant_id}/mark-paid`, { method: 'POST' }); load() }
+    catch (e) { onError(e.message) }
+  }
+  const extendTrial = async (t) => {
+    try {
+      await authFetch(`/v1/master/tenants/${t.tenant_id}/extend-trial`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ days: 14 }),
+      })
+      load()
+    } catch (e) { onError(e.message) }
+  }
+  const cancelSub = async (t) => {
+    if (!confirm(`Cancel ${t.display_name || t.tenant_id}'s subscription? This also suspends them — bot, checkout, and dashboard logins stop working immediately.`)) return
+    try { await authFetch(`/v1/master/tenants/${t.tenant_id}/cancel`, { method: 'POST' }); load() }
+    catch (e) { onError(e.message) }
+  }
+  const reactivateSub = async (t) => {
+    try { await authFetch(`/v1/master/tenants/${t.tenant_id}/reactivate`, { method: 'POST' }); load() }
+    catch (e) { onError(e.message) }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -250,6 +272,14 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
                   <tr>
                     <td colSpan={8} style={{ padding: 0, background: C.alt }}>
                       <ManageTenantRow tenant={t} registry={registry} onSave={(patch) => saveManage(t.tenant_id, patch)} />
+                      <div style={{ padding: '0 14px 14px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', borderTop: `1px solid ${C.border}`, marginTop: 4, paddingTop: 12 }}>
+                        <b style={{ fontSize: 12.5 }}>Billing</b>
+                        <button style={miniBtn} onClick={() => markPaid(t)}>Mark paid</button>
+                        <button style={miniBtn} onClick={() => extendTrial(t)}>+14 day trial</button>
+                        {t.signup_status === 'cancelled'
+                          ? <button style={{ ...miniBtn, color: C.green, fontWeight: 600 }} onClick={() => reactivateSub(t)}>Reactivate</button>
+                          : <button style={{ ...miniBtn, color: C.red }} onClick={() => cancelSub(t)}>Cancel subscription</button>}
+                      </div>
                     </td>
                   </tr>
                 )}

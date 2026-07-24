@@ -97,6 +97,83 @@ async def master_update_tenant(tenant_id: str, body: dict,
     return res.data[0]
 
 
+# ── Billing lifecycle (vula_tenants: signup/payment state) ─────────────────────
+# The Tenants tab's existing Suspend/Activate toggles vula_tenant_config.active — operational,
+# any reason. These four are specifically about the *subscription*, reading/writing
+# vula_tenants (paid, status, trial_ends) instead — the "was write-only" audit finding closed
+# 2026-07-24. mark-paid/extend-trial are pure vula_tenants writes; cancel/reactivate also flip
+# vula_tenant_config.active so cancelling actually stops the bot/checkout/logins, not just the
+# billing label (same enforcement path the Suspend toggle uses).
+
+def _billing_row_not_found(tenant_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found in vula_tenants")
+
+
+@router.post("/tenants/{tenant_id}/mark-paid")
+async def master_mark_paid(tenant_id: str, identity: dict = Depends(require_master)) -> dict:
+    """Manual payment confirmation (EFT, correction) — PayFast's ITN webhook does this
+    automatically for a real gateway payment; this covers everything else."""
+    res = (_client().table("vula_tenants").update({"paid": True, "status": "active"})
+           .eq("tenant_id", tenant_id).execute())
+    if not res.data:
+        raise _billing_row_not_found(tenant_id)
+    audit(identity, "tenant_marked_paid", tenant_id)
+    from vula.api import merchant_audit
+    merchant_audit.audit(tenant_id, identity, "billing_marked_paid")
+    return res.data[0]
+
+
+@router.post("/tenants/{tenant_id}/extend-trial")
+async def master_extend_trial(tenant_id: str, body: dict,
+                              identity: dict = Depends(require_master)) -> dict:
+    days = int((body or {}).get("days") or 14)
+    rows = (_client().table("vula_tenants").select("trial_ends")
+            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    if not rows:
+        raise _billing_row_not_found(tenant_id)
+    current = rows[0].get("trial_ends")
+    base = datetime.fromisoformat(current.replace("Z", "+00:00")) if current else datetime.now(timezone.utc)
+    base = max(base, datetime.now(timezone.utc))  # extend from today if the trial already lapsed
+    new_end = (base + timedelta(days=days)).isoformat()
+    res = (_client().table("vula_tenants").update({"trial_ends": new_end})
+           .eq("tenant_id", tenant_id).execute())
+    audit(identity, "tenant_trial_extended", tenant_id, days=days, new_trial_ends=new_end)
+    from vula.api import merchant_audit
+    merchant_audit.audit(tenant_id, identity, "billing_trial_extended", days=days)
+    return res.data[0]
+
+
+@router.post("/tenants/{tenant_id}/cancel")
+async def master_cancel_subscription(tenant_id: str, identity: dict = Depends(require_master)) -> dict:
+    res = (_client().table("vula_tenants").update({"status": "cancelled"})
+           .eq("tenant_id", tenant_id).execute())
+    if not res.data:
+        raise _billing_row_not_found(tenant_id)
+    _client().table("vula_tenant_config").update({"active": False}).eq("tenant_id", tenant_id).execute()
+    from vula.api import tenants as _tenants
+    _tenants.invalidate(tenant_id)
+    audit(identity, "tenant_cancelled", tenant_id)
+    from vula.api import merchant_audit
+    merchant_audit.audit(tenant_id, identity, "billing_cancelled")
+    return res.data[0]
+
+
+@router.post("/tenants/{tenant_id}/reactivate")
+async def master_reactivate_subscription(tenant_id: str,
+                                         identity: dict = Depends(require_master)) -> dict:
+    res = (_client().table("vula_tenants").update({"status": "active"})
+           .eq("tenant_id", tenant_id).execute())
+    if not res.data:
+        raise _billing_row_not_found(tenant_id)
+    _client().table("vula_tenant_config").update({"active": True}).eq("tenant_id", tenant_id).execute()
+    from vula.api import tenants as _tenants
+    _tenants.invalidate(tenant_id)
+    audit(identity, "tenant_reactivated", tenant_id)
+    from vula.api import merchant_audit
+    merchant_audit.audit(tenant_id, identity, "billing_reactivated")
+    return res.data[0]
+
+
 @router.get("/tenants/{tenant_id}/setup")
 async def master_tenant_setup(tenant_id: str):
     """Onboarding cockpit (UI overhaul P3): the 9-step go-live checklist, COMPUTED live from
@@ -242,7 +319,7 @@ async def master_health():
 # Recent migrations this session added — a cheap existence probe since there's no formal
 # schema_migrations tracking table (migrations are hand-run SQL files). Lets Health flag
 # "you probably haven't run 073 yet" instead of tenants silently hitting empty-catch fallbacks.
-_MIGRATION_PROBES: list[tuple[str, str, str]] = [
+_MIGRATION_PROBES: list[tuple[str, str, str] | tuple[str, str, str, str]] = [
     ("069", "commerce_scheduled_job_config", "Scheduling tab"),
     ("070", "commerce_order_settings", "Delivery areas/fees"),          # column-only, table always exists
     ("071", "vula_wa_msg_dedup", "Durable WhatsApp dedup"),
@@ -251,14 +328,16 @@ _MIGRATION_PROBES: list[tuple[str, str, str]] = [
     ("098", "commerce_geo_cache", "Marketplace-style delivery radius"),   # renumbered from 074
     ("075", "commerce_saved_copy", "Marketing saved-copy library"),
     ("099", "vula_webhook_failures", "Webhook failure feed"),             # renumbered from 076
+    ("108", "vula_tenants", "Billing: paid column", "paid"),  # re-adds a column 001 always declared but was never applied
 ]
 
 
 def _probe_migrations(db) -> list[dict]:
     out = []
-    for num, table, note in _MIGRATION_PROBES:
+    for num, table, note, *rest in _MIGRATION_PROBES:
+        column = rest[0] if rest else None  # probe a specific column for column-only migrations
         try:
-            db.table(table).select("*").limit(1).execute()
+            db.table(table).select(column or "*").limit(1).execute()
             applied = True
         except Exception:
             applied = False

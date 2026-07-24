@@ -81,6 +81,6 @@ def test_migration_probes_reference_current_filenames():
 
     migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
     files = {f.name for f in migrations_dir.glob("*.sql")}
-    for num, table, _note in _MIGRATION_PROBES:
+    for num, table, _note, *_rest in _MIGRATION_PROBES:
         matches = [f for f in files if f.startswith(f"{num}_")]
         assert matches, f"no migration file starts with {num}_ (probe for {table} is stale)"
