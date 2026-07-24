@@ -80,6 +80,29 @@ async def add_member(tenant: str, body: MemberIn,
         return {"error": f"{exc} (run migration 029?)"}
 
 
+async def _revoke_matching_login(tenant: str, member_id: str, identity: dict) -> bool:
+    """Disabling a team-directory member used to leave their dashboard login untouched — two
+    independently-tracked systems (vula_team_members vs vula_tenant_users/Supabase Auth), so
+    "Disable" looked like it revoked access but didn't; only the separate "Revoke" button in
+    Logins & passwords did (2026-07-24 admin-depth audit finding). If this member's email
+    matches a real login, pull it too. Best-effort: a lookup miss just means no login existed."""
+    try:
+        rows = (_client().table("vula_team_members").select("email")
+                .eq("id", member_id).eq("tenant_id", tenant).limit(1).execute().data or [])
+        email = (rows[0].get("email") or "").strip() if rows else ""
+        if not email:
+            return False
+        from vula.api.users import _find_user_id, remove_access
+        user_id = await _find_user_id(email)
+        if not user_id:
+            return False
+        await remove_access(tenant, user_id, identity=identity)
+        return True
+    except Exception as exc:
+        log.warning("login revoke on disable failed for member %s: %s", member_id, exc)
+        return False
+
+
 @router.patch("/{tenant}/{member_id}")
 async def update_member(tenant: str, member_id: str, body: MemberPatch,
                         identity: dict = Depends(require_tenant_actor)) -> dict:
@@ -91,9 +114,15 @@ async def update_member(tenant: str, member_id: str, body: MemberPatch,
         _client().table("vula_team_members").update(patch).eq("id", member_id).eq("tenant_id", tenant).execute()
     except Exception as exc:
         return {"error": str(exc)}
+
+    login_revoked = False
+    if patch.get("active") is False:
+        login_revoked = await _revoke_matching_login(tenant, member_id, identity)
+
     merchant_audit.audit(tenant, identity, "member_updated", member_id=member_id,
-                         changed={k: v for k, v in patch.items() if k != "updated_at"})
-    return {"id": member_id, **patch}
+                         changed={k: v for k, v in patch.items() if k != "updated_at"},
+                         login_revoked=login_revoked)
+    return {"id": member_id, **patch, "login_revoked": login_revoked}
 
 
 @router.delete("/{tenant}/{member_id}")

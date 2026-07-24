@@ -625,7 +625,7 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict):
 
 @router.post("/{tenant_id}/admin/geo/geocode")
 async def admin_geocode(tenant_id: str, body: dict):
-    """Find coordinates for an address/suburb (Delivery settings map picker, migration 074)."""
+    """Find coordinates for an address/suburb (Delivery settings map picker, migration 098)."""
     from vula.commerce import geo
     q = (body or {}).get("query") or ""
     result = await geo.geocode(q)

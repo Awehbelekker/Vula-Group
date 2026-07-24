@@ -272,7 +272,7 @@ async def receive_message(
                     elif msg_type == "location":
                         # Shared pin (e.g. delivery address step) → a Maps link, routed through the
                         # same text pipeline so onboarding/order flows capture it like typed text.
-                        # Geo coverage (migration 074): if the tenant has a shop pin + radius, the
+                        # Geo coverage (migration 098): if the tenant has a shop pin + radius, the
                         # exact distance verdict is appended so the assistant answers "do you
                         # deliver here?" deterministically — Marketplace-style.
                         loc = msg.get("location") or {}
@@ -343,7 +343,7 @@ async def receive_message(
                             "error": str(_dispatch_exc)[:500],
                         }).execute()
                     except Exception as _log_exc:
-                        logger.debug("webhook failure log skipped (run migration 076?): %s", _log_exc)
+                        logger.debug("webhook failure log skipped (run migration 099?): %s", _log_exc)
 
             # Delivery/read status callbacks (outbound) → broadcast analytics.
             for s in value.get("statuses", []):

@@ -20,7 +20,7 @@ _DEFAULTS = {
     # it does NOT know the delivery area and must check with the team (escalate), never guess.
     "delivery_areas": None, "delivery_fee_cents": None,
     "free_delivery_over_cents": None, "min_order_cents": None,
-    # Marketplace-style geo coverage (migration 074): shop pin + radius.
+    # Marketplace-style geo coverage (migration 098): shop pin + radius.
     "origin_lat": None, "origin_lng": None, "origin_label": None, "delivery_radius_km": None,
     # Storefront presentation (migration 084) — moved here from off_the_hook's own local
     # store-settings.json when its admin was retired, so this content has one real home instead

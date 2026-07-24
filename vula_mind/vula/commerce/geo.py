@@ -1,5 +1,5 @@
 """
-vula/commerce/geo.py — delivery geography (migration 074).
+vula/commerce/geo.py — delivery geography (migration 098).
 
 Facebook-Marketplace-style coverage: the tenant's shop pin (origin_lat/lng) + a radius in km.
 - `coverage(tenant_id, lat, lng)` — deterministic in/out verdict for a coordinate (used the
@@ -52,7 +52,7 @@ async def geocode(query: str) -> Optional[dict]:
                 return None  # cached miss
             return {"lat": h["lat"], "lng": h["lng"], "label": h.get("label") or query}
     except Exception as exc:
-        log.debug("geo cache read skipped (run migration 074?): %s", exc)
+        log.debug("geo cache read skipped (run migration 098?): %s", exc)
 
     result = None
     try:

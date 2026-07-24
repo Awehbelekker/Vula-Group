@@ -232,7 +232,7 @@ async def master_health():
                 .gte("created_at", since).order("created_at", desc=True).limit(50).execute().data or [])
         out["webhook_failures_24h"] = {"count": len(rows), "recent": rows[:10]}
     except Exception as exc:
-        out["webhook_failures_24h"] = {"count": 0, "recent": [], "note": f"{exc} (run migration 076?)"}
+        out["webhook_failures_24h"] = {"count": 0, "recent": [], "note": f"{exc} (run migration 099?)"}
 
     out["migration_state"] = _probe_migrations(db)
 
@@ -248,9 +248,9 @@ _MIGRATION_PROBES: list[tuple[str, str, str]] = [
     ("071", "vula_wa_msg_dedup", "Durable WhatsApp dedup"),
     ("072", "vula_admin_audit", "Master audit trail"),
     ("073", "commerce_categories", "Product categories/sale price"),
-    ("074", "commerce_geo_cache", "Marketplace-style delivery radius"),
+    ("098", "commerce_geo_cache", "Marketplace-style delivery radius"),   # renumbered from 074
     ("075", "commerce_saved_copy", "Marketing saved-copy library"),
-    ("076", "vula_webhook_failures", "Webhook failure feed"),
+    ("099", "vula_webhook_failures", "Webhook failure feed"),             # renumbered from 076
 ]
 
 

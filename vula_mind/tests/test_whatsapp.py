@@ -70,8 +70,13 @@ def _wa_payload(phone: str, text: str) -> dict:
 
 
 def test_inbound_returns_ok():
+    # Durable dedup (migration 071) and number routing both hit the real DB via
+    # vula.commerce.service._client() — mocked here so this test can't self-poison
+    # vula_wa_msg_dedup with its hardcoded msg_id against production (bit us 3x this
+    # session: a prior real insert made every later run see "wamid.abc123" as a dup).
     with (
         patch("vula.api.whatsapp._handle_message", new_callable=AsyncMock) as mock_handle,
+        patch("vula.commerce.service._client", return_value=MagicMock()),
     ):
         resp = client.post("/v1/whatsapp/webhook", json=_wa_payload("+27821234567", "Hello"))
     assert resp.status_code == 200

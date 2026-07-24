@@ -94,9 +94,10 @@ export default function VulaTeam({ tenantId }) {
     setForm({ name: "", whatsapp: "", role: "staff" }); load();
   };
   const patch = async (id, body) => {
-    await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
+    const d = await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
+    }).then((x) => x.json()).catch(() => ({}));
+    if (d.login_revoked) setMsg("Disabled — their dashboard login was revoked too.");
     load();
   };
   const del = async (id) => { await fetch(`${VULA_API}/v1/team/${tenantId}/${id}`, { method: "DELETE" }); load(); };
@@ -171,10 +172,28 @@ export default function VulaTeam({ tenantId }) {
               <button onClick={() => del(m.id)} style={{ fontSize: 11.5, color: "#A23B2D", background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Remove</button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase" }}>Can access {m.role === "owner" || m.role === "manager" ? "· (owner/manager see everything)" : ""}</div>
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 12 }}>
-            {MODULES.map(([k, label]) => <Chip key={k} label={label} on={(m.access || []).includes(k)} onClick={() => patch(m.id, { access: toggle(m.access, k) })} />)}
-          </div>
+          {(() => {
+            const isOwnerOrManager = m.role === "owner" || m.role === "manager";
+            const isFull = isOwnerOrManager || !(m.access || []).length;
+            return (
+              <>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase" }}>
+                  Can access
+                  {isFull && (
+                    <span style={{ color: "var(--accent)", textTransform: "none", marginLeft: 6, fontWeight: 600 }}>
+                      · Full access{isOwnerOrManager ? " (owner/manager)" : " — click a module below to restrict"}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 12 }}>
+                  {MODULES.map(([k, label]) => (
+                    <Chip key={k} label={label} on={isFull || (m.access || []).includes(k)}
+                          onClick={() => patch(m.id, { access: toggle(m.access, k) })} />
+                  ))}
+                </div>
+              </>
+            );
+          })()}
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase" }}>Notify by WhatsApp</div>
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
             {EVENTS.map(([k, label]) => <Chip key={k} label={label} on={(m.notify || []).includes(k)} onClick={() => patch(m.id, { notify: toggle(m.notify, k) })} />)}
