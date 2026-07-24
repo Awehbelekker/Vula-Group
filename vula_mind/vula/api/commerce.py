@@ -419,6 +419,10 @@ async def public_validate_discount_code(tenant_id: str, body: ValidateDiscountRe
 
 @router.post("/{tenant_id}/checkout")
 async def create_checkout(tenant_id: str, body: CheckoutRequest):
+    from vula.api import tenants as _tenants
+    if not _tenants.is_active(tenant_id):
+        raise HTTPException(status_code=403, detail="This store isn't accepting orders right now.")
+
     # Fetch cart
     cart = await service.get_or_create_cart(tenant_id, body.session_id, customer_phone=body.customer_phone)
     items = cart.get("commerce_cart_items", [])

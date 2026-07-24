@@ -112,6 +112,21 @@ def get_config(tenant_id: str, fresh: bool = False) -> dict:
     return cfg
 
 
+def is_active(tenant_id: str) -> bool:
+    """Whether a tenant is allowed to operate (bot replies, checkout, dashboard login).
+
+    Absence of a row or an unset `active` column means active — `active` only exists to be
+    explicitly flipped False by master's Suspend action, so anything else defaults open.
+    """
+    return get_config(tenant_id).get("active") is not False
+
+
+def invalidate(tenant_id: str) -> None:
+    """Drop a tenant's cached config so a write from outside this module (e.g. master's
+    suspend/reactivate PATCH) is visible immediately instead of after the 60s TTL."""
+    _CACHE.pop(tenant_id, None)
+
+
 def store_url(tenant_id: str) -> Optional[str]:
     cfg = get_config(tenant_id)
     if cfg.get("store_url"):

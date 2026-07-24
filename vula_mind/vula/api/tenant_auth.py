@@ -40,8 +40,15 @@ async def is_tenant_member(authorization: str, tenant_id: str) -> bool:
             from vula.commerce import service as cs
             rows = (cs._client().table("vula_tenant_users").select("tenant_id,role")
                     .eq("user_id", user["id"]).limit(10).execute().data or [])
-            allowed = any(r.get("role") == "master" or r.get("tenant_id") == tenant_id
-                          for r in rows)
+            is_master = any(r.get("role") == "master" for r in rows)
+            is_member = any(r.get("tenant_id") == tenant_id for r in rows)
+            # A suspended tenant's own team loses dashboard access too — master keeps it
+            # (needed to reactivate / investigate a suspended tenant).
+            if is_master:
+                allowed = True
+            elif is_member:
+                from vula.api import tenants as _tenants
+                allowed = _tenants.is_active(tenant_id)
         except Exception as exc:
             log.warning("tenant membership lookup failed: %s", exc)
 

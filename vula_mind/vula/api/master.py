@@ -91,6 +91,8 @@ async def master_update_tenant(tenant_id: str, body: dict,
            .eq("tenant_id", tenant_id).execute())
     if not res.data:
         raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
+    from vula.api import tenants as _tenants
+    _tenants.invalidate(tenant_id)
     audit(identity, "tenant_updated", tenant_id, patch=patch)
     return res.data[0]
 

@@ -221,6 +221,14 @@ async def receive_message(
                 route_tenant, route_mode = _resolve_number_route(phone_number_id)
                 commerce_tenant = route_tenant if route_mode == "commerce" else None
 
+                # Suspended tenant (master's Suspend action, vula_tenant_config.active=false) —
+                # drop silently rather than reply, same as a disconnected line would behave.
+                if route_tenant:
+                    from vula.api import tenants as _tenants
+                    if not _tenants.is_active(route_tenant):
+                        logger.info("Dropping inbound WA message for suspended tenant %s", route_tenant)
+                        continue
+
                 try:
                     if msg_type == "text":
                         text = msg.get("text", {}).get("body", "").strip()
@@ -471,6 +479,14 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         # Resolve tenant_id from contractor if needed
         if not tenant_id and contractor:
             tenant_id = contractor.tenant_id
+
+        # Suspended tenant, resolved via shared-line phone lookup (the dedicated-line case
+        # is already caught in receive_message before dispatch, using route_tenant directly).
+        if tenant_id:
+            from vula.api import tenants as _tenants
+            if not _tenants.is_active(tenant_id):
+                logger.info("Dropping inbound WA message for suspended tenant %s", tenant_id)
+                return
 
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _DELETE_RE.match(text):
@@ -2529,10 +2545,27 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         except Exception:
             shop_name = tenant_id.replace("-", " ").title()
 
+        # Dashboard link (2026-07-24) — this used to only mention the WhatsApp line itself, never
+        # the actual admin dashboard, even though every owner/staff member also has a login there.
+        # The dashboard lives on its own "admin." subdomain, NOT a /admin path on the storefront
+        # domain (that path is the tenant's own separate legacy system, e.g. off-the-hook's own
+        # in-repo /admin — see tenantThemes.js's admin.<storefront-domain> convention). Deliberately
+        # doesn't repeat the actual email/password here — those are sent once, separately, via
+        # whichever channel that team member's login was actually delivered through; this is just
+        # a standing reminder of where to go, safe to resend on every trigger.
+        from vula.api.tenants import store_url as _store_url
+        import re as _re2
+        raw_url = _store_url(tenant_id)
+        host = _re2.sub(r"^https?://", "", raw_url).rstrip("/") if raw_url else None
+        dash_url = f"https://admin.{host}" if host else None
+        dash_line = (f"\n\nYour Vula dashboard is at {dash_url} — log in with the email/password "
+                     f"you were given." if dash_url else
+                     f"\n\nAsk your Vula contact for your dashboard login if you don't have it yet.")
+
         msg = (f"Hey {first_name}! 🎣 Welcome to Vula — you're all set up as the owner/team "
                f"member for *{shop_name}* here on WhatsApp. This is where your delivery "
                f"briefings, low-stock nudges, order chases and day-to-day questions land from "
-               f"now on. No fish were harmed in the sending of this message. 🐟🎉")
+               f"now on.{dash_line} No fish were harmed in the sending of this message. 🐟🎉")
         await _send_reply(phone, msg, tenant_id)
         logger.info("Sent owner welcome to %s (%s)", phone, tenant_id)
         return True
