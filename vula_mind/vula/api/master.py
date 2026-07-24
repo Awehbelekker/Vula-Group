@@ -326,11 +326,13 @@ async def master_users():
 
 @router.post("/tenants/{tenant_id}/users")
 async def master_create_user(tenant_id: str, body: dict, identity: dict = Depends(require_master)):
-    """Create a login for ANY tenant. vula/api/users.py has no auth of its own (a tenant owner
-    hits it directly from their own dashboard) — this wrapper reuses that logic under the
-    already-enforced require_master gate so master can do the same thing cross-tenant safely."""
+    """Create a login for ANY tenant, under the already-enforced require_master gate so master
+    can do the same thing cross-tenant that a tenant owner does from their own dashboard.
+    Bypasses users.py's own require_tenant_actor dependency (direct function call, not an HTTP
+    request) — passes master's identity through explicitly so the merchant audit row still
+    attributes the action to the real actor instead of failing on a missing dependency."""
     from vula.api.users import create_user, CreateUserIn
-    result = await create_user(tenant_id, CreateUserIn(**(body or {})))
+    result = await create_user(tenant_id, CreateUserIn(**(body or {})), identity=identity)
     audit(identity, "master_create_user", tenant_id, email=body.get("email"), role=body.get("role"))
     return result
 
@@ -338,7 +340,7 @@ async def master_create_user(tenant_id: str, body: dict, identity: dict = Depend
 @router.post("/tenants/{tenant_id}/users/{user_id}/reset")
 async def master_reset_user_password(tenant_id: str, user_id: str, identity: dict = Depends(require_master)):
     from vula.api.users import reset_password
-    result = await reset_password(tenant_id, user_id)
+    result = await reset_password(tenant_id, user_id, identity=identity)
     audit(identity, "master_reset_password", tenant_id, user_id=user_id)
     return result
 
@@ -346,7 +348,7 @@ async def master_reset_user_password(tenant_id: str, user_id: str, identity: dic
 @router.delete("/tenants/{tenant_id}/users/{user_id}")
 async def master_remove_user(tenant_id: str, user_id: str, identity: dict = Depends(require_master)):
     from vula.api.users import remove_access
-    result = await remove_access(tenant_id, user_id)
+    result = await remove_access(tenant_id, user_id, identity=identity)
     audit(identity, "master_remove_user_access", tenant_id, user_id=user_id)
     return result
 

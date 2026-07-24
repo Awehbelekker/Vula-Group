@@ -18,10 +18,12 @@ import secrets
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from config import settings
+from vula.api.tenant_auth import require_tenant_actor
+from vula.api import merchant_audit
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["users"])
@@ -75,7 +77,8 @@ class CreateUserIn(BaseModel):
 
 
 @router.post("/{tenant}/users")
-async def create_user(tenant: str, body: CreateUserIn) -> dict:
+async def create_user(tenant: str, body: CreateUserIn,
+                      identity: dict = Depends(require_tenant_actor)) -> dict:
     """Create (or attach) a login for this tenant and return a one-time temp password."""
     temp = secrets.token_urlsafe(9)
     r = await _auth_admin("POST", "/users", {
@@ -112,15 +115,18 @@ async def create_user(tenant: str, body: CreateUserIn) -> dict:
         except Exception as exc:
             log.debug("team_members upsert skipped: %s", exc)
 
+    merchant_audit.audit(tenant, identity, "login_created", email=body.email, role=body.role)
     return {"email": body.email, "temp_password": temp, "user_id": user_id, "created": created}
 
 
 @router.post("/{tenant}/users/{user_id}/reset")
-async def reset_password(tenant: str, user_id: str) -> dict:
+async def reset_password(tenant: str, user_id: str,
+                         identity: dict = Depends(require_tenant_actor)) -> dict:
     temp = secrets.token_urlsafe(9)
     r = await _auth_admin("PUT", f"/users/{user_id}", {"password": temp})
     if r.status_code != 200:
         return {"error": r.text[:200]}
+    merchant_audit.audit(tenant, identity, "password_reset", user_id=user_id)
     return {"temp_password": temp}
 
 
@@ -129,19 +135,23 @@ class RolePatch(BaseModel):
 
 
 @router.patch("/{tenant}/users/{user_id}")
-async def update_role(tenant: str, user_id: str, body: RolePatch) -> dict:
+async def update_role(tenant: str, user_id: str, body: RolePatch,
+                      identity: dict = Depends(require_tenant_actor)) -> dict:
     try:
         _client().table("vula_tenant_users").update({"role": body.role}) \
             .eq("user_id", user_id).eq("tenant_id", tenant).execute()
     except Exception as exc:
         return {"error": str(exc)}
+    merchant_audit.audit(tenant, identity, "login_role_changed", user_id=user_id, role=body.role)
     return {"user_id": user_id, "role": body.role}
 
 
 @router.delete("/{tenant}/users/{user_id}")
-async def remove_access(tenant: str, user_id: str) -> dict:
+async def remove_access(tenant: str, user_id: str,
+                        identity: dict = Depends(require_tenant_actor)) -> dict:
     _client().table("vula_tenant_users").delete() \
         .eq("user_id", user_id).eq("tenant_id", tenant).execute()
+    merchant_audit.audit(tenant, identity, "login_access_removed", user_id=user_id)
     return {"removed": user_id}
 
 

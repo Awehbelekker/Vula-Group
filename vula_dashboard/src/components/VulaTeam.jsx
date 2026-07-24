@@ -24,6 +24,14 @@ const EVENTS = [
 ];
 const ROLES = ["owner", "manager", "bookkeeper", "staff"];
 
+// Human-readable label per merchant_audit action (vula/api/merchant_audit.py).
+const AUDIT_LABELS = {
+  member_added: "added team member", member_updated: "updated team member",
+  member_removed: "removed team member", login_created: "created a login",
+  password_reset: "reset a password", login_role_changed: "changed a login's role",
+  login_access_removed: "revoked a login",
+};
+
 export default function VulaTeam({ tenantId }) {
   const [members, setMembers] = useState([]);
   const [form, setForm] = useState({ name: "", whatsapp: "", role: "staff" });
@@ -32,6 +40,8 @@ export default function VulaTeam({ tenantId }) {
   const [tempPw, setTempPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [msg, setMsg] = useState("");
+  const [auditLog, setAuditLog] = useState([]);
+  const [showAudit, setShowAudit] = useState(false);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
@@ -42,6 +52,13 @@ export default function VulaTeam({ tenantId }) {
     setLogins(lu.users || []);
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
+
+  const loadAudit = async () => {
+    if (!tenantId) return;
+    const d = await fetch(`${VULA_API}/v1/team/${tenantId}/audit`).then((x) => x.json()).catch(() => ({}));
+    setAuditLog(d.events || []);
+  };
+  useEffect(() => { if (showAudit) loadAudit(); }, [showAudit, tenantId]);
 
   const createLogin = async () => {
     if (!loginForm.email) return;
@@ -164,6 +181,32 @@ export default function VulaTeam({ tenantId }) {
           </div>
         </div>
       ))}
+
+      {/* ── Audit log (migration 107) ──────────────────────────────────── */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginTop: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setShowAudit((s) => !s)}>
+          <span style={{ fontWeight: 700, color: C.text }}>Activity log</span>
+          <span style={{ fontSize: 11, color: C.muted }}>who changed team access, roles, and logins</span>
+          <span style={{ marginLeft: "auto", fontSize: 12, color: C.muted }}>{showAudit ? "▲ hide" : "▼ show"}</span>
+        </div>
+        {showAudit && (
+          auditLog.length === 0
+            ? <div style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>No activity recorded yet.</div>
+            : <div style={{ marginTop: 10 }}>
+                {auditLog.map((e) => (
+                  <div key={e.id} style={{ display: "flex", gap: 10, padding: "6px 0", borderTop: `1px solid ${C.alt}`, fontSize: 12.5, flexWrap: "wrap" }}>
+                    <span style={{ color: C.muted, minWidth: 130 }}>{new Date(e.created_at).toLocaleString()}</span>
+                    <span style={{ color: C.text }}>{e.actor_email || "unknown"}</span>
+                    <span style={{ color: C.muted }}>{AUDIT_LABELS[e.action] || e.action}</span>
+                    {e.detail && (e.detail.email || e.detail.name) && (
+                      <span style={{ color: C.muted }}>— {e.detail.email || e.detail.name}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+        )}
+      </div>
+
       <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 12 }}>Powered by Vula · each member gets only what you select</p>
     </div>
   );
