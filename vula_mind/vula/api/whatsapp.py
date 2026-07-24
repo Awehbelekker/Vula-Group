@@ -2560,7 +2560,7 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         dash_url = f"https://admin.{host}" if host else None
         dash_line = (f"\n\nYour Vula dashboard is at {dash_url} — log in with the email/password "
                      f"you were given." if dash_url else
-                     f"\n\nAsk your Vula contact for your dashboard login if you don't have it yet.")
+                     "\n\nAsk your Vula contact for your dashboard login if you don't have it yet.")
 
         msg = (f"Hey {first_name}! 🎣 Welcome to Vula — you're all set up as the owner/team "
                f"member for *{shop_name}* here on WhatsApp. This is where your delivery "
