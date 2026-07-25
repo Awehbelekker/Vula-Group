@@ -2206,6 +2206,153 @@ async def admin_preview_invoice_settings(tenant_id: str, body: dict):
     return Response(content=pdf_bytes, media_type="application/pdf")
 
 
+_CLONE_STYLE_PROMPT = """You are a design analyst. Look at this image of an old invoice/letterhead and
+return ONLY a JSON object (no prose, no markdown fences) describing its visual style, mapped onto
+this exact schema:
+{
+  "accent_color": "#RRGGBB" or null,
+  "ink_color": "#RRGGBB" or null,
+  "logo_align": "left" | "center" | null,
+  "logo_size": "sm" | "md" | "lg" | null,
+  "font_pairing": "vula" | "modern" | "editorial" | "classic" | "" | null,
+  "template_choice": "classic" | "minimal" | "modern" | "branded" | "digg" | null,
+  "show_company_reg": true | false | null,
+  "footer_text": "<verbatim recurring footer/terms line, if any>" | null
+}
+Field meanings:
+- accent_color: the dominant brand colour used for headings/accents (not body text).
+- ink_color: the body-text colour, ONLY if it's visibly a colour other than plain black/dark grey.
+- logo_align: "left" if the logo/header sits left-aligned or split left/right; "center" if the
+  whole header (logo, name, everything) is centred on the page.
+- logo_size: how large the logo is relative to the page width — sm (small, understated),
+  md (moderate), lg (large, dominant).
+- font_pairing: classify the heading font's visual style — vula=elegant serif (like Cormorant
+  Garamond), modern=humanist sans-serif (like Poppins), editorial=dramatic display serif (like
+  Playfair Display), classic=traditional serif (like Merriweather), ""=plain system sans-serif.
+- template_choice: pick the closest overall layout — filled/coloured table header + rounded
+  totals box -> "modern" or "branded"; hairline rules, monochrome, minimal fills -> "minimal";
+  a plain two-column description/amount table with bold running-subtotal rows (no qty/unit/price
+  columns) -> "digg"; anything else / uncertain -> "classic".
+- show_company_reg: true only if a company registration number is visibly printed anywhere.
+- footer_text: copy the exact recurring footer/terms line if one is visible, else null.
+Return null for any field you are not confident about. Do not guess."""
+
+_CLONE_VALID = {
+    "logo_align": {"left", "center"},
+    "logo_size": {"sm", "md", "lg"},
+    "font_pairing": {"", "vula", "modern", "editorial", "classic"},
+    "template_choice": set(service._TEMPLATE_CHOICES),
+}
+
+
+def _clean_clone_suggestion(raw: dict) -> dict:
+    """Whitelist the vision model's output field-by-field — never trust a raw LLM response
+    into settings that control real invoice rendering. Anything invalid, missing, or explicitly
+    null is dropped rather than guessed at; the caller only ever pre-fills what survives here."""
+    import re as _re
+    hex_re = _re.compile(r"^#[0-9A-Fa-f]{6}$")
+    out: dict = {}
+    for field in ("accent_color", "ink_color"):
+        v = raw.get(field)
+        if isinstance(v, str) and hex_re.match(v):
+            out[field] = v
+    for field, allowed in _CLONE_VALID.items():
+        v = raw.get(field)
+        if isinstance(v, str) and v in allowed:
+            out[field] = v
+    if isinstance(raw.get("show_company_reg"), bool):
+        out["show_company_reg"] = raw["show_company_reg"]
+    footer = raw.get("footer_text")
+    if isinstance(footer, str) and footer.strip():
+        out["footer_text"] = footer.strip()[:300]
+    return out
+
+
+@router.post("/{tenant_id}/admin/invoice-settings/clone-from-upload")
+async def admin_clone_invoice_style(tenant_id: str, body: dict):
+    """Analyze an uploaded old invoice/letterhead (PDF or image) and suggest branding settings
+    matching its visual style. Proposes only — never writes to commerce_invoice_settings; the
+    dashboard pre-fills the settings form with whatever comes back and the tenant still has to
+    hit Save to keep it (same trust model as the existing /preview endpoint: look, don't touch)."""
+    import asyncio
+    import base64
+    import io
+    import json as _json
+    import re as _re
+
+    file_url = (body or {}).get("file_url")
+    if not file_url:
+        raise HTTPException(status_code=400, detail="file_url is required")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(file_url)
+            resp.raise_for_status()
+            data = resp.content
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Couldn't fetch that file: {exc}")
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File is too large (max 15MB)")
+
+    from PIL import Image
+    content_type = resp.headers.get("content-type", "")
+    is_pdf = "pdf" in content_type or file_url.lower().endswith(".pdf")
+    try:
+        if is_pdf:
+            from pdf2image import convert_from_bytes
+            pages = convert_from_bytes(data, dpi=200, first_page=1, last_page=1)
+            if not pages:
+                raise ValueError("no pages rendered")
+            img = pages[0]
+        else:
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+        img.thumbnail((1600, 1600))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
+    except Exception as exc:
+        log.warning("Invoice clone: couldn't read uploaded file for %s: %s", tenant_id, exc)
+        raise HTTPException(status_code=400, detail="Couldn't read that file — try a clearer photo or scan")
+
+    from core.llm_router import resolve_cloud_vision_route
+    cloud = resolve_cloud_vision_route()
+    if not cloud:
+        raise HTTPException(status_code=503, detail="Style analysis isn't configured on this server")
+    model, api_key, api_base = cloud
+
+    try:
+        import litellm
+        litellm.drop_params = True
+        response = await asyncio.wait_for(litellm.acompletion(
+            model=model,
+            messages=[
+                {"role": "system", "content": _CLONE_STYLE_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Analyze this invoice's visual style."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                ]},
+            ],
+            temperature=0.1, max_tokens=500, api_key=api_key, api_base=api_base,
+        ), timeout=30)
+        content = response.choices[0].message.content or "{}"
+    except Exception as exc:
+        log.warning("Invoice clone: vision call failed for %s: %s", tenant_id, exc)
+        raise HTTPException(status_code=502, detail="Couldn't analyze that file — try again or a clearer image")
+
+    content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
+    content = _re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=_re.MULTILINE).strip()
+    try:
+        raw = _json.loads(content)
+    except Exception:
+        m = _re.search(r"\{.*\}", content, _re.DOTALL)
+        raw = _json.loads(m.group(0)) if m else {}
+
+    suggested = _clean_clone_suggestion(raw if isinstance(raw, dict) else {})
+    if not suggested:
+        raise HTTPException(status_code=422, detail="Couldn't confidently extract any style details from that file")
+    return {"suggested": suggested}
+
+
 @router.get("/{tenant_id}/brand")
 async def public_brand(tenant_id: str):
     """Public, read-only, non-secret brand fields — deliberately OUTSIDE the /admin/ path so the

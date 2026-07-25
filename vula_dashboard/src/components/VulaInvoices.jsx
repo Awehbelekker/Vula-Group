@@ -852,6 +852,10 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
   const [saving, setSaving] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingMenuImage, setUploadingMenuImage] = useState(false)
+  const [showCloneUpload, setShowCloneUpload] = useState(false)
+  const [cloning, setCloning] = useState(false)
+  const [cloneError, setCloneError] = useState(null)
+  const [cloneApplied, setCloneApplied] = useState(null) // string[] of human labels, or null
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   async function uploadLogo(e) {
@@ -882,6 +886,41 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
         if (data?.publicUrl) set('menu_header_image_url', data.publicUrl)
       }
     } finally { setUploadingMenuImage(false) }
+  }
+
+  const CLONE_FIELD_LABELS = {
+    accent_color: 'Accent colour', ink_color: 'Text colour', logo_align: 'Logo position',
+    logo_size: 'Logo size', font_pairing: 'Heading font', template_choice: 'Template',
+    show_company_reg: 'Reg. number visibility', footer_text: 'Footer text',
+  }
+
+  async function cloneFromUpload(e) {
+    const file = (e.target.files || [])[0]
+    if (!file) return
+    setCloning(true); setCloneError(null); setCloneApplied(null)
+    try {
+      const clean = file.name.replace(/[^a-zA-Z0-9.-]/g, '-').toLowerCase()
+      const path = `${tenantId}/invoice-clone-source/${Date.now()}-${clean}`
+      const { error: uploadErr } = await supabase.storage.from('product-images').upload(path, file, { cacheControl: '3600', upsert: true })
+      if (uploadErr) { setCloneError('Upload failed — try again.'); return }
+      const { data } = supabase.storage.from('product-images').getPublicUrl(path)
+      if (!data?.publicUrl) { setCloneError('Upload failed — try again.'); return }
+
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings/clone-from-upload`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_url: data.publicUrl }),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { setCloneError(d.detail || "Couldn't read that file — try a clearer photo or scan."); return }
+      const suggested = d.suggested || {}
+      Object.entries(suggested).forEach(([k, v]) => set(k, v))
+      setCloneApplied(Object.keys(suggested).map(k => CLONE_FIELD_LABELS[k] || k))
+      setShowCloneUpload(false)
+    } catch {
+      setCloneError("Couldn't read that file — try a clearer photo or scan.")
+    } finally {
+      setCloning(false)
+    }
   }
 
   async function save() {
@@ -979,6 +1018,37 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
       </div>
 
       <p style={s.sectionLabel}>Look &amp; feel</p>
+
+      <div style={{ margin: '4px 0 14px' }}>
+        {!showCloneUpload ? (
+          <button type="button" onClick={() => { setShowCloneUpload(true); setCloneError(null); setCloneApplied(null) }}
+            style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+            ✨ Clone from an old invoice
+          </button>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: cloning ? 'default' : 'pointer', fontFamily: 'system-ui', opacity: cloning ? 0.6 : 1 }}>
+              {cloning ? 'Analyzing…' : '📄 Upload a PDF or photo'}
+              <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" disabled={cloning} onChange={cloneFromUpload} style={{ display: 'none' }} />
+            </label>
+            <button type="button" onClick={() => setShowCloneUpload(false)} disabled={cloning}
+              style={{ background: 'none', border: '1px solid #DDD8CE', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer', color: '#8A8680', fontFamily: 'system-ui' }}>
+              Cancel
+            </button>
+          </div>
+        )}
+        <p style={{ fontFamily: 'system-ui', fontSize: 11.5, color: '#8A8680', margin: '6px 0 0' }}>
+          Upload an invoice you used before — Vula suggests matching colours, fonts and layout below. Nothing saves until you click "Save branding".
+        </p>
+        {cloneError && <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12.5, color: '#A23B2D', fontFamily: 'system-ui' }}>{cloneError}</div>}
+        {cloneApplied && (
+          <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', border: '1px solid var(--accent, #2C5545)', borderRadius: 6, fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>
+            <span>{cloneApplied.length > 0 ? `Applied: ${cloneApplied.join(', ')} — review below and Save branding to keep them.` : "Couldn't confidently match anything from that file."}</span>
+            <button type="button" onClick={() => setCloneApplied(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 15, flexShrink: 0 }}>×</button>
+          </div>
+        )}
+      </div>
+
       <div style={s.tplGrid}>
         {TEMPLATES.map(t => {
           const active = form.template_choice === t.id

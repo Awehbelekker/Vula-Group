@@ -44,9 +44,10 @@ _FONT_IMPORTS = {
 _CSS_CLASSIC = """
   @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: {{ font_family }}; font-size: 11pt; color: #1a1a1a; }
+  body { font-family: {{ font_family }}; font-size: 11pt; color: {{ ink_color or '#1a1a1a' }}; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; }
   .brand h1 { font-size: 22pt; font-weight: 800; color: {{ accent }}; margin-bottom: 2px; }
+  .brand .legal-name { font-size: 8.5pt; color: #888; font-weight: 400; margin-top: 2px; }
   .brand p  { font-size: 9pt; color: #555; line-height: 1.5; }
   .doc-title { text-align: right; }
   .doc-title h2 { font-size: 18pt; font-weight: 700; color: {{ accent }}; text-transform: uppercase; letter-spacing: 1px; }
@@ -82,9 +83,10 @@ _CSS_CLASSIC = """
 _CSS_MINIMAL = """
   @page { size: A4; margin: 20mm 18mm 22mm 18mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: {{ font_family }}; font-size: 10.5pt; color: #222; }
+  body { font-family: {{ font_family }}; font-size: 10.5pt; color: {{ ink_color or '#222' }}; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 16px; border-bottom: 1px solid #222; }
   .brand h1 { font-size: 18pt; font-weight: 600; color: #111; margin-bottom: 2px; letter-spacing: 0.5px; }
+  .brand .legal-name { font-size: 8pt; color: #888; font-weight: 400; margin-top: 2px; }
   .brand p  { font-size: 8.5pt; color: #777; line-height: 1.5; }
   .doc-title { text-align: right; }
   .doc-title h2 { font-size: 13pt; font-weight: 600; color: #111; text-transform: uppercase; letter-spacing: 3px; }
@@ -114,9 +116,10 @@ _CSS_MINIMAL = """
 _CSS_MODERN = """
   @page { size: A4; margin: 0 0 18mm 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: {{ font_family }}; font-size: 11pt; color: #1a1a1a; }
+  body { font-family: {{ font_family }}; font-size: 11pt; color: {{ ink_color or '#1a1a1a' }}; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin: 0 0 28px; padding: 28px 18mm 22px; background: {{ accent }}; color: #fff; }
   .brand h1 { font-size: 24pt; font-weight: 800; color: #fff; margin-bottom: 2px; }
+  .brand .legal-name { font-size: 8.5pt; color: rgba(255,255,255,0.65); font-weight: 400; margin-top: 2px; }
   .brand p  { font-size: 9pt; color: rgba(255,255,255,0.85); line-height: 1.5; }
   .doc-title { text-align: right; }
   .doc-title h2 { font-size: 17pt; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 2px; }
@@ -148,10 +151,11 @@ _CSS_MODERN = """
 _CSS_BRANDED = """
   @page { size: A4; margin: 16mm 0 18mm 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: {{ font_family }}; font-size: 11pt; color: #1f2430; }
+  body { font-family: {{ font_family }}; font-size: 11pt; color: {{ ink_color or '#1f2430' }}; }
   .header { text-align: center; padding: 0 18mm 18px; border-bottom: 3px solid {{ accent }}; margin: 0 0 26px; }
   .brand img { margin: 0 auto 8px; }
   .brand h1 { font-size: 21pt; font-weight: 800; color: {{ accent }}; letter-spacing: -0.5px; }
+  .brand .legal-name { font-size: 8.5pt; color: #888; font-weight: 400; margin-top: 2px; }
   .brand p  { font-size: 9pt; color: #6b7280; line-height: 1.5; }
   .doc-title { margin-top: 12px; }
   .doc-title h2 { font-size: 14pt; font-weight: 700; color: #1f2430; text-transform: uppercase; letter-spacing: 3px; }
@@ -185,10 +189,11 @@ _CSS_BRANDED = """
 _CSS_DIGG = """
   @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: {{ font_family }}; font-size: 10.5pt; color: #1E1E1E; }
+  body { font-family: {{ font_family }}; font-size: 10.5pt; color: {{ ink_color or '#1E1E1E' }}; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; padding-bottom: 14px; border-bottom: 2px solid {{ accent }}; }
   .brand img { margin-bottom: 8px; display: block; }
   .brand h1 { font-size: 17pt; font-weight: 800; color: {{ accent }}; margin-bottom: 2px; }
+  .brand .legal-name { font-size: 8pt; color: #999; font-weight: 400; margin-top: 2px; }
   .brand p  { font-size: 8.5pt; color: #666; line-height: 1.55; }
   .doc-title { text-align: right; }
   .doc-title h2 { font-size: 13pt; font-weight: 700; color: #1E1E1E; text-transform: uppercase; letter-spacing: 2px; }
@@ -244,7 +249,12 @@ _DOC_HTML = """<!DOCTYPE html>
 <div class="header">
   <div class="brand"{% if logo_align == 'center' %} style="text-align:center;"{% endif %}>
     {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:{{ '56px' if logo_size == 'sm' else ('100px' if logo_size == 'lg' else '76px') }};max-width:{{ '180px' if logo_size == 'sm' else ('320px' if logo_size == 'lg' else '240px') }};margin-bottom:10px;display:block;{% if logo_align == 'center' %}margin-left:auto;margin-right:auto;{% endif %}">{% endif %}
-    <h1>{{ tenant_name }}{% if trading_as %} <span style="font-size:0.58em;color:#888;font-weight:400;">t/a {{ trading_as }}</span>{% endif %}</h1>
+    {% if trading_as %}
+    <h1>{{ trading_as }}</h1>
+    <p class="legal-name">{{ tenant_name }}</p>
+    {% else %}
+    <h1>{{ tenant_name }}</h1>
+    {% endif %}
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
     {% if tenant_phone %}<p>{{ tenant_phone }}</p>{% endif %}
@@ -437,6 +447,10 @@ def merge_branding(tenant_id: str, settings: Optional[dict]) -> dict:
     branding["logo_size"] = settings.get("logo_size") or "md"
     branding["logo_align"] = settings.get("logo_align") or "left"
     branding["font_pairing"] = settings.get("font_pairing") or ""
+    # Brand Kit's ink_color already reaches the storefront (GET /{tenant}/brand) but never
+    # reached the PDF renderer before this — body text stayed hardcoded per-theme regardless
+    # of what a tenant picked. "" (unset) keeps each theme's existing hardcoded fallback.
+    branding["ink_color"] = settings.get("ink_color") or ""
     return branding
 
 
@@ -566,6 +580,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "show_company_reg": branding.get("show_company_reg", True),
         "logo_size": branding.get("logo_size") or "md",
         "logo_align": branding.get("logo_align") or "left",
+        "ink_color": branding.get("ink_color") or "",
         **_font_ctx(branding),
     }
 
@@ -615,7 +630,12 @@ __TEMPLATE_CSS__
 <div class="header">
   <div class="brand">
     {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:76px;max-width:240px;margin-bottom:10px;display:block;">{% endif %}
-    <h1>{{ tenant_name }}{% if trading_as %} <span style="font-size:0.58em;color:#888;font-weight:400;">t/a {{ trading_as }}</span>{% endif %}</h1>
+    {% if trading_as %}
+    <h1>{{ trading_as }}</h1>
+    <p class="legal-name">{{ tenant_name }}</p>
+    {% else %}
+    <h1>{{ tenant_name }}</h1>
+    {% endif %}
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
     {% if tenant_phone %}<p>{{ tenant_phone }}</p>{% endif %}
@@ -714,6 +734,7 @@ def render_letter_pdf(
         "body_html": body_html,
         "body_paragraphs": paragraphs,
         "sign_off": sign_off or "",
+        "ink_color": branding.get("ink_color") or "",
         **_font_ctx(branding),
     }
 
