@@ -206,7 +206,11 @@ async def _get_tenant_yoco_creds(tenant_id: str) -> Optional[dict]:
         )
         rows = result.data or []
         if rows and rows[0].get("secret_key"):
-            creds = rows[0]
+            from vula.email_imap.credentials import decrypt_secret
+            creds = dict(rows[0])
+            creds["secret_key"] = decrypt_secret(creds["secret_key"])
+            if creds.get("webhook_secret"):
+                creds["webhook_secret"] = decrypt_secret(creds["webhook_secret"])
             _yoco_creds_cache[tenant_id] = creds
             return creds
     except Exception as exc:

@@ -271,6 +271,32 @@ def _client():
     return cs._client()
 
 
+# credentials is JSONB holding a different shape per provider (secret_key for yoco/paystack,
+# merchant_id+merchant_key+passphrase for payfast, etc) — encrypted as one Fernet-wrapped JSON
+# blob rather than field-by-field, stored inside the same JSONB column as {"_enc": "fernet:..."}
+# so the column stays valid JSON. decrypt_creds() returns a dict UNCHANGED if it isn't wrapped
+# this way, so rows written before this existed keep working until next saved.
+def _encrypt_creds(creds: dict) -> dict:
+    import json
+    from vula.email_imap.credentials import encrypt_secret
+    if not creds:
+        return {}
+    return {"_enc": encrypt_secret(json.dumps(creds))}
+
+
+def _decrypt_creds(creds: Optional[dict]) -> dict:
+    import json
+    from vula.email_imap.credentials import decrypt_secret
+    if not creds:
+        return {}
+    if "_enc" in creds:
+        try:
+            return json.loads(decrypt_secret(creds["_enc"]))
+        except Exception:
+            return {}
+    return creds
+
+
 def list_providers(tenant_id: str) -> list:
     try:
         rows = (_client().table("vula_payment_providers")
@@ -281,7 +307,7 @@ def list_providers(tenant_id: str) -> list:
         return []
     # Never leak secrets — report only which fields are set.
     for r in rows:
-        creds = r.pop("credentials", {}) or {}
+        creds = _decrypt_creds(r.pop("credentials", {}))
         r["connected_fields"] = [k for k, v in creds.items() if v]
     return rows
 
@@ -294,6 +320,8 @@ def default_provider_row(tenant_id: str) -> Optional[dict]:
         return None
     if not rows:
         return None
+    for r in rows:
+        r["credentials"] = _decrypt_creds(r.get("credentials"))
     return next((r for r in rows if r.get("is_default")), rows[0])
 
 
@@ -310,7 +338,7 @@ def upsert_provider(tenant_id: str, provider: str, credentials: dict, mode: str 
             db.table("vula_payment_providers").update({"is_default": False}).eq("tenant_id", tenant_id).execute()
         except Exception:
             pass
-    row = {"tenant_id": tenant_id, "provider": provider, "credentials": credentials or {},
+    row = {"tenant_id": tenant_id, "provider": provider, "credentials": _encrypt_creds(credentials or {}),
            "mode": mode, "is_default": is_default, "active": True, "updated_at": now}
     existing = (db.table("vula_payment_providers").select("id")
                 .eq("tenant_id", tenant_id).eq("provider", provider).limit(1).execute().data or [])

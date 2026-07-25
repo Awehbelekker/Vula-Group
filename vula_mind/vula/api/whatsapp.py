@@ -1104,6 +1104,24 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                                                   lookup_learned_project)
         data = local_path.read_bytes()
         ctype = mime_type or "application/octet-stream"
+
+        # Customer linkage (migration 109) — a document is only auto-tagged to a customer when
+        # it genuinely came FROM one (has real order history), not from the tenant's own staff
+        # filing a supplier invoice (the common case for `filed_by`/`phone` here). A light,
+        # single indexed lookup — not the full _aggregate_customers union, which is overkill for
+        # a per-document "is this a known customer" check.
+        customer_phone = None
+        try:
+            digits = "".join(c for c in (phone or "") if c.isdigit())
+            digits = "27" + digits[1:] if digits.startswith("0") else digits
+            from vula.commerce import service as _cs_doc
+            has_orders = (_cs_doc._client().table("commerce_orders").select("id")
+                          .eq("tenant_id", tenant_id).eq("customer_phone", digits)
+                          .limit(1).execute().data or [])
+            if has_orders:
+                customer_phone = digits
+        except Exception as exc:
+            logger.debug("customer linkage check skipped: %s", exc)
         hint = " ".join([
             result.filename or "", summary or "",
             " ".join(str(v) for v in (fields or {}).values() if isinstance(v, (str, int, float))),
@@ -1120,6 +1138,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,
                 source=source, filed_by=phone, project=match["project"],
                 clickup_list_id=match.get("clickup_list_id"), status="filed",
+                customer_phone=customer_phone,
             )
             note = f"📂 Filed under *{match['project']}*."
             if row.get("clickup_task_id"):
@@ -1130,6 +1149,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 tenant_id, filename=result.filename, data=data, content_type=ctype,
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,
                 source=source, filed_by=phone, status="pending_project",
+                customer_phone=customer_phone,
             )
             candidates = match.get("candidates") if match else None
             if candidates:
@@ -2480,8 +2500,19 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # 2. Supplier Intake — OTH-07 logic. Word-boundary match (not bare substring) — a plain
     # "sell" in text_lower matched inside the Afrikaans "kanselleer" (cancel), wrongly routing
     # a customer's cancellation request to the supplier-intake reply.
+    #
+    # Direction matters too: "sell"/"supply" are used both by a fisherman offering their catch
+    # TO the business ("I can supply you with linefish") and by a customer asking whether the
+    # business sells something TO them ("do you sell abalone?", "can you supply me with X?") —
+    # confirmed live 2026-07-25, both phrasings from a real customer got the supplier-intake
+    # reply instead of reaching the shopping assistant. Exclude the customer-directed phrasing
+    # before matching keywords, rather than trying to enumerate every supplier phrasing instead.
+    _customer_asking_re = re.compile(
+        r"\byou\s+(?:guys\s+)?(?:sell|supply|have|stock)\b|\bsupply\s+(?:me|us)\b|\bsell\s+(?:me|us|to me)\b"
+    )
     supplier_keywords = {"supply", "sell", "catch", "supplier", "verskaf", "fish for you"}
-    if any(re.search(rf"\b{re.escape(k)}\b", text_lower) for k in supplier_keywords):
+    if (not _customer_asking_re.search(text_lower)
+            and any(re.search(rf"\b{re.escape(k)}\b", text_lower) for k in supplier_keywords)):
         reply = (
             "Thanks for reaching out! 🐟 We're always looking for quality suppliers. "
             "Please complete our intake form here: https://offthehook.co.za/suppliers "

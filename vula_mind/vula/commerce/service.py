@@ -1132,6 +1132,28 @@ async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
         logger.warning("send_order_invoice: invoice creation failed for order %s: %s", order_id, exc)
         return None
 
+    # Best-effort "Pay now" link — a connected gateway is optional, so this never blocks the
+    # invoice itself from being created/sent if no provider is set up or the call fails.
+    try:
+        from vula import payments as _payments
+        api_base = "https://vula-group-production.up.railway.app"
+        row = _payments.default_provider_row(tenant_id)
+        provider = row["provider"] if row else "yoco"
+        link = await _payments.create_pay_link(
+            tenant_id, amount_cents=int(invoice["total_cents"]), reference=invoice["id"],
+            description=f"Invoice {invoice.get('invoice_number') or ''}".strip(),
+            success_url=f"{api_base}/payment/success?invoice={invoice['id']}",
+            cancel_url=f"{api_base}/payment/cancel?invoice={invoice['id']}",
+            notify_url=f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}",
+            customer={"email": invoice.get("customer_email"), "phone": phone})
+        if link and link.url:
+            _client().table("commerce_invoices").update(
+                {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id")}
+            ).eq("id", invoice["id"]).execute()
+            invoice["pay_url"] = link.url
+    except Exception as exc:
+        logger.debug("send_order_invoice: pay-link skipped for invoice %s: %s", invoice.get("id"), exc)
+
     try:
         from vula.commerce.pdf import render_invoice_pdf, merge_branding
         from vula.api.whatsapp import _send_invoice_document
@@ -1146,6 +1168,8 @@ async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
             f"Hi {invoice.get('customer_name', 'there')}, here is your invoice {number} "
             f"for {total} from {tenant_name}. Thank you for your order!"
         )
+        if invoice.get("pay_url"):
+            caption += f"\n\n💳 Pay now: {invoice['pay_url']}"
         sent = await _send_invoice_document(phone, pdf_bytes, f"{number}.pdf", caption, tenant_id)
         if sent:
             await update_invoice_status(tenant_id, invoice["id"], "sent")

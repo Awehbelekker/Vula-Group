@@ -104,7 +104,11 @@ async def connect_yoco(body: ConnectYocoRequest):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "amount": 100,           # R1.00 — never charged
+                    "amount": 200,           # R2.00 — Yoco's own minimum; R1.00 was rejected
+                                              # with "cannot process a payment for less than
+                                              # R2.00", which made this validation fail for
+                                              # every valid key (confirmed live 2026-07-25) —
+                                              # never charged either way, just a checkout session.
                     "currency": "ZAR",
                     "metadata": {"vula_test": "true", "tenant_id": body.tenant_id},
                 },
@@ -146,13 +150,17 @@ async def connect_yoco(body: ConnectYocoRequest):
             except Exception as exc:
                 log.warning("Yoco webhook reg exception (non-fatal): %s", exc)
 
-    # Step 3 — save to Supabase
+    # Step 3 — save to Supabase. Encrypted at rest (Fernet) — same mechanism/key already used
+    # for email credentials (vula.email_imap.credentials); decrypt_secret() returns a value
+    # unchanged if it wasn't encrypted, so existing plaintext-stored rows keep working until
+    # they're next re-saved through this endpoint.
+    from vula.email_imap.credentials import encrypt_secret
     db = _supabase()
     record = {
         "tenant_id": body.tenant_id,
-        "secret_key": body.secret_key,
+        "secret_key": encrypt_secret(body.secret_key),
         "public_key": body.public_key,
-        "webhook_secret": webhook_secret,
+        "webhook_secret": encrypt_secret(webhook_secret) if webhook_secret else webhook_secret,
         "mode": mode,
         "status": "connected",
         "webhook_registered": webhook_registered,
@@ -197,6 +205,7 @@ async def yoco_status(tenant_id: str):
             "env_fallback": env_fallback,
         }
 
+    from vula.email_imap.credentials import decrypt_secret
     data = rows[0]
     return {
         "tenant_id": tenant_id,
@@ -205,7 +214,7 @@ async def yoco_status(tenant_id: str):
         "webhook_registered": data.get("webhook_registered"),
         "connected_at": data.get("connected_at"),
         "last_test_at": data.get("last_test_at"),
-        "masked_secret": _mask(data.get("secret_key") or ""),
+        "masked_secret": _mask(decrypt_secret(data.get("secret_key") or "")),
         "public_key": data.get("public_key"),
     }
 
@@ -213,6 +222,7 @@ async def yoco_status(tenant_id: str):
 @router.post("/test/{tenant_id}")
 async def yoco_test(tenant_id: str):
     """Re-test the stored Yoco keys against the Yoco API."""
+    from vula.email_imap.credentials import decrypt_secret
     db = _supabase()
     result = (
         db.table("vula_yoco_accounts")
@@ -225,12 +235,12 @@ async def yoco_test(tenant_id: str):
     if not rows:
         raise HTTPException(status_code=404, detail="No Yoco account for this tenant")
 
-    secret = rows[0]["secret_key"]
+    secret = decrypt_secret(rows[0]["secret_key"])
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{YOCO_BASE}/checkouts",
             headers={"Authorization": f"Bearer {secret}"},
-            json={"amount": 100, "currency": "ZAR", "metadata": {"vula_test": "true"}},
+            json={"amount": 200, "currency": "ZAR", "metadata": {"vula_test": "true"}},  # R2.00 min
         )
 
     ok = resp.is_success

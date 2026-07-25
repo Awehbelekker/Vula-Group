@@ -270,6 +270,25 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "resend_invoice",
+            "description": (
+                "Re-send a customer's invoice/receipt PDF via WhatsApp. Call this when they ask "
+                "to resend, reprint, or get a copy of their invoice. Accepts either the invoice's "
+                "own number (e.g. OTH-INV-00002) or the order number (e.g. OTH-00001) — customers "
+                "don't reliably know which one they have, so try whatever they give you. If they "
+                "don't give a number at all, omit it and their most recent invoice is sent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "invoice_number": {"type": "string", "description": "Invoice or order number, if the customer gave one."}
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_daily_catch",
             "description": (
                 "Return today's fresh catch highlights and any specials. Call this when a "
@@ -840,6 +859,8 @@ class CommerceAssistantSkill(BaseSkill):
             return self._exec_start_checkout(tid)
         if name == "track_order":
             return await self._exec_track_order(tid, args)
+        if name == "resend_invoice":
+            return await self._exec_resend_invoice(tid, phone, args)
         if name == "get_daily_catch":
             return await self._exec_get_daily_catch(tid)
         if name == "suggest_recipe":
@@ -1075,6 +1096,67 @@ class CommerceAssistantSkill(BaseSkill):
             "status": match["status"],
             "total": f"R{match['total_cents'] / 100:.2f}",
         }
+
+    async def _exec_resend_invoice(self, tenant_id: str, phone: Optional[str],
+                                   args: Dict[str, Any]) -> Dict[str, Any]:
+        """Re-send an already-created invoice PDF via WhatsApp. Looks up by the invoice's OWN
+        number OR its order's display id (confirmed live 2026-07-25: a customer gave the real
+        invoice number and the assistant said it "wasn't in our system" — the only lookup that
+        existed, track_order, only ever matched commerce_orders.display_id, so an invoice number
+        could never be found by it). Phone-scoped throughout — only ever finds documents billed
+        to the requesting number, never an arbitrary invoice by guessing numbers."""
+        digits = "".join(c for c in (phone or "") if c.isdigit())
+        number = (args.get("invoice_number") or "").strip().upper()
+        db = service._client()
+        try:
+            rows = (db.table("commerce_invoices").select("*")
+                    .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(200)
+                    .execute().data or [])
+        except Exception as exc:
+            return {"error": f"Could not look up invoices: {exc}"}
+        mine = [r for r in rows if "".join(c for c in (r.get("customer_phone") or "") if c.isdigit())
+               .endswith(digits[-9:] or "x")]
+        if not mine:
+            return {"error": "I couldn't find any invoices under this number."}
+
+        match = None
+        if number:
+            match = next((r for r in mine if (r.get("invoice_number") or "").upper() == number), None)
+            if not match:
+                # They may have given the ORDER number instead — try that too before giving up.
+                try:
+                    orow = (db.table("commerce_orders").select("id")
+                            .eq("tenant_id", tenant_id).eq("display_id", number).limit(1)
+                            .execute().data or [])
+                    if orow:
+                        match = next((r for r in mine if r.get("order_id") == orow[0]["id"]), None)
+                except Exception:
+                    pass
+        else:
+            match = mine[0]  # most recent, when no number was given
+        if not match:
+            return {"error": f"I couldn't find an invoice matching {number!r} under this number."}
+
+        try:
+            from vula.commerce.pdf import render_invoice_pdf, merge_branding
+            from vula.api.whatsapp import _send_invoice_document
+            branding = merge_branding(tenant_id, await service.get_invoice_settings(tenant_id))
+            pdf_bytes = render_invoice_pdf(match, branding)
+            tenant_name = branding.get("name") or tenant_id.replace("-", " ").title()
+            inv_num = match.get("invoice_number", match["id"])
+            total = f"R{(int(match.get('total_cents') or 0) / 100):.2f}"
+            caption = f"Here's a copy of your invoice {inv_num} for {total} from {tenant_name}."
+            if match.get("pay_url") and match.get("status") != "paid":
+                caption += f"\n\n💳 Pay now: {match['pay_url']}"
+            sent = await _send_invoice_document(phone, pdf_bytes, f"{inv_num}.pdf", caption, tenant_id)
+        except Exception as exc:
+            return {"error": f"Found the invoice but couldn't send the PDF: {exc}"}
+        if not sent:
+            return {"error": "Found the invoice but the WhatsApp document send failed."}
+        return {"invoice_number": inv_num, "total": total,
+                "instruction_to_assistant": "The PDF was just sent as a separate WhatsApp "
+                                            "document message — just confirm briefly, don't "
+                                            "repeat the invoice details in your text reply."}
 
     async def _exec_get_daily_catch(self, tenant_id: str) -> Dict[str, Any]:
         """Return products flagged as today's catch + any fresh fish in stock."""

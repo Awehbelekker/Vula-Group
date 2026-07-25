@@ -4,10 +4,18 @@ core/lang.py — lightweight South African language detection + naming.
 Used to remember a customer's language preference. Voice notes give us a reliable language
 code straight from Whisper; this heuristic covers TEXT messages where we have no such signal.
 
-It is deliberately conservative: it only returns a non-English code when there's a clear marker
-word, otherwise None (meaning "unknown — don't overwrite what we already know"). Distinguishing
+It is deliberately conservative: it only returns a code when there's a clear marker word,
+otherwise None (meaning "unknown — don't overwrite what we already know"). Distinguishing
 isiZulu from isiXhosa perfectly from a few words is hard; we make a best effort and lean on the
-Whisper signal for voice. English is never force-detected here — the assistant already mirrors it.
+Whisper signal for voice.
+
+English DOES get detected here (via _EN_MARKERS below) — confirmed live 2026-07-25: a customer
+whose preferred_language had been set to "af" from an earlier conversation kept getting Afrikaans
+replies even after several consecutive, unambiguous English messages ("Hake Centre Cuts",
+"Yes please"). The system prompt's "reply in their usual language unless they clearly switch"
+instruction isn't reliable enough on its own for short messages — the persisted preference needs
+a real, symmetric "they switched to English" signal to correct itself, the same way it already
+corrects when someone switches TO Afrikaans/isiZulu/etc.
 """
 from __future__ import annotations
 
@@ -26,7 +34,8 @@ LANG_NAMES = {
 # (e.g. isiZulu for a siSwati speaker) still beats defaulting to English.
 _MARKERS = {
     "af": {"ek", "jy", "nie", "asseblief", "dankie", "goeie", "wil", "hê", "kan", "'n",
-           "baie", "hoeveel", "bestel", "vis", "hoender", "aflewering", "more", "vandag", "graag"},
+           "baie", "hoeveel", "bestel", "vis", "hoender", "aflewering", "more", "vandag",
+           "graag", "kontant"},
     "zu": {"sawubona", "ngiyabonga", "ngicela", "yebo", "cha", "unjani", "ngifuna",
            "malini", "inhlanzi", "ngingathanda", "usuku", "namuhla", "ngiyafuna"},
     "xh": {"molo", "molweni", "enkosi", "ndicela", "ndifuna", "uxolo", "kunjani",
@@ -40,6 +49,16 @@ _MARKERS = {
     "nr": {"lotjhani", "ngiyathokoza", "salibonani", "ngicela", "unjani", "ndebele"},
 }
 
+# Common, unambiguous English words that don't collide with any marker set above (deliberately
+# excludes words like "more" — already claimed as an Afrikaans marker meaning "tomorrow" — to
+# avoid the two signals fighting over the same token).
+_EN_MARKERS = {
+    "yes", "please", "thanks", "thank", "hello", "hi", "sure", "okay", "the", "and",
+    "want", "would", "like", "have", "order", "cash", "card", "deliver", "delivery",
+    "please", "cancel", "confirm", "when", "today", "tomorrow", "kg", "much",
+}
+_MARKERS_WITH_EN = {**_MARKERS, "en": _EN_MARKERS}
+
 
 def detect_language(text: Optional[str]) -> Optional[str]:
     """Best-effort language code from a text message. None when unsure (don't overwrite)."""
@@ -49,7 +68,7 @@ def detect_language(text: Optional[str]) -> Optional[str]:
     if not words:
         return None
     best, score = None, 0
-    for code, markers in _MARKERS.items():
+    for code, markers in _MARKERS_WITH_EN.items():
         hits = len(words & markers)
         if hits > score:
             best, score = code, hits

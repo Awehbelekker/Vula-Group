@@ -70,7 +70,7 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
     try:
         rows = (payments._client().table("vula_payment_providers").select("credentials")
                 .eq("tenant_id", tenant_id).eq("provider", provider).limit(1).execute().data or [])
-        creds = (rows[0].get("credentials") if rows else {}) or {}
+        creds = payments._decrypt_creds(rows[0].get("credentials") if rows else {})
     except Exception:
         pass
     raw = await request.body()
