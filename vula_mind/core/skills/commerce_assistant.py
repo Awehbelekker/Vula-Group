@@ -259,7 +259,11 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "track_order",
-            "description": "Look up the status of an existing order by its display id (e.g. OTH-00042).",
+            "description": (
+                "Check an order's delivery/preparation STATUS by its order number (e.g. OTH-00042). "
+                "Does NOT know about invoices/receipts — for those, or anything the customer wants "
+                "sent/resent as a document, use resend_invoice instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"order_id": {"type": "string", "description": "Order display id."}},
@@ -677,7 +681,16 @@ class CommerceAssistantSkill(BaseSkill):
             "never say an order is cancelled without calling it, and never claim it's fully done; "
             "the team confirms the actual cancellation (a paid order may need a refund).\n"
             "- Only use start_checkout if the customer specifically wants to pay on the website.\n"
-            "- For a price quote without ordering, call create_quote and share the number and total."
+            "- For a price quote without ordering, call create_quote and share the number and total.\n"
+            "- track_order is ONLY for checking an order's delivery/preparation STATUS by its order "
+            "number (e.g. OTH-00042) — it does not know about invoices and will never find one. If "
+            "a customer wants a document — their invoice, receipt, a copy, wants it 'resent' — call "
+            "resend_invoice instead, even if the number they gave you looks like an order number; it "
+            "tries both. Never call track_order with something that looks like an invoice number "
+            "(e.g. contains 'INV'), and never invent/guess a number that wasn't actually given to you.\n"
+            "- Only call a tool when the customer's message actually needs one. A reply like 'thanks', "
+            "an unrelated follow-up ('reply in English', 'ok', a new question) does NOT mean repeat "
+            "your last action — respond in plain text, or ask what they'd like, instead."
             + delivery_block
             + lang_block
             + booking_block
@@ -1087,6 +1100,13 @@ class CommerceAssistantSkill(BaseSkill):
 
     async def _exec_track_order(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
         display_id = (args.get("order_id") or "").strip().upper()
+        # Code-level backstop, not just prompt guidance: an invoice number was given here despite
+        # the tool description — confirmed live 2026-07-25, twice in a row on a real customer
+        # conversation — track_order has no invoice data at all, so guide the NEXT turn instead
+        # of a bare "not found" that just repeats the same mistake.
+        if "INV" in display_id:
+            return {"error": f"{display_id} looks like an invoice number, not an order number — "
+                              f"call resend_invoice instead, not track_order."}
         orders = await service.list_orders(tenant_id, limit=50)
         match = next((o for o in orders if (o.get("display_id") or "").upper() == display_id), None)
         if not match:
