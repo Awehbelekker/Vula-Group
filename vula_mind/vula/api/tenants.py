@@ -136,14 +136,22 @@ def store_url(tenant_id: str) -> Optional[str]:
 
 
 def _effective_modules(cfg: dict) -> list:
-    """A tenant's configured modules, plus `pages` whenever they have a live Vula-built site —
-    `pages` is a factual capability (you either have one or you don't), not a business-type
-    judgment call, so it shouldn't depend on which preset a tenant happened to onboard under
-    (the `food` preset never included it, which is why off-the-hook's Storefront tab was
-    invisible despite offthehook.co.za being a real, fully Puck-editable Vula site)."""
+    """A tenant's configured modules, plus a few that are factual capabilities rather than a
+    business-type judgment call — they shouldn't depend on which preset a tenant happened to
+    onboard under:
+    - `pages`, whenever they have a live Vula-built site (the `food` preset never included it,
+      which is why off-the-hook's Storefront tab was invisible despite offthehook.co.za being a
+      real, fully Puck-editable Vula site).
+    - `documents`, always. `documents` was only ever in the "services" preset (construction docs),
+      but every tenant already files documents via WhatsApp/email/dashboard-upload regardless of
+      business type — the Documents tab (customer linkage, media library, Drive import) is a
+      universal capability, not something food/retail/health/trades tenants should have hidden.
+    """
     mods = list(cfg.get("modules") or [])
     if cfg.get("store_url") and "pages" not in mods:
         mods.append("pages")
+    if "documents" not in mods:
+        mods.append("documents")
     return mods
 
 
