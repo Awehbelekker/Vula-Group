@@ -1,11 +1,17 @@
 """Tests for HRM Orchestrator — routing logic, no LLM calls required."""
+from unittest.mock import MagicMock
+
 import pytest
 from core.hrm.orchestrator import HRMOrchestrator
 from core.thinkmesh.graph import GraphStatus, MergeStrategy, ModelTier, TaskGraph
 
 
 @pytest.fixture
-def hrm():
+def hrm(monkeypatch):
+    # Off by default so every existing test stays a real unit test (no network calls) —
+    # tests that specifically exercise the LLM fallback path re-enable it themselves.
+    from config import settings
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", False)
     return HRMOrchestrator()
 
 
@@ -34,10 +40,77 @@ def test_keyword_complexity(hrm, prompt, expected):
     ("Read this PDF document", "file_parse"),
     # "fitout" is in architecture_planning keywords, so this correctly routes there.
     ("What is the cost per square metre for fitout?", "architecture_planning"),
-    ("Just tell me something", "reasoning"),
 ])
 def test_skill_matching(hrm, prompt, expected_skill):
     assert hrm._match_skill(prompt) == expected_skill
+
+
+def test_no_keyword_match_falls_back_to_reasoning_when_llm_fallback_disabled(hrm, monkeypatch):
+    from config import settings
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", False)
+    assert hrm._match_skill("Just tell me something") == "reasoning"
+
+
+# ── LLM classification fallback (keyword-miss path only) ───────────────────────
+
+def test_llm_fallback_used_when_no_keyword_matches(hrm, monkeypatch):
+    from config import settings
+    import httpx as httpx_module
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", True)
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"response": "finance_admin"}
+    monkeypatch.setattr(httpx_module, "post", lambda *a, **kw: mock_resp)
+
+    assert hrm._match_skill("Just tell me something") == "finance_admin"
+
+
+def test_llm_fallback_not_called_when_keyword_already_matched(hrm, monkeypatch):
+    from config import settings
+    import httpx as httpx_module
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", True)
+
+    def _boom(*a, **kw):
+        raise AssertionError("LLM fallback should not fire when a keyword already matched")
+
+    monkeypatch.setattr(httpx_module, "post", _boom)
+    assert hrm._match_skill("check my email") == "email_admin"
+
+
+def test_llm_fallback_disabled_skips_classification_call(hrm, monkeypatch):
+    from config import settings
+    import httpx as httpx_module
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", False)
+
+    def _boom(*a, **kw):
+        raise AssertionError("LLM fallback should not fire when disabled")
+
+    monkeypatch.setattr(httpx_module, "post", _boom)
+    assert hrm._match_skill("Just tell me something") == "reasoning"
+
+
+def test_llm_fallback_ignores_unrecognised_response(hrm, monkeypatch):
+    from config import settings
+    import httpx as httpx_module
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", True)
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"response": "not_a_real_skill_name"}
+    monkeypatch.setattr(httpx_module, "post", lambda *a, **kw: mock_resp)
+
+    assert hrm._match_skill("Just tell me something") == "reasoning"
+
+
+def test_llm_fallback_fails_open_on_error(hrm, monkeypatch):
+    from config import settings
+    import httpx as httpx_module
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", True)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(httpx_module, "post", _boom)
+    assert hrm._match_skill("Just tell me something") == "reasoning"
 
 
 # ── ClickUp routing: meeting / todo / follow-up ───────────────────────────────

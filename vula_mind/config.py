@@ -176,6 +176,16 @@ class Settings(BaseSettings):
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
 
+    # ── Skill routing (core/hrm/orchestrator.py) ──────────────────────────────
+    # HRM's skill router is pure keyword substring matching; anything that misses every
+    # keyword silently falls through to the generic "reasoning" skill (the exact mechanism
+    # behind the 2026-07-27 DIGG bathroom-bizarre bug). skill_llm_fallback_enabled adds one
+    # cheap local-model classification pass ONLY on that miss path, before giving up on
+    # routing. Kill switch, not a cost-control gate — this fires on a minority of messages
+    # (the ones keywords already failed on), so it's on by default; flip off via env var if
+    # it ever misbehaves, no redeploy needed.
+    skill_llm_fallback_enabled: bool = True
+
     @property
     def verification_policies(self) -> dict[str, str]:
         import json

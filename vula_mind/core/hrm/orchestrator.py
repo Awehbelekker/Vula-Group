@@ -176,7 +176,42 @@ class HRMOrchestrator:
         for skill_name, keywords in SKILL_KEYWORDS.items():
             if any(kw in lower for kw in keywords):
                 return skill_name
+        # No keyword matched — before silently defaulting to the least-specialized skill,
+        # try one cheap local-model classification pass (2026-07-27: this exact fallthrough
+        # is what routed a real supplier-quotation question to generic reasoning instead of
+        # a document-grounded skill). Fails open to "reasoning" on any error or disagreement.
+        if settings.skill_llm_fallback_enabled:
+            classified = self._llm_classify_skill(prompt)
+            if classified:
+                return classified
         return "reasoning"
+
+    def _llm_classify_skill(self, prompt: str) -> str | None:
+        """One cheap local-model pass, keyword-miss path only. Returns a skill name from
+        SKILL_KEYWORDS, or None (caller falls back to "reasoning") on any failure/non-match."""
+        try:
+            options = ", ".join(SKILL_KEYWORDS.keys())
+            resp = httpx.post(
+                f"{self.ollama_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": (
+                        f"Pick the ONE best-fitting skill for this request from this exact "
+                        f"list: {options}. Reply with only the skill name, nothing else.\n"
+                        f"Request: {prompt}"
+                    ),
+                    "stream": False,
+                    "options": {"num_predict": 10},
+                },
+                timeout=8,
+            )
+            answer = (resp.json().get("response") or "").strip().lower()
+            for skill_name in SKILL_KEYWORDS:
+                if skill_name in answer:
+                    return skill_name
+        except Exception as exc:
+            log.debug("LLM skill classification failed, falling back to reasoning: %s", exc)
+        return None
 
     def _select_model(self, complexity: int, routing_hints: dict) -> ModelTier:
         hint = routing_hints.get("preferred_tier")
