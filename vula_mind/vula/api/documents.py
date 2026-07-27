@@ -1,9 +1,10 @@
 """
 vula/api/documents.py — Vula Documents library (filed documents by project).
 
-    GET  /v1/documents/{tenant}/filed?project=   → filed documents (grouped client-side)
+    GET  /v1/documents/{tenant}/filed?project=   → filed documents, filterable (see list_filed)
     GET  /v1/documents/{tenant}/projects          → project labels for the assign dropdown
     POST /v1/documents/{id}/assign-project        → manually file an Unfiled document
+    POST /v1/documents/{tenant}/media             → "just store this" upload, no OCR/KB-extraction
 
 Filed records are written by the WhatsApp ingest path (vula/integrations/doc_filing.py).
 """
@@ -12,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, Form, UploadFile
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -27,22 +28,39 @@ def _client():
 @router.get("/{tenant_id}/filed")
 async def list_filed(
     tenant_id: str, project: Optional[str] = None, commerce_invoice_id: Optional[str] = None,
+    customer_phone: Optional[str] = None, category: Optional[str] = None,
+    since: Optional[str] = None, until: Optional[str] = None, search: Optional[str] = None,
+    limit: int = 100, offset: int = 0,
 ) -> dict:
-    """Filed documents for a tenant (newest first), optionally filtered by project or by the
-    commerce_invoices row they were promoted into (migration 102's bridge column) — lets the
-    Invoices tab link an inbound invoice back to the real scanned/emailed document it came from."""
+    """Filed documents for a tenant (newest first) — real filters (customer/category/date-range/
+    text search), not just project, and real pagination (limit/offset, not a flat 500-row cap) so
+    the Documents screen can actually be browsed instead of client-side-filtering one giant list.
+    `commerce_invoice_id` lets the Invoices tab link an inbound invoice back to the real scanned/
+    emailed document it came from (migration 102's bridge column)."""
     try:
-        q = (_client().table("vula_filed_documents").select("*")
-             .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(500))
+        q = (_client().table("vula_filed_documents").select("*", count="exact")
+             .eq("tenant_id", tenant_id).order("created_at", desc=True))
         if project:
             q = q.eq("project", project)
         if commerce_invoice_id:
             q = q.eq("commerce_invoice_id", commerce_invoice_id)
-        rows = q.execute().data or []
+        if customer_phone:
+            q = q.eq("customer_phone", customer_phone)
+        if category:
+            q = q.eq("category", category)
+        if since:
+            q = q.gte("created_at", since)
+        if until:
+            q = q.lte("created_at", until)
+        if search:
+            q = q.or_(f"filename.ilike.%{search}%,summary.ilike.%{search}%")
+        res = q.range(offset, offset + min(limit, 200) - 1).execute()
+        rows = res.data or []
+        total = res.count if res.count is not None else len(rows)
     except Exception as exc:
-        log.warning("documents list failed (run migration 015?): %s", exc)
-        rows = []
-    return {"tenant_id": tenant_id, "documents": rows, "count": len(rows)}
+        log.warning("documents list failed (run migration 015/109?): %s", exc)
+        rows, total = [], 0
+    return {"tenant_id": tenant_id, "documents": rows, "count": len(rows), "total": total}
 
 
 @router.get("/{tenant_id}/projects")
@@ -128,3 +146,29 @@ async def assign_project(doc_id: str, body: AssignIn) -> dict:
 
     return {"id": doc_id, "project": body.project, "clickup_attached": bool(clickup_task_id),
             "learned_signals": learned}
+
+
+@router.post("/{tenant_id}/media")
+async def upload_media(
+    tenant_id: str, file: UploadFile = File(...),
+    customer_phone: Optional[str] = Form(None), project: Optional[str] = Form(None),
+    caption: Optional[str] = Form(None),
+) -> dict:
+    """'Just store this' — a photo, form, or any file with nothing to extract, stored straight
+    into the documents library with no OCR/KB-ingest attempted (unlike the Smart Scanner upload
+    path). Optionally tagged to a customer and/or project. Reuses file_document's storage/dedup
+    machinery — same durable copy, same table, just category='media' and no data-extraction step."""
+    try:
+        from vula.integrations.doc_filing import file_document
+        data = await file.read()
+        row = await file_document(
+            tenant_id, filename=file.filename or "upload", data=data,
+            content_type=file.content_type or "application/octet-stream",
+            category="media", summary=caption or "", source="dashboard",
+            filed_by=f"dashboard:{tenant_id}", project=project,
+            customer_phone=customer_phone or None,
+        )
+        return {"document": row}
+    except Exception as exc:
+        log.warning("media upload failed for %s: %s", tenant_id, exc)
+        return {"error": str(exc)}

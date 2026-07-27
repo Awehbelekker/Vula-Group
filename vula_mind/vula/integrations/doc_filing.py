@@ -313,7 +313,7 @@ async def file_document(
     category: str = "", summary: str = "", fields: Optional[dict] = None,
     doc_id: str = "", source: str = "whatsapp", filed_by: str = "",
     project: Optional[str] = None, clickup_list_id: Optional[str] = None,
-    status: str = "filed",
+    status: str = "filed", customer_phone: Optional[str] = None,
 ) -> dict:
     """Store a durable copy + a `vula_filed_documents` row, and (if a ClickUp list is
     given and we have bytes) attach the file into ClickUp. Returns the row dict
@@ -361,6 +361,7 @@ async def file_document(
         "fields": fields or {}, "filename": filename, "file_url": file_url,
         "mime": content_type, "doc_id": doc_id, "source": source,
         "status": status, "filed_by": filed_by, "content_hash": content_hash,
+        "customer_phone": customer_phone,
     }
     try:
         # ignore_duplicates=True (Postgres ON CONFLICT DO NOTHING) against the unique
@@ -383,12 +384,14 @@ async def file_document(
             if existing:
                 row = existing[0]
     except Exception as exc:
-        # migration 092 not run yet — content_hash column/index don't exist. Retry against the
-        # OLD (tenant_id, source, filename) constraint so filing keeps working in the meantime
-        # (accepting the pre-092 generic-filename-collision limitation) rather than breaking
-        # every document filing outright.
-        logger.warning("vula_filed_documents insert retried without content_hash (run migration 092?): %s", exc)
+        # migration 092 (content_hash) and/or 109 (customer_phone) not run yet — either missing
+        # column breaks the whole insert. Retry against the OLD (tenant_id, source, filename)
+        # constraint, without customer_phone, so filing keeps working in the meantime (accepting
+        # the pre-092 generic-filename-collision limitation, and no customer linkage until 109
+        # runs) rather than breaking every document filing outright.
+        logger.warning("vula_filed_documents insert retried without content_hash/customer_phone (run migrations 092/109?): %s", exc)
         row.pop("content_hash", None)
+        row.pop("customer_phone", None)
         try:
             ins = _client().table("vula_filed_documents").upsert(
                 row, on_conflict="tenant_id,source,filename", ignore_duplicates=True

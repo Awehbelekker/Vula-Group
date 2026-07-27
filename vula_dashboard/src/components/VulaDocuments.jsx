@@ -147,26 +147,108 @@ function FieldsPreview({ fields }) {
   );
 }
 
-function FiledLibrary({ tenantId }) {
+// Modern grid+lightbox viewing — same visual language as Puck's Gallery block (thumbnail grid,
+// hover-zoom, fade/scale-in lightbox) so this feels like part of the same product, not a bolted-on
+// file manager. Self-contained styles (not dependent on Puck's global VULA_PUCK_STYLES injection,
+// which this shell never loads) via a <style> tag scoped to this component's class names.
+const GRID_STYLES = `
+.vdoc-tile { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid ${C.border};
+  background: ${C.surface}; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; }
+.vdoc-tile:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,.10); }
+.vdoc-thumb { width: 100%; height: 140px; object-fit: cover; display: block; transition: transform .3s ease; }
+.vdoc-tile:hover .vdoc-thumb { transform: scale(1.05); }
+.vdoc-icon-tile { width: 100%; height: 140px; display: flex; align-items: center; justify-content: center;
+  background: ${C.surfaceAlt}; }
+.vdoc-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 9999; display: flex;
+  align-items: center; justify-content: center; padding: 24px; cursor: zoom-out;
+  animation: vdocFadeIn .18s ease both; }
+.vdoc-lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px;
+  animation: vdocScaleIn .2s cubic-bezier(.16,1,.3,1) both; }
+.vdoc-lightbox-close { position: absolute; top: 20px; right: 24px; color: #fff; font-size: 32px;
+  line-height: 1; cursor: pointer; background: none; border: none; }
+@keyframes vdocFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vdocScaleIn { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+`;
+
+const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const CATEGORIES = ["invoice", "receipt", "quote", "delivery_note", "media", "other"];
+
+function DocTile({ doc, projects, onAssign, onOpenImage }) {
+  const ext = "." + (doc.filename || "").split(".").pop().toLowerCase();
+  const isImage = IMG_EXT.has(ext) || (doc.mime || "").startsWith("image/");
+  const needsProject = doc.status === "pending_project" || (!doc.project && doc.category !== "media");
+
+  return (
+    <div className="vdoc-tile" onClick={() => (isImage ? onOpenImage(doc) : doc.file_url && window.open(doc.file_url, "_blank"))}>
+      {isImage && doc.file_url ? (
+        <img className="vdoc-thumb" src={doc.file_url} alt={doc.filename} loading="lazy" />
+      ) : (
+        <div className="vdoc-icon-tile"><FileBadge ext={ext} /></div>
+      )}
+      <div style={{ padding: "8px 10px" }}>
+        <div style={{ fontSize: 12, color: C.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {doc.filename}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
+          {doc.category && (
+            <span style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, background: C.surfaceAlt, padding: "2px 6px", borderRadius: 4 }}>{doc.category}</span>
+          )}
+          {doc.customer_phone && (
+            <span style={{ fontSize: 9.5, color: C.green }} title="Linked to a customer">👤 {doc.customer_phone}</span>
+          )}
+          {doc.clickup_task_id && <span style={{ fontSize: 9.5, color: "#7B68EE" }} title="Attached in ClickUp">🗂️</span>}
+        </div>
+        {doc.summary && <p style={{ margin: "4px 0 0", fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.summary}</p>}
+        {needsProject && (
+          <select defaultValue="" onClick={(e) => e.stopPropagation()} onChange={(e) => onAssign(doc.id, e.target.value)}
+            style={{ marginTop: 6, width: "100%", fontSize: 11, padding: "5px 6px", border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, background: C.surface }}>
+            <option value="" disabled>File under…</option>
+            {projects.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+          </select>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function FiledLibrary({ tenantId, customerPhone, title = "📂 Documents & media" }) {
   const [docs, setDocs] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [lightboxDoc, setLightboxDoc] = useState(null);
+  const [filters, setFilters] = useState({ search: "", category: "", customer_phone: customerPhone || "", since: "", until: "" });
+  const [offset, setOffset] = useState(0);
+  const PAGE = 24;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (append = false) => {
     if (!tenantId?.trim()) return;
     setLoading(true);
     try {
+      const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? offset : 0) });
+      Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
       const [dr, pr] = await Promise.all([
-        fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/filed`).then((r) => r.json()),
-        fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/projects`).then((r) => r.json()),
+        fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/filed?${params}`).then((r) => r.json()),
+        projects.length ? Promise.resolve({ projects }) : fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/projects`).then((r) => r.json()),
       ]);
-      setDocs(dr.documents || []);
-      setProjects(pr.projects || []);
+      setDocs((prev) => append ? [...prev, ...(dr.documents || [])] : (dr.documents || []));
+      setTotal(dr.total ?? (dr.documents || []).length);
+      if (!projects.length) setProjects(pr.projects || []);
+      if (!append) setOffset(PAGE);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [tenantId]);
+  }, [tenantId, filters]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(false); }, [tenantId, filters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (customerPhone || !tenantId?.trim()) return; // customer-scoped view (Phase 4) skips its own picker
+    fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/customers`)
+      .then((r) => r.json()).then((d) => setCustomers(d.customers || [])).catch(() => {});
+  }, [tenantId, customerPhone]);
+
+  const setFilter = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
 
   const assign = async (docId, label) => {
     const proj = projects.find((p) => p.label === label);
@@ -175,75 +257,212 @@ function FiledLibrary({ tenantId }) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ project: proj.label, clickup_list_id: proj.clickup_list_id }),
     });
-    load();
+    load(false);
   };
-
-  // Group by project (null → Unfiled), Unfiled first.
-  const groups = {};
-  docs.forEach((d) => {
-    const key = d.status === "pending_project" || !d.project ? "Unfiled" : d.project;
-    (groups[key] = groups[key] || []).push(d);
-  });
-  const groupNames = Object.keys(groups).sort((a, b) =>
-    a === "Unfiled" ? -1 : b === "Unfiled" ? 1 : a.localeCompare(b));
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 28 }}>
-      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>📂 Filed documents</span>
+      <style>{GRID_STYLES}</style>
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{title}</span>
         <span style={{ fontSize: 12, color: C.muted }}>
-          {loading ? "Loading…" : `${docs.length} ${docs.length === 1 ? "document" : "documents"}`}
+          {loading && !docs.length ? "Loading…" : `${total} ${total === 1 ? "document" : "documents"}`}
         </span>
       </div>
 
-      {!loading && docs.length === 0 && (
-        <div style={{ padding: "28px 20px", textAlign: "center", color: C.muted, fontSize: 13 }}>
-          No filed documents yet. Send a doc or photo on WhatsApp and Vula will file it here by project.
+      {!customerPhone && (
+        <div style={{ padding: "10px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 8, flexWrap: "wrap", background: C.surfaceAlt }}>
+          <input value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder="🔍 Search filename or summary…"
+            style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface }} />
+          <select value={filters.category} onChange={(e) => setFilter("category", e.target.value)}
+            style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }}>
+            <option value="">All categories</option>
+            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={filters.customer_phone} onChange={(e) => setFilter("customer_phone", e.target.value)}
+            style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, maxWidth: 180 }}>
+            <option value="">All customers</option>
+            {customers.map((c) => <option key={c.phone} value={c.phone}>{c.name || c.phone}</option>)}
+          </select>
+          <input type="date" value={filters.since} onChange={(e) => setFilter("since", e.target.value)}
+            style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }} />
+          <input type="date" value={filters.until} onChange={(e) => setFilter("until", e.target.value)}
+            style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }} />
         </div>
       )}
 
-      {groupNames.map((g) => (
-        <div key={g}>
-          <div style={{ padding: "8px 20px", background: C.surfaceAlt, fontSize: 12, fontWeight: 700, color: g === "Unfiled" ? C.amber : C.green }}>
-            {g} <span style={{ color: C.muted, fontWeight: 400 }}>· {groups[g].length}</span>
-          </div>
-          {groups[g].map((doc) => {
-            const ext = "." + (doc.filename || "").split(".").pop().toLowerCase();
-            const needsProject = doc.status === "pending_project" || !doc.project;
-            return (
-              <div key={doc.id} style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 14, alignItems: "flex-start" }}>
-                <FileBadge ext={ext} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    {doc.file_url ? (
-                      <a href={doc.file_url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: C.green, fontWeight: 600, textDecoration: "none" }}>
-                        {doc.filename} ↓
-                      </a>
-                    ) : (
-                      <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{doc.filename}</span>
-                    )}
-                    {doc.category && (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, background: C.surfaceAlt, padding: "2px 8px", borderRadius: 4 }}>{doc.category}</span>
-                    )}
-                    {doc.clickup_task_id && (
-                      <span style={{ fontSize: 10, color: "#7B68EE" }} title="Attached in ClickUp">🗂️ ClickUp</span>
-                    )}
-                  </div>
-                  {doc.summary && <p style={{ margin: "4px 0 0", fontSize: 12, color: C.muted }}>{doc.summary}</p>}
-                  <FieldsPreview fields={doc.fields} />
-                </div>
-                {needsProject && (
-                  <select defaultValue="" onChange={(e) => assign(doc.id, e.target.value)}
-                    style={{ fontSize: 12, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, background: C.surface, maxWidth: 160 }}>
-                    <option value="" disabled>File under…</option>
-                    {projects.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
-                  </select>
-                )}
-              </div>
-            );
-          })}
+      {!loading && docs.length === 0 && (
+        <div style={{ padding: "28px 20px", textAlign: "center", color: C.muted, fontSize: 13 }}>
+          No documents match{customerPhone ? " this customer" : ""} yet.
         </div>
-      ))}
+      )}
+
+      {docs.length > 0 && (
+        <div style={{ padding: 16, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12 }}>
+          {docs.map((doc) => (
+            <DocTile key={doc.id} doc={doc} projects={projects} onAssign={assign} onOpenImage={setLightboxDoc} />
+          ))}
+        </div>
+      )}
+
+      {docs.length < total && (
+        <div style={{ textAlign: "center", padding: "0 20px 16px" }}>
+          <button onClick={() => { setOffset(docs.length); load(true); }} disabled={loading}
+            style={{ padding: "8px 18px", background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, cursor: "pointer" }}>
+            {loading ? "Loading…" : `Load more (${total - docs.length} left)`}
+          </button>
+        </div>
+      )}
+
+      {lightboxDoc && (
+        <div className="vdoc-lightbox" onClick={() => setLightboxDoc(null)}>
+          <button className="vdoc-lightbox-close" onClick={(e) => { e.stopPropagation(); setLightboxDoc(null); }} aria-label="Close">×</button>
+          <img src={lightboxDoc.file_url} alt={lightboxDoc.filename} onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "Just store this" — a photo/form/file with nothing to extract, no OCR/KB-ingest attempted.
+function MediaUpload({ tenantId, onUploaded }) {
+  const [customers, setCustomers] = useState([]);
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState("");
+  const inputRef = useRef();
+
+  useEffect(() => {
+    if (!tenantId?.trim()) return;
+    fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/customers`)
+      .then((r) => r.json()).then((d) => setCustomers(d.customers || [])).catch(() => {});
+  }, [tenantId]);
+
+  const handle = async (files) => {
+    if (!files?.length || !tenantId?.trim()) return;
+    setUploading(true);
+    setMsg("");
+    let ok = 0;
+    for (const file of Array.from(files)) {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (customerPhone) fd.append("customer_phone", customerPhone);
+      try {
+        const r = await fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/media`, { method: "POST", body: fd });
+        if (r.ok) ok += 1;
+      } catch { /* ignore */ }
+    }
+    setUploading(false);
+    setMsg(`${ok}/${files.length} stored ✓`);
+    onUploaded?.();
+    setTimeout(() => setMsg(""), 3000);
+  };
+
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 28 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>📷 Store media</h3>
+      <p style={{ margin: "0 0 14px", fontSize: 12, color: C.muted }}>
+        For anything with nothing to extract — a photo, a signed form, anything you just want to keep.
+        No AI processing, stored straight into the library above.
+      </p>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <select value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)}
+          style={{ fontSize: 12, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, maxWidth: 200 }}>
+          <option value="">No customer (general)</option>
+          {customers.map((c) => <option key={c.phone} value={c.phone}>{c.name || c.phone}</option>)}
+        </select>
+        <input ref={inputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => handle(e.target.files)} />
+        <button onClick={() => inputRef.current?.click()} disabled={uploading}
+          style={{ padding: "8px 16px", background: uploading ? C.muted : C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: uploading ? "not-allowed" : "pointer" }}>
+          {uploading ? "Storing…" : "+ Add photos / files"}
+        </button>
+        {msg && <span style={{ fontSize: 12, color: C.green, fontWeight: 600 }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+// Google Drive import — search-based, not a folder browser. The drive.file OAuth scope (a
+// deliberate least-privilege choice on the backend) means Vula only sees files it created itself
+// or ones the tenant explicitly opened through it before, so a generic "browse my whole Drive"
+// tree would show nothing useful for most tenants under this scope. Imported files land in the
+// same library above (category='media'), viewed with the exact same grid — no separate UI.
+function DriveImport({ tenantId, onImported }) {
+  const [status, setStatus] = useState(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [importingId, setImportingId] = useState(null);
+
+  useEffect(() => {
+    if (!tenantId?.trim()) return;
+    fetch(`${VULA_API}/v1/google/status/${tenantId.trim()}`).then((r) => r.json())
+      .then((d) => setStatus(d.status)).catch(() => setStatus("error"));
+  }, [tenantId]);
+
+  const search = async () => {
+    setSearching(true);
+    try {
+      const r = await fetch(`${VULA_API}/v1/google/${tenantId.trim()}/drive/search?q=${encodeURIComponent(q)}`);
+      const d = await r.json();
+      setResults(d.files || []);
+    } catch { setResults([]); }
+    setSearching(false);
+  };
+
+  const doImport = async (file) => {
+    setImportingId(file.id);
+    try {
+      await fetch(`${VULA_API}/v1/google/${tenantId.trim()}/drive/import`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_id: file.id }),
+      });
+      setResults((rs) => rs.filter((f) => f.id !== file.id));
+      onImported?.();
+    } catch { /* ignore */ }
+    setImportingId(null);
+  };
+
+  if (status === null) return null; // still checking — don't flash a "connect" prompt unnecessarily
+  if (status !== "connected") {
+    return (
+      <div style={{ background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 28, fontSize: 12.5, color: C.muted }}>
+        🔵 Connect Google in Settings to import files from Drive into this library.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 28 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>🔵 Import from Google Drive</h3>
+      <p style={{ margin: "0 0 14px", fontSize: 12, color: C.muted }}>
+        Search files Vula can see in your Drive and pull one into this library.
+      </p>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()}
+          placeholder="Search Drive by filename…"
+          style={{ flex: 1, fontSize: 13, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6 }} />
+        <button onClick={search} disabled={searching}
+          style={{ padding: "8px 16px", background: searching ? C.muted : C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: searching ? "not-allowed" : "pointer" }}>
+          {searching ? "Searching…" : "Search"}
+        </button>
+      </div>
+      {results !== null && results.length === 0 && (
+        <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>No matching files Vula can see. Files you've opened via Vula before, or created with Vula, are searchable here.</p>
+      )}
+      {results && results.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {results.map((f) => (
+            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              <span style={{ flex: 1, fontSize: 12.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+              <button onClick={() => doImport(f)} disabled={importingId === f.id}
+                style={{ padding: "5px 12px", background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11.5, color: C.text, cursor: "pointer" }}>
+                {importingId === f.id ? "Importing…" : "Import"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -257,6 +476,7 @@ export default function VulaDocuments({ tenantId: propTenantId }) {
   const [queue, setQueue] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [apiKey, setApiKey] = useState(import.meta.env.VITE_API_KEY ?? "");
+  const [libraryKey, setLibraryKey] = useState(0);
 
   const load = useCallback(async () => {
     if (!tenantId.trim()) return;
@@ -388,8 +608,15 @@ export default function VulaDocuments({ tenantId: propTenantId }) {
         </div>
       </div>
 
-      {/* Filed documents — durable copies organised by project (WhatsApp + ClickUp) */}
-      <FiledLibrary tenantId={tenantId} />
+      {/* "Just store this" — no OCR/KB-extraction, straight into the library below */}
+      <MediaUpload tenantId={tenantId} onUploaded={() => setLibraryKey((k) => k + 1)} />
+
+      {/* Google Drive import — search-based (see component comment for why not a folder browser) */}
+      <DriveImport tenantId={tenantId} onImported={() => setLibraryKey((k) => k + 1)} />
+
+      {/* Filed documents — durable copies, modern grid+lightbox, filterable (project/customer/
+          category/date/search). key bump forces a reload after a media upload lands. */}
+      <FiledLibrary key={libraryKey} tenantId={tenantId} />
 
       {/* Raw KB-ingest status list */}
       <div style={{

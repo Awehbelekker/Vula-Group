@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { downloadCsv } from '../lib/csv'
 import { whatsAppLink } from '../lib/phone'
+import { FiledLibrary } from './VulaDocuments'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
@@ -292,6 +293,11 @@ export default function VulaCustomers({ tenantId }) {
                           {e.amount_cents != null && <span style={{ fontFamily: "'Source Code Pro', monospace", color: '#2A2A2A' }}>{fmt(e.amount_cents)}</span>}
                         </div>
                       ))}
+                      {/* Documents & media filed against this customer (migration 109) — same
+                          modern grid+lightbox the main Documents tab uses, scoped to just them. */}
+                      <div style={{ marginTop: 14 }}>
+                        <FiledLibrary tenantId={tenantId} customerPhone={c.phone} title="📎 Documents & media" />
+                      </div>
                     </>
                   )}
                 </div>

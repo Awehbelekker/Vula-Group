@@ -1,9 +1,18 @@
 """
 vula/api/google.py — one-click Google connect (Drive + Gmail).
 
-    GET /v1/google/authorize-url?tenant_id=    → Google consent URL
-    GET /v1/google/oauth/callback?code=&state= → exchange + store + close popup
-    GET /v1/google/status/{tenant_id}          → connection status
+    GET  /v1/google/authorize-url?tenant_id=    → Google consent URL
+    GET  /v1/google/oauth/callback?code=&state= → exchange + store + close popup
+    GET  /v1/google/status/{tenant_id}          → connection status
+    GET  /v1/google/{tenant_id}/drive/search?q= → search files Vula can see (drive.file scope)
+    POST /v1/google/{tenant_id}/drive/import    → pull a Drive file into vula_filed_documents
+
+Drive import is search-based, not a folder browser: the drive.file OAuth scope (a deliberate
+least-privilege choice, see vula/google/service.py) means Vula can only see files it created
+itself or ones the tenant has explicitly opened through it before — a generic "browse my whole
+Drive" UI would show nothing for most tenants under this scope. A live folder-browser needs
+Google's Picker widget, which needs its own client-side OAuth flow and Google Cloud config beyond
+what this connect flow does — a real follow-up, not built here.
 """
 from __future__ import annotations
 
@@ -82,3 +91,45 @@ async def status(tenant_id: str) -> dict:
     except Exception:
         rows = []
     return rows[0] if rows else {"tenant_id": tenant_id, "status": "not_connected"}
+
+
+@router.get("/{tenant_id}/drive/search")
+async def drive_search_route(tenant_id: str, q: str = "") -> dict:
+    try:
+        files = await service.drive_search(tenant_id, q, limit=25)
+    except service.GoogleNotConnected:
+        return {"error": "Google Drive isn't connected for this tenant.", "files": []}
+    except Exception as exc:
+        log.warning("Drive search failed for %s: %s", tenant_id, exc)
+        return {"error": str(exc), "files": []}
+    return {"files": files}
+
+
+@router.post("/{tenant_id}/drive/import")
+async def drive_import_route(tenant_id: str, body: dict) -> dict:
+    """Pull one Drive file (by id, from a prior /drive/search result) into the tenant's own
+    documents library — category='media' by default, no OCR/KB-extraction attempted, same as
+    the dashboard's "Just store this" upload. Optionally tag it to a customer."""
+    file_id = body.get("file_id")
+    if not file_id:
+        return {"error": "file_id is required"}
+    try:
+        dl = await service.drive_download(tenant_id, file_id)
+    except service.GoogleNotConnected:
+        return {"error": "Google Drive isn't connected for this tenant."}
+    except Exception as exc:
+        log.warning("Drive download failed for %s/%s: %s", tenant_id, file_id, exc)
+        return {"error": str(exc)}
+
+    try:
+        from vula.integrations.doc_filing import file_document
+        row = await file_document(
+            tenant_id, filename=dl.get("name") or file_id, data=dl.get("data"),
+            content_type=dl.get("mime") or "application/octet-stream",
+            category="media", source="dashboard", filed_by=f"dashboard:{tenant_id}:drive-import",
+            customer_phone=body.get("customer_phone") or None,
+        )
+        return {"document": row}
+    except Exception as exc:
+        log.warning("Drive import file_document failed for %s/%s: %s", tenant_id, file_id, exc)
+        return {"error": str(exc)}
