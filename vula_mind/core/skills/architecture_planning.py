@@ -83,14 +83,22 @@ class ArchitecturePlanningSkill(BaseSkill):
             "and can then answer questions about them. If asked, tell them to just attach "
             "the file here."
         )
+        # Context before history, and each labelled for precedence — a real DIGG-tenant bug
+        # (2026-07-27) showed the model answering from a stale, topically-unrelated exchange
+        # several messages back instead of a correctly-retrieved document sitting in the same
+        # prompt, because nothing told it which one to trust when they diverge.
         context_block = "\n\n---\n\n".join(contexts) if contexts else ""
         history_block = (
-            f"Conversation so far:\n{inp.conversation_history}\n\n"
+            f"Conversation so far (for tone/continuity only — it may be stale or about a "
+            f"different topic; do not treat it as a source of facts):\n{inp.conversation_history}\n\n"
             if inp.conversation_history else ""
         )
+        context_label = ("Context (authoritative - if this conflicts with the conversation "
+                         "history below, trust this, not the history):")
+        context_prefix = f"{context_label}\n{context_block}\n\n" if context_block else ""
         user_msg = (
+            f"{context_prefix}"
             f"{history_block}"
-            f"{('Context:' + chr(10) + context_block + chr(10) + chr(10)) if context_block else ''}"
             f"Question: {inp.question}\n\nAnswer:"
         )
 

@@ -150,7 +150,7 @@ async def test_calculations_single_emit(emits, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_adversarial_pass(emits, monkeypatch):
-    async def _pass(question, answer):
+    async def _pass(question, answer, context=""):
         return {"verdict": "pass", "defects": [], "checker_ms": 5}
 
     monkeypatch.setattr(verification, "adversarial_check", _pass)
@@ -167,7 +167,7 @@ async def test_adversarial_pass(emits, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_adversarial_defect_caveats(emits, monkeypatch):
-    async def _fail(question, answer):
+    async def _fail(question, answer, context=""):
         return {"verdict": "fail", "defects": ["number is wrong"], "checker_ms": 5}
 
     monkeypatch.setattr(verification, "adversarial_check", _fail)
@@ -225,7 +225,7 @@ async def test_verification_never_breaks_skill(monkeypatch):
 async def test_skill_error_skips_adversarial(emits, monkeypatch):
     called = []
 
-    async def _check(question, answer):
+    async def _check(question, answer, context=""):
         called.append(1)
         return {"verdict": "pass", "defects": [], "checker_ms": 1}
 
@@ -236,6 +236,108 @@ async def test_skill_error_skips_adversarial(emits, monkeypatch):
     assert out.error == "boom"
     assert called == []
     assert emits == []
+
+
+# ── context-aware checking (2026-07-27 DIGG bug: right doc retrieved, ignored anyway) ──
+
+@pytest.mark.asyncio
+async def test_adversarial_check_includes_context_when_provided(monkeypatch):
+    import litellm
+
+    captured = {}
+
+    class _Msg:
+        content = '{"verdict": "pass", "defects": []}'
+
+    class _Resp:
+        choices = [type("C", (), {"message": _Msg()})()]
+
+    async def _fake_completion(*a, **kw):
+        captured["messages"] = kw["messages"]
+        return _Resp()
+
+    async def _fake_route(*a, **kw):
+        return "ollama/test", None, "http://localhost:11434"
+
+    monkeypatch.setattr(litellm, "acompletion", _fake_completion)
+    import core.llm_router as router
+    monkeypatch.setattr(router, "resolve_generation_route", _fake_route)
+
+    await verification.adversarial_check("q", "a", context="Bathroom Bizarre quotation R1,234")
+    user_content = captured["messages"][1]["content"]
+    assert "Bathroom Bizarre quotation R1,234" in user_content
+    assert "Retrieved context" in user_content
+
+
+@pytest.mark.asyncio
+async def test_adversarial_check_omits_context_block_when_empty(monkeypatch):
+    import litellm
+
+    captured = {}
+
+    class _Msg:
+        content = '{"verdict": "pass", "defects": []}'
+
+    class _Resp:
+        choices = [type("C", (), {"message": _Msg()})()]
+
+    async def _fake_completion(*a, **kw):
+        captured["messages"] = kw["messages"]
+        return _Resp()
+
+    async def _fake_route(*a, **kw):
+        return "ollama/test", None, "http://localhost:11434"
+
+    monkeypatch.setattr(litellm, "acompletion", _fake_completion)
+    import core.llm_router as router
+    monkeypatch.setattr(router, "resolve_generation_route", _fake_route)
+
+    await verification.adversarial_check("q", "a")
+    assert "Retrieved context" not in captured["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_apply_builds_context_from_kb_sources(emits, monkeypatch):
+    captured = {}
+
+    async def _check(question, answer, context=""):
+        captured["context"] = context
+        return {"verdict": "pass", "defects": [], "checker_ms": 1}
+
+    monkeypatch.setattr(verification, "adversarial_check", _check)
+
+    class SourcedSkill(BaseSkill):
+        name = "sourced"
+        description = "test"
+        verification_policy = "adversarial"
+
+        async def run(self, inp: SkillInput) -> SkillOutput:
+            return SkillOutput(
+                answer="the quote is R1,234", skill_name=self.name, confidence=0.75,
+                sources=[
+                    {"type": "kb", "filename": "quote.pdf", "score": 0.46, "text": "R1,234 quotation"},
+                    {"type": "kb", "filename": "other.pdf", "score": 0.3, "text": ""},
+                    {"type": "conversation", "filename": "chat", "score": 0.9, "text": "irrelevant history"},
+                ],
+            )
+
+    await SourcedSkill()(_inp())
+    assert captured["context"] == "R1,234 quotation"
+
+
+@pytest.mark.asyncio
+async def test_apply_context_empty_when_no_kb_sources(monkeypatch):
+    captured = {}
+
+    async def _check(question, answer, context=""):
+        captured["context"] = context
+        return {"verdict": "pass", "defects": [], "checker_ms": 1}
+
+    monkeypatch.setattr(verification, "adversarial_check", _check)
+    skill = DummySkill()
+    skill.verification_policy = "adversarial"
+    await skill(_inp())
+    assert captured["context"] == ""
 
 
 # ── verdict parsing (local 8B models return messy JSON) ───────────────────────

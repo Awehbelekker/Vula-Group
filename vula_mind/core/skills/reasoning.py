@@ -35,7 +35,7 @@ class ReasoningSkill(BaseSkill):
                 )
                 sources = [
                     {"type": "kb", "filename": c.get("filename", "?"),
-                     "score": round(c.get("score", 0.0), 3)}
+                     "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
                     for c in chunks
                 ]
         except Exception as exc:
@@ -52,15 +52,21 @@ class ReasoningSkill(BaseSkill):
             "WhatsApp — you file them into the knowledge base automatically. If asked about "
             "uploading, tell them to just attach the file in this chat."
         )
+        # Context before history, and each labelled for precedence — a real DIGG-tenant bug
+        # (2026-07-27) showed the model answering from a stale, topically-unrelated exchange
+        # several messages back instead of a correctly-retrieved document sitting in the same
+        # prompt, because nothing told it which one to trust when they diverge.
         history = (
-            f"\nConversation so far:\n{inp.conversation_history}\n"
+            f"\nConversation so far (for tone/continuity only — it may be stale or about a "
+            f"different topic; do not treat it as a source of facts):\n{inp.conversation_history}\n"
             if inp.conversation_history else ""
         )
         context_block = (
-            f"\nRelevant context:\n{kb_context}\n"
+            f"\nDocument context (authoritative — if this conflicts with the conversation "
+            f"history below, trust this, not the history):\n{kb_context}\n"
             if kb_context else ""
         )
-        user_msg = f"{history}{context_block}\nQuestion: {inp.question}\n\nAnswer:"
+        user_msg = f"{context_block}{history}\nQuestion: {inp.question}\n\nAnswer:"
 
         try:
             import litellm

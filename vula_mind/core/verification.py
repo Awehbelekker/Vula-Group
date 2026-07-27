@@ -46,7 +46,10 @@ _CHECKER_SYSTEM = (
     "defects: wrong numbers, invented facts or code clauses, contradictions with the task, "
     "unsupported claims. Do NOT rewrite or improve the answer. Respond ONLY with JSON: "
     '{"verdict": "pass" | "fail", "defects": ["..."]}. '
-    'Use "fail" only for a concrete defect, not for style or brevity.'
+    'Use "fail" only for a concrete defect, not for style or brevity. '
+    "If retrieved context is provided below, treat it as ground truth: fail the answer if it "
+    "contradicts the context, or if it ignores information clearly relevant to the task that "
+    "the context contains in favor of unrelated or unsupported claims."
 )
 
 
@@ -57,8 +60,11 @@ def resolve_policy(skill_name: str, class_default: str = POLICY_NONE) -> str:
     return policy if policy in _POLICIES else POLICY_NONE
 
 
-async def adversarial_check(question: str, answer: str) -> Dict[str, Any]:
-    """One checker-framed LLM pass, local-first via the shared router. Returns
+async def adversarial_check(question: str, answer: str, context: str = "") -> Dict[str, Any]:
+    """One checker-framed LLM pass, local-first via the shared router. `context`, when given,
+    is the retrieved KB text the answer should be grounded in — lets the checker catch a
+    defect the generic (question, answer)-only check can't: an answer that ignores correctly-
+    retrieved context in favor of unrelated/stale content (the 2026-07-27 DIGG bug). Returns
     {"verdict": "pass"|"fail"|"checker_error", "defects": [...], "checker_ms": int}."""
     started = time.monotonic()
     try:
@@ -66,6 +72,10 @@ async def adversarial_check(question: str, answer: str) -> Dict[str, Any]:
         from core.llm_router import resolve_generation_route
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route(task_type="verification")
+        context_block = (
+            f"\n\nRetrieved context the answer should be grounded in:\n{context[:_CHECKER_INPUT_CAP]}"
+            if context else ""
+        )
         resp = await asyncio.wait_for(
             litellm.acompletion(
                 model=model,
@@ -73,7 +83,8 @@ async def adversarial_check(question: str, answer: str) -> Dict[str, Any]:
                     {"role": "system", "content": _CHECKER_SYSTEM},
                     {"role": "user", "content":
                         f"Task:\n{question[:_CHECKER_INPUT_CAP]}\n\n"
-                        f"Proposed answer:\n{answer[:_CHECKER_INPUT_CAP]}"},
+                        f"Proposed answer:\n{answer[:_CHECKER_INPUT_CAP]}"
+                        f"{context_block}"},
                 ],
                 temperature=0.0,
                 max_tokens=settings.verification_checker_max_tokens,
@@ -155,7 +166,11 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
             return
 
         # POLICY_ADVERSARIAL
-        check = await adversarial_check(inp.question, result.answer)
+        context = "\n\n".join(
+            s.get("text", "") for s in (result.sources or [])
+            if s.get("type") == "kb" and s.get("text")
+        )
+        check = await adversarial_check(inp.question, result.answer, context=context)
         verdict = check["verdict"]
         outcome = {"pass": "accepted", "fail": "defect_found"}.get(verdict, "checker_error")
         if verdict == "fail":
