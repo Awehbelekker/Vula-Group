@@ -319,6 +319,45 @@ async def test_rag_reply_returns_answer_when_sources_found():
 
 
 @pytest.mark.asyncio
+async def test_rag_reply_passes_phone_as_metadata_to_agent_runner():
+    """2026-07-27 bookings-via-chat gap: commerce_assistant's book_appointment/
+    cancel_appointment need customer_phone/session_id, but _rag_reply never passed
+    metadata through to the agent runner at all."""
+    from types import SimpleNamespace
+
+    captured = {}
+
+    class _FakeRunner:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(final_answer="ok", skill_used="commerce_assistant", confidence=0.8)
+
+    with patch("core.agent_runner.get_agent_runner", return_value=_FakeRunner()):
+        from vula.api.whatsapp import _rag_reply
+        await _rag_reply("tenant-abc", "book me a slot", phone="27821234567")
+
+    assert captured["metadata"] == {"customer_phone": "27821234567", "session_id": "27821234567"}
+
+
+@pytest.mark.asyncio
+async def test_rag_reply_metadata_none_when_no_phone():
+    from types import SimpleNamespace
+
+    captured = {}
+
+    class _FakeRunner:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(final_answer="ok", skill_used="reasoning", confidence=0.8)
+
+    with patch("core.agent_runner.get_agent_runner", return_value=_FakeRunner()):
+        from vula.api.whatsapp import _rag_reply
+        await _rag_reply("tenant-abc", "what standards apply?")
+
+    assert captured["metadata"] is None
+
+
+@pytest.mark.asyncio
 async def test_rag_reply_handles_pipeline_error():
     # Pipeline import itself raises (e.g. missing Qdrant dependency)
     import vula.ingestion.pipeline as _pip

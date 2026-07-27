@@ -113,6 +113,38 @@ def test_llm_fallback_fails_open_on_error(hrm, monkeypatch):
     assert hrm._match_skill("Just tell me something") == "reasoning"
 
 
+# ── Appointment-booking routing (customer-facing, not clickup_admin's internal tasks) ──
+
+@pytest.mark.parametrize("prompt", [
+    "I'd like to book an appointment for Tuesday",
+    "can I book a slot next week?",
+    "book a session with you",
+    "book a consultation please",
+    "I want to make an appointment",
+    "cancel my appointment",
+    "please cancel my booking",
+    "I need to reschedule my appointment",
+    "what are your available slots tomorrow?",
+    "any available times on Friday",
+    "can you check availability for me",
+])
+def test_appointment_booking_routes_to_commerce_assistant(hrm, prompt):
+    assert hrm._match_skill(prompt) == "commerce_assistant", (
+        f"Expected commerce_assistant (booking) for: {prompt!r}"
+    )
+
+
+@pytest.mark.parametrize("prompt", [
+    "book a meeting with Nolo on Friday",
+    "schedule a meeting about the site inspection",
+    "set up a meeting for Monday",
+])
+def test_internal_meeting_scheduling_still_routes_to_clickup(hrm, prompt):
+    """Staff scheduling an internal meeting is a different action from a customer booking an
+    appointment — must not be stolen by the new commerce_assistant booking keywords."""
+    assert hrm._match_skill(prompt) == "clickup_admin", f"Expected clickup_admin for: {prompt!r}"
+
+
 # ── ClickUp routing: meeting / todo / follow-up ───────────────────────────────
 
 @pytest.mark.parametrize("prompt", [

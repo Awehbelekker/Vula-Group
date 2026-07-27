@@ -174,6 +174,70 @@ async def test_retrieve_kb_sources_carry_chunk_text():
     assert sources[0]["type"] == "kb"
 
 
+# ── Booking-focused conditioning (health/services tenants, no storefront) ──────
+
+from core.skills.commerce_assistant import _ASK_TEAM_ONLY, _is_booking_focused
+
+
+@pytest.mark.parametrize("business_type,has_bookings,expected", [
+    ("health", True, True),
+    ("services", True, True),
+    ("health", False, False),   # bookings module not actually enabled — no tools to use
+    ("food", True, False),      # a storefront that also takes bookings stays storefront-first
+    ("retail", True, False),
+    ("", True, False),
+])
+def test_is_booking_focused(business_type, has_bookings, expected):
+    with (
+        patch("core.skills.commerce_assistant._tenant_has_bookings", return_value=has_bookings),
+        patch("core.skills.commerce_assistant._tenant_business_type", return_value=business_type),
+    ):
+        assert _is_booking_focused(TENANT) is expected
+
+
+def test_booking_focused_prompt_has_no_storefront_copy():
+    skill = CommerceAssistantSkill()
+    prompt = skill._system_prompt(TENANT, kb_context="", booking_focused=True)
+    assert "fish" not in prompt.lower()
+    assert "cart" not in prompt.lower()
+    assert "list_availability" in prompt
+    assert "book_appointment" in prompt
+    assert "cancel_appointment" in prompt
+
+
+def test_storefront_prompt_unchanged_by_default():
+    skill = CommerceAssistantSkill()
+    prompt = skill._system_prompt(TENANT, kb_context="")
+    assert "fresh fish and chicken delivery business" in prompt
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_uses_ask_team_only_tools_when_booking_focused():
+    skill = CommerceAssistantSkill()
+    captured = {}
+
+    async def _fake_completion(*a, **kw):
+        # Only the first (tool-offering) call includes "tools" — a same-turn escalation
+        # retry (looks_unreliable) omits it; capture just the one we care about.
+        if "tools" in kw:
+            captured["tools"] = kw["tools"]
+        return _msg("A confident, complete-looking answer with plenty of content in it.")
+
+    with (
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.commerce_assistant.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        await skill._agent_loop("sys", "", "book me a slot",
+                                {"tenant_id": TENANT, "session_id": "s", "customer_phone": "s",
+                                 "bookings": True, "booking_focused": True, "current_message": "book me a slot"})
+
+    tool_names = {t["function"]["name"] for t in captured["tools"]}
+    expected_ask_team = {t["function"]["name"] for t in _ASK_TEAM_ONLY}
+    assert tool_names == expected_ask_team | {"list_availability", "book_appointment", "cancel_appointment"}
+    assert "list_products" not in tool_names
+
+
 # ── WhatsApp handler wiring ───────────────────────────────────────────────────
 
 @pytest.mark.asyncio

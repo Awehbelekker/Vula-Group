@@ -57,10 +57,18 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "on letterhead", "on our letterhead", "draft a letter", "draft a proposal",
                              "draft a fee proposal", "draft me a letter", "draft me a proposal",
                              "write a letter", "write me a letter"],
-    # Commerce next — clear ordering intent
+    # Commerce next — clear ordering intent, plus appointment-booking intent (the skill's
+    # BOOKING_TOOL_SPECS, gated per-tenant by _tenant_has_bookings). Phrased to never collide
+    # with clickup_admin's internal-task "book/schedule a meeting" keywords above (customer
+    # booking an appointment vs. staff scheduling a meeting are different actions).
     "commerce_assistant":   ["order", "buy", "cart", "checkout", "stock", "in stock", "menu",
                              "catalog", "catalogue", "track order", "add to cart",
-                             "product", "fish", "seafood", "catch"],
+                             "product", "fish", "seafood", "catch",
+                             "book an appointment", "book a slot", "book a session",
+                             "book a consultation", "make an appointment",
+                             "cancel my appointment", "cancel my booking",
+                             "reschedule my appointment", "available slots",
+                             "available times", "check availability"],
     # Calculation intent BEFORE architecture_planning so "how many seats / what
     # width / occupancy" get deterministic arithmetic (computed, not guessed).
     "calculations":         ["how many seats", "how many people", "how many can", "how many bays",

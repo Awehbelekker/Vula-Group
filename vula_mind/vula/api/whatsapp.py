@@ -604,7 +604,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         set_request_tenant(tenant_id)
     except Exception:
         pass
-    reply = await _rag_reply(tenant_id, text, conversation_history=history)
+    reply = await _rag_reply(tenant_id, text, conversation_history=history, phone=phone)
 
     # ── Escalate-and-learn: if the agent isn't confident, reuse a learned answer,
     # else ask a human helper on WhatsApp and hold the customer with a friendly note.
@@ -1178,6 +1178,36 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             except Exception as exc:
                 logger.warning("commit_inbound_document failed for %s: %s", result.filename, exc)
 
+        if category in _CONTACT_DOC_CATEGORIES:
+            try:
+                from vula.commerce import service as commerce_service
+                cf = fields or {}
+                cname = (cf.get("name") or "").strip()
+                if cname:
+                    cphone = "".join(c for c in (cf.get("phone") or "") if c.isdigit())
+                    if cphone.startswith("0"):
+                        cphone = "27" + cphone[1:]
+                    from uuid import uuid4 as _uuid4
+                    row_c = {
+                        "tenant_id": tenant_id, "phone": cphone or f"nophone-{_uuid4().hex[:10]}",
+                        "name": cname, "email": cf.get("email") or None,
+                        "company": cf.get("company") or None, "title": cf.get("title") or None,
+                        "source": "whatsapp_scan", "created_by": phone,
+                    }
+                    try:
+                        commerce_service._client().table("commerce_contacts").upsert(
+                            row_c, on_conflict="tenant_id,phone").execute()
+                    except Exception as exc2:
+                        if not any(k in str(exc2) for k in ("company", "title", "created_by")):
+                            raise
+                        for k in ("company", "title", "created_by"):
+                            row_c.pop(k, None)
+                        commerce_service._client().table("commerce_contacts").upsert(
+                            row_c, on_conflict="tenant_id,phone").execute()
+                    note = f"📇 Saved *{cname}*" + (f" ({cf['company']})" if cf.get("company") else "") + " to your contacts."
+            except Exception as exc:
+                logger.warning("Business card contact save failed for %s: %s", result.filename, exc)
+
         return note
     except Exception as exc:
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
@@ -1191,8 +1221,12 @@ _DOC_CATEGORIES = [
     "Fee Proposal / Schedule", "Contract / Agreement", "Bill of Quantities (BOQ)",
     "Quote / Estimate", "Invoice", "Drawing / Plan", "Specification",
     "Meeting Minutes", "Programme / Schedule", "Report", "Tender Document",
-    "General Document",
+    "Business Card", "General Document",
 ]
+
+# Business Card fields land straight in commerce_contacts (see the write-back hook in
+# _file_uploaded_document) — separate from _FINANCIAL_DOC_CATEGORIES's money shape.
+_CONTACT_DOC_CATEGORIES = {"Business Card"}
 
 # Categories whose `fields` are extracted in the Smart-Scanner-aligned money shape
 # (supplier/tax_id/total_cents/vat_cents/line_items) and are therefore both arithmetic-
@@ -1295,10 +1329,12 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
                     '"unit_price_cents": integer|null, "total_cents": integer|null}]} — money in '
                     "CENTS (Rands × 100), never Rand floats — this is the same shape/units the "
                     "Smart Scanner already uses, so both pipelines can be verified and booked the "
-                    "same way. For every other category (fee proposal, contract, drawing, "
-                    "specification, etc.), use whatever key structured data best fits — e.g. fee "
-                    "proposal: client, stages, total; contract: parties, value, dates. Use null "
-                    "when unknown."},
+                    "same way. For Business Card, fields MUST use this exact shape: "
+                    '{"name": string|null, "company": string|null, "title": string|null, '
+                    '"phone": string|null, "email": string|null}. For every other category (fee '
+                    "proposal, contract, drawing, specification, etc.), use whatever key "
+                    "structured data best fits — e.g. fee proposal: client, stages, total; "
+                    "contract: parties, value, dates. Use null when unknown."},
                 {"role": "user", "content": f"Filename: {filename}\n\nDocument:\n{text}\n\nJSON:"},
         ]
 
@@ -2069,7 +2105,7 @@ async def _tenant_for_phone(phone: str) -> Optional[str]:
 
 # ─── RAG reply ────────────────────────────────────────────────────────────────
 
-async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "") -> str:
+async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "", phone: str = "") -> str:
     """Answer a question — routes through the multi-agent runner.
 
     The agent uses HRM to pick the right skill(s): KB recall, web research
@@ -2088,10 +2124,16 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
     try:
         from core.agent_runner import get_agent_runner
         runner = get_agent_runner()
+        # customer_phone/session_id — without this, a message that reaches commerce_assistant
+        # via this (knowledge-mode) path instead of the dedicated commerce route had no phone
+        # to attach a booking to: book_appointment recorded no customer_phone, and
+        # cancel_appointment couldn't look the caller up at all (2026-07-27 bookings-via-chat gap).
+        metadata = {"customer_phone": phone, "session_id": phone} if phone else None
         result = await runner.run(
             question=question,
             tenant_id=tenant_id,
             conversation_history=conversation_history,
+            metadata=metadata,
             max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
             max_tokens=700,    # room to hold working facts + show code calcs
             top_k=5,           # retrieve enough to surface the right clause/doc
@@ -2545,25 +2587,47 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
         await _forward_to_n8n_commerce(phone, text, msg_id, tenant_id)
 
 
-def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
-    """Is this phone an owner/staff of the tenant (→ admin agent)?
+_ADMIN_AGENT_ROLES = ("owner", "operations", "staff", "admin", "sales_rep", "manager")
 
-    Source of truth is the per-tenant team registry in vula.api.yoco
-    (_TENANT_TEAM). Adding a tenant's owner/staff there enables the admin agent
-    for them automatically — the same mechanism for every tenant.
+
+def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
+    """Is this phone an owner/staff/rep of the tenant (→ admin agent)?
+
+    DB-driven (vula_team_members), falling back to the static _TENANT_TEAM map in
+    vula.api.yoco for backward compat. Was previously reading ONLY the static map,
+    which meant any team member added purely via the DB/dashboard (e.g. a sales rep
+    added by a manager, never hand-added to yoco.py) was silently invisible here —
+    a real gap now that "sales_rep" is a role reps get added under.
+
+    Deliberately NOT yoco._tenant_team() — that helper is scoped to "who gets order
+    alerts" (owner/manager/operations, or anyone opted into order notifications) and
+    would silently drop a plain "staff"/"admin"/"sales_rep" team member who hasn't
+    opted into order notifications, which is a real behaviour regression for this
+    admin-agent-access check.
     """
-    try:
-        from vula.api.yoco import _TENANT_TEAM
-    except Exception:
-        return False
 
     def _digits(p: str) -> str:
         n = "".join(ch for ch in (p or "") if ch.isdigit())
         return "27" + n[1:] if n.startswith("0") else n
 
     target = _digits(phone)
+    try:
+        from vula.commerce import service as commerce_service
+        rows = (commerce_service._client().table("vula_team_members")
+                .select("whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
+                .execute().data or [])
+        if rows:
+            return any(_digits(r.get("whatsapp") or "") == target
+                       and (r.get("role") or "") in _ADMIN_AGENT_ROLES for r in rows)
+    except Exception as exc:
+        logger.debug("_is_tenant_owner DB lookup skipped: %s", exc)
+
+    try:
+        from vula.api.yoco import _TENANT_TEAM
+    except Exception:
+        return False
     for _name, team_phone, role in _TENANT_TEAM.get(tenant_id, []):
-        if _digits(team_phone) == target and role in ("owner", "operations", "staff", "admin"):
+        if _digits(team_phone) == target and role in _ADMIN_AGENT_ROLES:
             return True
     return False
 
@@ -2713,11 +2777,31 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)
 
+    # Who is this, specifically? Needed so a company with several team members (e.g. a few
+    # sales reps sharing the tenant's WhatsApp number) can be scoped per-caller rather than
+    # every recognized admin getting the identical, full owner-level view. Best-effort — an
+    # unmatched/failed lookup just leaves the caller unscoped (today's behaviour).
+    caller_name, caller_role = None, None
+    try:
+        def _digits(p: str) -> str:
+            n = "".join(ch for ch in (p or "") if ch.isdigit())
+            return "27" + n[1:] if n.startswith("0") else n
+        target = _digits(phone)
+        rows = (commerce_service._client().table("vula_team_members")
+                .select("name,whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
+                .execute().data or [])
+        match = next((r for r in rows if _digits(r.get("whatsapp") or "") == target), None)
+        if match:
+            caller_name, caller_role = match.get("name"), match.get("role")
+    except Exception as exc:
+        logger.debug("caller identity lookup skipped: %s", exc)
+
     skill = get_skill("commerce_admin")
     output = await skill(
         SkillInput(
             question=text, tenant_id=tenant_id, conversation_history=history,
-            metadata={"session_id": f"admin:{phone}", "customer_phone": phone},
+            metadata={"session_id": f"admin:{phone}", "customer_phone": phone,
+                      "caller_name": caller_name, "caller_role": caller_role},
         )
     )
     if not output.success or not output.answer:

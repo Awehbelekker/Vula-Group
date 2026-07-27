@@ -35,6 +35,26 @@ def _tenant_has_bookings(tenant_id: str) -> bool:
     except Exception:
         return False
 
+
+# health/services are the two business types that ship with "bookings" enabled by default
+# (vula/api/tenants.py BUSINESS_TYPES) — the two tenant shapes this skill's hardcoded "fresh
+# fish and chicken delivery" storefront prompt/tool list has never fit. A booking-focused
+# tenant gets a bookings-first prompt and a trimmed tool list (booking tools + ask_team only)
+# instead of 15 product/cart/order tools it has no products or orders to use.
+_BOOKING_FOCUSED_TYPES = {"health", "services"}
+
+
+def _tenant_business_type(tenant_id: str) -> str:
+    try:
+        from vula.api.tenants import get_config
+        return (get_config(tenant_id).get("business_type") or "").lower()
+    except Exception:
+        return ""
+
+
+def _is_booking_focused(tenant_id: str) -> bool:
+    return _tenant_has_bookings(tenant_id) and _tenant_business_type(tenant_id) in _BOOKING_FOCUSED_TYPES
+
 # Known tool names — so we only treat text as a tool call when it actually names one of ours.
 # Populated from TOOL_SPECS + BOOKING_TOOL_SPECS after they're defined (end of module) — was a
 # hand-maintained set that silently drifted: cancel_order was added to TOOL_SPECS but not here,
@@ -545,6 +565,10 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
 # again (see _TOOL_NAMES comment at the top of the module).
 _TOOL_NAMES.update(s["function"]["name"] for s in TOOL_SPECS + BOOKING_TOOL_SPECS)
 
+# Booking-focused tenants (see _is_booking_focused) get this instead of the full storefront
+# TOOL_SPECS — ask_team (the one universal, non-storefront tool) plus the booking tools.
+_ASK_TEAM_ONLY = [t for t in TOOL_SPECS if t["function"]["name"] == "ask_team"]
+
 
 class CommerceAssistantSkill(BaseSkill):
     name = "commerce_assistant"
@@ -564,10 +588,12 @@ class CommerceAssistantSkill(BaseSkill):
             ),
             "customer_phone": inp.metadata.get("customer_phone"),
             "bookings": _tenant_has_bookings(inp.tenant_id),
+            "booking_focused": _is_booking_focused(inp.tenant_id),
             "current_message": inp.question,
         }
         kb_context, sources = await self._retrieve_kb(inp)
-        system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"))
+        system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"),
+                                         booking_focused=ctx["booking_focused"])
 
         try:
             answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx)
@@ -584,7 +610,8 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._fallback(inp, ctx, kb_context, sources)
 
     # ── Prompt + grounding ───────────────────────────────────────────────────
-    def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None) -> str:
+    def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None,
+                       booking_focused: bool = False) -> str:
         kb_block = f"\n\nBusiness knowledge (use this to answer accurately):\n{kb_context}" if kb_context else ""
         lang_block = ""
         try:
@@ -597,6 +624,35 @@ class CommerceAssistantSkill(BaseSkill):
                 )
         except Exception:
             pass
+
+        # health/services tenants (see _is_booking_focused) get a bookings-first prompt instead
+        # of the storefront one below — they have no products, cart, or orders, so the fish-shop
+        # cart/checkout guidance was never applicable and only confused the model into offering
+        # tools it didn't have.
+        if booking_focused:
+            return (
+                "You are a friendly, professional WhatsApp assistant for a South African "
+                "business that takes bookings. Your goal: help customers check availability, "
+                "book, and cancel appointments, and answer questions about the business.\n\n"
+                "Guidelines:\n"
+                "- Reply in the SAME language the customer writes in. South Africans message in "
+                "English, Afrikaans, isiZulu, isiXhosa, Sesotho and more — mirror their language "
+                "naturally and warmly. If they mix languages, follow their lead; if unsure, use "
+                "English.\n"
+                "- To book: find out what they need and when, call list_availability to show "
+                "REAL open times, confirm the exact time back to them, then call "
+                "book_appointment. Never promise or invent a time you haven't confirmed via "
+                "list_availability.\n"
+                "- To cancel an appointment, call cancel_appointment.\n"
+                "- If you can't answer a question about the business itself (services offered, "
+                "pricing, location, custom requests), call *ask_team* with the customer's "
+                "question — a real person is asked on WhatsApp and the customer gets the answer. "
+                "Never invent business facts, and never answer yes/no when you don't know.\n"
+                "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly."
+                + lang_block
+                + kb_block
+            )
+
         # Delivery coverage + fee rules as HARD FACTS — without these the model has invented
         # coverage ("Ja, ons lewer na Timbuktu", live 2026-07-16) instead of escalating.
         delivery_block = ""
@@ -736,7 +792,12 @@ class CommerceAssistantSkill(BaseSkill):
         model, api_key, api_base = await resolve_generation_route(
             task_type="commerce_chat", messages=messages, run_id=run_id)
 
-        tools = TOOL_SPECS + BOOKING_TOOL_SPECS if ctx.get("bookings") else TOOL_SPECS
+        if ctx.get("booking_focused"):
+            tools = _ASK_TEAM_ONLY + BOOKING_TOOL_SPECS
+        elif ctx.get("bookings"):
+            tools = TOOL_SPECS + BOOKING_TOOL_SPECS
+        else:
+            tools = TOOL_SPECS
 
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(
@@ -1662,15 +1723,17 @@ class CommerceAssistantSkill(BaseSkill):
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route()
 
-        try:
-            products = await service.list_products(inp.tenant_id, in_stock_only=True, statuses={"active"})
-            catalog = "\n".join(
-                f"- {p['name']} ({p['slug']}): R{p['price_cents'] / 100:.2f}" for p in products[:30]
-            )
-        except Exception:
-            catalog = ""
+        catalog = ""
+        if not ctx.get("booking_focused"):
+            try:
+                products = await service.list_products(inp.tenant_id, in_stock_only=True, statuses={"active"})
+                catalog = "\n".join(
+                    f"- {p['name']} ({p['slug']}): R{p['price_cents'] / 100:.2f}" for p in products[:30]
+                )
+            except Exception:
+                catalog = ""
 
-        system_msg = self._system_prompt(inp.tenant_id, kb_context)
+        system_msg = self._system_prompt(inp.tenant_id, kb_context, booking_focused=ctx.get("booking_focused", False))
         history_block = f"\nConversation so far:\n{inp.conversation_history}\n" if inp.conversation_history else ""
         catalog_block = f"\nCurrent product list:\n{catalog}\n" if catalog else ""
         user_msg = f"{catalog_block}{history_block}\nCustomer: {inp.question}\n\nReply:"
