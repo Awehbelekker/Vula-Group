@@ -326,6 +326,37 @@ async def test_apply_builds_context_from_kb_sources(emits, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_apply_builds_context_from_tenant_and_training_kb_sources(monkeypatch):
+    """architecture_planning.py's two-pipeline retrieval tags sources "tenant_kb"/
+    "training_kb", not plain "kb" — apply() must still pick both up (substring match)."""
+    captured = {}
+
+    async def _check(question, answer, context=""):
+        captured["context"] = context
+        return {"verdict": "pass", "defects": [], "checker_ms": 1}
+
+    monkeypatch.setattr(verification, "adversarial_check", _check)
+
+    class ArchSourcedSkill(BaseSkill):
+        name = "arch_sourced"
+        description = "test"
+        verification_policy = "adversarial"
+
+        async def run(self, inp: SkillInput) -> SkillOutput:
+            return SkillOutput(
+                answer="answer", skill_name=self.name, confidence=0.75,
+                sources=[
+                    {"type": "tenant_kb", "filename": "past.pdf", "score": 0.5, "text": "practice fee schedule"},
+                    {"type": "training_kb", "filename": "sans.pdf", "score": 0.4, "text": "SANS 10400 clause"},
+                ],
+            )
+
+    await ArchSourcedSkill()(_inp())
+    assert "practice fee schedule" in captured["context"]
+    assert "SANS 10400 clause" in captured["context"]
+
+
+@pytest.mark.asyncio
 async def test_apply_context_empty_when_no_kb_sources(monkeypatch):
     captured = {}
 

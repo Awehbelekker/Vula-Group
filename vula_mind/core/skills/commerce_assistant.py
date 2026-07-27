@@ -712,7 +712,8 @@ class CommerceAssistantSkill(BaseSkill):
             f"[{c.get('filename', 'doc')}]: {c.get('text', '')[:400]}" for c in chunks
         )
         sources = [
-            {"type": "kb", "filename": c.get("filename", "?"), "score": round(c.get("score", 0.0), 3)}
+            {"type": "kb", "filename": c.get("filename", "?"), "score": round(c.get("score", 0.0), 3),
+             "text": c.get("text", "")[:400]}
             for c in chunks
         ]
         return kb_context, sources

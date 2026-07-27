@@ -43,7 +43,7 @@ class ArchitecturePlanningSkill(BaseSkill):
                 ))
                 all_sources.extend([
                     {"type": "tenant_kb", "filename": c.get("filename", "?"),
-                     "score": round(c.get("score", 0.0), 3)}
+                     "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
                     for c in tenant_chunks
                 ])
 
@@ -59,7 +59,7 @@ class ArchitecturePlanningSkill(BaseSkill):
                     ))
                     all_sources.extend([
                         {"type": "training_kb", "filename": c.get("filename", "?"),
-                         "score": round(c.get("score", 0.0), 3)}
+                         "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
                         for c in training_chunks
                     ])
             except Exception as exc:

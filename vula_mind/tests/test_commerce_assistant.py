@@ -156,6 +156,24 @@ async def test_run_falls_back_when_loop_fails():
     assert out.confidence < 0.6  # fallback confidence band
 
 
+# ── KB retrieval (verification-context reuse) ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_retrieve_kb_sources_carry_chunk_text():
+    """sources must carry retrieved text (not just filename/score) so
+    core/verification.py's context-aware adversarial check has something to
+    ground its check against — added alongside reasoning.py/architecture_planning.py."""
+    skill = CommerceAssistantSkill()
+    mock_pipeline = MagicMock()
+    mock_pipeline.query = AsyncMock(return_value=[
+        {"filename": "menu.pdf", "text": "Fresh snoek R185/kg", "score": 0.6},
+    ])
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline):
+        _, sources = await skill._retrieve_kb(SkillInput(question="snoek price", tenant_id=TENANT))
+    assert sources[0]["text"] == "Fresh snoek R185/kg"
+    assert sources[0]["type"] == "kb"
+
+
 # ── WhatsApp handler wiring ───────────────────────────────────────────────────
 
 @pytest.mark.asyncio

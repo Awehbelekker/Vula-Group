@@ -52,6 +52,28 @@ async def test_context_precedes_history_and_is_labelled_authoritative():
 
 
 @pytest.mark.asyncio
+async def test_sources_carry_retrieved_text_for_verification_reuse():
+    """Both tenant_kb and training_kb sources must carry chunk text — verification.py's
+    context builder matches on "kb" as a substring of the source type, so tenant_kb/
+    training_kb need real text just like reasoning.py's plain "kb" sources."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("the answer")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline",
+              return_value=_pipeline_mock([{"filename": "boq.pdf", "text": "Bathroom Bizarre R1,234", "score": 0.5}])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(SkillInput(question="q", tenant_id="digg-demo"))
+
+    kb_sources = [s for s in out.sources if "kb" in s["type"]]
+    assert kb_sources, "expected at least one kb-ish source"
+    assert all(s["text"] == "Bathroom Bizarre R1,234" for s in kb_sources)
+
+
+@pytest.mark.asyncio
 async def test_no_context_omits_context_block():
     captured = {}
 

@@ -166,9 +166,12 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
             return
 
         # POLICY_ADVERSARIAL
+        # "kb" (reasoning.py, commerce_assistant.py) and "tenant_kb"/"training_kb"
+        # (architecture_planning.py's two-pipeline retrieval) are all groundable document
+        # sources — match on substring so any future kb-ish source type is picked up too.
         context = "\n\n".join(
             s.get("text", "") for s in (result.sources or [])
-            if s.get("type") == "kb" and s.get("text")
+            if "kb" in (s.get("type") or "") and s.get("text")
         )
         check = await adversarial_check(inp.question, result.answer, context=context)
         verdict = check["verdict"]
