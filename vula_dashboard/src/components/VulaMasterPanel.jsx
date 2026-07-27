@@ -348,6 +348,7 @@ function HealthPanel({ onError, onViewDetail }) {
   if (!h) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const router = h.llm_router_24h || {}
   const localPct = router.total ? Math.round((router.local / router.total) * 100) : null
+  const vrl = h.vrl_health || {}
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={card}>
@@ -402,6 +403,20 @@ function HealthPanel({ onError, onViewDetail }) {
           <div style={{ fontSize: 12.5 }}>
             Open: <b style={{ color: (h.escalations?.open || 0) > 0 ? C.amber : C.green }}>{h.escalations?.open ?? '—'}</b>
             {h.escalations?.oldest && <div style={{ color: C.muted }}>oldest: {String(h.escalations.oldest).slice(0, 16).replace('T', ' ')}</div>}
+          </div>
+        </div>
+        <div style={{ ...card, flex: 1, minWidth: 220 }}>
+          <h4 style={h4}>✅ VRL verification (30d)</h4>
+          <div style={{ fontSize: 12.5 }}>
+            <b style={{ color: vrl.low_coverage ? C.amber : C.green }}>{vrl.total_events ?? '—'}</b> verify event{vrl.total_events === 1 ? '' : 's'}
+            {vrl.low_coverage && <div style={{ color: C.amber }}>Low coverage — too few events for a pass-rate to mean anything.</div>}
+            {Object.entries(vrl.by_verifier || {}).map(([v, s]) => (
+              <div key={v} style={{ color: C.muted, marginTop: 4 }}>
+                <span style={{ fontFamily: 'monospace' }}>{v}</span>: {s.accepted}/{s.total} accepted
+                {s.defect_found > 0 && <span style={{ color: C.amber }}> · {s.defect_found} defect{s.defect_found === 1 ? '' : 's'} caught</span>}
+              </div>
+            ))}
+            {vrl.last_event_at && <div style={{ color: C.muted, marginTop: 4 }}>last: {String(vrl.last_event_at).slice(0, 16).replace('T', ' ')}</div>}
           </div>
         </div>
         <div style={{ ...card, flex: 1, minWidth: 220 }}>

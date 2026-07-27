@@ -304,6 +304,39 @@ async def master_health():
         out["escalations"] = {"error": str(exc)}
 
     try:
+        # VRL coverage/recalibration signal (2026-07-27) — the verified-reasoning layer's proven
+        # 52%→88% number came from a one-time offline test harness (17 labeled cases, then 481),
+        # not from live traffic, and nothing previously surfaced whether real verify events are
+        # even accumulating. 30-day window (not 24h like the router stats above) because verify
+        # events are sparse — no skill has verification_policy="adversarial" enabled by default
+        # today, only calculations.py's deterministic self-check. A low count here IS the finding.
+        since30 = (now - timedelta(days=30)).isoformat()
+        vrows = (db.table("vula_reasoning_telemetry")
+                 .select("verifier,outcome,escalated,created_at")
+                 .eq("system", "verified-reasoning")
+                 .gte("created_at", since30).order("created_at", desc=True).limit(2000)
+                 .execute().data or [])
+        by_verifier: dict[str, dict] = {}
+        for r in vrows:
+            v = r.get("verifier") or "unknown"
+            b = by_verifier.setdefault(v, {"total": 0, "accepted": 0, "defect_found": 0, "escalated": 0})
+            b["total"] += 1
+            if r.get("outcome") == "accepted":
+                b["accepted"] += 1
+            elif r.get("outcome") == "defect_found":
+                b["defect_found"] += 1
+            if r.get("escalated"):
+                b["escalated"] += 1
+        out["vrl_health"] = {
+            "window_days": 30, "total_events": len(vrows),
+            "last_event_at": vrows[0]["created_at"] if vrows else None,
+            "by_verifier": by_verifier,
+            "low_coverage": len(vrows) < 20,  # below this, a pass-rate % is noise, not signal
+        }
+    except Exception as exc:
+        out["vrl_health"] = {"error": str(exc)}
+
+    try:
         since = (now - timedelta(hours=24)).isoformat()
         rows = (db.table("vula_webhook_failures").select("*")
                 .gte("created_at", since).order("created_at", desc=True).limit(50).execute().data or [])
