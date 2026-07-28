@@ -26,6 +26,35 @@ _NO_ANSWER = re.compile(
     re.IGNORECASE,
 )
 
+# Explicit complaint/frustration words (English + Afrikaans) — a signal about the CUSTOMER's
+# message, independent of how confident the bot's own reply looked. Before this, staff only
+# got pulled in when the bot doubted itself; an upset customer getting a calm, confidently
+# wrong or unhelpful reply never escalated at all.
+_FRUSTRATION_WORDS = re.compile(
+    r"(ridiculous|terrible|useless|pathetic|waste of (my )?(time|money)|not happy|"
+    r"unacceptable|disgusted|disgusting|(this is |so )?annoying|angry|furious|fed up|"
+    r"sick of|worst (service|experience)|scam|rip.?off|shocking service|"
+    r"belaglik|omgekrap|woedend|totale mors|swak diens|verskriklike diens)",
+    re.IGNORECASE,
+)
+
+
+def customer_seems_frustrated(text: str) -> bool:
+    """Cheap heuristic on the customer's own message — no LLM call needed. Catches explicit
+    complaint words, shouting (mostly-caps with real content, not a short "OK"/order number),
+    and repeated ?!/!! punctuation, the common typed signals of frustration."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if _FRUSTRATION_WORDS.search(stripped):
+        return True
+    letters = [c for c in stripped if c.isalpha()]
+    if len(letters) >= 8 and sum(1 for c in letters if c.isupper()) / len(letters) > 0.8:
+        return True
+    if re.search(r"[!?]{3,}", stripped):
+        return True
+    return False
+
 
 def _client():
     from vula.commerce import service as cs
@@ -40,10 +69,13 @@ def _tokens(s: str) -> set:
     return {w for w in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(w) > 2}
 
 
-def should_escalate(answer: str, confidence: float, threshold: float = 0.4) -> bool:
+def should_escalate(answer: str, confidence: float, threshold: float = 0.4,
+                    customer_text: str = "") -> bool:
     if not answer or not answer.strip():
         return True
     if _NO_ANSWER.search(answer):
+        return True
+    if customer_text and customer_seems_frustrated(customer_text):
         return True
     return confidence is not None and confidence < threshold
 

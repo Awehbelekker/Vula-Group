@@ -378,6 +378,47 @@ async def test_rag_reply_handles_pipeline_error():
         _pip.VulaIngestionPipeline = original
 
 
+# ── _maybe_escalate_and_learn — customer-sentiment flag to the helper ─────────
+
+@pytest.mark.asyncio
+async def test_escalation_flags_frustrated_customer_to_helper():
+    from vula.api.whatsapp import _maybe_escalate_and_learn
+
+    with (
+        patch("vula.escalation.find_learned_answer", return_value=None),
+        patch("vula.escalation.create_escalation",
+              return_value={"id": "e1", "helper_phone": "27821112222", "helper_name": "Staci"}),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
+    ):
+        reply = await _maybe_escalate_and_learn(
+            "off-the-hook", "27820001111", "This is ridiculous, worst service ever!!!",
+            "Sorry, I'm not sure about that.", confidence=0.9,
+        )
+
+    assert "check with the team" in reply.lower()
+    helper_msg = mock_send.call_args[0][1]
+    assert "frustrated" in helper_msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_escalation_no_frustration_flag_for_normal_question():
+    from vula.api.whatsapp import _maybe_escalate_and_learn
+
+    with (
+        patch("vula.escalation.find_learned_answer", return_value=None),
+        patch("vula.escalation.create_escalation",
+              return_value={"id": "e1", "helper_phone": "27821112222", "helper_name": "Staci"}),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
+    ):
+        await _maybe_escalate_and_learn(
+            "off-the-hook", "27820001111", "Do you deliver to Bellville?",
+            "I don't know that one.", confidence=0.9,
+        )
+
+    helper_msg = mock_send.call_args[0][1]
+    assert "frustrated" not in helper_msg.lower()
+
+
 # ── _run_commerce_assistant — voice/language threading ────────────────────────
 
 @pytest.mark.asyncio
