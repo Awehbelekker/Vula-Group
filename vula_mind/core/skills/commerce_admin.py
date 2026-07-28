@@ -205,6 +205,43 @@ DRAFT_TOOLS = [
             "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
         }, "required": ["document_type", "brief"]}}},
 ]
+CONTACT_TOOLS = [
+    {"type": "function", "function": {
+        "name": "create_contact",
+        "description": (
+            "Save a new contact (e.g. from a scanned business card or a client you just met) "
+            "to your contact book."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}, "phone": {"type": "string"},
+            "company": {"type": "string"}, "email": {"type": "string"},
+            "title": {"type": "string"}, "notes": {"type": "string"}},
+            "required": ["name"]}}},
+]
+MEETING_TOOLS = [
+    {"type": "function", "function": {
+        "name": "log_meeting",
+        "description": (
+            "Log a client/site meeting from a description (usually a voice note transcript): "
+            "pulls out attendees, a summary, and any action items, and files it against the "
+            "contact so you can pull it up later or turn it into a proposal."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "notes": {"type": "string", "description": "The meeting description/transcript, as given."},
+            "contact_name_or_phone": {"type": "string", "description": "Who the meeting was with, if known."}},
+            "required": ["notes"]}}},
+    {"type": "function", "function": {
+        "name": "draft_followup_email",
+        "description": (
+            "Draft a thank-you / follow-up email from a logged meeting (attendees, what was "
+            "discussed, next steps). Saved as a Gmail DRAFT for you to review and send yourself "
+            "— it is never sent automatically."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "to_email": {"type": "string"}, "meeting_notes": {"type": "string"},
+            "subject": {"type": "string"}},
+            "required": ["to_email", "meeting_notes"]}}},
+]
 SUBSCRIPTION_TOOLS = [
     {"type": "function", "function": {
         "name": "create_subscription",
@@ -240,19 +277,34 @@ _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
 ]
-# Always available (universally useful, not tied to a business type): marketing copy, letter drafting.
+# Always available (universally useful, not tied to a business type): marketing copy, letter
+# drafting, and — since a sales rep's own contact book/meeting log is just as relevant to a
+# shop owner fielding a client relationship — contacts and meeting logging too.
 _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
-                   + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS + BROADCAST_TOOLS)
+                   + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS
+                   + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS)
+
+# A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
+# scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
+# (stock, invoices, broadcasts, products) an individual rep has no business touching.
+_REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + DRAFT_TOOLS + BOOKING_TOOLS
+                   + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
+                   + [t for t in TOOL_SPECS if t["function"]["name"] == "finance_insights"])
 
 
-def _tools_for(tenant_id: str) -> List[Dict[str, Any]]:
-    """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on)."""
+def _tools_for(tenant_id: str, role: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
+    role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
+    which modules the tenant has enabled — a rep never gets shop-wide stock/invoice/broadcast
+    tools just because the tenant (e.g. their employer) has those modules on."""
+    if role == "sales_rep":
+        return list(_REP_TOOL_SPECS)
     try:
         from vula.api.tenants import enabled_modules
         mods = set(enabled_modules(tenant_id) or [])
     except Exception:
         mods = set()
-    tools = list(TOOL_SPECS) + MARKETING_TOOLS + DRAFT_TOOLS   # always on
+    tools = list(TOOL_SPECS) + MARKETING_TOOLS + DRAFT_TOOLS + CONTACT_TOOLS + MEETING_TOOLS  # always on
     show_all = not mods                       # no config yet → show everything
     for mod, group in _GATED_GROUPS:
         if show_all or mod in mods:
@@ -268,9 +320,11 @@ class CommerceAdminSkill(BaseSkill):
     )
 
     async def run(self, inp: SkillInput) -> SkillOutput:
-        ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone")}
-        tools = _tools_for(inp.tenant_id)
-        system_msg = self._system_prompt(inp.tenant_id)
+        caller_role = inp.metadata.get("caller_role")
+        ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
+               "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
+        tools = _tools_for(inp.tenant_id, role=caller_role)
+        system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"])
         try:
             answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx, tools)
             if not answer:
@@ -280,17 +334,33 @@ class CommerceAdminSkill(BaseSkill):
             logger.warning("commerce_admin loop failed (%s)", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
-    def _system_prompt(self, tenant_id: str) -> str:
+    def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None) -> str:
+        if role == "sales_rep":
+            who = f"{name} — a sales rep/agent" if name else "a sales rep/agent"
+            return (
+                f"You are {who}'s personal WhatsApp business assistant. You are talking to THEM, "
+                "not a customer — help them run their day: capturing contacts (e.g. from a scanned "
+                "business card), logging what happened in a client meeting from a voice note, "
+                "drafting a proposal/letter onto branded letterhead, drafting (never sending) a "
+                "follow-up email, checking availability, and booking a follow-up meeting. Only offer "
+                "what your tools actually support; if you genuinely lack a tool for something, say so "
+                "plainly. Use tools to read and change REAL data — never invent facts about a contact "
+                "or meeting. Keep replies short and WhatsApp-friendly.\n"
+                "IMPORTANT — confirm before anything that can't be undone or reaches someone else: "
+                "sending a proposal document, drafting an email (drafts are safe/reversible so this is "
+                "lower-stakes, but still confirm the recipient), or booking a meeting. Show the details "
+                "and wait for a clear 'yes' first."
+            )
         return (
             "You are the AI business assistant for the OWNER of a South African business "
             "(you are talking to the owner/staff, not a customer). Help them run the business with "
             "the tools available to you — which may include sales, orders, stock, invoices/quotes, "
             "expenses, products, bookings/appointments, marketing copy, financial insights, recurring "
-            "orders, customers, and broadcasts. Only offer what your tools actually support; if you "
-            "genuinely lack a tool for something, say so plainly. Use tools to read and change REAL "
-            "data — never invent figures. Show money in ZAR (e.g. R1 250.00). Keep replies short and "
-            "WhatsApp-friendly with the key numbers, and confirm back what you changed after any "
-            "update.\n"
+            "orders, customers, contacts, meeting logs, and broadcasts. Only offer what your tools "
+            "actually support; if you genuinely lack a tool for something, say so plainly. Use tools "
+            "to read and change REAL data — never invent figures. Show money in ZAR (e.g. R1 250.00). "
+            "Keep replies short and WhatsApp-friendly with the key numbers, and confirm back what you "
+            "changed after any update.\n"
             "IMPORTANT — confirm before acting on anything that spends money, sends messages to "
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding. Show the details and wait for a clear 'yes' first. For send_broadcast, "
@@ -436,6 +506,9 @@ class CommerceAdminSkill(BaseSkill):
             if name == "draft_letter":
                 from core.skills.draft_admin import draft_letter
                 return await draft_letter(args, tid, ctx.get("phone") or "")
+            if name == "create_contact":     return await self._create_contact(tid, args, ctx)
+            if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
+            if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
             return {"error": str(exc)}
@@ -745,6 +818,124 @@ class CommerceAdminSkill(BaseSkill):
         return {"name": match.get("name"), "phone": match.get("phone"),
                 "orders": match.get("orders", 0), "lifetime_value": self._rands(match.get("total_spent_cents")),
                 "last_seen": match.get("last_order_at") or match.get("last_seen_at")}
+
+    async def _create_contact(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        from uuid import uuid4
+        name = (args.get("name") or "").strip()
+        if not name:
+            return {"error": "Need at least a name."}
+        phone = re.sub(r"\D", "", args.get("phone") or "")
+        if phone.startswith("0"):
+            phone = "27" + phone[1:]
+        # commerce_contacts' unique key is (tenant_id, phone) — a card with no printed number
+        # still needs one to save under; a placeholder keeps the save working, editable later.
+        no_phone = not phone
+        if no_phone:
+            phone = f"nophone-{uuid4().hex[:10]}"
+        row = {
+            "tenant_id": tid, "phone": phone, "name": name,
+            "email": args.get("email") or None, "company": args.get("company") or None,
+            "title": args.get("title") or None, "notes": args.get("notes") or None,
+            "source": "whatsapp_admin", "created_by": ctx.get("phone") or None,
+        }
+        try:
+            service._client().table("commerce_contacts").upsert(row, on_conflict="tenant_id,phone").execute()
+        except Exception as exc:
+            # company/title/created_by are from migration 110 — degrade gracefully if it hasn't
+            # run yet in this environment rather than failing the save outright.
+            if not any(k in str(exc) for k in ("company", "title", "created_by")):
+                raise
+            for k in ("company", "title", "created_by"):
+                row.pop(k, None)
+            service._client().table("commerce_contacts").upsert(row, on_conflict="tenant_id,phone").execute()
+        return {"saved": name, "phone": None if no_phone else phone, "company": args.get("company")}
+
+    async def _log_meeting(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        notes = (args.get("notes") or "").strip()
+        if not notes:
+            return {"error": "Need the meeting notes/transcript."}
+
+        # Resolve which contact this was with, if named — links the log to their record.
+        customer_phone = None
+        who = (args.get("contact_name_or_phone") or "").strip()
+        if who:
+            digits = re.sub(r"\D", "", who)
+            try:
+                q = service._client().table("commerce_contacts").select("phone,name").eq("tenant_id", tid)
+                rows = (q.eq("phone", digits).execute().data if digits
+                        else q.ilike("name", f"%{who}%").limit(1).execute().data) or []
+                if rows:
+                    customer_phone = rows[0]["phone"]
+            except Exception as exc:
+                logger.debug("meeting contact lookup skipped: %s", exc)
+
+        # One LLM pass: turn the raw voice-note transcript into attendees/summary/action items.
+        summary, fields = notes[:400], {"raw_notes": notes}
+        try:
+            import litellm
+            litellm.drop_params = True
+            model, api_key, api_base = await resolve_generation_route()
+            resp = await litellm.acompletion(
+                model=model, temperature=0.1, max_tokens=400, api_key=api_key, api_base=api_base,
+                messages=[
+                    {"role": "system", "content": (
+                        "Extract structured meeting notes from this text. Return STRICT JSON only: "
+                        '{"summary": "1-2 sentences", "attendees": ["..."], "action_items": ["..."]}')},
+                    {"role": "user", "content": notes[:3000]},
+                ])
+            raw = (resp.choices[0].message.content or "").strip().replace("```json", "").replace("```", "").strip()
+            i, j = raw.find("{"), raw.rfind("}")
+            if i >= 0 and j > i:
+                data = json.loads(raw[i:j + 1])
+                summary = data.get("summary") or summary
+                fields = {"attendees": data.get("attendees") or [],
+                          "action_items": data.get("action_items") or [], "raw_notes": notes}
+        except Exception as exc:
+            logger.debug("meeting extraction failed, filing raw notes: %s", exc)
+
+        from vula.integrations.doc_filing import file_document
+        fname = f"meeting-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.txt"
+        await file_document(
+            tid, filename=fname, data=None, content_type="text/plain",
+            category="meeting_notes", summary=summary, fields=fields,
+            source="whatsapp_admin", filed_by=ctx.get("phone") or "", status="filed",
+            customer_phone=customer_phone,
+        )
+        return {"logged": True, "summary": summary, "action_items": fields.get("action_items") or [],
+                "linked_contact": bool(customer_phone)}
+
+    async def _draft_followup_email(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        to = (args.get("to_email") or "").strip()
+        if not to:
+            return {"error": "Need the recipient's email."}
+        notes = (args.get("meeting_notes") or "").strip()
+        subject = (args.get("subject") or "Great meeting you").strip()
+        body = notes
+        try:
+            import litellm
+            litellm.drop_params = True
+            model, api_key, api_base = await resolve_generation_route()
+            resp = await litellm.acompletion(
+                model=model, temperature=0.3, max_tokens=350, api_key=api_key, api_base=api_base,
+                messages=[
+                    {"role": "system", "content": "Write a short, warm, professional thank-you/"
+                     "follow-up email body from these meeting notes. Plain text, no markdown, no "
+                     "subject line, no placeholder brackets."},
+                    {"role": "user", "content": notes[:2000]},
+                ])
+            body = (resp.choices[0].message.content or notes).strip() or notes
+        except Exception as exc:
+            logger.debug("followup email generation failed, using raw notes: %s", exc)
+        try:
+            from vula.google import service as google_service
+            from vula.google.service import GoogleNotConnected
+            await google_service.gmail_create_draft(tid, to, subject, body)
+        except GoogleNotConnected:
+            return {"error": "Google isn't connected for this account yet — connect it from the dashboard first."}
+        except Exception as exc:
+            return {"error": f"Couldn't create the Gmail draft: {exc}"}
+        return {"drafted": True, "to": to, "subject": subject,
+                "note": "Saved as a Gmail DRAFT — review and send it yourself, nothing was sent automatically."}
 
     async def _send_broadcast(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         audience = args.get("audience", "all")

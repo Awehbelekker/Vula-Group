@@ -409,16 +409,21 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
     """
     try:
         from vula import escalation as esc
-        if not esc.should_escalate(reply, confidence):
+        if not esc.should_escalate(reply, confidence, customer_text=text):
             return reply
         learned = esc.find_learned_answer(tenant_id, text)
         if learned:
             return learned
         row = esc.create_escalation(tenant_id, phone, text)
         if row:
+            # Flag it to the helper when the customer's OWN message reads frustrated — a
+            # confidently-wrong-or-unhelpful reply to an upset customer used to never surface
+            # this to staff at all, since escalation only looked at the bot's own confidence.
+            prefix = ("😠 This customer sounds frustrated — please prioritise this one.\n\n"
+                     if esc.customer_seems_frustrated(text) else "❓ ")
             await _send_reply(
                 row["helper_phone"],
-                f"❓ A customer asked:\n\n\"{text.strip()}\"\n\nReply to this message with "
+                f"{prefix}A customer asked:\n\n\"{text.strip()}\"\n\nReply to this message with "
                 f"the answer — I'll send it to them and remember it.",
                 tenant_id=tenant_id,
             )
@@ -487,6 +492,32 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
             if not _tenants.is_active(tenant_id):
                 logger.info("Dropping inbound WA message for suspended tenant %s", tenant_id)
                 return
+
+    # ── sales_rep team member → the rep-scoped commerce admin agent, not the generic
+    # construction knowledge-base assistant below. This function (_handle_message) is the
+    # ONLY dispatch path for "knowledge"-mode tenant lines (e.g. digg-demo) — a tenant using
+    # that mode never reaches _handle_commerce_message, where commerce_admin normally lives, so
+    # without this a sales_rep team member added to a knowledge-mode tenant would be silently
+    # invisible here regardless of their vula_team_members role. Deliberately scoped to ONLY
+    # the "sales_rep" role (not owner/staff/admin/manager) so the existing RAG/KB behaviour a
+    # tenant's real recognized team already relies on here is completely unchanged.
+    if tenant_id:
+        try:
+            from vula.commerce import service as _commerce_service
+
+            def _digits(p: str) -> str:
+                n = "".join(ch for ch in (p or "") if ch.isdigit())
+                return "27" + n[1:] if n.startswith("0") else n
+            target = _digits(phone)
+            rep_rows = (_commerce_service._client().table("vula_team_members")
+                       .select("whatsapp").eq("tenant_id", tenant_id).eq("role", "sales_rep")
+                       .eq("active", True).execute().data or [])
+            if any(_digits(r.get("whatsapp") or "") == target for r in rep_rows):
+                if await _run_commerce_admin(phone, text, tenant_id):
+                    return
+                # Admin agent failed → fall through to the normal KB/RAG flow below.
+        except Exception as exc:
+            logger.debug("sales_rep routing check skipped: %s", exc)
 
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _DELETE_RE.match(text):
