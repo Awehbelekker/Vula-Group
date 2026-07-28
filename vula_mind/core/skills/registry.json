@@ -1,10 +1,10 @@
 {
   "version": "1.0.0",
-  "description": "Universal Soul AI Skill Registry — drop a file, add an entry, submit a PR.",
+  "description": "Vula skill catalog. NOT currently consulted for routing — core/hrm/orchestrator.py's SKILL_KEYWORDS dict + the keyword-miss LLM fallback are the real source of truth (loaded into HRMOrchestrator._skill_registry but never read after load, as of 2026-07-28). Kept accurate anyway so it isn't misleading documentation; core/skills/loader.py's _SKILLS dict is the authoritative list of what's actually implemented.",
   "skills": [
     {
       "name": "reasoning",
-      "description": "General-purpose reasoning and analysis",
+      "description": "General-purpose reasoning and analysis — the default fallback skill",
       "trigger_keywords": [
         "think", "reason", "analyse", "analyze", "explain", "understand",
         "what", "why", "how", "should", "would", "could"
@@ -25,19 +25,6 @@
       "device_pref": "any",
       "timeout_ms": 15000,
       "module": "core.skills.web_search"
-    },
-    {
-      "name": "code_execution",
-      "description": "Write, debug, review and execute code",
-      "trigger_keywords": [
-        "write code", "build", "script", "debug", "fix", "error",
-        "function", "class", "python", "javascript", "api", "implement",
-        "program", "develop", "refactor", "test"
-      ],
-      "model_tier": "14b",
-      "device_pref": "desktop",
-      "timeout_ms": 60000,
-      "module": "core.skills.code_execution"
     },
     {
       "name": "memory_recall",
@@ -64,36 +51,11 @@
       "module": "core.skills.file_parse"
     },
     {
-      "name": "image_analysis",
-      "description": "Analyse images, screenshots and visual content",
-      "trigger_keywords": [
-        "image", "photo", "picture", "screenshot", "look at",
-        "what do you see", "describe", "ocr", "read this image"
-      ],
-      "model_tier": "7b",
-      "device_pref": "desktop",
-      "timeout_ms": 30000,
-      "module": "core.skills.image_analysis",
-      "requires_vision": true
-    },
-    {
-      "name": "financial_reasoning",
-      "description": "Financial analysis, trading logic, investment reasoning",
-      "trigger_keywords": [
-        "trade", "invest", "portfolio", "price", "market", "stock",
-        "profit", "loss", "revenue", "cost", "budget", "financial", "money"
-      ],
-      "model_tier": "14b",
-      "device_pref": "desktop",
-      "timeout_ms": 45000,
-      "module": "core.skills.financial_reasoning"
-    },
-    {
       "name": "architecture_planning",
-      "description": "System design, software architecture, technical planning",
+      "description": "South African architecture and construction planning — SACAP, JBCC, NHBRC, SANS 10400, BOQ",
       "trigger_keywords": [
         "architect", "design system", "plan", "structure", "schema",
-        "database", "api design", "microservice", "infrastructure"
+        "sacap", "jbcc", "nhbrc", "sans", "boq", "construction"
       ],
       "model_tier": "14b",
       "device_pref": "desktop",
@@ -102,16 +64,77 @@
     },
     {
       "name": "commerce_assistant",
-      "description": "Conversational shopping assistant — browse products, build a cart, checkout, track orders",
+      "description": "Conversational shopping + bookings assistant — browse products, build a cart, checkout, track orders, book/cancel appointments",
       "trigger_keywords": [
         "order", "buy", "cart", "checkout", "stock", "menu", "catalog",
-        "catalogue", "delivery", "track order", "add to cart", "product",
-        "fish", "seafood", "catch"
+        "catalogue", "track order", "add to cart", "product", "fish",
+        "seafood", "catch", "book an appointment", "cancel my booking",
+        "check availability"
       ],
       "model_tier": "7b",
       "device_pref": "any",
       "timeout_ms": 45000,
       "module": "core.skills.commerce_assistant"
+    },
+    {
+      "name": "commerce_admin",
+      "description": "Merchant/staff admin agent (stock, invoices, broadcasts) and the per-seat sales-rep agent (contacts, meetings, proposals) — reached via a dedicated role-gated path in vula/api/whatsapp.py, not the keyword router",
+      "module": "core.skills.commerce_admin"
+    },
+    {
+      "name": "clickup_admin",
+      "description": "ClickUp task/reminder management — explicit task-management phrasing only",
+      "module": "core.skills.clickup_admin"
+    },
+    {
+      "name": "calculations",
+      "description": "Deterministic arithmetic (occupancy, parking bays, cost estimates) — self-verifies via safe_eval",
+      "module": "core.skills.calculations"
+    },
+    {
+      "name": "standards_lookup",
+      "description": "Cited search of the SA construction code/standards library",
+      "module": "core.skills.standards_lookup"
+    },
+    {
+      "name": "google_admin",
+      "description": "Google Drive + Gmail — provider-named phrasing only",
+      "module": "core.skills.google_admin"
+    },
+    {
+      "name": "microsoft_admin",
+      "description": "OneDrive + Outlook (draft-only email)",
+      "module": "core.skills.microsoft_admin"
+    },
+    {
+      "name": "email_admin",
+      "description": "Generic IMAP/SMTP mailbox — read, draft, reply, follow-up digest",
+      "module": "core.skills.email_admin"
+    },
+    {
+      "name": "finance_admin",
+      "description": "Money/budget/supplier questions answered from the finance ledger",
+      "module": "core.skills.finance_admin"
+    },
+    {
+      "name": "draft_admin",
+      "description": "Letters/proposals on tenant letterhead (fee proposals, appointment letters, meeting minutes)",
+      "module": "core.skills.draft_admin"
+    },
+    {
+      "name": "code_execution",
+      "description": "Not separately implemented — core/skills/loader.py aliases this to 'reasoning' at runtime",
+      "alias_of": "reasoning"
+    },
+    {
+      "name": "image_analysis",
+      "description": "Not separately implemented — aliased to 'file_parse' (handles image OCR via the ingestion pipeline)",
+      "alias_of": "file_parse"
+    },
+    {
+      "name": "financial_reasoning",
+      "description": "Not separately implemented — aliased to 'architecture_planning' (construction cost questions)",
+      "alias_of": "architecture_planning"
     }
   ]
 }

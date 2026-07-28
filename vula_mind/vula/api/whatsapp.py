@@ -2294,7 +2294,7 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
                 logger.warning("template send failed (%s -> %s): %s", template, to, resp.text[:200])
             elif tenant_id:
                 # Stamp last_notified_at for a recognized team member (keep-window-open nudge,
-                # migration 108) — single hook point covers every proactive template send across
+                # migration 112) — single hook point covers every proactive template send across
                 # every tenant/call site (server.py's OTH schedules, field_ops.py's DIGG sends,
                 # any future one), not just the nudge feature's own sends. Best-effort.
                 try:
@@ -2304,7 +2304,7 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
                         {"last_notified_at": datetime.now(timezone.utc).isoformat()}
                     ).eq("tenant_id", tenant_id).eq("whatsapp", number).execute()
                 except Exception as exc:
-                    logger.debug("last_notified_at stamp skipped (run migration 108?): %s", exc)
+                    logger.debug("last_notified_at stamp skipped (run migration 112?): %s", exc)
             return resp.is_success
     except Exception as exc:
         logger.warning("template send failed (%s -> %s): %s", template, to, exc)
@@ -2526,7 +2526,7 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     except Exception:
         pass
 
-    # Stamp last_message_at for a recognized team member (keep-window-open nudge, migration 108) —
+    # Stamp last_message_at for a recognized team member (keep-window-open nudge, migration 112) —
     # ANY reply resets their 24h window, so this is what lets the nudge check (see whatsapp.py's
     # scheduled poller hook) know a member is still reachable via free text and skip nudging them.
     # Best-effort, never blocks the actual reply logic below.
@@ -2539,7 +2539,7 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
             {"last_message_at": datetime.now(timezone.utc).isoformat()}
         ).eq("tenant_id", tenant_id).eq("whatsapp", _digits).eq("active", True).execute()
     except Exception as exc:
-        logger.debug("last_message_at stamp skipped (run migration 108?): %s", exc)
+        logger.debug("last_message_at stamp skipped (run migration 112?): %s", exc)
 
     # Human handoff: if an owner/agent has taken over this conversation from the
     # shared inbox, the bot stays quiet — but we still log the customer's message
@@ -2736,7 +2736,7 @@ _NUDGE_AFTER_HOURS = 20
 
 
 async def check_and_nudge_quiet_team_members() -> int:
-    """Keep-the-window-open nudge (migration 108), generalized across every tenant/team member —
+    """Keep-the-window-open nudge (migration 112), generalized across every tenant/team member —
     not hardcoded to one person. Any team member we've sent a proactive template to, who hasn't
     replied since, and whose 24h window is now approaching its close, gets a check-in template
     ("anything you need?") — since ANY reply resets the window, this is what lets Vula keep
@@ -2760,7 +2760,7 @@ async def check_and_nudge_quiet_team_members() -> int:
                       .eq("active", True).not_.is_("last_notified_at", "null")
                       .lte("last_notified_at", cutoff).execute().data or [])
     except Exception as exc:
-        logger.debug("nudge candidate query skipped (run migration 108?): %s", exc)
+        logger.debug("nudge candidate query skipped (run migration 112?): %s", exc)
         return 0
 
     sent = 0

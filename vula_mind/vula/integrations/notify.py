@@ -22,7 +22,7 @@ EVENTS = (
     "new_order",
     "low_stock",
     "procurement_done",   # a procurement/stock-ordering ClickUp task was marked complete
-    "window_nudge",       # keep-WhatsApp-window-open check-in (migration 108) — default-on, see whatsapp.py
+    "window_nudge",       # keep-WhatsApp-window-open check-in (migration 112) — default-on, see whatsapp.py
 )
 
 

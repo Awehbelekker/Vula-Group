@@ -245,6 +245,26 @@ def test_skill_registry_uses_name_key(hrm):
     for key, skill in hrm._skill_registry.items():
         assert key == skill["name"], f"Key mismatch: {key} != {skill['name']}"
 
+
+def test_skill_registry_matches_real_implemented_skills(hrm):
+    """Regression guard: registry.json drifted stale from core/skills/loader.py's real
+    skill set once already (2026-07-28 cleanup) — every entry that isn't explicitly marked
+    alias_of must correspond to a real, loadable skill, and vice versa."""
+    from core.skills.loader import available_skills
+
+    real = set(available_skills())
+    registry_real = {name for name, s in hrm._skill_registry.items() if "alias_of" not in s}
+    registry_aliases = {name: s["alias_of"] for name, s in hrm._skill_registry.items()
+                        if "alias_of" in s}
+
+    assert registry_real == real, (
+        f"registry.json's real (non-alias) entries {registry_real} don't match "
+        f"loader.py's actually-implemented skills {real}"
+    )
+    for alias_name, target in registry_aliases.items():
+        assert target in real, f"registry.json: {alias_name} aliases {target!r}, which isn't a real skill"
+
+
 def test_plan_simple_task(hrm):
     g = hrm.plan(make_graph("What is 2 + 2?"))
     assert g.status == GraphStatus.PLANNING
