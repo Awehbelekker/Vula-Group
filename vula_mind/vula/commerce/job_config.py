@@ -1,8 +1,13 @@
 """
-vula/commerce/job_config.py — per-tenant config for the 5 system WhatsApp scheduled jobs.
+vula/commerce/job_config.py — per-tenant config for the system WhatsApp scheduled jobs.
 
 The scheduler (vula/api/server.py) and the admin endpoints (vula/api/commerce.py) both need the
 job registry + config resolution, so it lives here to avoid a server↔commerce circular import.
+
+Five of these jobs are commerce-specific and only ever run for tenants with the "orders" module
+(_commerce_jobs_scheduler_loop's tenant list). "stale_escalation_nudge" is the one exception —
+server.py's _stale_escalation_scheduler_loop runs it for every tenant, reusing this same
+config/interval-claim machinery purely for admin visibility and per-tenant enable/disable.
 
 A tenant with no row (or NULL fields) gets the built-in defaults below — identical to the
 behaviour that was hardcoded in server.py before migration 069, so nothing changes for a tenant
@@ -44,6 +49,17 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Unpaid-order customer chase", "kind": "interval",
         "interval_minutes": 30, "template_suffix": "unpaid_order_chase",
         "description": "Nudges customers whose orders sit unpaid 2–4h (once per order)."},
+    # The only job here NOT commerce-specific — runs for every tenant (server.py's
+    # _stale_escalation_scheduler_loop iterates all tenants, not just ones with the "orders"
+    # module), reusing this same config/interval-claim machinery for admin visibility and
+    # per-tenant enable/disable via the Scheduling tab. template_suffix is unused (this job
+    # sends a plain reply to the assigned helper, not a Meta template message) but kept for
+    # structural consistency with the other entries.
+    "stale_escalation_nudge": {
+        "label": "Stale question reminder", "kind": "interval",
+        "interval_minutes": 60, "template_suffix": "stale_escalation_nudge",
+        "description": "Reminds the assigned helper about a customer question that's sat "
+                       "unanswered a while (every tenant, not just shops)."},
 }
 
 SAST = timezone(timedelta(hours=2))

@@ -558,6 +558,51 @@ async def _daily_commerce_jobs_loop() -> None:
         await _asyncio.sleep(86400)  # daily
 
 
+async def _stale_escalation_scheduler_loop() -> None:
+    """Tenant-agnostic 'conversation gone stale' nudge (2026-07-28) — generalizes proactive
+    re-engagement past commerce-only tenants. _commerce_jobs_scheduler_loop only ever iterates
+    tenants with the "orders" module (_commerce_tenant_ids), so a DIGG-shaped services/
+    construction tenant had no re-engagement mechanism at all. An open customer escalation
+    that sat unanswered too long used to just silently expire at 48h
+    (escalation.open_escalation_for_helper) with nobody told a question was dropped — this
+    reminds the assigned helper before that happens, for every tenant."""
+    import asyncio as _asyncio
+    from datetime import datetime, timezone
+    from vula.commerce import job_config
+    from vula import escalation as esc
+    from vula.api.whatsapp import _send_reply
+    from vula.api import tenants as _t
+
+    await _asyncio.sleep(180)  # settle on boot
+    while True:
+        try:
+            rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+            for r in rows:
+                tenant_id = r.get("tenant_id")
+                if not tenant_id:
+                    continue
+                cfg = job_config.get_configs(tenant_id).get("stale_escalation_nudge")
+                if not cfg or not cfg.get("enabled", True):
+                    continue
+                if not job_config.claim_run(tenant_id, "stale_escalation_nudge", cfg):
+                    continue
+                try:
+                    for row in esc.find_stale_open_escalations(tenant_id):
+                        age_h = int((datetime.now(timezone.utc)
+                                    - datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")))
+                                   .total_seconds() // 3600)
+                        msg = (f"⏰ Reminder — this customer question is still waiting ({age_h}h):\n\n"
+                              f"\"{(row.get('question') or '').strip()}\"\n\nReply to this message "
+                              f"with the answer — I'll send it to them and remember it.")
+                        if await _send_reply(row["helper_phone"], msg, tenant_id=tenant_id):
+                            esc.mark_stale_notified(row["id"])
+                except Exception as exc:
+                    log.warning("stale escalation nudge failed for %s: %s", tenant_id, exc)
+        except Exception as exc:
+            log.warning("stale escalation scheduler tick failed: %s", exc)
+        await _asyncio.sleep(600)  # poll every 10 minutes; per-tenant interval is job_config-driven
+
+
 async def _subscriptions_loop() -> None:
     """Create due recurring orders every hour (acts only when a subscription's next_run arrives)."""
     import asyncio as _asyncio
@@ -707,6 +752,8 @@ def _start_scheduled_job_tasks() -> None:
     # sales summary, unpaid chase, low stock, Friday reminder) — see migration 069 + the
     # ⏰ Scheduling tab. Needs the commerce_scheduled_job_config table to fire anything.
     _asyncio.create_task(_commerce_jobs_scheduler_loop())
+    # Runs for EVERY tenant (not just ones with the "orders" module) — see its own docstring.
+    _asyncio.create_task(_stale_escalation_scheduler_loop())
 
 
 async def _scheduler_leadership_loop() -> None:

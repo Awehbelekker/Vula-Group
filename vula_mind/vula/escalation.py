@@ -185,6 +185,35 @@ def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Opt
     return row
 
 
+def find_stale_open_escalations(tenant_id: str, hours: float = 6.0) -> list[dict]:
+    """This tenant's open escalations older than `hours` that haven't been nudged yet —
+    part of generalizing proactive re-engagement past commerce-only tenants (2026-07-28).
+    Excludes rows already past the 48h auto-expire window: open_escalation_for_helper
+    retires those on sight instead, so the two paths never double-handle the same row."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=hours)).isoformat()
+    expiry_cutoff = (now - timedelta(hours=48)).isoformat()
+    try:
+        rows = (_client().table("vula_escalations").select("*")
+                .eq("tenant_id", tenant_id).eq("status", "open")
+                .lt("created_at", cutoff).gte("created_at", expiry_cutoff)
+                .is_("stale_notified_at", "null")
+                .limit(50).execute().data or [])
+    except Exception as exc:
+        log.debug("stale escalation lookup skipped (run migration 111?): %s", exc)
+        return []
+    return rows
+
+
+def mark_stale_notified(escalation_id: str) -> None:
+    try:
+        _client().table("vula_escalations").update(
+            {"stale_notified_at": _now()}).eq("id", escalation_id).execute()
+    except Exception as exc:
+        log.debug("stale-notified stamp failed for %s: %s", escalation_id, exc)
+
+
 def answer_escalation(escalation: dict, answer: str) -> Optional[dict]:
     """Mark answered, store the learned answer, return who to reply to.
 
