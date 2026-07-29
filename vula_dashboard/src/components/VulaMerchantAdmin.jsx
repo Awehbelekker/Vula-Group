@@ -56,6 +56,7 @@ import VulaTakeoff from './VulaTakeoff'
 import VulaDraft from './VulaDraft'
 import VulaTraining from './VulaTraining'
 import VulaAutomations from './VulaAutomations'
+import VulaFlowBuilder from './VulaFlowBuilder'
 // Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
 const VulaPages = lazy(() => import('./VulaPages'))
 import VulaPayments from './VulaPayments'
@@ -182,6 +183,7 @@ function AssistantSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNa
       {active === 'assistant' && <VulaAssistant tenantId={tenantId} />}
       {active === 'agentlog' && <VulaAgentActivity tenantId={tenantId} />}
       {active === 'automations' && <VulaAutomations tenantId={tenantId} />}
+      {active === 'flows' && <VulaFlowBuilder tenantId={tenantId} />}
     </div>
   )
 }

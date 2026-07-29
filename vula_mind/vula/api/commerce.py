@@ -4499,6 +4499,42 @@ async def admin_delete_automation(tenant_id: str, automation_id: str):
     return {"deleted": automation_id}
 
 
+# ── Conversation flow builder (MVP, migration 118) ───────────────────────────
+# Owner-configurable no-code WhatsApp flows: trigger phrases → a linear sequence of
+# steps → a terminal action drawn from the commerce_admin tool vocabulary. Evaluated
+# inline by the WhatsApp router (vula.commerce.flows), not a poller.
+
+@router.get("/{tenant_id}/admin/flows")
+async def admin_list_flows(tenant_id: str):
+    from vula.commerce import flows
+    return {"flows": flows.list_flows(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/flows")
+async def admin_create_flow(tenant_id: str, body: dict):
+    from vula.commerce import flows
+    try:
+        return flows.create_flow(tenant_id, body or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.patch("/{tenant_id}/admin/flows/{flow_id}")
+async def admin_update_flow(tenant_id: str, flow_id: str, body: dict):
+    from vula.commerce import flows
+    try:
+        return flows.update_flow(tenant_id, flow_id, body or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/{tenant_id}/admin/flows/{flow_id}")
+async def admin_delete_flow(tenant_id: str, flow_id: str):
+    from vula.commerce import flows
+    flows.delete_flow(tenant_id, flow_id)
+    return {"deleted": flow_id}
+
+
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/match-supplier")
 async def admin_match_invoice_supplier(tenant_id: str, invoice_id: str):
     """Run tiered supplier auto-detection against a stored inbound invoice.

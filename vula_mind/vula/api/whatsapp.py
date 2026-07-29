@@ -2609,6 +2609,19 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     except Exception as exc:
         logger.debug("Handoff check failed (non-fatal): %s", exc)
 
+    # Owner-configurable conversation flow (migration 118) — is this phone already mid-flow?
+    # Checked before greeting/menu so a flow reply (e.g. answering "which location?") is never
+    # accidentally swallowed by the greeting/supplier-intake keyword checks below.
+    try:
+        from vula.commerce import flows as commerce_flows
+        flow_reply = await commerce_flows.maybe_continue_flow(tenant_id, phone, text)
+    except Exception as exc:
+        logger.debug("flow continue check failed: %s", exc)
+        flow_reply = None
+    if flow_reply is not None:
+        await _send_reply(phone, flow_reply, tenant_id)
+        return
+
     # 1. Greeting / explicit "menu" request — send the interactive category list. "menu" is its
     # own trigger (not just a greeting) because the bot's own copy tells customers to reply
     # *menu* to see what's fresh — without this, that reply fell through to the AI assistant
@@ -2656,6 +2669,20 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
             }).execute()
         except Exception:
             pass
+        return
+
+    # Owner-configurable conversation flow — does this NEW message match a trigger phrase?
+    # Deliberately placed AFTER greeting/menu and supplier-intake so those reserved system
+    # behaviours always win — an owner's own trigger phrase can't accidentally shadow "menu".
+    # Not gated on _is_tenant_owner: an owner can self-test a flow by texting its trigger phrase.
+    try:
+        from vula.commerce import flows as commerce_flows
+        flow_start_reply = await commerce_flows.maybe_start_flow(tenant_id, phone, text)
+    except Exception as exc:
+        logger.debug("flow start check failed: %s", exc)
+        flow_start_reply = None
+    if flow_start_reply is not None:
+        await _send_reply(phone, flow_start_reply, tenant_id)
         return
 
     # Owner/staff → admin agent (run the shop); customers → shopping agent.

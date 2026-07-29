@@ -28,6 +28,7 @@ export const MERCHANT_GROUPS = [
       { id: "assistant", icon: "💬", label: "Chat" },
       { id: "agentlog", icon: "🧠", label: "Activity" },
       { id: "automations", icon: "⚡", label: "Automations" },
+      { id: "flows", icon: "🧭", label: "Flows" },
     ]},
   ]},
   { label: "Sell", items: [
