@@ -865,6 +865,24 @@ async def _handle_document_ingest(
             doc_category = analysis["category"]
             summary = analysis.get("summary", "")
             fields = analysis.get("fields", {})
+
+            # Normalise a business-card phone ONCE, here — before it's shown in the WhatsApp
+            # breakdown, stored in vula_document_extractions, or written to commerce_contacts
+            # below, so the number displayed to the rep always matches what actually got saved
+            # (previously the confirmation showed the raw OCR digits while the saved contact
+            # had the normalised 27-prefixed number — two different values for the same field).
+            if doc_category in _CONTACT_DOC_CATEGORIES and fields.get("phone"):
+                _p = "".join(c for c in fields["phone"] if c.isdigit())
+                fields["phone"] = ("27" + _p[1:]) if _p.startswith("0") else _p
+
+            # WhatsApp gives uncaptioned photos an opaque wamid-based filename (see the
+            # `caption or f"image-{msg_id}.jpg"` fallback where inbound images are first named)
+            # — replace it with something a human can actually recognise once we know what the
+            # document IS. Mutating result.filename here (not a local var) so every downstream
+            # use — this confirmation message, vula_document_extractions, and file_document()'s
+            # stored filename — picks up the friendly name for free.
+            result.filename = _friendly_document_name(doc_category, fields, result.filename)
+
             # Keep the structured extraction (legacy table, best-effort).
             try:
                 from vula.commerce import service as commerce_service
@@ -1215,9 +1233,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 cf = fields or {}
                 cname = (cf.get("name") or "").strip()
                 if cname:
-                    cphone = "".join(c for c in (cf.get("phone") or "") if c.isdigit())
-                    if cphone.startswith("0"):
-                        cphone = "27" + cphone[1:]
+                    cphone = cf.get("phone") or ""  # already normalised above
                     from uuid import uuid4 as _uuid4
                     row_c = {
                         "tenant_id": tenant_id, "phone": cphone or f"nophone-{_uuid4().hex[:10]}",
@@ -1439,6 +1455,25 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
     except Exception as exc:
         logger.warning("Doc analyze setup failed for %s: %s", filename, exc)
         return None
+
+
+def _friendly_document_name(category: str, fields: dict, original_filename: str) -> str:
+    """Build a human-readable filename from the classified category + whatever identity the
+    extraction found, replacing WhatsApp's opaque wamid-based fallback name for an uncaptioned
+    photo (e.g. 'image-wamid.HBgLMjc2...jpg'). Falls back to a timestamped category name if
+    nothing identifying was extracted — never returns something as opaque as the input."""
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt
+
+    ext = _Path(original_filename).suffix or ".jpg"
+    ident = (fields.get("name") or fields.get("supplier") or fields.get("client")
+            or fields.get("company") or "")
+    ident = re.sub(r"[^A-Za-z0-9 ]+", "", ident).strip()
+    label = category.split(" / ")[0].split(" (")[0].strip()  # "Quote / Estimate" -> "Quote"
+    base = f"{label} - {ident}" if ident else label
+    base = re.sub(r"\s+", " ", base).strip()
+    ts = _dt.now().strftime("%Y%m%d-%H%M")
+    return f"{base} {ts}{ext}"
 
 
 def _format_extraction(analysis: dict) -> str:
