@@ -204,6 +204,17 @@ DRAFT_TOOLS = [
             "recipient": {"type": "string", "description": "Who it's addressed to (name/address block)."},
             "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
         }, "required": ["document_type", "brief"]}}},
+    {"type": "function", "function": {
+        "name": "competitor_check",
+        "description": (
+            "Research a competitor or market price online — searches the live web and "
+            "summarises what's found into price position, notable differentiators, and a "
+            "one-line recommendation."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "What to research — a competitor name, "
+                      "or e.g. 'eFoil pricing South Africa'."},
+        }, "required": ["query"]}}},
 ]
 CONTACT_TOOLS = [
     {"type": "function", "function": {
@@ -509,6 +520,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
+            if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
             return {"error": str(exc)}
@@ -909,6 +921,54 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": "Couldn't save the meeting log — please try again or check with support."}
         return {"logged": True, "summary": summary, "action_items": fields.get("action_items") or [],
                 "linked_contact": bool(customer_phone)}
+
+    async def _competitor_check(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        query = (args.get("query") or "").strip()
+        if not query:
+            return {"error": "Need something to research — a competitor name or a product/price query."}
+        from core.skills.web_search import _ddg_search, _fetch_text
+        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+
+        hits = await _ddg_search(f"{query} price buy South Africa", limit=5)
+        if not hits:
+            return {"error": f"Couldn't find live web results for '{query}' right now."}
+
+        contexts, sources = [], []
+        for h in hits[:3]:
+            text = await _fetch_text(h["url"])
+            if text:
+                contexts.append(f"[{h['url']}] {h['title']}\n{text}")
+                sources.append(h["url"])
+        if not contexts:
+            return {"error": "Found results but couldn't read any of the pages.",
+                    "links": [h["url"] for h in hits[:5]]}
+
+        try:
+            import litellm
+            from core.llm_router import resolve_generation_route
+            litellm.drop_params = True
+            model, api_key, api_base = await resolve_generation_route()
+            system = (
+                "You are a competitive-intelligence researcher. Using ONLY the web results "
+                "given, produce a short brief (under 300 words) with three sections: "
+                "Price position (how this compares on price), Notable differentiators (what "
+                "stands out — features, service, reputation), and Recommendation (one line, "
+                "actionable). Cite real figures only; never invent a price or claim that isn't "
+                "in the results.\n\n" + UNTRUSTED_CONTENT_RULE
+            )
+            web_block = fence("WEB_RESULTS", "\n\n---\n\n".join(contexts)[:6000])
+            resp = await litellm.acompletion(
+                model=model, temperature=0.2, max_tokens=900, api_key=api_key, api_base=api_base,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": f"Research query: {query}{web_block}"},
+                ])
+            summary = (resp.choices[0].message.content or "").strip()
+        except Exception as exc:
+            logger.warning("competitor_check synthesis failed: %s", exc)
+            return {"error": f"Found results but couldn't summarise them: {exc}",
+                    "links": sources}
+        return {"summary": summary or "No clear findings from the search results.", "sources": sources}
 
     async def _draft_followup_email(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         to = (args.get("to_email") or "").strip()
