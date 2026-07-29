@@ -895,12 +895,18 @@ class CommerceAdminSkill(BaseSkill):
 
         from vula.integrations.doc_filing import file_document
         fname = f"meeting-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.txt"
-        await file_document(
+        filed_row = await file_document(
             tid, filename=fname, data=None, content_type="text/plain",
             category="meeting_notes", summary=summary, fields=fields,
             source="whatsapp_admin", filed_by=ctx.get("phone") or "", status="filed",
             customer_phone=customer_phone,
         )
+        # file_document() swallows its own DB errors and still returns a row dict on total
+        # failure — the ONLY reliable "did this actually save" signal is a real id coming
+        # back. Without this check, a DB-side failure (e.g. a pending migration) was reported
+        # to the rep as a successful log even though nothing was ever persisted.
+        if not filed_row.get("id"):
+            return {"error": "Couldn't save the meeting log — please try again or check with support."}
         return {"logged": True, "summary": summary, "action_items": fields.get("action_items") or [],
                 "linked_contact": bool(customer_phone)}
 
