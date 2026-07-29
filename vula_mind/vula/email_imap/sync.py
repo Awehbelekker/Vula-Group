@@ -288,7 +288,11 @@ def _fetch_new(creds: dict, last_uid: int, max_emails: int, folder: str = "INBOX
         out = []
         oversized = []
         for u in batch:
-            typ, md = m.uid("fetch", str(u).encode(), "(RFC822)")
+            # BODY.PEEK[] (not RFC822/BODY[]) — a plain fetch implicitly sets \Seen server-side,
+            # which was silently marking the owner's real inbox as "read" before they ever opened
+            # it themselves (confirmed live — Judy was missing real mail because it no longer
+            # showed as unread by the time she checked). PEEK returns identical bytes, no side effect.
+            typ, md = m.uid("fetch", str(u).encode(), "(BODY.PEEK[])")
             raw = _extract_msg_bytes(md)
             if not raw:
                 continue

@@ -118,7 +118,9 @@ def _read(creds: dict, uid: str) -> dict:
     m = _imap_login(creds)
     try:
         m.select("INBOX")
-        typ, data = m.fetch(uid.encode(), "(RFC822)")
+        # BODY.PEEK[] — never silently mark the owner's own mailbox as read on their behalf
+        # (see sync.py's identical fix; this fetch used RFC822/BODY[] which implicitly sets \Seen).
+        typ, data = m.fetch(uid.encode(), "(BODY.PEEK[])")
         if not data or not data[0]:
             return {"error": "message not found"}
         msg = email.message_from_bytes(data[0][1])
@@ -149,7 +151,9 @@ def _download_attachment(creds: dict, uid: str, filename: str) -> Optional[dict]
     m = _imap_login(creds)
     try:
         m.select("INBOX")
-        typ, data = m.fetch(uid.encode(), "(RFC822)")
+        # BODY.PEEK[] — never silently mark the owner's own mailbox as read on their behalf
+        # (see sync.py's identical fix; this fetch used RFC822/BODY[] which implicitly sets \Seen).
+        typ, data = m.fetch(uid.encode(), "(BODY.PEEK[])")
         if not data or not data[0]:
             return None
         msg = email.message_from_bytes(data[0][1])
