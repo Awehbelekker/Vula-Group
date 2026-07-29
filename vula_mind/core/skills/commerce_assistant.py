@@ -612,7 +612,9 @@ class CommerceAssistantSkill(BaseSkill):
     # ── Prompt + grounding ───────────────────────────────────────────────────
     def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None,
                        booking_focused: bool = False) -> str:
-        kb_block = f"\n\nBusiness knowledge (use this to answer accurately):\n{kb_context}" if kb_context else ""
+        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+        kb_block = fence("BUSINESS_KNOWLEDGE", kb_context)
+        untrusted_block = ("\n\n" + UNTRUSTED_CONTENT_RULE) if kb_context else ""
         lang_block = ""
         try:
             from core.lang import language_name
@@ -650,6 +652,7 @@ class CommerceAssistantSkill(BaseSkill):
                 "Never invent business facts, and never answer yes/no when you don't know.\n"
                 "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly."
                 + lang_block
+                + untrusted_block
                 + kb_block
             )
 
@@ -750,6 +753,7 @@ class CommerceAssistantSkill(BaseSkill):
             + delivery_block
             + lang_block
             + booking_block
+            + untrusted_block
             + kb_block
         )
 

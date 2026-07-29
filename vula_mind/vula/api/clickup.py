@@ -39,9 +39,10 @@ def _store_connection(tenant_id: str, token: str, team_id: Optional[str],
         for l in lists:
             if l.get("id"):
                 list_ids[l["id"]] = l.get("name")
+    from vula.email_imap.credentials import encrypt_secret
     _client().table("vula_clickup_accounts").upsert({
         "tenant_id": tenant_id,
-        "api_token": token,
+        "api_token": encrypt_secret(token),
         "team_id": team_id,
         "list_ids": list_ids,
         "status": "connected",

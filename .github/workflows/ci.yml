@@ -53,6 +53,11 @@ jobs:
           DEBUG: "true"
         run: pytest tests/
 
+      # Every table created in migrations/*.sql must get RLS enabled somewhere —
+      # regression guard for the security remediation pass (2026-07).
+      - name: Check RLS coverage
+        run: python tools/check_migrations_rls.py
+
   # ── React dashboard — build must pass ─────────────────────────────────────────
   dashboard:
     name: Dashboard (React)

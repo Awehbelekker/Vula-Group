@@ -74,9 +74,12 @@ REASONING_RULES = (
 
 def behaviour_preamble(persona: str = "") -> str:
     """Assemble the shared behaviour policy. `persona` (optional, per-tenant) sets the
-    voice/style; the rest enforces integrity, honesty, reasoning, and conversation rules."""
+    voice/style; the rest enforces integrity, honesty, reasoning, conversation, and
+    untrusted-content rules."""
+    from core.prompt_safety import UNTRUSTED_CONTENT_RULE
     head = (persona.strip() + "\n\n") if persona else ""
-    return head + "\n".join([ETHICS_RULES, HONESTY_RULES, REASONING_RULES, CONVERSATION_RULES])
+    return head + "\n".join([ETHICS_RULES, HONESTY_RULES, REASONING_RULES,
+                             UNTRUSTED_CONTENT_RULE, CONVERSATION_RULES])
 
 
 @dataclass

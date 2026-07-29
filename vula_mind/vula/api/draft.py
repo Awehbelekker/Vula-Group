@@ -243,6 +243,7 @@ _store = DraftStore()
 async def _retrieve_context(tenant_id: str, brief: str, doc_type: str,
                             extra_context: Optional[str]) -> tuple[str, int]:
     """Pull relevant context from tenant KB + shared training KB."""
+    from core.prompt_safety import fence
     from vula.ingestion.pipeline import VulaIngestionPipeline
     from vula.training.content import TRAINING_TENANT_ID
 
@@ -257,7 +258,7 @@ async def _retrieve_context(tenant_id: str, brief: str, doc_type: str,
             tenant_context = "\n\n".join(
                 f"[{c.get('filename','doc')}]: {c['text'][:600]}" for c in tenant_chunks
             )
-            sections.append(f"## Your Business Knowledge\n{tenant_context}")
+            sections.append(fence("YOUR_BUSINESS_KNOWLEDGE", tenant_context))
             sources += len(tenant_chunks)
     except Exception as exc:
         logger.warning("Tenant KB retrieval failed for %s: %s", tenant_id, exc)
@@ -271,14 +272,15 @@ async def _retrieve_context(tenant_id: str, brief: str, doc_type: str,
             training_context = "\n\n".join(
                 f"[{c.get('filename','standard')}]: {c['text'][:400]}" for c in training_chunks
             )
-            sections.append(f"## SA Construction Standards & Rates\n{training_context}")
+            sections.append(fence("SA_CONSTRUCTION_STANDARDS_AND_RATES", training_context))
             sources += len(training_chunks)
     except Exception as exc:
         logger.warning("Training KB retrieval failed: %s", exc)
 
-    # 3. Extra context from caller (e.g., client details, project specs)
+    # 3. Extra context from caller (e.g., client details, project specs) — also externally
+    # influenceable (whoever briefed this document), so fenced the same way.
     if extra_context:
-        sections.append(f"## Additional Project Information\n{extra_context}")
+        sections.append(fence("ADDITIONAL_PROJECT_INFORMATION", extra_context))
 
     return "\n\n---\n\n".join(sections), sources
 
@@ -293,7 +295,8 @@ async def _generate_document(
     output_format: str,
 ) -> tuple[str, str]:
     """Call LLM to generate the document. Returns (content, model_used)."""
-    system_prompt = doc_config["system_prompt"]
+    from core.prompt_safety import UNTRUSTED_CONTENT_RULE
+    system_prompt = doc_config["system_prompt"] + "\n\n" + UNTRUSTED_CONTENT_RULE
     sections = doc_config["output_sections"]
 
     project_info = ""

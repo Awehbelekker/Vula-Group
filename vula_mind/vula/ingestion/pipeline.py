@@ -851,10 +851,11 @@ class VulaIngestionPipeline:
         if not chunks:
             return "I don't have enough information about that in your business documents yet. Try uploading more documents or rephrase the question."
 
-        context = "\n\n---\n\n".join(
+        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+        context = fence(context_label.upper().replace(" ", "_"), "\n\n---\n\n".join(
             f"[From: {c['filename']}, page {c['page_num']}]\n{c['text']}"
             for c in chunks
-        )
+        ))
 
         # 2. Build prompt with optional conversation history
         history_block = (
@@ -867,10 +868,10 @@ class VulaIngestionPipeline:
             f"You are Vula, an AI assistant specialising in South African construction and business. "
             f"Answer questions using the {context_label} provided. "
             f"If the answer isn't in the {context_label}, say so clearly. "
-            f"Be concise and practical."
+            f"Be concise and practical.\n\n" + UNTRUSTED_CONTENT_RULE
         )
         user_msg = (
-            f"{context_label.title()}:\n{context}\n\n"
+            f"{context_label.title()}:{context}\n\n"
             f"{history_block}"
             f"Question: {question}\n\nAnswer:"
         )

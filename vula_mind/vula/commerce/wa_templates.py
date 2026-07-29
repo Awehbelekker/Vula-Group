@@ -38,7 +38,8 @@ async def _waba_creds(tenant_id: str) -> Optional[Dict[str, str]]:
                .select("waba_id,access_token").eq("tenant_id", tenant_id)
                .eq("status", "connected").limit(1).execute().data or [None])[0]
         if row and row.get("waba_id") and row.get("access_token"):
-            return {"waba_id": row["waba_id"], "token": row["access_token"]}
+            from vula.email_imap.credentials import decrypt_secret
+            return {"waba_id": row["waba_id"], "token": decrypt_secret(row["access_token"])}
     except Exception as exc:
         log.debug("WABA creds lookup failed for %s: %s", tenant_id, exc)
     from config import settings

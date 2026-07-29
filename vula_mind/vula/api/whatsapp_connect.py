@@ -161,13 +161,14 @@ async def connect_whatsapp(body: ConnectRequest):
             log.warning("Webhook registration failed (non-fatal): %s", webhook_resp.text)
 
     # Step 4 — save credentials to Supabase
+    from vula.email_imap.credentials import encrypt_secret
     db = _supabase()
     record = {
         "tenant_id": body.tenant_id,
         "waba_id": waba_id,
         "phone_number_id": phone_number_id,
         "phone_number": phone_number,
-        "access_token": access_token,
+        "access_token": encrypt_secret(access_token),
         "token_type": "user",
         "verified_name": verified_name,
         "status": "connected",

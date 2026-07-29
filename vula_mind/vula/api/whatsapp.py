@@ -2244,8 +2244,9 @@ async def _get_tenant_wa_creds(tenant_id: str) -> dict | None:
             .execute()
         )
         if result.data and result.data.get("access_token"):
+            from vula.email_imap.credentials import decrypt_secret
             creds = {
-                "token": result.data["access_token"],
+                "token": decrypt_secret(result.data["access_token"]),
                 "phone_id": result.data["phone_number_id"],
             }
             _wa_creds_cache[tenant_id] = creds

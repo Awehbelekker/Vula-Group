@@ -35,19 +35,21 @@ def invalidate(tenant_id: str) -> None:
 
 def store_connection(tenant_id: str, *, access_token: str, refresh_token: str | None,
                      expires_in: int, email: str, scopes: str, connected_by: str = "") -> None:
+    from vula.email_imap.credentials import encrypt_secret
     expiry = (datetime.now(timezone.utc) + timedelta(seconds=int(expires_in or 3600))).isoformat()
     row = {
-        "tenant_id": tenant_id, "email": email, "access_token": access_token,
+        "tenant_id": tenant_id, "email": email, "access_token": encrypt_secret(access_token),
         "token_expiry": expiry, "scopes": scopes, "status": "connected",
         "connected_by": connected_by, "connected_at": "now()", "updated_at": "now()",
     }
     if refresh_token:
-        row["refresh_token"] = refresh_token
+        row["refresh_token"] = encrypt_secret(refresh_token)
     _client().table("vula_microsoft_accounts").upsert(row, on_conflict="tenant_id").execute()
     invalidate(tenant_id)
 
 
 async def _refresh(tenant_id: str, refresh_token: str) -> str | None:
+    from vula.email_imap.credentials import encrypt_secret
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_token_url(), data={
             "client_id": settings.microsoft_client_id,
@@ -60,9 +62,9 @@ async def _refresh(tenant_id: str, refresh_token: str) -> str | None:
         d = r.json()
     access = d.get("access_token")
     expiry = (datetime.now(timezone.utc) + timedelta(seconds=int(d.get("expires_in", 3600)))).isoformat()
-    update = {"access_token": access, "token_expiry": expiry, "updated_at": "now()"}
+    update = {"access_token": encrypt_secret(access), "token_expiry": expiry, "updated_at": "now()"}
     if d.get("refresh_token"):  # MS rotates refresh tokens
-        update["refresh_token"] = d["refresh_token"]
+        update["refresh_token"] = encrypt_secret(d["refresh_token"])
     try:
         _client().table("vula_microsoft_accounts").update(update).eq("tenant_id", tenant_id).execute()
     except Exception:
@@ -73,6 +75,7 @@ async def _refresh(tenant_id: str, refresh_token: str) -> str | None:
 
 async def get_access_token(tenant_id: str) -> dict | None:
     """Return {access_token, email} for a connected tenant, refreshing if expired."""
+    from vula.email_imap.credentials import decrypt_secret
     try:
         rows = (_client().table("vula_microsoft_accounts")
                 .select("access_token,refresh_token,token_expiry,email,status")
@@ -83,13 +86,17 @@ async def get_access_token(tenant_id: str) -> dict | None:
     if not rows:
         return None
     r = rows[0]
-    token, email, expiry = r.get("access_token"), r.get("email"), r.get("token_expiry")
+    # decrypt_secret() passes plaintext legacy values through unchanged, so this is safe to
+    # deploy before any backfill of existing rows has run.
+    token = decrypt_secret(r.get("access_token") or "") or None
+    email, expiry = r.get("email"), r.get("token_expiry")
+    refresh_token = decrypt_secret(r.get("refresh_token") or "") or None
     needs = not token
     if expiry and not needs:
         try:
             needs = datetime.fromisoformat(expiry.replace("Z", "+00:00")) <= datetime.now(timezone.utc) + timedelta(seconds=60)
         except Exception:
             needs = True
-    if needs and r.get("refresh_token"):
-        token = await _refresh(tenant_id, r["refresh_token"])
+    if needs and refresh_token:
+        token = await _refresh(tenant_id, refresh_token)
     return {"access_token": token, "email": email} if token else None

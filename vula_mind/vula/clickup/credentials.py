@@ -35,9 +35,10 @@ def get_tenant_clickup_creds(tenant_id: str) -> Optional[dict]:
                .limit(1).execute())
         rows = res.data or []
         if rows and rows[0].get("api_token"):
+            from vula.email_imap.credentials import decrypt_secret
             r = rows[0]
             creds = {
-                "token": r["api_token"],
+                "token": decrypt_secret(r["api_token"]),
                 "team_id": r.get("team_id"),
                 "list_ids": r.get("list_ids") or {},
                 "space_id": r.get("space_id"),
