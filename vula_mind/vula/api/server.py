@@ -532,6 +532,13 @@ async def _automations_loop() -> None:
                 log.info("Keep-window-open nudge sent to %d team member(s)", nudged)
         except Exception as exc:
             log.warning("Window-nudge check error: %s", exc)
+        try:
+            from vula.api.whatsapp import check_and_nudge_due_reminders
+            reminded = await check_and_nudge_due_reminders()
+            if reminded:
+                log.info("Due-reminder nudge sent for %d reminder(s)", reminded)
+        except Exception as exc:
+            log.warning("Reminder nudge check error: %s", exc)
         await _asyncio.sleep(300)
 
 

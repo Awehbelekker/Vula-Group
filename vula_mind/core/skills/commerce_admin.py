@@ -253,6 +253,27 @@ MEETING_TOOLS = [
             "subject": {"type": "string"}},
             "required": ["to_email", "meeting_notes"]}}},
 ]
+REMINDER_TOOLS = [
+    {"type": "function", "function": {
+        "name": "create_reminder",
+        "description": "Set a reminder/commitment (e.g. 'remind me to follow up with John Friday'). "
+                       "An undated reminder (no due date) is fine too.",
+        "parameters": {"type": "object", "properties": {
+            "text": {"type": "string", "description": "What to be reminded about."},
+            "due_at": {"type": "string", "description": "ISO datetime, if a specific time was given."},
+            "contact_name_or_phone": {"type": "string", "description": "Who this relates to, if known."}},
+            "required": ["text"]}}},
+    {"type": "function", "function": {
+        "name": "list_reminders",
+        "description": "List reminders — open ones by default, or all including completed.",
+        "parameters": {"type": "object", "properties": {
+            "status": {"type": "string", "enum": ["open", "done", "all"]}}}}},
+    {"type": "function", "function": {
+        "name": "complete_reminder",
+        "description": "Mark a reminder done (use list_reminders first to find its id).",
+        "parameters": {"type": "object", "properties": {
+            "reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
+]
 SUBSCRIPTION_TOOLS = [
     {"type": "function", "function": {
         "name": "create_subscription",
@@ -293,13 +314,13 @@ _GATED_GROUPS = [
 # shop owner fielding a client relationship — contacts and meeting logging too.
 _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS
-                   + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS)
+                   + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
 
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
 # (stock, invoices, broadcasts, products) an individual rep has no business touching.
 _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + DRAFT_TOOLS + BOOKING_TOOLS
-                   + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
+                   + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS
                    + [t for t in TOOL_SPECS if t["function"]["name"] == "finance_insights"])
 
 
@@ -346,6 +367,15 @@ class CommerceAdminSkill(BaseSkill):
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
     def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None) -> str:
+        persona_block = ""
+        try:
+            from vula.api.tenants import get_config
+            persona = (get_config(tenant_id) or {}).get("persona_prompt")
+            if persona:
+                persona_block = f"\n\nHow you should sound: {persona}"
+        except Exception:
+            pass
+
         if role == "sales_rep":
             who = f"{name} — a sales rep/agent" if name else "a sales rep/agent"
             return (
@@ -361,6 +391,7 @@ class CommerceAdminSkill(BaseSkill):
                 "sending a proposal document, drafting an email (drafts are safe/reversible so this is "
                 "lower-stakes, but still confirm the recipient), or booking a meeting. Show the details "
                 "and wait for a clear 'yes' first."
+                + persona_block
             )
         return (
             "You are the AI business assistant for the OWNER of a South African business "
@@ -376,6 +407,7 @@ class CommerceAdminSkill(BaseSkill):
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding. Show the details and wait for a clear 'yes' first. For send_broadcast, "
             "only pass confirm=true after the owner has explicitly confirmed."
+            + persona_block
         )
 
     # ── Agent loop (mirrors commerce_assistant) ──────────────────────────────
@@ -521,6 +553,9 @@ class CommerceAdminSkill(BaseSkill):
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
+            if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
+            if name == "list_reminders":     return await self._list_reminders(tid, args, ctx)
+            if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
         except Exception as exc:
             logger.warning("admin tool %s failed: %s", name, exc)
             return {"error": str(exc)}
@@ -919,7 +954,22 @@ class CommerceAdminSkill(BaseSkill):
         # to the rep as a successful log even though nothing was ever persisted.
         if not filed_row.get("id"):
             return {"error": "Couldn't save the meeting log — please try again or check with support."}
-        return {"logged": True, "summary": summary, "action_items": fields.get("action_items") or [],
+
+        # Turn each extracted action item into a real, trackable reminder — previously these only
+        # lived inside the filed document's fields jsonb and were forgotten the moment the
+        # WhatsApp reply was sent.
+        action_items = fields.get("action_items") or []
+        if action_items:
+            try:
+                rows = [{"tenant_id": tid, "created_by": ctx.get("phone") or "", "text": item,
+                        "source": "log_meeting", "linked_contact_phone": customer_phone}
+                       for item in action_items if item]
+                if rows:
+                    service._client().table("vula_reminders").insert(rows).execute()
+            except Exception as exc:
+                logger.warning("Persisting meeting action items as reminders failed: %s", exc)
+
+        return {"logged": True, "summary": summary, "action_items": action_items,
                 "linked_contact": bool(customer_phone)}
 
     async def _competitor_check(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
@@ -1002,6 +1052,55 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": f"Couldn't create the Gmail draft: {exc}"}
         return {"drafted": True, "to": to, "subject": subject,
                 "note": "Saved as a Gmail DRAFT — review and send it yourself, nothing was sent automatically."}
+
+    async def _create_reminder(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        text = (args.get("text") or "").strip()
+        if not text:
+            return {"error": "Need something to remind you about."}
+        linked_phone = None
+        who = (args.get("contact_name_or_phone") or "").strip()
+        if who:
+            digits = re.sub(r"\D", "", who)
+            try:
+                q = service._client().table("commerce_contacts").select("phone,name").eq("tenant_id", tid)
+                rows = (q.eq("phone", digits).execute().data if digits
+                        else q.ilike("name", f"%{who}%").limit(1).execute().data) or []
+                if rows:
+                    linked_phone = rows[0]["phone"]
+            except Exception as exc:
+                logger.debug("reminder contact lookup skipped: %s", exc)
+        row = {
+            "tenant_id": tid, "created_by": ctx.get("phone") or "", "text": text,
+            "due_at": args.get("due_at") or None, "linked_contact_phone": linked_phone,
+        }
+        try:
+            res = service._client().table("vula_reminders").insert(row).execute()
+        except Exception as exc:
+            return {"error": f"Couldn't save the reminder: {exc}"}
+        if not (res.data and res.data[0].get("id")):
+            return {"error": "Couldn't save the reminder — please try again."}
+        return {"created": True, "text": text, "due_at": row["due_at"]}
+
+    async def _list_reminders(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        status = (args.get("status") or "open").strip()
+        q = service._client().table("vula_reminders").select("id,text,due_at,status,created_at").eq("tenant_id", tid)
+        if status != "all":
+            q = q.eq("status", status)
+        rows = q.order("due_at", desc=False).limit(20).execute().data or []
+        return {"count": len(rows), "reminders": [
+            {"id": r["id"], "text": r["text"], "due_at": r.get("due_at"), "status": r["status"]}
+            for r in rows]} if rows else {"message": "No reminders found."}
+
+    async def _complete_reminder(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        reminder_id = (args.get("reminder_id") or "").strip()
+        if not reminder_id:
+            return {"error": "Need the reminder id (use list_reminders to find it)."}
+        res = (service._client().table("vula_reminders")
+               .update({"status": "done", "completed_at": datetime.now(timezone.utc).isoformat()})
+               .eq("id", reminder_id).eq("tenant_id", tid).execute())
+        if not res.data:
+            return {"error": f"No reminder found with id {reminder_id} for this tenant."}
+        return {"completed": True, "text": res.data[0].get("text")}
 
     async def _send_broadcast(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         audience = args.get("audience", "all")

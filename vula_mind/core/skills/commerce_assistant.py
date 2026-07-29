@@ -627,6 +627,15 @@ class CommerceAssistantSkill(BaseSkill):
         except Exception:
             pass
 
+        persona_block = ""
+        try:
+            from vula.api.tenants import get_config
+            persona = (get_config(tenant_id) or {}).get("persona_prompt")
+            if persona:
+                persona_block = f"\n\nHow you should sound: {persona}"
+        except Exception:
+            pass
+
         # health/services tenants (see _is_booking_focused) get a bookings-first prompt instead
         # of the storefront one below — they have no products, cart, or orders, so the fish-shop
         # cart/checkout guidance was never applicable and only confused the model into offering
@@ -652,6 +661,7 @@ class CommerceAssistantSkill(BaseSkill):
                 "Never invent business facts, and never answer yes/no when you don't know.\n"
                 "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly."
                 + lang_block
+                + persona_block
                 + untrusted_block
                 + kb_block
             )
@@ -753,6 +763,7 @@ class CommerceAssistantSkill(BaseSkill):
             + delivery_block
             + lang_block
             + booking_block
+            + persona_block
             + untrusted_block
             + kb_block
         )

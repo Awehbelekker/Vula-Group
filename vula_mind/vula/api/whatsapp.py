@@ -2838,6 +2838,43 @@ async def check_and_nudge_quiet_team_members() -> int:
     return sent
 
 
+async def check_and_nudge_due_reminders() -> int:
+    """Send a WhatsApp nudge for every reminder (migration 117) whose due_at has passed and
+    hasn't been nudged yet. Free text via _send_reply, not a template — reminders are set by
+    someone actively using the assistant, so the 24h window is usually still open; if that
+    proves unreliable for far-future reminders, a proper approved template (same pattern as
+    check_and_nudge_quiet_team_members's vula_owner_checkin_nudge) is the natural follow-up.
+    Called from the same 5-minute automations poller as everything else in this arc."""
+    from datetime import datetime, timezone
+    from vula.commerce import service as _cs
+    db = _cs._client()
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        due = (db.table("vula_reminders").select("id,tenant_id,created_by,text")
+               .eq("status", "open").is_("nudged_at", "null")
+               .not_.is_("due_at", "null").lte("due_at", now).execute().data or [])
+    except Exception as exc:
+        logger.debug("reminder nudge query skipped (run migration 117?): %s", exc)
+        return 0
+
+    sent = 0
+    for r in due:
+        tenant_id, phone, text = r.get("tenant_id"), r.get("created_by"), r.get("text")
+        if not (tenant_id and phone and text):
+            continue
+        ok = await _send_reply(phone, f"⏰ Reminder: {text}", tenant_id)
+        if ok:
+            sent += 1
+            try:
+                db.table("vula_reminders").update(
+                    {"nudged_at": datetime.now(timezone.utc).isoformat()}
+                ).eq("id", r["id"]).execute()
+            except Exception as exc:
+                logger.debug("marking reminder %s as nudged failed: %s", r.get("id"), exc)
+    return sent
+
+
 async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
     """Drive the commerce_admin skill (owner running the shop) with memory."""
     try:
