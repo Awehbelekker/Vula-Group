@@ -46,9 +46,46 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "client_name": {"type": "string"},
             "recipient": {"type": "string", "description": "Who it's addressed to (name/address block)."},
             "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
+            "project_value_zar": {"type": "number",
+                "description": "fee_proposal only: project/construction value in ZAR, if known."},
+            "floor_area_m2": {"type": "number",
+                "description": "fee_proposal only: floor area in square metres, if known."},
+            "work_stages": {"type": "string",
+                "description": "fee_proposal only: which SACAP work stage(s) this covers "
+                               "(e.g. 'concept and documentation'), if known."},
+            "fee_basis": {"type": "string",
+                "description": "fee_proposal only: how the fee is charged — a percentage of "
+                               "construction cost, an hourly rate, or a fixed fee — if known."},
         }, "required": ["document_type", "brief"]}}},
 ]
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
+
+# fee_proposal completeness gate (2026-07-29) — draft_letter used to silently draft with
+# "[PLACEHOLDER]" for whatever wasn't given, an unenforced soft prompt instruction. Never guess
+# these four; ask instead. Checks the structured args first, falls back to scanning the free-text
+# brief for the same four signals (a rand amount, an m² figure, a recognizable stage name, a
+# %/hourly/fixed-fee mention) since the orchestrating model won't always populate the new fields.
+_VALUE_RE = re.compile(r"r\s?\d[\d,]*(\.\d+)?|\d+\s?(million|mil\b|k\b)", re.IGNORECASE)
+_AREA_RE = re.compile(r"\d+(\.\d+)?\s?(m2|m²|sqm|square met)", re.IGNORECASE)
+_STAGE_RE = re.compile(
+    r"\b(inception|concept|viability|design development|documentation|procurement|"
+    r"construction admin|construction|close.?out|stage\s*[1-5]|sacap stage)\b", re.IGNORECASE)
+_FEE_BASIS_RE = re.compile(
+    r"(\d+(\.\d+)?\s?%|percent|per\s?cent|hourly|per\s?hour|fixed fee|lump sum)", re.IGNORECASE)
+
+
+def _fee_proposal_gaps(args: Dict[str, Any]) -> List[str]:
+    brief = args.get("brief") or ""
+    gaps: List[str] = []
+    if not args.get("project_value_zar") and not _VALUE_RE.search(brief):
+        gaps.append("the project value / construction cost")
+    if not args.get("floor_area_m2") and not _AREA_RE.search(brief):
+        gaps.append("the floor area (m²)")
+    if not args.get("work_stages") and not _STAGE_RE.search(brief):
+        gaps.append("which work stage(s) this covers (e.g. concept, documentation, construction)")
+    if not args.get("fee_basis") and not _FEE_BASIS_RE.search(brief):
+        gaps.append("the fee basis (% of construction cost, hourly rate, or fixed fee)")
+    return gaps
 
 
 async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict:
@@ -68,6 +105,15 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict
     if not brief:
         return {"error": "brief is required"}
 
+    if doc_type == "fee_proposal":
+        gaps = _fee_proposal_gaps(args)
+        if gaps:
+            return {
+                "status": "need_info",
+                "missing": gaps,
+                "message": "Before I draft this, I still need: " + "; ".join(gaps) + ".",
+            }
+
     # This path renders onto the tenant's REAL letterhead (render_letter_pdf) — drop the
     # generated placeholder header/letterhead section so it isn't duplicated under the
     # actual logo/address, and tell the model not to invent one either.
@@ -84,8 +130,14 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict
     content, model_used = await _generate_document(
         doc_config=doc_config, brief=brief, context=context,
         project_name=args.get("project_name"), client_name=args.get("client_name"),
-        project_value=None, output_format="markdown",
+        project_value=args.get("project_value_zar"), output_format="markdown",
     )
+    # Output-side safety net: [PLACEHOLDER] is the model's own escape hatch for values it
+    # wasn't given (vula/api/draft.py's generation prompt) — the completeness gate above should
+    # catch the fee_proposal case, but this covers every other document_type and any gap the
+    # gate's regex heuristics miss. Never silently ship a client-ready PDF with invented-looking
+    # gaps unflagged.
+    has_placeholders = "[PLACEHOLDER]" in content
     word_count = len(content.split())
     draft_id = hashlib.md5(
         f"{tenant_id}:{doc_type}:{brief[:50]}:{datetime.utcnow().isoformat()}".encode()
@@ -104,7 +156,8 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict
     )
 
     filename = f"{doc_config['label'].replace(' ', '_')}.pdf"
-    result: Dict[str, Any] = {"draft_id": draft_id, "document_type": doc_type, "word_count": word_count}
+    result: Dict[str, Any] = {"draft_id": draft_id, "document_type": doc_type,
+                              "word_count": word_count, "has_placeholders": has_placeholders}
 
     sent = False
     if phone:
@@ -144,7 +197,15 @@ class DraftAdminSkill(BaseSkill):
                 "construction/professional-services business.\n\n" + behaviour_preamble() +
                 "\n- Call draft_letter with a BRIEF that captures everything the user told you "
                 "(project, amounts, dates, scope) — the drafting model only sees what you pass in "
-                "brief/project_name/client_name, not this conversation.\n"
+                "brief/project_name/client_name, not this conversation. For a fee_proposal, also "
+                "pass project_value_zar/floor_area_m2/work_stages/fee_basis whenever the user has "
+                "given you any of them.\n"
+                "- If draft_letter returns status:'need_info', do NOT retry blindly — ask the user "
+                "for exactly the items listed in 'missing', in one short message, then call "
+                "draft_letter again once they've answered.\n"
+                "- If draft_letter's result has has_placeholders:true, tell the user the draft has "
+                "some values it couldn't fill in and to double-check the [PLACEHOLDER] markers "
+                "before sending it on — don't present it as complete.\n"
                 "- After drafting, tell the user it's been sent as a WhatsApp document (and, if "
                 "requested, saved to Drive) — never claim you emailed it unless a send actually "
                 "happened.\nKeep replies short and WhatsApp-friendly.")

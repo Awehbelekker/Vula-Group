@@ -4,12 +4,13 @@ WhatsApp send + Drive upload) was verified live against digg-demo during develop
 feature's commit message — matching how sibling admin skills (email_admin, google_admin) are
 tested in this codebase (routing + pure logic here, live verification for the LLM loop itself)."""
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from core.hrm.orchestrator import HRMOrchestrator
 from core.skills.loader import available_skills, get_skill
+from core.skills.draft_admin import _fee_proposal_gaps, draft_letter
 
 
 def _mock_weasyprint(monkeypatch, captured: dict):
@@ -120,3 +121,134 @@ def test_render_letter_pdf_markdown():
     )
     assert isinstance(pdf, bytes)
     assert pdf[:4] == b"%PDF"
+
+
+# ── Fee-proposal completeness gate (2026-07-29: ask, don't guess) ─────────────
+
+def test_gaps_all_missing_from_bare_brief():
+    gaps = _fee_proposal_gaps({"brief": "Draft a fee proposal for the Bokaap job."})
+    assert len(gaps) == 4
+
+
+def test_gaps_none_missing_when_brief_has_all_four_signals():
+    brief = ("Fee proposal for the Bokaap job. Construction value R2,500,000, floor area "
+             "450 m2, covering concept design and documentation, at 8% of construction cost.")
+    assert _fee_proposal_gaps({"brief": brief}) == []
+
+
+def test_gaps_satisfied_by_structured_fields_even_with_bare_brief():
+    args = {"brief": "Fee proposal for the Bokaap job.", "project_value_zar": 2500000,
+           "floor_area_m2": 450, "work_stages": "concept and documentation", "fee_basis": "8%"}
+    assert _fee_proposal_gaps(args) == []
+
+
+@pytest.mark.parametrize("brief,still_missing", [
+    ("Value is R2,500,000, 450 m2, concept stage.", "fee basis"),
+    ("Value is R2,500,000, 450 m2, at 8%.", "work stage"),
+    ("Value is R2,500,000, concept stage, at 8%.", "floor area"),
+    ("450 m2, concept stage, at 8%.", "project value"),
+])
+def test_gaps_reports_only_the_actually_missing_item(brief, still_missing):
+    gaps = _fee_proposal_gaps({"brief": brief})
+    assert len(gaps) == 1
+    assert still_missing in gaps[0]
+
+
+# ── draft_letter: need_info gate + placeholder flag ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_draft_letter_returns_need_info_for_incomplete_fee_proposal():
+    result = await draft_letter(
+        {"document_type": "fee_proposal", "brief": "Draft a fee proposal for the Bokaap job."},
+        tenant_id="digg-demo", phone="27645755210",
+    )
+    assert result["status"] == "need_info"
+    assert len(result["missing"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_draft_letter_does_not_gate_non_fee_proposal_types():
+    with (
+        patch("vula.api.draft._retrieve_context", new=AsyncMock(return_value=("", 0))),
+        patch("vula.api.draft._generate_document", new=AsyncMock(return_value=("Body text.", "test-model"))),
+        patch("vula.commerce.service.get_invoice_settings", new=AsyncMock(return_value={})),
+        patch("vula.commerce.pdf.merge_branding", return_value={"name": "DIGG Architects"}),
+        patch("vula.commerce.pdf.render_letter_pdf", return_value=b"%PDF-fake"),
+    ):
+        result = await draft_letter(
+            {"document_type": "appointment_letter", "brief": "Appoint the contractor for site 12."},
+            tenant_id="digg-demo", phone="",
+        )
+    assert "status" not in result
+    assert result["document_type"] == "appointment_letter"
+
+
+@pytest.mark.asyncio
+async def test_draft_letter_flags_placeholders_in_output():
+    brief = ("Fee proposal, R2,500,000, 450 m2, concept and documentation, 8% of "
+             "construction cost.")
+    with (
+        patch("vula.api.draft._retrieve_context", new=AsyncMock(return_value=("", 0))),
+        patch("vula.api.draft._generate_document",
+              new=AsyncMock(return_value=("Fee: [PLACEHOLDER]", "test-model"))),
+        patch("vula.commerce.service.get_invoice_settings", new=AsyncMock(return_value={})),
+        patch("vula.commerce.pdf.merge_branding", return_value={"name": "DIGG Architects"}),
+        patch("vula.commerce.pdf.render_letter_pdf", return_value=b"%PDF-fake"),
+    ):
+        result = await draft_letter(
+            {"document_type": "fee_proposal", "brief": brief}, tenant_id="digg-demo", phone="",
+        )
+    assert result["has_placeholders"] is True
+
+
+@pytest.mark.asyncio
+async def test_draft_letter_no_placeholder_flag_when_clean():
+    brief = ("Fee proposal, R2,500,000, 450 m2, concept and documentation, 8% of "
+             "construction cost.")
+    with (
+        patch("vula.api.draft._retrieve_context", new=AsyncMock(return_value=("", 0))),
+        patch("vula.api.draft._generate_document",
+              new=AsyncMock(return_value=("Fee: R200,000.", "test-model"))),
+        patch("vula.commerce.service.get_invoice_settings", new=AsyncMock(return_value={})),
+        patch("vula.commerce.pdf.merge_branding", return_value={"name": "DIGG Architects"}),
+        patch("vula.commerce.pdf.render_letter_pdf", return_value=b"%PDF-fake"),
+    ):
+        result = await draft_letter(
+            {"document_type": "fee_proposal", "brief": brief}, tenant_id="digg-demo", phone="",
+        )
+    assert result["has_placeholders"] is False
+
+
+# ── _retrieve_context: rate-card grounding ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_retrieve_context_injects_rate_table_for_fee_proposal():
+    from vula.api.draft import _retrieve_context
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.query = AsyncMock(return_value=[])
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline),
+        patch("vula.api.qs.search_rates",
+              return_value=[{"description": "Concept design", "rate": 50000, "unit": "project"}]),
+    ):
+        context, _sources = await _retrieve_context("digg-demo", "fee proposal brief", "fee_proposal", None)
+
+    assert "YOUR_OWN_RATE_TABLE" in context
+    assert "Concept design" in context
+    assert "R50000" in context
+
+
+@pytest.mark.asyncio
+async def test_retrieve_context_no_rate_table_for_other_doc_types():
+    from vula.api.draft import _retrieve_context
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.query = AsyncMock(return_value=[])
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=mock_pipeline),
+        patch("vula.api.qs.search_rates") as mock_search,
+    ):
+        await _retrieve_context("digg-demo", "letter brief", "appointment_letter", None)
+
+    mock_search.assert_not_called()

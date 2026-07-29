@@ -57,7 +57,10 @@ DOCUMENT_TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Fee Proposal",
         "description": "Professional fee proposal for architectural or consulting services",
         "system_prompt": """You are a senior South African architect drafting a professional fee proposal.
-Use SACAP fee guidelines and the client's own fee schedule where available.
+Use SACAP fee guidelines and the client's own fee schedule where available. If a
+YOUR_OWN_RATE_TABLE block is present in the context, it is the business's own real rates —
+prefer it over any other figure, and never state a rate that isn't in it, in the SACAP
+guidelines, or in the brief itself.
 Format as a formal business document with:
 - Company letterhead reference (company name, SACAP number)
 - Client details
@@ -262,6 +265,25 @@ async def _retrieve_context(tenant_id: str, brief: str, doc_type: str,
             sources += len(tenant_chunks)
     except Exception as exc:
         logger.warning("Tenant KB retrieval failed for %s: %s", tenant_id, exc)
+
+    # 1b. The tenant's own structured rate table (migrations/017_qs_rates.sql) — built
+    # specifically so cost figures are "computed from real, owned figures — never market rates
+    # guessed by the model." Previously only the calculations skill queried it; a fee proposal's
+    # numbers deserve the same grounding instead of relying on KB semantic-search luck or the
+    # model inventing a figure. fee_proposal only — other letter types don't price anything.
+    if doc_type == "fee_proposal":
+        try:
+            from vula.api.qs import search_rates
+            rate_rows = search_rates(tenant_id, query="", limit=15)
+            if rate_rows:
+                rate_lines = "\n".join(
+                    f"- {r.get('description', '')}: R{r.get('rate', '?')} per {r.get('unit', '')}"
+                    for r in rate_rows
+                )
+                sections.append(fence(
+                    "YOUR_OWN_RATE_TABLE_AUTHORITATIVE_NEVER_INVENT_A_RATE_BEYOND_THIS", rate_lines))
+        except Exception as exc:
+            logger.debug("Rate-card lookup skipped for %s: %s", tenant_id, exc)
 
     # 2. Shared construction KB (SA standards, SACAP fees, rates)
     try:
