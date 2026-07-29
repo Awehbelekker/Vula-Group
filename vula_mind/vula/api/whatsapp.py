@@ -388,6 +388,17 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     if re.match(r"^\s*(hi|hello|hallo|hey|howzit|good\s*morning|goeie\s*dag|ok(ay)?|thanks|dankie)\s*[!.👋🙂]*\s*$",
                 text, re.IGNORECASE):
         return False
+    # A helper's own NEW question is not an answer either — confirmed live 2026-07-29: a helper
+    # sitting on a stale (but not yet 48h-expired) escalation from an unrelated earlier message
+    # asked their own genuine question, and it got swallowed as "the answer," relayed to the
+    # WRONG person (the original asker of the unrelated old question), while the helper's real
+    # question was never actually answered. A trailing '?', or a common question-starter with no
+    # closing punctuation, means they're asking — let it fall through to normal routing instead.
+    if text.strip().endswith("?") or re.match(
+        r"^\s*(what|how|why|where|when|who|which|can you|could you|do you|does|is there|are there)\b",
+        text, re.IGNORECASE,
+    ):
+        return False
     info = esc.answer_escalation(open_esc, text.strip())
     if not info:
         return True  # already answered by a concurrent delivery — consume silently, no double relay
@@ -493,6 +504,35 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
                 logger.info("Dropping inbound WA message for suspended tenant %s", tenant_id)
                 return
 
+    # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
+    if _DELETE_RE.match(text):
+        await _handle_data_deletion(phone, tenant_id)
+        return
+
+    # Deterministic, IN-FLIGHT conversational state — checked BEFORE the sales_rep agent below.
+    # 2026-07-29: a sales_rep's plain reply to "which project is that receipt for?" (e.g. "HPC")
+    # or a correction ("it was on the company card") was being swallowed by the sales_rep gate's
+    # free-form tool-calling loop, which — having no awareness of a pending expense-allocation
+    # or bank-review question — hallucinated an unrelated tool call (draft a follow-up email,
+    # log a meeting, save a contact) instead of falling through. These deterministic checks know
+    # exactly what reply they're waiting for, so they must win over the general-purpose agent.
+    if tenant_id:
+        _alloc = await _maybe_allocate_pending_expense(tenant_id, phone, text)
+        if _alloc:
+            await _send_reply(phone, _alloc, tenant_id)
+            return
+        # Answering a bank-review question ("R720 to Lonese — what's this?").
+        _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
+        if _rev:
+            await _send_reply(phone, _rev, tenant_id)
+            return
+        # A team member managing their own notification prefs ("stop follow-up emails").
+        from vula.integrations.notify import handle_preference_command
+        _pref = handle_preference_command(tenant_id, phone, text)
+        if _pref:
+            await _send_reply(phone, _pref, tenant_id)
+            return
+
     # ── sales_rep team member → the rep-scoped commerce admin agent, not the generic
     # construction knowledge-base assistant below. This function (_handle_message) is the
     # ONLY dispatch path for "knowledge"-mode tenant lines (e.g. digg-demo) — a tenant using
@@ -518,29 +558,6 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
                 # Admin agent failed → fall through to the normal KB/RAG flow below.
         except Exception as exc:
             logger.debug("sales_rep routing check skipped: %s", exc)
-
-    # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
-    if _DELETE_RE.match(text):
-        await _handle_data_deletion(phone, tenant_id)
-        return
-
-    # Answering "which project is that receipt for?" → allocate the pending expense claim.
-    if tenant_id:
-        _alloc = await _maybe_allocate_pending_expense(tenant_id, phone, text)
-        if _alloc:
-            await _send_reply(phone, _alloc, tenant_id)
-            return
-        # Answering a bank-review question ("R720 to Lonese — what's this?").
-        _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
-        if _rev:
-            await _send_reply(phone, _rev, tenant_id)
-            return
-        # A team member managing their own notification prefs ("stop follow-up emails").
-        from vula.integrations.notify import handle_preference_command
-        _pref = handle_preference_command(tenant_id, phone, text)
-        if _pref:
-            await _send_reply(phone, _pref, tenant_id)
-            return
 
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):

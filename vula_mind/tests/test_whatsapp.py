@@ -419,6 +419,101 @@ async def test_escalation_no_frustration_flag_for_normal_question():
     assert "frustrated" not in helper_msg.lower()
 
 
+# ── _maybe_helper_escalation_answer — helper's own new question isn't an answer ────
+
+_OPEN_ESC = {"id": "e1", "customer_phone": "27645755210", "tenant_id": "digg-demo"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", [
+    "If a tile is 200 x 200 how many tiles are in a square?",
+    "What time does the site open tomorrow?",
+    "How many bags of cement do we need for this",  # no trailing '?'
+    "Can you check the BOQ for me?",
+])
+async def test_helper_own_new_question_not_swallowed_as_answer(question):
+    """2026-07-29: Judy, sitting as helper on a 2-day-old stale escalation from an unrelated
+    message, asked her own genuine question — it got treated as "the answer" and relayed to
+    the wrong person (the original asker), and she never got a reply to her real question."""
+    from vula.api.whatsapp import _maybe_helper_escalation_answer
+
+    with (
+        patch("vula.escalation.open_escalation_for_helper", return_value=dict(_OPEN_ESC)),
+        patch("vula.escalation.answer_escalation") as mock_answer,
+    ):
+        result = await _maybe_helper_escalation_answer("27827077080", question)
+
+    assert result is False
+    mock_answer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_helper_real_answer_still_relayed():
+    from vula.api.whatsapp import _maybe_helper_escalation_answer
+
+    with (
+        patch("vula.escalation.open_escalation_for_helper", return_value=dict(_OPEN_ESC)),
+        patch("vula.escalation.answer_escalation",
+              return_value={"customer_phone": "27645755210", "tenant_id": "digg-demo"}),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
+    ):
+        result = await _maybe_helper_escalation_answer(
+            "27827077080", "It's a business card for the new supplier contact.")
+
+    assert result is True
+    assert mock_send.call_count == 2
+    assert mock_send.call_args_list[0].args[0] == "27645755210"  # relayed to the original asker
+
+
+# ── _handle_message — deterministic pending state wins over the sales_rep agent ────
+
+@pytest.mark.asyncio
+async def test_pending_expense_allocation_wins_over_sales_rep_gate():
+    """2026-07-29: a sales_rep's answer to "which project is this for?" (e.g. "HPC") was
+    swallowed by the sales_rep gate's tool-calling agent, which — having no awareness of the
+    pending question — hallucinated an unrelated tool call instead of falling through.
+    Confirmed live: the same reply triggered a Google-account/email-drafting response, and a
+    payment-method correction triggered fabricated "meeting notes". Deterministic in-flight
+    conversational state must be checked before the general-purpose sales_rep agent."""
+    from vula.api.whatsapp import _handle_message
+
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense",
+              new=AsyncMock(return_value="Logged to HPC.")),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
+        patch("vula.api.whatsapp._run_commerce_admin", new=AsyncMock(return_value=True)) as mock_admin,
+    ):
+        await _handle_message("27645755210", "HPC", "wamid.1", route_tenant_id="digg-demo")
+
+    mock_admin.assert_not_called()
+    mock_send.assert_called_once_with("27645755210", "Logged to HPC.", "digg-demo")
+
+
+@pytest.mark.asyncio
+async def test_sales_rep_gate_still_runs_when_nothing_pending():
+    from vula.api.whatsapp import _handle_message
+
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = \
+        MagicMock(data=[{"whatsapp": "27645755210"}])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_bank_review_answer", new=AsyncMock(return_value=None)),
+        patch("vula.integrations.notify.handle_preference_command", return_value=None),
+        patch("vula.commerce.service._client", return_value=mock_db),
+        patch("vula.api.whatsapp._run_commerce_admin", new=AsyncMock(return_value=True)) as mock_admin,
+    ):
+        await _handle_message("27645755210", "Please see business card", "wamid.2",
+                              route_tenant_id="digg-demo")
+
+    mock_admin.assert_called_once()
+
+
 # ── _run_commerce_assistant — voice/language threading ────────────────────────
 
 @pytest.mark.asyncio
