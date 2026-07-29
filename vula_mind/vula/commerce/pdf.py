@@ -249,11 +249,13 @@ _DOC_HTML = """<!DOCTYPE html>
 <div class="header">
   <div class="brand"{% if logo_align == 'center' %} style="text-align:center;"{% endif %}>
     {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:{{ '56px' if logo_size == 'sm' else ('100px' if logo_size == 'lg' else '76px') }};max-width:{{ '180px' if logo_size == 'sm' else ('320px' if logo_size == 'lg' else '240px') }};margin-bottom:10px;display:block;{% if logo_align == 'center' %}margin-left:auto;margin-right:auto;{% endif %}">{% endif %}
+    {% if not tenant_logo %}
     {% if trading_as %}
     <h1>{{ trading_as }}</h1>
     <p class="legal-name">{{ tenant_name }}</p>
     {% else %}
     <h1>{{ tenant_name }}</h1>
+    {% endif %}
     {% endif %}
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
@@ -630,11 +632,13 @@ __TEMPLATE_CSS__
 <div class="header">
   <div class="brand">
     {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:76px;max-width:240px;margin-bottom:10px;display:block;">{% endif %}
+    {% if not tenant_logo %}
     {% if trading_as %}
     <h1>{{ trading_as }}</h1>
     <p class="legal-name">{{ tenant_name }}</p>
     {% else %}
     <h1>{{ tenant_name }}</h1>
+    {% endif %}
     {% endif %}
     <p>{{ tenant_address | replace("\\n", "<br>") | safe }}</p>
     {% if tenant_email %}<p>{{ tenant_email }}</p>{% endif %}
