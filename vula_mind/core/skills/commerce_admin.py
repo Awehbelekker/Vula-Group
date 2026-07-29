@@ -178,10 +178,12 @@ BOOKING_TOOLS = [
 MARKETING_TOOLS = [
     {"type": "function", "function": {
         "name": "generate_marketing",
-        "description": "Write marketing copy: today's specials post, a product description, promo, or broadcast text.",
+        "description": "Write marketing copy: today's specials post, a product description, promo, or "
+                       "broadcast text. Give a couple of options by default so you can pick the best one.",
         "parameters": {"type": "object", "properties": {
             "kind": {"type": "string", "enum": ["specials", "product", "promo", "broadcast"]},
-            "topic": {"type": "string"}, "tone": {"type": "string"}}}}},
+            "topic": {"type": "string"}, "tone": {"type": "string"},
+            "variant_count": {"type": "integer", "description": "How many options to generate (1-3, default 3)."}}}}},
 ]
 DRAFT_TOOLS = [
     {"type": "function", "function": {
@@ -813,11 +815,19 @@ class CommerceAdminSkill(BaseSkill):
 
     async def _generate_marketing(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         from vula.commerce import marketing
+        count = max(1, min(int(args.get("variant_count") or 3), 3))
         res = await marketing.generate(tid, kind=args.get("kind", "specials"),
-                                       topic=args.get("topic", ""), tone=args.get("tone", ""), variants=1)
+                                       topic=args.get("topic", ""), tone=args.get("tone", ""),
+                                       variants=count)
         if res.get("error"):
             return res
-        return {"copy": (res.get("variants") or [""])[0]}
+        variants = res.get("variants") or []
+        if not variants:
+            return {"error": "No copy came back — try again."}
+        if len(variants) == 1:
+            return {"copy": variants[0]}
+        return {"options": variants, "note": f"{len(variants)} options — reply with which one to use, "
+                "or ask for changes."}
 
     async def _create_subscription(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         from vula.commerce import subscriptions as subs
