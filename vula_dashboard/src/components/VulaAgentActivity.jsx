@@ -23,12 +23,46 @@ export default function VulaAgentActivity({ tenantId }) {
   const [a, setA] = useState("");
   const [msg, setMsg] = useState("");
 
+  const [persona, setPersona] = useState("");
+  const [suggested, setSuggested] = useState("");
+  const [voiceMsg, setVoiceMsg] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+
   const load = useCallback(async () => {
     const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/agent-activity?limit=80`)
       .then(r => r.json()).catch(() => ({ events: [] }));
     setEvents(d.events || []);
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
+
+  const loadPersona = useCallback(async () => {
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/persona`)
+      .then(r => r.json()).catch(() => ({}));
+    setPersona(d.persona_prompt || "");
+    setSuggested(d.persona_prompt_suggested || "");
+  }, [tenantId]);
+  useEffect(() => { loadPersona(); }, [loadPersona]);
+
+  const savePersona = async (text) => {
+    setVoiceMsg("Saving…");
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/persona`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona_prompt: text }),
+    }).then(r => r.json()).catch(() => ({ error: "network" }));
+    if (r.error) setVoiceMsg(r.error);
+    else { setPersona(text); setSuggested(""); setVoiceMsg("Saved ✓"); }
+    setTimeout(() => setVoiceMsg(""), 4000);
+  };
+
+  const analyzeVoice = async () => {
+    setAnalyzing(true);
+    setVoiceMsg("Reading your recent replies…");
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/persona/analyze`, { method: "POST" })
+      .then(r => r.json()).catch(() => ({ error: "network" }));
+    setAnalyzing(false);
+    if (r.error) setVoiceMsg(r.error);
+    else { setSuggested(r.suggested); setVoiceMsg(`Learned from ${r.sample_count} of your replies ✓`); }
+  };
 
   const teach = async () => {
     if (!q.trim() || !a.trim()) { setMsg("Fill in both the question and the correct answer."); return; }
@@ -51,6 +85,35 @@ export default function VulaAgentActivity({ tenantId }) {
       <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>
         See what Vula's AI did — the tools it used and whether it ran on your local GPU or escalated to the cloud.
       </p>
+
+      {/* Voice card */}
+      <div style={{ ...card, background: C.alt, marginBottom: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>🗣️ How Vula sounds</div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+          Set it yourself, or let Vula learn it from the replies you've personally sent customers
+          in the inbox.
+        </div>
+        <textarea value={persona} onChange={e => setPersona(e.target.value)}
+          placeholder="e.g. Warm, casual, quick replies — small family shop, not corporate."
+          style={{ ...input, width: "100%", minHeight: 54, resize: "vertical", boxSizing: "border-box" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
+          <button onClick={() => savePersona(persona)} style={{ ...btn, ...btnOn }}>Save</button>
+          <button onClick={analyzeVoice} disabled={analyzing} style={btn}>
+            {analyzing ? "Analyzing…" : "Analyze my voice"}
+          </button>
+          {voiceMsg && <span style={{ fontSize: 12, color: C.green }}>{voiceMsg}</span>}
+        </div>
+        {suggested && suggested !== persona && (
+          <div style={{ ...card, marginTop: 10, background: C.surface }}>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>Vula suggests:</div>
+            <div style={{ fontSize: 13, marginBottom: 8 }}>{suggested}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => savePersona(suggested)} style={{ ...btn, ...btnOn }}>Accept</button>
+              <button onClick={() => savePersona(persona)} style={btn}>Dismiss</button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Teach box */}
       <div style={{ ...card, background: C.alt, marginBottom: 16 }}>

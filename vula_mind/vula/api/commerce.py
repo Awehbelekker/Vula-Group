@@ -1007,6 +1007,55 @@ async def admin_agent_unteach(tenant_id: str, body: dict):
     return {"ok": True, "removed": q}
 
 
+@router.get("/{tenant_id}/admin/persona")
+async def admin_get_persona(tenant_id: str):
+    """Current + suggested voice/tone (persona_prompt, migration 116+119)."""
+    from vula.api import tenants as _tenants
+    cfg = _tenants.get_config(tenant_id, fresh=True)
+    return {
+        "persona_prompt": cfg.get("persona_prompt") or "",
+        "persona_prompt_suggested": cfg.get("persona_prompt_suggested") or "",
+        "persona_prompt_suggested_at": cfg.get("persona_prompt_suggested_at"),
+    }
+
+
+class PersonaPatch(BaseModel):
+    persona_prompt: str
+
+
+@router.patch("/{tenant_id}/admin/persona")
+async def admin_set_persona(tenant_id: str, body: PersonaPatch):
+    """Owner sets/edits how Vula should sound — read by commerce_admin/commerce_assistant's
+    persona_block. Accepting a suggestion is just a PATCH with the suggested text as the value;
+    also clears the pending suggestion either way so old suggestions don't linger stale."""
+    from vula.api import tenants as _tenants
+    try:
+        service._client().table("vula_tenant_config").update({
+            "persona_prompt": body.persona_prompt.strip(),
+            "persona_prompt_suggested": None,
+            "persona_prompt_suggested_at": None,
+        }).eq("tenant_id", tenant_id).execute()
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 116/119?)"}
+    _tenants.invalidate(tenant_id)
+    return {"ok": True, "persona_prompt": body.persona_prompt.strip()}
+
+
+@router.post("/{tenant_id}/admin/persona/analyze")
+async def admin_analyze_persona(tenant_id: str):
+    """Analyse the owner/staff's own WhatsApp replies (role='agent') and suggest a persona."""
+    from vula.commerce import voice_profile
+    result = await voice_profile.analyze_voice(tenant_id)
+    if "error" in result:
+        return result
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-agent-teach", task="voice_profile", tenant_id=tenant_id, outcome="suggested")
+    except Exception:
+        pass
+    return {"ok": True, **result}
+
+
 class MarketingRequest(BaseModel):
     kind: str = "specials"          # specials | product | promo | broadcast
     topic: str = ""                 # product name (for 'product') or the offer/subject
