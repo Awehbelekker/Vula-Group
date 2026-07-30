@@ -333,7 +333,10 @@ def _fetch_new(creds: dict, last_uid: int, max_emails: int, folder: str = "INBOX
                         # References name the message(s) it's replying to.
                         "message_id": (msg.get("Message-ID") or "").strip(),
                         "in_reply_to": (msg.get("In-Reply-To") or "").strip(),
-                        "references": (msg.get("References") or "").strip()})
+                        "references": (msg.get("References") or "").strip(),
+                        # Set by vula/email_imap/service.py::_build() on anything Vula composed
+                        # (auto-sent or a draft) — excluded from voice-profile learning below.
+                        "vula_sent": bool((msg.get("X-Vula-Sent") or "").strip())})
         return {"emails": out, "max_uid": max(batch) if batch else last_uid, "folder": resolved,
                 "oversized": oversized}
     finally:
@@ -458,6 +461,39 @@ async def _resolve_replied_followups(db, tenant_id: str, sent_emails: list) -> i
     return len(resolved)
 
 
+_QUOTE_MARKERS = re.compile(
+    r"\n\s*(On .{0,80} wrote:|-{2,}\s*Original Message\s*-{2,}|From:\s*.+\nSent:\s*.+|>.*)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_quoted(body: str) -> str:
+    """Keep only the new text above the quoted thread — the quoted history isn't the owner's
+    own voice, just noise/duplication if left in."""
+    m = _QUOTE_MARKERS.search(body or "")
+    return (body[:m.start()] if m else (body or "")).strip()
+
+
+async def _capture_voice_samples(db, tenant_id: str, sent_emails: list) -> None:
+    """Keep a short, redacted excerpt of genuinely human-composed Sent-folder emails (never
+    Vula's own AI-composed mail — see the vula_sent flag) for voice_profile.py to learn tone
+    from. Best-effort: a failure here must never break the actual email sync."""
+    rows = []
+    for em in sent_emails:
+        if em.get("vula_sent"):
+            continue
+        text = _strip_quoted(em.get("body", ""))
+        if len(text) < 20:
+            continue
+        rows.append({"tenant_id": tenant_id, "excerpt": text[:600]})
+    if not rows:
+        return
+    try:
+        db.table("vula_email_voice_samples").insert(rows).execute()
+    except Exception as exc:
+        logger.debug("voice-sample capture skipped (run migration 120?): %s", exc)
+
+
 async def _record_sync_failure(db, tenant_id: str, account_id: str, email_addr: str,
                                prior_fail_count: int, error: str) -> None:
     """Bump the consecutive-failure streak. Only notify AT the threshold crossing, not every
@@ -556,6 +592,8 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
     # Outbound mail this sync picked up might BE the reply to something still tracked as
     # open — close that loop before processing this batch's own new follow-ups below.
     resolved_followups = await _resolve_replied_followups(db, tenant_id, sent_result["emails"])
+
+    await _capture_voice_samples(db, tenant_id, sent_result["emails"])
 
     emails = inbox_result["emails"] + sent_result["emails"]
     contacts_seen, filed = set(), 0

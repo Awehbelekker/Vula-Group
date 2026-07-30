@@ -90,8 +90,8 @@ export default function VulaAgentActivity({ tenantId }) {
       <div style={{ ...card, background: C.alt, marginBottom: 16 }}>
         <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>🗣️ How Vula sounds</div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
-          Set it yourself, or let Vula learn it from the replies you've personally sent customers
-          in the inbox.
+          Set it yourself, or let Vula learn it from your own words — WhatsApp replies you've
+          sent, meeting notes, and emails you've sent.
         </div>
         <textarea value={persona} onChange={e => setPersona(e.target.value)}
           placeholder="e.g. Warm, casual, quick replies — small family shop, not corporate."

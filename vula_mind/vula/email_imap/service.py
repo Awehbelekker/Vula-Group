@@ -184,6 +184,13 @@ def _build(creds: dict, to: str, subject: str, body: str) -> EmailMessage:
     if creds.get("from_name"):
         frm = f'{creds["from_name"]} <{creds["email"]}>'
     msg["From"], msg["To"], msg["Subject"] = frm, to, subject
+    # Marks every AI-composed message (auto-sent or a draft later sent as-is) so
+    # vula/email_imap/sync.py's Sent-folder voice-profile capture can exclude it — learning tone
+    # from Vula's own writing would just reinforce whatever it already does, not the owner's real
+    # voice. Deliberately conservative: most mail clients preserve custom headers even after a
+    # human edits a draft before sending, so an edited draft is excluded too rather than risking
+    # AI-originated text polluting the sample.
+    msg["X-Vula-Sent"] = "1"
     msg.set_content(body)
     return msg
 
