@@ -229,7 +229,7 @@ def test_plan_all_branches_have_prompts(hrm):
 
 
 def test_plan_routing_hint_overrides_tier(hrm):
-    g = TaskGraph(original_prompt="Simple task", routing_hints={"preferred_tier": "14b"})
+    g = TaskGraph(original_prompt="Simple task", routing_hints={"winning_tier": "14b"})
     g = hrm.plan(g)
     assert g.branches[0].model_tier == ModelTier.REASONER
 
@@ -296,7 +296,7 @@ def test_plan_all_branches_have_prompts(hrm):
 
 
 def test_plan_routing_hint_overrides_tier(hrm):
-    g = TaskGraph(original_prompt="Simple task", routing_hints={"preferred_tier": "14b"})
+    g = TaskGraph(original_prompt="Simple task", routing_hints={"winning_tier": "14b"})
     g = hrm.plan(g)
     assert g.branches[0].model_tier == ModelTier.REASONER
 

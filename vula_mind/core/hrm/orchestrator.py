@@ -222,7 +222,10 @@ class HRMOrchestrator:
         return None
 
     def _select_model(self, complexity: int, routing_hints: dict) -> ModelTier:
-        hint = routing_hints.get("preferred_tier")
+        # Was "preferred_tier" — a key ReflectionAgent.get_routing_hints() never produces (it
+        # returns "winning_tier"), so this always read None and the reflection loop silently
+        # never influenced routing despite being fully computed, stored, and fetched back.
+        hint = routing_hints.get("winning_tier")
         if hint:
             try:
                 return ModelTier(hint)
