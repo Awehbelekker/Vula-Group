@@ -276,10 +276,10 @@ async def yoco_webhook(request: Request) -> dict:
     invoice_id = metadata.get("invoice_id")
     if invoice_id and event_type in ("payment.succeeded", "checkout.completed"):
         try:
-            from vula.commerce import service as _svc
-            _svc._client().table("commerce_invoices").update(
-                {"status": "paid", "updated_at": _svc._now()}
-            ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+            # Routed through the shared service function (not a direct table write) so this
+            # also fires the general-ledger posting hook — a direct write here would silently
+            # skip journal posting for pay-link invoices.
+            await commerce.update_invoice_status(tenant_id, invoice_id, "paid")
             log.info("Invoice %s paid via Yoco", metadata.get("invoice_number", invoice_id))
         except Exception as exc:
             log.warning("invoice mark-paid failed: %s", exc)

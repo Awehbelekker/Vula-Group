@@ -250,6 +250,11 @@ async def create_claim(
         res = db.table("commerce_expenses").insert(row).execute()
     out = (res.data or [row])[0]
     out["needs_project"] = (not project) and bool(known_projects(tenant_id))
+    try:
+        from vula.commerce import ledger
+        ledger.post_expense(tenant_id, out)
+    except Exception as exc:
+        log.warning("ledger hook failed for expense %s: %s", out.get("id"), exc)
     return out
 
 

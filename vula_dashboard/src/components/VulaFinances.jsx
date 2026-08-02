@@ -25,6 +25,14 @@ export default function VulaFinances({ tenantId }) {
   const [budget, setBudget] = useState("");
   const [openProj, setOpenProj] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [tb, setTb] = useState(null);
+  const [tbOpen, setTbOpen] = useState(false);
+
+  const loadTrialBalance = useCallback(async () => {
+    if (!tenantId) return;
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reports/trial-balance`);
+    setTb(await r.json());
+  }, [tenantId]);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
@@ -140,6 +148,36 @@ export default function VulaFinances({ tenantId }) {
             <span style={{ fontSize: 10, color: t.reconciled ? C.green : C.muted }}>{t.reconciled ? "✓ matched" : t.kind}</span>
           </div>
         ))}
+      </div>
+      <div style={{ marginTop: 20 }}>
+        <span onClick={() => { setTbOpen(!tbOpen); if (!tb) loadTrialBalance(); }} style={{ fontSize: 12, color: C.muted, cursor: "pointer", borderBottom: `1px dotted ${C.muted}` }}>
+          {tbOpen ? "▾" : "▸"} General ledger (trial balance)
+        </span>
+        {tbOpen && (
+          <div style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+            {tb?.error && <div style={{ padding: 12, fontSize: 12, color: C.muted }}>{tb.error}</div>}
+            {tb && !tb.error && tb.accounts.length === 0 && <div style={{ padding: 12, fontSize: 12, color: C.muted }}>No journal entries yet — these post automatically as orders/invoices get paid and expenses are logged.</div>}
+            {tb && !tb.error && tb.accounts.length > 0 && (
+              <>
+                <div style={{ padding: "8px 16px", display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 11, color: C.muted, textTransform: "uppercase", background: C.alt }}>
+                  <span>Account</span><span>Debit</span><span>Credit</span>
+                </div>
+                {tb.accounts.map((a) => (
+                  <div key={a.code} style={{ padding: "7px 16px", borderTop: `1px solid ${C.alt}`, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 12.5 }}>
+                    <span>{a.name} <span style={{ color: C.muted, fontSize: 10 }}>· {a.type}</span></span>
+                    <span>{a.debit_cents ? rand(a.debit_cents) : "—"}</span>
+                    <span>{a.credit_cents ? rand(a.credit_cents) : "—"}</span>
+                  </div>
+                ))}
+                <div style={{ padding: "8px 16px", borderTop: `1px solid ${C.border}`, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 12.5, fontWeight: 700, background: C.alt }}>
+                  <span>Total</span>
+                  <span>{rand(tb.total_debit_cents)}</span>
+                  <span style={{ color: tb.total_debit_cents === tb.total_credit_cents ? C.green : C.red }}>{rand(tb.total_credit_cents)}</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
       <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 20 }}>Powered by Vula · figures from filed invoices & payments</p>
     </div>

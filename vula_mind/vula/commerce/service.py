@@ -768,7 +768,17 @@ async def update_order_status(order_id: str, status: str, yoco_checkout_id: Opti
     update = {"status": status, "updated_at": _now()}
     if yoco_checkout_id:
         update["yoco_checkout_id"] = yoco_checkout_id
-    _client().table("commerce_orders").update(update).eq("id", order_id).execute()
+    result = _client().table("commerce_orders").update(update).eq("id", order_id).execute()
+    if status in ("paid", "refunded") and result.data:
+        try:
+            from vula.commerce import ledger
+            order = result.data[0]
+            if status == "paid":
+                ledger.post_order_paid(order["tenant_id"], order)
+            else:
+                ledger.post_order_refund(order["tenant_id"], order)
+        except Exception as exc:
+            logger.warning("ledger hook failed for order %s: %s", order_id, exc)
 
 
 async def get_order(order_id: str) -> Optional[dict]:
@@ -1233,7 +1243,14 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
         .eq("id", invoice_id)
         .execute()
     )
-    return result.data[0] if result.data else {}
+    invoice = result.data[0] if result.data else {}
+    if status == "paid" and invoice:
+        try:
+            from vula.commerce import ledger
+            ledger.post_invoice_paid(tenant_id, invoice)
+        except Exception as exc:
+            logger.warning("ledger hook failed for invoice %s: %s", invoice_id, exc)
+    return invoice
 
 
 async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:

@@ -43,11 +43,20 @@ DEFAULT_CHART = [
     ("insurance",        "Insurance",             "expense", "standard", True, 140),
     ("other_expense",    "Other expenses",        "expense", "standard", True, 150),
     ("owner_drawings",   "Owner drawings",        "equity",  "none",     False, 160),
+    # Balance-sheet accounts (added for the general ledger, migration 121) — the original chart
+    # was income/expense/equity only, fine for cash-basis P&L/VAT but a journal entry needs a
+    # real Bank/Cash asset and VAT liability/asset side.
+    ("bank_cash",        "Bank / cash",           "asset",     "none",  False, 5),
+    ("accounts_payable", "Accounts payable",      "liability", "none",  False, 170),
+    ("vat_output",       "VAT output (owed)",     "liability", "none",  False, 180),
+    ("vat_input",        "VAT input (claimable)", "asset",     "none",  False, 190),
 ]
 
 
 def ensure_chart(tenant_id: str) -> List[dict]:
-    """Return the tenant's chart of accounts, seeding SA defaults if they have none."""
+    """Return the tenant's chart of accounts, seeding any SA default codes they don't already
+    have (not just when the table is empty — a tenant who already has accounts from using
+    expenses still needs the balance-sheet codes added in migration 121 backfilled)."""
     db = _client()
     try:
         rows = (db.table("commerce_accounts").select("*").eq("tenant_id", tenant_id)
@@ -55,16 +64,18 @@ def ensure_chart(tenant_id: str) -> List[dict]:
     except Exception as exc:
         log.debug("accounts read skipped (run migration 058?): %s", exc)
         return []
-    if rows:
+    have = {r["code"] for r in rows}
+    missing = [{"tenant_id": tenant_id, "code": c, "name": n, "type": t,
+                "vat_treatment": v, "deductible": d, "sort": s}
+               for (c, n, t, v, d, s) in DEFAULT_CHART if c not in have]
+    if not missing:
         return rows
-    seed = [{"tenant_id": tenant_id, "code": c, "name": n, "type": t,
-             "vat_treatment": v, "deductible": d, "sort": s}
-            for (c, n, t, v, d, s) in DEFAULT_CHART]
     try:
-        db.table("commerce_accounts").insert(seed).execute()
+        db.table("commerce_accounts").insert(missing).execute()
     except Exception as exc:
         log.debug("chart seed skipped: %s", exc)
-    return seed
+        return rows
+    return rows + missing
 
 
 def _account_map(tenant_id: str) -> Dict[str, dict]:

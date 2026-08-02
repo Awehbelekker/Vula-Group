@@ -1631,6 +1631,13 @@ async def admin_report_expenses(tenant_id: str, since: Optional[str] = None,
     return expenses.report(tenant_id, since=since, until=until, project=project)
 
 
+@router.get("/{tenant_id}/admin/reports/trial-balance")
+async def admin_report_trial_balance(tenant_id: str, since: Optional[str] = None,
+                                     until: Optional[str] = None):
+    from vula.commerce import ledger
+    return ledger.trial_balance(tenant_id, since=since, until=until)
+
+
 # ── Company cards (whose money paid — drives reimbursement + bank matching) ───
 @router.get("/{tenant_id}/admin/cards")
 async def admin_list_cards(tenant_id: str):
