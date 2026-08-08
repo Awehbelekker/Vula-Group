@@ -467,6 +467,11 @@ class CommerceAdminSkill(BaseSkill):
             resp = await litellm.acompletion(
                 model=model, messages=messages, tools=tools, tool_choice="auto",
                 temperature=0.2, max_tokens=900, api_key=api_key, api_base=api_base,
+                # Unconditional — dropped silently wherever unsupported (cloud routes, older
+                # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
+                # Matters here specifically for the no-cloud-key fallback case, since this
+                # loop otherwise force-escalates to cloud above.
+                logprobs=True, top_logprobs=1,
             )
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
@@ -485,7 +490,26 @@ class CommerceAdminSkill(BaseSkill):
                         "Do not output JSON or tool calls."
                     )})
                     continue
-                return (msg.content or "").strip()
+                answer = (msg.content or "").strip()
+                # 2026-08 accuracy audit: zero adoption of the logprob-confidence escalation
+                # wired into reasoning.py/commerce_assistant.py the same day. Only fires in
+                # the no-cloud-key fallback case (model.startswith("ollama/")) — when the
+                # force-escalation above succeeded, model is already a cloud model here.
+                if model.startswith("ollama/"):
+                    from config import settings
+                    from core.llm_router import looks_unreliable, compute_confidence
+                    logprob_conf = compute_confidence(resp)
+                    if looks_unreliable(answer, confidence=logprob_conf,
+                                        confidence_threshold=settings.local_confidence_threshold):
+                        esc2 = escalate_to_cloud("local_unreliable", task_type="commerce_admin")
+                        if esc2:
+                            model, api_key, api_base = esc2
+                            resp = await litellm.acompletion(
+                                model=model, messages=messages, temperature=0.2,
+                                max_tokens=900, api_key=api_key, api_base=api_base,
+                                logprobs=True, top_logprobs=1)
+                            answer = (resp.choices[0].message.content or "").strip()
+                return answer
 
             messages.append({
                 "role": "assistant", "content": msg.content or "",

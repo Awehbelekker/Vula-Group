@@ -79,6 +79,8 @@ class FinanceAdminSkill(BaseSkill):
 
     async def _loop(self, history: str, question: str, tenant_id: str) -> str:
         import litellm
+        from config import settings
+        from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route()
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system()}]
@@ -88,7 +90,10 @@ class FinanceAdminSkill(BaseSkill):
 
         for _ in range(MAX_TOOL_ITERATIONS):
             resp = await litellm.acompletion(model=model, messages=messages, tools=TOOL_SPECS,
-                tool_choice="auto", temperature=0.2, max_tokens=700, api_key=api_key, api_base=api_base)
+                tool_choice="auto", temperature=0.2, max_tokens=700, api_key=api_key, api_base=api_base,
+                # Unconditional — dropped silently wherever unsupported (cloud routes, older
+                # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
+                logprobs=True, top_logprobs=1)
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
@@ -102,7 +107,23 @@ class FinanceAdminSkill(BaseSkill):
                         f"[{name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str)[:1500])}\n"
                         "Answer the user in short plain language. No JSON."})
                     continue
-                return (msg.content or "").strip()
+                answer = (msg.content or "").strip()
+                # 2026-08 accuracy audit: this skill previously had zero adoption of the
+                # logprob-confidence escalation wired into reasoning.py/commerce_assistant.py
+                # the same day — money-reporting with no low-confidence-local-answer check.
+                if model.startswith("ollama/"):
+                    logprob_conf = compute_confidence(resp)
+                    if looks_unreliable(answer, confidence=logprob_conf,
+                                        confidence_threshold=settings.local_confidence_threshold):
+                        esc = escalate_to_cloud("local_unreliable", task_type="finance_admin")
+                        if esc:
+                            model, api_key, api_base = esc
+                            resp = await litellm.acompletion(
+                                model=model, messages=messages, temperature=0.2,
+                                max_tokens=700, api_key=api_key, api_base=api_base,
+                                logprobs=True, top_logprobs=1)
+                            answer = (resp.choices[0].message.content or "").strip()
+                return answer
             messages.append({"role": "assistant", "content": msg.content or "",
                 "tool_calls": [{"id": tc.id, "type": "function",
                     "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
