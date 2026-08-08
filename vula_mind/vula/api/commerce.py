@@ -430,7 +430,10 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
         raise HTTPException(status_code=400, detail="Cart is empty")
 
     # Create order in Supabase
-    order = await service.create_order(tenant_id, cart, body.model_dump())
+    try:
+        order = await service.create_order(tenant_id, cart, body.model_dump())
+    except service.OutOfStockError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
     # Resolve Yoco credentials — per-tenant from Supabase, env var fallback
     from vula.api.yoco import _get_tenant_yoco_creds
@@ -4718,14 +4721,17 @@ async def admin_create_manual_order(tenant_id: str, body: dict):
     if not added:
         raise HTTPException(status_code=400, detail="no valid items")
     cart = await service.get_or_create_cart(tenant_id, session_id)  # re-read with items joined
-    order = await service.create_order(tenant_id, cart, {
-        "customer_phone": phone, "customer_name": name,
-        "customer_email": b.get("customer_email"),
-        "delivery_address": b.get("delivery_address") or "Collection / to arrange",
-        "delivery_slot": b.get("delivery_slot") or "morning",
-        "delivery_notes": b.get("delivery_notes"),
-        "channel": "manual", "payment_method": b.get("payment_method") or "cod",
-    })
+    try:
+        order = await service.create_order(tenant_id, cart, {
+            "customer_phone": phone, "customer_name": name,
+            "customer_email": b.get("customer_email"),
+            "delivery_address": b.get("delivery_address") or "Collection / to arrange",
+            "delivery_slot": b.get("delivery_slot") or "morning",
+            "delivery_notes": b.get("delivery_notes"),
+            "channel": "manual", "payment_method": b.get("payment_method") or "cod",
+        })
+    except service.OutOfStockError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if b.get("mark_paid"):
         await service.update_order_status(order["id"], "paid")
         try:

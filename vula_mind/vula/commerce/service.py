@@ -175,6 +175,67 @@ async def update_variant_stock(variant_id: str, quantity_delta: int) -> None:
     ).execute()
 
 
+class OutOfStockError(ValueError):
+    """Raised by create_order when one or more items can't be reserved.
+
+    `product_name` and `available` (may be None if unknown) are provided for
+    a customer-facing message; any stock already reserved for earlier items
+    in the same checkout is restored before this is raised, so a failed
+    checkout never leaves partial stock held against no order.
+    """
+    def __init__(self, product_name: str, available: Optional[int] = None):
+        self.product_name = product_name
+        self.available = available
+        msg = f"'{product_name}' doesn't have enough stock available."
+        if available is not None:
+            msg = f"'{product_name}' only has {available} left in stock."
+        super().__init__(msg)
+
+
+async def _reserve_cart_stock(tenant_id: str, items: list) -> None:
+    """Atomically reserve stock for every cart item before an order is created
+    (migration 122). Each reservation is a single conditional UPDATE
+    (`reserve_product_stock` / `reserve_variant_stock`) that only succeeds if
+    enough stock exists, so two concurrent checkouts for the last unit can't
+    both succeed. If any item fails, everything reserved so far in this call
+    is restored and OutOfStockError is raised — the caller must not insert
+    the order in that case.
+    """
+    reserved: list[tuple[Optional[str], Optional[str], int]] = []  # (product_id, variant_id, qty)
+    try:
+        for it in items:
+            pid = it.get("product_id")
+            if not pid:
+                continue
+            qty = int(round(float(it.get("quantity") or 0)))
+            if qty <= 0:
+                continue
+            vid = it.get("variant_id")
+            if vid:
+                ok = _client().rpc(
+                    "reserve_variant_stock", {"p_variant_id": vid, "p_qty": qty}
+                ).execute().data
+            else:
+                ok = _client().rpc(
+                    "reserve_product_stock",
+                    {"p_tenant_id": tenant_id, "p_product_id": pid, "p_qty": qty},
+                ).execute().data
+            if not ok:
+                name = it.get("commerce_products", {}).get("name") or "This item"
+                raise OutOfStockError(name)
+            reserved.append((pid, vid, qty))
+    except OutOfStockError:
+        for pid, vid, qty in reserved:
+            try:
+                if vid:
+                    await update_variant_stock(vid, -qty)
+                else:
+                    await update_product_stock(tenant_id, pid, -qty)
+            except Exception as exc:
+                logger.error("stock rollback failed for product %s variant %s: %s", pid, vid, exc)
+        raise
+
+
 async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
     """Decrement (sale) or restore (cancel/refund) product stock for an order's items — ONCE.
 
@@ -529,6 +590,13 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     display_id = await _next_order_display_id(tenant_id)
     attributed_broadcast_id = await _attribute_broadcast(tenant_id, checkout_data["customer_phone"])
 
+    # Reserve stock atomically BEFORE the order is inserted (migration 122). Previously
+    # stock was only decremented later at payment confirmation, so two concurrent
+    # checkouts for the last unit of a product would both succeed here and the shortfall
+    # would only surface as a silent clamp-to-zero at payment time. Raises OutOfStockError
+    # (already restoring anything reserved earlier in this same checkout) if unavailable.
+    await _reserve_cart_stock(tenant_id, items)
+
     order = {
         "id": str(uuid.uuid4()),
         "display_id": display_id,
@@ -549,27 +617,54 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
         "payment_method": checkout_data.get("payment_method"),  # online | cod | eft (migration 044)
         "attributed_broadcast_id": attributed_broadcast_id,      # migration 104
         "cart_id": cart["id"],
+        # Stock was just reserved above, at creation time rather than at payment
+        # confirmation — mark it adjusted now so apply_order_stock's idempotency guard
+        # (migration 054) correctly no-ops a later decrement and correctly allows a
+        # later cancel/refund to restore it exactly once.
+        "stock_adjusted": True,
         "created_at": _now(),
         "updated_at": _now(),
     }
 
     try:
-        result = _client().table("commerce_orders").insert(order).execute()
-    except Exception as exc:
-        # Any of these newer optional columns might not exist yet on an un-migrated DB
-        # (payment_method: migration 044; discount_code/discount_cents: migration 091;
-        # attributed_broadcast_id: migration 104) — strip them and retry so ordering
-        # never breaks on a missing column.
-        method = order.pop("payment_method", None)
-        order.pop("discount_code", None)
-        order.pop("discount_cents", None)
-        order.pop("attributed_broadcast_id", None)
-        if method:
-            note = order.get("delivery_notes") or ""
-            order["delivery_notes"] = (f"[pay:{method}] " + note).strip()
-        logger.warning("order insert retried without payment_method/discount/attribution fields (%s): %s", method, exc)
-        result = _client().table("commerce_orders").insert(order).execute()
-        code_row = None  # discount_cents column didn't exist -> don't count usage below
+        try:
+            result = _client().table("commerce_orders").insert(order).execute()
+        except Exception as exc:
+            # Any of these newer optional columns might not exist yet on an un-migrated DB
+            # (payment_method: migration 044; discount_code/discount_cents: migration 091;
+            # attributed_broadcast_id: migration 104) — strip them and retry so ordering
+            # never breaks on a missing column.
+            method = order.pop("payment_method", None)
+            order.pop("discount_code", None)
+            order.pop("discount_cents", None)
+            order.pop("attributed_broadcast_id", None)
+            if method:
+                note = order.get("delivery_notes") or ""
+                order["delivery_notes"] = (f"[pay:{method}] " + note).strip()
+            logger.warning("order insert retried without payment_method/discount/attribution fields (%s): %s", method, exc)
+            result = _client().table("commerce_orders").insert(order).execute()
+            code_row = None  # discount_cents column didn't exist -> don't count usage below
+    except Exception:
+        # Order insert failed even after the compatibility retry — stock was already
+        # reserved above, so restore it rather than leaving it stranded against an
+        # order that was never created.
+        for it in items:
+            pid = it.get("product_id")
+            if not pid:
+                continue
+            qty = int(round(float(it.get("quantity") or 0)))
+            if qty <= 0:
+                continue
+            vid = it.get("variant_id")
+            try:
+                if vid:
+                    await update_variant_stock(vid, -qty)
+                else:
+                    await update_product_stock(tenant_id, pid, -qty)
+            except Exception as rexc:
+                logger.error("stock rollback failed after order-insert failure for product %s variant %s: %s",
+                             pid, vid, rexc)
+        raise
     order_id = result.data[0]["id"]
 
     if code_row:
@@ -794,21 +889,13 @@ async def get_order(order_id: str) -> Optional[dict]:
 
 
 async def _next_order_display_id(tenant_id: str) -> str:
-    result = (
-        _client()
-        .table("commerce_orders")
-        .select("display_id")
-        .eq("tenant_id", tenant_id)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    last = result.data[0]["display_id"] if result.data else None
+    """Race-safe (migration 122) — see `_next_invoice_number` above for why
+    this can no longer be a SELECT-last-then-add-1 read/write pair."""
+    result = _client().rpc(
+        "next_document_number", {"p_tenant_id": tenant_id, "p_counter_key": "order"}
+    ).execute()
+    num = int(result.data)
     prefix = tenant_id.upper()[:3]
-    if last:
-        num = int(last.split("-")[-1]) + 1
-    else:
-        num = 1
     return f"{prefix}-{num:05d}"
 
 
@@ -1025,20 +1112,19 @@ def _compute_totals(line_items: List[dict], vat_rate: float,
 
 
 async def _next_invoice_number(tenant_id: str, doc_type: str) -> str:
-    """Sequential, tenant-scoped, doc-type-scoped number e.g. OTH-INV-00001."""
+    """Sequential, tenant-scoped, doc-type-scoped number e.g. OTH-INV-00001.
+
+    Race-safe (migration 122): the number comes from a single atomic
+    UPSERT...RETURNING RPC (`next_document_number`) rather than a
+    SELECT-last-then-add-1-in-Python read/write pair, which two concurrent
+    invoice creations could both read before either had written back,
+    minting the same number twice.
+    """
     code = _DOC_TYPE_CODE.get(doc_type, "INV")
-    result = (
-        _client()
-        .table("commerce_invoices")
-        .select("invoice_number")
-        .eq("tenant_id", tenant_id)
-        .eq("doc_type", doc_type)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    last = result.data[0]["invoice_number"] if result.data else None
-    num = int(last.split("-")[-1]) + 1 if last else 1
+    result = _client().rpc(
+        "next_document_number", {"p_tenant_id": tenant_id, "p_counter_key": doc_type}
+    ).execute()
+    num = int(result.data)
     prefix = tenant_id.upper()[:3]
     return f"{prefix}-{code}-{num:05d}"
 

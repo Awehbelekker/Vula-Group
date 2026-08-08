@@ -115,12 +115,35 @@ def _clean(row):
     return {k: v for k, v in row.items() if k != "__seq__"}
 
 
+class _RpcResult:
+    def __init__(self, data):
+        self.data = data
+
+
 class _FakeSupabase:
     def __init__(self):
         self.store = {}
 
     def table(self, name):
         return _Query(self.store, name)
+
+    def rpc(self, name, params=None):
+        params = params or {}
+        if name == "next_document_number":
+            counters = self.store.setdefault("_counters", {})
+            key = (params["p_tenant_id"], params["p_counter_key"])
+            counters[key] = counters.get(key, 0) + 1
+            return _RpcCall(counters[key])
+        raise NotImplementedError(f"fake rpc not implemented: {name}")
+
+
+class _RpcCall:
+    """Mimics the postgrest .execute() chain for an rpc() call."""
+    def __init__(self, result):
+        self._result = result
+
+    def execute(self):
+        return _RpcResult(self._result)
 
 
 @pytest.fixture
