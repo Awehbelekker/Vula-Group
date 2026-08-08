@@ -1742,6 +1742,19 @@ async def commit_inbound_document(
     if not auto_commit:
         return {"ok": True, "preview": preview, "committed": False}
 
+    # 2026-08-08 fix — a real invoice/quote/delivery note always has a total; total_cents
+    # defaulting to 0 here means extraction failed to find one, not that the document is
+    # genuinely worth nothing. Confirmed live: 4 junk R0.00 "draft" quotes (OFF-QTE-00010/11/
+    # 12/14) were created this way over several weeks, unnoticed — this path had no equivalent
+    # to the price-completeness gate added the same day to commerce_admin.py's _create_invoice
+    # (a different tool, doesn't cover this document-intake path at all). The document itself
+    # is still filed/in the KB regardless — this only skips the phantom commerce_invoices row.
+    # No interactive "ask" here: unlike the WhatsApp tool-calling path, not every intake channel
+    # (email attachment, dashboard Smart Scanner) has someone to ask in the moment.
+    if is_invoice and total_cents <= 0:
+        return {"ok": True, "preview": preview, "committed": False,
+                "reason": "no total found on this document — not booked as a draft"}
+
     record_id = str(uuid4())
     supplier_id = supplier_row.get("id") if supplier_row else None
 

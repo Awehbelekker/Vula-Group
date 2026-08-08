@@ -26,13 +26,28 @@ _DEFAULT_ORDER = ("supplier", "vendor", "payee", "counterparty", "beneficiary", 
 def resolve_party_name(
     fields: dict, *, order: tuple = _DEFAULT_ORDER, exclude: tuple = (),
 ) -> Optional[str]:
-    """First non-empty party name across the known key aliases, in `order`."""
+    """First non-empty party name across the known key aliases, in `order`.
+
+    2026-08-08: "General Document" extractions (whatsapp.py's _analyze_document) have no
+    enforced fields shape beyond Invoice/Quote/BOQ/Business Card — the model is free to choose
+    its own structure. Confirmed live on a real bank payment notification: it nested the payee
+    under `payee_details: {"name": ..., "bank": ..., ...}` instead of a flat `payee` string, so
+    the flat lookup below returned nothing and the payee was silently unidentifiable — no
+    learned filing rule, no reimbursement-balance match, nothing. `{key}_details.name` is
+    checked as a fallback for the same reason so this doesn't keep happening for every payment
+    notification/EFT confirmation shaped this way.
+    """
     for key in order:
         if key in exclude:
             continue
         v = (fields or {}).get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
+        nested = (fields or {}).get(f"{key}_details")
+        if isinstance(nested, dict):
+            name = nested.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
     return None
 
 
