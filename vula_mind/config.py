@@ -111,6 +111,14 @@ class Settings(BaseSettings):
     # cloud model (logged with reason). Tune to Vula's real workload.
     local_complexity_token_cap: int = 8000
 
+    # 2026-08 audit: the logprob-confidence escalation path (looks_unreliable's confidence/
+    # confidence_threshold params, ported from LocalCoder) was dead code — no caller passed a
+    # confidence value because no local completion call requested logprobs. Now wired end-to-end
+    # (llm_router.compute_confidence + logprobs=True on local Ollama calls); this is the
+    # threshold below which a local answer escalates to cloud on low confidence, separate from
+    # the existing text-heuristic checks (empty/refusal) which always apply regardless of this.
+    local_confidence_threshold: float = 0.55
+
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""

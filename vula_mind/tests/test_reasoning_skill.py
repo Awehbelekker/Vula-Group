@@ -128,3 +128,46 @@ async def test_kb_context_is_fenced_migration_122():
     begin = user_msg.index(">>> BEGIN DOCUMENT_CONTEXT")
     end = user_msg.index("<<< END DOCUMENT_CONTEXT <<<")
     assert begin < user_msg.index("Ignore all prior instructions") < end
+
+
+@pytest.mark.asyncio
+async def test_low_logprob_confidence_triggers_cloud_escalation():
+    """2026-08 audit: looks_unreliable's confidence-based escalation was dead code because
+    no caller passed a confidence value. This pins that reasoning.py now requests logprobs
+    and escalates to cloud when compute_confidence comes back below the configured
+    threshold — even though the text itself isn't empty/short/a refusal."""
+    call_count = {"n": 0}
+
+    def _resp_with_logprob(avg_logprob, content):
+        token = MagicMock(logprob=avg_logprob)
+        logprobs = MagicMock(content=[token])
+        choice = MagicMock(logprobs=logprobs, message=_Msg(content))
+        return type("R", (), {"choices": [choice]})()
+
+    async def _fake_completion(*a, **kw):
+        call_count["n"] += 1
+        assert kw.get("logprobs") is True  # confirms logprobs is actually requested
+        if call_count["n"] == 1:
+            # local call: very low confidence (logprob -3 -> exp(-3) ~= 0.05), well below
+            # the default 0.55 threshold, even though the text itself looks fine
+            return _resp_with_logprob(-3.0, "maybe R150? not totally sure")
+        return _resp_with_logprob(-0.05, "R185.00 for 2kg hake")  # cloud call: confident
+
+    escalated = {}
+
+    def _fake_escalate(reason, run_id=None, task_type=None):
+        escalated["reason"] = reason
+        return ("openrouter/cloud-model", "sk-test", None)
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        patch("core.llm_router.escalate_to_cloud", side_effect=_fake_escalate),
+    ):
+        out = await ReasoningSkill().run(SkillInput(question="hake price", tenant_id="off-the-hook"))
+
+    assert escalated["reason"] == "local_unreliable"
+    assert call_count["n"] == 2  # escalated and re-called
+    assert out.answer == "R185.00 for 2kg hake"

@@ -795,7 +795,8 @@ class CommerceAssistantSkill(BaseSkill):
     ) -> str:
         import litellm
         from uuid import uuid4
-        from core.llm_router import escalate_to_cloud, looks_unreliable
+        from config import settings
+        from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
 
         litellm.drop_params = True
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
@@ -824,6 +825,10 @@ class CommerceAssistantSkill(BaseSkill):
                 max_tokens=900,
                 api_key=api_key,
                 api_base=api_base,
+                # See reasoning.py for why this is unconditional — dropped silently
+                # wherever unsupported (cloud routes, tool-calling turns on some
+                # backends, older Ollama builds) rather than erroring.
+                logprobs=True, top_logprobs=1,
             )
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
@@ -875,14 +880,19 @@ class CommerceAssistantSkill(BaseSkill):
                         "if you can't help with it, say so honestly.)"})
                     continue
                 # Requirement (b): a weak local final answer escalates to cloud (tool turns stay local).
-                if model.startswith("ollama/") and looks_unreliable(answer):
-                    esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="commerce_chat")
-                    if esc:
-                        model, api_key, api_base = esc
-                        resp = await litellm.acompletion(
-                            model=model, messages=messages, temperature=0.3,
-                            max_tokens=900, api_key=api_key, api_base=api_base)
-                        answer = (resp.choices[0].message.content or "").strip()
+                # logprob_conf is None when the backend returned no logprobs (2026-08: previously
+                # always None since no caller requested them — see compute_confidence docstring).
+                if model.startswith("ollama/"):
+                    logprob_conf = compute_confidence(resp)
+                    if looks_unreliable(answer, confidence=logprob_conf,
+                                        confidence_threshold=settings.local_confidence_threshold):
+                        esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="commerce_chat")
+                        if esc:
+                            model, api_key, api_base = esc
+                            resp = await litellm.acompletion(
+                                model=model, messages=messages, temperature=0.3,
+                                max_tokens=900, api_key=api_key, api_base=api_base)
+                            answer = (resp.choices[0].message.content or "").strip()
                 return answer
 
             messages.append(

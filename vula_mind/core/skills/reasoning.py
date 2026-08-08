@@ -83,7 +83,8 @@ class ReasoningSkill(BaseSkill):
         try:
             import litellm
             from uuid import uuid4
-            from core.llm_router import escalate_to_cloud, looks_unreliable
+            from config import settings
+            from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
             litellm.drop_params = True
 
             _msgs = [
@@ -97,20 +98,31 @@ class ReasoningSkill(BaseSkill):
             async def _complete(m, k, b):
                 return await litellm.acompletion(
                     model=m, messages=_msgs, temperature=0.3,
-                    max_tokens=inp.max_tokens, api_key=k, api_base=b)
+                    max_tokens=inp.max_tokens, api_key=k, api_base=b,
+                    # logprobs is only meaningful for the local Ollama path (see the
+                    # looks_unreliable call below) — requested unconditionally since
+                    # litellm.drop_params silently discards it where unsupported
+                    # (cloud routes, older Ollama builds) rather than erroring.
+                    logprobs=True, top_logprobs=1)
 
             resp = await _complete(model, api_key, api_base)
             raw = resp.choices[0].message.content or ""
             answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-            # Requirement (b): if the local answer is empty/refusal, escalate to cloud and log why.
-            if model.startswith("ollama/") and looks_unreliable(answer):
-                esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="reasoning")
-                if esc:
-                    model, api_key, api_base = esc
-                    resp = await _complete(model, api_key, api_base)
-                    raw = resp.choices[0].message.content or ""
-                    answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            # Requirement (b): if the local answer is empty/refusal/low-confidence, escalate to
+            # cloud and log why. logprob_conf is None when the backend returned no logprobs
+            # (2026-08: previously always None — no caller requested them — so this branch of
+            # looks_unreliable was dead code; now wired via compute_confidence above).
+            if model.startswith("ollama/"):
+                logprob_conf = compute_confidence(resp)
+                if looks_unreliable(answer, confidence=logprob_conf,
+                                    confidence_threshold=settings.local_confidence_threshold):
+                    esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="reasoning")
+                    if esc:
+                        model, api_key, api_base = esc
+                        resp = await _complete(model, api_key, api_base)
+                        raw = resp.choices[0].message.content or ""
+                        answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
             confidence = 0.75 if kb_context else 0.55
             return SkillOutput(

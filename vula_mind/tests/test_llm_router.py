@@ -10,6 +10,7 @@ from core.llm_router import (
     reset_health_cache,
     assess_complexity,
     looks_unreliable,
+    compute_confidence,
     escalate_to_cloud,
     _task_label,
     _log_decision,
@@ -306,6 +307,54 @@ def test_looks_unreliable():
     assert looks_unreliable("okay", confidence=0.2, confidence_threshold=0.4) is True
     assert looks_unreliable("okay", confidence=0.9, confidence_threshold=0.4) is False
     assert looks_unreliable("okay", confidence=0.2) is False
+
+
+# ── compute_confidence: the other half of the previously-dormant confidence path ─────
+
+def _resp_with_logprobs(token_logprobs):
+    """Builds a fake litellm response with the shape compute_confidence expects:
+    resp.choices[0].logprobs.content[i].logprob"""
+    content = [MagicMock(logprob=v) for v in token_logprobs]
+    logprobs = MagicMock(content=content)
+    choice = MagicMock(logprobs=logprobs)
+    return MagicMock(choices=[choice])
+
+
+def test_compute_confidence_converts_mean_logprob_to_probability():
+    import math
+    # Two tokens at logprob -0.1 and -0.3 → mean -0.2 → exp(-0.2)
+    resp = _resp_with_logprobs([-0.1, -0.3])
+    conf = compute_confidence(resp)
+    assert conf == pytest.approx(math.exp(-0.2), rel=1e-6)
+    assert 0.0 < conf <= 1.0
+
+
+def test_compute_confidence_returns_none_when_no_logprobs_present():
+    """The pre-fix state for every real caller: no logprobs requested/returned at all."""
+    choice = MagicMock(logprobs=None)
+    resp = MagicMock(choices=[choice])
+    assert compute_confidence(resp) is None
+
+
+def test_compute_confidence_returns_none_when_logprobs_content_empty():
+    resp = _resp_with_logprobs([])
+    assert compute_confidence(resp) is None
+
+
+def test_compute_confidence_handles_dict_shaped_logprobs():
+    """Some providers return logprobs as a plain dict rather than an object with
+    attributes — compute_confidence must handle both shapes."""
+    resp = MagicMock(choices=[MagicMock(
+        logprobs={"content": [{"logprob": -0.5}, {"logprob": -0.7}]}
+    )])
+    import math
+    conf = compute_confidence(resp)
+    assert conf == pytest.approx(math.exp(-0.6), rel=1e-6)
+
+
+def test_compute_confidence_never_raises_on_malformed_response():
+    assert compute_confidence(MagicMock(choices=[])) is None
+    assert compute_confidence(object()) is None
 
 
 def test_escalate_to_cloud_returns_route_or_none():

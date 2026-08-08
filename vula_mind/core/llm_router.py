@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -147,6 +148,46 @@ def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] 
         if chars // 4 >= cap:
             return f"complexity:tokens>={cap}"
     return None
+
+
+def compute_confidence(resp) -> Optional[float]:
+    """Extract a 0.0-1.0 confidence estimate from a completion response's per-token
+    logprobs, if the backend returned any. Ported from LocalCoder's
+    ollama_backend._compute_confidence: mean log-probability of the generated tokens,
+    converted to a mean probability via exp() (log-probs are <= 0, so this is bounded
+    to (0.0, 1.0]).
+
+    2026-08 audit finding: this scoring existed in looks_unreliable() but was dead —
+    no caller ever passed a confidence value, because no local completion call
+    requested logprobs in the first place. This is the missing other half; callers
+    (reasoning.py, commerce_assistant.py) now request logprobs=True on the local
+    Ollama call and pass compute_confidence(resp) through.
+
+    Returns None — never a guessed value — when the response carries no logprobs
+    (cloud providers may omit them even when requested; older Ollama builds don't
+    support the param at all and litellm.drop_params silently drops it), so callers
+    can tell "no signal" apart from "signal says low confidence."
+    """
+    try:
+        choice = resp.choices[0]
+        lp = getattr(choice, "logprobs", None)
+        if not lp:
+            return None
+        content = lp.get("content") if isinstance(lp, dict) else getattr(lp, "content", None)
+        if not content:
+            return None
+        token_logprobs = [
+            (tok.get("logprob") if isinstance(tok, dict) else getattr(tok, "logprob", None))
+            for tok in content
+        ]
+        token_logprobs = [v for v in token_logprobs if isinstance(v, (int, float))]
+        if not token_logprobs:
+            return None
+        avg_logprob = sum(token_logprobs) / len(token_logprobs)
+        return math.exp(avg_logprob)
+    except Exception as exc:
+        logger.debug("compute_confidence: couldn't extract logprobs: %s", exc)
+        return None
 
 
 def looks_unreliable(text: str, confidence: Optional[float] = None,
