@@ -45,6 +45,13 @@ _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
 class FinanceAdminSkill(BaseSkill):
     name = "finance_admin"
     description = "Answer money/budget/supplier questions from the project finance ledger."
+    # 2026-08 accuracy audit: pure money-reporting with zero adversarial verification — this
+    # skill's whole job is stating figures, and the anchor check (_verify_answer above) only
+    # catches a number that doesn't match ANY tool result, not a subtler misreport (right
+    # number, wrong project; right figure, wrong period). VRL's checker-framed second pass
+    # (core/verification.py) catches that class of defect; wired into every skill's call path
+    # already, just never turned on here.
+    verification_policy = "adversarial"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         self._verified: List[float] = []  # every numeric value seen in a tool result this turn

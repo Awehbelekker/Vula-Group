@@ -384,6 +384,14 @@ class CommerceAdminSkill(BaseSkill):
         "Owner/staff admin assistant — run the shop over WhatsApp: sales, orders, "
         "stock, invoices, expenses, and broadcast previews."
     )
+    # 2026-08 accuracy audit: the highest-stakes skill in the platform (real invoice/stock/
+    # broadcast mutations) had zero adversarial verification — VRL's checker-framed second
+    # pass (core/verification.py) was wired into every skill's call path but never turned on
+    # here. Low volume (owner-only), so the added cost of one extra LLM call per request is
+    # smallest where it matters most. Never blocks a mutating tool call itself (those are
+    # already guarded by the confirm=true gate + post-write readback) — this catches
+    # inaccurate READ-ONLY replies (sales summaries, stock status) that had no check at all.
+    verification_policy = "adversarial"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         caller_role = inp.metadata.get("caller_role")
