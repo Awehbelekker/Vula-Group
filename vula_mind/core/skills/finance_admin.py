@@ -46,13 +46,28 @@ class FinanceAdminSkill(BaseSkill):
     description = "Answer money/budget/supplier questions from the project finance ledger."
 
     async def run(self, inp: SkillInput) -> SkillOutput:
+        self._verified: List[float] = []  # every numeric value seen in a tool result this turn
         try:
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id)
-            return SkillOutput(answer=answer or "I couldn't find any financial records for that.",
-                               skill_name=self.name, confidence=0.8)
+            if not answer:
+                return SkillOutput(answer="I couldn't find any financial records for that.",
+                                   skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("finance_admin failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
+
+        # 2026-08 accuracy audit: unlike calculations.py (anchor check) or commerce_admin.py's
+        # mutating tools (post-write readback), nothing previously verified that this skill's
+        # prose reply actually matches the money figures its own tools returned — the model
+        # could transpose/misreport a real number with nothing catching it. Same soft
+        # anchor-and-caveat shape as calculations.py, not a hard block.
+        anchored, unmatched = self._verify_answer(answer)
+        confidence = 0.8
+        if anchored is False:
+            confidence = 0.45
+            answer += ("\n\n⚠️ Please confirm these figures — some of the numbers above "
+                       "couldn't be matched to what the ledger actually returned.")
+        return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence)
 
     def _system(self) -> str:
         return ("You are Vula, answering questions about the business's money from its project "
@@ -80,6 +95,7 @@ class FinanceAdminSkill(BaseSkill):
                 if inline:
                     name, args = inline
                     result = self._dispatch(name, args, tenant_id)
+                    self._verified.extend(self._extract_candidates(result))
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
                         f"[{name} returned]: {json.dumps(result, default=str)[:1500]}\n"
@@ -96,6 +112,7 @@ class FinanceAdminSkill(BaseSkill):
                 except Exception:
                     args = {}
                 result = self._dispatch(tc.function.name, args, tenant_id)
+                self._verified.extend(self._extract_candidates(result))
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
                                  "content": json.dumps(result, default=str)[:1800]})
 
@@ -116,6 +133,38 @@ class FinanceAdminSkill(BaseSkill):
         name = obj.get("function") or obj.get("name") or obj.get("tool")
         args = obj.get("arguments") or obj.get("parameters") or obj.get("args") or {}
         return (name, args) if name in _TOOL_NAMES and isinstance(args, dict) else None
+
+    # ── accuracy anchor (2026-08 audit) ──────────────────────────────────────────
+    @staticmethod
+    def _numbers(text: str) -> List[float]:
+        return [float(m.replace(",", "")) for m in re.findall(r"-?\d[\d,]*\.?\d*", text or "")]
+
+    def _extract_candidates(self, result: Any) -> List[float]:
+        """Every numeric value in a tool result, plus its /100 form — vula_project_finances
+        stores rand directly (not cents, unlike the commerce_* tables), but this stays
+        defensive of either convention rather than assuming one."""
+        raw = self._numbers(json.dumps(result, default=str))
+        out = set()
+        for v in raw:
+            out.add(round(v, 2))
+            out.add(round(v / 100, 2))
+        return list(out)
+
+    def _verify_answer(self, answer: str):
+        """Every money-shaped number in the reply (>=10, to skip incidental small counts like
+        '3 projects') must be anchored to a real tool-returned figure. Returns
+        (all_anchored: True|False|None, unmatched_numbers)."""
+        if not self._verified:
+            return (None, [])
+        ans_nums = [n for n in self._numbers(answer) if abs(n) >= 10]
+        if not ans_nums:
+            return (None, [])
+        unmatched = []
+        for a in ans_nums:
+            tol = max(0.5, abs(a) * 0.01)
+            if not any(abs(a - v) <= tol for v in self._verified):
+                unmatched.append(a)
+        return (len(unmatched) == 0, unmatched)
 
     # ── tools ──────────────────────────────────────────────────────────────────
     def _match_project(self, tenant_id: str, summary: dict, hint: str) -> str:

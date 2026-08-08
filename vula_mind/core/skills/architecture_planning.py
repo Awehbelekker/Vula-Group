@@ -130,6 +130,13 @@ class ArchitecturePlanningSkill(BaseSkill):
             answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
             confidence = 0.85 if contexts else 0.6
+            if not contexts:
+                # 2026-08 accuracy audit: this skill is a domain-expert advisor (SACAP/JBCC/
+                # SANS knowledge), not a document-lookup skill — it can't refuse the way
+                # standards_lookup.py does when nothing is retrieved. Confidence already drops,
+                # but that score never reaches the WhatsApp user; make the uncertainty visible.
+                answer += ("\n\n⚠️ No specific document/standard was found for this — worth "
+                           "confirming against the actual source before relying on it.")
             return SkillOutput(
                 answer=answer,
                 skill_name=self.name,

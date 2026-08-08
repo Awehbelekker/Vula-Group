@@ -168,6 +168,32 @@ async def extract_transactions(statement_text: str) -> List[Dict[str, Any]]:
     return out
 
 
+# ── Extraction quality (2026-08 accuracy audit) ────────────────────────────────
+# A bank statement has no single "total" the way an invoice does (extraction_quality.py's
+# line-sum-vs-stated-total check doesn't apply), but SA statements typically show a running
+# balance per line — the same "don't trust the model's confidence, check the arithmetic"
+# discipline can cross-check that instead: each line's balance should equal the previous
+# line's balance plus/minus this transaction's amount.
+
+def reconciliation_ok(txns: List[Dict[str, Any]]) -> bool:
+    """False only on a genuine mismatch between consecutive extracted running balances — never
+    penalises a statement format that doesn't show a running balance at all (nothing to check
+    there, so it passes)."""
+    prev_balance = None
+    for t in txns:
+        bal = t.get("balance_cents")
+        if bal is None:
+            prev_balance = None  # gap in the running balance — can't compare across it
+            continue
+        if prev_balance is not None:
+            expected = (prev_balance + t["amount_cents"] if t["direction"] == "in"
+                        else prev_balance - t["amount_cents"])
+            if abs(expected - bal) > 100:  # R1 tolerance (fee-ordering/rounding quirks)
+                return False
+        prev_balance = bal
+    return True
+
+
 # ── Reconciliation ────────────────────────────────────────────────────────────
 
 def _tok(s: str) -> set:
@@ -429,7 +455,13 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
     txns = await extract_transactions(text)
     if not txns:
         return {"error": "no transactions found in the statement"}
+    reconciled = reconciliation_ok(txns)
+    if not reconciled:
+        log.warning("bank statement extraction quality check FAILED for %s (%s) — running "
+                    "balances don't reconcile, at least one transaction was likely misread",
+                    tenant_id, source_file)
     result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name)
+    result["extraction_reconciled"] = reconciled
     log.info("bank statement reconciled for %s: %s", tenant_id, result)
     return result
 

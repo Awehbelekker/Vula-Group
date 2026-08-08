@@ -93,3 +93,44 @@ async def test_no_context_omits_context_block():
     user_msg = captured["messages"][1]["content"]
     assert "Context (authoritative" not in user_msg
     assert "Vula AI: hi" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_no_context_appends_accuracy_caveat():
+    """2026-08 accuracy audit: this skill is a domain-expert advisor (SACAP/JBCC/SANS
+    knowledge), not a document-lookup skill, so it can't refuse outright when nothing is
+    retrieved — confidence already quietly dropped (0.85->0.6), but that never reached the
+    WhatsApp user. Fix: a visible caveat instead."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("Typical retention on a JBCC contract is 5-10%.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(
+            SkillInput(question="typical retention on JBCC?", tenant_id="digg-demo"))
+
+    assert "⚠️" in out.answer
+    assert out.confidence == 0.6
+
+
+@pytest.mark.asyncio
+async def test_context_present_has_no_caveat():
+    async def _fake_completion(*a, **kw):
+        return _Resp("Per the filed BoQ, retention is 5%.")
+
+    chunks = [{"filename": "boq.pdf", "text": "Retention: 5%", "score": 0.9}]
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock(chunks)),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(
+            SkillInput(question="what's the retention?", tenant_id="digg-demo"))
+
+    assert "⚠️" not in out.answer
+    assert out.confidence == 0.85

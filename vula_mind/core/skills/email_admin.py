@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 from vula.email_imap import service
 from vula.email_imap.credentials import get_email_creds
@@ -103,7 +104,7 @@ class EmailAdminSkill(BaseSkill):
                     result = await self._dispatch(name, args, tenant_id, creds)
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
-                        f"[{name} returned]: {json.dumps(result, default=str)[:1500]}\n"
+                        f"[{name} returned]:{fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:1500])}\n"
                         "Reply to the user in short plain language. No JSON."})
                     continue
                 return (msg.content or "").strip()
@@ -118,7 +119,7 @@ class EmailAdminSkill(BaseSkill):
                     args = {}
                 result = await self._dispatch(tc.function.name, args, tenant_id, creds)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
-                                 "content": json.dumps(result, default=str)[:1800]})
+                                 "content": fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:1800])})
 
         resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
             max_tokens=500, api_key=api_key, api_base=api_base)

@@ -125,6 +125,14 @@ class ReasoningSkill(BaseSkill):
                         answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
             confidence = 0.75 if kb_context else 0.55
+            if not kb_context:
+                # 2026-08 accuracy audit: confidence already dropped for a no-KB answer, but
+                # that score never reaches the WhatsApp user — this is the default fallback
+                # skill so it must still answer from general knowledge (can't refuse the way
+                # standards_lookup.py does), but the uncertainty should be visible, not just
+                # scored internally.
+                answer += ("\n\n⚠️ I couldn't find a specific document on this — worth "
+                           "double-checking anything critical.")
             return SkillOutput(
                 answer=answer,
                 skill_name=self.name,

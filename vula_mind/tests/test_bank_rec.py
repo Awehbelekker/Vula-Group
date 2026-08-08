@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vula.commerce.bank_rec import _match_invoice, _match_order, extract_payment_confirmation
+from vula.commerce.bank_rec import _match_invoice, _match_order, extract_payment_confirmation, reconciliation_ok
 
 
 def test_match_invoice_ambiguous_same_amount_no_name_match():
@@ -80,3 +80,66 @@ async def test_extract_payment_confirmation_accepts_iso_date():
     ):
         txns = await extract_payment_confirmation("Standard Bank Payment Confirmation ...")
     assert txns[0]["date"] == "2026-07-17"
+
+
+# ── reconciliation_ok (2026-08 accuracy audit) ────────────────────────────────
+# Bank statements have no single "total" the way an invoice does, so extraction_quality.py's
+# line-sum-vs-stated-total check can't be reused as-is — this cross-checks each line's stated
+# running balance against the previous line's balance +/- this transaction's amount instead.
+
+def test_reconciliation_ok_when_running_balance_is_consistent():
+    txns = [
+        {"amount_cents": 10000, "direction": "in", "balance_cents": 20000},
+        {"amount_cents": 5000, "direction": "out", "balance_cents": 15000},
+        {"amount_cents": 2000, "direction": "in", "balance_cents": 17000},
+    ]
+    assert reconciliation_ok(txns) is True
+
+
+def test_reconciliation_fails_on_a_genuine_balance_mismatch():
+    txns = [
+        {"amount_cents": 10000, "direction": "in", "balance_cents": 20000},
+        # Model misread this amount — stated balance doesn't follow from the previous line.
+        {"amount_cents": 5000, "direction": "out", "balance_cents": 99999},
+    ]
+    assert reconciliation_ok(txns) is False
+
+
+def test_reconciliation_ok_when_no_balance_data_present():
+    """Not every statement format shows a running balance — nothing to check, must not be
+    treated as a failure (that would flag every such statement as suspect for no reason)."""
+    txns = [
+        {"amount_cents": 10000, "direction": "in", "balance_cents": None},
+        {"amount_cents": 5000, "direction": "out", "balance_cents": None},
+    ]
+    assert reconciliation_ok(txns) is True
+
+
+def test_reconciliation_tolerates_small_rounding():
+    txns = [
+        {"amount_cents": 10000, "direction": "in", "balance_cents": 20000},
+        {"amount_cents": 5000, "direction": "out", "balance_cents": 15050},  # 50c off, within tolerance
+    ]
+    assert reconciliation_ok(txns) is True
+
+
+@pytest.mark.asyncio
+async def test_ingest_statement_flags_extraction_reconciled_in_result():
+    from pathlib import Path
+    from vula.commerce import bank_rec
+
+    bad_txns = [
+        {"date": "2026-08-01", "description": "Deposit", "amount_cents": 10000,
+         "direction": "in", "balance_cents": 20000, "reference": None},
+        {"date": "2026-08-02", "description": "Withdrawal", "amount_cents": 5000,
+         "direction": "out", "balance_cents": 99999, "reference": None},
+    ]
+    with (
+        patch.object(bank_rec, "extract_pdf_text", return_value="statement text"),
+        patch.object(bank_rec, "get_statement_password", return_value=None),
+        patch.object(bank_rec, "extract_transactions", new=AsyncMock(return_value=bad_txns)),
+        patch.object(bank_rec, "reconcile", new=AsyncMock(return_value={"parsed": 2, "saved": 2})),
+    ):
+        result = await bank_rec.ingest_statement("off-the-hook", Path("fake.pdf"))
+
+    assert result["extraction_reconciled"] is False

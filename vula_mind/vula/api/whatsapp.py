@@ -817,6 +817,9 @@ async def _handle_document_ingest(
                            f"✅ {rec.get('matched_invoices', 0)} matched to invoices"
                            f" · 🧾 {rec.get('matched_expenses', 0)} matched to receipts"
                            f" · 👷 {rec.get('matched_workers', 0)} worker payments")
+                    if rec.get("extraction_reconciled") is False:
+                        msg += ("\n⚠️ The running balances on this statement didn't add up — "
+                                "please double-check the figures in your 🏦 Bank tab.")
                     ni = rec.get("needs_input", 0)
                     if ni:
                         # Start the review right here in the chat — one item at a time.

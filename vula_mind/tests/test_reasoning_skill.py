@@ -170,4 +170,46 @@ async def test_low_logprob_confidence_triggers_cloud_escalation():
 
     assert escalated["reason"] == "local_unreliable"
     assert call_count["n"] == 2  # escalated and re-called
-    assert out.answer == "R185.00 for 2kg hake"
+    # No KB context in this scenario (_pipeline_mock([])) — the 2026-08 accuracy-audit caveat
+    # is expected to be appended (see test_no_kb_context_appends_accuracy_caveat).
+    assert out.answer.startswith("R185.00 for 2kg hake")
+
+
+@pytest.mark.asyncio
+async def test_no_kb_context_appends_accuracy_caveat():
+    """2026-08 accuracy audit: reasoning.py already quietly dropped confidence (0.75->0.55)
+    when nothing was retrieved, but that score never reached the WhatsApp user. It can't
+    refuse outright (it's the default fallback — must answer ordinary questions with zero
+    KB), so the fix is a visible caveat instead."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("Cape Town is the legislative capital of South Africa.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ReasoningSkill().run(SkillInput(question="capital of SA?", tenant_id="digg-demo"))
+
+    assert "⚠️" in out.answer
+    assert "couldn't find a specific document" in out.answer
+    assert out.confidence == 0.55
+
+
+@pytest.mark.asyncio
+async def test_kb_context_present_has_no_caveat():
+    async def _fake_completion(*a, **kw):
+        return _Resp("Per the filed contract, retention is 5%.")
+
+    chunks = [{"filename": "contract.pdf", "text": "Retention: 5%", "score": 0.9}]
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock(chunks)),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ReasoningSkill().run(SkillInput(question="what's the retention?", tenant_id="digg-demo"))
+
+    assert "⚠️" not in out.answer
+    assert out.confidence == 0.75
