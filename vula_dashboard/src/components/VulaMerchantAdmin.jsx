@@ -2157,6 +2157,8 @@ function PurchaseOrders({ tenantId }) {
   const [pos, setPos] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(null)
+  const [channel, setChannel] = useState({})
+  const [sendMsg, setSendMsg] = useState({})
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -2191,6 +2193,22 @@ function PurchaseOrders({ tenantId }) {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
     })
     await load()
+    setBusy(null)
+  }
+
+  async function sendPo(po) {
+    setBusy(po.id)
+    setSendMsg({ ...sendMsg, [po.id]: 'Sending…' })
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/purchase-orders/${po.id}/send`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: channel[po.id] || 'email' }),
+    }).then(r => r.json()).catch(() => ({ error: 'network' }))
+    if (r.error) {
+      setSendMsg({ ...sendMsg, [po.id]: r.error })
+    } else {
+      setSendMsg({ ...sendMsg, [po.id]: r.warnings ? `Sent via ${r.sent_via.join(', ')} (${r.warnings[0]})` : `Sent via ${r.sent_via.join(', ')} ✓` })
+      await load()
+    }
     setBusy(null)
   }
 
@@ -2237,15 +2255,26 @@ function PurchaseOrders({ tenantId }) {
                   <span style={styles.productName}>{po.supplier_name || 'Unassigned'}</span>
                   <span style={{ ...styles.statSub, marginLeft: 8 }}>{PO_STATUS[po.status] || po.status} · {fmt(po.total_cents)}</span>
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {po.status === 'draft' && <button disabled={busy === po.id} onClick={() => advance(po, 'sent')} style={styles.btnGhost}>Mark sent</button>}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {po.status === 'draft' && (
+                    <select value={channel[po.id] || 'email'} onChange={e => setChannel({ ...channel, [po.id]: e.target.value })}
+                            style={{ ...styles.apInput, padding: '4px 6px', fontSize: 12 }}>
+                      <option value="email">Email</option>
+                      <option value="whatsapp">WhatsApp</option>
+                      <option value="both">Both</option>
+                    </select>
+                  )}
+                  {po.status === 'draft' && <button disabled={busy === po.id} onClick={() => sendPo(po)} style={styles.btnAction}>Send</button>}
+                  {po.status === 'draft' && <button disabled={busy === po.id} onClick={() => advance(po, 'sent')} style={styles.btnGhost} title="Mark sent without Vula dispatching it — e.g. you phoned the order in">Mark sent manually</button>}
                   {po.status === 'sent' && <button disabled={busy === po.id} onClick={() => advance(po, 'received')} style={styles.btnAction}>Mark received</button>}
                   {(po.status === 'draft' || po.status === 'sent') && <button disabled={busy === po.id} onClick={() => advance(po, 'cancelled')} style={styles.btnDanger}>Cancel</button>}
                 </div>
               </div>
               <div style={{ ...styles.statSub, marginTop: 4 }}>
                 {(po.items || []).map(it => `${it.name} ×${it.quantity}`).join(' · ')}
+                {po.sent_channel && ` · sent via ${po.sent_channel}`}
               </div>
+              {sendMsg[po.id] && <div style={{ fontSize: 11, color: sendMsg[po.id].includes('error') || sendMsg[po.id] === 'network' ? '#A23B2D' : '#8A8680', marginTop: 4 }}>{sendMsg[po.id]}</div>}
             </div>
           ))}
         </div>

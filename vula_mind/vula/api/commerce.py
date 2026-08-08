@@ -4429,46 +4429,10 @@ async def admin_delete_supplier(tenant_id: str, supplier_id: str):
 async def admin_reorder_suggestions(tenant_id: str):
     """Products (or, for a variant product, each individual variant) at/below their reorder
     threshold, grouped by default supplier — the 'what should I order' view. Anything without
-    a threshold set is never suggested."""
-    products = await service.list_products(tenant_id, in_stock_only=False, include_archived=False)
-    low = []
-    for p in products:
-        variants = await service.list_variants(tenant_id, p["id"], include_archived=False)
-        if variants:
-            for v in variants:
-                if v.get("reorder_threshold") is None:
-                    continue
-                if (v.get("stock_quantity") or 0) <= v["reorder_threshold"]:
-                    opts = v.get("option_values") or {}
-                    suffix = ", ".join(f"{k}: {val}" for k, val in opts.items())
-                    low.append({
-                        "product_id": p["id"], "variant_id": v["id"],
-                        "name": f"{p['name']} ({suffix})" if suffix else p["name"],
-                        "stock_quantity": v.get("stock_quantity") or 0,
-                        "reorder_threshold": v["reorder_threshold"], "suggested_qty": v.get("reorder_qty") or 10,
-                        "unit_cost_cents": v.get("price_cents") or p.get("price_cents") or 0,
-                        "default_supplier_id": v.get("default_supplier_id"),
-                    })
-        elif (p.get("reorder_threshold") is not None
-              and (p.get("stock_quantity") or 0) <= p["reorder_threshold"]):
-            low.append({
-                "product_id": p["id"], "variant_id": None, "name": p["name"],
-                "stock_quantity": p.get("stock_quantity") or 0,
-                "reorder_threshold": p["reorder_threshold"], "suggested_qty": p.get("reorder_qty") or 10,
-                "unit_cost_cents": p.get("price_cents") or 0,
-                "default_supplier_id": p.get("default_supplier_id"),
-            })
-    suppliers = {s["id"]: s for s in await service.list_suppliers(tenant_id)}
-    groups: dict = {}
-    for item in low:
-        sid = item.pop("default_supplier_id") or "unassigned"
-        g = groups.setdefault(sid, {
-            "supplier_id": None if sid == "unassigned" else sid,
-            "supplier_name": suppliers.get(sid, {}).get("name") if sid != "unassigned" else "No default supplier",
-            "items": [],
-        })
-        g["items"].append(item)
-    return {"groups": list(groups.values()), "count": len(low)}
+    a threshold set is never suggested. Shared with draft_reorder_pos()'s auto-drafting
+    (vula/commerce/purchase_orders.py) so both agree on what counts as low stock."""
+    from vula.commerce import purchase_orders
+    return await purchase_orders.get_reorder_suggestions(tenant_id)
 
 
 @router.get("/{tenant_id}/admin/purchase-orders")
@@ -4523,6 +4487,17 @@ async def admin_update_po_status(tenant_id: str, po_id: str, body: dict):
                 log.warning("PO receive stock bump failed for %s: %s", it.get("product_id"), exc)
     result = db.table("commerce_purchase_orders").update(patch).eq("tenant_id", tenant_id).eq("id", po_id).execute()
     return result.data[0] if result.data else {}
+
+
+@router.post("/{tenant_id}/admin/purchase-orders/{po_id}/send")
+async def admin_send_purchase_order(tenant_id: str, po_id: str, body: dict):
+    """Actually dispatches the PO (email and/or WhatsApp) — distinct from the generic status
+    PATCH above, which is just a manual flag for orders placed outside Vula (e.g. by phone)."""
+    channel = (body or {}).get("channel", "email")
+    if channel not in ("email", "whatsapp", "both"):
+        raise HTTPException(status_code=400, detail="channel must be email, whatsapp, or both")
+    from vula.commerce import purchase_orders
+    return await purchase_orders.send_purchase_order(tenant_id, po_id, channel)
 
 
 # ── Automations builder (P3, 2026-07-19) ─────────────────────────────────────

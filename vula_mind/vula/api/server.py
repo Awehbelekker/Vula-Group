@@ -438,6 +438,17 @@ async def _send_low_stock_alert(only_tenant: str | None = None,
             log.info("%s low stock alert to %s: %s (%d items)",
                      tenant_id, phone, "sent" if ok else "FAILED", len(low))
 
+        # Auto-draft (never auto-send) supplier POs for anything the owner has explicitly
+        # configured for auto-reorder (reorder_threshold/reorder_qty/default_supplier_id all
+        # set) — everything else is still just the alert above, unchanged.
+        try:
+            from vula.commerce import purchase_orders as _po
+            drafted = await _po.draft_reorder_pos(tenant_id)
+            if drafted:
+                log.info("%s auto-drafted %d supplier PO(s) for review", tenant_id, len(drafted))
+        except Exception as exc:
+            log.warning("%s auto-draft POs failed: %s", tenant_id, exc)
+
 
 async def _send_friday_catch_reminder(only_tenant: str | None = None,
                                       template_override: str | None = None) -> None:
