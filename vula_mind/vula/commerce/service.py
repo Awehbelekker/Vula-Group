@@ -1685,6 +1685,25 @@ async def commit_inbound_document(
         result = db.table("commerce_invoices").insert(row).execute()
         committed_record = result.data[0] if result.data else row
     else:
+        # Reimbursable inference (2026-08-08 fix) — this insert used to omit the key entirely,
+        # silently defaulting to the column's `false` regardless of what the document itself
+        # said about who paid. create_claim() (expenses.py:223-228) already does this correctly
+        # via resolve_paid_with(card_last4/payment_method); this path just never called it.
+        # Confirmed live: a card-paid hardware invoice landed with reimbursable=false. No
+        # submitter phone is available at this layer (unlike _log_expense_claim's role-based
+        # inference), so this only resolves the card-vs-not signal, not who specifically to
+        # reimburse — paid_by_name falls back to the resolved payee/counterparty on the doc.
+        from vula.commerce.expenses import resolve_paid_with
+        paid_with = resolve_paid_with(
+            tenant_id, card_last4=extracted.get("card_last4"),
+            payment_method=extracted.get("payment_method"))
+        reimbursable = paid_with == "personal"
+        paid_by_name = None
+        try:
+            from vula.commerce.party import resolve_party_name
+            paid_by_name = resolve_party_name(extracted, exclude=("payer",))
+        except Exception:
+            pass
         row = {
             "id": record_id, "tenant_id": tenant_id, "date": str(doc_date),
             "due_date": str(due_date) if due_date else None,
@@ -1695,6 +1714,7 @@ async def commit_inbound_document(
             "payment_terms_days": payment_terms_days, "status": "pending", "source": source,
             "doc_type": doc_type, "line_items": _j.dumps(extracted.get("line_items", [])),
             "scan_confidence": extracted.get("confidence"),
+            "paid_with": paid_with, "reimbursable": reimbursable, "paid_by_name": paid_by_name,
         }
         result = db.table("commerce_expenses").insert(row).execute()
         committed_record = result.data[0] if result.data else row

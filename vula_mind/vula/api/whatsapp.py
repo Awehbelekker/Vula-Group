@@ -1197,7 +1197,17 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # with a resolved project auto-files — this used to auto-file on ANY truthy match,
         # including a single coincidental token, with no ambiguity check at all.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
-        confident = bool(match and not match.get("ambiguous") and match.get("project"))
+        # 2026-08-08 fix: confidence >= 0.6 required, not just "some project, not ambiguous".
+        # The weakest tier — match_project()'s canonical-register substring fallback, confidence
+        # 0.5, explicitly "no separate ambiguity check" (doc_filing.py:126-138) — used to count
+        # as confident on its own, so a first-time/unknown payee with no learned history (e.g. a
+        # payment notification to someone Vula has never filed for before) got silently
+        # auto-filed on a loose guess instead of asking. Confirmed live: a cleaner's first-ever
+        # proof of payment got silently filed under a project she'd never been linked to. A real
+        # ClickUp/field-ops keyword match (0.6) or a previously-confirmed learned rule (1.0)
+        # still auto-files with no added friction — only the weak fallback now asks.
+        confident = bool(match and not match.get("ambiguous") and match.get("project")
+                         and (match.get("confidence") or 0) >= 0.6)
         if confident:
             row = await file_document(
                 tenant_id, filename=result.filename, data=data, content_type=ctype,

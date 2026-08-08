@@ -196,23 +196,41 @@ def learn_filing_rule(tenant_id: str, fields: dict, project: str) -> int:
 
 
 def lookup_learned_project(tenant_id: str, fields: dict) -> Optional[dict]:
-    """If a learned rule matches this doc's signals, return its project (high confidence)."""
+    """If a learned rule matches this doc's signals, return its project (high confidence).
+
+    2026-08-08 fix: this used to `.limit(1)` and trust whichever project had the most hits —
+    fine for a signal that's only ever meant one project, but wrong for a genuinely cross-project
+    payee (e.g. a cleaner who does work for HPC_Bokaap AND the DIGG office). Confirmed live: the
+    same recurring payee ("NELETU"/"NELETU CELING"/"NELETHU" — spelling drift aside, the same
+    signal) had been learned against three different projects over time, and lookups kept
+    silently picking whichever won that round rather than recognizing the payee isn't
+    single-project. Now: if every matching signal agrees on one project, return it confidently as
+    before (this is what lets a genuine one-project submitter go frictionless). If more than one
+    DISTINCT project appears across confirmed history, return ambiguous with the candidates —
+    same shape match_project() already uses for its own ClickUp-tier ties (doc_filing.py:108-111)
+    — so the caller asks instead of guessing, offering the payee's own history as quick-reply
+    options.
+    """
     sigs = [v for _, v in _signals_from(fields)]
     if not sigs:
         return None
     try:
         rows = (_client().table("vula_filing_rules").select("project,signal,hits")
                 .eq("tenant_id", tenant_id).in_("signal", sigs)
-                .order("hits", desc=True).limit(1).execute().data or [])
+                .order("hits", desc=True).execute().data or [])
     except Exception:
         return None
-    if rows:
-        # A previously-confirmed learned signal is definitionally not ambiguous — a human
-        # already resolved this exact case once. Numeric confidence matches match_project()'s
-        # convention (1.0 = strong match) so both are directly comparable/storable.
-        return {"project": rows[0]["project"], "clickup_list_id": None,
-                "confidence": 1.0, "ambiguous": False, "learned": rows[0]["signal"]}
-    return None
+    if not rows:
+        return None
+    distinct_projects = sorted({r["project"] for r in rows if r.get("project")})
+    if len(distinct_projects) > 1:
+        return {"project": None, "clickup_list_id": None, "confidence": 1.0,
+                "ambiguous": True, "candidates": distinct_projects, "learned": rows[0]["signal"]}
+    # A previously-confirmed learned signal is definitionally not ambiguous — a human
+    # already resolved this exact case once. Numeric confidence matches match_project()'s
+    # convention (1.0 = strong match) so both are directly comparable/storable.
+    return {"project": rows[0]["project"], "clickup_list_id": None,
+            "confidence": 1.0, "ambiguous": False, "learned": rows[0]["signal"]}
 
 
 def project_examples(tenant_id: str, n: int = 3) -> list[str]:

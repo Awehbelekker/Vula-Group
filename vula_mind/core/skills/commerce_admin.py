@@ -36,6 +36,28 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 3
 
+# Shared guardrails appended to every commerce_admin system prompt (2026-08-08) — added after a
+# real-transcript review found: a how-to question ("how do I add invoices from Xero?") answered
+# with an unrelated status dump because nothing told the model to just answer procedural questions
+# in plain text; the literal tool name "outstanding_invoices" leaked into a WhatsApp reply; and a
+# fabricated "exported to Xero" success claim with no Xero tool behind it at all. draft_admin.py's
+# prompt already has an analogous honesty guardrail ("never claim you emailed it unless a send
+# actually happened") — this generalizes that pattern here.
+_GUARDRAILS = (
+    "\n- If the message is a how-to/procedural question (e.g. 'how do I...', 'where do I...') "
+    "rather than a request for data or an action, answer directly in plain text — don't call a "
+    "tool just to have something to say.\n"
+    "- If the message doesn't clearly map to any tool or data request, ask a short clarifying "
+    "question instead of guessing the closest-sounding tool.\n"
+    "- Never mention internal tool/function names (e.g. 'the outstanding_invoices function') in "
+    "a reply — describe what you did or found in plain business language.\n"
+    "- Never say an action (exported, uploaded, sent, synced) succeeded unless a tool call "
+    "actually performed it. If no tool exists for what's being asked, say so plainly instead of "
+    "describing it as done.\n"
+    "- If a tool returns status:'need_info', do NOT retry blindly — ask the user for exactly the "
+    "items listed in 'missing', in one short message, then call it again once they've answered."
+)
+
 _PAID_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered"}
 _VALID_ORDER_STATUS = {"confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
 
@@ -115,6 +137,15 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "description": "Plain-language money read: revenue, expenses, profit/margin, VAT collected, who owes you. Answers 'am I profitable', 'what's my VAT'.",
         "parameters": {"type": "object", "properties": {
             "days": {"type": "integer", "description": "Look-back window, default 30."}}},
+    }},
+    {"type": "function", "function": {
+        "name": "reimbursement_balance",
+        "description": "What the business owes a specific person for money they paid out of pocket "
+                       "(e.g. stock/materials bought on a personal card or cash) that hasn't been "
+                       "reimbursed yet. Answers 'what do we owe X', 'has Y been paid back'.",
+        "parameters": {"type": "object", "properties": {
+            "payee": {"type": "string", "description": "The person's name or phone number."}},
+            "required": ["payee"]},
     }},
 ]
 
@@ -393,7 +424,7 @@ class CommerceAdminSkill(BaseSkill):
                 "sending a proposal document, drafting an email (drafts are safe/reversible so this is "
                 "lower-stakes, but still confirm the recipient), or booking a meeting. Show the details "
                 "and wait for a clear 'yes' first."
-                + persona_block
+                + _GUARDRAILS + persona_block
             )
         return (
             "You are the AI business assistant for the OWNER of a South African business "
@@ -409,7 +440,7 @@ class CommerceAdminSkill(BaseSkill):
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding. Show the details and wait for a clear 'yes' first. For send_broadcast, "
             "only pass confirm=true after the owner has explicitly confirmed."
-            + persona_block
+            + _GUARDRAILS + persona_block
         )
 
     # ── Agent loop (mirrors commerce_assistant) ──────────────────────────────
@@ -535,6 +566,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
+            if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""))
             if name == "create_product":     return await self._create_product(tid, args)
@@ -694,8 +726,49 @@ class CommerceAdminSkill(BaseSkill):
                 "vat_collected": self._rands(data["vat"]["collected_cents"]),
                 "owed_to_you": self._rands(data["receivables"]["outstanding_cents"])}
 
+    async def _reimbursement_balance(self, tid: str, payee: str) -> Dict[str, Any]:
+        """What's still owed to `payee` for money they paid out of pocket — sums
+        commerce_expenses where reimbursable=true and reimbursed_at is unset, matched by
+        paid_by (phone) or paid_by_name (case-insensitive substring, to tolerate spelling
+        drift like 'NELETU' vs 'NELETHU' on different documents for the same person)."""
+        payee = (payee or "").strip()
+        if not payee:
+            return {"error": "Need a name or phone number to check."}
+        digits = "".join(c for c in payee if c.isdigit())
+        q = (service._client().table("commerce_expenses").select(
+                "id,date,description,amount_cents,supplier,project,paid_by,paid_by_name")
+             .eq("tenant_id", tid).eq("reimbursable", True).is_("reimbursed_at", "null"))
+        if digits and len(digits) >= 7:
+            rows = q.eq("paid_by", digits).execute().data or []
+        else:
+            rows = q.ilike("paid_by_name", f"%{payee}%").execute().data or []
+        if not rows:
+            return {"payee": payee, "owed": self._rands(0), "items": [],
+                    "note": "No outstanding reimbursable expenses found for this person."}
+        total = sum(int(r.get("amount_cents") or 0) for r in rows)
+        items = [{"date": r.get("date"), "description": r.get("description"),
+                  "amount": self._rands(r.get("amount_cents")), "project": r.get("project")}
+                 for r in rows]
+        return {"payee": payee, "owed": self._rands(total), "item_count": len(items), "items": items}
+
     async def _create_invoice(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         raw = args.get("line_items") or []
+        # Price-completeness gate (2026-08-08) — a missing unit_price_rands used to silently
+        # coerce to 0 below, creating a real R0.00 draft invoice instead of asking for the price
+        # first (confirmed live: OFF-INV-00016/17/18/00065 are junk artifacts of exactly this).
+        # An explicit 0 (a genuinely free item) is still allowed through — only an ABSENT price
+        # gates. Mirrors _fee_proposal_gaps' need_info shape in core/skills/draft_admin.py.
+        price_gaps = [
+            (it.get("description") or "").strip() for it in raw
+            if isinstance(it, dict) and (it.get("description") or "").strip()
+            and it.get("unit_price_rands") is None
+        ]
+        if price_gaps:
+            return {
+                "status": "need_info",
+                "missing": [f"the price for {d}" for d in price_gaps],
+                "message": "Before I create this, I need the price for: " + "; ".join(price_gaps) + ".",
+            }
         line_items = [{
             "description": (it.get("description") or "").strip(),
             "quantity": float(it.get("quantity") or 1),
