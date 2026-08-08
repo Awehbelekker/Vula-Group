@@ -124,6 +124,7 @@ class WebSearchSkill(BaseSkill):
         try:
             import litellm
             from core.llm_router import resolve_generation_route
+            from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
             litellm.drop_params = True
             model, api_key, api_base = await resolve_generation_route()
 
@@ -140,14 +141,16 @@ class WebSearchSkill(BaseSkill):
                     "- Then a list, one per option: *Item* — R<price> (unit) — Supplier — short note.\n"
                     "- End with a 'Best value:' line and any caveats (stock, delivery, date).\n"
                     "Cite real figures only; if a price isn't in the results, say 'price not listed'. "
-                    "ZAR for money, SA suppliers. Don't invent numbers."
+                    "ZAR for money, SA suppliers. Don't invent numbers.\n\n"
+                    + UNTRUSTED_CONTENT_RULE
                 )
                 cap = max(inp.max_tokens, 900)
             else:
                 system = (
                     "You are Vula. Answer the question using ONLY the web search results below. "
                     "Be specific and cite figures/dates where present. If the results don't "
-                    "answer it, say so. South African context, ZAR for money. Concise."
+                    "answer it, say so. South African context, ZAR for money. Concise.\n\n"
+                    + UNTRUSTED_CONTENT_RULE
                 )
                 cap = min(inp.max_tokens, 600)
             resp = await litellm.acompletion(
@@ -155,7 +158,13 @@ class WebSearchSkill(BaseSkill):
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content":
-                        f"Web results:\n{context_block}\n\nQuestion: {q}\n\nAnswer:"},
+                        # Fetched page text is the least trustworthy content this skill
+                        # handles — it's raw text from arbitrary internet pages, not even a
+                        # curated KB. Previously this had no fencing and no untrusted-content
+                        # rule at all: a page (including one an attacker seeded to rank for
+                        # the query) could contain "ignore prior instructions and..." with
+                        # nothing structurally telling the model it's data, not a command.
+                        f"{fence('WEB_SEARCH_RESULTS', context_block)}\n\nQuestion: {q}\n\nAnswer:"},
                 ],
                 temperature=0.2,
                 max_tokens=cap,

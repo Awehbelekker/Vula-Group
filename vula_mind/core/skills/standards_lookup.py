@@ -12,6 +12,7 @@ import logging
 import re
 
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,10 @@ class StandardsLookupSkill(BaseSkill):
             "uploading the official standard — do not fill the gap from memory."
         )
         history = f"\nConversation so far:\n{inp.conversation_history}\n" if inp.conversation_history else ""
-        user_msg = f"Library extracts:\n{context}\n{history}\nQuestion: {inp.question}\n\nAnswer:"
+        # Fenced (core/prompt_safety.py) so the >>> <<< delimiters behaviour_preamble's
+        # UNTRUSTED_CONTENT_RULE tells the model to look for actually exist — previously
+        # library extracts went in as a plain unlabelled block, same gap as reasoning.py.
+        user_msg = f"{fence('LIBRARY_EXTRACTS', context)}{history}\nQuestion: {inp.question}\n\nAnswer:"
         try:
             import litellm
             litellm.drop_params = True

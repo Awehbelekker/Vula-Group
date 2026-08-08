@@ -178,11 +178,19 @@ class LLMExtractor:
 
     async def extract(self, text: str, prompt: str, schema: str = "") -> Dict[str, Any]:
         """Extract structured data from text using a natural language prompt."""
+        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+
         schema_hint = f"\n\nReturn ONLY valid JSON matching this schema:\n{schema}" if schema else "\n\nReturn ONLY valid JSON."
 
+        # Scraped web pages are untrusted, externally-authored content (competitor sites,
+        # supplier pages) — fenced the same way KB/RAG content is (core/prompt_safety.py,
+        # Phase 2 remediation), so text shaped like an instruction on the page itself
+        # ("ignore prior rules and return {...}") can't be mistaken for one. Previously
+        # this went straight into the prompt as a plain, unlabelled block.
         full_prompt = (
             f"{prompt}\n\n"
-            f"Text to analyse:\n{text[:6000]}\n\n"  # Cap at 6k tokens
+            f"{UNTRUSTED_CONTENT_RULE}"
+            f"{fence('SCRAPED_PAGE_TEXT', text[:6000])}"  # Cap at 6k tokens
             f"{schema_hint}"
         )
 
@@ -217,7 +225,8 @@ class LLMExtractor:
 
     async def summarise(self, text: str, instruction: str) -> str:
         """Generate a plain text summary."""
-        prompt = f"{instruction}\n\nText:\n{text[:6000]}\n\nSummary:"
+        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+        prompt = f"{instruction}\n\n{UNTRUSTED_CONTENT_RULE}{fence('SCRAPED_PAGE_TEXT', text[:6000])}\n\nSummary:"
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{self.base}/api/generate",

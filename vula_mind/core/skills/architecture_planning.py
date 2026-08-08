@@ -15,6 +15,7 @@ import re
 
 from config import settings
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,10 @@ class ArchitecturePlanningSkill(BaseSkill):
         )
         context_label = ("Context (authoritative - if this conflicts with the conversation "
                          "history below, trust this, not the history):")
-        context_prefix = f"{context_label}\n{context_block}\n\n" if context_block else ""
+        # Fenced (core/prompt_safety.py) — same gap as reasoning.py/standards_lookup.py/
+        # calculations.py: behaviour_preamble's UNTRUSTED_CONTENT_RULE describes >>> <<<
+        # delimiters that KB context previously never actually had here.
+        context_prefix = f"{context_label}{fence('KB_CONTEXT', context_block)}\n\n" if context_block else ""
         user_msg = (
             f"{context_prefix}"
             f"{history_block}"

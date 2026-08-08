@@ -19,6 +19,7 @@ import re
 from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,10 @@ class CalculationsSkill(BaseSkill):
         if history:
             messages.append({"role": "user", "content": f"(Conversation so far)\n{history}"})
         if context:
-            messages.append({"role": "user", "content": f"(Reference context — cite if used)\n{context}"})
+            # Fenced (core/prompt_safety.py) — same gap as reasoning.py/standards_lookup.py:
+            # behaviour_preamble's UNTRUSTED_CONTENT_RULE describes >>> <<< delimiters that
+            # this reference context previously never actually had.
+            messages.append({"role": "user", "content": f"(Reference context — cite if used){fence('REFERENCE_CONTEXT', context)}"})
         messages.append({"role": "user", "content": question})
 
         for _ in range(MAX_TOOL_ITERATIONS):

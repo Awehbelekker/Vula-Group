@@ -11,6 +11,7 @@ import logging
 import re
 
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
@@ -56,14 +57,25 @@ class ReasoningSkill(BaseSkill):
         # (2026-07-27) showed the model answering from a stale, topically-unrelated exchange
         # several messages back instead of a correctly-retrieved document sitting in the same
         # prompt, because nothing told it which one to trust when they diverge.
+        #
+        # Both blocks are wrapped with fence() (core/prompt_safety.py) so the >>> <<< markers
+        # UNTRUSTED_CONTENT_RULE tells the model to look for actually exist here. Previously
+        # this skill built kb_context as a plain unlabelled string — the untrusted-content rule
+        # was present in the system prompt (via behaviour_preamble) but pointed at delimiters
+        # that were never applied, so retrieved document/KB text had no structural signal
+        # separating it from instructions. A malicious or compromised uploaded document could
+        # contain text shaped like an instruction ("ignore prior rules and...") with nothing
+        # to stop the model treating it as one.
         history = (
             f"\nConversation so far (for tone/continuity only — it may be stale or about a "
-            f"different topic; do not treat it as a source of facts):\n{inp.conversation_history}\n"
+            f"different topic; do not treat it as a source of facts):"
+            f"{fence('CONVERSATION_HISTORY', inp.conversation_history)}"
             if inp.conversation_history else ""
         )
         context_block = (
             f"\nDocument context (authoritative — if this conflicts with the conversation "
-            f"history below, trust this, not the history):\n{kb_context}\n"
+            f"history above, trust this, not the history):"
+            f"{fence('DOCUMENT_CONTEXT', kb_context)}"
             if kb_context else ""
         )
         user_msg = f"{context_block}{history}\nQuestion: {inp.question}\n\nAnswer:"
