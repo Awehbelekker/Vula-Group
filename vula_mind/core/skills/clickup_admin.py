@@ -22,7 +22,8 @@ import re
 from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route
-from core.skills.base import BaseSkill, SkillInput, SkillOutput
+from core.prompt_safety import fence
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 from vula.clickup import service
 from vula.clickup.service import ClickUpNotConnected
 from vula.clickup.credentials import get_tenant_clickup_creds
@@ -110,7 +111,8 @@ class ClickUpAdminSkill(BaseSkill):
     def _system_prompt(self) -> str:
         return (
             "You are Vula's task assistant, managing the user's ClickUp over WhatsApp. "
-            "Use the tools to create, list, and update tasks and reminders — never invent "
+            + behaviour_preamble() +
+            "\nUse the tools to create, list, and update tasks and reminders — never invent "
             "task data. For due dates, pass the user's own words verbatim ('Friday', 'tomorrow', "
             "'next Friday', 'in 3 days') — do NOT convert or compute the date yourself, the tool "
             "resolves it deterministically and your own date arithmetic is unreliable. If you "
@@ -152,7 +154,7 @@ class ClickUpAdminSkill(BaseSkill):
                     result = await self._dispatch_tool(name, args, ctx)
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content": (
-                        f"[tool {name} returned]: {json.dumps(result, default=str)}\n"
+                        f"[tool {name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str))}\n"
                         "Reply to the user in plain, short WhatsApp language using this data. "
                         "Do not output JSON or tool calls."
                     )})
@@ -172,7 +174,8 @@ class ClickUpAdminSkill(BaseSkill):
                     args = {}
                 result = await self._dispatch_tool(tc.function.name, args, ctx)
                 messages.append({"role": "tool", "tool_call_id": tc.id,
-                                 "name": tc.function.name, "content": json.dumps(result, default=str)})
+                                 "name": tc.function.name,
+                                 "content": fence('TOOL_RESULT', json.dumps(result, default=str))})
 
         resp = await litellm.acompletion(
             model=model, messages=messages, temperature=0.2, max_tokens=500,
@@ -188,7 +191,7 @@ class ClickUpAdminSkill(BaseSkill):
                 model=model,
                 messages=[
                     {"role": "system", "content": "Summarise this for the user in short, plain WhatsApp language. No JSON."},
-                    {"role": "user", "content": json.dumps(result, default=str)},
+                    {"role": "user", "content": fence('TOOL_RESULT', json.dumps(result, default=str))},
                 ],
                 temperature=0.2, max_tokens=300, api_key=api_key, api_base=api_base,
             )

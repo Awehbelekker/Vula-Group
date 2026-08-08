@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ class FinanceAdminSkill(BaseSkill):
                     self._verified.extend(self._extract_candidates(result))
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
-                        f"[{name} returned]: {json.dumps(result, default=str)[:1500]}\n"
+                        f"[{name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str)[:1500])}\n"
                         "Answer the user in short plain language. No JSON."})
                     continue
                 return (msg.content or "").strip()
@@ -114,7 +115,7 @@ class FinanceAdminSkill(BaseSkill):
                 result = self._dispatch(tc.function.name, args, tenant_id)
                 self._verified.extend(self._extract_candidates(result))
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
-                                 "content": json.dumps(result, default=str)[:1800]})
+                                 "content": fence('TOOL_RESULT', json.dumps(result, default=str)[:1800])})
 
         resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
             max_tokens=400, api_key=api_key, api_base=api_base)

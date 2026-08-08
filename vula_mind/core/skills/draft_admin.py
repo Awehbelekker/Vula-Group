@@ -21,6 +21,7 @@ import re
 from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
 logger = logging.getLogger(__name__)
@@ -231,7 +232,7 @@ class DraftAdminSkill(BaseSkill):
                     result = await self._dispatch(name, args, tenant_id, phone)
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
-                        f"[{name} returned]: {json.dumps(result, default=str)[:1500]}\n"
+                        f"[{name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str)[:1500])}\n"
                         "Reply to the user in short plain language. No JSON."})
                     continue
                 return (msg.content or "").strip()
@@ -246,7 +247,7 @@ class DraftAdminSkill(BaseSkill):
                     args = {}
                 result = await self._dispatch(tc.function.name, args, tenant_id, phone)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
-                                 "content": json.dumps(result, default=str)[:1800]})
+                                 "content": fence('TOOL_RESULT', json.dumps(result, default=str)[:1800])})
 
         resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
             max_tokens=500, api_key=api_key, api_base=api_base)

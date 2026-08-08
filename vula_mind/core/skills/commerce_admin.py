@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from core.llm_router import resolve_generation_route, escalate_to_cloud
+from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import BaseSkill, SkillInput, SkillOutput
 from vula.commerce import service
@@ -479,7 +480,7 @@ class CommerceAdminSkill(BaseSkill):
                     result = await self._dispatch_tool(name, args, ctx)
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content": (
-                        f"[tool {name} returned]: {json.dumps(result, default=str)}\n"
+                        f"[tool {name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str))}\n"
                         "Reply to the owner in plain, short WhatsApp language using this data. "
                         "Do not output JSON or tool calls."
                     )})
@@ -499,7 +500,8 @@ class CommerceAdminSkill(BaseSkill):
                     args = {}
                 result = await self._dispatch_tool(tc.function.name, args, ctx)
                 messages.append({"role": "tool", "tool_call_id": tc.id,
-                                 "name": tc.function.name, "content": json.dumps(result, default=str)})
+                                 "name": tc.function.name,
+                                 "content": fence('TOOL_RESULT', json.dumps(result, default=str))})
 
         # Final pass — force a plain-language answer (no tools available now).
         resp = await litellm.acompletion(
@@ -518,7 +520,7 @@ class CommerceAdminSkill(BaseSkill):
                 model=model,
                 messages=[
                     {"role": "system", "content": "Summarise this data for a shop owner in short, plain WhatsApp language. No JSON."},
-                    {"role": "user", "content": json.dumps(result, default=str)},
+                    {"role": "user", "content": fence('TOOL_RESULT', json.dumps(result, default=str))},
                 ],
                 temperature=0.2, max_tokens=400, api_key=api_key, api_base=api_base,
             )
@@ -1060,7 +1062,7 @@ class CommerceAdminSkill(BaseSkill):
         if not query:
             return {"error": "Need something to research — a competitor name or a product/price query."}
         from core.skills.web_search import _ddg_search, _fetch_text
-        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+        from core.prompt_safety import UNTRUSTED_CONTENT_RULE
 
         hits = await _ddg_search(f"{query} price buy South Africa", limit=5)
         if not hits:

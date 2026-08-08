@@ -198,7 +198,7 @@ class CalculationsSkill(BaseSkill):
                     args = {}
                 result = self._dispatch(tc.function.name, args, tenant_id)
                 messages.append({"role": "tool", "tool_call_id": tc.id,
-                    "name": tc.function.name, "content": json.dumps(result)})
+                    "name": tc.function.name, "content": fence('TOOL_RESULT', json.dumps(result))})
 
         resp = await litellm.acompletion(
             model=model, messages=messages, temperature=0.1, max_tokens=500,

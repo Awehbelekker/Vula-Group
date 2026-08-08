@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
 from core.llm_router import resolve_generation_route
+from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput
 from vula.commerce import service
 
@@ -851,7 +852,7 @@ class CommerceAssistantSkill(BaseSkill):
                     result = await self._dispatch_tool(tname, targs, ctx)
                     messages.append({"role": "assistant", "content": answer})
                     messages.append({"role": "user", "content":
-                        f"(system: the {tname} tool returned: {json.dumps(result, default=str)[:1500]}. "
+                        f"(system: the {tname} tool returned:{fence('TOOL_RESULT', json.dumps(result, default=str)[:1500])} "
                         f"Now reply to the customer in plain, friendly language — never output JSON.)"})
                     continue
                 leaked_msg = _extract_message_leak(answer)
@@ -920,7 +921,7 @@ class CommerceAssistantSkill(BaseSkill):
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "name": tc.function.name,
-                        "content": json.dumps(result, default=str),
+                        "content": fence('TOOL_RESULT', json.dumps(result, default=str)),
                     }
                 )
 
