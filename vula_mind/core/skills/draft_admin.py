@@ -95,7 +95,7 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict
     (commerce-mode tenant owners) can call the identical draft_letter tool."""
     from vula.api.draft import DOCUMENT_TYPES, _retrieve_context, _generate_document, _store
     import hashlib
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     doc_type = args.get("document_type") or "fee_proposal"
     base_config = DOCUMENT_TYPES.get(doc_type)
@@ -140,7 +140,7 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict
     has_placeholders = "[PLACEHOLDER]" in content
     word_count = len(content.split())
     draft_id = hashlib.md5(
-        f"{tenant_id}:{doc_type}:{brief[:50]}:{datetime.utcnow().isoformat()}".encode()
+        f"{tenant_id}:{doc_type}:{brief[:50]}:{datetime.now(timezone.utc).isoformat()}".encode()
     ).hexdigest()[:16]
     _store.save(tenant_id=tenant_id, draft_id=draft_id, doc_type=doc_type, brief=brief,
                content=content, word_count=word_count, model=model_used, sources=sources)

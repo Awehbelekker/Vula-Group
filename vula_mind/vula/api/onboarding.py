@@ -20,7 +20,7 @@ import re
 import secrets
 import urllib.parse
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import httpx
@@ -135,7 +135,7 @@ def _payfast_url(tenant_id: str, plan: str, email: str, name: str) -> Optional[s
         "item_name": f"Vula {plan.title()} — Monthly Subscription",
         "item_description": tier.get("label", plan),
         "subscription_type": "1",          # recurring subscription
-        "billing_date": datetime.utcnow().strftime("%Y-%m-%d"),
+        "billing_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "recurring_amount": f"{amount:.2f}",
         "frequency": "3",                  # monthly
         "cycles": "0",                     # until cancelled
@@ -350,7 +350,7 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
     temp_password = secrets.token_urlsafe(12)
     slug = _slugify(req.company_name)
     workspace_url = f"{settings.vula_base_url}/{slug}"
-    trial_ends = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    trial_ends = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
     # Normalise WhatsApp to E.164 without leading + so lookup always matches
     whatsapp_normalised: str | None = None
@@ -375,7 +375,7 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
         "workspace_url": workspace_url,
         "workspace_slug": slug,
         "temp_password_hash": hashlib.sha256(temp_password.encode()).hexdigest(),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # 1. Always write to local SQLite tenant registry (works with no cloud deps)

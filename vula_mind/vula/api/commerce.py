@@ -4678,11 +4678,15 @@ async def admin_request_supplier_approval(tenant_id: str, invoice_id: str, body:
 @router.patch("/{tenant_id}/admin/expenses/{expense_id}/pay")
 async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
     """Mark an expense as paid — removes it from the Due view."""
-    from datetime import datetime
+    from datetime import datetime, timezone
     db = service._client()
     result = db.table("commerce_expenses").update({
         "status": "paid",
-        "paid_at": datetime.utcnow().isoformat(),
+        # datetime.now(timezone.utc) — matches the created_at/updated_at convention used
+        # everywhere else on this table (service._now()); datetime.utcnow() was both
+        # deprecated and, more importantly, inconsistent with those fields' format
+        # (naive vs. timezone-aware isoformat).
+        "paid_at": datetime.now(timezone.utc).isoformat(),
     }).eq("tenant_id", tenant_id).eq("id", expense_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Expense not found")

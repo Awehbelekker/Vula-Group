@@ -373,8 +373,8 @@ def test_get_task_with_evidence(client):
 
 
 def test_daily_tasks_endpoint(client):
-    from datetime import datetime
-    today = datetime.utcnow().date().isoformat()
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
     client.post("/v1/field/task", json={
         "tenant_id": "t1", "project_id": "proj1",
         "title": "Due today", "trade": "painting", "due_date": today,

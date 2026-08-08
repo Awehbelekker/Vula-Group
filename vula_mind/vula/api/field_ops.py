@@ -338,7 +338,8 @@ async def get_daily_tasks(tenant_id: str) -> dict:
             "contractor_name": contractor.name if contractor else "",
             "contractor_phone": contractor.phone if contractor else "",
         })
-    return {"tenant_id": tenant_id, "date": __import__("datetime").datetime.utcnow().date().isoformat(), "tasks": result, "count": len(result)}
+    from datetime import datetime, timezone
+    return {"tenant_id": tenant_id, "date": datetime.now(timezone.utc).date().isoformat(), "tasks": result, "count": len(result)}
 
 
 @router.post("/daily-tasks/{tenant_id}/dispatch")

@@ -29,7 +29,7 @@ import hashlib
 import logging
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Security
@@ -411,9 +411,9 @@ async def generate_draft(body: DraftRequest) -> DraftResponse:
 
     word_count = len(content.split())
     draft_id = hashlib.md5(
-        f"{body.tenant_id}:{body.document_type}:{body.brief[:50]}:{datetime.utcnow().isoformat()}".encode()
+        f"{body.tenant_id}:{body.document_type}:{body.brief[:50]}:{datetime.now(timezone.utc).isoformat()}".encode()
     ).hexdigest()[:16]
-    generated_at = datetime.utcnow().isoformat()
+    generated_at = datetime.now(timezone.utc).isoformat()
 
     # Persist
     _store.save(

@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -282,7 +282,7 @@ class FieldOpsDB:
         return [_to_task(r) for r in (res.data or [])]
 
     def get_tasks_due_today(self, tenant_id: str) -> List[Task]:
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         res = (_client().table(_T_TASKS).select("*").eq("tenant_id", tenant_id)
                .eq("due_date", today).not_.in_("status", ["complete", "rejected"])
                .order("trade").execute())
@@ -420,7 +420,7 @@ def _new_id() -> str:
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _normalise_phone(phone: str) -> str:
