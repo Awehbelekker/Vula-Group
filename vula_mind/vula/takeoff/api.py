@@ -77,6 +77,7 @@ async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: f
             "rooms": len(project.rooms),
             "gfa": project.gross_floor_area,
             "confidence": round(project.confidence_overall * 100, 1),
+            "notes": project.extraction_notes,
         }
 
         _jobs[job_id]["status"] = "generating_boq"

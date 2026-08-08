@@ -8,10 +8,12 @@ from vula.api.server import app
 from vula.takeoff.boq_generator import BOQ, BOQGenerator, BOQItem, RateLookup
 from vula.takeoff.plan_reader import (
     DoorWindow,
+    DrawingSheet,
     ExtractedProject,
     MEPSchedule,
     Room,
     TitleBlock,
+    geometry_reconciled,
 )
 
 client = TestClient(app)
@@ -366,3 +368,51 @@ def test_takeoff_suppliers_returns_list():
 def test_takeoff_boq_404_unknown_job():
     resp = client.get("/takeoff/nonexistent-job-id-xyz/boq")
     assert resp.status_code == 404
+
+
+# ── geometry_reconciled (2026-08 accuracy audit) ────────────────────────────────
+# gross_floor_area and the room schedule are extracted by two SEPARATE LLM calls and
+# previously nothing checked they agreed — a hallucinated GFA (or a room schedule missing
+# half the building) fed straight into BOQGenerator, which prices demolition/finishes
+# directly off GFA, with "confidence" that was only ever a hardcoded per-extraction-method
+# constant, never a measured signal.
+
+def test_geometry_reconciled_when_room_sum_matches_gfa():
+    project = _project(rooms=[_room("Office", 120), _room("Kitchen", 30)], gfa=180)
+    ok, warnings = geometry_reconciled(project)
+    assert ok is True
+    assert warnings == []
+
+
+def test_geometry_flags_room_sum_wildly_exceeding_gfa():
+    """Rooms summing to well over 100% of GFA means one of the two numbers was misread —
+    rooms can't physically occupy more area than the building they're inside."""
+    project = _project(rooms=[_room("Office", 300), _room("Kitchen", 100)], gfa=180)
+    ok, warnings = geometry_reconciled(project)
+    assert ok is False
+    assert any("likely misread" in w for w in warnings)
+
+
+def test_geometry_flags_room_sum_far_below_gfa():
+    project = _project(rooms=[_room("Small storeroom", 10)], gfa=500)
+    ok, warnings = geometry_reconciled(project)
+    assert ok is False
+    assert any("may be missing" in w for w in warnings)
+
+
+def test_geometry_flags_zero_rooms_despite_readable_sheets():
+    project = _project(rooms=[], gfa=0)
+    project.sheets = [DrawingSheet(sheet_number="A001", title="Floor Plan", scale="1:100",
+                                    discipline="arch", raw_text="x", raw_markdown="x", status="read")]
+    ok, warnings = geometry_reconciled(project)
+    assert ok is False
+    assert any("no rooms were extracted" in w for w in warnings)
+
+
+def test_geometry_reconciled_when_gfa_missing_nothing_to_check():
+    """No GFA extracted at all (only room schedule) — nothing to cross-check against, must
+    not be treated as a failure."""
+    project = _project(rooms=[_room("Office", 120)], gfa=0)
+    ok, warnings = geometry_reconciled(project)
+    assert ok is True
+    assert warnings == []

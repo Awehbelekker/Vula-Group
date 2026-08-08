@@ -565,6 +565,41 @@ class DrawingIntelligence:
         return {}
 
 
+# ─── Extraction quality (2026-08 accuracy audit) ──────────────────────────────
+# gross_floor_area and the room schedule are extracted by two SEPARATE LLM calls
+# (_extract_areas / _extract_rooms) and should roughly agree — the same "don't trust
+# confidence, cross-check independently-derived numbers" discipline as
+# vula/commerce/extraction_quality.py and bank_rec.reconciliation_ok(). Previously nothing
+# checked this: a hallucinated GFA (or a room schedule missing half the building) fed
+# straight into BOQGenerator, which prices demolition/finishes/etc. directly off GFA —
+# a wrong number here silently becomes a wrong quoted cost, with "confidence" that was
+# never more than a hardcoded constant per extraction method (0.90 for text, 0.70 for OCR),
+# not a measured signal.
+
+def geometry_reconciled(project: "ExtractedProject") -> Tuple[bool, List[str]]:
+    """Cross-checks independently-extracted geometry. Returns (ok, warnings) — never blocks
+    anything, matches the soft-caveat pattern used everywhere else this session."""
+    warnings: List[str] = []
+    gfa = project.gross_floor_area or 0
+    room_sum = sum(r.area for r in project.rooms)
+    if gfa > 0 and room_sum > 0:
+        ratio = room_sum / gfa
+        if ratio > 1.15:
+            warnings.append(
+                f"Room areas sum to {room_sum:.0f}m² but the extracted GFA is only "
+                f"{gfa:.0f}m² — one of these was likely misread.")
+        elif ratio < 0.35:
+            warnings.append(
+                f"Room areas sum to only {room_sum:.0f}m² of a {gfa:.0f}m² GFA — the room "
+                f"schedule may be missing rooms.")
+    readable = [s for s in project.sheets if s.status == "read"]
+    if readable and not project.rooms:
+        warnings.append(
+            "Sheets were read successfully but no rooms were extracted — check the "
+            "drawing set has a legible room schedule.")
+    return (len(warnings) == 0, warnings)
+
+
 # ─── Main PlanReader ──────────────────────────────────────────────────────────
 
 class PlanReader:
@@ -629,6 +664,16 @@ class PlanReader:
             project.rooms = rooms_from_vector
         if doors_from_vector:
             project.doors_windows = doors_from_vector
+
+        ok, warnings = geometry_reconciled(project)
+        if not ok:
+            project.extraction_notes.extend(warnings)
+            # Halve confidence rather than a hardcoded per-method constant standing
+            # unchallenged — a real (if coarse) signal beats a fixed label when the
+            # independently-extracted numbers actually disagree.
+            project.confidence_overall = round(project.confidence_overall * 0.5, 2)
+            for w in warnings:
+                logger.warning("[%s] plan reading quality check: %s", self.tenant_id, w)
 
         elapsed = round(time.time() - started, 1)
         logger.info(f"[{self.tenant_id}] Plan reading complete in {elapsed}s: "
