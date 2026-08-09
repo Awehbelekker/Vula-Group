@@ -62,6 +62,15 @@ async def remove_provider(tenant_id: str, provider: str) -> dict:
 @router.post("/webhook/{tenant_id}/{provider}")
 async def payment_webhook(tenant_id: str, provider: str, request: Request) -> dict:
     """Verify a gateway notification and mark the referenced invoice paid."""
+    if provider == "yoco":
+        # Yoco.verify_webhook() deliberately skips HMAC verification ("handled in the existing
+        # yoco webhook" — see its docstring) because Yoco's Checkout API silently ignores the
+        # notifyUrl this module passes in and always calls back to the account-wide URL
+        # configured in the Yoco dashboard (/v1/yoco/webhook, which IS HMAC-verified). That
+        # means this generic route was never reachable by real Yoco traffic — but it was still
+        # live and unauthenticated, so a forged POST here with a guessed tenant/invoice id
+        # could mark an invoice paid for free. Yoco must only ever be handled at /v1/yoco/webhook.
+        return {"received": True}
     prov = payments.get_provider(provider)
     if not prov:
         return {"received": True}

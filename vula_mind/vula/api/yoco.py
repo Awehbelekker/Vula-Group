@@ -227,6 +227,50 @@ async def _get_tenant_yoco_creds(tenant_id: str) -> Optional[dict]:
     return None
 
 
+async def refund_yoco_payment(tenant_id: str, checkout_id: str, amount_cents: int) -> dict:
+    """Issue a real refund via Yoco's Checkout API (POST /api/checkouts/{id}/refund).
+
+    A 200/202 means Yoco *accepted* the refund request — the money movement itself is
+    confirmed asynchronously via a refund.succeeded/refund.failed webhook (best-effort logged
+    below), same "trust the synchronous accept, treat the webhook as secondary confirmation"
+    pattern this file already uses for checkout creation. Returns {'ok': True, 'refund_id'}
+    or {'ok': False, 'detail': <reason>} — never raises, so callers can surface a clear
+    message without a stack trace.
+    """
+    creds = await _get_tenant_yoco_creds(tenant_id)
+    if not creds or not creds.get("secret_key"):
+        return {"ok": False, "detail": "No Yoco account connected for this tenant."}
+    import uuid
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"https://payments.yoco.com/api/checkouts/{checkout_id}/refund",
+                headers={
+                    "Authorization": f"Bearer {creds['secret_key']}",
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": str(uuid.uuid4()),
+                },
+                json={"amount": int(amount_cents)},
+            )
+    except Exception as exc:
+        log.error("Yoco refund request failed for checkout %s: %s", checkout_id, exc)
+        return {"ok": False, "detail": f"Could not reach Yoco: {exc}"}
+    if resp.status_code not in (200, 202):
+        detail = "Refund rejected by Yoco."
+        try:
+            detail = resp.json().get("message") or detail
+        except Exception:
+            pass
+        log.error("Yoco refund rejected for checkout %s: %s %s", checkout_id, resp.status_code, resp.text[:300])
+        return {"ok": False, "detail": detail}
+    refund_id = None
+    try:
+        refund_id = (resp.json() or {}).get("id")
+    except Exception:
+        pass
+    return {"ok": True, "refund_id": refund_id}
+
+
 @router.post("/webhook")
 async def yoco_webhook(request: Request) -> dict:
     raw_body = await request.body()
@@ -264,6 +308,15 @@ async def yoco_webhook(request: Request) -> dict:
     event_type = payload.get("type", "")
     data = payload.get("payload", payload)  # Yoco wraps in 'payload' key
     metadata = data.get("metadata", {})
+
+    # Refund confirmations — logged best-effort only. Yoco's refund webhook payload doesn't
+    # reliably carry back the order/invoice metadata the way payment events do, so this is NOT
+    # treated as authoritative: the refund is already recorded (refund_status='pending') at the
+    # moment Vula's own refund call is accepted by Yoco (see refund_yoco_payment above). This
+    # just gives visibility into the async outcome without depending on unverified correlation.
+    if event_type in ("refund.succeeded", "refund.failed"):
+        log.info("Yoco %s: %s", event_type, data)
+        return {"received": True}
 
     order_id = metadata.get("order_id")
     # tenant_id already extracted above for webhook verification

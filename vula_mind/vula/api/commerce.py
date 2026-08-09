@@ -536,17 +536,45 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
         await service.apply_order_stock(order_id, restore=True)
     elif new_status in ("confirmed", "packing", "dispatched", "delivered"):
         await service.apply_order_stock(order_id, restore=False)
-    # A refund moves real money — Vula restores stock + flags the team to process the refund in
-    # their payment gateway (automated per-gateway refund API is a separate, opt-in step).
+    # A refund moves real money. Vula always restores stock; whether it also calls the gateway
+    # is opt-in (body.auto_refund) — this endpoint also handles routine status transitions, and
+    # a real charge-reversal call should never fire without the owner explicitly asking for it.
+    refund_result = None
     if new_status == "refunded":
+        checkout_id = order.get("yoco_checkout_id")
+        if body.get("auto_refund") and checkout_id:
+            amount = int(body.get("amount_cents") or order.get("total_cents") or 0)
+            from vula.api.yoco import refund_yoco_payment
+            result = await refund_yoco_payment(tenant_id, checkout_id, amount)
+            now = service._now()
+            if result.get("ok"):
+                refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
+                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
+                         "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
+            else:
+                refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
+                patch = {"refund_status": "failed"}
+            try:
+                service._client().table("commerce_orders").update(patch) \
+                    .eq("id", order_id).eq("tenant_id", tenant_id).execute()
+            except Exception as exc:
+                log.warning("refund tracking update failed for order %s: %s", order_id, exc)
         try:
             from vula.integrations.notify import notify_team
-            await notify_team(tenant_id, "refund",
-                              f"Refund needed: order {order.get('display_id') or order_id} "
-                              f"(R{(order.get('total_cents') or 0)/100:.2f}) — process it in your payment gateway.")
+            if refund_result and refund_result["status"] == "pending":
+                msg = (f"Order {order.get('display_id') or order_id} refunded automatically via "
+                       f"Yoco (R{refund_result['amount_cents']/100:.2f}).")
+            elif refund_result and refund_result["status"] == "failed":
+                msg = (f"Refund needed: order {order.get('display_id') or order_id} "
+                       f"(R{(order.get('total_cents') or 0)/100:.2f}) — automatic Yoco refund "
+                       f"failed ({refund_result.get('detail')}), please process it manually.")
+            else:
+                msg = (f"Refund needed: order {order.get('display_id') or order_id} "
+                       f"(R{(order.get('total_cents') or 0)/100:.2f}) — process it in your payment gateway.")
+            await notify_team(tenant_id, "refund", msg)
         except Exception as exc:
             log.debug("refund team notify skipped: %s", exc)
-    return {"order_id": order_id, "status": new_status}
+    return {"order_id": order_id, "status": new_status, "refund": refund_result}
 
 
 _ORDER_DELETABLE_STATUSES = ("pending_payment", "cancelled")
@@ -2480,12 +2508,42 @@ async def cron_recurring_invoices():
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/credit-note")
 async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict = None):
-    """Create a credit note against an invoice (full, or partial via body.line_items)."""
+    """Create a credit note against an invoice (full, or partial via body.line_items).
+    Invoices have no 'refunded' status (unlike orders) — a credit note IS the refund record —
+    so body.auto_refund here does what body.auto_refund does on the order status endpoint:
+    opt-in, real money-back-to-customer via Yoco, keyed off the invoice's own checkout id."""
+    body = body or {}
     try:
-        cn = await service.create_credit_note(tenant_id, invoice_id, (body or {}).get("line_items"))
+        cn = await service.create_credit_note(tenant_id, invoice_id, body.get("line_items"))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return {"credit_note": cn}
+    refund_result = None
+    if body.get("auto_refund"):
+        src = await service.get_invoice(tenant_id, invoice_id)
+        checkout_id = (src or {}).get("yoco_checkout_id")
+        amount = int(cn.get("total_cents") or 0)
+        if not checkout_id:
+            refund_result = {"gateway": "yoco", "status": "failed",
+                              "detail": "This invoice has no online (Yoco) payment on record."}
+        elif amount <= 0:
+            refund_result = {"gateway": "yoco", "status": "failed", "detail": "Nothing to refund."}
+        else:
+            from vula.api.yoco import refund_yoco_payment
+            result = await refund_yoco_payment(tenant_id, checkout_id, amount)
+            now = service._now()
+            if result.get("ok"):
+                refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
+                patch = {"refund_status": "pending", "refunded_amount_cents": amount,
+                         "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
+            else:
+                refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
+                patch = {"refund_status": "failed"}
+            try:
+                service._client().table("commerce_invoices").update(patch) \
+                    .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+            except Exception as exc:
+                log.warning("refund tracking update failed for invoice %s: %s", invoice_id, exc)
+    return {"credit_note": cn, "refund": refund_result}
 
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")

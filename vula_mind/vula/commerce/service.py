@@ -701,7 +701,8 @@ async def list_orders(
     q = (
         _client()
         .table("commerce_orders")
-        .select("id,display_id,customer_name,customer_phone,total_cents,status,channel,delivery_slot,created_at")
+        .select("id,display_id,customer_name,customer_phone,total_cents,status,channel,delivery_slot,"
+                "created_at,yoco_checkout_id,refund_status")
         .eq("tenant_id", tenant_id)
     )
     if status:

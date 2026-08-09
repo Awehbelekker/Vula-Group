@@ -470,15 +470,35 @@ function OrdersTab({ tenantId }) {
 
   useEffect(() => { load() }, [load])
 
-  async function advance(orderId, newStatus) {
+  async function advance(orderId, newStatus, extra = {}) {
     setUpdating(orderId)
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/${orderId}/status`, {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus }),
+      body: JSON.stringify({ status: newStatus, ...extra }),
     })
+    const d = await r.json().catch(() => ({}))
+    if (d.refund?.status === 'pending') {
+      alert(`Refunded R${(d.refund.amount_cents / 100).toFixed(2)} via Yoco.`)
+    } else if (d.refund?.status === 'failed') {
+      alert(`Order marked refunded, but the automatic Yoco refund failed: ${d.refund.detail || 'unknown error'}. Please process it manually in Yoco.`)
+    }
     await load()
     setUpdating(null)
+  }
+
+  // "Refunded" is real money leaving the business — for an order that was paid online, offer to
+  // actually call Yoco's refund API (opt-in) instead of only recording the status.
+  function refundOrder(o) {
+    if (o.yoco_checkout_id) {
+      const auto = confirm(
+        `This order was paid online via Yoco (R${(o.total_cents / 100).toFixed(2)}).\n\n` +
+        `OK = refund it automatically through Yoco now.\nCancel = just mark it refunded (you'll process the refund yourself).`
+      )
+      advance(o.id, 'refunded', auto ? { auto_refund: true } : {})
+    } else {
+      advance(o.id, 'refunded')
+    }
   }
 
   function toggleSelect(orderId) {
@@ -598,7 +618,7 @@ function OrdersTab({ tenantId }) {
                   <button
                     key={ns}
                     disabled={updating === o.id}
-                    onClick={() => advance(o.id, ns)}
+                    onClick={() => ns === 'refunded' ? refundOrder(o) : advance(o.id, ns)}
                     style={ns === 'cancelled' ? styles.btnDanger : styles.btnAction}
                   >
                     {updating === o.id ? '…' : `→ ${STATUS_LABELS[ns]?.label || ns}`}

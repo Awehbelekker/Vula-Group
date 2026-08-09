@@ -230,10 +230,23 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }
 
   async function creditNote(inv) {
-    if (!confirm(`Create a credit note for ${inv.invoice_number} (${fmt(inv.total_cents)})?`)) return
-    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/credit-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    let autoRefund = false
+    if (inv.yoco_checkout_id) {
+      autoRefund = confirm(
+        `This invoice was paid online via Yoco (${fmt(inv.total_cents)}).\n\n` +
+        `OK = create the credit note AND refund the customer through Yoco now.\nCancel = just create the credit note (you'll refund them yourself).`
+      )
+    } else if (!confirm(`Create a credit note for ${inv.invoice_number} (${fmt(inv.total_cents)})?`)) {
+      return
+    }
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/credit-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_refund: autoRefund }) })
       .then(r => r.json()).catch(() => ({}))
-    if (d.credit_note) { alert(`Credit note ${d.credit_note.invoice_number} created.`); load() }
+    if (d.credit_note) {
+      let msg = `Credit note ${d.credit_note.invoice_number} created.`
+      if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
+      else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
+      alert(msg); load()
+    }
     else alert(d.detail || 'Could not create credit note.')
   }
 
@@ -688,6 +701,7 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
         : [])
   const [rows, setRows] = useState(rawItems.map(it => ({ ...it, checked: true, creditQty: it.quantity })))
   const [saving, setSaving] = useState(false)
+  const [autoRefund, setAutoRefund] = useState(true)  // only shown/sent when the invoice was paid via Yoco
   const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
 
   function toggle(i) { setRows(rows.map((r, idx) => idx === i ? { ...r, checked: !r.checked } : r)) }
@@ -715,10 +729,15 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
     setSaving(true)
     const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${invoice.id}/credit-note`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ line_items: creditItems }),
+      body: JSON.stringify({ line_items: creditItems, auto_refund: !!invoice.yoco_checkout_id && autoRefund }),
     }).then(r => r.json()).catch(() => ({}))
     setSaving(false)
-    if (d.credit_note) { alert(`Credit note ${d.credit_note.invoice_number} created.`); onDone() }
+    if (d.credit_note) {
+      let msg = `Credit note ${d.credit_note.invoice_number} created.`
+      if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
+      else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
+      alert(msg); onDone()
+    }
     else alert(d.detail || 'Could not create credit note.')
   }
 
@@ -747,6 +766,12 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
         <div style={s.totRow}><span>VAT ({vatRate}%)</span><span>{fmt(vat)}</span></div>
         <div style={{ ...s.totRow, ...s.totFinal }}><span>Credit total</span><span>{fmt(total)}</span></div>
       </div>
+      {invoice.yoco_checkout_id && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'system-ui', fontSize: 12, color: '#444', margin: '0 0 10px' }}>
+          <input type="checkbox" checked={autoRefund} onChange={e => setAutoRefund(e.target.checked)} />
+          This invoice was paid online via Yoco — also refund {fmt(total)} to the customer through Yoco now
+        </label>
+      )}
       <button onClick={save} disabled={saving || creditItems.length === 0} style={s.saveInvBtn}>
         {saving ? 'Creating…' : `Create credit note (${fmt(total)})`}
       </button>
