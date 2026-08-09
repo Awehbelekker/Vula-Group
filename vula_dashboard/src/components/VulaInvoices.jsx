@@ -41,6 +41,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   const autoOpened = useRef(false)                       // first-run wizard opened once
   const [selectedQuotes, setSelectedQuotes] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [creditingInvoice, setCreditingInvoice] = useState(null)  // invoice row being partially credited
 
   // A fresh deep-link (e.g. clicking a different supplier while already on this tab) —
   // re-sync local state to match.
@@ -294,6 +295,15 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     return <RecurringManager tenantId={tenantId} onCancel={() => setShowRecurring(false)} />
   }
 
+  if (creditingInvoice) {
+    return <CreditNoteForm
+      tenantId={tenantId}
+      invoice={creditingInvoice}
+      onDone={() => { setCreditingInvoice(null); load() }}
+      onCancel={() => setCreditingInvoice(null)}
+    />
+  }
+
   return (
     <div>
       <div style={s.dirTabs}>
@@ -385,6 +395,9 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
                       {inv.doc_type === 'invoice' && inv.status !== 'paid' && <button onClick={() => payLink(inv)} style={s.actPaid}>💳 Pay link</button>}
                       {inv.doc_type === 'invoice' && <button onClick={() => creditNote(inv)} style={s.actMatch}>↩️ Credit note</button>}
+                      {inv.doc_type === 'invoice' && Array.isArray(inv.line_items) && inv.line_items.length > 1 && (
+                        <button onClick={() => setCreditingInvoice(inv)} style={s.actMatch}>✂️ Partial credit</button>
+                      )}
                       {inv.doc_type === 'invoice' && (
                         <button
                           onClick={() => matchSupplier(inv)}
@@ -659,6 +672,83 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
 
       <button onClick={save} disabled={saving || !customer.name} style={s.saveInvBtn}>
         {saving ? 'Saving…' : `Create ${docType}`}
+      </button>
+    </div>
+  )
+}
+
+// ── Partial credit note: pick which lines (and how much of each) to credit ───
+// Defaults to every line fully checked, so a plain "Create credit note" click here is
+// equivalent to the quick full-credit button — this only adds the ability to narrow it down.
+
+function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
+  const rawItems = Array.isArray(invoice.line_items) ? invoice.line_items
+    : (typeof invoice.line_items === 'string'
+        ? (() => { try { return JSON.parse(invoice.line_items) } catch { return [] } })()
+        : [])
+  const [rows, setRows] = useState(rawItems.map(it => ({ ...it, checked: true, creditQty: it.quantity })))
+  const [saving, setSaving] = useState(false)
+  const fmt = c => `R${((c || 0) / 100).toFixed(2)}`
+
+  function toggle(i) { setRows(rows.map((r, idx) => idx === i ? { ...r, checked: !r.checked } : r)) }
+  function setQty(i, val) { setRows(rows.map((r, idx) => idx === i ? { ...r, creditQty: val } : r)) }
+
+  const creditItems = rows.filter(r => r.checked && (parseFloat(r.creditQty) || 0) > 0).map(r => {
+    const qty = parseFloat(r.creditQty) || 0
+    const cents = r.unit_price_cents || 0
+    const disc = r.discount_pct || 0
+    return {
+      description: r.description, quantity: qty, unit: r.unit || '',
+      unit_price_cents: cents, discount_pct: disc,
+      total_cents: Math.round(cents * qty * (1 - disc / 100)),
+      section: r.section || undefined,
+    }
+  })
+  const vatRate = parseFloat(invoice.vat_rate) || 15
+  const subtotal = creditItems.reduce((sum, i) => sum + i.total_cents, 0)
+  const vat = Math.round(subtotal * vatRate / 100)
+  const total = subtotal + vat
+  const isFullCredit = rows.every(r => r.checked && parseFloat(r.creditQty) === parseFloat(r.quantity))
+
+  async function save() {
+    if (creditItems.length === 0) return
+    setSaving(true)
+    const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${invoice.id}/credit-note`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ line_items: creditItems }),
+    }).then(r => r.json()).catch(() => ({}))
+    setSaving(false)
+    if (d.credit_note) { alert(`Credit note ${d.credit_note.invoice_number} created.`); onDone() }
+    else alert(d.detail || 'Could not create credit note.')
+  }
+
+  return (
+    <div>
+      <div style={s.topBar}>
+        <button onClick={onCancel} style={s.backBtn}>← Back</button>
+        <h3 style={s.formTitle}>Credit note — {invoice.invoice_number}</h3>
+      </div>
+      <p style={{ fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', margin: '0 0 10px' }}>
+        Untick a line, or reduce its quantity, to credit only part of this invoice.
+        {isFullCredit ? ' Every line is currently full — this will be a full credit note.' : ''}
+      </p>
+      {rows.map((r, i) => (
+        <div key={i} style={{ ...s.itemRow, opacity: r.checked ? 1 : 0.45, alignItems: 'center' }}>
+          <input type="checkbox" checked={r.checked} onChange={() => toggle(i)} style={{ marginRight: 2 }} />
+          <span style={{ flex: 2, fontFamily: 'system-ui', fontSize: 13 }}>{r.description}</span>
+          <input type="number" step="0.001" disabled={!r.checked} value={r.creditQty}
+            onChange={e => setQty(i, e.target.value)} style={{ ...s.fInput, width: 60 }} />
+          <span style={{ width: 70, fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>of {r.quantity} {r.unit || ''}</span>
+          <span style={{ width: 80, textAlign: 'right', fontFamily: 'system-ui', fontSize: 13 }}>{fmt(r.unit_price_cents)}</span>
+        </div>
+      ))}
+      <div style={s.totals}>
+        <div style={s.totRow}><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
+        <div style={s.totRow}><span>VAT ({vatRate}%)</span><span>{fmt(vat)}</span></div>
+        <div style={{ ...s.totRow, ...s.totFinal }}><span>Credit total</span><span>{fmt(total)}</span></div>
+      </div>
+      <button onClick={save} disabled={saving || creditItems.length === 0} style={s.saveInvBtn}>
+        {saving ? 'Creating…' : `Create credit note (${fmt(total)})`}
       </button>
     </div>
   )
