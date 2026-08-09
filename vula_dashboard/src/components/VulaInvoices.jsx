@@ -433,7 +433,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
 
 function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
   const [customer, setCustomer] = useState({ name: '', phone: '', email: '', address: '' })
-  const [items, setItems] = useState([{ description: '', quantity: 1, unit: '', unit_price: '', discount: '' }])
+  const [items, setItems] = useState([{ description: '', quantity: 1, unit: '', unit_price: '', discount: '', section: '' }])
   const [dueDate, setDueDate] = useState('')
   const [validUntil, setValidUntil] = useState('')
   const [vatRate, setVatRate] = useState(15)
@@ -524,7 +524,7 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       return next
     }))
   }
-  function addItem() { setItems([...items, { description: '', quantity: 1, unit: '', unit_price: '', discount: '' }]) }
+  function addItem() { setItems([...items, { description: '', quantity: 1, unit: '', unit_price: '', discount: '', section: '' }]) }
   function removeItem(i) { setItems(items.filter((_, idx) => idx !== i)) }
 
   const lineItems = items.map(it => {
@@ -538,6 +538,7 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       unit_price_cents: cents,
       discount_pct: disc,
       total_cents: Math.round(cents * qty * (1 - disc / 100)),
+      section: (it.section || '').trim() || undefined,
     }
   })
   const subtotal = lineItems.reduce((sum, i) => sum + i.total_cents, 0)
@@ -603,6 +604,7 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       </div>
       {items.map((it, i) => (
         <div key={i} style={s.itemRow}>
+          <input list="section-list" placeholder="Section (optional)" title="Group this line under a BoQ trade section, e.g. Demolition, Structure, Finishes" value={it.section} onChange={e => updateItem(i, 'section', e.target.value)} style={{ ...s.fInput, width: 90 }} />
           <input list="prod-list" placeholder="Description / pick product or service" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} style={{ ...s.fInput, flex: 2 }} />
           <input type="number" step="0.001" placeholder="Qty" value={it.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} style={{ ...s.fInput, width: 54 }} />
           <input list="unit-list" placeholder="unit" value={it.unit} onChange={e => updateItem(i, 'unit', e.target.value)} style={{ ...s.fInput, width: 58 }} />
@@ -614,6 +616,10 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       <datalist id="prod-list">
         {catalogItems.map(c => <option key={c.id} value={c.name}>{`${c.kind === 'product' ? '📦' : '🛠'} R${(c.unit_price_cents / 100).toFixed(2)}${c.unit ? `/${c.unit}` : ''}`}</option>)}
         {products.map(p => <option key={p.id} value={p.name}>{`R${(p.price_cents / 100).toFixed(2)}${p.sold_by === 'kg' ? '/kg' : ''}`}</option>)}
+      </datalist>
+      <datalist id="section-list">
+        {[...new Set(items.map(it => it.section).filter(Boolean))].map(sec => <option key={sec} value={sec} />)}
+        {['Demolition', 'Structure', 'Finishes', 'Electrical', 'Plumbing', 'External Works'].map(sec => <option key={sec} value={sec} />)}
       </datalist>
       {items.some(it => it._tplDescription) && !project && (
         <p style={{ fontFamily: 'system-ui', fontSize: 11, color: '#a8780a', margin: '0 0 8px' }}>

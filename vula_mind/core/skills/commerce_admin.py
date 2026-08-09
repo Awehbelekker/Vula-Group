@@ -161,7 +161,11 @@ INVOICE_TOOLS = [
             "customer_phone": {"type": "string"},
             "line_items": {"type": "array", "items": {"type": "object", "properties": {
                 "description": {"type": "string"}, "quantity": {"type": "number"},
-                "unit": {"type": "string"}, "unit_price_rands": {"type": "number"}}}},
+                "unit": {"type": "string"}, "unit_price_rands": {"type": "number"},
+                "section": {"type": "string", "description": "Optional BoQ trade section "
+                            "to group this line under, e.g. 'Demolition', 'Structure' — "
+                            "only set this if the owner explicitly organised the invoice "
+                            "into sections; leave unset otherwise."}}}},
             "discount_pct": {"type": "number"}, "deposit_rands": {"type": "number"}},
             "required": ["customer_name", "line_items"]}}},
     {"type": "function", "function": {
@@ -808,6 +812,7 @@ class CommerceAdminSkill(BaseSkill):
             "quantity": float(it.get("quantity") or 1),
             "unit": (it.get("unit") or None),
             "unit_price_cents": int(round(float(it.get("unit_price_rands") or 0) * 100)),
+            "section": (it.get("section") or "").strip() or None,
         } for it in raw if isinstance(it, dict) and (it.get("description") or "").strip()]
         if not line_items:
             return {"error": "Need at least one line item with a description and unit_price_rands."}

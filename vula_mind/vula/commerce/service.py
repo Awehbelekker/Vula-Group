@@ -1097,6 +1097,10 @@ def _compute_totals(line_items: List[dict], vat_rate: float,
                 "discount_pct": line_disc or None,
                 "total_cents": line_total,
                 "product_id": str(item["product_id"]) if item.get("product_id") else None,
+                # Optional BoQ-style trade section (e.g. "Demolition", "Structure") — a
+                # construction invoice/quote can group lines with a subtotal per section.
+                # None for every existing caller, so this is purely additive.
+                "section": (item.get("section") or "").strip() or None,
             }
         )
     discount_cents = int(round(entered * (invoice_discount_pct / 100.0))) if invoice_discount_pct else 0

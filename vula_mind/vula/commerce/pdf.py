@@ -315,7 +315,11 @@ _DOC_HTML = """<!DOCTYPE html>
     </tr>
   </thead>
   <tbody>
-    {% for item in line_items %}
+    {% for section in sections %}
+    {% if section.name %}
+    <tr class="section-header"><td colspan="5"><strong>{{ section.name }}</strong></td></tr>
+    {% endif %}
+    {% for item in section.lines %}
     <tr>
       <td>{{ item.description }}{% if item.discount_pct %} <span style="color:#8A8680">(−{{ "%g" | format(item.discount_pct | float) }}%)</span>{% endif %}</td>
       <td>{{ "%g" | format(item.quantity | float) }}</td>
@@ -323,6 +327,10 @@ _DOC_HTML = """<!DOCTYPE html>
       <td>R{{ "%.2f" | format(item.unit_price_cents / 100) }}{% if item.unit %}/{{ item.unit }}{% endif %}</td>
       <td>R{{ "%.2f" | format(item.total_cents / 100) }}</td>
     </tr>
+    {% endfor %}
+    {% if section.name %}
+    <tr class="section-subtotal"><td colspan="4" style="text-align:right"><em>Section subtotal</em></td><td>R{{ "%.2f" | format(section.subtotal_cents / 100) }}</td></tr>
+    {% endif %}
     {% endfor %}
   </tbody>
 </table>
@@ -470,6 +478,29 @@ def _font_ctx(branding: dict) -> dict:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _group_sections(line_items: list) -> list:
+    """Group line items into named BoQ-style trade sections (e.g. "Demolition",
+    "Structure"), preserving first-seen order, each with its own subtotal. Items with no
+    `section` set land in one unnamed group — when that's the ONLY group, the template
+    renders exactly as before (flat table, no section header/subtotal rows), so this is
+    purely additive: zero visual change for every invoice that never sets `section`."""
+    # NOTE: the per-section key is "lines", NOT "items" — a dict has a real built-in
+    # `.items` attribute (the method), so `section.items` in Jinja's dot-notation resolves
+    # to that bound method, not a dict lookup, and silently breaks the {% for %} loop.
+    sections: list = []
+    by_name: dict = {}
+    for item in line_items:
+        name = (item.get("section") or "").strip() or None
+        if name not in by_name:
+            sec = {"name": name, "lines": [], "subtotal_cents": 0}
+            by_name[name] = sec
+            sections.append(sec)
+        sec = by_name[name]
+        sec["lines"].append(item)
+        sec["subtotal_cents"] += int(item.get("total_cents") or 0)
+    return sections
+
+
 def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> bytes:
     """Render an invoice / quote dict as PDF bytes.
 
@@ -567,6 +598,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "customer_address": bill_address,
         # Financials — always integer cents, never floats in storage
         "line_items": line_items,
+        "sections": _group_sections(line_items),
         "subtotal_cents": int(invoice.get("subtotal_cents") or 0),
         "discount_cents": int(invoice.get("discount_cents") or 0),
         "vat_rate": float(invoice.get("vat_rate") or 15.0),
