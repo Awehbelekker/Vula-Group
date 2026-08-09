@@ -319,6 +319,23 @@ def project_financials(tenant_id: str, project: str) -> dict:
         except Exception:
             pass
 
+    # Latest progress claim (if any) — cumulative work value, retention held, this payment.
+    latest_claim = None
+    try:
+        from vula.integrations.progress_claims import list_claims
+        claims = list_claims(tenant_id, project)
+        if claims:
+            last = claims[-1]
+            latest_claim = {
+                "claim_number": last["claim_number"], "status": last["status"],
+                "cumulative_value": round(int(last["cumulative_value_cents"]) / 100.0, 2),
+                "retention_held": round(int(last["retention_cents"]) / 100.0, 2),
+                "certified_to_date": round(int(last["certified_to_date_cents"]) / 100.0, 2),
+                "this_payment": round(int(last["this_payment_cents"]) / 100.0, 2),
+            }
+    except Exception as exc:
+        logger.debug("project claims skipped (run migration 125?): %s", exc)
+
     spent = round(paid_out + expenses + labour, 2)  # cash paid out + logged expenses + casual labour
     return {
         "project": project,
@@ -332,5 +349,6 @@ def project_financials(tenant_id: str, project: str) -> dict:
         "net": round(paid_in - spent, 2),
         "remaining": round(contract - spent, 2) if contract else None,
         "outstanding": round(max(invoiced - invoiced_paid, 0), 2),  # billed but not yet paid
+        "latest_claim": latest_claim,               # cumulative-to-date progress claim, if any
         "transactions": sorted(ledger, key=lambda r: r.get("created_at") or "", reverse=True)[:100],
     }

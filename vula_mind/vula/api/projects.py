@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -99,6 +99,66 @@ async def set_budget(tenant: str, body: BudgetIn) -> dict:
     except Exception as exc:
         return {"error": f"{exc} (run migration 027?)"}
     return {"project": body.project, "budget": body.budget}
+
+
+# ── Progress claims / interim payment certificates (structured, JBCC-style) ───
+
+class ClaimIn(BaseModel):
+    cumulative_value: float          # Rands — QS-assessed value of ALL work done to date
+    retention_pct: float = 5.0
+    claim_date: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.get("/{tenant}/p/{project}/claims")
+async def list_project_claims(tenant: str, project: str) -> dict:
+    from vula.integrations.progress_claims import list_claims
+    return {"claims": list_claims(tenant, project)}
+
+
+@router.post("/{tenant}/p/{project}/claims")
+async def create_project_claim(tenant: str, project: str, body: ClaimIn) -> dict:
+    from vula.integrations.progress_claims import create_claim
+    try:
+        claim = create_claim(tenant, project, int(round(body.cumulative_value * 100)),
+                             retention_pct=body.retention_pct, claim_date=body.claim_date,
+                             notes=body.notes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 125?)"}
+    return {"claim": claim}
+
+
+@router.post("/{tenant}/p/{project}/claims/{claim_id}/certify")
+async def certify_project_claim(tenant: str, project: str, claim_id: str) -> dict:
+    from vula.integrations.progress_claims import certify_claim
+    try:
+        claim = certify_claim(tenant, claim_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"claim": claim}
+
+
+class ClaimInvoiceIn(BaseModel):
+    customer_name: str
+    customer_phone: Optional[str] = None
+    customer_email: Optional[str] = None
+    customer_address: Optional[str] = None
+    vat_rate: float = 15.0
+
+
+@router.post("/{tenant}/p/{project}/claims/{claim_id}/invoice")
+async def invoice_project_claim(tenant: str, project: str, claim_id: str, body: ClaimInvoiceIn) -> dict:
+    from vula.integrations.progress_claims import convert_claim_to_invoice
+    try:
+        invoice = await convert_claim_to_invoice(tenant, claim_id, {
+            "name": body.customer_name, "phone": body.customer_phone,
+            "email": body.customer_email, "address": body.customer_address,
+        }, vat_rate=body.vat_rate)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"invoice": invoice}
 
 
 # ── Project Workspaces ("Claude Projects" for Vula) ───────────────────────────

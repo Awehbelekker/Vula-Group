@@ -42,12 +42,61 @@ export default function VulaFinances({ tenantId }) {
   useEffect(() => { load(); }, [load]);
 
   const [contractDraft, setContractDraft] = useState("");
+  const [claims, setClaims] = useState([]);
+  const [newClaim, setNewClaim] = useState({ value: "", retention: "5" });
+  const [claimBusy, setClaimBusy] = useState(false);
+  const [invoicing, setInvoicing] = useState(null); // { claimId, name, phone, email, address }
+
+  const loadClaims = async (project) => {
+    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims`).then(r => r.json()).catch(() => null);
+    setClaims(r?.claims || []);
+  };
 
   const openDetail = async (project) => {
     if (openProj === project) { setOpenProj(null); return; }
-    setOpenProj(project); setDetail(null); setContractDraft("");
+    setOpenProj(project); setDetail(null); setContractDraft(""); setClaims([]); setInvoicing(null);
     const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
     setDetail(r);
+    loadClaims(project);
+  };
+
+  const refreshProject = async (project) => {
+    const r = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/financials`).then(r => r.json()).catch(() => null);
+    setDetail(r);
+    loadClaims(project);
+  };
+
+  const addClaim = async (project) => {
+    const value = Number(newClaim.value);
+    if (!value) return;
+    setClaimBusy(true);
+    const d = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cumulative_value: value, retention_pct: Number(newClaim.retention) || 5 }),
+    }).then(r => r.json()).catch(() => ({}));
+    setClaimBusy(false);
+    if (d.claim) { setNewClaim({ value: "", retention: "5" }); refreshProject(project); }
+    else alert(d.detail || d.error || "Could not create claim.");
+  };
+
+  const certifyClaim = async (project, claimId) => {
+    await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims/${claimId}/certify`, { method: "POST" });
+    refreshProject(project);
+  };
+
+  const submitInvoice = async (project) => {
+    if (!invoicing?.name) return;
+    setClaimBusy(true);
+    const d = await fetch(`${VULA_API}/v1/projects/${tenantId}/p/${encodeURIComponent(project)}/claims/${invoicing.claimId}/invoice`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customer_name: invoicing.name, customer_phone: invoicing.phone || undefined,
+        customer_email: invoicing.email || undefined, customer_address: invoicing.address || undefined,
+      }),
+    }).then(r => r.json()).catch(() => ({}));
+    setClaimBusy(false);
+    if (d.invoice) { alert(`Invoice ${d.invoice.invoice_number || ""} created for this claim.`); setInvoicing(null); refreshProject(project); }
+    else alert(d.detail || "Could not create invoice.");
   };
 
   const saveContract = async (project) => {
@@ -131,6 +180,60 @@ export default function VulaFinances({ tenantId }) {
                   <button onClick={() => saveContract(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "#fff", fontSize: 12, cursor: "pointer" }}>Save</button>
                 </div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Unified from invoices, expenses and filed payments. Contract value persists (survives restarts) and drives budget-remaining; link invoices to a project on the invoice form.</div>
+
+                <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Progress claims (interim payment certificates)</div>
+                  {claims.length > 0 && (
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", marginBottom: 10 }}>
+                      <div style={{ padding: "6px 10px", display: "grid", gridTemplateColumns: "40px 1fr 1fr 1fr 1fr 1.4fr", gap: 6, fontSize: 10, color: C.muted, textTransform: "uppercase", background: C.alt }}>
+                        <span>#</span><span>Work to date</span><span>Retention</span><span>Certified</span><span>This payment</span><span></span>
+                      </div>
+                      {claims.map(c => (
+                        <div key={c.id} style={{ padding: "8px 10px", borderTop: `1px solid ${C.alt}`, display: "grid", gridTemplateColumns: "40px 1fr 1fr 1fr 1fr 1.4fr", gap: 6, alignItems: "center", fontSize: 12 }}>
+                          <span>{c.claim_number}</span>
+                          <span>{rand(c.cumulative_value_cents / 100)}</span>
+                          <span style={{ color: C.muted }}>{rand(c.retention_cents / 100)} ({c.retention_pct}%)</span>
+                          <span>{rand(c.certified_to_date_cents / 100)}</span>
+                          <span style={{ fontWeight: 600, color: C.green }}>{rand(c.this_payment_cents / 100)}</span>
+                          <span style={{ display: "flex", gap: 4, justifyContent: "flex-end", alignItems: "center" }}>
+                            <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>{c.status}</span>
+                            {c.status === "draft" && (
+                              <button onClick={() => certifyClaim(p.project, c.id)} style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: "#fff", fontSize: 11, cursor: "pointer" }}>Certify</button>
+                            )}
+                            {c.status === "certified" && !c.linked_invoice_id && (
+                              <button onClick={() => setInvoicing({ claimId: c.id, name: "", phone: "", email: "", address: "" })} style={{ padding: "3px 8px", border: "none", borderRadius: 5, background: C.green, color: "#fff", fontSize: 11, cursor: "pointer" }}>Invoice</button>
+                            )}
+                            {c.linked_invoice_id && <span style={{ fontSize: 10, color: C.green }}>✓ invoiced</span>}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {invoicing && (
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, marginBottom: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                      <span style={{ fontSize: 11, color: C.muted }}>Create an invoice for this claim's net payment:</span>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <input placeholder="Customer name" value={invoicing.name} onChange={e => setInvoicing({ ...invoicing, name: e.target.value })} style={{ flex: 1, minWidth: 120, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
+                        <input placeholder="Phone (optional)" value={invoicing.phone} onChange={e => setInvoicing({ ...invoicing, phone: e.target.value })} style={{ flex: 1, minWidth: 100, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
+                        <input placeholder="Email (optional)" value={invoicing.email} onChange={e => setInvoicing({ ...invoicing, email: e.target.value })} style={{ flex: 1, minWidth: 120, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button disabled={claimBusy || !invoicing.name} onClick={() => submitInvoice(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "#fff", fontSize: 12, cursor: "pointer" }}>{claimBusy ? "Creating…" : "Create invoice"}</button>
+                        <button onClick={() => setInvoicing(null)} style={{ padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, color: C.muted }}>New claim — total value of work done to date:</span>
+                    <input value={newClaim.value} onChange={e => setNewClaim({ ...newClaim, value: e.target.value })} placeholder="R total" style={{ width: 110, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
+                    <span style={{ fontSize: 12, color: C.muted }}>Retention %</span>
+                    <input value={newClaim.retention} onChange={e => setNewClaim({ ...newClaim, retention: e.target.value })} style={{ width: 50, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
+                    <button disabled={claimBusy || !newClaim.value} onClick={() => addClaim(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "#fff", fontSize: 12, cursor: "pointer" }}>{claimBusy ? "Saving…" : "Add claim"}</button>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Enter the CUMULATIVE value of all work completed to date, not just this period — retention and the actual payment due are calculated automatically from the previous claim.</div>
+                </div>
               </div>
             )}
           </div>
