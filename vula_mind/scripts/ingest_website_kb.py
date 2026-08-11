@@ -51,6 +51,11 @@ async def ingest_website(tenant_id: str, urls: list[str]) -> list[dict]:
 
 
 async def _main() -> None:
+    # Windows consoles default to cp1252 — force UTF-8 so the checkmarks below print cleanly.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(1)
