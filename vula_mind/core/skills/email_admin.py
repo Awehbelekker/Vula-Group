@@ -25,6 +25,12 @@ from vula.email_imap.credentials import get_email_creds
 logger = logging.getLogger(__name__)
 MAX_TOOL_ITERATIONS = 3
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _looks_like_email(addr: str) -> bool:
+    return bool(_EMAIL_RE.match((addr or "").strip()))
+
 TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
         "name": "email_search", "description": "Search the mailbox inbox (by text, sender, subject).",
@@ -70,11 +76,14 @@ class EmailAdminSkill(BaseSkill):
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
     def _system(self, send_mode: str) -> str:
-        mode = ("When you draft, the message is SENT directly." if send_mode == "send"
+        mode = ("When you draft, the message is SENT directly — IMPORTANT: confirm the exact "
+                "recipient, subject, and a summary of the body with the user and wait for a "
+                "clear 'yes' before calling email_draft, since this cannot be undone."
+                if send_mode == "send"
                 else "When you draft, it is SAVED to Drafts for the user to review and send — never claim "
                      "it was sent.")
         return ("You are Vula, managing the user's connected email mailbox. You CAN search, read "
-                "and draft email — you have full tool access to this mailbox.\n\n" + behaviour_preamble() +
+                "and draft email — you have full tool access to this mailbox.\n\n" + behaviour_preamble(agentic=True) +
                 "\n- To read or summarise an email, ALWAYS call email_search first to get the message "
                 "uid, then email_read with that exact numeric uid. Never claim you can't access email, "
                 "and never read with a non-numeric id.\n"
@@ -160,6 +169,16 @@ class EmailAdminSkill(BaseSkill):
             if name == "email_draft":
                 to, subj, body = args.get("to", ""), args.get("subject", ""), args.get("body", "")
                 if creds.get("send_mode") == "send":
+                    # 2026-08-08: email_draft can perform an irreversible real send when a
+                    # tenant's send_mode="send" — confirmed no validation existed on `to` at all
+                    # before this, so a malformed/misread recipient (e.g. the model picking a
+                    # name out of context instead of a real address) would go straight to
+                    # service.send() with no check. Draft-mode (the default) is unaffected —
+                    # a bad address there just means an unsendable draft, not a real send.
+                    if not _looks_like_email(to):
+                        return {"status": "need_info", "missing": ["a valid recipient email address"],
+                                "message": f"'{to or '(nothing)'}' doesn't look like a real email "
+                                           "address — who should this actually go to?"}
                     return await service.send(creds, to, subj, body)
                 return await service.save_draft(creds, to, subj, body)
             if name == "list_followups":

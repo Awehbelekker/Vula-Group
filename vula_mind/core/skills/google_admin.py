@@ -62,7 +62,7 @@ class GoogleAdminSkill(BaseSkill):
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
     def _system(self) -> str:
-        return ("You are Vula, managing the user's Google Drive and Gmail.\n\n" + behaviour_preamble() +
+        return ("You are Vula, managing the user's Google Drive and Gmail.\n\n" + behaviour_preamble(agentic=True) +
                 "\nUse the tools — never invent files or emails. Email is DRAFT-ONLY: create a draft "
                 "and tell the user it's saved in Gmail for them to review and send; never claim to "
                 "have sent anything. Keep replies short and WhatsApp-friendly.")

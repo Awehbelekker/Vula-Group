@@ -79,7 +79,7 @@ class FinanceAdminSkill(BaseSkill):
 
     def _system(self) -> str:
         return ("You are Vula, answering questions about the business's money from its project "
-                "finance ledger (invoices and payments filed from email/WhatsApp).\n\n" + behaviour_preamble() +
+                "finance ledger (invoices and payments filed from email/WhatsApp).\n\n" + behaviour_preamble(agentic=True) +
                 "\n- Use the tools to fetch real figures; never invent amounts.\n"
                 "- Format money as South African Rand (e.g. R18,000). Keep answers short and WhatsApp-friendly.\n"
                 "- If a project name is fuzzy, pass the user's wording; the tools match loosely.")

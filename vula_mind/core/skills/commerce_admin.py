@@ -30,34 +30,20 @@ from config import settings
 from core.llm_router import resolve_generation_route, escalate_to_cloud
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
-from core.skills.base import BaseSkill, SkillInput, SkillOutput
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 from vula.commerce import service
 
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 3
 
-# Shared guardrails appended to every commerce_admin system prompt (2026-08-08) — added after a
-# real-transcript review found: a how-to question ("how do I add invoices from Xero?") answered
-# with an unrelated status dump because nothing told the model to just answer procedural questions
-# in plain text; the literal tool name "outstanding_invoices" leaked into a WhatsApp reply; and a
-# fabricated "exported to Xero" success claim with no Xero tool behind it at all. draft_admin.py's
-# prompt already has an analogous honesty guardrail ("never claim you emailed it unless a send
-# actually happened") — this generalizes that pattern here.
-_GUARDRAILS = (
-    "\n- If the message is a how-to/procedural question (e.g. 'how do I...', 'where do I...') "
-    "rather than a request for data or an action, answer directly in plain text — don't call a "
-    "tool just to have something to say.\n"
-    "- If the message doesn't clearly map to any tool or data request, ask a short clarifying "
-    "question instead of guessing the closest-sounding tool.\n"
-    "- Never mention internal tool/function names (e.g. 'the outstanding_invoices function') in "
-    "a reply — describe what you did or found in plain business language.\n"
-    "- Never say an action (exported, uploaded, sent, synced) succeeded unless a tool call "
-    "actually performed it. If no tool exists for what's being asked, say so plainly instead of "
-    "describing it as done.\n"
-    "- If a tool returns status:'need_info', do NOT retry blindly — ask the user for exactly the "
-    "items listed in 'missing', in one short message, then call it again once they've answered."
-)
+# 2026-08-08: the four guardrails that used to live here as a local `_GUARDRAILS` constant
+# (added after a real-transcript review found an off-topic non-answer, a leaked internal tool
+# name, and a hallucinated "exported to Xero" claim) now live centrally as `AGENTIC_RULES` in
+# core/skills/base.py, alongside the platform's other shared behaviour policy — every other
+# tool-calling skill was found to have the exact same gaps, and commerce_admin itself was found
+# to be missing the FOUNDATIONAL shared policy (ethics/honesty/reasoning/untrusted-content
+# rules) entirely, not just these four. See `behaviour_preamble(agentic=True)` below.
 
 _PAID_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered"}
 _VALID_ORDER_STATUS = {"confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
@@ -436,8 +422,8 @@ class CommerceAdminSkill(BaseSkill):
                 "IMPORTANT — confirm before anything that can't be undone or reaches someone else: "
                 "sending a proposal document, drafting an email (drafts are safe/reversible so this is "
                 "lower-stakes, but still confirm the recipient), or booking a meeting. Show the details "
-                "and wait for a clear 'yes' first."
-                + _GUARDRAILS + persona_block
+                "and wait for a clear 'yes' first.\n\n"
+                + behaviour_preamble(agentic=True) + persona_block
             )
         return (
             "You are the AI business assistant for the OWNER of a South African business "
@@ -452,8 +438,8 @@ class CommerceAdminSkill(BaseSkill):
             "IMPORTANT — confirm before acting on anything that spends money, sends messages to "
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding. Show the details and wait for a clear 'yes' first. For send_broadcast, "
-            "only pass confirm=true after the owner has explicitly confirmed."
-            + _GUARDRAILS + persona_block
+            "only pass confirm=true after the owner has explicitly confirmed.\n\n"
+            + behaviour_preamble(agentic=True) + persona_block
         )
 
     # ── Agent loop (mirrors commerce_assistant) ──────────────────────────────

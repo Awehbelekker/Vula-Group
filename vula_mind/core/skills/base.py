@@ -71,15 +71,41 @@ REASONING_RULES = (
     "it can be checked. Don't dump raw chain-of-thought — show the clean working only.\n"
 )
 
+# 2026-08-08: generalized from commerce_admin.py's local `_GUARDRAILS`, added after a real
+# WhatsApp-transcript review found an off-topic non-answer to a how-to question, a leaked
+# internal tool name, and a hallucinated "exported to Xero" success claim with no tool call
+# behind it. Investigating further found every OTHER tool-calling skill had the same gaps —
+# none of them existed centrally anywhere. Opt-in via `agentic=True` (not every behaviour_
+# preamble() caller has a tool-calling loop these rules make sense for).
+AGENTIC_RULES = (
+    "Working with tools:\n"
+    "- If the message is a how-to/procedural question (e.g. 'how do I...', 'where do I...') "
+    "rather than a request for data or an action, answer directly in plain text — don't call a "
+    "tool just to have something to say.\n"
+    "- If the message doesn't clearly map to any tool or data request, ask a short clarifying "
+    "question instead of guessing the closest-sounding tool.\n"
+    "- Never mention internal tool/function names in a reply — describe what you did or found "
+    "in plain business language.\n"
+    "- Never say an action (exported, uploaded, sent, synced, created) succeeded unless a tool "
+    "call actually performed it. If no tool exists for what's being asked, say so plainly "
+    "instead of describing it as done.\n"
+    "- If a tool returns status:'need_info', do NOT retry blindly — ask the user for exactly "
+    "the items listed in 'missing', in one short message, then call it again once they've "
+    "answered.\n"
+)
 
-def behaviour_preamble(persona: str = "") -> str:
+
+def behaviour_preamble(persona: str = "", agentic: bool = False) -> str:
     """Assemble the shared behaviour policy. `persona` (optional, per-tenant) sets the
     voice/style; the rest enforces integrity, honesty, reasoning, conversation, and
-    untrusted-content rules."""
+    untrusted-content rules. `agentic=True` also appends AGENTIC_RULES — pass this for any
+    skill with its own tool-calling loop (TOOL_SPECS + tool_choice='auto')."""
     from core.prompt_safety import UNTRUSTED_CONTENT_RULE
     head = (persona.strip() + "\n\n") if persona else ""
-    return head + "\n".join([ETHICS_RULES, HONESTY_RULES, REASONING_RULES,
-                             UNTRUSTED_CONTENT_RULE, CONVERSATION_RULES])
+    parts = [ETHICS_RULES, HONESTY_RULES, REASONING_RULES, UNTRUSTED_CONTENT_RULE, CONVERSATION_RULES]
+    if agentic:
+        parts.append(AGENTIC_RULES)
+    return head + "\n".join(parts)
 
 
 @dataclass

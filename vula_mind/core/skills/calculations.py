@@ -134,7 +134,7 @@ class CalculationsSkill(BaseSkill):
     def _system_prompt(self) -> str:
         return (
             "You are Vula, doing South African construction/QS calculations.\n\n"
-            + behaviour_preamble() +
+            + behaviour_preamble(agentic=True) +
             "\nCalculation rules:\n"
             "- Determine the governing rule or ratio ONLY from the user's stated values or "
             "the cited standard in the provided context. If the rule/ratio you need is not "

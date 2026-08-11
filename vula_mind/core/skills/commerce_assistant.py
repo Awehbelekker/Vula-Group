@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import settings
 from core.llm_router import resolve_generation_route
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 from vula.commerce import service
 
 logger = logging.getLogger(__name__)
@@ -613,9 +613,13 @@ class CommerceAssistantSkill(BaseSkill):
     # ── Prompt + grounding ───────────────────────────────────────────────────
     def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None,
                        booking_focused: bool = False) -> str:
-        from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
+        # 2026-08-08: this skill never called the platform's shared behaviour_preamble() at
+        # all (confirmed while auditing every tool-calling skill for the same gap fixed in
+        # commerce_admin.py earlier the same day) — it hand-rolled just an UNTRUSTED_CONTENT_RULE
+        # inclusion. Now gets the full shared policy (ethics/honesty/reasoning/conversation/
+        # untrusted-content + the agentic tool-calling rules) like every other skill.
+        from core.prompt_safety import fence
         kb_block = fence("BUSINESS_KNOWLEDGE", kb_context)
-        untrusted_block = ("\n\n" + UNTRUSTED_CONTENT_RULE) if kb_context else ""
         lang_block = ""
         try:
             from core.lang import language_name
@@ -663,7 +667,7 @@ class CommerceAssistantSkill(BaseSkill):
                 "- Show money in ZAR (e.g. R185.00). Keep replies short and WhatsApp-friendly."
                 + lang_block
                 + persona_block
-                + untrusted_block
+                + "\n\n" + behaviour_preamble(agentic=True)
                 + kb_block
             )
 
@@ -765,7 +769,7 @@ class CommerceAssistantSkill(BaseSkill):
             + lang_block
             + booking_block
             + persona_block
-            + untrusted_block
+            + "\n\n" + behaviour_preamble(agentic=True)
             + kb_block
         )
 

@@ -111,7 +111,7 @@ class ClickUpAdminSkill(BaseSkill):
     def _system_prompt(self) -> str:
         return (
             "You are Vula's task assistant, managing the user's ClickUp over WhatsApp. "
-            + behaviour_preamble() +
+            + behaviour_preamble(agentic=True) +
             "\nUse the tools to create, list, and update tasks and reminders — never invent "
             "task data. For due dates, pass the user's own words verbatim ('Friday', 'tomorrow', "
             "'next Friday', 'in 3 days') — do NOT convert or compute the date yourself, the tool "
