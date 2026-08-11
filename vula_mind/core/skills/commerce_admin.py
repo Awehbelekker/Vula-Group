@@ -134,6 +134,24 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "payee": {"type": "string", "description": "The person's name or phone number."}},
             "required": ["payee"]},
     }},
+    {"type": "function", "function": {
+        "name": "learn_my_voice",
+        "description": "Analyze the owner's own real WhatsApp replies, meeting notes, and sent "
+                       "emails and suggest how Vula should sound to match their tone. Answers "
+                       "'learn my tone', 'sound more like me'. Show the suggestion to the owner "
+                       "and ask if they want it before calling apply_voice_persona — never apply "
+                       "it without them explicitly saying yes.",
+        "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": "apply_voice_persona",
+        "description": "Adopt a suggested voice/tone as how Vula sounds going forward. Only call "
+                       "after the owner has explicitly confirmed they want to use it.",
+        "parameters": {"type": "object", "properties": {
+            "persona_prompt": {"type": "string", "description": "The exact suggested tone text "
+                               "to adopt, as returned by learn_my_voice."}},
+            "required": ["persona_prompt"]},
+    }},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -437,8 +455,10 @@ class CommerceAdminSkill(BaseSkill):
             "changed after any update.\n"
             "IMPORTANT — confirm before acting on anything that spends money, sends messages to "
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
-            "cancelling/refunding. Show the details and wait for a clear 'yes' first. For send_broadcast, "
-            "only pass confirm=true after the owner has explicitly confirmed.\n\n"
+            "cancelling/refunding, or adopting a new voice/tone. Show the details and wait for a "
+            "clear 'yes' first. For send_broadcast, only pass confirm=true after the owner has "
+            "explicitly confirmed. For apply_voice_persona, only call it after showing the "
+            "learn_my_voice suggestion and getting a clear yes.\n\n"
             + behaviour_preamble(agentic=True) + persona_block
         )
 
@@ -591,6 +611,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
+            if name == "learn_my_voice":     return await self._learn_my_voice(tid)
+            if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""))
             if name == "create_product":     return await self._create_product(tid, args)
@@ -774,6 +796,37 @@ class CommerceAdminSkill(BaseSkill):
                   "amount": self._rands(r.get("amount_cents")), "project": r.get("project")}
                  for r in rows]
         return {"payee": payee, "owed": self._rands(total), "item_count": len(items), "items": items}
+
+    async def _learn_my_voice(self, tid: str) -> Dict[str, Any]:
+        """WhatsApp entry point for vula/commerce/voice_profile.py's tone analysis (migration
+        119/120) — previously only reachable via a dashboard endpoint (vula/api/commerce.py's
+        admin_analyze_persona) that nobody had triggered for any real tenant. Returns the
+        LLM-described suggestion (or the existing "not enough data yet" message) as-is."""
+        from vula.commerce import voice_profile
+        result = await voice_profile.analyze_voice(tid)
+        if "error" in result:
+            return result
+        return {"suggested_persona": result["suggested"], "sample_count": result["sample_count"],
+                "note": "Show this to the owner and ask if they'd like Vula to sound like this — "
+                       "only call apply_voice_persona if they say yes."}
+
+    async def _apply_voice_persona(self, tid: str, persona_prompt: str) -> Dict[str, Any]:
+        """Same accept semantics as vula/api/commerce.py's admin_set_persona: set persona_prompt,
+        clear the pending suggestion either way so it doesn't linger stale."""
+        persona_prompt = (persona_prompt or "").strip()
+        if not persona_prompt:
+            return {"error": "No persona text given — call learn_my_voice first."}
+        service._client().table("vula_tenant_config").update({
+            "persona_prompt": persona_prompt,
+            "persona_prompt_suggested": None,
+            "persona_prompt_suggested_at": None,
+        }).eq("tenant_id", tid).execute()
+        try:
+            from vula.api import tenants as _tenants
+            _tenants.invalidate(tid)
+        except Exception:
+            pass
+        return {"applied": True, "persona_prompt": persona_prompt}
 
     async def _create_invoice(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         raw = args.get("line_items") or []

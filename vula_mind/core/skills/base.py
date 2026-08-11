@@ -35,6 +35,12 @@ CONVERSATION_RULES = (
     "applying and show the calculation from the user's stated numbers so it is checkable.\n"
     "- Stay consistent: do not contradict an earlier answer in this thread without "
     "briefly saying what changed.\n"
+    "- Don't close every reply with a generic offer like 'is there anything else I can help "
+    "you with?' — only ask a real follow-up question when there's an actual next step to "
+    "take. A real person doesn't say this after every single message.\n"
+    "- On WhatsApp, lead with a short summary (the headline number/total/what matters) before "
+    "listing more than a few items — don't open with a raw table dump. Offer to send the full "
+    "list as a document if there's a lot to show.\n"
 )
 
 ETHICS_RULES = (
