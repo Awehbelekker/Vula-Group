@@ -93,6 +93,7 @@ from vula.api.users import router as users_router
 from vula.api.qs import router as qs_router
 from vula.api.google import router as google_router
 from vula.api.microsoft import router as microsoft_router
+from vula.api.dynamics365 import router as dynamics365_router
 from vula.api.email_connect import router as email_connect_router
 from vula.api.commerce import router as commerce_router
 from vula.api.bookings import router as bookings_router
@@ -930,6 +931,7 @@ app.include_router(users_router, prefix="/v1/users")
 app.include_router(qs_router, prefix="/v1/qs")
 app.include_router(google_router, prefix="/v1/google")
 app.include_router(microsoft_router, prefix="/v1/microsoft")
+app.include_router(dynamics365_router, prefix="/v1/dynamics365")
 app.include_router(email_connect_router, prefix="/v1/email")
 app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(bookings_router, prefix="/v1/bookings")

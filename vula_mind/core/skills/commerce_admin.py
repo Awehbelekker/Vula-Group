@@ -336,6 +336,15 @@ CRM_TOOLS = [
         "name": "customer_lookup",
         "description": "Look up a customer by phone or name: lifetime value, orders, last seen, preferred language.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "dynamics_lookup",
+        "description": "Search the connected Dynamics 365 CRM for an account (company), contact (person), "
+                       "or opportunity by name. Only works once Dynamics 365 is connected for this account.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Name to search for."},
+            "kind": {"type": "string", "enum": ["account", "contact", "opportunity"],
+                     "description": "What to search — company, person, or open opportunity."}},
+            "required": ["query", "kind"]}}},
 ]
 BROADCAST_TOOLS = [
     {"type": "function", "function": {
@@ -625,6 +634,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "create_subscription": return await self._create_subscription(tid, args)
             if name == "list_subscriptions": return await self._list_subscriptions(tid, args.get("status"))
             if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""))
+            if name == "dynamics_lookup":    return await self._dynamics_lookup(tid, args.get("query", ""), args.get("kind", "contact"))
             if name == "send_broadcast":     return await self._send_broadcast(tid, args)
             if name == "draft_letter":
                 from core.skills.draft_admin import draft_letter
@@ -1026,6 +1036,27 @@ class CommerceAdminSkill(BaseSkill):
         return {"name": match.get("name"), "phone": match.get("phone"),
                 "orders": match.get("orders", 0), "lifetime_value": self._rands(match.get("total_spent_cents")),
                 "last_seen": match.get("last_order_at") or match.get("last_seen_at")}
+
+    async def _dynamics_lookup(self, tid: str, query: str, kind: str) -> Dict[str, Any]:
+        q = (query or "").strip()
+        if not q:
+            return {"error": "Give a name to search for."}
+        try:
+            from vula.dynamics365 import client as d365
+            from vula.dynamics365.client import Dynamics365NotConnected
+            if kind == "account":
+                results = await d365.search_accounts(tid, q)
+            elif kind == "opportunity":
+                results = await d365.list_opportunities(tid, q)
+            else:
+                results = await d365.search_contacts(tid, q)
+        except Dynamics365NotConnected:
+            return {"error": "Dynamics 365 isn't connected for this account yet — connect it from the dashboard first."}
+        except Exception as exc:
+            return {"error": f"Dynamics 365 lookup failed: {exc}"}
+        if not results:
+            return {"message": f"No {kind} found for '{query}'."}
+        return {"kind": kind, "results": results}
 
     async def _create_contact(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         from uuid import uuid4

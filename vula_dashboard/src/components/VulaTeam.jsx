@@ -22,7 +22,7 @@ const EVENTS = [
   ["help_request", "Help requests (agent escalations)"],
   ["procurement_done", "Procurement done"],
 ];
-const ROLES = ["owner", "manager", "bookkeeper", "staff"];
+const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
 
 // Human-readable label per merchant_audit action (vula/api/merchant_audit.py).
 const AUDIT_LABELS = {
