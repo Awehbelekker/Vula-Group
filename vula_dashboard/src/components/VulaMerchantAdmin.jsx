@@ -135,7 +135,17 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
   const inner = (
     <>
         {/* Content */}
-        <div style={styles.contentBare}>
+        {/* Keyed by tenantId (2026-08-12 urgent fix): every tab component below fetches its own
+            tenant-scoped data into local state (pages, settings, brand, the open page-editor
+            document, etc.) via useEffect([tenantId]) — but without a key here, switching tenants
+            (e.g. master's "Open as tenant" takeover) re-renders the SAME component instance with
+            a new tenantId prop instead of remounting it, so any state that isn't itself reset by
+            an effect (most visibly VulaPages' `editing` — a page open in the Puck editor) kept
+            showing the PREVIOUS tenant's data until something else forced a remount. Keying this
+            wrapper by tenantId forces a full remount of whichever tab is active on every tenant
+            switch, so no component can carry stale state across tenants — not a perf concern,
+            this only remounts the one currently-visible tab, not the whole dashboard shell. */}
+        <div key={tenantId} style={styles.contentBare}>
           {tab === 'overview'  && <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />}
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}
           {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
