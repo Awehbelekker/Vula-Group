@@ -1077,10 +1077,20 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
             msg += f" — marked to reimburse {name or 'you'}. 👛"
         else:
             msg += "."
+        # 2026-08-12 fix: these used to be if/elif — mutually exclusive, so whenever a project
+        # allocation was also needed (the common case for a project-running tenant), the
+        # payment-method question got silently dropped entirely, even with paid_with genuinely
+        # unknown and registered company cards on file. The reply handler
+        # (_maybe_allocate_pending_expense) already independently processes both answer types
+        # in one incoming message, so asking both here is safe — a reply with just one piece of
+        # info (e.g. "HPC") still resolves correctly, leaving the other question open.
+        asks = []
         if not claim.get("project") and claim.get("needs_project"):
-            msg += "\n📍 Which project/site is this for? Reply with the site name, or 'none'."
-        elif paid_with is None and expenses.list_cards(tenant_id):
-            msg += "\n💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'."
+            asks.append("📍 Which project/site is this for? Reply with the site name, or 'none'.")
+        if paid_with is None and expenses.list_cards(tenant_id):
+            asks.append("💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'.")
+        if asks:
+            msg += "\n" + "\n".join(asks)
         return msg
     except Exception as exc:
         logger.warning("expense claim from receipt failed: %s", exc)
