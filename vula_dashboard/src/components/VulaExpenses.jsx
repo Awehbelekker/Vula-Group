@@ -22,6 +22,7 @@ const STATUS = {
 export default function VulaExpenses({ tenantId }) {
   const [rows, setRows] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [rep, setRep] = useState(null);
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(false);
@@ -42,6 +43,7 @@ export default function VulaExpenses({ tenantId }) {
     ]);
     setRows(d.expenses || []);
     setProjects(d.projects || []);
+    setCategories(d.categories || []);
     setRep(r);
     setCards(c.cards || []);
     setBusy(false);
@@ -135,13 +137,13 @@ export default function VulaExpenses({ tenantId }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: C.muted, background: C.alt }}>
-              {["Date", "What", "Who paid", "Amount", "VAT", "Category", "Project", "Status", ""].map(h =>
+              {["Date", "What", "Who paid", "Amount", "VAT", "Category", "Project", "Notes", "Status", ""].map(h =>
                 <th key={h} style={th}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
-            {busy && <tr><td colSpan={9} style={{ ...td, color: C.muted }}>Loading…</td></tr>}
-            {!busy && !rows.length && <tr><td colSpan={9} style={{ ...td, color: C.muted }}>No expenses yet. Snap a receipt on WhatsApp or add one.</td></tr>}
+            {busy && <tr><td colSpan={10} style={{ ...td, color: C.muted }}>Loading…</td></tr>}
+            {!busy && !rows.length && <tr><td colSpan={10} style={{ ...td, color: C.muted }}>No expenses yet. Snap a receipt on WhatsApp or add one.</td></tr>}
             {rows.map(e => {
               const st = STATUS[e.status] || { label: e.status, color: C.muted };
               return (
@@ -158,13 +160,28 @@ export default function VulaExpenses({ tenantId }) {
                   </td>
                   <td style={{ ...td, fontWeight: 600 }}>{R(e.amount_cents)}</td>
                   <td style={{ ...td, color: C.muted }}>{e.vat_cents ? R(e.vat_cents) : "—"}</td>
-                  <td style={td}>{e.category || "—"}</td>
                   <td style={td}>
+                    <select value={e.account_code || ""} onChange={ev => assign(e.id, { account_code: ev.target.value })}
+                      style={{ ...miniInput, maxWidth: 130 }}>
+                      <option value="">{e.category || "—"}</option>
+                      {categories.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
+                    </select>
+                  </td>
+                  <td style={td}>
+                    {/* Distinguish still-pending (NULL, amber warning) from a real, saved "no
+                        project" answer (empty string, neutral "No project" label) — both used
+                        to look identical here, and "no project" never actually stuck (see
+                        expenses.assign()'s 2026-08-12 fix). */}
                     <select value={e.project || ""} onChange={ev => assign(e.id, { project: ev.target.value })}
-                      style={{ ...miniInput, maxWidth: 130, borderColor: e.project ? C.border : C.amber }}>
-                      <option value="">{e.project ? "—" : "⚠ set…"}</option>
+                      style={{ ...miniInput, maxWidth: 130, borderColor: (e.project == null) ? C.amber : C.border }}>
+                      <option value="">{e.project == null ? "⚠ set…" : "No project"}</option>
                       {projects.map(p => <option key={p} value={p}>{p}</option>)}
                     </select>
+                  </td>
+                  <td style={td}>
+                    <input defaultValue={e.notes || ""} placeholder="note for the accountant…"
+                      onBlur={ev => { if (ev.target.value !== (e.notes || "")) assign(e.id, { notes: ev.target.value }); }}
+                      style={{ ...miniInput, width: 130 }} />
                   </td>
                   <td style={{ ...td, color: st.color, fontWeight: 600 }}>{st.label}</td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>

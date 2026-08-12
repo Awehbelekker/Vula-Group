@@ -294,14 +294,23 @@ def set_status(tenant_id: str, expense_id: str, status: str) -> dict:
 
 
 def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,
-           account_code: Optional[str] = None, category: Optional[str] = None) -> dict:
-    """Owner corrects/allocates a claim → apply + LEARN the account rule for next time."""
+           account_code: Optional[str] = None, category: Optional[str] = None,
+           notes: Optional[str] = None) -> dict:
+    """Owner corrects/allocates a claim → apply + LEARN the account/project rule for next time."""
     db = _client()
     row = (db.table("commerce_expenses").select("*").eq("tenant_id", tenant_id)
            .eq("id", expense_id).limit(1).execute().data or [None])[0]
     patch: Dict[str, Any] = {"updated_at": _now()}
     if project is not None:
-        patch["project"] = project or None
+        # 2026-08-12 fix: this used to be `project or None`, silently converting an explicit ""
+        # (a real, deliberate "this has no project" answer) back into NULL (never decided) —
+        # confirmed live: digg-demo had 29 expenses stuck at project IS NULL and zero at
+        # project='', meaning "no project" had never once actually stuck — every dashboard/
+        # WhatsApp "none" answer was silently undone. Keep the two states distinct: NULL = still
+        # pending (keeps getting asked about), '' = resolved, no project.
+        patch["project"] = project
+    if notes is not None:
+        patch["notes"] = notes
     if account_code:
         patch["account_code"] = account_code
         if category is None and row:
@@ -322,6 +331,17 @@ def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,
                 {"description": f"{row.get('supplier') or ''} {row.get('description') or ''}",
                  "reference": row.get("supplier") or ""},
                 account_code)
+        except Exception:
+            pass
+    # Learn the project allocation too — same learned-rules mechanism the document-filing path
+    # already uses (vula_filing_rules via doc_filing.learn_filing_rule/lookup_learned_project,
+    # already fixed 2026-08-08 for cross-project-payee ambiguity). A real (non-empty) project
+    # choice teaches a supplier→project signal for next time; an explicit "no project" (empty
+    # string) isn't a reusable signal, so it isn't learned.
+    if project and row and row.get("supplier"):
+        try:
+            from vula.integrations.doc_filing import learn_filing_rule
+            learn_filing_rule(tenant_id, {"supplier": row["supplier"]}, project)
         except Exception:
             pass
     return (res.data or [{}])[0]

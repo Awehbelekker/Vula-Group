@@ -1595,16 +1595,22 @@ class ExpenseAssignIn(BaseModel):
     project: Optional[str] = None
     account_code: Optional[str] = None
     category: Optional[str] = None
+    notes: Optional[str] = None
 
 
 @router.get("/{tenant_id}/admin/expenses")
 async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
                               reimbursable: Optional[bool] = None, project: Optional[str] = None,
                               since: Optional[str] = None, until: Optional[str] = None):
-    from vula.commerce import expenses
+    from vula.commerce import expenses, accounting
+    # Real chart-of-accounts categories for the dashboard's category dropdown — deliberately
+    # curated/finite (not free text), unlike `project` which is inherently open-ended. Expense
+    # accounts only; an expense is never income.
+    accounts = [a for a in accounting.ensure_chart(tenant_id) if a.get("type") == "expense"]
     return {"expenses": expenses.list_claims(tenant_id, status=status, reimbursable=reimbursable,
                                              project=project, since=since, until=until),
-            "projects": expenses.known_projects(tenant_id)}
+            "projects": expenses.known_projects(tenant_id),
+            "categories": [{"code": a["code"], "name": a["name"]} for a in accounts]}
 
 
 @router.post("/{tenant_id}/admin/expenses")

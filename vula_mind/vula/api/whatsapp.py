@@ -1039,7 +1039,21 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         paid_with = expenses.resolve_paid_with(
             tenant_id, card_last4=scan_data.get("card_last4"),
             payment_method=scan_data.get("payment_method"))
-        project = expenses.match_project(tenant_id, scan_data.get("notes") or "")
+        # Learned supplier→project rule first (from a previous manual allocation — same
+        # learned-rules mechanism the document-filing path uses, including its 2026-08-08
+        # cross-project-payee ambiguity fix), then fall back to loose text matching on the
+        # receipt's own notes.
+        project = None
+        if supplier:
+            try:
+                from vula.integrations.doc_filing import lookup_learned_project
+                learned = lookup_learned_project(tenant_id, {"supplier": supplier})
+                if learned and not learned.get("ambiguous"):
+                    project = learned.get("project")
+            except Exception:
+                pass
+        if not project:
+            project = expenses.match_project(tenant_id, scan_data.get("notes") or "")
         # Read-only supplier lookup — a receipt is a reimbursement event, not a bill, so it
         # never auto-creates a new supplier; it only links supplier_id when this genuinely
         # matches a supplier Vula already knows (same tiered match the Smart Scanner uses).
