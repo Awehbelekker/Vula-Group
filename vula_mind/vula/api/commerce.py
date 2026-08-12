@@ -67,12 +67,14 @@ class PageIn(BaseModel):
 
 @router.get("/{tenant_id}/pages")
 async def list_pages(tenant_id: str):
-    """Published pages (public) — slugs + titles for nav, not full bodies."""
+    """Published pages (public) — slugs + titles for nav, not full bodies. Ordered the same way
+    the tenant already controls via the admin page-list's drag-reorder (sort_order), since this
+    list doubles as the storefront's nav menu — not just an arbitrary listing."""
     try:
         rows = (service._client().table("vula_pages")
                 .select("slug,title,seo,status,updated_at")
                 .eq("tenant_id", tenant_id).eq("status", "published")
-                .order("updated_at", desc=True).execute().data or [])
+                .order("sort_order").order("updated_at", desc=True).execute().data or [])
     except Exception as exc:
         log.debug("pages list skipped (run migration 041?): %s", exc)
         rows = []
@@ -2453,6 +2455,13 @@ async def public_brand(tenant_id: str):
         "accent_color": settings.get("accent_color"),
         "ink_color": settings.get("ink_color"),
         "font_pairing": settings.get("font_pairing"),
+        "logo_align": settings.get("logo_align") or "left",
+        "logo_size": settings.get("logo_size") or "md",
+        "header_sticky": settings.get("header_sticky", True),
+        "header_nav_position": settings.get("header_nav_position") or "right",
+        "header_cta_text": settings.get("header_cta_text"),
+        "header_cta_link": settings.get("header_cta_link"),
+        "whatsapp": settings.get("company_phone"),  # utility bar contact link — already tenant-editable, no new field
     }
 
 

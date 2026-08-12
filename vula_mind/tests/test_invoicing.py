@@ -418,6 +418,23 @@ async def test_upsert_invoice_settings_creates_then_updates_one_row(fake_db):
 
 
 @pytest.mark.asyncio
+async def test_upsert_invoice_settings_accepts_header_layout_fields(fake_db):
+    """Migration 128 (storefront header config) — logo_align/logo_size (migration 103) reused
+    as-is; header_sticky/header_nav_position/header_cta_text/header_cta_link are new."""
+    row = await service.upsert_invoice_settings(TENANT, {
+        "logo_align": "center", "logo_size": "lg", "header_sticky": False,
+        "header_nav_position": "below-logo", "header_cta_text": "Get a quote",
+        "header_cta_link": "#contact",
+    })
+    assert row["logo_align"] == "center"
+    assert row["logo_size"] == "lg"
+    assert row["header_sticky"] is False
+    assert row["header_nav_position"] == "below-logo"
+    assert row["header_cta_text"] == "Get a quote"
+    assert row["header_cta_link"] == "#contact"
+
+
+@pytest.mark.asyncio
 async def test_upsert_invoice_settings_whitelists_fields(fake_db):
     await service.upsert_invoice_settings(
         TENANT, {"vat_number": "X", "tenant_id": "evil", "id": "spoofed", "junk": 1}

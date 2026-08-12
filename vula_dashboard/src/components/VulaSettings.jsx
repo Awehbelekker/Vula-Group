@@ -110,6 +110,15 @@ function BrandKitSettings({ tenantId }) {
   const [accent, setAccent] = useState('#2C5545')
   const [ink, setInk] = useState('#1E1E1E')
   const [fontPairing, setFontPairing] = useState('vula')
+  // Storefront header layout (migration 128) — logoAlign/logoSize already existed (migration
+  // 103, invoice branding) and are reused as-is here: same tenant-editable fields now drive both
+  // invoice PDFs and the storefront header, one setting instead of two parallel ones.
+  const [logoAlign, setLogoAlign] = useState('left')
+  const [logoSize, setLogoSize] = useState('md')
+  const [headerSticky, setHeaderSticky] = useState(true)
+  const [headerNavPosition, setHeaderNavPosition] = useState('right')
+  const [headerCtaText, setHeaderCtaText] = useState('')
+  const [headerCtaLink, setHeaderCtaLink] = useState('')
   const [uploading, setUploading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -125,6 +134,12 @@ function BrandKitSettings({ tenantId }) {
         setAccent(/^#[0-9a-fA-F]{6}$/.test(st.accent_color || '') ? st.accent_color : '#2C5545')
         setInk(/^#[0-9a-fA-F]{6}$/.test(st.ink_color || '') ? st.ink_color : '#1E1E1E')
         setFontPairing(st.font_pairing || 'vula')
+        setLogoAlign(st.logo_align || 'left')
+        setLogoSize(st.logo_size || 'md')
+        setHeaderSticky(st.header_sticky !== false)
+        setHeaderNavPosition(st.header_nav_position || 'right')
+        setHeaderCtaText(st.header_cta_text || '')
+        setHeaderCtaLink(st.header_cta_link || '')
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
@@ -150,7 +165,11 @@ function BrandKitSettings({ tenantId }) {
     try {
       await fetch(`${API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trading_as: name, logo_url: logoUrl, accent_color: accent, ink_color: ink, font_pairing: fontPairing }),
+        body: JSON.stringify({
+          trading_as: name, logo_url: logoUrl, accent_color: accent, ink_color: ink, font_pairing: fontPairing,
+          logo_align: logoAlign, logo_size: logoSize, header_sticky: headerSticky,
+          header_nav_position: headerNavPosition, header_cta_text: headerCtaText, header_cta_link: headerCtaLink,
+        }),
       })
       // Live preview — no refresh needed to see any of it take effect.
       applyAccent(accent)
@@ -189,6 +208,39 @@ function BrandKitSettings({ tenantId }) {
         <select value={fontPairing} onChange={e => setFontPairing(e.target.value)} style={{ ...bk.input, width: 220 }}>
           {Object.entries(FONT_PAIRINGS).map(([key, p]) => <option key={key} value={key}>{p.label}</option>)}
         </select>
+      </div>
+      <div style={{ borderTop: '1px solid #EEE9DF', margin: '4px 0', paddingTop: 12 }}>
+        <p style={{ fontSize: 12.5, fontWeight: 600, color: '#8A8680', margin: '0 0 8px' }}>Storefront header</p>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Logo position</span>
+          <select value={logoAlign} onChange={e => setLogoAlign(e.target.value)} style={{ ...bk.input, width: 140 }}>
+            <option value="left">Left</option>
+            <option value="center">Centered</option>
+          </select>
+          <span style={{ fontSize: 13, color: '#8A8680', marginLeft: 10 }}>Size</span>
+          <select value={logoSize} onChange={e => setLogoSize(e.target.value)} style={{ ...bk.input, width: 100 }}>
+            <option value="sm">Small</option>
+            <option value="md">Medium</option>
+            <option value="lg">Large</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Menu position</span>
+          <select value={headerNavPosition} onChange={e => setHeaderNavPosition(e.target.value)} style={{ ...bk.input, width: 140 }}>
+            <option value="right">Right of logo</option>
+            <option value="center">Centered</option>
+            <option value="below-logo">Below logo</option>
+          </select>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#8A8680', marginLeft: 10 }}>
+            <input type="checkbox" checked={headerSticky} onChange={e => setHeaderSticky(e.target.checked)} />
+            Sticky on scroll
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Button</span>
+          <input placeholder="Button text (e.g. Get a quote) — blank for none" value={headerCtaText} onChange={e => setHeaderCtaText(e.target.value)} style={{ ...bk.input, flex: 1, minWidth: 160 }} />
+          <input placeholder="Link (e.g. #contact or /shop)" value={headerCtaLink} onChange={e => setHeaderCtaLink(e.target.value)} style={{ ...bk.input, flex: 1, minWidth: 160 }} />
+        </div>
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button onClick={save} disabled={saving} style={bk.saveBtn}>{saving ? 'Saving…' : 'Save brand kit'}</button>

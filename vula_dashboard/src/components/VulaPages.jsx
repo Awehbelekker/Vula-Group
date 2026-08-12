@@ -42,17 +42,87 @@ const btn = (bg) => ({ padding: "8px 14px", border: "none", borderRadius: 8, fon
 const rowStyle = { textAlign: "left", padding: "10px 12px", border: `1px solid #DDD8CE`, borderRadius: 8, background: "#FAF9F6", cursor: "pointer" };
 const ghost = { padding: "8px 12px", border: `1px solid ${C.border}`, background: C.surface, color: C.text, borderRadius: 8, cursor: "pointer", fontSize: 13 };
 
-// Starter templates — a page is never a blank scary canvas.
+// Starter templates — a page is never a blank scary canvas. Homepage templates are keyed by
+// business_type (food|retail|services|trades|health|other, the same taxonomy _map_business_type
+// already uses server-side — see tenants.py) so a tenant gets copy and blocks that actually fit
+// their business, not fish-shop language regardless of what they sell (the bug this replaces:
+// every tenant used to get "Fresh from the harbour" / FeaturedProducts / CategoryNav no matter
+// what business_type they were).
 const TEMPLATES = {
   blank: { label: "Blank page", data: {} },
-  home: {
-    label: "Store home (hero + featured + categories)",
+  home_food: {
+    label: "Homepage — Food & drink",
     data: { content: [
-      { type: "Hero", props: { id: "t-hero", title: "Fresh from the harbour", subtitle: "Order before 10am for same-day delivery.", image: "", ctaText: "Shop now", ctaHref: "/shop" } },
-      { type: "FeaturedProducts", props: { id: "t-feat", title: "Today's catch", count: 4, linkBase: "/shop" } },
-      { type: "CategoryNav", props: { id: "t-cats", title: "Browse by category", linkBase: "/shop" } },
-      { type: "Features", props: { id: "t-why", title: "Why shop with us", items: [
-        { heading: "Fresh", body: "Caught daily." }, { heading: "Local", body: "Cape Town sourced." }, { heading: "Delivered", body: "To your door." }] } },
+      { type: "Hero", props: { id: "t-food-hero", title: "Fresh, local, delivered", subtitle: "Order before 10am for same-day delivery.", image: "", ctaText: "Shop now", ctaHref: "/shop" } },
+      { type: "AnnouncementBar", props: { id: "t-food-ann", text: "Free delivery on orders over R500", linkText: "", href: "" } },
+      { type: "FeaturedProducts", props: { id: "t-food-feat", title: "Today's picks", count: 4, linkBase: "/shop" } },
+      { type: "CategoryNav", props: { id: "t-food-cats", title: "Browse by category", linkBase: "/shop" } },
+      { type: "Features", props: { id: "t-food-why", title: "Why order with us", items: [
+        { heading: "Fresh", body: "Sourced daily." }, { heading: "Local", body: "Proudly South African." }, { heading: "Delivered", body: "Straight to your door." }] } },
+      { type: "Testimonials", props: { id: "t-food-test", title: "What customers say", items: [
+        { quote: "Always fresh, always on time.", author: "A happy customer", role: "" }] } },
+      { type: "WhatsAppCTA", props: { id: "t-food-wa", phone: "", message: "Hi! I'd like to order.", buttonText: "💬 Order on WhatsApp" } },
+    ] },
+  },
+  home_retail: {
+    label: "Homepage — Retail / shop",
+    data: { content: [
+      { type: "Hero", props: { id: "t-retail-hero", title: "Shop the range", subtitle: "Quality products, straight to your door.", image: "", ctaText: "Shop now", ctaHref: "/shop" } },
+      { type: "ProductGrid", props: { id: "t-retail-grid", title: "Popular right now", category: "", count: 8, linkBase: "/shop" } },
+      { type: "CategoryNav", props: { id: "t-retail-cats", title: "Browse by category", linkBase: "/shop" } },
+      { type: "TwoColumns", props: { id: "t-retail-story", leftImage: "", leftHeading: "Our story", leftBody: "Tell customers who you are and why they should buy from you.", rightImage: "", rightHeading: "Quality you can trust", rightBody: "What makes your products different." } },
+      { type: "Testimonials", props: { id: "t-retail-test", title: "What customers say", items: [
+        { quote: "Great quality, great service.", author: "A happy customer", role: "" }] } },
+      { type: "CTA", props: { id: "t-retail-cta", text: "Shop the full range", href: "/shop", variant: "solid" } },
+    ] },
+  },
+  home_trades: {
+    label: "Homepage — Trades & construction",
+    data: { content: [
+      { type: "Hero", props: { id: "t-trades-hero", title: "Built to last", subtitle: "Quality workmanship, on time, on budget.", image: "", ctaText: "Get a quote", ctaHref: "#contact" } },
+      { type: "Features", props: { id: "t-trades-serv", title: "Our services", items: [
+        { heading: "Service one", body: "Describe what you offer." }, { heading: "Service two", body: "Describe what you offer." }, { heading: "Service three", body: "Describe what you offer." }] } },
+      { type: "TwoColumns", props: { id: "t-trades-work", leftImage: "", leftHeading: "Recent work", leftBody: "Show off a recent project — add a photo and describe the job.", rightImage: "", rightHeading: "Why choose us", rightBody: "Experience, reliability, and a job done properly." } },
+      { type: "Testimonials", props: { id: "t-trades-test", title: "What clients say", items: [
+        { quote: "Professional from start to finish.", author: "A happy client", role: "" }] } },
+      { type: "ContactCard", props: { id: "t-trades-contact", title: "Get in touch", phone: "", email: "", address: "", hours: "" } },
+      { type: "CTA", props: { id: "t-trades-cta", text: "Get a quote", href: "#contact", variant: "solid" } },
+    ] },
+  },
+  home_services: {
+    label: "Homepage — Professional services",
+    data: { content: [
+      { type: "Hero", props: { id: "t-serv-hero", title: "Expertise you can rely on", subtitle: "Tell visitors what you do and who you do it for.", image: "", ctaText: "Book a consultation", ctaHref: "#contact" } },
+      { type: "Features", props: { id: "t-serv-what", title: "What we do", items: [
+        { heading: "Service one", body: "Describe it." }, { heading: "Service two", body: "Describe it." }, { heading: "Service three", body: "Describe it." }] } },
+      { type: "TwoColumns", props: { id: "t-serv-approach", leftImage: "", leftHeading: "Our approach", leftBody: "How you work with clients, what sets you apart.", rightImage: "", rightHeading: "Who we work with", rightBody: "The kind of clients/projects you take on." } },
+      { type: "Testimonials", props: { id: "t-serv-test", title: "What clients say", items: [
+        { quote: "They understood exactly what we needed.", author: "A happy client", role: "" }] } },
+      { type: "CTA", props: { id: "t-serv-cta", text: "Book a consultation", href: "#contact", variant: "solid" } },
+    ] },
+  },
+  home_health: {
+    label: "Homepage — Health, salon & wellness",
+    data: { content: [
+      { type: "Hero", props: { id: "t-health-hero", title: "Feel your best", subtitle: "Book your appointment today.", image: "", ctaText: "Book now", ctaHref: "#contact" } },
+      { type: "Features", props: { id: "t-health-serv", title: "Our services", items: [
+        { heading: "Service one", body: "Describe it." }, { heading: "Service two", body: "Describe it." }, { heading: "Service three", body: "Describe it." }] } },
+      { type: "Gallery", props: { id: "t-health-gallery", title: "Our space", images: [] } },
+      { type: "Testimonials", props: { id: "t-health-test", title: "What clients say", items: [
+        { quote: "Always leave feeling great.", author: "A happy client", role: "" }] } },
+      { type: "ContactCard", props: { id: "t-health-contact", title: "Book your visit", phone: "", email: "", address: "", hours: "" } },
+      { type: "WhatsAppCTA", props: { id: "t-health-wa", phone: "", message: "Hi! I'd like to book an appointment.", buttonText: "💬 Book on WhatsApp" } },
+    ] },
+  },
+  home_other: {
+    label: "Homepage — General",
+    data: { content: [
+      { type: "Hero", props: { id: "t-other-hero", title: "Your headline", subtitle: "A short supporting line about your business.", image: "", ctaText: "Get in touch", ctaHref: "#contact" } },
+      { type: "Features", props: { id: "t-other-feat", title: "Why us", items: [
+        { heading: "Feature one", body: "Describe it." }, { heading: "Feature two", body: "Describe it." }, { heading: "Feature three", body: "Describe it." }] } },
+      { type: "Testimonials", props: { id: "t-other-test", title: "What customers say", items: [
+        { quote: "They made it so easy.", author: "A happy customer", role: "" }] } },
+      { type: "ContactCard", props: { id: "t-other-contact", title: "Get in touch", phone: "", email: "", address: "", hours: "" } },
     ] },
   },
   specials: {
@@ -75,6 +145,16 @@ const TEMPLATES = {
   },
 };
 
+// business_type -> matching homepage template key (mirrors tenants.py::_map_business_type's
+// taxonomy exactly). Falls back to the generic template for "other"/unrecognised.
+const HOME_TEMPLATE_BY_BUSINESS_TYPE = {
+  food: "home_food", retail: "home_retail", trades: "home_trades",
+  services: "home_services", health: "home_health",
+};
+function homeTemplateFor(businessType) {
+  return TEMPLATES[HOME_TEMPLATE_BY_BUSINESS_TYPE[businessType]] || TEMPLATES.home_other;
+}
+
 export default function VulaPages({ tenantId }) {
   const [pages, setPages] = useState(null);
   const [editing, setEditing] = useState(null);   // { slug, title, data, status, seo }
@@ -85,6 +165,7 @@ export default function VulaPages({ tenantId }) {
   const [versions, setVersions] = useState(null);
   const [msg, setMsg] = useState("");
   const [storeUrl, setStoreUrl] = useState(null);
+  const [businessType, setBusinessType] = useState(null);  // drives which niche template "Customize homepage" seeds
   const [showLivePreview, setShowLivePreview] = useState(false);
   const [storeSettings, setStoreSettings] = useState(null); // real hero copy — seeds "Customize homepage" with truth, not placeholder text
   const latestData = useRef(null);   // Puck's live document (survives re-renders/saves)
@@ -143,7 +224,8 @@ export default function VulaPages({ tenantId }) {
   // domain is configured yet.
   useEffect(() => {
     fetch(`${VULA_API}/v1/tenants/${tenantId}`).then((r) => r.json())
-      .then((d) => setStoreUrl(d.store_url || null)).catch(() => setStoreUrl(null));
+      .then((d) => { setStoreUrl(d.store_url || null); setBusinessType(d.business_type || null); })
+      .catch(() => { setStoreUrl(null); setBusinessType(null); });
     fetch(`${VULA_API}/v1/commerce/${tenantId}/settings`).then((r) => r.json())
       .then((d) => setStoreSettings(d.settings || null)).catch(() => setStoreSettings(null));
   }, [tenantId]);
@@ -160,12 +242,13 @@ export default function VulaPages({ tenantId }) {
   };
 
   // The "Customize homepage" starter used flat placeholder copy ("Fresh from the harbour")
-  // regardless of what's actually live, which made the editor feel disconnected from reality.
-  // The FeaturedProducts/CategoryNav blocks already fetch live data at render time so they're
-  // never stale, but Hero's title/subtitle were hardcoded text — swap in the tenant's real
-  // hero_tagline/hero_subtitle (same source their live homepage reads) when available.
+  // regardless of what's actually live, which made the editor feel disconnected from reality —
+  // and used to be the SAME fish-shop template for every tenant regardless of business_type.
+  // Now picks the niche template that actually matches this tenant (homeTemplateFor), then still
+  // overlays the tenant's real hero_tagline/hero_subtitle (same source their live homepage
+  // reads) on top when available.
   const homeSeed = () => {
-    const tpl = TEMPLATES.home.data;
+    const tpl = homeTemplateFor(businessType).data;
     if (!storeSettings?.hero_tagline && !storeSettings?.hero_subtitle) return tpl;
     return {
       ...tpl,
@@ -228,6 +311,41 @@ export default function VulaPages({ tenantId }) {
     load();
   };
 
+  // Safe "upgrade my existing (possibly already-published) page" path. vula_pages has ONE row
+  // per slug with a single status — there's no "draft revision of a published page" — so loading
+  // a new template straight into an already-live page's editor and clicking Save would actually
+  // UNPUBLISH it. Instead: create a separate {slug}-preview page (always draft, never touches
+  // the original), seeded with the niche template that matches this tenant. Reviewed/edited like
+  // any normal page; "Make this live" (below) does the actual swap once they're happy.
+  const tryNewTemplate = async (p) => {
+    const previewSlug = `${p.slug}-preview`;
+    const seed = norm(homeSeed());
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${previewSlug}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: `${p.title || p.slug} (new template preview)`, status: "draft", puck_data: seed, seo: {} }),
+    }).catch(() => {});
+    load();
+    open(previewSlug, `${p.title || p.slug} (new template preview)`);
+  };
+
+  // Promotes a "{slug}-preview" page's content to replace the original slug's live content.
+  // Reuses the existing upsert_page endpoint as-is — it already snapshots the slug's PRE-swap
+  // content into vula_page_versions before overwriting (same safety net "Publish" always gets),
+  // so this swap is restorable via the existing History panel even though it's a new action.
+  const makeLive = async (previewPage) => {
+    const originalSlug = previewPage.slug.replace(/-preview$/, "");
+    if (originalSlug === previewPage.slug) return;  // not actually a preview page — refuse
+    if (!window.confirm(`Replace the live "${originalSlug}" page with this template? The previous version stays in History if you want it back.`)) return;
+    const full = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${previewPage.slug}`).then((r) => r.json()).catch(() => ({}));
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${originalSlug}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: previewPage.title?.replace(/ \(new template preview\)$/, "") || originalSlug, status: "published", puck_data: full.puck_data || {}, seo: full.seo || {} }),
+    }).catch(() => {});
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${previewPage.slug}`, { method: "DELETE" }).catch(() => {});
+    setEditing(null);
+    load();
+  };
+
   const move = async (index, dir) => {
     const next = [...pages];
     const j = index + dir;
@@ -280,9 +398,21 @@ export default function VulaPages({ tenantId }) {
                 {showLivePreview ? "▲ Hide current site" : "👁 Current site"}
               </button>
             )}
+            {editing.slug.endsWith("-preview") && (
+              <button onClick={() => makeLive({ slug: editing.slug, title: editing.title })} style={btn("var(--accent)")}>
+                ✓ Make this live at /{editing.slug.replace(/-preview$/, "")}
+              </button>
+            )}
             {editing.status === "published" && <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>View live ↗</a>}
           </div>
         </div>
+        {editing.slug.endsWith("-preview") && (
+          <p style={{ fontSize: 12, color: C.muted, margin: "0 0 10px" }}>
+            This is a private preview — it isn't live anywhere yet. Save a draft to keep working on
+            it, then click <strong>Make this live</strong> above when you're ready to replace the
+            real page.
+          </p>
+        )}
 
         {/* So editing never feels disconnected from what's actually live — was previously only a
             new-tab link, meaning there was no way to see the real site *while* dragging blocks. */}
@@ -416,7 +546,7 @@ export default function VulaPages({ tenantId }) {
       )}
 
       {pages === null ? <p style={{ color: C.muted }}>Loading…</p> :
-        pages.length === 0 ? <p style={{ color: C.muted }}>No pages yet — create your first one (try the "Store home" template).</p> :
+        pages.length === 0 ? <p style={{ color: C.muted }}>No pages yet — create your first one (try the "Customize homepage" button above, or a homepage template below).</p> :
           <div style={{ display: "grid", gap: 8 }}>
             {pages.map((p, i) => (
               <div key={p.slug} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -436,6 +566,10 @@ export default function VulaPages({ tenantId }) {
                 </button>
                 <button onClick={() => rename(p)} title="Rename" style={{ ...ghost, padding: "8px 10px" }}>✏️</button>
                 <button onClick={() => duplicate(p)} title="Duplicate" style={{ ...ghost, padding: "8px 10px" }}>⧉</button>
+                {!p.slug.endsWith("-preview") && (
+                  <button onClick={() => tryNewTemplate(p)} title="Preview this page with a new template — never affects the live version until you choose to publish it"
+                    style={{ ...ghost, padding: "8px 10px" }}>🎨</button>
+                )}
                 <button onClick={() => del(p.slug, p.title)} title="Delete page"
                   style={{ border: `1px solid ${C.border}`, background: C.surface, color: "#A23B2D", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 14 }}>
                   🗑

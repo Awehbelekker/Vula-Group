@@ -1945,6 +1945,7 @@ _INVOICE_SETTINGS_FIELDS = (
     "template_choice", "accent_color", "onboarded", "menu_header_image_url",
     "ink_color", "font_pairing",
     "footer_text", "show_vat_breakdown", "show_company_reg", "logo_size", "logo_align",
+    "header_sticky", "header_nav_position", "header_cta_text", "header_cta_link",
 )
 _TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded", "digg")
 
@@ -1966,7 +1967,12 @@ _INVOICE_SETTINGS_078_FIELDS = ("ink_color", "font_pairing")  # only exist once 
 _INVOICE_SETTINGS_103_FIELDS = (  # only exist once migration 103 runs
     "footer_text", "show_vat_breakdown", "show_company_reg", "logo_size", "logo_align",
 )
-_INVOICE_SETTINGS_OPTIONAL_FIELDS = _INVOICE_SETTINGS_078_FIELDS + _INVOICE_SETTINGS_103_FIELDS
+_INVOICE_SETTINGS_128_FIELDS = (  # only exist once migration 128 runs
+    "header_sticky", "header_nav_position", "header_cta_text", "header_cta_link",
+)
+_INVOICE_SETTINGS_OPTIONAL_FIELDS = (
+    _INVOICE_SETTINGS_078_FIELDS + _INVOICE_SETTINGS_103_FIELDS + _INVOICE_SETTINGS_128_FIELDS
+)
 
 
 async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
