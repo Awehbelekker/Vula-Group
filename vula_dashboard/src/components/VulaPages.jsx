@@ -41,6 +41,11 @@ const PREVIEW_VIEWPORTS = [
 const btn = (bg) => ({ padding: "8px 14px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#fff", background: bg, cursor: "pointer" });
 const rowStyle = { textAlign: "left", padding: "10px 12px", border: `1px solid #DDD8CE`, borderRadius: 8, background: "#FAF9F6", cursor: "pointer" };
 const ghost = { padding: "8px 12px", border: `1px solid ${C.border}`, background: C.surface, color: C.text, borderRadius: 8, cursor: "pointer", fontSize: 13 };
+// Rendered inside Puck's own headerActions override, alongside its built-in Publish button —
+// deliberately plain/small so they read as part of that toolbar, not a second competing one.
+const iconBtn = { padding: "6px 9px", border: "1px solid transparent", background: "transparent", borderRadius: 6, cursor: "pointer", fontSize: 14, lineHeight: 1 };
+const iconBtnActive = { background: "rgba(44,85,69,0.1)", border: "1px solid var(--accent, #2C5545)" };
+const menuItem = { textAlign: "left", padding: "8px 12px", border: "none", background: "transparent", borderRadius: 6, cursor: "pointer", fontSize: 13, color: C.text, whiteSpace: "nowrap" };
 
 // Starter templates — a page is never a blank scary canvas. Homepage templates are keyed by
 // business_type (food|retail|services|trades|health|other, the same taxonomy _map_business_type
@@ -159,6 +164,7 @@ export default function VulaPages({ tenantId }) {
   const [pages, setPages] = useState(null);
   const [editing, setEditing] = useState(null);   // { slug, title, data, status, seo }
   const [creating, setCreating] = useState(false);
+  const [openMenuSlug, setOpenMenuSlug] = useState(null);  // which page row's "⋯" menu is open
   const [newForm, setNewForm] = useState({ title: "", template: "blank" });
   const [showSeo, setShowSeo] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -378,6 +384,52 @@ export default function VulaPages({ tenantId }) {
     const publicUrl = storeUrl
       ? `${storeUrl.replace(/\/$/, "")}/p/${editing.slug}`
       : `https://${tenantId}.${STOREFRONT_ROOT_DOMAIN}/p/${editing.slug}`;
+    const isPreviewPage = editing.slug.endsWith("-preview");
+
+    // Puck's own overrides API (confirmed present in the installed package — not a workaround)
+    // — headerActions extends Puck's OWN toolbar (where its built-in Publish button already
+    // lives) instead of stacking a second row of buttons above the canvas; fields extends its
+    // own right-hand sidebar so Page SEO reads as part of the editor, not a separate toggle
+    // panel that pushes the canvas down every time someone opens it.
+    const headerActions = ({ children }) => (
+      <>
+        <button onClick={() => setShowSeo((s) => !s)} title="Page SEO" style={{ ...iconBtn, ...(showSeo ? iconBtnActive : {}) }}>🔍</button>
+        <button onClick={() => { setShowHistory((v) => !v); if (!showHistory) loadVersions(); }} title="Version history" style={{ ...iconBtn, ...(showHistory ? iconBtnActive : {}) }}>🕐</button>
+        {storeUrl && (
+          <button onClick={() => setShowLivePreview((v) => !v)} title="Current live site" style={{ ...iconBtn, ...(showLivePreview ? iconBtnActive : {}) }}>👁</button>
+        )}
+        {isPreviewPage && (
+          <button onClick={() => makeLive({ slug: editing.slug, title: editing.title })} style={{ ...btn("var(--accent)"), fontSize: 12, padding: "7px 12px" }}>
+            ✓ Make live at /{editing.slug.replace(/-preview$/, "")}
+          </button>
+        )}
+        {editing.status === "published" && <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, marginRight: 4 }}>View live ↗</a>}
+        {children}
+      </>
+    );
+
+    const fields = ({ children, itemSelector }) => (
+      <>
+        {!itemSelector && (
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
+            <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: C.muted, margin: "0 0 8px" }}>Page SEO</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <input placeholder="SEO title (browser tab / Google)" value={editing.seo?.title || ""}
+                onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, title: e.target.value } }))}
+                style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12.5 }} />
+              <textarea placeholder="SEO description (search result snippet)" value={editing.seo?.description || ""}
+                onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, description: e.target.value } }))}
+                rows={2} style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12.5, fontFamily: "inherit", resize: "vertical" }} />
+              <input placeholder="Share image URL (WhatsApp / social link preview)" value={editing.seo?.image || ""}
+                onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, image: e.target.value } }))}
+                style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12.5 }} />
+            </div>
+          </div>
+        )}
+        {children}
+      </>
+    );
+
     return (
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", flexWrap: "wrap" }}>
@@ -390,73 +442,15 @@ export default function VulaPages({ tenantId }) {
             {editing.status === "published" ? "Live" : "Draft"}
           </span>
           {msg && <span style={{ color: "#2C7A4B", fontSize: 12 }}>{msg}</span>}
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-            <button onClick={() => setShowSeo(s => !s)} style={ghost}>🔍 SEO</button>
-            <button onClick={() => { setShowHistory(v => !v); if (!showHistory) loadVersions(); }} style={ghost}>🕐 History</button>
-            {storeUrl && (
-              <button onClick={() => setShowLivePreview((v) => !v)} style={ghost}>
-                {showLivePreview ? "▲ Hide current site" : "👁 Current site"}
-              </button>
-            )}
-            {editing.slug.endsWith("-preview") && (
-              <button onClick={() => makeLive({ slug: editing.slug, title: editing.title })} style={btn("var(--accent)")}>
-                ✓ Make this live at /{editing.slug.replace(/-preview$/, "")}
-              </button>
-            )}
-            {editing.status === "published" && <a href={publicUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>View live ↗</a>}
-          </div>
+          {isPreviewPage && <span style={{ fontSize: 12, color: C.muted }}>— private preview, not live yet</span>}
         </div>
-        {editing.slug.endsWith("-preview") && (
-          <p style={{ fontSize: 12, color: C.muted, margin: "0 0 10px" }}>
-            This is a private preview — it isn't live anywhere yet. Save a draft to keep working on
-            it, then click <strong>Make this live</strong> above when you're ready to replace the
-            real page.
-          </p>
-        )}
 
-        {/* So editing never feels disconnected from what's actually live — was previously only a
-            new-tab link, meaning there was no way to see the real site *while* dragging blocks. */}
         {showLivePreview && storeUrl && (
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 320, marginBottom: 10, background: "#FAF9F6" }}>
             <iframe src={storeUrl} title="Current live site" style={{ width: "100%", height: "100%", border: "none" }} />
           </div>
         )}
 
-        {showHistory && (
-          <div style={{ margin: "0 0 10px", background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
-            {versions === null ? <span style={{ fontSize: 12, color: C.muted }}>Loading…</span> :
-              versions.length === 0 ? <span style={{ fontSize: 12, color: C.muted }}>No earlier versions yet — a snapshot is taken every time you publish over an existing page.</span> :
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {versions.map((v) => (
-                    <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
-                      <span style={{ color: C.muted, minWidth: 140 }}>{new Date(v.created_at).toLocaleString("en-ZA")}</span>
-                      <span style={{ flex: 1 }}>{v.title}</span>
-                      <button onClick={() => restoreVersion(v.id)} style={{ ...ghost, padding: "4px 10px", fontSize: 11 }}>Restore as draft</button>
-                    </div>
-                  ))}
-                </div>}
-          </div>
-        )}
-
-        {showSeo && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px", background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
-            <input placeholder="SEO title (browser tab / Google)" value={editing.seo?.title || ""}
-              onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, title: e.target.value } }))}
-              style={{ flex: 1, minWidth: 200, padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13 }} />
-            <input placeholder="SEO description (search result snippet)" value={editing.seo?.description || ""}
-              onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, description: e.target.value } }))}
-              style={{ flex: 2, minWidth: 260, padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13 }} />
-            <input placeholder="Share image URL (WhatsApp / social link preview)" value={editing.seo?.image || ""}
-              onChange={(e) => setEditing((ed) => ({ ...ed, seo: { ...ed.seo, image: e.target.value } }))}
-              style={{ flex: 2, minWidth: 260, padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13 }} />
-            <span style={{ fontSize: 11, color: C.muted, alignSelf: "center" }}>Saved with the page on Publish / Save draft.</span>
-          </div>
-        )}
-
-        <p style={{ fontSize: 12, color: C.muted, margin: "0 0 8px" }}>
-          Drag blocks from the left (including <strong>live product blocks</strong>), edit on the right —
-          <strong> Publish</strong> makes it live, or use <strong>Save draft</strong> below to keep working privately.
-        </p>
         <div style={{ height: "74vh", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
           {/* Both get mirrored into Puck's canvas iframe (see brandCss comment above) — this is
               the only way animation/depth CSS and the tenant's real brand colors reach the
@@ -464,7 +458,7 @@ export default function VulaPages({ tenantId }) {
           <style>{VULA_PUCK_STYLES}{brandCss}</style>
           <Puck config={config} data={editing.data} onPublish={(data) => persist(data, "published")}
             onChange={(data) => { latestData.current = data; }}
-            viewports={PREVIEW_VIEWPORTS} />
+            viewports={PREVIEW_VIEWPORTS} overrides={{ headerActions, fields }} />
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <button onClick={() => persist(latestData.current || editing.data, "draft")} style={ghost}>💾 Save draft</button>
@@ -472,6 +466,33 @@ export default function VulaPages({ tenantId }) {
             <button onClick={() => persist(latestData.current || editing.data, "draft")} style={{ ...ghost, color: "#B7791F" }}>⏸ Unpublish (back to draft)</button>
           )}
         </div>
+
+        {/* Fixed-position drawer, not inline — history is looked at occasionally, not something
+            that should ever displace the canvas the way a push-down panel did before. */}
+        {showHistory && (
+          <>
+            <div onClick={() => setShowHistory(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.15)", zIndex: 999 }} />
+            <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 340, background: "#fff",
+              borderLeft: `1px solid ${C.border}`, boxShadow: "-8px 0 28px rgba(0,0,0,0.12)", zIndex: 1000,
+              padding: 16, overflowY: "auto" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <strong style={{ color: C.text }}>Version history</strong>
+                <button onClick={() => setShowHistory(false)} style={{ ...ghost, padding: "4px 9px" }}>✕</button>
+              </div>
+              {versions === null ? <span style={{ fontSize: 12, color: C.muted }}>Loading…</span> :
+                versions.length === 0 ? <span style={{ fontSize: 12, color: C.muted }}>No earlier versions yet — a snapshot is taken every time you publish over an existing page.</span> :
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {versions.map((v) => (
+                      <div key={v.id} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5, paddingBottom: 10, borderBottom: `1px solid #F0EDE5` }}>
+                        <span style={{ color: C.muted }}>{new Date(v.created_at).toLocaleString("en-ZA")}</span>
+                        <span>{v.title}</span>
+                        <button onClick={() => restoreVersion(v.id)} style={{ ...ghost, padding: "4px 10px", fontSize: 11, alignSelf: "flex-start" }}>Restore as draft</button>
+                      </div>
+                    ))}
+                  </div>}
+            </div>
+          </>
+        )}
       </div>
     );
   }
@@ -483,8 +504,7 @@ export default function VulaPages({ tenantId }) {
         <button onClick={() => setCreating((c) => !c)} style={{ ...btn("var(--accent)"), marginLeft: "auto" }}>{creating ? "Close" : "+ New page"}</button>
       </div>
       <p style={{ fontSize: 12, color: C.muted, margin: "4px 0 12px" }}>
-        Build your store's pages by drag-and-drop — including live product grids that always show your
-        current catalog and prices. Published pages appear on your website automatically.
+        Drag-and-drop pages, including live product grids — publish and they're on your website automatically.
       </p>
 
       {/* Editing "a new page" doesn't obviously connect to "the homepage I already have live" —
@@ -549,7 +569,7 @@ export default function VulaPages({ tenantId }) {
         pages.length === 0 ? <p style={{ color: C.muted }}>No pages yet — create your first one (try the "Customize homepage" button above, or a homepage template below).</p> :
           <div style={{ display: "grid", gap: 8 }}>
             {pages.map((p, i) => (
-              <div key={p.slug} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div key={p.slug} style={{ display: "flex", alignItems: "center", gap: 6, position: "relative" }}>
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   <button onClick={() => move(i, -1)} disabled={i === 0} title="Move up"
                     style={{ ...ghost, padding: "1px 8px", fontSize: 10, opacity: i === 0 ? 0.3 : 1, borderBottom: "none", borderRadius: "6px 6px 0 0" }}>▲</button>
@@ -564,16 +584,27 @@ export default function VulaPages({ tenantId }) {
                     {p.status === "published" ? "● Live" : "○ Draft"}
                   </span>
                 </button>
-                <button onClick={() => rename(p)} title="Rename" style={{ ...ghost, padding: "8px 10px" }}>✏️</button>
-                <button onClick={() => duplicate(p)} title="Duplicate" style={{ ...ghost, padding: "8px 10px" }}>⧉</button>
-                {!p.slug.endsWith("-preview") && (
-                  <button onClick={() => tryNewTemplate(p)} title="Preview this page with a new template — never affects the live version until you choose to publish it"
-                    style={{ ...ghost, padding: "8px 10px" }}>🎨</button>
+                {/* Rename/duplicate/try-template/delete are all occasional actions — collapsed into
+                    one overflow menu instead of 4 separate always-visible icon buttons per row. */}
+                <button onClick={() => setOpenMenuSlug((s) => s === p.slug ? null : p.slug)} title="More actions"
+                  style={{ ...ghost, padding: "8px 10px" }}>⋯</button>
+                {openMenuSlug === p.slug && (
+                  <>
+                    <div onClick={() => setOpenMenuSlug(null)} style={{ position: "fixed", inset: 0, zIndex: 10 }} />
+                    <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, zIndex: 11,
+                      background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+                      minWidth: 170, display: "flex", flexDirection: "column", padding: 4 }}>
+                      <button onClick={() => { setOpenMenuSlug(null); rename(p); }} style={menuItem}>✏️ Rename</button>
+                      <button onClick={() => { setOpenMenuSlug(null); duplicate(p); }} style={menuItem}>⧉ Duplicate</button>
+                      {!p.slug.endsWith("-preview") && (
+                        <button onClick={() => { setOpenMenuSlug(null); tryNewTemplate(p); }} style={menuItem} title="Preview this page with a new template — never affects the live version until you publish it">
+                          🎨 Try new template
+                        </button>
+                      )}
+                      <button onClick={() => { setOpenMenuSlug(null); del(p.slug, p.title); }} style={{ ...menuItem, color: "#A23B2D" }}>🗑 Delete</button>
+                    </div>
+                  </>
                 )}
-                <button onClick={() => del(p.slug, p.title)} title="Delete page"
-                  style={{ border: `1px solid ${C.border}`, background: C.surface, color: "#A23B2D", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 14 }}>
-                  🗑
-                </button>
               </div>
             ))}
           </div>}
