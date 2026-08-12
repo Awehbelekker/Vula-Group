@@ -1,3 +1,6 @@
 [submodule "off_the_hook"]
 	path = off_the_hook
 	url = https://github.com/Awehbelekker/off-the-hook
+[submodule "vula_storefront"]
+	path = vula_storefront
+	url = https://github.com/Awehbelekker/vula-storefront

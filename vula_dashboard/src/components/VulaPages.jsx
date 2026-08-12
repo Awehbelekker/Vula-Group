@@ -15,6 +15,11 @@ import { getTenantTheme } from "../theme/tenantThemes";
 import { FONT_PAIRINGS } from "../theme/tokens";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+// Every tenant gets a real, live, SSR'd storefront the instant they publish — no more "no
+// custom domain configured, previewing a Vula-hosted page" — vula_storefront serves this
+// subdomain for every tenant automatically. A tenant with a wired custom domain (storeUrl) still
+// takes priority below; this is the always-real fallback, not just a preview.
+const STOREFRONT_ROOT_DOMAIN = import.meta.env.VITE_STOREFRONT_ROOT_DOMAIN || "vula.site";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", text: "#2A2A2A", muted: "#8A8680" };
 
 function norm(data) {
@@ -142,7 +147,7 @@ export default function VulaPages({ tenantId }) {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/settings`).then((r) => r.json())
       .then((d) => setStoreSettings(d.settings || null)).catch(() => setStoreSettings(null));
   }, [tenantId]);
-  const liveUrl = storeUrl || `${window.location.origin}/#/page/${tenantId}/home`;
+  const liveUrl = storeUrl || `https://${tenantId}.${STOREFRONT_ROOT_DOMAIN}`;
 
   const load = () =>
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages`)
@@ -252,7 +257,9 @@ export default function VulaPages({ tenantId }) {
   };
 
   if (editing) {
-    const publicUrl = `${window.location.origin}/#/page/${tenantId}/${editing.slug}`;
+    const publicUrl = storeUrl
+      ? `${storeUrl.replace(/\/$/, "")}/p/${editing.slug}`
+      : `https://${tenantId}.${STOREFRONT_ROOT_DOMAIN}/p/${editing.slug}`;
     return (
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", flexWrap: "wrap" }}>
@@ -379,7 +386,7 @@ export default function VulaPages({ tenantId }) {
             {showLivePreview ? "▲ Hide" : "▼ Show"} current live site
           </button>
           {storeUrl && <a href={liveUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Open in new tab ↗</a>}
-          {!storeUrl && <span style={{ fontSize: 11, color: C.muted }}>(no custom domain configured — previewing the Vula-hosted page)</span>}
+          {!storeUrl && <span style={{ fontSize: 11, color: C.muted }}>(live now at your free {tenantId}.{STOREFRONT_ROOT_DOMAIN} address — a custom domain can be added later)</span>}
         </div>
         {showLivePreview && (
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 480, background: "#FAF9F6" }}>
