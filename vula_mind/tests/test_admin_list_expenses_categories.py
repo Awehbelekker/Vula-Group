@@ -25,6 +25,7 @@ async def test_returns_only_expense_type_accounts_as_categories():
     with (
         patch("vula.commerce.expenses.list_claims", return_value=[]),
         patch("vula.commerce.expenses.known_projects", return_value=["HPC_Bokaap"]),
+        patch("vula.commerce.expenses.known_sections", return_value=["Demolition"]),
         patch("vula.commerce.accounting.ensure_chart", return_value=CHART),
     ):
         result = await admin_list_expenses(TID)
@@ -32,3 +33,4 @@ async def test_returns_only_expense_type_accounts_as_categories():
     codes = {c["code"] for c in result["categories"]}
     assert codes == {"stock", "travel"}
     assert result["projects"] == ["HPC_Bokaap"]
+    assert result["sections"] == ["Demolition"]
