@@ -269,16 +269,26 @@ def project_financials(tenant_id: str, project: str) -> dict:
     paid_out = sum(float(r.get("amount") or 0) for r in dedup_ledger if r.get("direction") == "out")
 
     # Invoices linked to the project (guarded — column may not exist pre-migration 055).
-    invoiced = invoiced_paid = 0.0
-    inv_count = 0
+    invoiced = invoiced_paid = quoted = 0.0
+    inv_count = quote_count = 0
     try:
-        invs = (db.table("commerce_invoices")
-                .select("total_cents,status,project,doc_type").eq("tenant_id", tenant_id)
-                .limit(3000).execute().data or [])
-        invs = [i for i in _match(invs) if (i.get("doc_type") or "invoice") == "invoice"]
+        all_docs = (db.table("commerce_invoices")
+                   .select("total_cents,status,project,doc_type").eq("tenant_id", tenant_id)
+                   .limit(3000).execute().data or [])
+        matched = _match(all_docs)
+        invs = [i for i in matched if (i.get("doc_type") or "invoice") == "invoice"]
         inv_count = len(invs)
         invoiced = sum(int(i.get("total_cents") or 0) for i in invs) / 100.0
         invoiced_paid = sum(int(i.get("total_cents") or 0) for i in invs if i.get("status") == "paid") / 100.0
+        # 2026-08-12 fix: quotes (including BoQ-derived ones, which map to doc_type='quote' —
+        # there's no separate doc_type for a BoQ) were silently invisible here entirely, not
+        # just excluded from the contract figure. Confirmed live: a real project had R2.9M in
+        # quotes sitting in commerce_invoices with zero visibility in this money picture. Kept
+        # as a distinct figure, not merged into `invoiced` — a quote isn't a commitment the way
+        # a sent invoice is.
+        qts = [i for i in matched if (i.get("doc_type") or "") == "quote"]
+        quote_count = len(qts)
+        quoted = sum(int(i.get("total_cents") or 0) for i in qts) / 100.0
     except Exception as exc:
         logger.debug("project invoices skipped (run migration 055?): %s", exc)
 
@@ -343,6 +353,8 @@ def project_financials(tenant_id: str, project: str) -> dict:
         "invoiced": round(invoiced, 2),            # total raised to the client
         "invoiced_paid": round(invoiced_paid, 2),  # invoices marked paid
         "invoice_count": inv_count,
+        "quoted": round(quoted, 2),                 # quotes/BoQs on file — not yet an invoice
+        "quote_count": quote_count,
         "paid_in": round(paid_in, 2),              # cash received (ledger)
         "spent": spent,                            # cash out + expenses + labour
         "labour_cents": int(round(labour * 100)),  # casual labour paid on this project

@@ -519,6 +519,31 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     except Exception as exc:
         logger.warning("Pending doc update failed: %s", exc)
 
+    # 2026-08-12 fix — the financial record already committed by commit_inbound_document (at
+    # filing time, when the project wasn't yet known) never had its `project` updated once the
+    # tenant actually answered "which project?" here — only vula_filed_documents.project was
+    # ever touched. Confirmed live: a real R240,553.53 BoQ-derived quote sat permanently
+    # unlinked from any project this way. Propagate the resolution through to the real record.
+    invoice_id = doc.get("commerce_invoice_id")
+    if invoice_id:
+        try:
+            _client().table("commerce_invoices").update(
+                {"project": match["project"]}).eq("id", invoice_id).execute()
+        except Exception as exc:
+            logger.warning("Failed to propagate resolved project to commerce_invoices %s: %s",
+                           invoice_id, exc)
+        # Same BoQ→contract-value bridge commit_inbound_document does when the project is
+        # already known at commit time (vula/commerce/service.py's upsert_project_boq) — this
+        # covers the other, common case: the project is only resolved here, later.
+        if (doc.get("category") or "") == "Bill of Quantities (BOQ)":
+            try:
+                total_cents = (doc.get("fields") or {}).get("total_cents")
+                if total_cents:
+                    from vula.commerce.service import upsert_project_boq
+                    upsert_project_boq(tenant_id, match["project"], int(total_cents))
+            except Exception as exc:
+                logger.debug("BoQ bridge (resolve) skipped: %s", exc)
+
     # Learn from this correction so similar docs auto-file next time.
     learned = learn_filing_rule(tenant_id, doc.get("fields") or {}, match["project"])
 

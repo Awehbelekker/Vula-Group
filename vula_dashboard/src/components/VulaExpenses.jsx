@@ -23,6 +23,7 @@ export default function VulaExpenses({ tenantId }) {
   const [rows, setRows] = useState([]);
   const [projects, setProjects] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [sections, setSections] = useState([]);
   const [rep, setRep] = useState(null);
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(false);
@@ -44,6 +45,7 @@ export default function VulaExpenses({ tenantId }) {
     setRows(d.expenses || []);
     setProjects(d.projects || []);
     setCategories(d.categories || []);
+    setSections(d.sections || []);
     setRep(r);
     setCards(c.cards || []);
     setBusy(false);
@@ -94,7 +96,7 @@ export default function VulaExpenses({ tenantId }) {
         </div>
       )}
 
-      {adding && <AddForm tenantId={tenantId} projects={projects} onDone={() => { setAdding(false); load(); }} />}
+      {adding && <AddForm tenantId={tenantId} projects={projects} sections={sections} onDone={() => { setAdding(false); load(); }} />}
 
       {/* Company card register — whose money decides reimbursement + bank matching */}
       <div style={{ ...card, margin: "0 0 10px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -137,13 +139,13 @@ export default function VulaExpenses({ tenantId }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: C.muted, background: C.alt }}>
-              {["Date", "What", "Who paid", "Amount", "VAT", "Category", "Project", "Notes", "Status", ""].map(h =>
+              {["Date", "What", "Who paid", "Amount", "VAT", "Category", "Project", "Section", "Notes", "Status", ""].map(h =>
                 <th key={h} style={th}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
-            {busy && <tr><td colSpan={10} style={{ ...td, color: C.muted }}>Loading…</td></tr>}
-            {!busy && !rows.length && <tr><td colSpan={10} style={{ ...td, color: C.muted }}>No expenses yet. Snap a receipt on WhatsApp or add one.</td></tr>}
+            {busy && <tr><td colSpan={11} style={{ ...td, color: C.muted }}>Loading…</td></tr>}
+            {!busy && !rows.length && <tr><td colSpan={11} style={{ ...td, color: C.muted }}>No expenses yet. Snap a receipt on WhatsApp or add one.</td></tr>}
             {rows.map(e => {
               const st = STATUS[e.status] || { label: e.status, color: C.muted };
               return (
@@ -179,6 +181,17 @@ export default function VulaExpenses({ tenantId }) {
                     </select>
                   </td>
                   <td style={td}>
+                    {/* Unlike project, no pending/warning state — a BoQ trade section is
+                        genuinely optional (most tenants don't run BoQs at all), so this is
+                        always neutral, not amber. Options come from the project's own BoQ
+                        breakdown once one exists (vula_project_boq.sections, migration 129). */}
+                    <select value={e.section || ""} onChange={ev => assign(e.id, { section: ev.target.value })}
+                      style={{ ...miniInput, maxWidth: 130 }}>
+                      <option value="">No section</option>
+                      {sections.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </td>
+                  <td style={td}>
                     <input defaultValue={e.notes || ""} placeholder="note for the accountant…"
                       onBlur={ev => { if (ev.target.value !== (e.notes || "")) assign(e.id, { notes: ev.target.value }); }}
                       style={{ ...miniInput, width: 130 }} />
@@ -202,8 +215,8 @@ export default function VulaExpenses({ tenantId }) {
   );
 }
 
-function AddForm({ tenantId, projects, onDone }) {
-  const [f, setF] = useState({ description: "", amount: "", supplier: "", date: "", project: "", paid_by_name: "", reimbursable: false });
+function AddForm({ tenantId, projects, sections, onDone }) {
+  const [f, setF] = useState({ description: "", amount: "", supplier: "", date: "", project: "", section: "", paid_by_name: "", reimbursable: false });
   const [busy, setBusy] = useState(false);
   const s = (k, v) => setF(o => ({ ...o, [k]: v }));
   const submit = async () => {
@@ -214,7 +227,7 @@ function AddForm({ tenantId, projects, onDone }) {
       body: JSON.stringify({
         amount_cents: Math.round(parseFloat(f.amount) * 100), description: f.description,
         supplier: f.supplier || null, date: f.date || null, project: f.project || null,
-        paid_by_name: f.paid_by_name || null, reimbursable: f.reimbursable,
+        section: f.section || null, paid_by_name: f.paid_by_name || null, reimbursable: f.reimbursable,
       }),
     });
     setBusy(false); onDone();
@@ -229,6 +242,10 @@ function AddForm({ tenantId, projects, onDone }) {
       <select value={f.project} onChange={e => s("project", e.target.value)} style={input}>
         <option value="">No project</option>
         {projects.map(p => <option key={p} value={p}>{p}</option>)}
+      </select>
+      <select value={f.section} onChange={e => s("section", e.target.value)} style={input}>
+        <option value="">No section</option>
+        {sections.map(sec => <option key={sec} value={sec}>{sec}</option>)}
       </select>
       <label style={{ fontSize: 12, color: C.muted, display: "flex", alignItems: "center", gap: 3 }}>
         <input type="checkbox" checked={f.reimbursable} onChange={e => s("reimbursable", e.target.checked)} /> reimburse me

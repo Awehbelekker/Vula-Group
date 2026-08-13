@@ -81,3 +81,23 @@ def test_notes_are_saved():
 
     patch_arg = mock_db.table.return_value.update.call_args[0][0]
     assert patch_arg["notes"] == "Ask the accountant about this one"
+
+
+def test_section_is_saved():  # migration 129
+    row = {"id": EID, "supplier": "Bauxite Extrusions"}
+    mock_db = _mock_db(row)
+    with patch("vula.commerce.expenses._client", return_value=mock_db):
+        assign(TID, EID, section="Demolition")
+
+    patch_arg = mock_db.table.return_value.update.call_args[0][0]
+    assert patch_arg["section"] == "Demolition"
+
+
+def test_explicit_empty_section_is_saved_as_empty_string():
+    row = {"id": EID, "supplier": "Bauxite Extrusions"}
+    mock_db = _mock_db(row)
+    with patch("vula.commerce.expenses._client", return_value=mock_db):
+        assign(TID, EID, section="")
+
+    patch_arg = mock_db.table.return_value.update.call_args[0][0]
+    assert patch_arg["section"] == ""

@@ -12,7 +12,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from config import settings
 from supabase import create_client, Client
@@ -1642,9 +1642,39 @@ async def delete_supplier(tenant_id: str, supplier_id: str) -> None:
     )
 
 
+def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
+                       title: Optional[str] = None, source_job: Optional[str] = None,
+                       sections: Optional[list] = None) -> None:
+    """Persist a project's BoQ/contract value — same upsert shape as the manual dashboard
+    endpoint (vula/api/projects.py's set_project_boq), reused here so a real filed BoQ document
+    can populate it automatically instead of only via manual dashboard entry. 2026-08-12: a real
+    BoQ document was confirmed to get a real total_cents extracted and committed as a quote, but
+    nothing ever bridged that total into vula_project_boq — the project's "contract value" stayed
+    at 0 regardless of a real, substantial BoQ being on file.
+
+    `sections` (migration 129) is [{"section": "Demolition", "budget_cents": ...}, ...] — the
+    BoQ's real trade-section breakdown, so site expenses can eventually be compared against a
+    section's own budget, not just the whole project's lump total. Omitted (None) on purpose
+    when not explicitly given: PostgREST upsert only touches columns present in the payload, so
+    leaving `sections` out here preserves whatever was already set rather than resetting it —
+    the auto-bridge from a scanned BoQ (no reliable per-section signal in that extraction) must
+    never clobber a real breakdown entered manually."""
+    row: Dict[str, Any] = {
+        "tenant_id": tenant_id, "project": project, "title": title,
+        "total_cents": int(total_cents or 0), "source_job": source_job, "updated_at": _now(),
+    }
+    if sections is not None:
+        row["sections"] = sections
+    try:
+        _client().table("vula_project_boq").upsert(row, on_conflict="tenant_id,project").execute()
+    except Exception as exc:
+        logger.debug("upsert_project_boq skipped (run migration 056/129?): %s", exc)
+
+
 async def commit_inbound_document(
     tenant_id: str, extracted: dict, *, auto_commit: bool = True, source: str = "scanner",
     filed_document_id: Optional[str] = None, project: Optional[str] = None,
+    is_boq: bool = False,
 ) -> dict:
     """Commit an extracted inbound document (invoice/quote/delivery_note/receipt) into the
     books: supplier match (or auto-create for a genuinely new supplier), due-date calc,
@@ -1788,6 +1818,14 @@ async def commit_inbound_document(
         }
         result = db.table("commerce_invoices").insert(row).execute()
         committed_record = result.data[0] if result.data else row
+        # Bridge a real BoQ's total into the project's tracked contract value — confirmed live
+        # 2026-08-12: a real, substantial BoQ (R240,553.53) got committed here as a quote but
+        # never once reached vula_project_boq, leaving the project's "contract value" at 0
+        # regardless. Only fires when the project is already confidently known at commit time;
+        # doc_filing.resolve_pending_document does the same bridge for the (common) case where
+        # the project is only resolved later via the "which project?" WhatsApp answer.
+        if is_boq and project:
+            upsert_project_boq(tenant_id, project, total_cents)
     else:
         # Reimbursable inference (2026-08-08 fix) — this insert used to omit the key entirely,
         # silently defaulting to the column's `false` regardless of what the document itself

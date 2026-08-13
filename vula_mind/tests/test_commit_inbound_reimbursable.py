@@ -86,6 +86,59 @@ async def test_company_card_payment_not_reimbursable():
     assert captured["row"]["reimbursable"] is False
 
 
+# ── BoQ → project contract-value bridge (2026-08-12) ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_boq_commit_bridges_total_to_project_boq_when_project_known():
+    """Confirmed live: a real R240,553.53 BoQ got committed as a quote but never once reached
+    vula_project_boq — the project's tracked "contract value" stayed at 0 regardless."""
+    mock_db, captured = _mock_db()
+    extracted = {"doc_type": "quote", "supplier": "Some Supplier", "total_cents": 24055353,
+                 "line_items": []}
+    with (
+        patch("vula.commerce.service._client", return_value=mock_db),
+        patch("vula.commerce.service.match_supplier", new=AsyncMock(return_value=None)),
+        patch("vula.commerce.service.upsert_project_boq") as mock_upsert_boq,
+    ):
+        result = await commit_inbound_document(
+            TID, extracted, auto_commit=True, project="Porterfield", is_boq=True)
+
+    assert result["committed"] is True
+    mock_upsert_boq.assert_called_once_with(TID, "Porterfield", 24055353)
+
+
+@pytest.mark.asyncio
+async def test_boq_commit_does_not_bridge_when_project_unknown():
+    """The common real case: a BoQ arrives before the project is confirmed — the bridge must
+    wait for resolve_pending_document, not fire on a guess."""
+    mock_db, captured = _mock_db()
+    extracted = {"doc_type": "quote", "supplier": "Some Supplier", "total_cents": 24055353,
+                 "line_items": []}
+    with (
+        patch("vula.commerce.service._client", return_value=mock_db),
+        patch("vula.commerce.service.match_supplier", new=AsyncMock(return_value=None)),
+        patch("vula.commerce.service.upsert_project_boq") as mock_upsert_boq,
+    ):
+        await commit_inbound_document(TID, extracted, auto_commit=True, project=None, is_boq=True)
+
+    mock_upsert_boq.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_boq_quote_does_not_bridge():
+    mock_db, captured = _mock_db()
+    extracted = {"doc_type": "quote", "supplier": "Some Supplier", "total_cents": 50000,
+                 "line_items": []}
+    with (
+        patch("vula.commerce.service._client", return_value=mock_db),
+        patch("vula.commerce.service.match_supplier", new=AsyncMock(return_value=None)),
+        patch("vula.commerce.service.upsert_project_boq") as mock_upsert_boq,
+    ):
+        await commit_inbound_document(TID, extracted, auto_commit=True, project="HPC_Bokaap")
+
+    mock_upsert_boq.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_quote_with_no_extracted_total_is_not_committed():
     """2026-08-08 fix: a quote/invoice/delivery_note with total_cents defaulting to 0 (failed

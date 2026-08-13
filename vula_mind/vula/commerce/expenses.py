@@ -63,6 +63,35 @@ def known_projects(tenant_id: str) -> List[str]:
     return sorted(names)
 
 
+def known_sections(tenant_id: str, project: Optional[str] = None) -> List[str]:
+    """Distinct BoQ trade-section names Vula already knows (migration 129) — from a project's
+    persisted BoQ breakdown (vula_project_boq.sections) plus any section already used on a real
+    expense. `project` optionally scopes to one project's BoQ; omitted, unions across all of
+    them (still useful as an "easy pick" list even before a specific project is chosen)."""
+    names: set[str] = set()
+    db = _client()
+    try:
+        q = db.table("vula_project_boq").select("project,sections").eq("tenant_id", tenant_id)
+        if project:
+            q = q.eq("project", project)
+        for r in (q.limit(500).execute().data or []):
+            for s in (r.get("sections") or []):
+                v = (s.get("section") or "").strip() if isinstance(s, dict) else ""
+                if v:
+                    names.add(v)
+    except Exception:
+        pass
+    try:
+        for r in (db.table("commerce_expenses").select("section").eq("tenant_id", tenant_id)
+                  .not_.is_("section", "null").limit(500).execute().data or []):
+            v = (r.get("section") or "").strip()
+            if v:
+                names.add(v)
+    except Exception:
+        pass
+    return sorted(names)
+
+
 def match_project(tenant_id: str, text: str, projects: Optional[List[str]] = None) -> Optional[str]:
     """Loose-match a project from free text (e.g. 'for the bokaap site') to a known project name.
     Returns the canonical project name, or None if nothing matches confidently."""
@@ -147,6 +176,7 @@ async def create_claim(
     category: Optional[str] = None,
     account_code: Optional[str] = None,
     project: Optional[str] = None,
+    section: Optional[str] = None,
     paid_by: Optional[str] = None,
     paid_by_name: Optional[str] = None,
     reimbursable: bool = False,
@@ -233,7 +263,7 @@ async def create_claim(
         "description": description or (supplier or "Expense"),
         "amount_cents": amount_cents, "vat_cents": int(vat_cents or 0),
         "supplier": supplier, "supplier_id": supplier_id, "category": category, "account_code": account_code,
-        "project": project, "paid_by": paid_by, "paid_by_name": paid_by_name,
+        "project": project, "section": section, "paid_by": paid_by, "paid_by_name": paid_by_name,
         "reimbursable": bool(reimbursable), "status": "submitted",
         "paid_with": paid_with, "card_last4": re.sub(r"\D", "", card_last4 or "")[-4:] or None,
         "channel": channel, "receipt_doc_id": receipt_doc_id, "receipt_url": receipt_url,
@@ -245,7 +275,7 @@ async def create_claim(
     except Exception as exc:
         log.warning("expense insert retry (pre-060/061?): %s", exc)
         for k in ("paid_by", "paid_by_name", "reimbursable", "channel", "paid_with",
-                  "card_last4", "receipt_doc_id", "notes", "updated_at", "supplier_id"):
+                  "card_last4", "receipt_doc_id", "notes", "updated_at", "supplier_id", "section"):
             row.pop(k, None)
         res = db.table("commerce_expenses").insert(row).execute()
     out = (res.data or [row])[0]
@@ -295,7 +325,7 @@ def set_status(tenant_id: str, expense_id: str, status: str) -> dict:
 
 def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,
            account_code: Optional[str] = None, category: Optional[str] = None,
-           notes: Optional[str] = None) -> dict:
+           notes: Optional[str] = None, section: Optional[str] = None) -> dict:
     """Owner corrects/allocates a claim → apply + LEARN the account/project rule for next time."""
     db = _client()
     row = (db.table("commerce_expenses").select("*").eq("tenant_id", tenant_id)
@@ -309,6 +339,9 @@ def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,
         # WhatsApp "none" answer was silently undone. Keep the two states distinct: NULL = still
         # pending (keeps getting asked about), '' = resolved, no project.
         patch["project"] = project
+    if section is not None:
+        # Same NULL-vs-'' distinction as project, for the same reason (migration 129).
+        patch["section"] = section
     if notes is not None:
         patch["notes"] = notes
     if account_code:

@@ -1277,6 +1277,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                     tenant_id, commit_fields, auto_commit=True, source=source,
                     filed_document_id=row.get("id") if row else None,
                     project=match["project"] if confident else None,
+                    is_boq=(category == "Bill of Quantities (BOQ)"),
                 )
             except Exception as exc:
                 logger.warning("commit_inbound_document failed for %s: %s", result.filename, exc)

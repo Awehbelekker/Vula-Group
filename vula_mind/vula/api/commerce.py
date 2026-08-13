@@ -1582,6 +1582,7 @@ class ExpenseIn(BaseModel):
     category: Optional[str] = None
     account_code: Optional[str] = None
     project: Optional[str] = None
+    section: Optional[str] = None
     paid_by: Optional[str] = None
     paid_by_name: Optional[str] = None
     reimbursable: bool = False
@@ -1596,6 +1597,7 @@ class ExpenseAssignIn(BaseModel):
     account_code: Optional[str] = None
     category: Optional[str] = None
     notes: Optional[str] = None
+    section: Optional[str] = None
 
 
 @router.get("/{tenant_id}/admin/expenses")
@@ -1609,6 +1611,7 @@ async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
     accounts = [a for a in accounting.ensure_chart(tenant_id) if a.get("type") == "expense"]
     return {"expenses": expenses.list_claims(tenant_id, status=status, reimbursable=reimbursable,
                                              project=project, since=since, until=until),
+            "sections": expenses.known_sections(tenant_id, project=project),
             "projects": expenses.known_projects(tenant_id),
             "categories": [{"code": a["code"], "name": a["name"]} for a in accounts]}
 

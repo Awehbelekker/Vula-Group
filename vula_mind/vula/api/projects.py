@@ -43,24 +43,46 @@ async def get_project_financials(tenant: str, project: str) -> dict:
     return project_financials(tenant, project)
 
 
+class BoqSectionIn(BaseModel):
+    section: str
+    budget: float                # section budget in Rands
+
+
 class BoqIn(BaseModel):
     total: float                 # BoQ / contract value in Rands
     title: Optional[str] = None
     source_job: Optional[str] = None
+    sections: Optional[list[BoqSectionIn]] = None    # trade-section breakdown (migration 129)
 
 
 @router.post("/{tenant}/p/{project}/boq")
 async def set_project_boq(tenant: str, project: str, body: BoqIn) -> dict:
     """Persist a project's BoQ / contract value (e.g. from a takeoff) so it survives restarts
-    and drives the unified project financials' contract figure."""
-    row = {"tenant_id": tenant, "project": project, "title": body.title,
-           "total_cents": int(round(body.total * 100)), "source_job": body.source_job,
-           "updated_at": "now()"}
+    and drives the unified project financials' contract figure. `sections` (optional) is the
+    BoQ's real trade-section breakdown, so site expenses can be compared per-section, not just
+    against the whole project's lump total."""
+    from vula.commerce.service import upsert_project_boq
+    sections = ([{"section": s.section, "budget_cents": int(round(s.budget * 100))}
+                for s in body.sections] if body.sections is not None else None)
     try:
-        _client().table("vula_project_boq").upsert(row, on_conflict="tenant_id,project").execute()
+        upsert_project_boq(tenant, project, int(round(body.total * 100)),
+                           title=body.title, source_job=body.source_job, sections=sections)
+    except Exception as exc:
+        return {"error": f"{exc} (run migration 056/129?)"}
+    return {"project": project, "contract": body.total, "sections": sections}
+
+
+@router.get("/{tenant}/p/{project}/boq")
+async def get_project_boq(tenant: str, project: str) -> dict:
+    """Current BoQ/contract value + trade-section breakdown for one project."""
+    try:
+        rows = (_client().table("vula_project_boq").select("*")
+               .eq("tenant_id", tenant).eq("project", project).limit(1).execute().data or [])
     except Exception as exc:
         return {"error": f"{exc} (run migration 056?)"}
-    return {"project": project, "contract": body.total}
+    if not rows:
+        return {"project": project, "total_cents": 0, "sections": []}
+    return rows[0]
 
 
 class BudgetIn(BaseModel):
