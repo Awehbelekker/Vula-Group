@@ -1089,6 +1089,200 @@ async def admin_analyze_persona(tenant_id: str):
     return {"ok": True, **result}
 
 
+class PageAiDraftRequest(BaseModel):
+    content: list = []
+    description: str = ""
+    mood: str = ""   # optional curated MOOD_PRESETS key — see page_copy.MOOD_PRESETS
+
+
+@router.post("/{tenant_id}/admin/pages/ai-draft")
+async def admin_ai_draft_page_copy(tenant_id: str, body: PageAiDraftRequest):
+    """AI-drafted real copy for a page-builder template's marketing-copy fields, grounded in the
+    tenant's real business_type/invoice-and-order settings/persona_prompt/ingested KB (if any)
+    plus an optional one-line description. Never invents contact facts (phone/email/address come
+    only from real settings) and never touches Testimonials (see page_copy.py). Proposal only —
+    the dashboard drops the returned content into whatever page is currently open in the editor;
+    Save draft / Publish there is still the explicit review/accept step, same as any manual edit.
+
+    If `mood` is a recognized preset key, the response also includes a `theme` suggestion (font/
+    color/motion) — a pure deterministic lookup, no extra LLM call — and motion (`animation`
+    props) is assigned across the drafted content accordingly. Motion is always assigned with a
+    restrained "subtle" default even without a mood, per the same design-restraint principle.
+
+    Before motion is assigned, every draft always gets a bounded polish pass
+    (page_copy.polish_page) over the ASSEMBLED content — one mandatory holistic "does this feel
+    specific and finished, not generic" pass, plus one further targeted fix pass if a
+    deterministic check (Hero title too long, a thin/unfinished section, weak button-text
+    contrast against the resolved accent color) still finds something afterward. Hard-capped at
+    2 total polish LLM calls — bounded, not an unbounded refine loop. Runs here (not inside
+    generate_page_copy) because the accent-contrast check needs the resolved theme, which isn't
+    known until after copy generation."""
+    if not body.content:
+        raise HTTPException(status_code=400, detail="content is required")
+    from vula.commerce import page_copy
+    result = await page_copy.generate_page_copy(tenant_id, body.content, description=body.description)
+    if "error" in result:
+        return result
+    theme = page_copy.suggest_theme(mood=body.mood or None)
+    result["content"] = await page_copy.polish_page(result["content"], theme)
+    result["content"] = page_copy.assign_motion(result["content"], theme["motion_intensity"])
+    if body.mood:
+        result["theme"] = theme
+    return result
+
+
+class PageAiRefineRequest(BaseModel):
+    content: list = []
+    instruction: str = ""
+    add_features: list = []   # feature keys from analyze-reference's features_found, e.g. ["booking", "faq"]
+
+
+@router.post("/{tenant_id}/admin/pages/ai-refine")
+async def admin_ai_refine_page_copy(tenant_id: str, body: PageAiRefineRequest):
+    """Adjust the CURRENT draft (already AI-generated or manually edited) per a specific
+    free-text instruction from the owner — e.g. "make the headline punchier". Same safety
+    guarantees as ai-draft: contact facts never LLM-written, Testimonials never touched,
+    per-field defensive merge (see page_copy.refine_page_copy). Proposal only, same review
+    posture as ai-draft — nothing is saved here.
+
+    If `add_features` is given (feature keys from analyze-reference's own response), each
+    recognized one (page_copy.FEATURE_BLOCK_MAP) is appended as a new block via
+    page_copy.add_block, then filled with real business-specific copy via a scoped internal
+    instruction — the SAME refine_page_copy pipeline, so the rest of the page is never touched.
+    Unrecognized/unsupported feature keys are silently skipped here — the dashboard already knows
+    which are unsupported from analyze-reference's response and is responsible for telling the
+    tenant, not this endpoint."""
+    if not body.content and not body.add_features:
+        raise HTTPException(status_code=400, detail="content is required")
+    from vula.commerce import page_copy
+    content = list(body.content)
+    added_ids = []
+    for feature in body.add_features:
+        block_type = page_copy.FEATURE_BLOCK_MAP.get(feature)
+        if not block_type:
+            continue
+        content = page_copy.add_block(content, block_type)
+        added_ids.append(content[-1]["props"]["id"])
+
+    if added_ids:
+        instruction = ("Write real, business-specific content for the new section(s) you just "
+                        f"added (block ids: {', '.join(added_ids)}). Leave every other section "
+                        "exactly as it already is.")
+        if body.instruction and body.instruction.strip():
+            instruction += f" Also: {body.instruction.strip()}"
+        return await page_copy.refine_page_copy(tenant_id, content, instruction)
+
+    if not body.instruction or not body.instruction.strip():
+        raise HTTPException(status_code=400, detail="instruction is required")
+    return await page_copy.refine_page_copy(tenant_id, content, body.instruction)
+
+
+class PageAnalyzeReferenceRequest(BaseModel):
+    urls: list = []
+
+
+@router.post("/{tenant_id}/admin/pages/analyze-reference")
+async def admin_analyze_reference(tenant_id: str, body: PageAnalyzeReferenceRequest):
+    """Safely fetch and analyze up to 3 tenant-supplied "sites I like" URLs for known features
+    (booking/faq/pricing/shop_grid/etc — see reference_url.KNOWN_FEATURES), constrained to a
+    fixed vocabulary so the model classifies rather than invents. Text/structure analysis only —
+    no visual/screenshot analysis (no headless browser exists in this deployment; see
+    reference_url.py's module docstring). Uses a purpose-built, SSRF-hardened fetcher — NOT
+    web_scraper.py's WebFetcher, which has no protection against a tenant-supplied URL resolving
+    to an internal/cloud-metadata address. Never persists anything; the dashboard uses the
+    response to ask the tenant which features to add via ai-refine's add_features."""
+    if not body.urls:
+        raise HTTPException(status_code=400, detail="urls is required")
+    from vula.commerce import reference_url
+    return await reference_url.analyze_reference_urls(body.urls)
+
+
+@router.post("/{tenant_id}/admin/pages/design-reference")
+async def admin_design_reference(tenant_id: str, body: dict):
+    """Analyze a tenant-uploaded reference image (a look they like — a website screenshot, photo,
+    or mood board) and suggest a storefront theme. Mirrors admin_clone_invoice_style's shape
+    (fetch already-uploaded file_url, downscale + re-encode as base64 JPEG, call the strong cloud
+    vision model) with one deliberate accuracy change: the vision model's ONLY job is picking the
+    closest MOOD_PRESETS bucket (a constrained classification, not open-ended generation) — the
+    actual accent color is computed deterministically from the image's own pixels
+    (page_copy.extract_dominant_color, zero LLM involvement) and snapped to that preset's own
+    pre-vetted, contrast-checked shortlist. Proposal only — nothing is saved here."""
+    import asyncio
+    import base64
+    import io
+    import json as _json
+    import re as _re
+    from vula.commerce import page_copy
+
+    file_url = (body or {}).get("file_url")
+    if not file_url:
+        raise HTTPException(status_code=400, detail="file_url is required")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(file_url)
+            resp.raise_for_status()
+            data = resp.content
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Couldn't fetch that file: {exc}")
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File is too large (max 15MB)")
+
+    from PIL import Image
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img.thumbnail((1600, 1600))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
+    except Exception as exc:
+        log.warning("Design reference: couldn't read uploaded file for %s: %s", tenant_id, exc)
+        raise HTTPException(status_code=400, detail="Couldn't read that image — try a different file")
+
+    # Deterministic, non-LLM color extraction — happens regardless of whether the vision call
+    # below succeeds, so a flaky/unavailable vision model degrades to "preset default color"
+    # rather than blocking the whole feature.
+    dominant_hex = page_copy.extract_dominant_color(img)
+
+    from core.llm_router import resolve_cloud_vision_route
+    cloud = resolve_cloud_vision_route()
+    mood = None
+    style_note = ""
+    if cloud:
+        model, api_key, api_base = cloud
+        try:
+            import litellm
+            litellm.drop_params = True
+            response = await asyncio.wait_for(litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": page_copy.DESIGN_REFERENCE_PROMPT},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": "Classify this reference image's design mood."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                    ]},
+                ],
+                temperature=0.1, max_tokens=200, api_key=api_key, api_base=api_base,
+            ), timeout=30)
+            content = response.choices[0].message.content or "{}"
+            content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
+            content = _re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=_re.MULTILINE).strip()
+            try:
+                raw = _json.loads(content)
+            except Exception:
+                m = _re.search(r"\{.*\}", content, _re.DOTALL)
+                raw = _json.loads(m.group(0)) if m else {}
+            cleaned = page_copy.clean_design_reference(raw if isinstance(raw, dict) else {})
+            mood = cleaned.get("mood")
+            style_note = cleaned.get("style_note", "")
+        except Exception as exc:
+            log.warning("Design reference: vision call failed for %s: %s", tenant_id, exc)
+            # Fall through with mood=None — suggest_theme() defaults sanely either way.
+
+    theme = page_copy.suggest_theme(mood=mood, computed_dominant_hex=dominant_hex)
+    return {"theme": theme, "style_note": style_note}
+
+
 class MarketingRequest(BaseModel):
     kind: str = "specials"          # specials | product | promo | broadcast
     topic: str = ""                 # product name (for 'product') or the offer/subject

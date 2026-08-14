@@ -609,6 +609,99 @@ export const config = {
         );
       },
     },
+    Booking: {
+      label: "Booking calendar (live)",
+      fields: {
+        title: { type: "text" },
+        subtitle: { type: "text" },
+      },
+      defaultProps: { title: "Book an appointment", subtitle: "Pick a service and a time that works for you." },
+      render: (props) => <LiveBooking {...props} />,
+    },
+    FAQ: {
+      label: "FAQ",
+      fields: {
+        title: { type: "text" },
+        items: {
+          type: "array", arrayFields: { question: { type: "text" }, answer: { type: "textarea" } },
+          defaultItemProps: { question: "Question", answer: "Answer." },
+        },
+      },
+      defaultProps: {
+        title: "Frequently asked questions",
+        items: [
+          { question: "Question one", answer: "Answer one." },
+          { question: "Question two", answer: "Answer two." },
+        ],
+      },
+      render: ({ title, items }) => {
+        const [openIndex, setOpenIndex] = useState(null);
+        const listRef = useStaggerReveal();
+        return (
+          <section style={{ ...wrap, padding: "48px 16px" }}>
+            {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 32, color: INK }}>{title}</h2> : null}
+            <div ref={listRef} style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 10 }}>
+              {(items || []).map((it, i) => {
+                const open = openIndex === i;
+                return (
+                  <div key={i} className="vula-stagger-item" style={{ ...staggerDelay(i), border: "1px solid #e5e5e5", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+                    <button onClick={() => setOpenIndex(open ? null : i)} style={{ width: "100%", textAlign: "left", padding: "14px 18px", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, fontSize: 15, color: INK }}>
+                      {it.question}
+                      <span style={{ marginLeft: 12, color: ACCENT, transform: open ? "rotate(45deg)" : "none", transition: "transform 0.2s ease" }}>+</span>
+                    </button>
+                    {open ? <div style={{ padding: "0 18px 16px", color: "#666", lineHeight: 1.6 }}>{it.answer}</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      },
+    },
+    PricingTable: {
+      label: "Pricing table",
+      fields: {
+        title: { type: "text" },
+        tiers: {
+          type: "array",
+          arrayFields: {
+            name: { type: "text" }, price: { type: "text" },
+            features: { type: "array", arrayFields: { value: { type: "text" } } },
+            ctaText: { type: "text", label: "Button text" },
+          },
+          defaultItemProps: { name: "Plan", price: "R0", features: [], ctaText: "Get started" },
+        },
+      },
+      defaultProps: {
+        title: "Pricing",
+        tiers: [
+          { name: "Basic", price: "R0", features: [{ value: "Feature one" }, { value: "Feature two" }], ctaText: "Get started" },
+          { name: "Standard", price: "R0", features: [{ value: "Feature one" }, { value: "Feature two" }, { value: "Feature three" }], ctaText: "Get started" },
+        ],
+      },
+      render: ({ title, tiers }) => {
+        const gridRef = useStaggerReveal();
+        return (
+          <section style={{ ...wrap, padding: "48px 16px" }}>
+            {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 32, color: INK }}>{title}</h2> : null}
+            <div ref={gridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 24 }}>
+              {(tiers || []).map((t, i) => (
+                <div key={i} className="vula-stagger-item vula-card-lift" style={{ ...staggerDelay(i), border: "1px solid #e5e5e5", borderRadius: 16, padding: 28, textAlign: "center", boxShadow: SHADOW_SM, background: "#fff", display: "flex", flexDirection: "column" }}>
+                  <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 6, color: INK }}>{t.name}</h3>
+                  <div style={{ fontWeight: 800, fontSize: 28, color: ACCENT, marginBottom: 16 }}>{t.price}</div>
+                  <ul style={{ listStyle: "none", padding: 0, margin: "0 0 20px", flex: 1, color: "#666", fontSize: 14, lineHeight: 2 }}>
+                    {(t.features || []).map((f, j) => <li key={j}>{f.value}</li>)}
+                  </ul>
+                  {t.ctaText ? (
+                    <button className="vula-btn-lift" style={{ padding: "10px 20px", borderRadius: 999, border: "none", background: ACCENT, color: ACCENT_FG, fontWeight: 600, cursor: "pointer" }}>{t.ctaText}</button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      },
+    },
   },
 };
 
@@ -736,6 +829,123 @@ function LiveCategories({ title, linkBase }) {
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+/* ── Live booking block (2026-08-14) — wired to the bookings backend (vula/api/bookings.py,
+   migration 050), already public/live for the dashboard's own scheduling tab and WhatsApp
+   booking flow ("book me Tue 2pm") — this just gives it a storefront face. Same
+   pageTenant()/apiBase() plumbing as the live product blocks above. Three steps client-side:
+   pick a service, pick a date (fetches that day's real availability), pick a slot + confirm. */
+
+function LiveBooking({ title, subtitle }) {
+  const [services, setServices] = useState(null);
+  const [serviceId, setServiceId] = useState("");
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [slots, setSlots] = useState(null);
+  const [slot, setSlot] = useState(null);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [status, setStatus] = useState(""); // "" | "booking" | "done" | "error"
+  const [errMsg, setErrMsg] = useState("");
+
+  useEffect(() => {
+    fetch(`${apiBase()}/v1/bookings/${pageTenant()}/services`)
+      .then((r) => r.json())
+      .then((d) => {
+        const rows = d.services || [];
+        setServices(rows);
+        if (rows[0]) setServiceId(rows[0].id);
+      })
+      .catch(() => setServices([]));
+  }, []);
+
+  useEffect(() => {
+    if (!date) return;
+    setSlots(null);
+    setSlot(null);
+    const q = serviceId ? `&service_id=${serviceId}` : "";
+    fetch(`${apiBase()}/v1/bookings/${pageTenant()}/availability?date=${date}${q}`)
+      .then((r) => r.json())
+      .then((d) => setSlots(d.slots || []))
+      .catch(() => setSlots([]));
+  }, [date, serviceId]);
+
+  const confirm = async () => {
+    if (!slot || !name.trim() || !phone.trim()) return;
+    setStatus("booking");
+    setErrMsg("");
+    try {
+      const res = await fetch(`${apiBase()}/v1/bookings/${pageTenant()}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service_id: serviceId || undefined, customer_name: name.trim(),
+          customer_phone: phone.trim(), start: slot.start_local, channel: "web",
+        }),
+      }).then((r) => r.json());
+      if (res.error) { setStatus("error"); setErrMsg(res.error); return; }
+      setStatus("done");
+    } catch {
+      setStatus("error");
+      setErrMsg("Could not complete the booking — please try again.");
+    }
+  };
+
+  const inputStyle = { padding: "10px 12px", border: "1px solid #ddd", borderRadius: 8, fontSize: 14, width: "100%", boxSizing: "border-box" };
+  const reveal = useReveal("fadeUp");
+
+  if (status === "done") {
+    return (
+      <section {...reveal} className="vula-reveal" style={{ ...wrap, padding: "48px 16px", textAlign: "center" }}>
+        <h2 style={{ fontSize: 26, fontWeight: 800, color: INK, marginBottom: 8 }}>Booked ✓</h2>
+        <p style={{ color: "#666" }}>You're confirmed for {slot?.label || slot?.start_local}. We'll be in touch if anything changes.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section {...reveal} className="vula-reveal" style={{ ...wrap, padding: "48px 16px" }}>
+      {title ? <h2 style={{ fontSize: 30, fontWeight: 800, textAlign: "center", marginBottom: 8, color: INK }}>{title}</h2> : null}
+      {subtitle ? <p style={{ textAlign: "center", color: "#666", marginBottom: 28 }}>{subtitle}</p> : null}
+      <div style={{ maxWidth: 480, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+        {services === null ? (
+          <div className="vula-skeleton" style={{ height: 44, borderRadius: 8 }} />
+        ) : services.length > 0 ? (
+          <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
+            {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        ) : null}
+        <input type="date" value={date} min={new Date().toISOString().slice(0, 10)}
+          onChange={(e) => setDate(e.target.value)} style={inputStyle} />
+        {slots === null ? (
+          <div className="vula-skeleton" style={{ height: 80, borderRadius: 8 }} />
+        ) : slots.length === 0 ? (
+          <p style={{ color: "#888", fontSize: 14, textAlign: "center" }}>No times available that day — try another date.</p>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {slots.map((s) => (
+              <button key={s.start_utc} onClick={() => setSlot(s)}
+                style={{ padding: "8px 14px", borderRadius: 999, border: `1px solid ${slot?.start_utc === s.start_utc ? ACCENT : "#ddd"}`,
+                  background: slot?.start_utc === s.start_utc ? ACCENT : "#fff", color: slot?.start_utc === s.start_utc ? ACCENT_FG : INK,
+                  cursor: "pointer", fontSize: 13.5 }}>
+                {s.label || s.start_local}
+              </button>
+            ))}
+          </div>
+        )}
+        {slot ? (
+          <>
+            <input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+            <input placeholder="Your phone (WhatsApp)" value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
+            {errMsg ? <p style={{ color: "#c0392b", fontSize: 13 }}>{errMsg}</p> : null}
+            <button onClick={confirm} disabled={status === "booking" || !name.trim() || !phone.trim()}
+              className="vula-btn-lift" style={{ padding: "12px 20px", borderRadius: 999, border: "none", background: ACCENT, color: ACCENT_FG, fontWeight: 600, cursor: "pointer" }}>
+              {status === "booking" ? "Booking…" : "Confirm booking"}
+            </button>
+          </>
+        ) : null}
+      </div>
     </section>
   );
 }

@@ -13,6 +13,7 @@ import "@measured/puck/puck.css";
 import { config, VULA_PUCK_STYLES } from "../puck/config";
 import { getTenantTheme } from "../theme/tenantThemes";
 import { FONT_PAIRINGS } from "../theme/tokens";
+import VulaImageUpload from "./VulaImageUpload";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 // Every tenant gets a real, live, SSR'd storefront the instant they publish — no more "no
@@ -37,6 +38,24 @@ const PREVIEW_VIEWPORTS = [
   { width: 768, height: "auto", label: "Tablet", icon: "Tablet" },
   { width: 390, height: "auto", label: "Mobile", icon: "Smartphone" },
 ];
+
+// Mirrors vula/commerce/page_copy.py's MOOD_PRESETS keys — a small, curated set the AI snaps
+// to (never a freely-generated style), so a tenant's pick is always deterministic and reliable.
+const MOOD_PRESETS = [
+  { key: "minimal", label: "Minimal" },
+  { key: "warm_earthy", label: "Warm & earthy" },
+  { key: "bold_energetic", label: "Bold & energetic" },
+  { key: "classic_elegant", label: "Classic & elegant" },
+  { key: "playful", label: "Playful & fun" },
+];
+
+// Mirrors page_copy.py's FEATURE_BLOCK_MAP — features a reference-URL analysis can offer to
+// actually ADD as a new, real block (Booking is wired to the real bookings backend; FAQ/Pricing
+// are content-only). Other recognized features (shop_grid/testimonials/gallery/contact_form)
+// aren't offered here since Vula already has an equivalent block for those.
+const ADDABLE_FEATURES = { booking: "a booking calendar", faq: "an FAQ section", pricing: "a pricing table" };
+const UNSUPPORTED_FEATURE_LABELS = { blog: "a blog", login: "account/login", live_chat: "live chat", newsletter_signup: "newsletter signup" };
+const URL_RE = /https?:\/\/[^\s]+/gi;
 
 const btn = (bg) => ({ padding: "8px 14px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#fff", background: bg, cursor: "pointer" });
 const rowStyle = { textAlign: "left", padding: "10px 12px", border: `1px solid #DDD8CE`, borderRadius: 8, background: "#FAF9F6", cursor: "pointer" };
@@ -176,6 +195,38 @@ export default function VulaPages({ tenantId }) {
   const [storeSettings, setStoreSettings] = useState(null); // real hero copy — seeds "Customize homepage" with truth, not placeholder text
   const latestData = useRef(null);   // Puck's live document (survives re-renders/saves)
   const [brand, setBrand] = useState(() => getTenantTheme(tenantId));
+  const [aiDraftBusy, setAiDraftBusy] = useState(false);
+  const [aiDraftErr, setAiDraftErr] = useState("");
+  // Puck's `data` prop is a one-shot useState initializer internally (confirmed in the installed
+  // package) — it does not react to being replaced after mount. Bumping this key forces a real
+  // remount whenever editing.data is replaced programmatically (AI-draft, restoreVersion), so the
+  // canvas actually reflects the new content instead of silently staying stale.
+  const [editorKey, setEditorKey] = useState(0);
+  // AI-draft style-direction modal — "editor" (fill whatever's currently open) or "homepage"
+  // (open+fill the homepage template) depending on which entry point was clicked.
+  const [aiDraftTarget, setAiDraftTarget] = useState(null);
+  const [aiDraftDescription, setAiDraftDescription] = useState("");
+  const [aiDraftMood, setAiDraftMood] = useState("");
+  const [aiDraftRefImageUrl, setAiDraftRefImageUrl] = useState("");
+  // A theme suggestion (color/font) the AI resolved alongside the copy — offered as an explicit,
+  // separate "Apply to brand kit" action, never silently written to real settings.
+  const [aiDraftTheme, setAiDraftTheme] = useState(null);
+  const [applyingTheme, setApplyingTheme] = useState(false);
+  // Conversational refine — mirrors VulaAssistant.jsx's chat shape (message list + input +
+  // send), scoped down: short confirmation bubbles instead of a general Q&A assistant, and each
+  // successful reply also applies the returned content to the open page.
+  const [showRefine, setShowRefine] = useState(false);
+  const [refineMessages, setRefineMessages] = useState([]);
+  const [refineInput, setRefineInput] = useState("");
+  const [refineSending, setRefineSending] = useState(false);
+  // Supported features found in the tenant's last-shared reference URL(s), offered as quick-add
+  // buttons under the analysis reply — cleared once the tenant adds one or sends a new message.
+  const [refineFoundFeatures, setRefineFoundFeatures] = useState([]);
+  const refineEndRef = useRef(null);
+  useEffect(() => { refineEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [refineMessages, refineSending]);
+  // A refine conversation is scoped to the page it happened on — switching to a different page
+  // (or back to the list) should never carry a stale thread/instruction context forward.
+  useEffect(() => { setRefineMessages([]); setShowRefine(false); setRefineFoundFeatures([]); }, [editing?.slug]);
 
   // Live product blocks in the editor preview need the tenant + API globals.
   useEffect(() => {
@@ -375,10 +426,242 @@ export default function VulaPages({ tenantId }) {
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}/versions/${versionId}/restore`, { method: "POST" }).catch(() => {});
     const p = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}`).then((r) => r.json()).catch(() => ({}));
     setEditing((e) => ({ ...e, data: norm(p.puck_data), status: p.status || "draft", title: p.title || e.title, seo: p.seo || {} }));
+    setEditorKey((k) => k + 1);  // editing.data was just replaced programmatically — force Puck to remount and pick it up
     setShowHistory(false);
     setMsg("Restored as draft ✓");
     setTimeout(() => setMsg(""), 2000);
   };
+
+  // ✨ AI-drafted copy + design — opens the style-direction modal, which on confirm fills the
+  // marketing-copy fields (headlines, section text, button labels, WhatsApp message) of whatever
+  // page is being targeted with real, business-specific writing, grounded server-side in this
+  // tenant's real settings/persona/KB (page_copy.py). Never touches Testimonials (customer
+  // quotes) and never invents phone/email/address — those are always the tenant's real settings
+  // or left blank, enforced server-side, not here. Same "review before it's live" boundary as
+  // any manual edit: this only changes what's loaded in the Puck editor / a suggested theme
+  // strip; Save draft / Publish and the separate "Apply theme" action are still explicit steps.
+  const openAiDraft = (target) => {
+    setAiDraftErr("");
+    setAiDraftTarget(target);
+  };
+
+  const runAiDraft = async () => {
+    const target = aiDraftTarget;
+    const baseContent = target === "homepage"
+      ? norm(homeSeed()).content
+      : (latestData.current || editing.data).content || [];
+
+    setAiDraftBusy(true);
+    setAiDraftErr("");
+    try {
+      let resolvedMood = aiDraftMood;
+      let resolvedTheme = null;
+      let styleNote = "";
+      if (aiDraftRefImageUrl) {
+        const ref = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/design-reference`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file_url: aiDraftRefImageUrl }),
+        }).then((r) => r.json());
+        if (ref.theme) { resolvedTheme = ref.theme; resolvedMood = ref.theme.mood; styleNote = ref.style_note || ""; }
+      }
+
+      const res = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/ai-draft`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: baseContent, description: aiDraftDescription.trim(), mood: resolvedMood }),
+      }).then((r) => r.json());
+      if (res.error) { setAiDraftErr(res.error); return; }
+
+      const finalTheme = resolvedTheme || res.theme || null;
+      const nextData = { content: res.content, root: { props: {} } };
+      if (target === "homepage") {
+        setEditing({ slug: "home", title: "Home", data: nextData, status: "draft", seo: {} });
+      } else {
+        latestData.current = nextData;
+        setEditing((e) => ({ ...e, data: nextData }));
+      }
+      setEditorKey((k) => k + 1); // force Puck remount so the canvas reflects the new data
+      if (finalTheme) setAiDraftTheme({ ...finalTheme, styleNote });
+      setMsg("Drafted ✓ — review before saving");
+      setTimeout(() => setMsg(""), 2500);
+      setAiDraftTarget(null);
+      setAiDraftDescription("");
+      setAiDraftMood("");
+      setAiDraftRefImageUrl("");
+    } catch {
+      setAiDraftErr("Could not draft this right now — please try again.");
+    } finally {
+      setAiDraftBusy(false);
+    }
+  };
+
+  // Explicit, separate action — never auto-applied. Only writes the 3 theme fields (a safe
+  // partial patch; the invoice-settings endpoint merges rather than overwrites).
+  const applyAiDraftTheme = async () => {
+    if (!aiDraftTheme) return;
+    setApplyingTheme(true);
+    try {
+      await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accent_color: aiDraftTheme.accent_color, ink_color: aiDraftTheme.ink_color,
+          font_pairing: aiDraftTheme.font_pairing,
+        }),
+      }).catch(() => {});
+      setBrand((b) => ({ ...b, accent: aiDraftTheme.accent_color, ink: aiDraftTheme.ink_color, fontPairing: aiDraftTheme.font_pairing }));
+      setMsg("Theme applied ✓");
+      setTimeout(() => setMsg(""), 2000);
+      setAiDraftTheme(null);
+    } finally {
+      setApplyingTheme(false);
+    }
+  };
+
+  // Conversational refine — adjusts the CURRENT draft in place per a plain-language instruction,
+  // instead of re-rolling the whole page from scratch. Same safety guarantees as AI-draft
+  // (contact facts real-data-only, Testimonials never touched) enforced server-side.
+  // Applies whatever content ai-refine/analyze-reference produced to the open editor — shared by
+  // sendRefine's instruction path and addFeature's confirm path.
+  const applyRefinedContent = (base, content) => {
+    const next = { ...base, content };
+    latestData.current = next;
+    setEditing((e) => ({ ...e, data: next }));
+    setEditorKey((k) => k + 1);
+  };
+
+  const sendRefine = async (text) => {
+    const raw = (text ?? refineInput).trim();
+    if (!raw || refineSending || !editing) return;
+    setRefineInput("");
+    setRefineFoundFeatures([]);
+    setRefineMessages((m) => [...m, { role: "user", text: raw }]);
+    setRefineSending(true);
+    try {
+      const base = latestData.current || editing.data;
+      const urls = raw.match(URL_RE);
+
+      // A pasted URL means "here's a site I like" — analyze it for features instead of treating
+      // the whole message as a copy-edit instruction.
+      if (urls && urls.length) {
+        const res = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/analyze-reference`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls }),
+        }).then((r) => r.json());
+        if (res.error) {
+          setRefineMessages((m) => [...m, { role: "assistant", text: res.error }]);
+          return;
+        }
+        const addable = (res.features_found || []).filter((f) => ADDABLE_FEATURES[f]);
+        const unsupported = (res.features_found || []).filter((f) => UNSUPPORTED_FEATURE_LABELS[f]);
+        let reply = res.notes ? `I looked at that — ${res.notes} ` : "I looked at that. ";
+        if (addable.length) {
+          reply += `I can add ${addable.map((f) => ADDABLE_FEATURES[f]).join(" and ")} — tap below to add one.`;
+        } else {
+          reply += "I didn't spot anything I can add as a new section right now.";
+        }
+        if (unsupported.length) {
+          reply += ` (It also has ${unsupported.map((f) => UNSUPPORTED_FEATURE_LABELS[f]).join(" and ")}, which Vula doesn't support yet.)`;
+        }
+        setRefineMessages((m) => [...m, { role: "assistant", text: reply }]);
+        setRefineFoundFeatures(addable);
+        return;
+      }
+
+      const res = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/ai-refine`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: base.content || [], instruction: raw }),
+      }).then((r) => r.json());
+      if (res.error) {
+        setRefineMessages((m) => [...m, { role: "assistant", text: res.error }]);
+        return;
+      }
+      applyRefinedContent(base, res.content);
+      setRefineMessages((m) => [...m, { role: "assistant", text: "Done — take a look ✓" }]);
+    } catch {
+      setRefineMessages((m) => [...m, { role: "assistant", text: "Connection error — please try again." }]);
+    } finally {
+      setRefineSending(false);
+    }
+  };
+
+  const addFeature = async (featureKey) => {
+    if (refineSending || !editing) return;
+    setRefineFoundFeatures((f) => f.filter((k) => k !== featureKey));
+    setRefineSending(true);
+    try {
+      const base = latestData.current || editing.data;
+      const res = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/ai-refine`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: base.content || [], add_features: [featureKey] }),
+      }).then((r) => r.json());
+      if (res.error) {
+        setRefineMessages((m) => [...m, { role: "assistant", text: res.error }]);
+        return;
+      }
+      applyRefinedContent(base, res.content);
+      setRefineMessages((m) => [...m, { role: "assistant", text: `Added ${ADDABLE_FEATURES[featureKey] || "that"} ✓` }]);
+    } catch {
+      setRefineMessages((m) => [...m, { role: "assistant", text: "Connection error — please try again." }]);
+    } finally {
+      setRefineSending(false);
+    }
+  };
+
+  // Shared across both the list view (homepage banner) and the editor (✨ icon) — one modal,
+  // one flow, regardless of which entry point opened it.
+  const aiDraftModal = aiDraftTarget && (
+    <>
+      <div onClick={() => !aiDraftBusy && setAiDraftTarget(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 1099 }} />
+      <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 420, maxWidth: "92vw",
+        background: "#fff", borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,0.25)", zIndex: 1100, padding: 20 }}>
+        <strong style={{ color: C.text, fontSize: 15 }}>✨ AI-draft copy &amp; design</strong>
+        <p style={{ fontSize: 12, color: C.muted, margin: "4px 0 14px" }}>
+          Optional — the more you give it, the more specific the result. Nothing is saved until you review it.
+        </p>
+        <textarea
+          placeholder='Briefly describe your business (e.g. "fresh fish shop, deliver in Cape Town, WhatsApp orders")'
+          value={aiDraftDescription} onChange={(e) => setAiDraftDescription(e.target.value)} rows={2}
+          style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", resize: "vertical", marginBottom: 12, boxSizing: "border-box" }}
+        />
+        <p style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, textTransform: "uppercase", margin: "0 0 6px" }}>Style direction (optional)</p>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {MOOD_PRESETS.map((m) => (
+            <button key={m.key} onClick={() => setAiDraftMood((cur) => (cur === m.key ? "" : m.key))}
+              style={{ ...ghost, padding: "6px 11px", fontSize: 12.5, ...(aiDraftMood === m.key ? iconBtnActive : {}) }}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <p style={{ fontSize: 11.5, color: C.muted, margin: "0 0 6px" }}>
+          Or upload a photo/screenshot of a look you like — used instead of the presets above:
+        </p>
+        <VulaImageUpload tenantId={tenantId} maxFiles={1}
+          existingUrls={aiDraftRefImageUrl ? [aiDraftRefImageUrl] : []}
+          onUploaded={(urls) => setAiDraftRefImageUrl(urls[urls.length - 1] || "")} />
+        {aiDraftErr && <p style={{ color: "#A23B2D", fontSize: 12, margin: "10px 0 0" }}>{aiDraftErr}</p>}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+          <button onClick={() => setAiDraftTarget(null)} disabled={aiDraftBusy} style={ghost}>Cancel</button>
+          <button onClick={runAiDraft} disabled={aiDraftBusy} style={btn("var(--accent)")}>
+            {aiDraftBusy ? "Drafting…" : "✨ Draft it"}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+
+  const aiDraftThemeStrip = aiDraftTheme && (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 8,
+      background: "var(--accent-soft, rgba(44,85,69,0.08))", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12.5 }}>
+      <span style={{ width: 18, height: 18, borderRadius: "50%", background: aiDraftTheme.accent_color, border: `1px solid ${C.border}`, flexShrink: 0 }} />
+      <span style={{ color: C.text }}>
+        Suggested theme: <strong>{aiDraftTheme.accent_color}</strong> · {(FONT_PAIRINGS[aiDraftTheme.font_pairing] || {}).label || aiDraftTheme.font_pairing}
+        {aiDraftTheme.styleNote ? ` — "${aiDraftTheme.styleNote}"` : ""}
+      </span>
+      <button onClick={applyAiDraftTheme} disabled={applyingTheme} style={{ ...ghost, padding: "4px 10px", fontSize: 12, marginLeft: "auto" }}>
+        {applyingTheme ? "Applying…" : "Apply to brand kit"}
+      </button>
+      <button onClick={() => setAiDraftTheme(null)} style={{ ...ghost, padding: "4px 9px", fontSize: 12 }}>Dismiss</button>
+    </div>
+  );
 
   if (editing) {
     const publicUrl = storeUrl
@@ -393,6 +676,8 @@ export default function VulaPages({ tenantId }) {
     // panel that pushes the canvas down every time someone opens it.
     const headerActions = ({ children }) => (
       <>
+        <button onClick={() => openAiDraft("editor")} disabled={aiDraftBusy} title="AI-draft real copy & design for this page" style={iconBtn}>{aiDraftBusy ? "⏳" : "✨"}</button>
+        <button onClick={() => setShowRefine((v) => !v)} title="Refine with AI" style={{ ...iconBtn, ...(showRefine ? iconBtnActive : {}) }}>💬</button>
         <button onClick={() => setShowSeo((s) => !s)} title="Page SEO" style={{ ...iconBtn, ...(showSeo ? iconBtnActive : {}) }}>🔍</button>
         <button onClick={() => { setShowHistory((v) => !v); if (!showHistory) loadVersions(); }} title="Version history" style={{ ...iconBtn, ...(showHistory ? iconBtnActive : {}) }}>🕐</button>
         {storeUrl && (
@@ -432,6 +717,7 @@ export default function VulaPages({ tenantId }) {
 
     return (
       <div>
+        {aiDraftModal}
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", flexWrap: "wrap" }}>
           <button onClick={() => { setEditing(null); load(); }} style={btn("#6B7280")}>← Pages</button>
           <strong style={{ color: C.text }}>{editing.title}</strong>
@@ -445,6 +731,8 @@ export default function VulaPages({ tenantId }) {
           {isPreviewPage && <span style={{ fontSize: 12, color: C.muted }}>— private preview, not live yet</span>}
         </div>
 
+        {aiDraftThemeStrip}
+
         {showLivePreview && storeUrl && (
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 320, marginBottom: 10, background: "#FAF9F6" }}>
             <iframe src={storeUrl} title="Current live site" style={{ width: "100%", height: "100%", border: "none" }} />
@@ -456,7 +744,7 @@ export default function VulaPages({ tenantId }) {
               the only way animation/depth CSS and the tenant's real brand colors reach the
               live preview while editing. */}
           <style>{VULA_PUCK_STYLES}{brandCss}</style>
-          <Puck config={config} data={editing.data} onPublish={(data) => persist(data, "published")}
+          <Puck key={editorKey} config={config} data={editing.data} onPublish={(data) => persist(data, "published")}
             onChange={(data) => { latestData.current = data; }}
             viewports={PREVIEW_VIEWPORTS} overrides={{ headerActions, fields }} />
         </div>
@@ -493,12 +781,67 @@ export default function VulaPages({ tenantId }) {
             </div>
           </>
         )}
+
+        {/* Floating chat widget, bottom-right — separate from History's right-side drawer so the
+            two never collide. Only mounted while open, so no cost when unused. */}
+        {showRefine && (
+          <div style={{ position: "fixed", bottom: 16, right: 16, width: 340, height: 420, background: "#fff",
+            border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 8px 28px rgba(0,0,0,0.18)",
+            zIndex: 1000, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: `1px solid ${C.border}` }}>
+              <strong style={{ fontSize: 13, color: C.text }}>💬 Refine with AI</strong>
+              <button onClick={() => setShowRefine(false)} style={{ ...ghost, padding: "4px 9px" }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+              {refineMessages.length === 0 && (
+                <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>
+                  Tell me what to change — e.g. "make the headline punchier" or "less corporate."
+                  Or paste a URL of a site you like and I'll suggest real features to add.
+                  Only what you ask for changes; nothing saves until you hit Save draft / Publish.
+                </p>
+              )}
+              {refineMessages.map((m, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                  <div style={{ maxWidth: "85%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.4,
+                    whiteSpace: "pre-wrap", ...(m.role === "user"
+                      ? { background: "var(--accent)", color: "#fff", borderBottomRightRadius: 3 }
+                      : { background: "#FAF9F6", color: C.text, border: `1px solid ${C.border}`, borderBottomLeftRadius: 3 }) }}>
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+              {refineFoundFeatures.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {refineFoundFeatures.map((f) => (
+                    <button key={f} onClick={() => addFeature(f)} disabled={refineSending}
+                      style={{ ...ghost, padding: "6px 11px", fontSize: 12 }}>
+                      + Add {ADDABLE_FEATURES[f]}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {refineSending && (
+                <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                  <div style={{ padding: "8px 12px", borderRadius: 12, fontSize: 13, background: "#FAF9F6", border: `1px solid ${C.border}` }}>…</div>
+                </div>
+              )}
+              <div ref={refineEndRef} />
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); sendRefine(); }} style={{ display: "flex", gap: 6, padding: 10, borderTop: `1px solid ${C.border}` }}>
+              <input value={refineInput} onChange={(e) => setRefineInput(e.target.value)} disabled={refineSending}
+                placeholder="What would you like to change?"
+                style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, boxSizing: "border-box" }} />
+              <button type="submit" disabled={refineSending || !refineInput.trim()} style={btn("var(--accent)")}>Send</button>
+            </form>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
+      {aiDraftModal}
       <div style={{ display: "flex", alignItems: "center" }}>
         <strong style={{ color: C.text }}>Storefront pages</strong>
         <button onClick={() => setCreating((c) => !c)} style={{ ...btn("var(--accent)"), marginLeft: "auto" }}>{creating ? "Close" : "+ New page"}</button>
@@ -521,11 +864,14 @@ export default function VulaPages({ tenantId }) {
               nothing changes on your live site until you hit <strong>Publish</strong>.
             </p>
           </div>
+          <button onClick={() => openAiDraft("homepage")} style={btn("var(--accent)")}>
+            ✨ AI-draft my homepage
+          </button>
           <button
             onClick={() => setEditing({ slug: "home", title: "Home", data: norm(homeSeed()), status: "draft", seo: {} })}
-            style={btn("var(--accent)")}
+            style={ghost}
           >
-            ✎ Customize homepage
+            ✎ Start from template
           </button>
         </div>
       )}
