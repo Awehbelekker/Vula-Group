@@ -355,17 +355,54 @@ BROADCAST_TOOLS = [
             "template_name": {"type": "string"}, "audience": {"type": "string", "enum": ["all", "active_30d", "high_value"]},
             "confirm": {"type": "boolean"}}, "required": ["template_name"]}}},
 ]
+# 2026-08-14: page-building, previously dashboard-only (vula/commerce/page_copy.py, reachable
+# only via the page-builder UI's own buttons). Same two-layer confirm=true gate as
+# send_broadcast, with one deliberate addition: confirm=true here only ever SAVES A DRAFT, never
+# publishes — a storefront page is customer-facing and this is a text-only channel that can't
+# show the owner the actual rendered result, so publishing stays a separate, dashboard-side step
+# (Save draft/Publish already exist there) — same "proposal only" trust boundary page_copy.py
+# was built around from the start. Scoped to editing an EXISTING page only; creating a brand-new
+# page from a template is a more visual, dashboard-side decision, not attempted here.
+PAGE_TOOLS = [
+    {"type": "function", "function": {
+        "name": "list_storefront_pages",
+        "description": "List this business's storefront pages (draft and published) with their status.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "draft_storefront_page",
+        "description": ("Edit an EXISTING storefront page's copy per a specific instruction (e.g. "
+                        "'mention we now deliver on weekends'). Without confirm, previews what would "
+                        "change. Only call with confirm=true AFTER the owner has explicitly confirmed "
+                        "— even then this only SAVES A DRAFT, it never publishes; the owner still "
+                        "reviews and publishes from the dashboard."),
+        "parameters": {"type": "object", "properties": {
+            "slug": {"type": "string", "description": "Page slug, e.g. 'home' for the homepage."},
+            "instruction": {"type": "string", "description": "What to change, in plain language."},
+            "confirm": {"type": "boolean"}}, "required": ["slug", "instruction"]}}},
+    {"type": "function", "function": {
+        "name": "add_storefront_section",
+        "description": ("Add a new section to an existing storefront page — a real booking calendar "
+                        "(linked to actual availability), an FAQ section, or a pricing table. Without "
+                        "confirm, previews. Only call with confirm=true AFTER the owner has explicitly "
+                        "confirmed — even then this only SAVES A DRAFT, it never publishes."),
+        "parameters": {"type": "object", "properties": {
+            "slug": {"type": "string"},
+            "feature": {"type": "string", "enum": ["booking", "faq", "pricing"]},
+            "confirm": {"type": "boolean"}}, "required": ["slug", "feature"]}}},
+]
 
 _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
+    ("pages", PAGE_TOOLS),
 ]
 # Always available (universally useful, not tied to a business type): marketing copy, letter
 # drafting, and — since a sales rep's own contact book/meeting log is just as relevant to a
 # shop owner fielding a client relationship — contacts and meeting logging too.
 _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS
-                   + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
+                   + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS
+                   + PAGE_TOOLS)
 
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
@@ -457,17 +494,22 @@ class CommerceAdminSkill(BaseSkill):
             "(you are talking to the owner/staff, not a customer). Help them run the business with "
             "the tools available to you — which may include sales, orders, stock, invoices/quotes, "
             "expenses, products, bookings/appointments, marketing copy, financial insights, recurring "
-            "orders, customers, contacts, meeting logs, and broadcasts. Only offer what your tools "
-            "actually support; if you genuinely lack a tool for something, say so plainly. Use tools "
-            "to read and change REAL data — never invent figures. Show money in ZAR (e.g. R1 250.00). "
-            "Keep replies short and WhatsApp-friendly with the key numbers, and confirm back what you "
-            "changed after any update.\n"
+            "orders, customers, contacts, meeting logs, broadcasts, and their storefront website "
+            "pages. Only offer what your tools actually support; if you genuinely lack a tool for "
+            "something, say so plainly. Use tools to read and change REAL data — never invent "
+            "figures. Show money in ZAR (e.g. R1 250.00). Keep replies short and WhatsApp-friendly "
+            "with the key numbers, and confirm back what you changed after any update.\n"
             "IMPORTANT — confirm before acting on anything that spends money, sends messages to "
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding, or adopting a new voice/tone. Show the details and wait for a "
             "clear 'yes' first. For send_broadcast, only pass confirm=true after the owner has "
             "explicitly confirmed. For apply_voice_persona, only call it after showing the "
-            "learn_my_voice suggestion and getting a clear yes.\n\n"
+            "learn_my_voice suggestion and getting a clear yes. For draft_storefront_page/"
+            "add_storefront_section, show what would change and only pass confirm=true after a "
+            "clear yes — note that even confirmed, these only SAVE A DRAFT and never publish live "
+            "(the owner still reviews and publishes from the dashboard), so they're lower-risk than "
+            "a broadcast or invoice but still need a real go-ahead since a saved draft overwrites "
+            "whatever draft existed before.\n\n"
             + behaviour_preamble(agentic=True) + persona_block
         )
 
@@ -636,6 +678,9 @@ class CommerceAdminSkill(BaseSkill):
             if name == "customer_lookup":    return await self._customer_lookup(tid, args.get("query", ""))
             if name == "dynamics_lookup":    return await self._dynamics_lookup(tid, args.get("query", ""), args.get("kind", "contact"))
             if name == "send_broadcast":     return await self._send_broadcast(tid, args)
+            if name == "list_storefront_pages": return await self._list_storefront_pages(tid)
+            if name == "draft_storefront_page": return await self._draft_storefront_page(tid, args.get("slug", ""), args.get("instruction", ""), bool(args.get("confirm")))
+            if name == "add_storefront_section": return await self._add_storefront_section(tid, args.get("slug", ""), args.get("feature", ""), bool(args.get("confirm")))
             if name == "draft_letter":
                 from core.skills.draft_admin import draft_letter
                 return await draft_letter(args, tid, ctx.get("phone") or "")
@@ -1329,3 +1374,85 @@ class CommerceAdminSkill(BaseSkill):
                                  f"sent={(row or {}).get('sent_count') or 0}. Not confirmed."}
             result["verified"] = True
         return result
+
+    async def _list_storefront_pages(self, tid: str) -> Dict[str, Any]:
+        from vula.api.commerce import admin_list_pages
+        res = await admin_list_pages(tid)
+        pages = res.get("pages") or []
+        if not pages:
+            return {"message": "No storefront pages yet — create one from the dashboard first."}
+        return {"pages": [{"slug": p.get("slug"), "title": p.get("title"), "status": p.get("status")} for p in pages]}
+
+    async def _fetch_page_content(self, tid: str, slug: str):
+        """Shared read for both page tools below — reuses the exact same query the dashboard
+        editor's own GET route uses, so a WhatsApp/chat edit sees exactly what the editor would."""
+        from vula.api.commerce import admin_get_page
+        page = await admin_get_page(tid, slug)
+        content = (page.get("puck_data") or {}).get("content") or []
+        return page, content
+
+    async def _save_page_draft(self, tid: str, slug: str, page: Dict[str, Any], content: List[dict]) -> None:
+        """Always saves as status='draft', regardless of the page's current status — publishing
+        stays a separate, dashboard-side step (see PAGE_TOOLS' own comment for why)."""
+        from vula.api.commerce import upsert_page, PageIn
+        body = PageIn(title=page.get("title"),
+                      puck_data={**(page.get("puck_data") or {}), "content": content},
+                      seo=page.get("seo") or {}, status="draft")
+        await upsert_page(tid, slug, body)
+
+    async def _draft_storefront_page(self, tid: str, slug: str, instruction: str, confirm: bool) -> Dict[str, Any]:
+        slug = (slug or "").strip()
+        instruction = (instruction or "").strip()
+        if not slug:
+            return {"error": "Need a page slug, e.g. 'home' for the homepage."}
+        if not instruction:
+            return {"error": "Tell me what to change on the page."}
+        page, content = await self._fetch_page_content(tid, slug)
+        if not content:
+            return {"error": f"Page '{slug}' doesn't exist yet or has no content to edit — "
+                             "create it from the dashboard's page builder first."}
+        from vula.commerce import page_copy
+        result = await page_copy.refine_page_copy(tid, content, instruction)
+        if "error" in result:
+            return result
+        if not confirm:
+            changes = []
+            for old_b, new_b in zip(content, result["content"]):
+                old_p, new_p = old_b.get("props") or {}, new_b.get("props") or {}
+                for k, v in new_p.items():
+                    if isinstance(v, str) and old_p.get(k) != v:
+                        changes.append({"block": new_b.get("type"), "field": k, "was": old_p.get(k), "now": v})
+            if not changes:
+                return {"preview": True, "slug": slug, "changes": [],
+                        "message": "That instruction didn't change anything on this page."}
+            return {"preview": True, "slug": slug, "changes": changes,
+                    "message": "This will save a draft of your page. Confirm to save (call again with confirm=true)."}
+        await self._save_page_draft(tid, slug, page, result["content"])
+        return {"saved": True, "slug": slug, "status": "draft",
+                "message": "Saved as a draft — review and publish from the dashboard when you're happy with it."}
+
+    async def _add_storefront_section(self, tid: str, slug: str, feature: str, confirm: bool) -> Dict[str, Any]:
+        slug = (slug or "").strip()
+        from vula.commerce import page_copy
+        block_type = page_copy.FEATURE_BLOCK_MAP.get((feature or "").strip().lower())
+        if not block_type:
+            return {"error": f"'{feature}' isn't a section I can add. Supported: "
+                             f"{', '.join(page_copy.FEATURE_BLOCK_MAP)}."}
+        if not slug:
+            return {"error": "Need a page slug, e.g. 'home' for the homepage."}
+        page, content = await self._fetch_page_content(tid, slug)
+        new_content = page_copy.add_block(content, block_type)
+        if not confirm:
+            return {"preview": True, "slug": slug, "adding": block_type,
+                    "message": "This will save a draft of your page with the new section. "
+                               "Confirm to save (call again with confirm=true)."}
+        new_id = new_content[-1]["props"]["id"]
+        result = await page_copy.refine_page_copy(
+            tid, new_content,
+            f"Write real, business-specific content for the new section you just added "
+            f"(block id: {new_id}). Leave every other section exactly as it already is.")
+        final_content = result.get("content", new_content)
+        await self._save_page_draft(tid, slug, page, final_content)
+        return {"saved": True, "slug": slug, "added": block_type, "status": "draft",
+                "message": "Saved as a draft with the new section — review and publish from the "
+                           "dashboard when ready."}

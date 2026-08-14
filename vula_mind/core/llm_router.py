@@ -36,7 +36,7 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 # Task types that genuinely need frontier (cloud) reasoning — the explicit part of the
 # requirement-(c) complexity threshold. Everything else stays local unless the token cap trips.
-_FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning"}
+_FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning", "page_copy"}
 
 # Health-probe cache: base_url -> (checked_at_monotonic, is_up)
 _HEALTH_TTL_S = 30.0

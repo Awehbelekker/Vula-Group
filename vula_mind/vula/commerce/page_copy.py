@@ -186,6 +186,7 @@ def _build_prompt(grounding: Dict[str, Any], description: str, schema: Dict[str,
             ">>> Real extracts from this business's own documents/website — ground your copy in "
             f"these where relevant, do not contradict them:\n{extracts}\n<<<"
         )
+    lines.append(DESIGN_PRINCIPLES)
     lines.append(
         "Below is the JSON shape of a website template, keyed by block id. For each block, write "
         "real copy for ONLY the fields listed, matching each field's hint for length/style. Keep "
@@ -320,13 +321,39 @@ def _apply_real_data_overrides(content: List[dict], grounding: Dict[str, Any]) -
 #     contrast check; otherwise it's discarded in favor of the vetted fallback, never offered
 #     anyway "in good faith."
 
+# 2026-08-14: expanded from a few sentences on visual design alone to also cover copywriting,
+# conversion, accessibility, and SEO — the fuller "design skill" a real page designer/copywriter
+# would actually apply, not just color/font/motion taste. Shared verbatim across the draft,
+# refine, and polish prompts below (_build_prompt/_build_refine_prompt/_HOLISTIC_POLISH_SYSTEM)
+# so every AI touch-point benefits from the same knowledge, regardless of which entry point
+# (dashboard click, refine-chat message, or a WhatsApp/commerce_admin tool call) triggered it.
 DESIGN_PRINCIPLES = (
-    "Design principles: pair the heading font deliberately with the chosen mood, not "
-    "arbitrarily. Use a genuinely neutral, deliberately-chosen ink color, not a generic "
-    "default. Avoid overused AI-generated-design clichés (cream+terracotta, purple-gradient "
-    "hero, everything centered). Use motion selectively — not every block animated, skip "
-    "motion on dense/informational blocks like ContactCard. Order content for narrative flow: "
-    "hero, then proof/features, then trust, then a call to action."
+    "Copywriting: lead with a concrete benefit or outcome, not a vague claim ('Fresh fish "
+    "delivered same-day' beats 'Quality you can trust'). A headline works best as a clear "
+    "promise or a specific number/timeframe, not a clever pun. CTA button text names the actual "
+    "next action ('Book a fitting', 'Get a quote'), not a generic 'Learn more' or 'Submit'. "
+    "Write for the reader's situation, not the business's org chart — 'delivered to your door', "
+    "not 'we operate a fleet of delivery vehicles'.\n"
+    "Conversion: put the strongest real proof point (a real number, a real guarantee, a real "
+    "specific detail) as close to the call to action as possible — proof right before an ask "
+    "works better than proof buried mid-page. Build urgency from something real and specific "
+    "('order before 10am for same-day delivery'), never from invented scarcity. Don't stack two "
+    "sections making the same point in different words — each section should say something the "
+    "others don't.\n"
+    "Accessibility: write link/button text that makes sense read on its own, out of context "
+    "(never 'click here'). Keep sentences short enough to scan on a phone screen — most tenants' "
+    "traffic is mobile. (Color contrast itself is handled separately by this module's own "
+    "computed contrast_ratio check, not by wording.)\n"
+    "SEO: work the business's actual name, location, and what it sells naturally into headings "
+    "and body copy — a real sentence a human would say, never a keyword list. Don't repeat the "
+    "exact same phrase in every section; natural variation reads better and covers more real "
+    "search terms.\n"
+    "Design: pair the heading font deliberately with the chosen mood, not arbitrarily. Use a "
+    "genuinely neutral, deliberately-chosen ink color, not a generic default. Avoid overused "
+    "AI-generated-design clichés (cream+terracotta, purple-gradient hero, everything centered). "
+    "Use motion selectively — not every block animated, skip motion on dense/informational "
+    "blocks like ContactCard. Order content for narrative flow: hero, then proof/features, then "
+    "trust, then a call to action."
 )
 
 # Each preset's accent_shortlist is pre-vetted: every color already passes the contrast check
@@ -682,8 +709,9 @@ _HOLISTIC_POLISH_SYSTEM = (
     "back-to-back sections saying the same thing. Improve what you find using ONLY real details "
     "already present in the page itself — never invent a new fact, name, quote, phone number, "
     "email, or address. Only return fields you are ACTUALLY changing; do not rewrite anything "
-    "that's already good, and never make a fix longer than the field's original text. If "
-    'genuinely nothing needs improving, return {"fixes": {}}. Return STRICT JSON only: '
+    "that's already good, and never make a fix longer than the field's original text.\n\n"
+    + DESIGN_PRINCIPLES + "\n\n"
+    'If genuinely nothing needs improving, return {"fixes": {}}. Return STRICT JSON only: '
     '{"fixes": {block_id: {field: new_value}}}'
 )
 
@@ -742,6 +770,7 @@ def _build_refine_prompt(grounding: Dict[str, Any], instruction: str, current: D
     ]
     if grounding["persona_prompt"]:
         lines.append(f"Tone/voice: {grounding['persona_prompt']}")
+    lines.append(DESIGN_PRINCIPLES)
     lines.append(
         f'The owner\'s request: "{instruction.strip()}"\n\n'
         "Below is the current copy for each block, keyed by block id. Apply the request. Only "

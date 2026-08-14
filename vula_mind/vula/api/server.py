@@ -891,6 +891,28 @@ _TENANT_GUARD_RES = [
     re.compile(r"^/v1/users/([^/]+)(?:/|$)"),
 ]
 
+# 2026-08-14: per-tenant LLM cost metering (vula/integrations/metering.py) attributes every
+# litellm call's token usage via a request-scoped contextvar — but until now that contextvar was
+# only ever set on WhatsApp's entry points (vula/api/whatsapp.py). Every dashboard-triggered AI
+# call (page-copy drafting, invoice-style cloning, marketing generation, voice-profile analysis,
+# etc — everything under /v1/commerce/{tenant}/...) was landing in vula_ai_usage's
+# "_unattributed" bucket instead of the responsible tenant. Deliberately a SEPARATE middleware
+# from tenant_admin_guard above, not folded into it — metering must never depend on
+# ENFORCE_TENANT_AUTH, which only gates auth, not cost attribution.
+_TENANT_ID_RE = re.compile(r"^/v1/commerce/([^/]+)/")
+
+
+@app.middleware("http")
+async def tenant_metering_context(request, call_next):
+    m = _TENANT_ID_RE.match(request.url.path)
+    if m:
+        try:
+            from vula.integrations.metering import set_request_tenant
+            set_request_tenant(m.group(1))
+        except Exception:
+            pass
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def tenant_admin_guard(request, call_next):
