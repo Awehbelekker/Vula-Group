@@ -217,6 +217,60 @@ def test_propose_pop_match_returns_none_when_nothing_matches():
     assert result is None
 
 
+# ── Customer-facing: sender-phone-scoped matching (2026-08-15, C2 second phase) ────────────
+# A customer texting the storefront line about their OWN order carries a much stronger signal
+# (their phone number) than a bank statement line ever has. This should be tried before the
+# generic tenant-wide amount+name matcher, and should resolve cases the generic matcher alone
+# would find ambiguous (two different customers who happen to owe the same amount).
+
+def test_propose_pop_match_prefers_senders_own_invoice_over_an_ambiguous_amount_tie():
+    # Two invoices share the SAME amount for DIFFERENT customers — the generic amount matcher
+    # alone would call this ambiguous (no name/reference boost) and return None. Knowing the
+    # sender's own phone should resolve it immediately.
+    mine = {"id": "inv1", "invoice_number": "OTH-0001", "customer_name": "Thabo",
+            "customer_phone": "0821234567", "total_cents": 15000, "status": "sent",
+            "doc_type": "invoice"}
+    someone_elses = {"id": "inv2", "invoice_number": "OTH-0002", "customer_name": "Sipho",
+                      "customer_phone": "0839876543", "total_cents": 15000, "status": "sent",
+                      "doc_type": "invoice"}
+    db = _FakeDB({
+        "commerce_invoices": _FakeTable([mine, someone_elses]),
+        "commerce_orders": _FakeTable([]),
+    })
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        # sender uses the international-prefix form; the row stores the local 0-prefixed form —
+        # normalization must treat these as the same number.
+        result = propose_pop_match("off-the-hook", 15000, sender_phone="27821234567")
+    assert result == ("invoice", mine)
+
+
+def test_propose_pop_match_falls_back_to_generic_matcher_when_sender_has_no_open_items():
+    order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
+             "customer_phone": "27821234567", "total_cents": 15000}
+    db = _FakeDB({
+        "commerce_invoices": _FakeTable([]),
+        "commerce_orders": _FakeTable([order]),
+    })
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        # A different phone than the order's own — no phone match, but the generic amount
+        # matcher (a single unambiguous candidate) should still resolve it.
+        result = propose_pop_match("off-the-hook", 15000, sender_phone="27000000000")
+    assert result == ("order", order)
+
+
+def test_propose_pop_match_without_sender_phone_behaves_exactly_as_before():
+    invoice = {"id": "inv1", "invoice_number": "OTH-0042", "customer_name": "Thabo",
+               "customer_phone": "27821234567", "total_cents": 15000, "status": "sent",
+               "doc_type": "invoice"}
+    db = _FakeDB({
+        "commerce_invoices": _FakeTable([invoice]),
+        "commerce_orders": _FakeTable([]),
+    })
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        result = propose_pop_match("off-the-hook", 15000, reference="OTH-0042")
+    assert result == ("invoice", invoice)
+
+
 def test_stage_pop_for_review_proposes_specific_invoice_and_stores_candidate():
     invoice = {"id": "inv1", "invoice_number": "OTH-0042", "customer_name": "Thabo",
                "total_cents": 15000, "status": "sent", "doc_type": "invoice"}

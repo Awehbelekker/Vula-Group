@@ -236,17 +236,29 @@ def _match_order(txn: Dict[str, Any], orders: List[dict]) -> Optional[dict]:
     return _match_by_amount(txn, orders, "total_cents", ("customer_name", "display_id"))
 
 
+def _digits(phone: Optional[str]) -> str:
+    n = "".join(ch for ch in (phone or "") if ch.isdigit())
+    return "27" + n[1:] if n.startswith("0") else n
+
+
 def propose_pop_match(tenant_id: str, amount_cents: int, reference: Optional[str] = None,
-                      payee: Optional[str] = None) -> Optional[tuple]:
-    """Best-guess candidate for a WhatsApp-sent proof-of-payment screenshot, reusing the same
-    amount(+name/reference) matcher a bank-statement credit line uses. Returns
+                      payee: Optional[str] = None, sender_phone: Optional[str] = None) -> Optional[tuple]:
+    """Best-guess candidate for a WhatsApp-sent proof-of-payment screenshot. Returns
     ("invoice"|"order", candidate_row) or None — never applied automatically here; a screenshot
     is easier to fake/misread than a real bank statement, so unlike reconcile()'s confident-match
-    auto-apply, this is always just a proposal for the owner to confirm."""
+    auto-apply, this is always just a proposal for the owner to confirm.
+
+    When sender_phone is known (a customer messaging about their OWN order/invoice — the common
+    case when this is sent by the tenant's storefront line, not the owner), that customer's own
+    outstanding invoices/orders are tried FIRST, by amount alone (no name/reference boost
+    needed — the phone match already identifies who it is). This is a materially stronger signal
+    than the generic tenant-wide amount+name matcher a bank-statement line has to fall back on,
+    since a bank statement never knows which customer paid. Falls back to the generic matcher
+    (across every outstanding invoice/order) when there's no sender phone or no match by phone."""
     db = _client()
     try:
         invoices = (db.table("commerce_invoices")
-                    .select("id,invoice_number,customer_name,total_cents,status,doc_type")
+                    .select("id,invoice_number,customer_name,customer_phone,total_cents,status,doc_type")
                     .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"])
                     .limit(500).execute().data or [])
         invoices = [i for i in invoices if (i.get("doc_type") or "invoice") == "invoice"]
@@ -259,6 +271,22 @@ def propose_pop_match(tenant_id: str, amount_cents: int, reference: Optional[str
                   .limit(500).execute().data or [])
     except Exception:
         orders = []
+
+    if sender_phone:
+        sender = _digits(sender_phone)
+        own_invoices = [i for i in invoices if _digits(i.get("customer_phone")) == sender]
+        own_orders = [o for o in orders if _digits(o.get("customer_phone")) == sender]
+        own_amount_matches_inv = [i for i in own_invoices if int(i.get("total_cents") or 0) == amount_cents]
+        if len(own_amount_matches_inv) == 1:
+            return ("invoice", own_amount_matches_inv[0])
+        own_amount_matches_ord = [o for o in own_orders if int(o.get("total_cents") or 0) == amount_cents]
+        if len(own_amount_matches_ord) == 1:
+            return ("order", own_amount_matches_ord[0])
+        # More than one of the customer's own open items share this amount — still worth
+        # narrowing the generic search to just their own items rather than the whole tenant.
+        if own_invoices or own_orders:
+            invoices, orders = own_invoices, own_orders
+
     txn = {"amount_cents": amount_cents, "description": payee or "", "reference": reference or ""}
     im = _match_invoice(txn, invoices)
     if im:
@@ -270,14 +298,19 @@ def propose_pop_match(tenant_id: str, amount_cents: int, reference: Optional[str
 
 
 def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
-                         reference: Optional[str] = None, payee: Optional[str] = None) -> str:
+                         reference: Optional[str] = None, payee: Optional[str] = None,
+                         sender_phone: Optional[str] = None) -> str:
     """Stage a WhatsApp proof-of-payment screenshot into the SAME interactive review flow
     bank_review.py already uses for an unmatched bank-statement credit — never auto-mark-paid.
     Returns the WhatsApp reply to send: a specific "does this match X — reply yes" proposal when
     a confident candidate is found, otherwise the same open "which order is this for" question
     the statement-sourced flow already asks. Marks the row 'asked' immediately (rather than
-    'unmatched') since we're sending the question right now, not waiting for a batched digest."""
-    candidate = propose_pop_match(tenant_id, amount_cents, reference, payee)
+    'unmatched') since we're sending the question right now, not waiting for a batched digest.
+
+    sender_phone should be the WhatsApp sender's number whenever known (both a customer texting
+    the storefront line and an owner forwarding a screenshot have a real sender number) — it
+    scopes matching to that person's own open invoices/orders first, see propose_pop_match."""
+    candidate = propose_pop_match(tenant_id, amount_cents, reference, payee, sender_phone)
     match_type, cand = candidate if candidate else (None, None)
     row = {
         "tenant_id": tenant_id,

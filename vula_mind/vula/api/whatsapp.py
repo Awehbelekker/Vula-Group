@@ -955,7 +955,7 @@ async def _handle_document_ingest(
                     from vula.commerce import bank_rec
                     reply = bank_rec.stage_pop_for_review(
                         tenant_id, round(total_r * 100), fin.get("date"),
-                        fin.get("reference"), fin.get("payee"))
+                        fin.get("reference"), fin.get("payee"), sender_phone=phone)
                     scan_msg = "\n\n" + reply
                 elif fin and dtp == "delivery_note":
                     scan_msg = ("\n\n📦 That's a *delivery note* — filed with your documents "
