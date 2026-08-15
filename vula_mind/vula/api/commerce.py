@@ -2829,7 +2829,10 @@ async def admin_convert_quote(tenant_id: str, quote_id: str):
     try:
         invoice = await service.convert_quote_to_invoice(tenant_id, quote_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        # "not found" is a real 404; "must be accepted"/"already converted" are business-rule
+        # rejections (400), not a missing resource — distinct enough to matter to the caller.
+        status = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc))
     return invoice
 
 

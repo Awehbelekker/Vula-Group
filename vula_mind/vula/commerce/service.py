@@ -1347,14 +1347,25 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
 async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
     """Create an invoice from an accepted quote, linking both directions.
 
-    The quote is marked 'accepted' and stamped with converted_invoice_id; the new
-    invoice carries source_quote_id back to the quote. Totals are copied as-is.
+    The quote is stamped with converted_invoice_id; the new invoice carries
+    source_quote_id back to the quote. Totals are copied as-is; issue_date is set to
+    today (the day it's actually being invoiced), not carried over from the quote.
+
+    Requires the quote to already be status="accepted" — invoicing for something the
+    customer hasn't agreed to yet isn't a real invoice (2026-08-15: previously
+    unenforced despite the docstring's own intent). Refuses a quote that's already been
+    converted (converted_invoice_id already set) rather than silently creating a
+    second, orphaned invoice.
     """
     quote = await get_invoice(tenant_id, quote_id)
     if not quote:
         raise ValueError("quote not found")
     if quote.get("doc_type") not in ("quote", "proforma"):
         raise ValueError("source document is not a quote or proforma")
+    if quote.get("converted_invoice_id"):
+        raise ValueError("this quote has already been converted to an invoice")
+    if quote.get("status") != "accepted":
+        raise ValueError("quote must be marked accepted before it can be converted to an invoice")
 
     invoice = {
         "id": str(uuid.uuid4()),
@@ -1367,19 +1378,34 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
         "customer_address": quote.get("customer_address"),
         "line_items": quote.get("line_items", []),
         "subtotal_cents": quote["subtotal_cents"],
+        "discount_cents": quote.get("discount_cents", 0),
         "vat_rate": quote["vat_rate"],
         "vat_cents": quote["vat_cents"],
         "total_cents": quote["total_cents"],
+        "deposit_cents": quote.get("deposit_cents", 0),
         "status": "draft",
+        "project": quote.get("project"),
+        "issue_date": _now()[:10],
+        "payment_method": quote.get("payment_method"),
         "source_quote_id": quote_id,
         "notes": quote.get("notes"),
         "created_at": _now(),
         "updated_at": _now(),
     }
-    created = _client().table("commerce_invoices").insert(invoice).execute().data[0]
+    try:
+        result = _client().table("commerce_invoices").insert(invoice).execute()
+    except Exception as exc:
+        # discount_cents/deposit_cents (053) or project (055) columns may not exist yet in
+        # this environment — same graceful-degrade retry create_invoice() already uses.
+        invoice.pop("discount_cents", None)
+        invoice.pop("deposit_cents", None)
+        invoice.pop("project", None)
+        logger.warning("quote conversion retried without discount/deposit/project (run migrations 053/055?): %s", exc)
+        result = _client().table("commerce_invoices").insert(invoice).execute()
+    created = result.data[0]
 
     _client().table("commerce_invoices").update(
-        {"status": "accepted", "converted_invoice_id": created["id"], "updated_at": _now()}
+        {"converted_invoice_id": created["id"], "updated_at": _now()}
     ).eq("tenant_id", tenant_id).eq("id", quote_id).execute()
 
     return created

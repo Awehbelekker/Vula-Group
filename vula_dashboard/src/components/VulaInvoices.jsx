@@ -81,12 +81,22 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
 
   async function convertToInvoice(quote) {
     if (!confirm(`Convert ${quote.invoice_number} to a tax invoice?`)) return
-    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${quote.id}/convert`, {
-      method: 'POST'
-    })
-    if (r.ok) {
+    try {
+      // NOTE: this is /admin/quotes/.../convert, not /admin/invoices/.../convert — the two
+      // previously didn't match (the route lives under quotes, this used to call invoices),
+      // so every conversion silently 404'd. Fixed 2026-08-15.
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/quotes/${quote.id}/convert`, {
+        method: 'POST'
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        alert(d.detail || 'Could not convert this quote to an invoice.')
+        return
+      }
       setDocType('invoice')
       load()
+    } catch {
+      alert('Could not convert this quote to an invoice — please try again.')
     }
   }
 
@@ -420,7 +430,10 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                           {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
                         </button>
                       )}
-                      {inv.doc_type === 'quote' && inv.status !== 'accepted' && (
+                      {inv.doc_type === 'quote' && !['accepted', 'declined', 'expired'].includes(inv.status) && (
+                        <button onClick={() => setStatus(inv, 'accepted')} style={s.actMatch}>✓ Mark accepted</button>
+                      )}
+                      {inv.doc_type === 'quote' && inv.status === 'accepted' && !inv.converted_invoice_id && (
                         <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
                       )}
                       {inv.doc_type === 'invoice' && inv.status !== 'paid' && (

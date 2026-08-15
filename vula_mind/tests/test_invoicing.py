@@ -224,19 +224,37 @@ async def test_update_status_paid_stamps_paid_at(fake_db):
 @pytest.mark.asyncio
 async def test_convert_quote_links_both_directions(fake_db):
     quote = await service.create_invoice(
-        TENANT, {"doc_type": "quote", "customer_name": "Thabo", "line_items": _items()}
+        TENANT, {"doc_type": "quote", "customer_name": "Thabo", "line_items": _items(),
+                 "status": "accepted"}
     )
     invoice = await service.convert_quote_to_invoice(TENANT, quote["id"])
 
     assert invoice["doc_type"] == "invoice"
     assert invoice["invoice_number"] == "OFF-INV-00001"
     assert invoice["source_quote_id"] == quote["id"]
+    assert invoice["status"] == "draft"
     # totals carried over verbatim
     assert invoice["total_cents"] == quote["total_cents"]
+    # issue_date is today's, not left blank (2026-08-15 bug fix)
+    assert invoice["issue_date"]
 
     refreshed = await service.get_invoice(TENANT, quote["id"])
-    assert refreshed["status"] == "accepted"
+    assert refreshed["status"] == "accepted"  # unchanged — already accepted, not re-set
     assert refreshed["converted_invoice_id"] == invoice["id"]
+
+
+@pytest.mark.asyncio
+async def test_convert_carries_over_discount_deposit_project_payment_method(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Thabo", "line_items": _items(),
+                 "status": "accepted", "discount_pct": 10, "deposit_cents": 5000,
+                 "project": "Kitchen fitout", "payment_method": "eft"}
+    )
+    invoice = await service.convert_quote_to_invoice(TENANT, quote["id"])
+    assert invoice["discount_cents"] == quote["discount_cents"]
+    assert invoice["deposit_cents"] == 5000
+    assert invoice["project"] == "Kitchen fitout"
+    assert invoice["payment_method"] == "eft"
 
 
 @pytest.mark.asyncio
@@ -250,6 +268,26 @@ async def test_convert_rejects_non_quote(fake_db):
 async def test_convert_rejects_missing_quote(fake_db):
     with pytest.raises(ValueError):
         await service.convert_quote_to_invoice(TENANT, "does-not-exist")
+
+
+@pytest.mark.asyncio
+async def test_convert_rejects_quote_not_yet_accepted(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Thabo", "line_items": _items()}
+    )  # default status is "draft"
+    with pytest.raises(ValueError, match="accepted"):
+        await service.convert_quote_to_invoice(TENANT, quote["id"])
+
+
+@pytest.mark.asyncio
+async def test_convert_rejects_already_converted_quote(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Thabo", "line_items": _items(),
+                 "status": "accepted"}
+    )
+    await service.convert_quote_to_invoice(TENANT, quote["id"])
+    with pytest.raises(ValueError, match="already"):
+        await service.convert_quote_to_invoice(TENANT, quote["id"])
 
 
 @pytest.mark.asyncio
