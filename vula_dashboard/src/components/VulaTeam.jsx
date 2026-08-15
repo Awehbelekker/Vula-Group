@@ -21,6 +21,7 @@ const EVENTS = [
   ["new_order", "New orders"], ["low_stock", "Low stock"],
   ["help_request", "Help requests (agent escalations)"],
   ["procurement_done", "Procurement done"],
+  ["invoice_overdue_escalated", "Overdue invoice escalations (14+ days)"],
 ];
 const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
 

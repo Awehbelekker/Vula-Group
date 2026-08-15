@@ -74,6 +74,17 @@ export default function VulaFinanceInsights({ tenantId }) {
         {summary && <p style={{ fontSize: 14, lineHeight: 1.55, margin: "10px 0 0", whiteSpace: "pre-wrap" }}>{summary}</p>}
       </div>
 
+      {d.receivables.aging && Object.values(d.receivables.aging).some(v => v > 0) && (
+        <div style={{ ...card, marginTop: 14 }}>
+          <div style={lbl}>Who to chase first (aging)</div>
+          <Row a="Not yet due" b={R(d.receivables.aging.current)} />
+          <Row a="1–30 days overdue" b={R(d.receivables.aging.days_1_30)} />
+          <Row a="31–60 days overdue" b={R(d.receivables.aging.days_31_60)} />
+          <Row a="61–90 days overdue" b={R(d.receivables.aging.days_61_90)} />
+          <Row a="90+ days overdue" b={R(d.receivables.aging.days_90_plus)} />
+        </div>
+      )}
+
       {(d.top_customers?.length > 0 || d.top_expense_categories?.length > 0) && (
         <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
           {d.top_customers?.length > 0 && (

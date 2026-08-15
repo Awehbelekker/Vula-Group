@@ -219,6 +219,54 @@ async def test_update_status_paid_stamps_paid_at(fake_db):
     assert updated["paid_at"]
 
 
+# ── admin_update_invoice routing (2026-08-15 fix) ───────────────────────────────
+#
+# The PATCH /admin/invoices/{id} route used to write `status` as a raw field alongside
+# everything else — which meant the dashboard's "Mark paid" button never went through
+# update_invoice_status, so it never posted to the general ledger. Fixed to route any status
+# change through update_invoice_status (which already stamps paid_at + posts the ledger entry,
+# both covered by test_update_status_paid_stamps_paid_at above and test_ledger.py) while still
+# applying any other fields in the same request.
+
+@pytest.mark.asyncio
+async def test_admin_update_invoice_routes_status_through_update_invoice_status(fake_db):
+    from vula.api import commerce as commerce_api
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    result = await commerce_api.admin_update_invoice(TENANT, inv["id"], {"status": "paid"})
+    assert result["status"] == "paid"
+    # paid_at is only ever set by update_invoice_status itself (client-supplied values are
+    # stripped, see next test) — its presence here proves the routing fix actually took effect.
+    assert result["paid_at"]
+
+
+@pytest.mark.asyncio
+async def test_admin_update_invoice_ignores_client_supplied_paid_at(fake_db):
+    from vula.api import commerce as commerce_api
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    result = await commerce_api.admin_update_invoice(
+        TENANT, inv["id"], {"status": "paid", "paid_at": "2000-01-01T00:00:00Z"})
+    assert result["paid_at"] != "2000-01-01T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_admin_update_invoice_status_and_other_fields_together(fake_db):
+    from vula.api import commerce as commerce_api
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    result = await commerce_api.admin_update_invoice(
+        TENANT, inv["id"], {"status": "paid", "payment_method": "cash"})
+    assert result["status"] == "paid"
+    assert result["payment_method"] == "cash"
+
+
+@pytest.mark.asyncio
+async def test_admin_update_invoice_no_status_change_is_a_plain_write(fake_db):
+    from vula.api import commerce as commerce_api
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    result = await commerce_api.admin_update_invoice(TENANT, inv["id"], {"notes": "called back"})
+    assert result["notes"] == "called back"
+    assert result["status"] == "draft"  # unchanged
+
+
 # ── Quote → invoice conversion ────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -557,3 +605,116 @@ def test_merge_branding_defaults_template_choice_to_classic():
 def test_payment_info_empty_without_banking_fields():
     from vula.commerce.pdf import _payment_info_from_settings
     assert _payment_info_from_settings({"vat_number": "X"}) == ""
+
+
+# ── Partial payments (migration 130) ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_record_partial_payment_sets_part_paid(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    total = inv["total_cents"]
+    result = await service.record_invoice_payment(TENANT, inv["id"], total // 2, "eft")
+    assert result["status"] == "part_paid"
+    assert result["total_paid_cents"] == total // 2
+    assert result["balance_due_cents"] == total - total // 2
+
+
+@pytest.mark.asyncio
+async def test_record_payment_reaching_total_flips_to_paid(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    total = inv["total_cents"]
+    await service.record_invoice_payment(TENANT, inv["id"], total // 2, "cash")
+    final = await service.record_invoice_payment(TENANT, inv["id"], total - total // 2, "cash")
+    assert final["status"] == "paid"
+    assert final["paid_at"]
+    assert final["balance_due_cents"] == 0
+
+
+@pytest.mark.asyncio
+async def test_record_payment_overpayment_still_flips_to_paid(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    result = await service.record_invoice_payment(TENANT, inv["id"], inv["total_cents"] + 5000)
+    assert result["status"] == "paid"
+    assert result["balance_due_cents"] == 0  # never negative
+
+
+@pytest.mark.asyncio
+async def test_record_payment_rejects_zero_or_negative_amount(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    with pytest.raises(ValueError):
+        await service.record_invoice_payment(TENANT, inv["id"], 0)
+    with pytest.raises(ValueError):
+        await service.record_invoice_payment(TENANT, inv["id"], -100)
+
+
+@pytest.mark.asyncio
+async def test_record_payment_rejects_already_paid_invoice(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    await service.update_invoice_status(TENANT, inv["id"], "paid")
+    with pytest.raises(ValueError, match="already"):
+        await service.record_invoice_payment(TENANT, inv["id"], 100)
+
+
+@pytest.mark.asyncio
+async def test_record_payment_rejects_quotes(fake_db):
+    quote = await service.create_invoice(TENANT, {"doc_type": "quote", "customer_name": "A", "line_items": _items()})
+    with pytest.raises(ValueError):
+        await service.record_invoice_payment(TENANT, quote["id"], 100)
+
+
+@pytest.mark.asyncio
+async def test_list_invoice_payments_returns_all_instalments(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    await service.record_invoice_payment(TENANT, inv["id"], 5000, "cash")
+    await service.record_invoice_payment(TENANT, inv["id"], 3000, "eft")
+    payments = await service.list_invoice_payments(TENANT, inv["id"])
+    assert len(payments) == 2
+    assert sum(p["amount_cents"] for p in payments) == 8000
+
+
+# ── Cancellation (migration 130) ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_cancel_invoice_from_draft(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    result = await service.cancel_invoice(TENANT, inv["id"], reason="Customer changed their mind")
+    assert result["status"] == "cancelled"
+    assert result["cancel_reason"] == "Customer changed their mind"
+    assert result["cancelled_at"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_invoice_rejects_paid(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    await service.update_invoice_status(TENANT, inv["id"], "paid")
+    with pytest.raises(ValueError, match="credit note"):
+        await service.cancel_invoice(TENANT, inv["id"])
+
+
+@pytest.mark.asyncio
+async def test_cancel_invoice_rejects_part_paid(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    await service.record_invoice_payment(TENANT, inv["id"], inv["total_cents"] // 2)
+    with pytest.raises(ValueError, match="credit note"):
+        await service.cancel_invoice(TENANT, inv["id"])
+
+
+@pytest.mark.asyncio
+async def test_cancel_invoice_rejects_already_cancelled(fake_db):
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    await service.cancel_invoice(TENANT, inv["id"])
+    with pytest.raises(ValueError, match="already"):
+        await service.cancel_invoice(TENANT, inv["id"])
+
+
+@pytest.mark.asyncio
+async def test_cancel_invoice_rejects_quotes(fake_db):
+    quote = await service.create_invoice(TENANT, {"doc_type": "quote", "customer_name": "A", "line_items": _items()})
+    with pytest.raises(ValueError):
+        await service.cancel_invoice(TENANT, quote["id"])
+
+
+@pytest.mark.asyncio
+async def test_cancel_invoice_rejects_missing_invoice(fake_db):
+    with pytest.raises(ValueError):
+        await service.cancel_invoice(TENANT, "does-not-exist")

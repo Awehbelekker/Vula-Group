@@ -85,6 +85,34 @@ def post_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
           source_type="invoice_paid", source_id=invoice.get("id"), lines=lines)
 
 
+def post_invoice_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict[str, Any]) -> None:
+    """A single partial (or final) instalment received against an invoice (migration 130) —
+    posts ONLY this payment's amount, dated when it was actually received, not lumped into one
+    entry when the balance finally clears (real cash-flow timing in the trial balance). VAT is
+    split proportionally using the invoice's own overall vat_cents/total_cents ratio, which
+    works regardless of VAT-inclusive/exclusive pricing since that's already baked into those
+    two figures. source_id is the PAYMENT's own id, not the invoice's — each instalment needs
+    its own idempotency key under the post_journal_entry RPC's unique(tenant_id, source_type,
+    source_id) constraint, otherwise a second payment on the same invoice would collide with
+    the first and silently be dropped as "already posted"."""
+    amount = int(payment.get("amount_cents") or 0)
+    if amount <= 0:
+        return
+    inv_total = int(invoice.get("total_cents") or 0)
+    inv_vat = int(invoice.get("vat_cents") or 0)
+    vat = (amount * inv_vat // inv_total) if inv_total > 0 else 0
+    vat = max(0, min(vat, amount))
+    lines = [{"account_code": "bank_cash", "debit_cents": amount, "credit_cents": 0}]
+    if vat > 0:
+        lines.append({"account_code": "sales", "debit_cents": 0, "credit_cents": amount - vat})
+        lines.append({"account_code": "vat_output", "debit_cents": 0, "credit_cents": vat})
+    else:
+        lines.append({"account_code": "sales", "debit_cents": 0, "credit_cents": amount})
+    _post(tenant_id, entry_date=(payment.get("paid_at") or _today()),
+          description=f"Payment on invoice {invoice.get('invoice_number') or invoice.get('id')}",
+          source_type="invoice_payment", source_id=payment.get("id"), lines=lines)
+
+
 def post_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
     amount = int(expense.get("amount_cents") or 0)
     if amount <= 0:

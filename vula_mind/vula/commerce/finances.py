@@ -34,6 +34,38 @@ def _cents(rows: List[dict], field: str, pred=lambda r: True) -> int:
     return sum(int(r.get(field) or 0) for r in rows if pred(r))
 
 
+# Standard accounts-receivable aging breakdown (2026-08-15) — for "who do I chase first", not a
+# replacement for the netted `receivable` total above. Deliberately gross per bucket, not netted
+# against credit notes — a credit note isn't tied to any one aging bucket, so there's no clean
+# way to net it into one; the top-level `receivable` figure stays the authoritative net number.
+def _aging_buckets(out_inv: List[dict], today) -> Dict[str, int]:
+    buckets = {"current": 0, "days_1_30": 0, "days_31_60": 0, "days_61_90": 0, "days_90_plus": 0}
+    for i in out_inv:
+        if i.get("status") not in ("sent", "overdue"):
+            continue
+        total = int(i.get("total_cents") or 0)
+        due = i.get("due_date")
+        if not due:
+            buckets["current"] += total
+            continue
+        try:
+            days_over = (today - datetime.fromisoformat(str(due)[:10]).date()).days
+        except Exception:
+            buckets["current"] += total
+            continue
+        if days_over <= 0:
+            buckets["current"] += total
+        elif days_over <= 30:
+            buckets["days_1_30"] += total
+        elif days_over <= 60:
+            buckets["days_31_60"] += total
+        elif days_over <= 90:
+            buckets["days_61_90"] += total
+        else:
+            buckets["days_90_plus"] += total
+    return buckets
+
+
 async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
     """Deterministic financial snapshot for the last `days`."""
     db = _client()
@@ -47,16 +79,25 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
     order_rev = _cents(paid_orders, "total_cents")
 
     # Invoices (invoiced revenue + VAT + receivables). Receivables are all-time, not period-bound.
+    # commerce_invoices also stores quotes and credit notes — doc_type=="invoice" filtering and
+    # netting credit notes out of receivables (they're money owed BACK to the customer, not
+    # additional money owed to the tenant) were both missing here before this fix (2026-08-15),
+    # same bug as admin_stats/admin_customer_detail in vula/api/commerce.py.
     inv_all = (db.table("commerce_invoices")
-               .select("total_cents,vat_cents,subtotal_cents,status,created_at,customer_name,direction")
+               .select("total_cents,vat_cents,subtotal_cents,status,created_at,customer_name,direction,doc_type,due_date")
                .eq("tenant_id", tenant_id).execute().data or [])
-    out_inv = [i for i in inv_all if (i.get("direction") or "outbound") == "outbound"]
+    out_inv = [i for i in inv_all if (i.get("direction") or "outbound") == "outbound"
+              and i.get("doc_type") == "invoice"]
+    out_credits = [i for i in inv_all if (i.get("direction") or "outbound") == "outbound"
+                   and i.get("doc_type") == "credit_note"]
     inv_paid_period = [i for i in out_inv if i.get("status") == "paid" and (i.get("created_at") or "")[:10] >= since]
     inv_rev = _cents(inv_paid_period, "total_cents")
     vat_collected = _cents(inv_paid_period, "vat_cents")
-    receivable = _cents(out_inv, "total_cents", lambda r: r.get("status") == "sent")
+    credited = _cents(out_credits, "total_cents")
+    receivable = _cents(out_inv, "total_cents", lambda r: r.get("status") == "sent") - credited
     overdue = _cents(out_inv, "total_cents", lambda r: r.get("status") == "overdue")
     receivable_count = len([i for i in out_inv if i.get("status") in ("sent", "overdue")])
+    aging = _aging_buckets(out_inv, today)
 
     # Expenses (costs)
     try:
@@ -95,7 +136,8 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
         "margin_pct": margin,
         "vat": {"collected_cents": vat_collected,
                 "note": "Output VAT collected on paid invoices. Input VAT on expenses isn't itemised — treat as an indicator, not a filed return."},
-        "receivables": {"outstanding_cents": receivable, "overdue_cents": overdue, "count": receivable_count},
+        "receivables": {"outstanding_cents": receivable, "overdue_cents": overdue,
+                        "count": receivable_count, "aging": aging},
         "orders_count": len(paid_orders),
         "top_customers": top_customers,
         "top_expense_categories": top_expenses,

@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vula.commerce.bank_rec import _match_invoice, _match_order, extract_payment_confirmation, reconciliation_ok
+from vula.commerce.bank_rec import (
+    _match_invoice, _match_order, extract_payment_confirmation, reconciliation_ok,
+    propose_pop_match, stage_pop_for_review,
+)
 
 
 def test_match_invoice_ambiguous_same_amount_no_name_match():
@@ -143,3 +146,105 @@ async def test_ingest_statement_flags_extraction_reconciled_in_result():
         result = await bank_rec.ingest_statement("off-the-hook", Path("fake.pdf"))
 
     assert result["extraction_reconciled"] is False
+
+
+# ── WhatsApp proof-of-payment staging (2026-08-15, migration 132) ───────────────
+# Unlike reconcile()'s confident-match auto-apply, a WhatsApp screenshot never auto-marks paid —
+# it always stages into bank_review.py's existing interactive flow, even on a confident match.
+
+class _FakeTable:
+    def __init__(self, rows):
+        self._rows = rows
+        self.inserted = None
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def in_(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+
+    def insert(self, payload):
+        self.inserted = payload
+        return self
+
+    def execute(self):
+        if self.inserted is not None:
+            return MagicMock(data=[self.inserted])
+        return MagicMock(data=self._rows)
+
+
+class _FakeDB:
+    def __init__(self, tables: dict):
+        self._tables = tables
+
+    def table(self, name):
+        return self._tables.get(name, _FakeTable([]))
+
+
+def test_propose_pop_match_finds_invoice_by_amount_and_reference():
+    invoice = {"id": "inv1", "invoice_number": "OTH-0042", "customer_name": "Thabo",
+               "total_cents": 15000, "status": "sent", "doc_type": "invoice"}
+    db = _FakeDB({
+        "commerce_invoices": _FakeTable([invoice]),
+        "commerce_orders": _FakeTable([]),
+    })
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        result = propose_pop_match("off-the-hook", 15000, reference="OTH-0042", payee="Thabo")
+    assert result is not None
+    match_type, cand = result
+    assert match_type == "invoice"
+    assert cand["id"] == "inv1"
+
+
+def test_propose_pop_match_falls_back_to_order_when_no_invoice_matches():
+    order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
+              "customer_phone": "27821234567", "total_cents": 15000}
+    db = _FakeDB({
+        "commerce_invoices": _FakeTable([]),
+        "commerce_orders": _FakeTable([order]),
+    })
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        result = propose_pop_match("off-the-hook", 15000, reference="OFF-00006")
+    assert result is not None
+    match_type, cand = result
+    assert match_type == "order"
+    assert cand["id"] == "ord1"
+
+
+def test_propose_pop_match_returns_none_when_nothing_matches():
+    db = _FakeDB({"commerce_invoices": _FakeTable([]), "commerce_orders": _FakeTable([])})
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        result = propose_pop_match("off-the-hook", 99999)
+    assert result is None
+
+
+def test_stage_pop_for_review_proposes_specific_invoice_and_stores_candidate():
+    invoice = {"id": "inv1", "invoice_number": "OTH-0042", "customer_name": "Thabo",
+               "total_cents": 15000, "status": "sent", "doc_type": "invoice"}
+    txn_table = _FakeTable([])
+    db = _FakeDB({
+        "commerce_invoices": _FakeTable([invoice]),
+        "commerce_orders": _FakeTable([]),
+        "commerce_bank_transactions": txn_table,
+    })
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        msg = stage_pop_for_review("off-the-hook", 15000, "2026-08-15", "OTH-0042", "Thabo")
+    assert "OTH-0042" in msg
+    assert "yes" in msg.lower()
+    assert txn_table.inserted["proposed_match_type"] == "invoice"
+    assert txn_table.inserted["proposed_match_id"] == "inv1"
+    assert txn_table.inserted["match_status"] == "asked"
+    assert txn_table.inserted["direction"] == "in"
+
+
+def test_stage_pop_for_review_asks_open_question_when_no_match():
+    txn_table = _FakeTable([])
+    db = _FakeDB({
+        "commerce_invoices": _FakeTable([]),
+        "commerce_orders": _FakeTable([]),
+        "commerce_bank_transactions": txn_table,
+    })
+    with patch("vula.commerce.bank_rec._client", return_value=db):
+        msg = stage_pop_for_review("off-the-hook", 5000, None, None, None)
+    assert "which order or invoice" in msg.lower()
+    assert txn_table.inserted["proposed_match_type"] is None
+    assert txn_table.inserted["proposed_match_id"] is None

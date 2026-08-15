@@ -99,12 +99,13 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
         ref = result["reference"]
         from vula.commerce import service as cs
         db = cs._client()
-        # 1. Invoice? (invoice pay-links use reference = invoice id)
+        # 1. Invoice? (invoice pay-links use reference = invoice id). Routed through the shared
+        # service function (not a direct table write) so this also fires the general-ledger
+        # posting hook — same fix applied to admin_update_invoice and already the pattern used
+        # by the real, HMAC-verified Yoco webhook (vula/api/yoco.py) for this exact case.
         try:
-            upd = (db.table("commerce_invoices")
-                   .update({"status": "paid", "updated_at": cs._now()})
-                   .eq("tenant_id", tenant_id).eq("id", ref).execute())
-            if upd.data:
+            updated = await cs.update_invoice_status(tenant_id, ref, "paid")
+            if updated:
                 log.info("Invoice %s paid via %s", ref, provider)
                 return {"received": True}
         except Exception as exc:

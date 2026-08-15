@@ -236,6 +236,79 @@ def _match_order(txn: Dict[str, Any], orders: List[dict]) -> Optional[dict]:
     return _match_by_amount(txn, orders, "total_cents", ("customer_name", "display_id"))
 
 
+def propose_pop_match(tenant_id: str, amount_cents: int, reference: Optional[str] = None,
+                      payee: Optional[str] = None) -> Optional[tuple]:
+    """Best-guess candidate for a WhatsApp-sent proof-of-payment screenshot, reusing the same
+    amount(+name/reference) matcher a bank-statement credit line uses. Returns
+    ("invoice"|"order", candidate_row) or None — never applied automatically here; a screenshot
+    is easier to fake/misread than a real bank statement, so unlike reconcile()'s confident-match
+    auto-apply, this is always just a proposal for the owner to confirm."""
+    db = _client()
+    try:
+        invoices = (db.table("commerce_invoices")
+                    .select("id,invoice_number,customer_name,total_cents,status,doc_type")
+                    .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"])
+                    .limit(500).execute().data or [])
+        invoices = [i for i in invoices if (i.get("doc_type") or "invoice") == "invoice"]
+    except Exception:
+        invoices = []
+    try:
+        orders = (db.table("commerce_orders")
+                  .select("id,display_id,customer_name,customer_phone,total_cents")
+                  .eq("tenant_id", tenant_id).eq("status", "pending_payment")
+                  .limit(500).execute().data or [])
+    except Exception:
+        orders = []
+    txn = {"amount_cents": amount_cents, "description": payee or "", "reference": reference or ""}
+    im = _match_invoice(txn, invoices)
+    if im:
+        return ("invoice", im)
+    om = _match_order(txn, orders)
+    if om:
+        return ("order", om)
+    return None
+
+
+def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
+                         reference: Optional[str] = None, payee: Optional[str] = None) -> str:
+    """Stage a WhatsApp proof-of-payment screenshot into the SAME interactive review flow
+    bank_review.py already uses for an unmatched bank-statement credit — never auto-mark-paid.
+    Returns the WhatsApp reply to send: a specific "does this match X — reply yes" proposal when
+    a confident candidate is found, otherwise the same open "which order is this for" question
+    the statement-sourced flow already asks. Marks the row 'asked' immediately (rather than
+    'unmatched') since we're sending the question right now, not waiting for a batched digest."""
+    candidate = propose_pop_match(tenant_id, amount_cents, reference, payee)
+    match_type, cand = candidate if candidate else (None, None)
+    row = {
+        "tenant_id": tenant_id,
+        "txn_date": (txn_date or _now())[:10],
+        "description": "WhatsApp proof of payment" + (f" — {payee}" if payee else ""),
+        "amount_cents": amount_cents,
+        "direction": "in",
+        "reference": reference,
+        "match_status": "asked",
+        "source_file": "whatsapp_pop",
+        "proposed_match_type": match_type,
+        "proposed_match_id": (cand or {}).get("id"),
+    }
+    try:
+        _client().table("commerce_bank_transactions").insert(row).execute()
+    except Exception as exc:
+        log.debug("pop staging insert failed (run migration 132?): %s", exc)
+
+    amt = amount_cents / 100
+    if match_type == "invoice":
+        return (f"📸 Got your payment screenshot — R{amt:,.2f}. Looks like it matches invoice "
+                f"*{cand.get('invoice_number')}* ({cand.get('customer_name') or 'customer'}). "
+                f"Reply *yes* to confirm, or tell me the right order/invoice number.")
+    if match_type == "order":
+        return (f"📸 Got your payment screenshot — R{amt:,.2f}. Looks like it matches order "
+                f"*{cand.get('display_id')}* ({cand.get('customer_name') or 'customer'}). "
+                f"Reply *yes* to confirm, or tell me the right order/invoice number.")
+    return (f"📸 Got your payment screenshot for R{amt:,.2f} — which order or invoice is this "
+            f"for? Reply with the number (e.g. OFF-00006) or the customer's name.")
+
+
 async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str = "") -> Dict[str, Any]:
     """Persist transactions and reconcile: credits → mark matching invoices paid; debits → expenses.
     Each transaction is also allocated to a chart-of-accounts category (learned/AI) with VAT."""

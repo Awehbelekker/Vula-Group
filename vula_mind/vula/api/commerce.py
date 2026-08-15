@@ -1975,14 +1975,23 @@ async def admin_stats(tenant_id: str):
     paid = [o for o in all_orders if o["status"] not in ("pending_payment", "cancelled", "refunded")]
     today_paid = [o for o in paid if o["created_at"][:10] == today]
 
-    # Invoice summary
+    # Invoice summary. Must filter doc_type=="invoice" — this table also stores quotes and
+    # credit notes, and credit notes need netting OUT of outstanding (they're money owed BACK
+    # to the customer, not additional money owed to the tenant) — same pattern already used
+    # correctly by admin_customer_statement's balance_due_cents below. Before this fix
+    # (2026-08-15), an unaccepted quote counted as "owed to you", and every credit note made
+    # the figure go UP instead of down.
     try:
         inv_result = db.table("commerce_invoices").select(
-            "total_cents,status"
+            "total_cents,status,doc_type"
         ).eq("tenant_id", tenant_id).execute().data or []
-        invoice_outstanding = sum(i["total_cents"] for i in inv_result if i["status"] in ("sent",))
-        invoice_overdue = sum(i["total_cents"] for i in inv_result if i["status"] == "overdue")
-        invoice_paid_month = sum(i["total_cents"] for i in inv_result if i["status"] == "paid")
+        credited = sum(i["total_cents"] for i in inv_result if i.get("doc_type") == "credit_note")
+        invoice_outstanding = sum(i["total_cents"] for i in inv_result
+                                  if i.get("doc_type") == "invoice" and i["status"] in ("sent",)) - credited
+        invoice_overdue = sum(i["total_cents"] for i in inv_result
+                              if i.get("doc_type") == "invoice" and i["status"] == "overdue")
+        invoice_paid_month = sum(i["total_cents"] for i in inv_result
+                                 if i.get("doc_type") == "invoice" and i["status"] == "paid")
     except Exception:
         invoice_outstanding = invoice_overdue = invoice_paid_month = 0
 
@@ -2236,6 +2245,24 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields")
+
+    # A status change is routed through update_invoice_status so a transition to "paid"
+    # always stamps paid_at server-side AND posts to the general ledger — a raw field write
+    # here silently skipped both (2026-08-15 fix: the dashboard's "Mark paid" button used this
+    # endpoint directly, so every invoice marked paid this way was invisible to the trial
+    # balance report). Never trust a client-supplied paid_at either — always server time.
+    new_status = update.pop("status", None)
+    update.pop("paid_at", None)
+    if new_status:
+        result = await service.update_invoice_status(tenant_id, invoice_id, new_status)
+        if update:  # any other fields sent in the same request still get applied
+            update["updated_at"] = service._now()
+            patched = (db.table("commerce_invoices").update(update)
+                      .eq("tenant_id", tenant_id).eq("id", invoice_id).execute())
+            if patched.data:
+                result = patched.data[0]
+        return result
+
     update["updated_at"] = service._now()
     result = db.table("commerce_invoices").update(update) \
         .eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
@@ -2247,6 +2274,45 @@ async def admin_delete_invoice(tenant_id: str, invoice_id: str):
     service._client().table("commerce_invoices") \
         .delete().eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
     return {"deleted": invoice_id}
+
+
+class InvoicePaymentIn(BaseModel):
+    amount_cents: int
+    payment_method: Optional[str] = None
+    note: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/payments")
+async def admin_record_invoice_payment(tenant_id: str, invoice_id: str, body: InvoicePaymentIn):
+    """Record one instalment against an invoice — supports real partial payments across
+    multiple calls. Status becomes 'part_paid' until the running total reaches the invoice
+    total, then flips to 'paid' automatically."""
+    try:
+        return await service.record_invoice_payment(
+            tenant_id, invoice_id, body.amount_cents, body.payment_method, body.note)
+    except ValueError as exc:
+        status = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc))
+
+
+@router.get("/{tenant_id}/admin/invoices/{invoice_id}/payments")
+async def admin_list_invoice_payments(tenant_id: str, invoice_id: str):
+    return {"payments": await service.list_invoice_payments(tenant_id, invoice_id)}
+
+
+class InvoiceCancelIn(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/invoices/{invoice_id}/cancel")
+async def admin_cancel_invoice(tenant_id: str, invoice_id: str, body: InvoiceCancelIn):
+    """Cancel an invoice that hasn't been paid yet. A paid/part_paid invoice must be reversed
+    via a credit note instead — see service.cancel_invoice's docstring for why."""
+    try:
+        return await service.cancel_invoice(tenant_id, invoice_id, body.reason)
+    except ValueError as exc:
+        status = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc))
 
 
 @router.post("/{tenant_id}/admin/quotes/bulk-delete")
@@ -3821,39 +3887,111 @@ async def _process_stock_alerts(tenant_id: str, force: bool = False) -> int:
     return len(low)
 
 
+_REMINDER_STAGE_ORDER = {None: 0, "pre_due": 1, "due": 2, "firm": 3, "escalated": 4}
+
+
+def _reminder_stage_for(days_over: int) -> Optional[str]:
+    """days_over is (today - due_date).days — negative before the due date."""
+    if days_over < -3:
+        return None
+    if days_over < 0:
+        return "pre_due"
+    if days_over < 7:
+        return "due"
+    if days_over < 14:
+        return "firm"
+    return "escalated"
+
+
+def _reminder_message(stage: str, iv: dict, days_over: int) -> str:
+    name = iv.get("customer_name") or "there"
+    num = iv.get("invoice_number")
+    amount = (iv.get("total_cents") or 0) / 100
+    if stage == "pre_due":
+        days_left = abs(days_over)
+        return (f"Hi {name}, just a heads-up — invoice *{num}* for R{amount:.2f} is due in "
+                f"{days_left} day{'s' if days_left != 1 else ''}. Let us know if you have any "
+                f"questions. Thank you! 🙏")
+    if stage == "due":
+        return (f"Hi {name}, a friendly reminder that invoice *{num}* for R{amount:.2f} is now "
+                f"past its due date. Please arrange payment when you can — reply here with any "
+                f"questions. Thank you! 🙏")
+    if stage == "firm":
+        return (f"Hi {name}, invoice *{num}* for R{amount:.2f} is now {days_over} days overdue. "
+                f"Please arrange payment as soon as possible, or reply here if there's an issue "
+                f"we should know about.")
+    return (f"Hi {name}, invoice *{num}* for R{amount:.2f} is now {days_over} days overdue. "
+            f"Please arrange payment urgently, or reply here so we can sort this out together.")
+
+
 async def _process_overdue_invoices(tenant_id: str) -> int:
-    """Mark past-due invoices overdue and send the customer a one-time WhatsApp reminder."""
+    """Staged overdue-invoice reminder cadence: pre_due (-3d) / due (0d) / firm (+7d) /
+    escalated (+14d, also alerts the internal team). Each stage fires exactly once per invoice,
+    claimed via a conditional update matching the invoice's previous reminder_stage — the same
+    idempotency shape commerce_orders.followup_sent_at uses, generalized from a boolean to an
+    ordered stage so a daily job re-run (or two overlapping runs) can never double-send.
+    Requires migration 131 (reminder_stage/last_reminded_at columns)."""
     from datetime import date as _date
     db = service._client()
-    today = _date.today().isoformat()
+    today = _date.today()
     try:
         rows = (db.table("commerce_invoices")
-                .select("id,invoice_number,customer_name,customer_phone,total_cents,due_date,doc_type,status")
-                .eq("tenant_id", tenant_id).eq("status", "sent").execute().data or [])
+                .select("id,invoice_number,customer_name,customer_phone,total_cents,due_date,"
+                        "doc_type,status,reminder_stage")
+                .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"]).execute().data or [])
     except Exception as exc:
         log.debug("overdue scan skipped: %s", exc)
         return 0
+
     reminded = 0
     for iv in rows:
-        due = iv.get("due_date")
-        if not due or due >= today:
-            continue
         if (iv.get("doc_type") or "invoice") != "invoice":
             continue   # only invoices go overdue — not quotes/proformas
-        db.table("commerce_invoices").update(
-            {"status": "overdue", "updated_at": service._now()}).eq("id", iv["id"]).execute()
+        due = iv.get("due_date")
+        if not due:
+            continue
+        try:
+            due_date = _date.fromisoformat(str(due)[:10])
+        except Exception:
+            continue
+        days_over = (today - due_date).days
+        target = _reminder_stage_for(days_over)
+        current = iv.get("reminder_stage")
+        if target is None or _REMINDER_STAGE_ORDER[target] <= _REMINDER_STAGE_ORDER.get(current, 0):
+            continue
+
+        patch = {"reminder_stage": target, "last_reminded_at": service._now(), "updated_at": service._now()}
+        if days_over >= 0 and iv.get("status") == "sent":
+            patch["status"] = "overdue"
+        q = db.table("commerce_invoices").update(patch).eq("id", iv["id"]).eq("tenant_id", tenant_id)
+        q = q.is_("reminder_stage", "null") if current is None else q.eq("reminder_stage", current)
+        try:
+            claimed = q.execute().data
+        except Exception as exc:
+            log.debug("overdue stage claim failed for %s: %s", iv.get("id"), exc)
+            continue
+        if not claimed:
+            continue   # another run already claimed this stage — race-safe skip
+
         phone = (iv.get("customer_phone") or "").strip()
         if phone:
             try:
                 from vula.api.whatsapp import _send_reply
-                await _send_reply(phone, (
-                    f"Hi {iv.get('customer_name') or 'there'}, a friendly reminder that invoice "
-                    f"*{iv.get('invoice_number')}* for R{(iv.get('total_cents') or 0) / 100:.2f} is now "
-                    f"past its due date. Please arrange payment when you can — reply here with any questions. "
-                    f"Thank you! 🙏"), tenant_id)
+                await _send_reply(phone, _reminder_message(target, iv, days_over), tenant_id)
                 reminded += 1
             except Exception as exc:
                 log.debug("overdue reminder send failed: %s", exc)
+
+        if target == "escalated":
+            try:
+                from vula.integrations.notify import notify_team
+                await notify_team(tenant_id, "invoice_overdue_escalated", (
+                    f"🔴 Invoice {iv.get('invoice_number')} for {iv.get('customer_name') or 'a customer'} "
+                    f"(R{(iv.get('total_cents') or 0) / 100:.2f}) is now {days_over} days overdue with no "
+                    f"response to reminders. May need a personal follow-up call."))
+            except Exception as exc:
+                log.debug("overdue escalation alert failed: %s", exc)
+
     if reminded:
         log.info("Overdue invoices: reminded %d customer(s) for %s", reminded, tenant_id)
     return reminded
@@ -4217,11 +4355,15 @@ async def admin_customer_detail(tenant_id: str, phone: str):
     paid_count = len(paid)
     dates = sorted(o["created_at"] for o in orders if o.get("created_at"))
     try:
-        invs = (db.table("commerce_invoices").select("total_cents,status")
+        invs = (db.table("commerce_invoices").select("total_cents,status,doc_type")
                 .eq("tenant_id", tenant_id).eq("customer_phone", phone).execute().data or [])
     except Exception:
         pass
-    inv_outstanding = sum(int(i.get("total_cents") or 0) for i in invs if i.get("status") in ("sent", "overdue"))
+    # doc_type=="invoice" only (this table also stores quotes/credit notes for this customer);
+    # credit notes net OUT — see admin_stats' identical fix above for the full rationale.
+    _inv_credited = sum(int(i.get("total_cents") or 0) for i in invs if i.get("doc_type") == "credit_note")
+    inv_outstanding = sum(int(i.get("total_cents") or 0) for i in invs
+                          if i.get("doc_type") == "invoice" and i.get("status") in ("sent", "overdue")) - _inv_credited
     # Session holds the language preference + internal note (agent_note), keyed by phone.
     lang, note, sess_name = None, None, None
     try:

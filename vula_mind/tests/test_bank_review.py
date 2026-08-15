@@ -83,3 +83,64 @@ async def test_handle_client_answer_exact_order_number_marks_paid():
     assert "marked paid" in reply
     mock_update.assert_awaited_once_with("ord1", "paid")
     mock_notify.assert_awaited_once()
+
+
+# ── "yes" confirms a WhatsApp proof-of-payment's proposed candidate (migration 132) ────────
+
+@pytest.mark.asyncio
+async def test_handle_client_answer_yes_confirms_proposed_invoice():
+    txn = {"id": "txn1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
+           "proposed_match_type": "invoice", "proposed_match_id": "inv1"}
+    invoice = {"id": "inv1", "invoice_number": "OTH-0042", "customer_name": "Thabo",
+               "total_cents": 15000, "status": "sent"}
+    db = _FakeDB({
+        "commerce_bank_transactions": _FakeTable([txn]),
+        "commerce_invoices": _FakeTable([invoice]),
+    })
+    with (
+        patch("vula.commerce.bank_review._client", return_value=db),
+        patch("vula.commerce.service.update_invoice_status", new=AsyncMock()) as mock_update,
+    ):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("off-the-hook", "yes")
+    assert "OTH-0042" in reply
+    assert "marked paid" in reply
+    mock_update.assert_awaited_once_with("off-the-hook", "inv1", "paid")
+
+
+@pytest.mark.asyncio
+async def test_handle_client_answer_yes_confirms_proposed_order():
+    txn = {"id": "txn1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
+           "proposed_match_type": "order", "proposed_match_id": "ord1"}
+    order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
+             "customer_phone": "27821234567", "total_cents": 15000, "status": "pending_payment"}
+    db = _FakeDB({
+        "commerce_bank_transactions": _FakeTable([txn]),
+        "commerce_orders": _FakeTable([order]),
+    })
+    with (
+        patch("vula.commerce.bank_review._client", return_value=db),
+        patch("vula.commerce.service.update_order_status", new=AsyncMock()) as mock_update,
+        patch("vula.api.yoco._notify_order_paid", new=AsyncMock()),
+    ):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("off-the-hook", "yes")
+    assert "OFF-00006" in reply
+    mock_update.assert_awaited_once_with("ord1", "paid")
+
+
+@pytest.mark.asyncio
+async def test_handle_client_answer_yes_without_a_proposal_falls_through_to_normal_search():
+    # No proposed_match_type at all (an ordinary statement-sourced unmatched credit) — "yes"
+    # isn't a real order number or customer name, so it should behave like any other miss,
+    # never crash trying to look up a candidate that was never proposed.
+    txn = {"id": "txn1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x"}
+    db = _FakeDB({
+        "commerce_bank_transactions": _FakeTable([txn]),
+        "commerce_orders": _FakeTable([]),
+        "commerce_invoices": _FakeTable([]),
+    })
+    with patch("vula.commerce.bank_review._client", return_value=db):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("off-the-hook", "yes")
+    assert "couldn't find" in reply.lower()

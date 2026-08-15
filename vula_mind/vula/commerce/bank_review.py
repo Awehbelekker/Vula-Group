@@ -265,6 +265,26 @@ async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
             {"match_status": "ignored"}).eq("id", txn["id"]).execute()
         return _next_client_or_done(tenant_id, "⏭ Skipped.")
 
+    # A proof-of-payment screenshot (vula/commerce/bank_rec.py::stage_pop_for_review) may have
+    # already proposed a specific candidate — "yes" confirms it directly rather than making the
+    # sender retype the order/invoice number back.
+    if low in ("yes", "y", "confirm", "confirmed", "correct") and txn.get("proposed_match_type"):
+        mtype, mid = txn["proposed_match_type"], txn.get("proposed_match_id")
+        if mtype == "invoice" and mid:
+            irow = (db.table("commerce_invoices")
+                    .select("id,invoice_number,customer_name,total_cents,status")
+                    .eq("id", mid).in_("status", ["sent", "overdue"]).limit(1).execute().data or [])
+            if irow:
+                return await _apply_invoice_match(tenant_id, txn, irow[0])
+        elif mtype == "order" and mid:
+            orow = (db.table("commerce_orders")
+                    .select("id,display_id,customer_name,customer_phone,total_cents,status")
+                    .eq("id", mid).eq("status", "pending_payment").limit(1).execute().data or [])
+            if orow:
+                return await _apply_order_match(tenant_id, txn, orow[0])
+        # the proposed row's status moved on since it was proposed — fall through to the
+        # normal name/number search below rather than confirming something stale.
+
     # 1. Trust an explicit order number / invoice number outright — direct human intent beats
     # an amount tolerance check (covers deposits/partial payments too).
     orow = (db.table("commerce_orders")

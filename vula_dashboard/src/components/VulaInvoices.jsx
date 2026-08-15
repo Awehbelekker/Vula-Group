@@ -15,11 +15,15 @@ import { FONT_PAIRINGS } from '../theme/tokens'
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const STATUS = {
-  draft:     { label: 'Draft',     color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
-  sent:      { label: 'Sent',      color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
-  paid:      { label: 'Paid',      color: '#16a34a', bg: 'rgba(34,197,94,0.12)' },
-  overdue:   { label: 'Overdue',   color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
-  cancelled: { label: 'Cancelled', color: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
+  draft:     { label: 'Draft',      color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
+  sent:      { label: 'Sent',       color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
+  part_paid: { label: 'Part paid',  color: '#d97706', bg: 'rgba(217,119,6,0.12)' },
+  paid:      { label: 'Paid',       color: '#16a34a', bg: 'rgba(34,197,94,0.12)' },
+  overdue:   { label: 'Overdue',    color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
+  cancelled: { label: 'Cancelled',  color: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
+  accepted:  { label: 'Accepted',   color: '#16a34a', bg: 'rgba(34,197,94,0.12)' },
+  declined:  { label: 'Declined',   color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
+  expired:   { label: 'Expired',    color: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
 }
 
 export default function VulaInvoices({ tenantId, products = [], initialSupplierId = null, onClearSupplierFilter }) {
@@ -101,8 +105,19 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }
 
   async function setStatus(inv, status) {
-    const body = { status }
-    if (status === 'paid') body.paid_at = new Date().toISOString()
+    // paid_at is stamped server-side now (never trust a client timestamp for this) — see
+    // markPaid() below for the 'paid' transition specifically.
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+    })
+    load()
+  }
+
+  async function markPaid(inv) {
+    const method = window.prompt('How was this paid? (cash / eft / card / other — leave blank to skip)', 'eft')
+    if (method === null) return  // cancelled
+    const body = { status: 'paid' }
+    if (method.trim()) body.payment_method = method.trim().toLowerCase()
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })
@@ -112,6 +127,35 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   async function del(id) {
     if (!confirm('Delete this invoice?')) return
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${id}`, { method: 'DELETE' })
+    load()
+  }
+
+  async function recordPayment(inv) {
+    const balance = (inv.total_cents || 0) - (inv.total_paid_cents || 0)
+    const raw = window.prompt(
+      `How much was paid? (Rand — balance due is R${(balance / 100).toFixed(2)})`, (balance / 100).toFixed(2))
+    if (raw === null) return
+    const rand = parseFloat(raw)
+    if (!rand || rand <= 0) { alert('Enter an amount greater than zero.'); return }
+    const method = window.prompt('How was this paid? (cash / eft / card / other — leave blank to skip)', 'eft')
+    const body = { amount_cents: Math.round(rand * 100) }
+    if (method && method.trim()) body.payment_method = method.trim().toLowerCase()
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/payments`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { alert(d.detail || 'Could not record that payment.'); return }
+    load()
+  }
+
+  async function cancelInvoice(inv) {
+    const reason = window.prompt(`Cancel ${inv.invoice_number}? Optionally say why (or leave blank):`, '')
+    if (reason === null) return
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/cancel`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason || null }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { alert(d.detail || 'Could not cancel this invoice.'); return }
     load()
   }
 
@@ -408,7 +452,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                         {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
                       </button>
                       {inv.status !== 'paid' && (
-                        <button onClick={() => setStatus(inv, 'paid')} style={s.actPaid}>✓ Mark paid</button>
+                        <button onClick={() => markPaid(inv)} style={s.actPaid}>✓ Mark paid</button>
                       )}
                     </>
                   ) : (
@@ -436,8 +480,14 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       {inv.doc_type === 'quote' && inv.status === 'accepted' && !inv.converted_invoice_id && (
                         <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
                       )}
-                      {inv.doc_type === 'invoice' && inv.status !== 'paid' && (
-                        <button onClick={() => setStatus(inv, 'paid')} style={s.actPaid}>✓ Mark paid</button>
+                      {inv.doc_type === 'invoice' && !['paid', 'cancelled'].includes(inv.status) && (
+                        <button onClick={() => markPaid(inv)} style={s.actPaid}>✓ Mark paid</button>
+                      )}
+                      {inv.doc_type === 'invoice' && !['paid', 'cancelled'].includes(inv.status) && (
+                        <button onClick={() => recordPayment(inv)} style={s.actMatch}>💵 Record payment</button>
+                      )}
+                      {inv.doc_type === 'invoice' && !['paid', 'part_paid', 'cancelled'].includes(inv.status) && (
+                        <button onClick={() => cancelInvoice(inv)} style={s.actMatch}>✕ Cancel</button>
                       )}
                     </>
                   )}

@@ -1411,6 +1411,84 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
     return created
 
 
+async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: int,
+                                  payment_method: Optional[str] = None,
+                                  note: Optional[str] = None) -> dict:
+    """Record one instalment against an invoice (migration 130). Multiple calls are supported —
+    real partial payments across several instalments — status becomes 'part_paid' until the
+    running total reaches the invoice's total_cents, then flips to 'paid' automatically (and
+    paid_at is stamped, same as a full one-shot payment). Each instalment posts its own ledger
+    entry, dated when it was actually received (see ledger.post_invoice_payment) — not one lump
+    entry when the balance finally clears."""
+    invoice = await get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise ValueError("invoice not found")
+    if invoice.get("doc_type") != "invoice":
+        raise ValueError("only invoices accept payments, not quotes or credit notes")
+    if invoice.get("status") in ("paid", "cancelled"):
+        raise ValueError(f"invoice is already {invoice['status']}")
+    if amount_cents <= 0:
+        raise ValueError("amount must be greater than zero")
+
+    payment = {
+        "tenant_id": tenant_id, "invoice_id": invoice_id, "amount_cents": amount_cents,
+        "payment_method": payment_method, "note": note, "paid_at": _now(),
+    }
+    created_payment = _client().table("commerce_invoice_payments").insert(payment).execute().data[0]
+
+    existing = (_client().table("commerce_invoice_payments").select("amount_cents")
+                .eq("tenant_id", tenant_id).eq("invoice_id", invoice_id).execute().data or [])
+    total_paid = sum(int(p.get("amount_cents") or 0) for p in existing)
+    total_due = int(invoice.get("total_cents") or 0)
+    new_status = "paid" if total_paid >= total_due else "part_paid"
+
+    # total_paid_cents is kept in sync here so the dashboard can show/compute the real
+    # remaining balance from the normal invoice list fetch alone (migration 130).
+    patch = {"status": new_status, "total_paid_cents": total_paid, "updated_at": _now()}
+    if new_status == "paid":
+        patch["paid_at"] = _now()
+    updated_result = (_client().table("commerce_invoices").update(patch)
+                      .eq("tenant_id", tenant_id).eq("id", invoice_id).execute())
+    updated = updated_result.data[0] if updated_result.data else invoice
+
+    try:
+        from vula.commerce import ledger
+        ledger.post_invoice_payment(tenant_id, invoice, created_payment)
+    except Exception as exc:
+        logger.warning("ledger hook failed for invoice payment %s: %s", created_payment.get("id"), exc)
+
+    return {**updated, "payment": created_payment, "total_paid_cents": total_paid,
+            "balance_due_cents": max(0, total_due - total_paid)}
+
+
+async def list_invoice_payments(tenant_id: str, invoice_id: str) -> List[dict]:
+    return (_client().table("commerce_invoice_payments").select("*")
+            .eq("tenant_id", tenant_id).eq("invoice_id", invoice_id)
+            .order("paid_at").execute().data or [])
+
+
+async def cancel_invoice(tenant_id: str, invoice_id: str, reason: Optional[str] = None) -> dict:
+    """Cancel an invoice that hasn't been paid yet (migration 130). A paid or partially-paid
+    invoice already has real ledger entries — reversing those is exactly what a credit note is
+    for, so cancel refuses rather than also trying to do that job. No ledger posting happens
+    here, same as order cancellation: nothing was ever posted for an invoice that was never
+    paid, so there's nothing to reverse."""
+    invoice = await get_invoice(tenant_id, invoice_id)
+    if not invoice:
+        raise ValueError("invoice not found")
+    if invoice.get("doc_type") != "invoice":
+        raise ValueError("only invoices can be cancelled — quotes use decline/expire instead")
+    if invoice.get("status") == "cancelled":
+        raise ValueError("this invoice is already cancelled")
+    if invoice.get("status") in ("paid", "part_paid"):
+        raise ValueError("a paid or partially-paid invoice can't be cancelled — use a credit note instead")
+
+    patch = {"status": "cancelled", "cancel_reason": reason, "cancelled_at": _now(), "updated_at": _now()}
+    result = (_client().table("commerce_invoices").update(patch)
+              .eq("tenant_id", tenant_id).eq("id", invoice_id).execute())
+    return result.data[0] if result.data else {}
+
+
 # ── Scheduled Jobs Logic ─────────────────────────────────────────────────────
 
 async def get_abandoned_carts(tenant_id: str, hours_old: int = 1) -> List[dict]:

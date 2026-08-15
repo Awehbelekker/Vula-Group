@@ -951,6 +951,12 @@ async def _handle_document_ingest(
                     if scan_msg and cur and cur not in ("ZAR", "UNKNOWN"):
                         scan_msg += (f"\n⚠️ This looks like a *{cur}* amount, not rands — "
                                      "please check it in the Expenses tab.")
+                elif fin and dtp == "payment_confirmation" and total_r > 0:
+                    from vula.commerce import bank_rec
+                    reply = bank_rec.stage_pop_for_review(
+                        tenant_id, round(total_r * 100), fin.get("date"),
+                        fin.get("reference"), fin.get("payee"))
+                    scan_msg = "\n\n" + reply
                 elif fin and dtp == "delivery_note":
                     scan_msg = ("\n\n📦 That's a *delivery note* — filed with your documents "
                                 "(no money booked). I'll match it against the supplier's invoice.")
@@ -970,7 +976,7 @@ async def _handle_document_ingest(
             doc_category, summary, fields, already_committed=already_committed,
         )
 
-        if scan_msg and any(k in scan_msg for k in ("💳", "♻️", "📦", "⚠️")):
+        if scan_msg and any(k in scan_msg for k in ("💳", "♻️", "📦", "⚠️", "📸")):
             # Money was booked (or deliberately not) — lead with THAT, not the filing mechanics.
             msg = scan_msg.strip() + "\n\n🗂 The document itself is filed — ask me about it any time."
         else:
@@ -2090,18 +2096,24 @@ async def _scan_financial_photo(photo_path: str) -> Optional[dict]:
             messages=[{"role": "user", "content": [
                 {"type": "text", "text":
                     "Read this document image carefully. Return STRICT JSON only, no prose:\n"
-                    '{"doc_type":"receipt|invoice|delivery_note|quote|statement|menu|other",'
+                    '{"doc_type":"receipt|invoice|delivery_note|quote|statement|menu|'
+                    'payment_confirmation|other",'
                     '"vendor":string|null,"date":"YYYY-MM-DD"|null,'
                     '"currency":"ZAR"|"USD"|"EUR"|"other"|"unknown",'
                     '"total":number|null,"vat":number|null,'
-                    '"payment_method":"card"|"cash"|"eft"|"unknown","card_last4":string|null}\n'
+                    '"payment_method":"card"|"cash"|"eft"|"unknown","card_last4":string|null,'
+                    '"reference":string|null,"payee":string|null}\n'
                     "Rules: total = the single final amount PAYABLE printed on the document "
                     "(grand total / amount due) — copy the printed number exactly, do not compute. "
                     "vat = the printed VAT/tax amount, null if not shown. R means ZAR. "
                     "card_last4 = the last 4 card digits if printed (e.g. '**** 1234', 'Card 572'), "
                     "else null. A menu/price list has many prices but no single bill total → "
                     "doc_type=menu, total=null. A delivery note lists goods delivered, often "
-                    "without prices."},
+                    "without prices. A proof-of-payment / EFT confirmation / bank-app payment "
+                    "screenshot (e.g. FNB/Capitec/Absa/PayShap/SnapScan confirming money was "
+                    "sent) → doc_type=payment_confirmation, total=the amount paid, "
+                    "reference=any transaction/reference number shown, payee=who received the "
+                    "payment if shown."},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
             ]}],
             temperature=0, max_tokens=200, api_key=api_key, api_base=api_base)

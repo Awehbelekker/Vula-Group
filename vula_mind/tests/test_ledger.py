@@ -166,6 +166,53 @@ def test_post_invoice_paid_no_vat_single_sales_line(fake_client):
     assert codes == {"bank_cash", "sales"}
 
 
+# ── post_invoice_payment (partial payments, migration 130) ─────────────────────────
+
+def test_post_invoice_payment_splits_vat_proportionally(fake_client):
+    # Invoice: R1150 total (R1000 + R150 VAT). A R575 instalment (exactly half) should carry
+    # exactly half the VAT (R75), not the full invoice's VAT.
+    invoice = {"id": "inv-1", "invoice_number": "OTH-0001", "total_cents": 11500, "vat_cents": 1500}
+    payment = {"id": "pay-1", "amount_cents": 5750, "paid_at": "2026-08-10"}
+    ledger.post_invoice_payment(TID, invoice, payment)
+    name, params = _lines_for(fake_client.rpc_calls)
+    assert params["p_source_type"] == "invoice_payment"
+    assert params["p_source_id"] == "pay-1"  # the PAYMENT's id, not the invoice's
+    lines = {l["account_code"]: l for l in params["p_lines"]}
+    assert lines["bank_cash"]["debit_cents"] == 5750
+    assert lines["vat_output"]["credit_cents"] == 750
+    assert lines["sales"]["credit_cents"] == 5000
+    total_debit = sum(l["debit_cents"] for l in params["p_lines"])
+    total_credit = sum(l["credit_cents"] for l in params["p_lines"])
+    assert total_debit == total_credit == 5750
+
+
+def test_post_invoice_payment_no_vat_single_sales_line(fake_client):
+    invoice = {"id": "inv-1", "total_cents": 5000, "vat_cents": 0}
+    payment = {"id": "pay-1", "amount_cents": 2000}
+    ledger.post_invoice_payment(TID, invoice, payment)
+    _, params = _lines_for(fake_client.rpc_calls)
+    codes = {l["account_code"] for l in params["p_lines"]}
+    assert codes == {"bank_cash", "sales"}
+
+
+def test_post_invoice_payment_two_instalments_use_distinct_source_ids(fake_client):
+    # Each instalment must get its own idempotency key (the payment's id) — using the
+    # invoice's id for both would collide under post_journal_entry's unique constraint and
+    # silently drop the second payment as "already posted".
+    invoice = {"id": "inv-1", "total_cents": 10000, "vat_cents": 0}
+    ledger.post_invoice_payment(TID, invoice, {"id": "pay-1", "amount_cents": 4000})
+    ledger.post_invoice_payment(TID, invoice, {"id": "pay-2", "amount_cents": 6000})
+    assert len(fake_client.rpc_calls) == 2
+    source_ids = {params["p_source_id"] for _, params in fake_client.rpc_calls}
+    assert source_ids == {"pay-1", "pay-2"}
+
+
+def test_post_invoice_payment_skips_zero_amount(fake_client):
+    invoice = {"id": "inv-1", "total_cents": 5000, "vat_cents": 0}
+    ledger.post_invoice_payment(TID, invoice, {"id": "pay-1", "amount_cents": 0})
+    assert fake_client.rpc_calls == []
+
+
 # ── post_expense ─────────────────────────────────────────────────────────────────
 
 def test_post_expense_splits_vat_and_uses_account_code(fake_client):
