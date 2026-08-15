@@ -488,7 +488,7 @@ async def _background_tasks(record: dict, temp_password: str, req: OnboardingReq
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
-@router.post("/onboard", response_model=OnboardingResponse)
+@router.post("/onboard", response_model=OnboardingResponse, dependencies=[Depends(_require_admin)])
 async def onboard_client(
     background_tasks: BackgroundTasks,
     req: OnboardingRequest,
@@ -524,7 +524,7 @@ async def onboard_client(
     )
 
 
-@router.post("/onboard/documents")
+@router.post("/onboard/documents", dependencies=[Depends(_require_admin)])
 async def upload_onboarding_documents(
     tenant_id: str = Form(...),
     files: List[UploadFile] = File(...),

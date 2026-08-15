@@ -193,6 +193,45 @@ def test_admin_signups_requires_key_when_configured():
     assert resp.status_code == 401
 
 
+# ── /onboard and /onboard/documents now require the same admin gate (2026-08-15) ───
+# Previously fully public — anyone could create vula_tenants rows and trigger real welcome
+# emails/WhatsApp sends to an attacker-supplied address, with no auth at all.
+
+def test_onboard_requires_key_when_configured():
+    with patch("vula.api.onboarding.settings") as mock_settings:
+        mock_settings.api_key = "secret123"
+        resp = client.post("/v1/onboard", json={
+            "company_name": "Test Co", "industry": "Construction",
+            "contact_name": "Jane", "email": "jane@test.co.za", "plan": "starter",
+        })
+    assert resp.status_code == 401
+
+
+def test_onboard_accepts_valid_api_key():
+    from vula.api.onboarding import settings as onboarding_settings
+    with (
+        patch.object(onboarding_settings, "api_key", "secret123"),
+        patch("vula.api.onboarding._supabase") as mock_sb,
+    ):
+        mock_sb.select = AsyncMock(return_value=[])
+        mock_sb.insert = AsyncMock(return_value={})
+        mock_sb.update = AsyncMock(return_value=None)
+        resp = client.post("/v1/onboard", headers={"X-API-Key": "secret123"}, json={
+            "company_name": "Test Co", "industry": "Construction",
+            "contact_name": "Jane", "email": "jane2@test.co.za", "plan": "starter",
+        })
+    assert resp.status_code == 200
+
+
+def test_onboard_documents_requires_key_when_configured():
+    with patch("vula.api.onboarding.settings") as mock_settings:
+        mock_settings.api_key = "secret123"
+        resp = client.post("/v1/onboard/documents",
+                           data={"tenant_id": "some-tenant"},
+                           files={"files": ("test.pdf", b"content", "application/pdf")})
+    assert resp.status_code == 401
+
+
 # ── Auth / Login ──────────────────────────────────────────────────────────────
 
 def _pw_hash(pw: str) -> str:
