@@ -98,6 +98,8 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
     overdue = _cents(out_inv, "total_cents", lambda r: r.get("status") == "overdue")
     receivable_count = len([i for i in out_inv if i.get("status") in ("sent", "overdue")])
     aging = _aging_buckets(out_inv, today)
+    from vula.commerce.payment_behavior import tenant_watch_list
+    payment_behavior = await tenant_watch_list(tenant_id)
 
     # Expenses (costs)
     try:
@@ -138,6 +140,7 @@ async def insights(tenant_id: str, days: int = 30) -> Dict[str, Any]:
                 "note": "Output VAT collected on paid invoices. Input VAT on expenses isn't itemised — treat as an indicator, not a filed return."},
         "receivables": {"outstanding_cents": receivable, "overdue_cents": overdue,
                         "count": receivable_count, "aging": aging},
+        "payment_behavior": payment_behavior,
         "orders_count": len(paid_orders),
         "top_customers": top_customers,
         "top_expense_categories": top_expenses,

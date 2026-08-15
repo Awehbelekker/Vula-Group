@@ -4355,7 +4355,8 @@ async def admin_customer_detail(tenant_id: str, phone: str):
     paid_count = len(paid)
     dates = sorted(o["created_at"] for o in orders if o.get("created_at"))
     try:
-        invs = (db.table("commerce_invoices").select("total_cents,status,doc_type")
+        invs = (db.table("commerce_invoices")
+                .select("total_cents,status,doc_type,due_date,paid_at")
                 .eq("tenant_id", tenant_id).eq("customer_phone", phone).execute().data or [])
     except Exception:
         pass
@@ -4364,6 +4365,8 @@ async def admin_customer_detail(tenant_id: str, phone: str):
     _inv_credited = sum(int(i.get("total_cents") or 0) for i in invs if i.get("doc_type") == "credit_note")
     inv_outstanding = sum(int(i.get("total_cents") or 0) for i in invs
                           if i.get("doc_type") == "invoice" and i.get("status") in ("sent", "overdue")) - _inv_credited
+    from vula.commerce.payment_behavior import customer_payment_behavior
+    payment_behavior = customer_payment_behavior([i for i in invs if i.get("doc_type") == "invoice"])
     # Session holds the language preference + internal note (agent_note), keyed by phone.
     lang, note, sess_name = None, None, None
     try:
@@ -4421,6 +4424,7 @@ async def admin_customer_detail(tenant_id: str, phone: str):
                   "paid_order_count": paid_count,
                   "avg_order_cents": int(ltv / paid_count) if paid_count else 0,
                   "invoice_outstanding_cents": inv_outstanding},
+        "payment_behavior": payment_behavior,
         "note": note or "",
         "events": _customer_timeline(db, tenant_id, phone),
         "conversation": conversation,

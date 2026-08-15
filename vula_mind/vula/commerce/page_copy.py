@@ -382,11 +382,14 @@ MOOD_PRESETS: Dict[str, Dict[str, Any]] = {
         "motion_intensity": "subtle",
     },
     "playful": {
-        # Distinct from bold_energetic (which reads urgent/warm) — bright teal/coral/violet,
+        # Distinct from bold_energetic (which reads urgent/warm) — bright coral/teal/violet,
         # genuinely playful rather than a call-to-action red. All 3 hand-verified via
         # contrast_ratio() against both white and _DEFAULT_INK before being added here.
+        # Coral is listed first: nearest_preset_color() falls back to shortlist[0] as the
+        # default accent whenever there's no reference image to match against, so this order
+        # is what actually determines which color a tenant sees by default.
         "label": "Playful & fun", "font_pairing": "modern",
-        "accent_shortlist": ["#0E7C7B", "#D6456B", "#6C4AB6"],
+        "accent_shortlist": ["#D6456B", "#0E7C7B", "#6C4AB6"],
         "motion_intensity": "expressive",
     },
 }

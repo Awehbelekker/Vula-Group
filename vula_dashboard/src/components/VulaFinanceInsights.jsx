@@ -9,6 +9,7 @@ const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const PERIODS = [{ d: 7, l: "7 days" }, { d: 30, l: "30 days" }, { d: 90, l: "90 days" }];
+const RISK_LABELS = { high_risk: "High risk", frequently_late: "Often late" };
 
 export default function VulaFinanceInsights({ tenantId }) {
   const [days, setDays] = useState(30);
@@ -62,6 +63,11 @@ export default function VulaFinanceInsights({ tenantId }) {
               sub={`${d.receivables.count} unpaid invoices`} />
         <Stat label="Overdue" value={R(d.receivables.overdue_cents)}
               color={d.receivables.overdue_cents > 0 ? C.red : C.muted} sub="chase these" />
+        {d.payment_behavior?.overall?.on_time_pct != null && (
+          <Stat label="On-time payment rate" value={`${d.payment_behavior.overall.on_time_pct}%`}
+                color={d.payment_behavior.overall.on_time_pct >= 70 ? C.green : C.red}
+                sub={`across ${d.payment_behavior.overall.sample_size} paid invoices`} />
+        )}
       </div>
 
       <div style={{ ...card, marginTop: 14, background: C.alt }}>
@@ -82,6 +88,29 @@ export default function VulaFinanceInsights({ tenantId }) {
           <Row a="31–60 days overdue" b={R(d.receivables.aging.days_31_60)} />
           <Row a="61–90 days overdue" b={R(d.receivables.aging.days_61_90)} />
           <Row a="90+ days overdue" b={R(d.receivables.aging.days_90_plus)} />
+        </div>
+      )}
+
+      {d.payment_behavior?.watch_list?.length > 0 && (
+        <div style={{ ...card, marginTop: 14 }}>
+          <div style={lbl}>Customers to watch (payment history)</div>
+          {d.payment_behavior.watch_list.map((w, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                                   fontSize: 13, padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ color: C.text, overflow: "hidden", textOverflow: "ellipsis",
+                             whiteSpace: "nowrap", maxWidth: "50%" }}>
+                {w.customer_name || w.customer_phone}
+              </span>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+                             color: w.label === "high_risk" ? C.red : "#A2632B",
+                             background: w.label === "high_risk" ? "#FBEAE7" : "#FBF1E4" }}>
+                {RISK_LABELS[w.label] || w.label}
+              </span>
+              <span style={{ color: C.muted, fontWeight: 600 }}>
+                {w.on_time_pct}% on time · +{w.avg_days_late}d avg late
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
