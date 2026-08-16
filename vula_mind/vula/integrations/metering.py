@@ -76,6 +76,34 @@ def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens
         logger.debug("meter skipped (run migration 031?): %s", exc)
 
 
+IMAGE_COST_USD = 0.04  # gemini-2.5-flash-image via OpenRouter, per generated image
+
+
+def record_image(tenant_id: str, model: str, images: int = 1) -> None:
+    """Meter AI image generation (fixed per-image cost, not token-based)."""
+    if not tenant_id:
+        return
+    cost = round(IMAGE_COST_USD * images, 6)
+    short = (model or "").replace("openrouter/", "") + ":image"
+    day = datetime.now(timezone.utc).date().isoformat()
+    try:
+        db = _client()
+        ex = (db.table("vula_ai_usage").select("id,calls,est_cost_usd")
+              .eq("tenant_id", tenant_id).eq("day", day).eq("model", short).limit(1).execute().data or [])
+        if ex:
+            e = ex[0]
+            db.table("vula_ai_usage").update({
+                "calls": (e["calls"] or 0) + images,
+                "est_cost_usd": float(e["est_cost_usd"] or 0) + cost, "updated_at": "now()",
+            }).eq("id", e["id"]).execute()
+        else:
+            db.table("vula_ai_usage").insert({
+                "tenant_id": tenant_id, "day": day, "model": short, "calls": images,
+                "prompt_tokens": 0, "completion_tokens": 0, "est_cost_usd": cost}).execute()
+    except Exception as exc:
+        logger.debug("image meter skipped: %s", exc)
+
+
 def meter_response(tenant_id: str, model: str, resp) -> None:
     """Record usage straight from a litellm response (reliable, same-context path)."""
     try:

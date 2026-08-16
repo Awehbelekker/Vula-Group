@@ -110,6 +110,80 @@ async def list_products(tenant_id: str, category: Optional[str] = None, in_stock
     return rows
 
 
+# ── Popularity + ratings (computed from real order/review data, cached) ───────
+
+_pop_cache: dict = {}     # tenant_id -> (expires_epoch, {product_id: paid_order_count})
+_rating_cache: dict = {}  # tenant_id -> (expires_epoch, {product_id: {"avg": x, "count": n}})
+_POP_TTL = 600            # 10 min
+
+_PAID_ORDER_STATUSES = ("paid", "confirmed", "packing", "dispatched", "delivered")
+
+
+def product_order_counts(tenant_id: str) -> dict:
+    """{product_id: number of PAID orders containing it}. Cached 10 min."""
+    import time as _t
+    hit = _pop_cache.get(tenant_id)
+    if hit and hit[0] > _t.time():
+        return hit[1]
+    counts: dict = {}
+    try:
+        orders = (_client().table("commerce_orders").select("id")
+                  .eq("tenant_id", tenant_id).in_("status", list(_PAID_ORDER_STATUSES))
+                  .limit(2000).execute().data or [])
+        ids = [o["id"] for o in orders]
+        if ids:
+            items = (_client().table("commerce_order_items").select("order_id,product_id")
+                     .in_("order_id", ids).execute().data or [])
+            seen: set = set()
+            for it in items:
+                key = (it.get("order_id"), it.get("product_id"))
+                if it.get("product_id") and key not in seen:
+                    seen.add(key)
+                    counts[it["product_id"]] = counts.get(it["product_id"], 0) + 1
+    except Exception as exc:
+        logger.debug("popularity compute skipped: %s", exc)
+    _pop_cache[tenant_id] = (_t.time() + _POP_TTL, counts)
+    return counts
+
+
+def product_ratings(tenant_id: str) -> dict:
+    """{product_id: {avg, count}} from commerce_reviews. Cached 10 min."""
+    import time as _t
+    hit = _rating_cache.get(tenant_id)
+    if hit and hit[0] > _t.time():
+        return hit[1]
+    out: dict = {}
+    try:
+        rows = (_client().table("commerce_reviews").select("product_id,rating")
+                .eq("tenant_id", tenant_id).limit(5000).execute().data or [])
+        agg: dict = {}
+        for r in rows:
+            pid = r.get("product_id")
+            if pid:
+                agg.setdefault(pid, []).append(int(r["rating"]))
+        for pid, ratings in agg.items():
+            out[pid] = {"avg": round(sum(ratings) / len(ratings), 1), "count": len(ratings)}
+    except Exception as exc:
+        logger.debug("ratings compute skipped: %s", exc)
+    _rating_cache[tenant_id] = (_t.time() + _POP_TTL, out)
+    return out
+
+
+def annotate_merchandising(tenant_id: str, rows: List[dict], popular_top: int = 8) -> List[dict]:
+    """Attach orders_count / is_popular / rating to product rows (public reads)."""
+    counts = product_order_counts(tenant_id)
+    ratings = product_ratings(tenant_id)
+    ranked = sorted((pid for pid in counts if counts[pid] >= 2),
+                    key=lambda p: counts[p], reverse=True)[:popular_top]
+    top = set(ranked)
+    for r in rows:
+        r["orders_count"] = counts.get(r["id"], 0)
+        r["is_popular"] = r["id"] in top
+        if r["id"] in ratings:
+            r["rating"] = ratings[r["id"]]
+    return rows
+
+
 async def get_product(tenant_id: str, product_id: str) -> Optional[dict]:
     result = (
         _client()

@@ -41,9 +41,14 @@ async def list_products(
     tenant_id: str,
     category: Optional[str] = Query(None),
     in_stock_only: bool = Query(True),
+    sort: Optional[str] = Query(None, description="'popular' ranks by paid-order count"),
 ):
     products = await service.list_products(tenant_id, category=category, in_stock_only=in_stock_only,
                                            statuses={"active"}, with_variant_price_range=True)
+    # Real merchandising data: orders_count / is_popular / rating (cached 10 min).
+    products = service.annotate_merchandising(tenant_id, products)
+    if sort == "popular":
+        products.sort(key=lambda p: p.get("orders_count", 0), reverse=True)
     return {"tenant_id": tenant_id, "products": products, "count": len(products)}
 
 
@@ -52,7 +57,89 @@ async def get_product(tenant_id: str, slug: str):
     product = await service.get_product_by_slug(tenant_id, slug, statuses={"active", "unlisted"})
     if not product:
         raise HTTPException(status_code=404, detail=f"Product '{slug}' not found")
+    service.annotate_merchandising(tenant_id, [product])
+    # Bundles: expand component items so the storefront can show "what's inside".
+    if product.get("product_type") == "bundle" and product.get("bundle_items"):
+        try:
+            ids = [i.get("product_id") for i in product["bundle_items"] if i.get("product_id")]
+            comps = (service._client().table("commerce_products")
+                     .select("id,name,slug,image_url,price_cents,pack_size")
+                     .eq("tenant_id", tenant_id).in_("id", ids).execute().data or []) if ids else []
+            by_id = {c["id"]: c for c in comps}
+            product["bundle_contents"] = [
+                {**by_id.get(i["product_id"], {}), "quantity": i.get("quantity", 1)}
+                for i in product["bundle_items"] if i.get("product_id") in by_id
+            ]
+        except Exception as exc:
+            log.debug("bundle expand skipped: %s", exc)
     return product
+
+
+@router.get("/{tenant_id}/products/{slug}/related")
+async def get_related_products(tenant_id: str, slug: str, limit: int = Query(4, ge=1, le=8)):
+    """'Goes well with' — manual related_ids first, topped up with popular same-category items."""
+    product = await service.get_product_by_slug(tenant_id, slug, statuses={"active", "unlisted"})
+    if not product:
+        raise HTTPException(status_code=404, detail=f"Product '{slug}' not found")
+    all_products = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
+    service.annotate_merchandising(tenant_id, all_products)
+    by_id = {p["id"]: p for p in all_products}
+
+    picked: list = []
+    for rid in (product.get("related_ids") or []):
+        if rid in by_id and rid != product["id"]:
+            picked.append(by_id[rid])
+    if len(picked) < limit:
+        fillers = sorted(
+            (p for p in all_products
+             if p["id"] != product["id"] and p not in picked
+             and p.get("category") == product.get("category")),
+            key=lambda p: p.get("orders_count", 0), reverse=True)
+        picked.extend(fillers[: limit - len(picked)])
+    if len(picked) < limit:  # cross-category popular as last resort
+        fillers = sorted((p for p in all_products if p["id"] != product["id"] and p not in picked),
+                         key=lambda p: p.get("orders_count", 0), reverse=True)
+        picked.extend(fillers[: limit - len(picked)])
+    keys = {"id", "name", "slug", "image_url", "price_cents", "pack_size", "category",
+            "is_popular", "rating", "sold_by"}
+    return {"related": [{k: p.get(k) for k in keys} for p in picked[:limit]]}
+
+
+# ── Reviews (real ratings, collected via WhatsApp after delivery) ─────────────
+
+class ReviewIn(BaseModel):
+    rating: int
+    comment: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_name: Optional[str] = None
+    product_id: Optional[str] = None
+    order_id: Optional[str] = None
+    source: str = "whatsapp"
+
+
+@router.post("/{tenant_id}/reviews")
+async def create_review(tenant_id: str, body: ReviewIn):
+    if not 1 <= body.rating <= 5:
+        raise HTTPException(status_code=400, detail="rating must be 1–5")
+    row = {k: v for k, v in body.model_dump().items() if v is not None}
+    row["tenant_id"] = tenant_id
+    service._client().table("commerce_reviews").insert(row).execute()
+    service._rating_cache.pop(tenant_id, None)  # bust cache so stars update
+    if body.order_id:
+        try:
+            service._client().table("commerce_orders").update(
+                {"review_rating": body.rating}).eq("id", body.order_id).eq("tenant_id", tenant_id).execute()
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+@router.get("/{tenant_id}/admin/reviews")
+async def admin_list_reviews(tenant_id: str, limit: int = Query(100, ge=1, le=500)):
+    rows = (service._client().table("commerce_reviews").select("*")
+            .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(limit).execute().data or [])
+    avg = round(sum(r["rating"] for r in rows) / len(rows), 2) if rows else None
+    return {"reviews": rows, "count": len(rows), "average": avg}
 
 
 # ── CMS pages (Puck self-serve page builder, P3) ─────────────────────────────
@@ -645,7 +732,8 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict):
                "pack_size", "weight_grams", "serves",
                "reorder_threshold", "reorder_qty", "default_supplier_id",
                "pricing_mode", "price_per_kg_cents", "min_weight_g", "max_weight_g",
-               "reference_weight_g", "catch_source", "fisherman_name", "seo", "status", "options"}
+               "reference_weight_g", "catch_source", "fisherman_name", "seo", "status", "options",
+               "product_type", "bundle_items", "cooking_tips", "related_ids"}
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
@@ -865,6 +953,152 @@ async def admin_delete_product(tenant_id: str, product_id: str):
         return {"archived": product_id}
     await service.delete_product(tenant_id, product_id)
     return {"deleted": product_id}
+
+
+# ── AI product photo (generate / restyle) ─────────────────────────────────────
+
+class GeneratePhotoRequest(BaseModel):
+    mode: str = "generate"               # 'generate' (from product info) | 'restyle' (perfect a real snap)
+    photo_base64: Optional[str] = None   # required for restyle: the tenant's own photo
+
+
+def _photo_subject(product: dict) -> str:
+    """Category-aware, realism-first subject line (raw cuts / retail packs, never cooked)."""
+    name = product["name"]
+    pack = product.get("pack_size") or ""
+    cat = product.get("category") or ""
+    pack_txt = f" ({pack})" if pack else ""
+    if cat == "fresh_fish":
+        return f"fresh raw {name}{pack_txt}, as sold at a premium fishmonger"
+    if cat == "fresh_chicken":
+        return f"fresh raw pasture-raised chicken — {name}{pack_txt}, uncooked, as sold at a butcher"
+    if cat in ("frozen_chicken", "frozen_seafood"):
+        return f"frozen — {name}{pack_txt}, shown as the frozen retail portions as sold"
+    return f"{name}{pack_txt}, the retail product as sold"
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/generate-photo")
+async def admin_generate_product_photo(tenant_id: str, product_id: str, body: GeneratePhotoRequest):
+    """AI product photo, styled on the tenant's own reference photo.
+
+    mode='generate' — create a production-quality catalog photo from the product info.
+    mode='restyle'  — the tenant snapped a real photo (photo_base64); re-shoot it in the
+                      house style so it's store-perfect. The real product stays the subject.
+    Works for every tenant: the style anchor is the tenant's first real product photo.
+    """
+    import base64 as _b64
+    import time as _time
+
+    from core.image_gen import (
+        ImageGenError, build_product_prompt, generate_image, qa_check_image,
+    )
+    from vula.api.whatsapp import _upload_to_storage
+
+    db = service._client()
+    prod = (db.table("commerce_products").select("*")
+            .eq("tenant_id", tenant_id).eq("id", product_id).limit(1).execute()).data
+    if not prod:
+        raise HTTPException(status_code=404, detail="Product not found")
+    prod = prod[0]
+    subject = _photo_subject(prod)
+
+    # Style anchor: the tenant's first NON-AI product photo (their real house style),
+    # falling back to any existing photo.
+    ref_bytes = None
+    others = (db.table("commerce_products").select("image_url")
+              .eq("tenant_id", tenant_id).neq("id", product_id)
+              .not_.is_("image_url", "null").limit(20).execute()).data or []
+    ref_url = next((r["image_url"] for r in others if "-ai-" not in (r["image_url"] or "")),
+                   (others[0]["image_url"] if others else None))
+    if ref_url:
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                ref_bytes = (await c.get(ref_url)).content
+        except Exception:
+            ref_bytes = None
+
+    if body.mode == "restyle":
+        if not body.photo_base64:
+            raise HTTPException(status_code=400, detail="photo_base64 required for restyle mode")
+        raw = body.photo_base64.split(",", 1)[-1]
+        try:
+            own_photo = _b64.b64decode(raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="photo_base64 is not valid base64")
+        prompt = (
+            "Re-shoot the product in the FIRST attached photo as a photorealistic professional "
+            "food product photograph, shot on a DSLR. Keep the exact same real product as the "
+            "subject — same cut, portioning, quantity and true colours — but present it in the "
+            "clean studio style of the SECOND attached reference photo (same surface, backdrop, "
+            "lighting and angle). Square 1:1 crop, subject centred, no text or watermark, no "
+            "illustration/CGI look."
+        )
+        # Model receives: instruction + tenant's own photo (+ style reference when present).
+        content_ref = own_photo if not ref_bytes else None
+        try:
+            if ref_bytes:
+                # two-image call: own photo first, reference second
+                import base64 as b64mod
+                from core.image_gen import OPENROUTER_BASE
+                from config import settings as _s
+                imgs = [own_photo, ref_bytes]
+                content = [{"type": "text", "text": prompt}] + [
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/jpeg;base64,{b64mod.b64encode(i).decode()}"}}
+                    for i in imgs
+                ]
+                async with httpx.AsyncClient(timeout=120) as c:
+                    resp = await c.post(
+                        f"{OPENROUTER_BASE}/chat/completions",
+                        headers={"Authorization": f"Bearer {_s.openrouter_api_key}"},
+                        json={"model": _s.model_image,
+                              "messages": [{"role": "user", "content": content}],
+                              "modalities": ["image", "text"]},
+                    )
+                if not resp.is_success:
+                    raise ImageGenError(f"OpenRouter {resp.status_code}: {resp.text[:200]}")
+                import re as _re
+                url0 = resp.json()["choices"][0]["message"]["images"][0]["image_url"]["url"]
+                img = _b64.b64decode(_re.match(r"data:image/[a-zA-Z+]+;base64,(.+)", url0).group(1))
+            else:
+                img = await generate_image(prompt, content_ref)
+        except (ImageGenError, Exception) as exc:
+            raise HTTPException(status_code=502, detail=f"Photo generation failed: {exc}")
+    else:
+        prompt = build_product_prompt(subject, None, has_reference_image=bool(ref_bytes))
+        try:
+            img = await generate_image(prompt, ref_bytes)
+        except ImageGenError as exc:
+            raise HTTPException(status_code=502, detail=f"Photo generation failed: {exc}")
+
+    # Realism QA gate — one retry, then refuse rather than publish a bad image.
+    if not await qa_check_image(img, subject):
+        try:
+            img = await generate_image(prompt, ref_bytes)
+        except ImageGenError as exc:
+            raise HTTPException(status_code=502, detail=f"Photo generation failed: {exc}")
+        if not await qa_check_image(img, subject):
+            raise HTTPException(status_code=422, detail="Generated image failed the realism check — please try again or upload a photo.")
+
+    slug = prod.get("slug") or product_id
+    path = f"{tenant_id}/products/{int(_time.time() * 1000)}-ai-{slug}.jpg"
+    url = _upload_to_storage("product-images", path, img, "image/jpeg")
+    if not url:
+        raise HTTPException(status_code=502, detail="Image upload failed")
+
+    # New photo becomes the cover; keep any previous images in the gallery after it.
+    gallery = [url] + [u for u in (prod.get("images") or []) if u and u != url][:4]
+    await service.update_product(tenant_id, product_id, {"image_url": url, "images": gallery})
+
+    # Meter the generation cost against the tenant (vula_ai_usage).
+    try:
+        from vula.integrations.metering import record_image
+        from config import settings as _cfg
+        record_image(tenant_id, _cfg.model_image)
+    except Exception:
+        pass
+
+    return {"image_url": url, "gallery": gallery, "mode": body.mode}
 
 
 # ── Product variants (migration 087, Phase 4) ─────────────────────────────────
