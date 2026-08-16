@@ -711,6 +711,29 @@ async def list_orders(
     return result.data or []
 
 
+async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
+    """Find this customer's most recent order and return its line items, for WhatsApp's
+    'reorder'/'same as last time' shortcut. Matches on the last 9 digits of the phone number
+    (mirrors the defensive suffix matching commerce_assistant.py already uses for cancel/change
+    order, since stored customer_phone formatting isn't perfectly consistent). Raises ValueError
+    with a message safe to show the customer if there's no prior order to repeat."""
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if not digits:
+        raise ValueError("no phone number to look up")
+    orders = (_client().table("commerce_orders")
+              .select("id,display_id,customer_phone,created_at")
+              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(50).execute().data or [])
+    mine = [o for o in orders
+            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
+    if not mine:
+        raise ValueError("no previous order found to repeat")
+    last = await get_order(mine[0]["id"])
+    items = (last or {}).get("commerce_order_items") or []
+    if not items:
+        raise ValueError("that order has no items on file to repeat")
+    return {"display_id": last.get("display_id"), "items": items}
+
+
 async def get_delivery_list(tenant_id: str, date_str: Optional[str] = None) -> List[dict]:
     """Return all orders for a given date (default today) with items, paid/unpaid status."""
     from datetime import date as _date

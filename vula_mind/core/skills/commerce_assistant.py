@@ -405,6 +405,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                         "description": "Preferred delivery slot, default morning.",
                     },
                     "delivery_notes": {"type": "string", "description": "Any special delivery instructions."},
+                    "discount_code": {"type": "string", "description": "A promo/discount code the customer gave, if any."},
                 },
                 "required": ["payment_method", "delivery_address"],
             },
@@ -426,6 +427,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                     "delivery_address": {"type": "string"},
                     "customer_name": {"type": "string"},
                     "delivery_slot": {"type": "string", "enum": ["morning", "afternoon", "express"]},
+                    "discount_code": {"type": "string", "description": "A promo/discount code the customer gave, if any."},
                 },
             },
         },
@@ -508,6 +510,44 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 },
                 "required": ["cadence"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_my_subscriptions",
+            "description": "List the customer's own standing/recurring orders (active or paused).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_subscription",
+            "description": "Cancel the customer's standing/recurring order.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pause_subscription",
+            "description": "Pause the customer's standing/recurring order (no orders will be "
+                           "auto-created until it's resumed — tell them to ask to start it "
+                           "again when they want it back).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reorder_last",
+            "description": (
+                "Repeat the customer's most recent order (e.g. 'same as last time', 'reorder', "
+                "'the usual'). Adds those items to their current cart — call review_order next "
+                "so they can confirm before it's placed."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
@@ -993,6 +1033,14 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_cancel_appointment(tid, phone)
         if name == "create_subscription":
             return await self._exec_create_subscription(tid, sid, phone, args)
+        if name == "list_my_subscriptions":
+            return await self._exec_list_my_subscriptions(tid, phone)
+        if name == "cancel_subscription":
+            return await self._exec_set_my_subscription_status(tid, phone, "cancelled")
+        if name == "pause_subscription":
+            return await self._exec_set_my_subscription_status(tid, phone, "paused")
+        if name == "reorder_last":
+            return await self._exec_reorder_last(tid, sid, phone)
         return {"error": f"unknown tool {name}"}
 
     async def _exec_create_subscription(self, tenant_id: str, session_id: str,
@@ -1019,6 +1067,59 @@ class CommerceAssistantSkill(BaseSkill):
         s = res["subscription"]
         return {"created": True, "cadence": cadence, "next_run": s.get("next_run"),
                 "message": f"Standing order set — repeats {cadence}, next on {s.get('next_run')}."}
+
+    async def _my_subscriptions(self, tenant_id: str, phone: Optional[str]) -> List[dict]:
+        from vula.commerce import subscriptions as subs
+        rows = await subs.list_subs(tenant_id, phone=phone or "")
+        return [s for s in rows if s.get("status") in ("active", "paused")]
+
+    async def _exec_list_my_subscriptions(self, tenant_id: str, phone: Optional[str]) -> Dict[str, Any]:
+        rows = await self._my_subscriptions(tenant_id, phone)
+        if not rows:
+            return {"message": "No standing orders found for this number."}
+        return {"subscriptions": [
+            {"cadence": s.get("cadence"), "status": s.get("status"), "next_run": s.get("next_run"),
+             "items": [i.get("product_name") for i in (s.get("items") or [])]} for s in rows]}
+
+    async def _exec_set_my_subscription_status(self, tenant_id: str, phone: Optional[str],
+                                               status: str) -> Dict[str, Any]:
+        from vula.commerce import subscriptions as subs
+        rows = await self._my_subscriptions(tenant_id, phone)
+        if not rows:
+            return {"error": "I couldn't find a standing order for this number to "
+                             f"{'cancel' if status == 'cancelled' else 'pause'}."}
+        if len(rows) > 1:
+            cadences = ", ".join(s.get("cadence", "?") for s in rows)
+            return {"error": f"Found more than one standing order ({cadences}) — ask which one "
+                             "before I change anything (I can't tell them apart yet)."}
+        sub = rows[0]
+        await subs.set_status(tenant_id, sub["id"], status)
+        verb = "cancelled" if status == "cancelled" else "paused"
+        return {"updated": True, "status": status,
+                "message": f"Done — your {sub.get('cadence')} standing order is now {verb}."}
+
+    async def _exec_reorder_last(self, tenant_id: str, session_id: str,
+                                 phone: Optional[str]) -> Dict[str, Any]:
+        try:
+            last = await service.reorder_from_last_order(tenant_id, phone or "")
+        except ValueError as exc:
+            return {"error": str(exc)}
+        cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+        added, skipped = [], []
+        for it in last["items"]:
+            product = await service.get_product(tenant_id, it.get("product_id"))
+            if not product or not product.get("in_stock"):
+                skipped.append(it.get("product_name") or "an item")
+                continue
+            await service.add_to_cart(tenant_id, cart["id"], it["product_id"], it.get("quantity") or 1,
+                                      variant_id=it.get("variant_id"))
+            added.append(it.get("product_name") or product.get("name") or "item")
+        if not added:
+            return {"error": f"Sorry, nothing from order {last['display_id']} is still available to reorder."}
+        return {"repeated_order": last["display_id"], "items_added": added, "skipped": skipped,
+                "instruction_to_assistant": "Tell the customer what was added (and mention "
+                                            "anything skipped as no longer available), then call "
+                                            "review_order so they can confirm."}
 
     # ── Booking tool handlers (only reachable when the tenant has bookings) ────
     async def _exec_list_availability(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1486,7 +1587,22 @@ class CommerceAssistantSkill(BaseSkill):
             return {"error": "The cart is empty — add items before reviewing."}
         subtotal = sum(_line_cents(i["quantity"], i["unit_price_cents"]) for i in items)
         delivery = cart.get("delivery_cents", 8000)
-        total = subtotal + delivery
+
+        # Discount preview only — never trust this for the amount actually charged. place_order
+        # re-resolves the code authoritatively inside service.create_order (same as the
+        # storefront), so a preview mismatch here can never under-charge.
+        discount_cents, discount_note, code_given = 0, "", (args.get("discount_code") or "").strip()
+        if code_given:
+            try:
+                resolved = await service.resolve_discount_code(tenant_id, code_given, subtotal, phone or "")
+                discount_cents = resolved["discount_cents"]
+                if resolved["free_shipping"]:
+                    delivery = 0
+                discount_note = f"\nDiscount ({resolved['code_row']['code']}): -R{discount_cents / 100:.2f}"
+            except service.DiscountError as exc:
+                discount_note = f"\n⚠️ {exc}"
+        total = max(0, subtotal - discount_cents) + delivery
+
         item_lines = "\n".join(
             f"• {_fmt_qty(it.get('commerce_products') or {}, it['quantity'])} "
             f"{(it.get('commerce_products') or {}).get('name', 'Item')} — "
@@ -1495,7 +1611,8 @@ class CommerceAssistantSkill(BaseSkill):
         pay = ow.PAYMENT_LABELS.get(method) if method in enabled else None
         preview = (
             f"🧾 *Please check your order:*\n{item_lines}\n"
-            f"Subtotal: R{subtotal / 100:.2f}\nDelivery: R{delivery / 100:.2f}\n*Total: R{total / 100:.2f}*"
+            f"Subtotal: R{subtotal / 100:.2f}\nDelivery: R{delivery / 100:.2f}" + discount_note
+            + f"\n*Total: R{total / 100:.2f}*"
             + (f"\nDeliver to: {addr}" if addr else "")
             + (f"\nPayment: {pay}" if pay else "")
             + "\n\nReply *CONFIRM* to place it, or tell me what to change.")
@@ -1660,6 +1777,10 @@ class CommerceAssistantSkill(BaseSkill):
                 "delivery_notes": args.get("delivery_notes"),
                 "channel": "whatsapp",
                 "payment_method": method,
+                # Resolved authoritatively inside create_order (never trusts a client-side
+                # preview amount) — an invalid/expired code is silently dropped there, same as
+                # the storefront, rather than failing the whole checkout.
+                "discount_code": (args.get("discount_code") or "").strip() or None,
             })
         except Exception as exc:
             logger.warning("place_order create_order failed: %s", exc)

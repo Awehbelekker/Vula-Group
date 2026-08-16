@@ -152,6 +152,20 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                                "to adopt, as returned by learn_my_voice."}},
             "required": ["persona_prompt"]},
     }},
+    {"type": "function", "function": {
+        "name": "create_manual_order",
+        "description": "Log an order taken by phone or in person on the customer's behalf — "
+                       "uses the same cart/stock/pricing path as the storefront and WhatsApp "
+                       "ordering, so it behaves identically.",
+        "parameters": {"type": "object", "properties": {
+            "customer_name": {"type": "string"}, "customer_phone": {"type": "string"},
+            "items": {"type": "array", "items": {"type": "object", "properties": {
+                "product": {"type": "string"}, "quantity": {"type": "number"}}}},
+            "delivery_address": {"type": "string"},
+            "payment_method": {"type": "string", "enum": ["cod", "eft", "online"]},
+            "mark_paid": {"type": "boolean"}},
+            "required": ["customer_name", "customer_phone", "items"]},
+    }},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -177,6 +191,121 @@ INVOICE_TOOLS = [
         "description": "Send an existing invoice to the customer on WhatsApp, by its number (e.g. OTH-INV-00001).",
         "parameters": {"type": "object", "properties": {"invoice_number": {"type": "string"}},
                        "required": ["invoice_number"]}}},
+    {"type": "function", "function": {
+        "name": "record_payment",
+        "description": "Record a payment received against an existing invoice, by its number "
+                       "(e.g. OTH-INV-00001). Supports partial payments — status becomes "
+                       "'part_paid' until the running total reaches the invoice total, then "
+                       "flips to 'paid' automatically.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_number": {"type": "string"},
+            "amount_rands": {"type": "number"},
+            "payment_method": {"type": "string", "description": "e.g. eft, cash, card, snapscan"},
+            "note": {"type": "string"}},
+            "required": ["invoice_number", "amount_rands"]}}},
+    {"type": "function", "function": {
+        "name": "list_quotes",
+        "description": "List quotes, optionally filtered by status (draft, sent, accepted, declined, expired). "
+                       "To create a quote, use create_invoice with doc_type='quote'.",
+        "parameters": {"type": "object", "properties": {"status": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "convert_quote_to_invoice",
+        "description": "Convert an accepted quote into a real invoice, by the quote's number "
+                       "(e.g. OTH-QUO-00003). The quote must already be marked accepted "
+                       "(update_quote_status) first.",
+        "parameters": {"type": "object", "properties": {"quote_number": {"type": "string"}},
+                       "required": ["quote_number"]}}},
+    {"type": "function", "function": {
+        "name": "update_quote_status",
+        "description": "Change a quote's status by its number, e.g. mark it accepted after "
+                       "the customer agrees, or declined/expired.",
+        "parameters": {"type": "object", "properties": {
+            "quote_number": {"type": "string"},
+            "status": {"type": "string", "enum": ["sent", "accepted", "declined", "expired"]}},
+            "required": ["quote_number", "status"]}}},
+]
+PURCHASE_ORDER_TOOLS = [
+    {"type": "function", "function": {
+        "name": "list_suppliers",
+        "description": "List known suppliers.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "upsert_supplier",
+        "description": "Add or update a supplier (matched by name).",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}, "contact_email": {"type": "string"},
+            "contact_phone": {"type": "string"}, "payment_terms": {"type": "string"}},
+            "required": ["name"]}}},
+    {"type": "function", "function": {
+        "name": "delete_supplier",
+        "description": "Remove a supplier by name.",
+        "parameters": {"type": "object", "properties": {"name": {"type": "string"}},
+                       "required": ["name"]}}},
+    {"type": "function", "function": {
+        "name": "reorder_suggestions",
+        "description": "Products at or below their reorder threshold, grouped by supplier — "
+                       "what should I order right now.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "create_purchase_order",
+        "description": "Create a draft purchase order for a supplier with line items.",
+        "parameters": {"type": "object", "properties": {
+            "supplier_name": {"type": "string"},
+            "items": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "quantity": {"type": "number"},
+                "unit_cost_rands": {"type": "number"}}}},
+            "notes": {"type": "string"}},
+            "required": ["supplier_name", "items"]}}},
+    {"type": "function", "function": {
+        "name": "list_purchase_orders",
+        "description": "List purchase orders, optionally filtered by status (draft, sent, received, cancelled).",
+        "parameters": {"type": "object", "properties": {"status": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "update_po_status",
+        "description": "Change a purchase order's status by its short reference (first 8 "
+                       "characters of its id, as shown by list_purchase_orders). Marking it "
+                       "'received' bumps real stock quantities for every line item.",
+        "parameters": {"type": "object", "properties": {
+            "po_ref": {"type": "string"},
+            "status": {"type": "string", "enum": ["draft", "sent", "received", "cancelled"]}},
+            "required": ["po_ref", "status"]}}},
+    {"type": "function", "function": {
+        "name": "send_purchase_order",
+        "description": "Actually dispatch a draft purchase order to its supplier by email "
+                       "and/or WhatsApp, by its short reference.",
+        "parameters": {"type": "object", "properties": {
+            "po_ref": {"type": "string"},
+            "channel": {"type": "string", "enum": ["email", "whatsapp", "both"]}},
+            "required": ["po_ref"]}}},
+]
+DISCOUNT_TOOLS = [
+    {"type": "function", "function": {
+        "name": "list_discount_codes",
+        "description": "List discount/promo codes.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "create_discount_code",
+        "description": "Create a redeemable discount code for customers.",
+        "parameters": {"type": "object", "properties": {
+            "code": {"type": "string", "description": "e.g. WEEKEND10"},
+            "discount_type": {"type": "string", "enum": ["percent", "fixed", "free_shipping"]},
+            "value": {"type": "number", "description": "Percentage number (e.g. 10 for 10%) "
+                      "for type=percent, or amount in Rands for type=fixed. Ignored for free_shipping."},
+            "min_order_rands": {"type": "number"},
+            "usage_limit": {"type": "integer"}},
+            "required": ["code", "discount_type"]}}},
+    {"type": "function", "function": {
+        "name": "update_discount_code",
+        "description": "Change an existing discount code's active state or other fields, by its code.",
+        "parameters": {"type": "object", "properties": {
+            "code": {"type": "string"}, "active": {"type": "boolean"},
+            "usage_limit": {"type": "integer"}},
+            "required": ["code"]}}},
+    {"type": "function", "function": {
+        "name": "delete_discount_code",
+        "description": "Delete a discount code by its code.",
+        "parameters": {"type": "object", "properties": {"code": {"type": "string"}},
+                       "required": ["code"]}}},
 ]
 PRODUCT_TOOLS = [
     {"type": "function", "function": {
@@ -394,7 +523,7 @@ PAGE_TOOLS = [
 _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
-    ("pages", PAGE_TOOLS),
+    ("pages", PAGE_TOOLS), ("purchase_orders", PURCHASE_ORDER_TOOLS), ("discounts", DISCOUNT_TOOLS),
 ]
 # Always available (universally useful, not tied to a business type): marketing copy, letter
 # drafting, and — since a sales rep's own contact book/meeting log is just as relevant to a
@@ -402,7 +531,7 @@ _GATED_GROUPS = [
 _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS
                    + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS
-                   + PAGE_TOOLS)
+                   + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS)
 
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
@@ -412,11 +541,41 @@ _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + DRAFT_TOOLS + BOOKING_TOOL
                    + [t for t in TOOL_SPECS if t["function"]["name"] == "finance_insights"])
 
 
-def _tools_for(tenant_id: str, role: Optional[str] = None) -> List[Dict[str, Any]]:
+# 2026-08-16: keyword pre-filter for _tools_for's gated groups — added alongside the purchase-
+# order/quote/discount/payment tools above, which pushed the flat per-call tool count past 45
+# with zero mitigation (an audit found NO intent-based subsetting existed anywhere: every
+# message exposed every enabled group's full tool list regardless of topic). Cheap and
+# deliberately conservative: only NARROWS the set when a group confidently matches; any message
+# that matches nothing (including short follow-ups like "confirm" or "yes") falls back to the
+# unfiltered behavior from before this existed, so multi-turn confirm flows are unaffected.
+_KEYWORD_GROUPS: Dict[str, set] = {
+    "invoices": {"invoice", "quote", "quotation", "bill", "payment", "paid", "owe", "owing",
+                 "outstanding", "convert"},
+    "products": {"product", "price", "catalogue", "catalog", "stock", "item"},
+    "bookings": {"booking", "appointment", "slot", "schedule", "calendar"},
+    "orders": {"subscription", "standing order", "recurring"},
+    "crm": {"customer", "dynamics", "crm"},
+    "broadcasts": {"broadcast", "blast", "campaign"},
+    "pages": {"page", "website", "storefront", "section"},
+    "purchase_orders": {"purchase order", "supplier", "reorder", "restock", "po "},
+    "discounts": {"discount", "promo", "coupon", "voucher"},
+}
+
+
+def _match_groups(message: str) -> Optional[set]:
+    """Which gated tool-groups this message plausibly relates to, by keyword hit. Returns None
+    (meaning: don't filter, show everything) if nothing matched confidently."""
+    text = (message or "").lower()
+    hits = {mod for mod, keywords in _KEYWORD_GROUPS.items() if any(kw in text for kw in keywords)}
+    return hits or None
+
+
+def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") -> List[Dict[str, Any]]:
     """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
     role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
     which modules the tenant has enabled — a rep never gets shop-wide stock/invoice/broadcast
-    tools just because the tenant (e.g. their employer) has those modules on."""
+    tools just because the tenant (e.g. their employer) has those modules on. `message`
+    (optional) narrows the gated groups further by keyword match — see _match_groups."""
     if role == "sales_rep":
         return list(_REP_TOOL_SPECS)
     try:
@@ -426,8 +585,11 @@ def _tools_for(tenant_id: str, role: Optional[str] = None) -> List[Dict[str, Any
         mods = set()
     tools = list(TOOL_SPECS) + MARKETING_TOOLS + DRAFT_TOOLS + CONTACT_TOOLS + MEETING_TOOLS  # always on
     show_all = not mods                       # no config yet → show everything
+    matched = _match_groups(message) if message else None
     for mod, group in _GATED_GROUPS:
-        if show_all or mod in mods:
+        if not (show_all or mod in mods):
+            continue
+        if matched is None or mod in matched:
             tools += group
     return tools
 
@@ -451,7 +613,7 @@ class CommerceAdminSkill(BaseSkill):
         caller_role = inp.metadata.get("caller_role")
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
-        tools = _tools_for(inp.tenant_id, role=caller_role)
+        tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"])
         try:
             answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx, tools)
@@ -666,6 +828,23 @@ class CommerceAdminSkill(BaseSkill):
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""))
+            if name == "record_payment":     return await self._record_payment(tid, args)
+            if name == "list_quotes":        return await self._list_quotes(tid, args.get("status"))
+            if name == "convert_quote_to_invoice": return await self._convert_quote_to_invoice(tid, args.get("quote_number", ""))
+            if name == "update_quote_status": return await self._update_quote_status(tid, args.get("quote_number", ""), args.get("status", ""))
+            if name == "list_suppliers":     return await self._list_suppliers(tid)
+            if name == "upsert_supplier":    return await self._upsert_supplier(tid, args)
+            if name == "delete_supplier":    return await self._delete_supplier(tid, args.get("name", ""))
+            if name == "reorder_suggestions": return await self._reorder_suggestions(tid)
+            if name == "create_purchase_order": return await self._create_purchase_order(tid, args)
+            if name == "list_purchase_orders": return await self._list_purchase_orders(tid, args.get("status"))
+            if name == "update_po_status":   return await self._update_po_status(tid, args.get("po_ref", ""), args.get("status", ""))
+            if name == "send_purchase_order": return await self._send_purchase_order(tid, args.get("po_ref", ""), args.get("channel", "email"))
+            if name == "create_manual_order": return await self._create_manual_order(tid, args)
+            if name == "list_discount_codes": return await self._list_discount_codes(tid)
+            if name == "create_discount_code": return await self._create_discount_code(tid, args)
+            if name == "update_discount_code": return await self._update_discount_code(tid, args)
+            if name == "delete_discount_code": return await self._delete_discount_code(tid, args.get("code", ""))
             if name == "create_product":     return await self._create_product(tid, args)
             if name == "update_product":     return await self._update_product(tid, args)
             if name == "booking_availability": return await self._booking_availability(tid, args.get("date", ""))
@@ -946,6 +1125,324 @@ class CommerceAdminSkill(BaseSkill):
         from vula.api.commerce import admin_send_invoice_whatsapp
         await admin_send_invoice_whatsapp(tid, rows[0]["id"], {})
         return {"sent": True, "invoice_number": num}
+
+    async def _find_invoice_by_number(self, tid: str, number: str) -> Optional[Dict[str, Any]]:
+        """Shared lookup for record_payment/convert_quote_to_invoice/update_quote_status —
+        owners refer to invoices/quotes by their display number, never the internal id."""
+        num = (number or "").strip()
+        if not num:
+            return None
+        rows = (service._client().table("commerce_invoices").select("*")
+                .eq("tenant_id", tid).eq("invoice_number", num).limit(1).execute().data or [])
+        return rows[0] if rows else None
+
+    async def _record_payment(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        num = (args.get("invoice_number") or "").strip()
+        inv = await self._find_invoice_by_number(tid, num)
+        if not inv:
+            return {"error": f"No invoice {num} found."}
+        cents = int(round(float(args.get("amount_rands") or 0) * 100))
+        if cents <= 0:
+            return {"error": "amount_rands must be positive."}
+        try:
+            updated = await service.record_invoice_payment(
+                tid, inv["id"], cents, args.get("payment_method"), args.get("note"))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        result = {"invoice_number": num, "recorded": self._rands(cents),
+                  "new_status": updated.get("status"),
+                  "balance_due": self._rands(updated.get("balance_due_cents"))}
+        if settings.readback_verify_enabled:
+            payments = await service.list_invoice_payments(tid, inv["id"])
+            total_paid = sum(int(p.get("amount_cents") or 0) for p in payments)
+            expected_min = int(inv.get("total_paid_cents") or 0) + cents
+            ok = total_paid >= expected_min
+            _readback_gate(tid, "record_payment", ok,
+                           {"invoice_id": inv["id"], "amount_cents": cents},
+                           {"total_paid_cents": total_paid})
+            if not ok:
+                return {"error": f"Payment for {num} did not persist — re-read shows "
+                                 f"R{total_paid / 100:.2f} total paid. Not confirmed."}
+            result["verified"] = True
+        return result
+
+    async def _list_quotes(self, tid: str, status: Optional[str]) -> Dict[str, Any]:
+        quotes = await service.list_invoices(tid, doc_type="quote", status=status, limit=20)
+        if not quotes:
+            return {"message": "No quotes found."}
+        return {"count": len(quotes), "quotes": [
+            {"quote": q.get("invoice_number"), "status": q.get("status"),
+             "total": self._rands(q.get("total_cents")), "customer": q.get("customer_name")}
+            for q in quotes]}
+
+    async def _convert_quote_to_invoice(self, tid: str, quote_number: str) -> Dict[str, Any]:
+        quote = await self._find_invoice_by_number(tid, quote_number)
+        if not quote:
+            return {"error": f"No quote {quote_number} found."}
+        try:
+            inv = await service.convert_quote_to_invoice(tid, quote["id"])
+        except ValueError as exc:
+            return {"error": str(exc)}
+        result = {"converted": True, "quote_number": quote_number,
+                  "invoice_number": inv.get("invoice_number"), "total": self._rands(inv.get("total_cents"))}
+        if settings.readback_verify_enabled:
+            inv2 = await service.get_invoice(tid, inv["id"]) if inv.get("id") else None
+            ok = bool(inv2) and inv2.get("doc_type") == "invoice" and inv2.get("source_quote_id") == quote["id"]
+            _readback_gate(tid, "convert_quote_to_invoice", ok,
+                           {"quote_id": quote["id"]}, {"found": bool(inv2)})
+            if not ok:
+                return {"error": "Conversion could not be confirmed — the new invoice did not "
+                                 "appear on re-read. Not confirmed; please check the Invoices tab."}
+            result["verified"] = True
+        return result
+
+    async def _update_quote_status(self, tid: str, quote_number: str, status: str) -> Dict[str, Any]:
+        valid = {"sent", "accepted", "declined", "expired"}
+        if status not in valid:
+            return {"error": f"status must be one of {sorted(valid)}"}
+        quote = await self._find_invoice_by_number(tid, quote_number)
+        if not quote:
+            return {"error": f"No quote {quote_number} found."}
+        await service.update_invoice_status(tid, quote["id"], status)
+        return {"updated": quote_number, "new_status": status}
+
+    async def _list_suppliers(self, tid: str) -> Dict[str, Any]:
+        suppliers = await service.list_suppliers(tid)
+        if not suppliers:
+            return {"message": "No suppliers on file yet."}
+        return {"suppliers": [{"name": s.get("name"), "email": s.get("contact_email"),
+                               "phone": s.get("contact_phone")} for s in suppliers]}
+
+    async def _upsert_supplier(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        name = (args.get("name") or "").strip()
+        if not name:
+            return {"error": "Need a supplier name."}
+        data = {"name": name}
+        if args.get("contact_email"):
+            data["contact_email"] = args["contact_email"]
+        if args.get("contact_phone"):
+            data["contact_phone"] = args["contact_phone"]
+        if args.get("payment_terms"):
+            data["payment_terms"] = args["payment_terms"]
+        s = await service.upsert_supplier(tid, data)
+        return {"saved": s.get("name")}
+
+    async def _delete_supplier(self, tid: str, name: str) -> Dict[str, Any]:
+        name = (name or "").strip().lower()
+        suppliers = await service.list_suppliers(tid)
+        s = next((x for x in suppliers if name and name in (x.get("name") or "").lower()), None)
+        if not s:
+            return {"error": f"No supplier matching '{name}'."}
+        await service.delete_supplier(tid, s["id"])
+        return {"deleted": s.get("name")}
+
+    async def _reorder_suggestions(self, tid: str) -> Dict[str, Any]:
+        from vula.commerce import purchase_orders
+        data = await purchase_orders.get_reorder_suggestions(tid)
+        if not data.get("count"):
+            return {"message": "Nothing is low on stock right now."}
+        return data
+
+    async def _resolve_po(self, tid: str, po_ref: str) -> Optional[Dict[str, Any]]:
+        """Owners refer to a PO by the short id-prefix shown in list_purchase_orders/
+        render_po_email (there's no dedicated display-id column for purchase orders)."""
+        ref = (po_ref or "").strip().lower()
+        if not ref:
+            return None
+        rows = (service._client().table("commerce_purchase_orders").select("*")
+                .eq("tenant_id", tid).order("created_at", desc=True).limit(100).execute().data or [])
+        return next((r for r in rows if str(r.get("id") or "").lower().startswith(ref)), None)
+
+    async def _create_purchase_order(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        supplier_name = (args.get("supplier_name") or "").strip()
+        if not supplier_name:
+            return {"error": "Need a supplier name."}
+        suppliers = await service.list_suppliers(tid)
+        supplier = next((s for s in suppliers
+                         if supplier_name.lower() in (s.get("name") or "").lower()), None)
+        if not supplier:
+            return {"error": f"No supplier matching '{supplier_name}' — add them first with upsert_supplier."}
+        items = [{"name": (it.get("name") or "").strip(),
+                  "quantity": int(it.get("quantity") or 0),
+                  "unit_cost_cents": int(round(float(it.get("unit_cost_rands") or 0) * 100))}
+                 for it in (args.get("items") or []) if isinstance(it, dict) and it.get("name")]
+        if not items:
+            return {"error": "Need at least one item with a name and quantity."}
+        from vula.api.commerce import admin_create_purchase_order
+        po = await admin_create_purchase_order(tid, {
+            "supplier_id": supplier["id"], "supplier_name": supplier["name"],
+            "items": items, "notes": args.get("notes")})
+        result = {"created": True, "supplier": supplier["name"],
+                  "po_ref": str(po.get("id") or "")[:8], "total": self._rands(po.get("total_cents"))}
+        if settings.readback_verify_enabled:
+            found = await self._resolve_po(tid, result["po_ref"])
+            ok = bool(found) and found.get("status") == "draft"
+            _readback_gate(tid, "create_purchase_order", ok,
+                           {"supplier_id": supplier["id"]}, {"found": bool(found)})
+            if not ok:
+                return {"error": "Purchase order creation could not be confirmed on re-read. "
+                                 "Not confirmed; please check the dashboard."}
+            result["verified"] = True
+        return result
+
+    async def _list_purchase_orders(self, tid: str, status: Optional[str]) -> Dict[str, Any]:
+        from vula.api.commerce import admin_list_purchase_orders
+        res = await admin_list_purchase_orders(tid, status)
+        pos = res.get("purchase_orders") or []
+        if not pos:
+            return {"message": "No purchase orders found."}
+        return {"purchase_orders": [
+            {"po_ref": str(p.get("id") or "")[:8], "supplier": p.get("supplier_name"),
+             "status": p.get("status"), "total": self._rands(p.get("total_cents"))}
+            for p in pos[:15]]}
+
+    async def _update_po_status(self, tid: str, po_ref: str, status: str) -> Dict[str, Any]:
+        valid = {"draft", "sent", "received", "cancelled"}
+        if status not in valid:
+            return {"error": f"status must be one of {sorted(valid)}"}
+        po = await self._resolve_po(tid, po_ref)
+        if not po:
+            return {"error": f"No purchase order matching '{po_ref}' — use list_purchase_orders to find its reference."}
+        from vula.api.commerce import admin_update_po_status
+        await admin_update_po_status(tid, po["id"], {"status": status})
+        result = {"updated": str(po["id"])[:8], "new_status": status}
+        if settings.readback_verify_enabled:
+            found = await self._resolve_po(tid, po_ref)
+            observed = (found or {}).get("status")
+            ok = observed == status
+            _readback_gate(tid, "update_po_status", ok,
+                           {"po_id": po["id"], "status": status}, {"status": observed})
+            if not ok:
+                return {"error": f"Status update did not persist — purchase order still shows "
+                                 f"{observed or 'unknown'}. Not confirmed."}
+            result["verified"] = True
+        return result
+
+    async def _send_purchase_order(self, tid: str, po_ref: str, channel: str) -> Dict[str, Any]:
+        po = await self._resolve_po(tid, po_ref)
+        if not po:
+            return {"error": f"No purchase order matching '{po_ref}' — use list_purchase_orders to find its reference."}
+        from vula.commerce import purchase_orders
+        res = await purchase_orders.send_purchase_order(tid, po["id"], channel or "email")
+        if res.get("error"):
+            return res
+        return {"sent": True, "po_ref": po_ref, "via": res.get("sent_via"), "warnings": res.get("warnings")}
+
+    async def _create_manual_order(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        name = (args.get("customer_name") or "").strip()
+        phone = (args.get("customer_phone") or "").strip()
+        if not name or not phone:
+            return {"error": "Need the customer's name and phone."}
+        raw_items = args.get("items") or []
+        if not raw_items:
+            return {"error": "Need at least one item."}
+        products = await service.list_products(tid, in_stock_only=False)
+        resolved = []
+        for it in raw_items:
+            if not isinstance(it, dict):
+                continue
+            want = (it.get("product") or "").strip().lower()
+            p = next((x for x in products if want and want in (x.get("name") or "").lower()), None)
+            if not p:
+                return {"error": f"No product matching '{it.get('product')}'."}
+            resolved.append((p, float(it.get("quantity") or 1)))
+        from uuid import uuid4
+        session_id = f"manual-{uuid4().hex[:12]}"
+        cart = await service.get_or_create_cart(tid, session_id, customer_phone=phone)
+        try:
+            for p, qty in resolved:
+                await service.add_to_cart(tid, cart["id"], p["id"], qty)
+        except Exception as exc:
+            return {"error": f"Couldn't add items to the order: {exc}"}
+        cart = await service.get_or_create_cart(tid, session_id)  # re-read with items joined
+        try:
+            order = await service.create_order(tid, cart, {
+                "customer_phone": phone, "customer_name": name,
+                "delivery_address": args.get("delivery_address") or "Collection / to arrange",
+                "delivery_slot": "morning", "channel": "manual",
+                "payment_method": args.get("payment_method") or "cod",
+            })
+        except service.OutOfStockError as exc:
+            return {"error": str(exc)}
+        if args.get("mark_paid"):
+            await service.update_order_status(order["id"], "paid")
+        result = {"created": True, "order": order.get("display_id"), "total": self._rands(order.get("total_cents"))}
+        if settings.readback_verify_enabled:
+            found = await service.get_order(order["id"]) if order.get("id") else None
+            ok = bool(found) and bool(found.get("display_id"))
+            _readback_gate(tid, "create_manual_order", ok,
+                           {"customer_phone": phone}, {"found": bool(found)})
+            if not ok:
+                return {"error": "Order creation could not be confirmed on re-read. Not confirmed; "
+                                 "please check the Orders tab."}
+            result["verified"] = True
+        return result
+
+    async def _list_discount_codes(self, tid: str) -> Dict[str, Any]:
+        codes = await service.list_discount_codes(tid)
+        if not codes:
+            return {"message": "No discount codes yet."}
+        return {"codes": [{"code": c.get("code"), "type": c.get("type"), "value": c.get("value"),
+                           "active": c.get("active"), "usage_count": c.get("usage_count")}
+                          for c in codes]}
+
+    async def _create_discount_code(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        code = (args.get("code") or "").strip()
+        dtype = args.get("discount_type")
+        if not code or dtype not in ("percent", "fixed", "free_shipping"):
+            return {"error": "Need a code and discount_type (percent, fixed, or free_shipping)."}
+        data: Dict[str, Any] = {"code": code, "type": dtype, "active": True}
+        if dtype == "percent":
+            data["value"] = float(args.get("value") or 0)
+        elif dtype == "fixed":
+            data["value"] = int(round(float(args.get("value") or 0) * 100))
+        if args.get("min_order_rands") is not None:
+            data["min_order_cents"] = int(round(float(args["min_order_rands"]) * 100))
+        if args.get("usage_limit") is not None:
+            data["usage_limit"] = int(args["usage_limit"])
+        try:
+            c = await service.create_discount_code(tid, data)
+        except Exception as exc:
+            if "idx_discount_codes_tenant_code" in str(exc) or "23505" in str(exc):
+                return {"error": f"Code '{code}' already exists."}
+            return {"error": str(exc)}
+        result = {"created": True, "code": c.get("code"), "type": c.get("type")}
+        if settings.readback_verify_enabled:
+            codes = await service.list_discount_codes(tid)
+            found = next((x for x in codes if x.get("code") == c.get("code")), None)
+            ok = bool(found)
+            _readback_gate(tid, "create_discount_code", ok, {"code": c.get("code")}, {"found": ok})
+            if not ok:
+                return {"error": "Discount code creation could not be confirmed on re-read. Not confirmed."}
+            result["verified"] = True
+        return result
+
+    async def _update_discount_code(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        code = (args.get("code") or "").strip().upper()
+        if not code:
+            return {"error": "Need the code to update."}
+        codes = await service.list_discount_codes(tid)
+        row = next((x for x in codes if (x.get("code") or "").upper() == code), None)
+        if not row:
+            return {"error": f"No discount code '{code}' found."}
+        patch: Dict[str, Any] = {}
+        if args.get("active") is not None:
+            patch["active"] = bool(args["active"])
+        if args.get("usage_limit") is not None:
+            patch["usage_limit"] = int(args["usage_limit"])
+        if not patch:
+            return {"error": "Nothing to change (active / usage_limit)."}
+        await service.update_discount_code(tid, row["id"], patch)
+        return {"updated": code, **patch}
+
+    async def _delete_discount_code(self, tid: str, code: str) -> Dict[str, Any]:
+        code = (code or "").strip().upper()
+        codes = await service.list_discount_codes(tid)
+        row = next((x for x in codes if (x.get("code") or "").upper() == code), None)
+        if not row:
+            return {"error": f"No discount code '{code}' found."}
+        await service.delete_discount_code(tid, row["id"])
+        return {"deleted": code}
 
     async def _create_product(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         name = (args.get("name") or "").strip()
