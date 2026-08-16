@@ -1021,7 +1021,13 @@ async def admin_generate_product_photo(tenant_id: str, product_id: str, body: Ge
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
     prod = prod[0]
-    subject = _photo_subject(prod)
+    # Prompt generator: LLM crafts a visually concrete subject (works for any
+    # product vertical); the food template is only the fallback.
+    try:
+        from core.image_gen import craft_photo_subject
+        subject = await craft_photo_subject(prod)
+    except Exception:
+        subject = _photo_subject(prod)
 
     # Style anchor: the tenant's first NON-AI product photo (their real house style),
     # falling back to any existing photo.

@@ -110,6 +110,43 @@ def build_product_prompt(
     return " ".join(parts)
 
 
+async def craft_photo_subject(product: dict) -> str:
+    """Prompt generator: turn a product's sales listing into a visually concrete
+    subject description for image generation AND QA.
+
+    Key lesson (learned on the OTH catalog): generation and QA both fail when fed
+    sales-name details a camera can't see — "80g", "deboned", "flecked". A cheap
+    LLM translates the listing into what the photo should physically SHOW.
+    Works for any product vertical (food, jewellery, hardware …), so the AI photo
+    feature is tenant-universal. Falls back to raising; callers keep a template.
+    """
+    import litellm
+    from core.llm_router import resolve_cheap_route
+
+    litellm.drop_params = True
+    model, api_key, api_base = await resolve_cheap_route()
+    resp = await litellm.acompletion(
+        model=model,
+        messages=[{"role": "user", "content": (
+            "You write subject lines for professional product photography.\n"
+            f"Product listing: name={product.get('name')!r}, category={product.get('category')!r}, "
+            f"pack size={product.get('pack_size')!r}, description={(product.get('description') or '')[:200]!r}.\n"
+            "Write ONE sentence describing exactly what the photo should visibly show: the "
+            "product's physical form, colour, texture, quantity and arrangement. Only what a "
+            "camera can capture — never weights, grams, brand claims, or process words like "
+            "'deboned' unless visually obvious. Raw/unprepared for fresh food, the retail item "
+            "itself for packaged goods. No style words (lighting/background are handled "
+            "separately). Reply with the sentence only."
+        )}],
+        temperature=0.3, max_tokens=90, api_key=api_key, api_base=api_base,
+    )
+    subject = re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content or "",
+                     flags=re.DOTALL).strip().strip('"')
+    if not subject or len(subject) < 15:
+        raise ImageGenError("prompt generator returned no usable subject")
+    return subject
+
+
 async def describe_reference_style(reference_jpeg: bytes) -> str:
     """One-off: use the (cheap) vision model to describe the reference photo's
     studio setup so prompt-only generations still match the house style."""

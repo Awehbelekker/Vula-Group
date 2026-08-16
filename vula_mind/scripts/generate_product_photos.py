@@ -48,8 +48,32 @@ def _sb():
     )
 
 
+# Hand-written, visually concrete subjects for products the generic template
+# fails on. Key insight: the QA gate can only verify what's VISIBLE — sales-name
+# details like "80g", "deboned", "flecked" aren't visually checkable, so both
+# generation and QA need the visual essence instead.
+SUBJECT_OVERRIDES = {
+    "whole-octopus-unclean": "one whole fresh raw octopus with curled tentacles, glistening, centred on the board",
+    "deboned-whole-chicken-fresh": "one whole raw chicken butterflied open and flattened (spatchcock style), skin on, on the board",
+    "deboned-whole-chicken-frozen": "one whole raw chicken butterflied open and flattened, skin on, with a light frost, on the board",
+    "snoek-head-off-gutted-flecked": "one long silver Cape snoek fish, headless and butterflied open lengthwise showing pale flesh, on the board",
+    "smoked-trout-slices-80g": "thin translucent slices of deep orange smoked trout fanned out on the board",
+    "half-shell-mussels-800g": "a dozen cooked mussels on the half shell, orange flesh visible, arranged on the board with light frost",
+    "jacopever-fillets": "small red-skinned fish fillets with white flesh, arranged on the board",
+    "kingklip-centre-cuts-skinless": "thick skinless white fish portions, firm pale flesh, stacked on the board",
+    "crumbed-fish-cakes-50g-1kg-20-cakes": "small round golden-crumbed fish cakes stacked in a pyramid on the board",
+    # Bundles — show the box contents together as a hamper.
+    "braai-box": "a braai hamper on the board: a butterflied silver snoek, raw chicken pieces and drumsticks arranged together",
+    "family-fish-box": "a family fish selection on the board: white fish fillets, golden crumbed fish cakes and pale calamari tubes arranged together",
+    "freezer-stock-up-box": "a frozen seafood selection on the board: white fish portions, whole pink prawns and half-shell mussels with light frost",
+}
+
+
 def subject_for(product: dict) -> str:
     """Realistic, category-aware subject line — raw cuts / retail packs, never cooked."""
+    override = SUBJECT_OVERRIDES.get(product.get("slug") or "")
+    if override:
+        return override
     name = product["name"]
     pack = product.get("pack_size") or ""
     cat = product.get("category") or ""
@@ -150,6 +174,9 @@ async def main() -> None:
     ap.add_argument("--add-variants", type=int, default=0, metavar="N",
                     help="after covers, add N extra gallery angles per product")
     ap.add_argument("--force", action="store_true", help="regenerate even if a photo exists")
+    ap.add_argument("--lenient-qa", action="store_true",
+                    help="publish the 2nd attempt even if QA still objects (FLAGGED for human review)")
+    ap.add_argument("--save-dir", help="also save every generated image locally for review")
     args = ap.parse_args()
 
     sb = _sb()
@@ -200,16 +227,38 @@ async def main() -> None:
             print(f"  cover: [{r['category']}] {r['name']}  →  {composition_for(r, 0)}")
         return
 
+    crafted_subjects: dict = {}  # product_id -> LLM-crafted subject (one call per product)
+
+    async def resolve_subject(r) -> str:
+        """Hand-override → LLM prompt generator → category template."""
+        if SUBJECT_OVERRIDES.get(r.get("slug") or ""):
+            return SUBJECT_OVERRIDES[r["slug"]]
+        if r["id"] in crafted_subjects:
+            return crafted_subjects[r["id"]]
+        try:
+            from core.image_gen import craft_photo_subject
+            subject = await craft_photo_subject(r)
+        except Exception:
+            subject = subject_for(r)
+        crafted_subjects[r["id"]] = subject
+        return subject
+
     async def gen_one(r, variant_idx: int):
         """Generate one shot for product r at the given variant angle; returns url."""
-        subject = subject_for(r)
+        subject = await resolve_subject(r)
         prompt = (build_product_prompt(subject, style_desc, has_reference_image=bool(reference))
                   + " " + composition_for(r, variant_idx))
         img = await generate_image(prompt, reference)
         if not await qa_check_image(img, subject):
             img = await generate_image(prompt, reference)
             if not await qa_check_image(img, subject):
-                raise ImageGenError("QA failed twice")
+                if not args.lenient_qa:
+                    raise ImageGenError("QA failed twice")
+                print("FLAGGED(qa) ", end="", flush=True)
+        if args.save_dir:
+            os.makedirs(args.save_dir, exist_ok=True)
+            with open(os.path.join(args.save_dir, f"{r.get('slug') or r['id']}-v{variant_idx}.jpg"), "wb") as fh:
+                fh.write(compress_jpeg(img))
         return upload(sb, args.tenant, r.get("slug") or r["id"], compress_jpeg(img))
 
     ok = failed = 0
