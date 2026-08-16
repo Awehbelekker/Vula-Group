@@ -33,7 +33,7 @@ const COLORS = {
 }
 
 export default function VulaLogin({ onSuccess }) {
-  const [mode, setMode] = useState('login')      // 'login' | 'reset_request' | 'set_password'
+  const [mode, setMode] = useState('login')      // 'login' | 'reset_request' | 'set_password' | 'signup' | 'setup_workspace'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -43,6 +43,20 @@ export default function VulaLogin({ onSuccess }) {
   const [loading, setLoading] = useState(false)
   const [brandLogoUrl, setBrandLogoUrl] = useState(null)
   const { login } = useAuthStore()
+
+  // Self-serve workspace setup (2026-08-15) — a signed-in Supabase user with no
+  // vula_tenant_users row lands here instead of the old dead-end error, via resolveAndLogin below.
+  const [pendingUser, setPendingUser] = useState(null)
+  const [businessName, setBusinessName] = useState('')
+  const [businessType, setBusinessType] = useState('other')
+  const [businessTypes, setBusinessTypes] = useState([])
+
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/tenants/registry`)
+      .then((r) => r.json())
+      .then((d) => { if (d?.business_types?.length) setBusinessTypes(d.business_types) })
+      .catch(() => {})
+  }, [])
 
   // Real logo (2026-07-24) — LOGIN_THEME's logoUrl is a static fallback in tenantThemes.js that
   // goes stale the moment a tenant uploads their own (confirmed: off-the-hook's real logo_url in
@@ -57,7 +71,10 @@ export default function VulaLogin({ onSuccess }) {
       .catch(() => {})
   }, [])
 
-  // Resolve tenant/role for a signed-in user (any method) and enter the app.
+  // Resolve tenant/role for a signed-in user (any method) and enter the app. A user with NO
+  // vula_tenant_users row isn't necessarily a dead end anymore — self-serve signup lands here
+  // too (Google OAuth, password, magic link all funnel through this same function), so instead
+  // of throwing, offer them the chance to create their own workspace right here.
   async function resolveAndLogin(user) {
     const { data: assignment, error: dbErr } = await supabase
       .from('vula_tenant_users')
@@ -66,7 +83,11 @@ export default function VulaLogin({ onSuccess }) {
       .limit(1)
       .single()
     if (dbErr || !assignment) {
-      throw new Error('No Vula access is linked to this account. Ask your admin to add you.')
+      setPendingUser(user)
+      setBusinessName('')
+      setError('')
+      setMode('setup_workspace')
+      return
     }
     login(
       { id: user.id, email: user.email, name: user.user_metadata?.full_name || (user.email || '').split('@')[0] },
@@ -106,6 +127,60 @@ export default function VulaLogin({ onSuccess }) {
       await resolveAndLogin(data.user)
     } catch (err) {
       setError(err.message || 'Login failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Create account (self-serve signup) ───────────────────────────────────────
+  async function handleSignUp(e) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      const { data, error: authErr } = await supabase.auth.signUp({ email, password })
+      if (authErr) throw authErr
+      if (data.session) {
+        await resolveAndLogin(data.user)
+      } else {
+        // Email confirmation is required on this project — no session yet. They'll land back
+        // here via the confirmation link, at which point the mount-effect's getSession() call
+        // picks them up and resolveAndLogin routes them into workspace setup automatically.
+        setInfo(`Check ${email} for a confirmation link, then come back here and sign in.`)
+        setMode('login')
+      }
+    } catch (err) {
+      setError(err.message || 'Could not create your account')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Create the new tenant + become its owner ─────────────────────────────────
+  async function handleSetupWorkspace(e) {
+    e.preventDefault()
+    setError('')
+    if (!businessName.trim()) { setError('Please enter your business name.'); return }
+    setLoading(true)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      const resp = await fetch(`${VULA_API}/v1/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tenant_id: businessName, display_name: businessName, business_type: businessType }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.detail || `Server error ${resp.status}`)
+      login(
+        { id: pendingUser.id, email: pendingUser.email,
+          name: pendingUser.user_metadata?.full_name || (pendingUser.email || '').split('@')[0] },
+        data.tenant.tenant_id,
+        data.role,
+      )
+      onSuccess?.()
+    } catch (err) {
+      setError(err.message || 'Could not set up your workspace')
     } finally {
       setLoading(false)
     }
@@ -243,6 +318,54 @@ export default function VulaLogin({ onSuccess }) {
                 Forgot password?
               </button>
             </p>
+            <p style={s.footer}>
+              New here?{' '}
+              <button style={s.textBtn} onClick={() => { setMode('signup'); setError(''); setInfo('') }}>
+                Create an account
+              </button>
+            </p>
+          </>
+        )}
+
+        {mode === 'signup' && (
+          <>
+            <h1 style={s.heading}>Create your account</h1>
+            <p style={s.sub}>Next you'll set up your business workspace.</p>
+            {error && <div style={s.errorBox}>{error}</div>}
+            <button type="button" onClick={handleGoogle} style={s.googleBtn}>
+              <span style={{ fontWeight: 700, marginRight: 8, color: '#4285F4' }}>G</span> Continue with Google
+            </button>
+            <div style={s.divider}><span style={s.dividerText}>or</span></div>
+            <form onSubmit={handleSignUp} style={s.form}>
+              <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
+              <Field label="Password" type="password" value={password} onChange={setPassword} placeholder="At least 8 characters" />
+              <Btn disabled={loading}>{loading ? 'Creating account…' : 'Create account'}</Btn>
+            </form>
+            <p style={s.footer}>
+              <button style={s.textBtn} onClick={() => { setMode('login'); setError('') }}>
+                ← Back to sign in
+              </button>
+            </p>
+          </>
+        )}
+
+        {mode === 'setup_workspace' && (
+          <>
+            <h1 style={s.heading}>Set up your workspace</h1>
+            <p style={s.sub}>Signed in as {pendingUser?.email}. What's your business called?</p>
+            {error && <div style={s.errorBox}>{error}</div>}
+            <form onSubmit={handleSetupWorkspace} style={s.form}>
+              <Field label="Business name" type="text" value={businessName} onChange={setBusinessName}
+                     placeholder="e.g. Off the Hook" />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={s.label}>What kind of business?</label>
+                <select value={businessType} onChange={(e) => setBusinessType(e.target.value)} style={s.input}>
+                  {(businessTypes.length ? businessTypes : [{ id: 'other', label: 'Other / General' }])
+                    .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+              </div>
+              <Btn disabled={loading}>{loading ? 'Setting up…' : 'Create my workspace'}</Btn>
+            </form>
           </>
         )}
 

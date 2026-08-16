@@ -89,6 +89,7 @@ from vula.api.projects import router as projects_router
 from vula.api.team import router as team_router
 from vula.api.payments import router as payments_router
 from vula.api.tenants import router as tenants_router
+from vula.api.signup import router as signup_router
 from vula.api.users import router as users_router
 from vula.api.qs import router as qs_router
 from vula.api.google import router as google_router
@@ -939,6 +940,7 @@ app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} p
 app.include_router(master_router, prefix="/v1/master")  # ALL endpoints require verified master JWT
 app.include_router(takeoff_router, prefix="/takeoff")
 app.include_router(onboarding_router, prefix="/v1")
+app.include_router(signup_router, prefix="/v1")
 app.include_router(whatsapp_router, prefix="/v1/whatsapp")
 app.include_router(training_router, prefix="/v1")
 app.include_router(chat_router, prefix="/v1")
