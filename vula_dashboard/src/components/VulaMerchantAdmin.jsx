@@ -1408,12 +1408,20 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
     catchSource: p.catch_source || '', fishermanName: p.fisherman_name || '',
     seoTitle: (p.seo && p.seo.title) || '', seoDescription: (p.seo && p.seo.description) || '',
     status: p.status || (p.archived ? 'archived' : 'active'),
+    productType: p.product_type || 'single',
+    bundleItems: Array.isArray(p.bundle_items) ? p.bundle_items : [],
+    cookingTips: p.cooking_tips || '',
   })
   const [suppliers, setSuppliers] = useState([])
+  const [allProducts, setAllProducts] = useState([])
+  const [writingTips, setWritingTips] = useState(false)
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers`).then(r => r.json())
       .then(d => setSuppliers(d.suppliers || [])).catch(() => {})
-  }, [tenantId])
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`).then(r => r.json())
+      .then(d => setAllProducts((d.products || []).filter(x => x.id !== p.id && (x.product_type || 'single') === 'single')))
+      .catch(() => {})
+  }, [tenantId])  // eslint-disable-line
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
   const inp = { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
   const lbl = { fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }
@@ -1441,7 +1449,22 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
     upd.seo = { title: f.seoTitle.trim() || undefined, description: f.seoDescription.trim() || undefined }
     upd.status = f.status
     upd.archived = f.status === 'archived'
+    upd.product_type = f.productType
+    upd.bundle_items = f.productType === 'bundle'
+      ? f.bundleItems.filter(i => i.product_id && (i.quantity || 1) > 0)
+      : []
+    upd.cooking_tips = f.cookingTips.trim() || null
     patch(p.id, upd)
+  }
+
+  async function writeTipsWithAI() {
+    setWritingTips(true)
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${p.id}/generate-cooking-tips`, { method: 'POST' })
+      const d = await r.json()
+      if (r.ok && d.cooking_tips) set('cookingTips', d.cooking_tips)
+    } catch {}
+    setWritingTips(false)
   }
 
   const gallery = (p.images && p.images.length) ? p.images : (p.image_url ? [p.image_url] : [])
@@ -1516,6 +1539,51 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
           <input value={f.fishermanName} onChange={e => set('fishermanName', e.target.value)} placeholder="e.g. Skipper Jan" style={{ ...inp, width: '100%' }} /></div>
       </div>
 
+      <SectionLabel>📦 Box deal / bundle <span style={{ fontWeight: 400, color: '#8A8680' }}>— sell several products as one (e.g. Braai Box)</span></SectionLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <select value={f.productType} onChange={e => set('productType', e.target.value)} style={{ ...inp, maxWidth: 260 }}>
+          <option value="single">Normal product</option>
+          <option value="bundle">Bundle — box of other products</option>
+        </select>
+        {f.productType === 'bundle' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {f.bundleItems.map((item, idx) => (
+              <div key={idx} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <select value={item.product_id || ''} onChange={e => {
+                  const items = [...f.bundleItems]; items[idx] = { ...items[idx], product_id: e.target.value }
+                  set('bundleItems', items)
+                }} style={{ ...inp, flex: 2 }}>
+                  <option value="">— choose product —</option>
+                  {allProducts.map(ap => <option key={ap.id} value={ap.id}>{ap.name}</option>)}
+                </select>
+                <input type="number" min="1" value={item.quantity || 1} onChange={e => {
+                  const items = [...f.bundleItems]; items[idx] = { ...items[idx], quantity: parseInt(e.target.value) || 1 }
+                  set('bundleItems', items)
+                }} style={{ ...inp, width: 64 }} />
+                <button onClick={() => set('bundleItems', f.bundleItems.filter((_, i) => i !== idx))}
+                        style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: 18, cursor: 'pointer' }}>×</button>
+              </div>
+            ))}
+            <button onClick={() => set('bundleItems', [...f.bundleItems, { product_id: '', quantity: 1 }])}
+                    style={{ ...styles.btnGhost, alignSelf: 'flex-start' }}>+ Add item to box</button>
+            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: 0 }}>
+              The box sells at THIS product&apos;s price — set it above. Contents show on the product page.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <SectionLabel>🍳 How to cook it <span style={{ fontWeight: 400, color: '#8A8680' }}>— shown on the product page</span></SectionLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <textarea value={f.cookingTips} onChange={e => set('cookingTips', e.target.value)} rows={3}
+                  placeholder="e.g. Braai over medium coals for 4–5 minutes a side, skin down first…"
+                  style={{ ...inp, width: '100%', resize: 'vertical', fontFamily: 'system-ui' }} />
+        <button onClick={writeTipsWithAI} disabled={writingTips}
+                style={{ ...styles.btnGhost, alignSelf: 'flex-start', color: 'var(--accent)' }}>
+          {writingTips ? '✨ Writing…' : '✨ Write it for me'}
+        </button>
+      </div>
+
       <SectionLabel>Stock &amp; reordering <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, for your own supply planning</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>🔔 Reorder when stock ≤</span>
@@ -1544,6 +1612,8 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
             patch(p.id, { images: all, image_url: all[0] })
           }}
         />
+        <AIPhotoButton tenantId={tenantId} product={p}
+          onDone={(d) => patch(p.id, { image_url: d.image_url, images: d.gallery })} />
         {gallery.length > 1 && (
           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
             {gallery.map((u, i) => (
@@ -1602,6 +1672,46 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       <button onClick={() => deleteProduct(p)} disabled={saving === p.id} style={styles.btnDeleteProduct}>
         🗑 {p.archived ? 'Delete permanently' : 'Remove product'}
       </button>
+    </div>
+  )
+}
+
+// ── AI product photo (generate a store-ready photo in the tenant's house style) ──────────────
+
+function AIPhotoButton({ tenantId, product, onDone }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  async function generate() {
+    if (busy) return
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${product.id}/generate-photo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'generate' }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.detail || 'Generation failed')
+      onDone(d)
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button onClick={generate} disabled={busy}
+        style={{ padding: '7px 14px', background: busy ? '#DDD8CE' : 'var(--accent, #2C5545)', color: '#fff',
+                 border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                 cursor: busy ? 'wait' : 'pointer', fontFamily: 'system-ui' }}>
+        {busy ? '✨ Generating photo… (~30s)' : '✨ AI photo — generate a store-ready shot'}
+      </button>
+      {err && <p style={{ color: '#ef4444', fontSize: 12, fontFamily: 'system-ui', margin: '6px 0 0' }}>{err}</p>}
+      <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: '4px 0 0' }}>
+        Generates a professional photo in your house style. Click again for another angle — each one is added to the gallery.
+      </p>
     </div>
   )
 }

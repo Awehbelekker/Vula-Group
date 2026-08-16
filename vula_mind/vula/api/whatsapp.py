@@ -2644,6 +2644,11 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     except Exception as exc:
         logger.debug("last_message_at stamp skipped (run migration 112?): %s", exc)
 
+    # Review capture: a bare 1–5 (or stars) right after we asked for a rating
+    # becomes a real review — recorded, thanked, done.
+    if await _maybe_capture_review(phone, text, tenant_id):
+        return
+
     # Human handoff: if an owner/agent has taken over this conversation from the
     # shared inbox, the bot stays quiet — but we still log the customer's message
     # so the agent sees it in the inbox thread.
@@ -2749,6 +2754,61 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
 
 
 _ADMIN_AGENT_ROLES = ("owner", "operations", "staff", "admin", "sales_rep", "manager")
+
+
+async def _maybe_capture_review(phone: str, text: str, tenant_id: str) -> bool:
+    """If this message is a bare 1–5 rating (digits or star emoji) and we recently
+    asked this customer to rate a delivered order, record it as a review.
+    Returns True when handled (reply already sent)."""
+    t = text.strip()
+    rating = None
+    if re.fullmatch(r"[1-5]", t):
+        rating = int(t)
+    elif re.fullmatch(r"⭐{1,5}|★{1,5}", t):
+        rating = len(t)
+    if rating is None:
+        return False
+    try:
+        from vula.commerce import service as commerce_service
+        db = commerce_service._client()
+        digits = "".join(c for c in phone if c.isdigit())
+        alt = "0" + digits[2:] if digits.startswith("27") else digits
+        # Most recent delivered order for this phone that was asked but not yet rated.
+        rows = (db.table("commerce_orders")
+                .select("id,display_id,customer_phone,customer_name,review_requested_at,review_rating")
+                .eq("tenant_id", tenant_id).eq("status", "delivered")
+                .not_.is_("review_requested_at", "null").is_("review_rating", "null")
+                .order("review_requested_at", desc=True).limit(10).execute()).data or []
+        order = next((o for o in rows
+                      if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit())
+                      in (digits, alt)), None)
+        if not order:
+            return False
+        db.table("commerce_reviews").insert({
+            "tenant_id": tenant_id, "order_id": order["id"],
+            "customer_phone": order.get("customer_phone"),
+            "customer_name": order.get("customer_name"),
+            "rating": rating, "source": "whatsapp",
+        }).execute()
+        db.table("commerce_orders").update({"review_rating": rating}).eq("id", order["id"]).execute()
+        commerce_service._rating_cache.pop(tenant_id, None)
+        thanks = ("Thank you so much for the 5 stars! 🌟 See you next order."
+                  if rating == 5 else
+                  f"Thanks for the feedback ({rating}/5)."
+                  + (" We'd love to make it right — the owner will follow up with you." if rating <= 3 else ""))
+        await _send_reply(phone, thanks, tenant_id)
+        if rating <= 3:
+            try:
+                from vula.integrations.notify import notify_team
+                await notify_team(tenant_id, "review",
+                                  f"⚠️ {order.get('customer_name') or phone} rated order "
+                                  f"{order.get('display_id')} {rating}/5 — worth a personal follow-up.")
+            except Exception:
+                pass
+        return True
+    except Exception as exc:
+        logger.debug("review capture skipped: %s", exc)
+        return False
 
 
 def _is_tenant_owner(tenant_id: str, phone: str) -> bool:

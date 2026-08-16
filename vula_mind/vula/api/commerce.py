@@ -663,6 +663,27 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
             await notify_team(tenant_id, "refund", msg)
         except Exception as exc:
             log.debug("refund team notify skipped: %s", exc)
+
+    # Delivered → ask the customer for a rating over WhatsApp (once per order,
+    # best-effort — usually inside the 24h service window since they just ordered).
+    if new_status == "delivered" and not order.get("review_requested_at") and order.get("customer_phone"):
+        try:
+            from vula.api.whatsapp import _send_reply
+            first = (order.get("customer_name") or "").split(" ")[0]
+            sent = await _send_reply(
+                order["customer_phone"],
+                (f"Hi {first}! 🐟 Your order {order.get('display_id') or ''} has been delivered — "
+                 "we hope everything is perfect. How was it? Reply with a rating from 1 to 5 "
+                 "(5 = excellent). Thank you!").replace("  ", " "),
+                tenant_id,
+            )
+            if sent:
+                service._client().table("commerce_orders").update(
+                    {"review_requested_at": service._now()}
+                ).eq("id", order_id).eq("tenant_id", tenant_id).execute()
+        except Exception as exc:
+            log.debug("review request skipped: %s", exc)
+
     return {"order_id": order_id, "status": new_status, "refund": refund_result}
 
 
@@ -1099,6 +1120,39 @@ async def admin_generate_product_photo(tenant_id: str, product_id: str, body: Ge
         pass
 
     return {"image_url": url, "gallery": gallery, "mode": body.mode}
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/generate-cooking-tips")
+async def admin_generate_cooking_tips(tenant_id: str, product_id: str):
+    """Write a short, practical 'how to cook it' for the product page (cheap LLM).
+    Saved to cooking_tips; the owner can edit it afterwards."""
+    prod = await service.get_product(tenant_id, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    import litellm
+    from core.llm_router import resolve_cheap_route
+    litellm.drop_params = True
+    model, api_key, api_base = await resolve_cheap_route()
+
+    resp = await litellm.acompletion(
+        model=model,
+        messages=[{"role": "user", "content": (
+            "Write 2–3 sentences of practical South African home-cooking advice for this "
+            f"product: {prod['name']} ({prod.get('category')}, {prod.get('pack_size') or ''}). "
+            "Direct and specific: best cooking method (braai/pan/oven), rough time/temperature, "
+            "one simple flavour suggestion. No intro, no bullet points, no exclamation marks — "
+            "just the advice, as if a fishmonger or butcher is talking to a customer."
+        )}],
+        temperature=0.4, max_tokens=160, api_key=api_key, api_base=api_base,
+    )
+    import re as _re
+    tips = _re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content or "",
+                   flags=_re.DOTALL).strip()
+    if not tips:
+        raise HTTPException(status_code=502, detail="Could not write cooking tips — try again")
+    await service.update_product(tenant_id, product_id, {"cooking_tips": tips})
+    return {"cooking_tips": tips}
 
 
 # ── Product variants (migration 087, Phase 4) ─────────────────────────────────
