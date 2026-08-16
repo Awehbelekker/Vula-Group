@@ -136,6 +136,11 @@ class SkillOutput:
     # Set by the skill (deterministic self-check, e.g. calculations) or by the verification
     # hook (adversarial pass): {"verifier", "outcome", "escalated", "extra", ...}.
     verification: Optional[Dict[str, Any]] = None
+    # 2026-08-14: a real product photo to send alongside `answer` on channels that support it
+    # (WhatsApp) — set by commerce_assistant.py when a tool result (list_products, add_to_cart)
+    # carries a real image_url. Optional and unused by most skills; None means text-only, same
+    # as before this field existed.
+    media_url: Optional[str] = None
 
     @property
     def success(self) -> bool:

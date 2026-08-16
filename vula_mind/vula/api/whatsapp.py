@@ -3079,6 +3079,18 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     # with a friendly note, instead of guessing. Same loop as the knowledge path.
     reply = await _maybe_escalate_and_learn(tenant_id, phone, text, output.answer)
 
+    # 2026-08-14: show the real product photo (when add_to_cart resolved one, see
+    # commerce_assistant.py's SkillOutput.media_url) before the text confirmation — reuses the
+    # image-send path already proven for the greeting menu header (_send_wa_image). Best-effort:
+    # a failed/missing image must never block the actual order confirmation text.
+    if output.media_url:
+        try:
+            creds = await _resolve_wa(tenant_id)
+            if creds:
+                await _send_wa_image(creds, _wa_number(phone), output.media_url)
+        except Exception as exc:
+            logger.debug("product photo send skipped: %s", exc)
+
     await _send_reply(phone, reply, tenant_id)
 
     # Persist this turn so the next message has context.

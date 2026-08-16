@@ -605,6 +605,7 @@ class CommerceAssistantSkill(BaseSkill):
                 skill_name=self.name,
                 confidence=0.8 if kb_context else 0.7,
                 sources=sources,
+                media_url=ctx.get("media_url"),
             )
         except Exception as exc:
             logger.warning("commerce_assistant tool loop failed (%s) — falling back", exc)
@@ -957,7 +958,7 @@ class CommerceAssistantSkill(BaseSkill):
         if name == "list_products":
             return await self._exec_list_products(tid, args)
         if name == "add_to_cart":
-            return await self._exec_add_to_cart(tid, sid, phone, args)
+            return await self._exec_add_to_cart(tid, sid, phone, args, ctx)
         if name == "view_cart":
             return await self._exec_view_cart(tid, sid, phone)
         if name == "start_checkout":
@@ -1102,7 +1103,8 @@ class CommerceAssistantSkill(BaseSkill):
         ]
 
     async def _exec_add_to_cart(
-        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
+        self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any],
+        ctx: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         name = (args.get("product") or "").strip()
         product = None
@@ -1151,6 +1153,14 @@ class CommerceAssistantSkill(BaseSkill):
         unit = "/kg" if _is_kg(product) else ""
         variant_label = (", ".join(f"{k}: {v}" for k, v in (variant.get("option_values") or {}).items())
                         if variant else None)
+        # 2026-08-14: show the customer a real photo of what they just added — image_url is a
+        # real, populated column that was never surfaced anywhere in the ordering conversation
+        # before this. WhatsApp send-side already existed (_send_wa_image, used only for the
+        # greeting menu header) — this is the first time a product photo appears while actually
+        # shopping. Scoped to add-to-cart only (one confirmed item, one image) rather than every
+        # browse/list result, to avoid sending a flood of images per message.
+        if ctx is not None and product.get("image_url"):
+            ctx["media_url"] = product["image_url"]
         return {
             "added": f"{product['name']} ({variant_label})" if variant_label else product["name"],
             "quantity": _fmt_qty(product, qty),

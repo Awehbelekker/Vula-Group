@@ -549,3 +549,78 @@ async def test_run_commerce_assistant_persists_detected_language():
     _, call_kwargs = mock_skill.call_args
     sent_input = mock_skill.call_args[0][0]
     assert sent_input.metadata["preferred_language"] == "af"
+
+
+# ── _run_commerce_assistant — product photo (2026-08-14) ───────────────────────
+
+def _commerce_service_mock():
+    mock_service = MagicMock()
+    mock_service.get_or_create_session = AsyncMock(return_value={"id": "sess-1", "preferred_language": None})
+    mock_service.get_recent_messages = AsyncMock(return_value=[])
+    mock_service.format_history = MagicMock(return_value="")
+    mock_service.set_session_language = AsyncMock()
+    mock_service.append_message = AsyncMock()
+    return mock_service
+
+
+@pytest.mark.asyncio
+async def test_sends_product_photo_when_output_has_media_url():
+    from vula.api.whatsapp import _run_commerce_assistant
+
+    mock_output = MagicMock(success=True, answer="Added Hake Fillets to your cart.", error=None,
+                            media_url="https://example.com/hake.jpg")
+    mock_skill = AsyncMock(return_value=mock_output)
+
+    with (
+        patch("vula.commerce.service", _commerce_service_mock()),
+        patch("core.skills.loader.get_skill", return_value=mock_skill),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)),
+        patch("vula.api.whatsapp._resolve_wa", new=AsyncMock(return_value={"token": "t", "phone_id": "p"})),
+        patch("vula.api.whatsapp._send_wa_image", new=AsyncMock(return_value=True)) as mock_send_image,
+    ):
+        handled = await _run_commerce_assistant("27821234567", "add hake fillets", "off-the-hook")
+
+    assert handled is True
+    mock_send_image.assert_awaited_once()
+    call_args = mock_send_image.call_args[0]
+    assert call_args[2] == "https://example.com/hake.jpg"
+
+
+@pytest.mark.asyncio
+async def test_no_photo_send_when_output_has_no_media_url():
+    from vula.api.whatsapp import _run_commerce_assistant
+
+    mock_output = MagicMock(success=True, answer="There are 12 items in that category.",
+                            error=None, media_url=None)
+    mock_skill = AsyncMock(return_value=mock_output)
+
+    with (
+        patch("vula.commerce.service", _commerce_service_mock()),
+        patch("core.skills.loader.get_skill", return_value=mock_skill),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)),
+        patch("vula.api.whatsapp._send_wa_image", new=AsyncMock(return_value=True)) as mock_send_image,
+    ):
+        handled = await _run_commerce_assistant("27821234567", "what fish do you have", "off-the-hook")
+
+    assert handled is True
+    mock_send_image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_photo_send_failure_does_not_block_text_reply():
+    from vula.api.whatsapp import _run_commerce_assistant
+
+    mock_output = MagicMock(success=True, answer="Added Hake Fillets to your cart.", error=None,
+                            media_url="https://example.com/hake.jpg")
+    mock_skill = AsyncMock(return_value=mock_output)
+
+    with (
+        patch("vula.commerce.service", _commerce_service_mock()),
+        patch("core.skills.loader.get_skill", return_value=mock_skill),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send_reply,
+        patch("vula.api.whatsapp._resolve_wa", new=AsyncMock(side_effect=Exception("no creds"))),
+    ):
+        handled = await _run_commerce_assistant("27821234567", "add hake fillets", "off-the-hook")
+
+    assert handled is True
+    mock_send_reply.assert_awaited_once()

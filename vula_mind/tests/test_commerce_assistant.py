@@ -56,6 +56,54 @@ async def test_dispatch_add_to_cart_unknown_product():
     assert "error" in out
 
 
+# ── add_to_cart product photo (2026-08-14) ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_add_to_cart_sets_ctx_media_url_when_product_has_image():
+    skill = CommerceAssistantSkill()
+    product = {"id": "p1", "name": "Hake Fillets", "price_cents": 16000,
+              "image_url": "https://example.com/hake.jpg"}
+    ctx = dict(CTX)  # fresh copy — must not mutate the shared module-level CTX
+    with (
+        patch("core.skills.commerce_assistant.service.get_product_by_slug", new=AsyncMock(return_value=product)),
+        patch("core.skills.commerce_assistant.service.get_or_create_cart", new=AsyncMock(return_value={"id": "c1"})),
+        patch("core.skills.commerce_assistant.service.add_to_cart", new=AsyncMock()),
+    ):
+        await skill._dispatch_tool("add_to_cart", {"product": "hake-fillets", "quantity": 1}, ctx)
+    assert ctx["media_url"] == "https://example.com/hake.jpg"
+
+
+@pytest.mark.asyncio
+async def test_add_to_cart_no_media_url_when_product_has_no_image():
+    skill = CommerceAssistantSkill()
+    product = {"id": "p1", "name": "Hake Fillets", "price_cents": 16000}
+    ctx = dict(CTX)
+    with (
+        patch("core.skills.commerce_assistant.service.get_product_by_slug", new=AsyncMock(return_value=product)),
+        patch("core.skills.commerce_assistant.service.get_or_create_cart", new=AsyncMock(return_value={"id": "c1"})),
+        patch("core.skills.commerce_assistant.service.add_to_cart", new=AsyncMock()),
+    ):
+        await skill._dispatch_tool("add_to_cart", {"product": "hake-fillets", "quantity": 1}, ctx)
+    assert "media_url" not in ctx
+
+
+@pytest.mark.asyncio
+async def test_add_to_cart_without_ctx_does_not_crash():
+    """_exec_add_to_cart is called with ctx=None from any caller that doesn't pass one —
+    must not error just because there's nowhere to stash the image URL."""
+    skill = CommerceAssistantSkill()
+    product = {"id": "p1", "name": "Hake Fillets", "price_cents": 16000,
+              "image_url": "https://example.com/hake.jpg"}
+    with (
+        patch("core.skills.commerce_assistant.service.get_product_by_slug", new=AsyncMock(return_value=product)),
+        patch("core.skills.commerce_assistant.service.get_or_create_cart", new=AsyncMock(return_value={"id": "c1"})),
+        patch("core.skills.commerce_assistant.service.add_to_cart", new=AsyncMock()),
+    ):
+        out = await skill._exec_add_to_cart(TENANT, "session1", "27821234567",
+                                            {"product": "hake-fillets", "quantity": 1}, None)
+    assert out["added"] == "Hake Fillets"
+
+
 @pytest.mark.asyncio
 async def test_dispatch_track_order_found():
     skill = CommerceAssistantSkill()
