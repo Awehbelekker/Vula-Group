@@ -48,6 +48,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   const [creditingInvoice, setCreditingInvoice] = useState(null)  // invoice row being partially credited
   const [editingInvoice, setEditingInvoice] = useState(null)      // quote/invoice row being edited (draft/sent only)
   const [emailConfigured, setEmailConfigured] = useState(true)    // assume yes until told otherwise — avoids a flash of "disabled" on first paint
+  const [openMenuId, setOpenMenuId] = useState(null)              // which row's "⋯ More" menu is open
 
   // A fresh deep-link (e.g. clicking a different supplier while already on this tab) —
   // re-sync local state to match.
@@ -524,7 +525,6 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                   ) : (
                     <>
                       {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
-                      <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
                       {inv.customer_email && (
                         emailConfigured ? (
                           <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>
@@ -539,20 +539,6 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                         <button onClick={() => setStatus(inv, 'sent')} style={s.actMatch}
                                 title="Already sent this outside Vula (email/WhatsApp/in person)? Mark it sent so it shows up correctly on your dashboard and gets payment reminders.">
                           📤 Mark as sent
-                        </button>
-                      )}
-                      {inv.doc_type === 'invoice' && inv.status !== 'paid' && <button onClick={() => payLink(inv)} style={s.actPaid}>💳 Pay link</button>}
-                      {inv.doc_type === 'invoice' && <button onClick={() => creditNote(inv)} style={s.actMatch}>↩️ Credit note</button>}
-                      {inv.doc_type === 'invoice' && Array.isArray(inv.line_items) && inv.line_items.length > 1 && (
-                        <button onClick={() => setCreditingInvoice(inv)} style={s.actMatch}>✂️ Partial credit</button>
-                      )}
-                      {inv.doc_type === 'invoice' && (
-                        <button
-                          onClick={() => matchSupplier(inv)}
-                          disabled={matchingId === inv.id}
-                          style={s.actMatch}
-                        >
-                          {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
                         </button>
                       )}
                       {inv.doc_type === 'quote' && !['accepted', 'declined', 'expired'].includes(inv.status) && (
@@ -574,17 +560,48 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                         </span>
                       )}
                       {inv.doc_type === 'invoice' && !['paid', 'cancelled'].includes(inv.status) && (
-                        <button onClick={() => markPaid(inv)} style={s.actPaid}>✓ Mark paid</button>
-                      )}
-                      {inv.doc_type === 'invoice' && !['paid', 'cancelled'].includes(inv.status) && (
                         <button onClick={() => recordPayment(inv)} style={s.actMatch}>💵 Record payment</button>
                       )}
-                      {inv.doc_type === 'invoice' && !['paid', 'part_paid', 'cancelled'].includes(inv.status) && (
-                        <button onClick={() => cancelInvoice(inv)} style={s.actMatch}>✕ Cancel</button>
+                      {inv.doc_type === 'invoice' && !['paid', 'cancelled'].includes(inv.status) && (
+                        <button onClick={() => markPaid(inv)} style={s.actPaid}>✓ Mark paid</button>
                       )}
+
+                      {/* Occasional actions (PDF, Pay link, Credit note, Match Supplier, Cancel,
+                          Delete) collapsed into one overflow menu — same pattern as the page
+                          builder's row menu — instead of always-visible pills crowding every row. */}
+                      <div style={{ position: 'relative' }}>
+                        <button onClick={() => setOpenMenuId(id => id === inv.id ? null : inv.id)}
+                                title="More actions" style={s.actMore}>⋯</button>
+                        {openMenuId === inv.id && (
+                          <>
+                            <div onClick={() => setOpenMenuId(null)} style={{ position: 'fixed', inset: 0, zIndex: 10 }} />
+                            <div style={s.menuPanel}>
+                              <button onClick={() => { setOpenMenuId(null); downloadPdf(inv) }} style={s.menuItem}>📄 PDF</button>
+                              {inv.doc_type === 'invoice' && inv.status !== 'paid' && (
+                                <button onClick={() => { setOpenMenuId(null); payLink(inv) }} style={s.menuItem}>💳 Pay link</button>
+                              )}
+                              {inv.doc_type === 'invoice' && (
+                                <button onClick={() => { setOpenMenuId(null); creditNote(inv) }} style={s.menuItem}>↩️ Credit note</button>
+                              )}
+                              {inv.doc_type === 'invoice' && Array.isArray(inv.line_items) && inv.line_items.length > 1 && (
+                                <button onClick={() => { setOpenMenuId(null); setCreditingInvoice(inv) }} style={s.menuItem}>✂️ Partial credit</button>
+                              )}
+                              {inv.doc_type === 'invoice' && (
+                                <button onClick={() => { setOpenMenuId(null); matchSupplier(inv) }} style={s.menuItem}
+                                        disabled={matchingId === inv.id}>
+                                  {matchingId === inv.id ? 'Matching…' : '🔗 Match Supplier'}
+                                </button>
+                              )}
+                              {inv.doc_type === 'invoice' && !['paid', 'part_paid', 'cancelled'].includes(inv.status) && (
+                                <button onClick={() => { setOpenMenuId(null); cancelInvoice(inv) }} style={s.menuItem}>✕ Cancel</button>
+                              )}
+                              <button onClick={() => { setOpenMenuId(null); del(inv.id) }} style={{ ...s.menuItem, color: '#ef4444' }}>🗑 Delete</button>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </>
                   )}
-                  <button onClick={() => del(inv.id)} style={s.actDel}>Delete</button>
                 </div>
                 {matchResults[inv.id]?.matched && (
                   <div style={s.matchBanner}>
@@ -1505,6 +1522,9 @@ const s = {
   actPaid:    { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
   actDisabled:{ padding: '5px 10px', background: '#F0EDE5', color: '#9C978C', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, cursor: 'not-allowed', fontFamily: 'system-ui' },
   balanceTag: { padding: '5px 10px', fontSize: 12, color: '#a8780a', fontFamily: 'system-ui', fontWeight: 600, alignSelf: 'center' },
+  actMore:    { padding: '5px 10px', background: 'transparent', color: '#8A8680', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, cursor: 'pointer', fontFamily: 'system-ui', lineHeight: 1 },
+  menuPanel:  { position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 11, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', minWidth: 170, display: 'flex', flexDirection: 'column', padding: 4 },
+  menuItem:   { textAlign: 'left', padding: '8px 12px', border: 'none', background: 'transparent', borderRadius: 6, cursor: 'pointer', fontSize: 13, color: '#2A2A2A', fontFamily: 'system-ui', whiteSpace: 'nowrap' },
   actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: 'var(--accent)' },
