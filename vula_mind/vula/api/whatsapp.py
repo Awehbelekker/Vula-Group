@@ -1316,6 +1316,40 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             except Exception as exc:
                 logger.warning("Business card contact save failed for %s: %s", result.filename, exc)
 
+        supplier_field = _SUPPLIER_CHECK_FIELD.get(category)
+        if supplier_field:
+            try:
+                from datetime import datetime as _dt2
+                from vula.commerce import service as commerce_service
+                pf = fields or {}
+                payee_name = (pf.get(supplier_field) or "").strip()
+                if payee_name:
+                    match = await commerce_service.match_supplier(
+                        tenant_id, name=payee_name, tax_id=pf.get("tax_id"))
+                    if match and match.get("auto_apply"):
+                        supplier_note = f"🏢 *{payee_name}* is already on your supplier list."
+                    else:
+                        details = []
+                        if pf.get("payee_bank"):
+                            details.append(f"Bank: {pf['payee_bank']}")
+                        if pf.get("payee_branch_code"):
+                            details.append(f"Branch code: {pf['payee_branch_code']}")
+                        if pf.get("tax_id"):
+                            details.append(f"Tax/VAT no: {pf['tax_id']}")
+                        await commerce_service.upsert_supplier(tenant_id, {
+                            "name": payee_name,
+                            "account_number": pf.get("payee_account_number"),
+                            "tax_id": pf.get("tax_id"),
+                            "notes": ("; ".join(details) + " — " if details else "") +
+                                     f"added automatically from a {category.lower()} "
+                                     f"forwarded {_dt2.now().strftime('%Y-%m-%d')}.",
+                        })
+                        supplier_note = f"🏢 Added *{payee_name}* to your supplier list."
+                    note = (note + "\n\n" if note else "") + supplier_note
+            except Exception as exc:
+                logger.warning("Supplier auto-add from %s failed for %s: %s",
+                              category, result.filename, exc)
+
         return note
     except Exception as exc:
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
@@ -1329,12 +1363,28 @@ _DOC_CATEGORIES = [
     "Fee Proposal / Schedule", "Contract / Agreement", "Bill of Quantities (BOQ)",
     "Quote / Estimate", "Invoice", "Drawing / Plan", "Specification",
     "Meeting Minutes", "Programme / Schedule", "Report", "Tender Document",
-    "Business Card", "General Document",
+    "Business Card", "Proof of Payment", "General Document",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
 # _file_uploaded_document) — separate from _FINANCIAL_DOC_CATEGORIES's money shape.
 _CONTACT_DOC_CATEGORIES = {"Business Card"}
+
+# 2026-08-17: a bank's own "Notification of Payment"/EFT confirmation PDF (the tenant paying a
+# SUPPLIER, not a customer paying the tenant — the existing dtp=="payment_confirmation" photo
+# path in _handle_document is the opposite direction and image-only, so PDFs like this never hit
+# it). Confirmed real via DIGG's actual FNB payment notifications. Deliberately different from a
+# scanned receipt's read-only supplier lookup (_log_expense_claim) — a reimbursement receipt
+# isn't proof the business has an ongoing relationship with that payee, while a real EFT-to-
+# supplier notification or a supplier's own invoice is. Extended same-day to cover real supplier
+# invoices/quotes/BOQs too (same check-existing/add-if-not behavior, just keyed off the
+# "supplier" field _FINANCIAL_DOC_CATEGORIES already extracts instead of "payee_name").
+_SUPPLIER_CHECK_FIELD = {
+    "Proof of Payment": "payee_name",
+    "Invoice": "supplier",
+    "Quote / Estimate": "supplier",
+    "Bill of Quantities (BOQ)": "supplier",
+}
 
 # Categories whose `fields` are extracted in the Smart-Scanner-aligned money shape
 # (supplier/tax_id/total_cents/vat_cents/line_items) and are therefore both arithmetic-
@@ -1439,7 +1489,14 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
                     "Smart Scanner already uses, so both pipelines can be verified and booked the "
                     "same way. For Business Card, fields MUST use this exact shape: "
                     '{"name": string|null, "company": string|null, "title": string|null, '
-                    '"phone": string|null, "email": string|null}. For every other category (fee '
+                    '"phone": string|null, "email": string|null}. For Proof of Payment (a bank '
+                    "own payment notification/EFT confirmation showing money paid OUT to someone "
+                    "- NOT a customer proving they paid the business), fields MUST use this exact "
+                    'shape: {"payer": string|null, "payee_name": string|null, "payee_bank": '
+                    'string|null, "payee_branch_code": string|null, "payee_account_number": '
+                    'string|null, "amount_cents": integer|null, "reference": string|null, '
+                    '"trace_id": string|null, "date": "YYYY-MM-DD"|null} - money in CENTS. '
+                    "For every other category (fee "
                     "proposal, contract, drawing, specification, etc.), use whatever key "
                     "structured data best fits — e.g. fee proposal: client, stages, total; "
                     "contract: parties, value, dates. Use null when unknown."},
@@ -1581,6 +1638,9 @@ def _classify_document(filename: str, path) -> str:
         ("Programme / Schedule",    ["programme", "gantt", "construction schedule", "critical path"]),
         ("Report",                  ["report", "assessment", "inspection"]),
         ("Tender Document",         ["tender", "rfp", "rfq", "bid"]),
+        ("Proof of Payment",        ["notification of payment", "proof of payment",
+                                     "payment confirmation", "payment instruction has been received",
+                                     "eft confirmation"]),
     ]
     for label, keywords in rules:
         if any(k in blob for k in keywords):

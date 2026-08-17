@@ -25,7 +25,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import tempfile
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -308,33 +310,66 @@ class DocumentParser:
             return []
 
     async def _parse_pdf(self, path: Path) -> List[tuple[int, str]]:
-        """Parse PDF — try text extraction first, OCR if scanned."""
-        pages = []
+        """Parse PDF — native text extraction first, OCR if scanned or if pdfminer can't parse
+        the document at all. Some real-world PDF producers (confirmed 2026-08-17 against a real
+        DIGG "Notification of Payment" PDF from FNB) emit non-compliant ASCII85 streams that
+        pdfminer's strict decoder rejects outright, raising mid-document. pdfplumber's own
+        .to_image() can't help there — it's still built on the same pdfminer object model that
+        just failed — so on ANY native-parsing failure this falls back to the whole document via
+        pdf2image/poppler (a genuinely independent rendering engine, same pattern already proven
+        in vula/takeoff/plan_reader.py's _full_ocr_fallback) rather than failing the document
+        outright."""
         try:
-            import pdfplumber
-            with pdfplumber.open(path) as pdf:
-                for i, page in enumerate(pdf.pages, 1):
-                    text = page.extract_text() or ""
-                    if len(text.strip()) < 50:
-                        # Likely scanned — extract page as image and OCR
-                        img = page.to_image(resolution=200)
-                        img_path = Path(f"/tmp/vula_page_{i}.png")
-                        img.save(str(img_path))
-                        text = await self.ocr.process_image(img_path)
-                        img_path.unlink(missing_ok=True)
-
-                    # Also extract tables
-                    tables = page.extract_tables()
-                    for table in tables:
-                        if table:
-                            rows = [" | ".join(str(c) for c in row if c) for row in table if row]
-                            text += "\n\n" + "\n".join(rows)
-
-                    pages.append((i, text.strip()))
+            pages = await self._parse_pdf_native(path)
+            if pages:
+                return pages
         except ImportError:
             logger.warning("pdfplumber not installed: pip install pdfplumber")
-            # Fallback: treat whole PDF as one image
-            pages = [(1, await self.ocr.process_image(path))]
+        except Exception as exc:
+            logger.warning(f"Native PDF parsing failed for {path.name}, falling back to OCR: {exc}")
+        return await self._parse_pdf_ocr_fallback(path)
+
+    async def _parse_pdf_native(self, path: Path) -> List[tuple[int, str]]:
+        import pdfplumber
+        pages = []
+        with pdfplumber.open(path) as pdf:
+            for i, page in enumerate(pdf.pages, 1):
+                text = page.extract_text() or ""
+                if len(text.strip()) < 50:
+                    # Likely scanned — extract page as image and OCR
+                    img = page.to_image(resolution=200)
+                    img_path = Path(tempfile.gettempdir()) / f"vula_page_{uuid.uuid4().hex}.png"
+                    img.save(str(img_path))
+                    text = await self.ocr.process_image(img_path)
+                    img_path.unlink(missing_ok=True)
+
+                # Also extract tables
+                tables = page.extract_tables()
+                for table in tables:
+                    if table:
+                        rows = [" | ".join(str(c) for c in row if c) for row in table if row]
+                        text += "\n\n" + "\n".join(rows)
+
+                pages.append((i, text.strip()))
+        return [p for p in pages if p[1]]
+
+    async def _parse_pdf_ocr_fallback(self, path: Path) -> List[tuple[int, str]]:
+        """Independent-engine (poppler) fallback for PDFs pdfminer can't parse at all — mirrors
+        vula/takeoff/plan_reader.py's _full_ocr_fallback."""
+        try:
+            from pdf2image import convert_from_path
+            images = convert_from_path(str(path), dpi=200)
+        except Exception as exc:
+            logger.error(f"pdf2image/poppler fallback also failed for {path.name}: {exc}")
+            # Last resort: treat the whole PDF as one image (matches the old ImportError path).
+            return [(1, await self.ocr.process_image(path))]
+        pages = []
+        for i, img in enumerate(images, 1):
+            img_path = Path(tempfile.gettempdir()) / f"vula_pdf_ocr_{uuid.uuid4().hex}.png"
+            img.save(str(img_path))
+            text = await self.ocr.process_image(img_path)
+            img_path.unlink(missing_ok=True)
+            pages.append((i, (text or "").strip()))
         return [p for p in pages if p[1]]
 
     async def _parse_docx(self, path: Path) -> List[tuple[int, str]]:
