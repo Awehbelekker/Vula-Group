@@ -405,8 +405,10 @@ MEETING_TOOLS = [
         "name": "log_meeting",
         "description": (
             "Log a client/site meeting from a description (usually a voice note transcript): "
-            "pulls out attendees, a summary, and any action items, and files it against the "
-            "contact so you can pull it up later or turn it into a proposal."
+            "pulls out attendees, a summary, and any action items, files it against the contact, "
+            "creates a real reminder for each action item, and sends back a PDF meeting-summary "
+            "document automatically — no separate step needed. If the notes mention a follow-up "
+            "date, ask the owner whether to book it before calling create_booking."
         ),
         "parameters": {"type": "object", "properties": {
             "notes": {"type": "string", "description": "The meeting description/transcript, as given."},
@@ -614,7 +616,8 @@ class CommerceAdminSkill(BaseSkill):
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
-        system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"])
+        system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
+                                         lang=inp.metadata.get("preferred_language", ""))
         try:
             answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx, tools)
             if not answer:
@@ -624,7 +627,8 @@ class CommerceAdminSkill(BaseSkill):
             logger.warning("commerce_admin loop failed (%s)", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
-    def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None) -> str:
+    def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None,
+                       lang: str = "") -> str:
         persona_block = ""
         try:
             from vula.api.tenants import get_config
@@ -649,7 +653,7 @@ class CommerceAdminSkill(BaseSkill):
                 "sending a proposal document, drafting an email (drafts are safe/reversible so this is "
                 "lower-stakes, but still confirm the recipient), or booking a meeting. Show the details "
                 "and wait for a clear 'yes' first.\n\n"
-                + behaviour_preamble(agentic=True) + persona_block
+                + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
             )
         return (
             "You are the AI business assistant for the OWNER of a South African business "
@@ -1637,7 +1641,7 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": "Need the meeting notes/transcript."}
 
         # Resolve which contact this was with, if named — links the log to their record.
-        customer_phone = None
+        customer_phone, contact_name = None, None
         who = (args.get("contact_name_or_phone") or "").strip()
         if who:
             digits = re.sub(r"\D", "", who)
@@ -1647,11 +1651,14 @@ class CommerceAdminSkill(BaseSkill):
                         else q.ilike("name", f"%{who}%").limit(1).execute().data) or []
                 if rows:
                     customer_phone = rows[0]["phone"]
+                    contact_name = rows[0].get("name")
             except Exception as exc:
                 logger.debug("meeting contact lookup skipped: %s", exc)
 
-        # One LLM pass: turn the raw voice-note transcript into attendees/summary/action items.
-        summary, fields = notes[:400], {"raw_notes": notes}
+        # One LLM pass: turn the raw voice-note transcript into attendees/summary/action items
+        # (+ next_meeting_hint, 2026-08-17 — only when the transcript explicitly mentions a
+        # follow-up date/time; never guessed).
+        summary, fields, next_meeting_hint = notes[:400], {"raw_notes": notes}, None
         try:
             import litellm
             litellm.drop_params = True
@@ -1661,7 +1668,10 @@ class CommerceAdminSkill(BaseSkill):
                 messages=[
                     {"role": "system", "content": (
                         "Extract structured meeting notes from this text. Return STRICT JSON only: "
-                        '{"summary": "1-2 sentences", "attendees": ["..."], "action_items": ["..."]}')},
+                        '{"summary": "1-2 sentences", "attendees": ["..."], "action_items": ["..."], '
+                        '"next_meeting_hint": "..."|null} — next_meeting_hint is a follow-up date/time '
+                        "ONLY if explicitly mentioned in the text (e.g. \"let's meet again next "
+                        "Tuesday\"), never invented.")},
                     {"role": "user", "content": notes[:3000]},
                 ])
             raw = (resp.choices[0].message.content or "").strip().replace("```json", "").replace("```", "").strip()
@@ -1671,6 +1681,7 @@ class CommerceAdminSkill(BaseSkill):
                 summary = data.get("summary") or summary
                 fields = {"attendees": data.get("attendees") or [],
                           "action_items": data.get("action_items") or [], "raw_notes": notes}
+                next_meeting_hint = (data.get("next_meeting_hint") or "").strip() or None
         except Exception as exc:
             logger.debug("meeting extraction failed, filing raw notes: %s", exc)
 
@@ -1703,8 +1714,39 @@ class CommerceAdminSkill(BaseSkill):
             except Exception as exc:
                 logger.warning("Persisting meeting action items as reminders failed: %s", exc)
 
-        return {"logged": True, "summary": summary, "action_items": action_items,
-                "linked_contact": bool(customer_phone)}
+        result: Dict[str, Any] = {"logged": True, "summary": summary, "action_items": action_items,
+                                  "linked_contact": bool(customer_phone)}
+
+        # 2026-08-17: a meeting log the owner never actually sees isn't much use — render it onto
+        # the tenant's real letterhead as a PDF and send it back, reusing draft_letter's existing
+        # generation/render/send pipeline exactly as-is (site_meeting_minutes is already a valid
+        # document_type there) rather than duplicating any of it here. Best-effort: the log itself
+        # (filed + reminders) has already succeeded above regardless of whether this PDF step works.
+        try:
+            attendees = fields.get("attendees") or []
+            brief_parts = [f"Summary: {summary}"]
+            if attendees:
+                brief_parts.append("Attendees: " + ", ".join(attendees))
+            if action_items:
+                brief_parts.append("Action items:\n" + "\n".join(f"- {a}" for a in action_items))
+            from core.skills.draft_admin import draft_letter
+            pdf_result = await draft_letter({
+                "document_type": "site_meeting_minutes",
+                "brief": "\n\n".join(brief_parts),
+                "client_name": contact_name,
+            }, tid, ctx.get("phone") or "")
+            result["pdf_sent"] = bool(pdf_result.get("sent_via_whatsapp"))
+        except Exception as exc:
+            logger.warning("Meeting-summary PDF failed for tenant %s: %s", tid, exc)
+            result["pdf_sent"] = False
+
+        if next_meeting_hint:
+            result["next_meeting_hint"] = next_meeting_hint
+            result["note"] = (f"The notes mention a follow-up: \"{next_meeting_hint}\". Ask the "
+                              f"owner if they'd like it booked, and only call create_booking once "
+                              f"they've confirmed a specific date/time.")
+
+        return result
 
     async def _competitor_check(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         query = (args.get("query") or "").strip()

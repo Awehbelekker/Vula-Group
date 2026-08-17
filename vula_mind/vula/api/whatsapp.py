@@ -2321,7 +2321,21 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         # via this (knowledge-mode) path instead of the dedicated commerce route had no phone
         # to attach a booking to: book_appointment recorded no customer_phone, and
         # cancel_appointment couldn't look the caller up at all (2026-07-27 bookings-via-chat gap).
-        metadata = {"customer_phone": phone, "session_id": phone} if phone else None
+        metadata = {"customer_phone": phone, "session_id": phone} if phone else {}
+        # 2026-08-17: this (knowledge-mode tenant) path never detected a language at all — the
+        # only skill with explicit language handling (commerce_assistant.py) is reached via a
+        # DIFFERENT dispatch route that knowledge-mode tenants never use, so whichever skill HRM
+        # picks here (commerce_admin, reasoning, etc.) got no signal beyond the raw message text
+        # and the generic "mirror their language" instruction. behaviour_preamble() now accepts
+        # preferred_language centrally (core/skills/base.py) — every skill that passes it through
+        # benefits from one fix here, no per-skill detection needed.
+        try:
+            from core.lang import detect_language
+            lang = detect_language(question)
+            if lang:
+                metadata["preferred_language"] = lang
+        except Exception as exc:
+            logger.debug("rag_reply language detect skipped: %s", exc)
         result = await runner.run(
             question=question,
             tenant_id=tenant_id,
@@ -2803,7 +2817,7 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # Owner/staff → admin agent (run the shop); customers → shopping agent.
     if _is_tenant_owner(tenant_id, phone):
         await _maybe_welcome_new_owner(tenant_id, phone)
-        if await _run_commerce_admin(phone, text, tenant_id):
+        if await _run_commerce_admin(phone, text, tenant_id, detected_lang=detected_lang):
             return
         # Admin agent failed → fall through to the customer assistant.
 
@@ -3072,7 +3086,8 @@ async def check_and_nudge_due_reminders() -> int:
     return sent
 
 
-async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
+async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
+                              detected_lang: Optional[str] = None) -> bool:
     """Drive the commerce_admin skill (owner running the shop) with memory."""
     try:
         from core.skills.base import SkillInput
@@ -3082,18 +3097,34 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
         logger.warning("commerce_admin unavailable: %s", exc)
         return False
 
+    admin_session_key = f"admin:{phone}"
     history = ""
     session_id: Optional[str] = None
+    preferred_language: Optional[str] = None
     try:
         session = await commerce_service.get_or_create_session(
-            tenant_id, session_key=f"admin:{phone}", channel="whatsapp", customer_phone=phone
+            tenant_id, session_key=admin_session_key, channel="whatsapp", customer_phone=phone
         )
         session_id = session["id"]
+        preferred_language = session.get("preferred_language")
         history = commerce_service.format_history(
             await commerce_service.get_recent_messages(tenant_id, session_id, limit=12)
         )
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)
+
+    # 2026-08-17: the owner/staff admin path never tracked a language preference at all —
+    # only commerce_assistant.py (the customer path) did, which is exactly backwards, since
+    # the owner is the one actually using this path for real business chat. Same pattern.
+    try:
+        from core.lang import detect_language, normalize_lang
+        lang = normalize_lang(detected_lang) or detect_language(text)
+        if lang and lang != normalize_lang(preferred_language):
+            preferred_language = lang
+            await commerce_service.set_session_language(tenant_id, admin_session_key, lang)
+        preferred_language = preferred_language or lang
+    except Exception as exc:
+        logger.debug("admin language preference update skipped: %s", exc)
 
     # Who is this, specifically? Needed so a company with several team members (e.g. a few
     # sales reps sharing the tenant's WhatsApp number) can be scoped per-caller rather than
@@ -3118,8 +3149,9 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str) -> bool:
     output = await skill(
         SkillInput(
             question=text, tenant_id=tenant_id, conversation_history=history,
-            metadata={"session_id": f"admin:{phone}", "customer_phone": phone,
-                      "caller_name": caller_name, "caller_role": caller_role},
+            metadata={"session_id": admin_session_key, "customer_phone": phone,
+                      "caller_name": caller_name, "caller_role": caller_role,
+                      "preferred_language": preferred_language},
         )
     )
     if not output.success or not output.answer:

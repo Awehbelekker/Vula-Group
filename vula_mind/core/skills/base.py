@@ -101,14 +101,37 @@ AGENTIC_RULES = (
 )
 
 
-def behaviour_preamble(persona: str = "", agentic: bool = False) -> str:
+def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_language: str = "") -> str:
     """Assemble the shared behaviour policy. `persona` (optional, per-tenant) sets the
     voice/style; the rest enforces integrity, honesty, reasoning, conversation, and
     untrusted-content rules. `agentic=True` also appends AGENTIC_RULES — pass this for any
-    skill with its own tool-calling loop (TOOL_SPECS + tool_choice='auto')."""
+    skill with its own tool-calling loop (TOOL_SPECS + tool_choice='auto').
+
+    `preferred_language` (optional, e.g. "af") — 2026-08-17: CONVERSATION_RULES' generic
+    "mirror their language" instruction wasn't reliable enough on its own (confirmed live: a
+    real Afrikaans-speaking tenant owner kept getting English replies). commerce_assistant.py
+    fixed this for itself months ago with a bespoke explicit-language block; centralized here so
+    every skill gets the same fix by just passing through whatever language it already detected,
+    instead of re-inventing it per skill. Pass "" (default) when nothing was detected — CONVERSATION_
+    RULES' generic instruction still applies as the fallback, unchanged from before this existed."""
     from core.prompt_safety import UNTRUSTED_CONTENT_RULE
     head = (persona.strip() + "\n\n") if persona else ""
+    lang_block = ""
+    if preferred_language:
+        try:
+            from core.lang import language_name
+            name = language_name(preferred_language)
+            if name and name != "English":
+                lang_block = (
+                    f"This person usually writes in {name}. Reply in {name} by default, unless "
+                    f"they clearly switch to another language in their latest message — then "
+                    f"follow them.\n"
+                )
+        except Exception:
+            pass
     parts = [ETHICS_RULES, HONESTY_RULES, REASONING_RULES, UNTRUSTED_CONTENT_RULE, CONVERSATION_RULES]
+    if lang_block:
+        parts.append(lang_block)
     if agentic:
         parts.append(AGENTIC_RULES)
     return head + "\n".join(parts)

@@ -354,7 +354,10 @@ async def test_rag_reply_metadata_none_when_no_phone():
         from vula.api.whatsapp import _rag_reply
         await _rag_reply("tenant-abc", "what standards apply?")
 
-    assert captured["metadata"] is None
+    # 2026-08-17: metadata is now always a (possibly-empty) dict rather than None, so
+    # preferred_language can be added regardless of whether a phone was given — functionally
+    # equivalent downstream (agent_runner.py already does `metadata or {}`).
+    assert captured["metadata"] == {}
 
 
 @pytest.mark.asyncio
