@@ -1656,22 +1656,30 @@ class CommerceAdminSkill(BaseSkill):
                 logger.debug("meeting contact lookup skipped: %s", exc)
 
         # One LLM pass: turn the raw voice-note transcript into attendees/summary/action items
-        # (+ next_meeting_hint, 2026-08-17 — only when the transcript explicitly mentions a
-        # follow-up date/time; never guessed).
+        # (+ next_meeting_hint, 2026-08-17). 2026-08-18: each action item now also carries an
+        # optional assignee/due_phrase — read from what the transcript actually says (e.g. "Peter
+        # said he'd send the drawings by Friday"), never invented if no name/date is attached, and
+        # the model is never asked to COMPUTE an actual date itself (LLMs are unreliable at date
+        # arithmetic) — due_phrase is the raw phrase, resolved deterministically below.
         summary, fields, next_meeting_hint = notes[:400], {"raw_notes": notes}, None
         try:
             import litellm
             litellm.drop_params = True
             model, api_key, api_base = await resolve_generation_route()
             resp = await litellm.acompletion(
-                model=model, temperature=0.1, max_tokens=400, api_key=api_key, api_base=api_base,
+                model=model, temperature=0.1, max_tokens=500, api_key=api_key, api_base=api_base,
                 messages=[
                     {"role": "system", "content": (
                         "Extract structured meeting notes from this text. Return STRICT JSON only: "
-                        '{"summary": "1-2 sentences", "attendees": ["..."], "action_items": ["..."], '
-                        '"next_meeting_hint": "..."|null} — next_meeting_hint is a follow-up date/time '
-                        "ONLY if explicitly mentioned in the text (e.g. \"let's meet again next "
-                        "Tuesday\"), never invented.")},
+                        '{"summary": "1-2 sentences", "attendees": ["..."], "action_items": '
+                        '[{"text": "...", "assignee": "..."|null, "due_phrase": "..."|null}], '
+                        '"next_meeting_hint": "..."|null}. assignee is who committed to that '
+                        "specific item, ONLY if a name is clearly attached to it — never guess who's "
+                        "responsible. due_phrase is the RAW date/time phrase mentioned for that item "
+                        '(e.g. "by Friday", "next Tuesday") — copy it verbatim, do not compute an '
+                        "actual date yourself. next_meeting_hint is a follow-up date/time ONLY if "
+                        "explicitly mentioned in the text (e.g. \"let's meet again next Tuesday\"), "
+                        "never invented.")},
                     {"role": "user", "content": notes[:3000]},
                 ])
             raw = (resp.choices[0].message.content or "").strip().replace("```json", "").replace("```", "").strip()
@@ -1679,8 +1687,17 @@ class CommerceAdminSkill(BaseSkill):
             if i >= 0 and j > i:
                 data = json.loads(raw[i:j + 1])
                 summary = data.get("summary") or summary
+                # Tolerate the model occasionally still returning plain strings.
+                norm_items = []
+                for it in (data.get("action_items") or []):
+                    if isinstance(it, str) and it.strip():
+                        norm_items.append({"text": it.strip(), "assignee": None, "due_phrase": None})
+                    elif isinstance(it, dict) and (it.get("text") or "").strip():
+                        norm_items.append({"text": it["text"].strip(),
+                                           "assignee": (it.get("assignee") or "").strip() or None,
+                                           "due_phrase": (it.get("due_phrase") or "").strip() or None})
                 fields = {"attendees": data.get("attendees") or [],
-                          "action_items": data.get("action_items") or [], "raw_notes": notes}
+                          "action_items": norm_items, "raw_notes": notes}
                 next_meeting_hint = (data.get("next_meeting_hint") or "").strip() or None
         except Exception as exc:
             logger.debug("meeting extraction failed, filing raw notes: %s", exc)
@@ -1700,21 +1717,56 @@ class CommerceAdminSkill(BaseSkill):
         if not filed_row.get("id"):
             return {"error": "Couldn't save the meeting log — please try again or check with support."}
 
+        def _format_action_item(it: Dict[str, Any]) -> str:
+            text = it.get("text") or ""
+            if it.get("assignee"):
+                text = f"{it['assignee']}: {text}"
+            if it.get("due_phrase"):
+                text = f"{text} ({it['due_phrase']})"
+            return text
+
+        def _resolve_due_at(due_phrase: Optional[str]) -> Optional[str]:
+            """Deterministic, never LLM-computed — a wrong due date is worse than none. Only
+            trusts dateutil's fuzzy parse when the phrase actually contains a real date/weekday/
+            relative-day signal (fuzzy=True alone can false-positive on ordinary text)."""
+            if not due_phrase:
+                return None
+            if not re.search(
+                r"\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|"
+                r"sun(day)?|today|tomorrow|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|"
+                r"jul(y)?|aug(ust)?|sep(tember)?|oct(ober)?|nov(ember)?|dec(ember)?|"
+                r"\d{1,2}[/-]\d{1,2}|\d{1,2}(st|nd|rd|th)?)\b",
+                due_phrase, re.IGNORECASE,
+            ):
+                return None
+            try:
+                from dateutil import parser as _date_parser
+                dt = _date_parser.parse(due_phrase, fuzzy=True, default=datetime.now(timezone.utc))
+                return dt.isoformat()
+            except Exception:
+                return None
+
         # Turn each extracted action item into a real, trackable reminder — previously these only
         # lived inside the filed document's fields jsonb and were forgotten the moment the
-        # WhatsApp reply was sent.
+        # WhatsApp reply was sent. 2026-08-18: now carries the assignee (folded into the reminder
+        # text — free text, not a DB relationship, since it may be a client's name rather than a
+        # real team-member account) and a deterministically-resolved due date, when either was
+        # actually stated in the transcript.
         action_items = fields.get("action_items") or []
         if action_items:
             try:
-                rows = [{"tenant_id": tid, "created_by": ctx.get("phone") or "", "text": item,
+                rows = [{"tenant_id": tid, "created_by": ctx.get("phone") or "",
+                        "text": _format_action_item(it),
+                        "due_at": _resolve_due_at(it.get("due_phrase")),
                         "source": "log_meeting", "linked_contact_phone": customer_phone}
-                       for item in action_items if item]
+                       for it in action_items if it.get("text")]
                 if rows:
                     service._client().table("vula_reminders").insert(rows).execute()
             except Exception as exc:
                 logger.warning("Persisting meeting action items as reminders failed: %s", exc)
 
-        result: Dict[str, Any] = {"logged": True, "summary": summary, "action_items": action_items,
+        formatted_items = [_format_action_item(it) for it in action_items if it.get("text")]
+        result: Dict[str, Any] = {"logged": True, "summary": summary, "action_items": formatted_items,
                                   "linked_contact": bool(customer_phone)}
 
         # 2026-08-17: a meeting log the owner never actually sees isn't much use — render it onto
@@ -1727,8 +1779,8 @@ class CommerceAdminSkill(BaseSkill):
             brief_parts = [f"Summary: {summary}"]
             if attendees:
                 brief_parts.append("Attendees: " + ", ".join(attendees))
-            if action_items:
-                brief_parts.append("Action items:\n" + "\n".join(f"- {a}" for a in action_items))
+            if formatted_items:
+                brief_parts.append("Action items:\n" + "\n".join(f"- {a}" for a in formatted_items))
             from core.skills.draft_admin import draft_letter
             pdf_result = await draft_letter({
                 "document_type": "site_meeting_minutes",
