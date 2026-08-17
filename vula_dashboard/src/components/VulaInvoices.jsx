@@ -107,9 +107,19 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   async function setStatus(inv, status) {
     // paid_at is stamped server-side now (never trust a client timestamp for this) — see
     // markPaid() below for the 'paid' transition specifically.
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
-    })
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        alert(d.detail || `Could not update this ${inv.doc_type}.`)
+        return
+      }
+    } catch {
+      alert(`Could not update this ${inv.doc_type} — please try again.`)
+      return
+    }
     load()
   }
 
@@ -477,8 +487,13 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       {inv.doc_type === 'quote' && !['accepted', 'declined', 'expired'].includes(inv.status) && (
                         <button onClick={() => setStatus(inv, 'accepted')} style={s.actMatch}>✓ Mark accepted</button>
                       )}
-                      {inv.doc_type === 'quote' && inv.status === 'accepted' && !inv.converted_invoice_id && (
-                        <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
+                      {inv.doc_type === 'quote' && !inv.converted_invoice_id && (
+                        inv.status === 'accepted' ? (
+                          <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
+                        ) : (
+                          <button disabled title="Mark this quote accepted before converting it to an invoice"
+                                  style={s.actDisabled}>Convert to Invoice — mark accepted first</button>
+                        )
                       )}
                       {inv.doc_type === 'invoice' && !['paid', 'cancelled'].includes(inv.status) && (
                         <button onClick={() => markPaid(inv)} style={s.actPaid}>✓ Mark paid</button>
@@ -1380,6 +1395,7 @@ const s = {
   actPdf:     { padding: '5px 10px', background: 'rgba(0,119,182,0.08)', color: '#0077b6', border: '1px solid rgba(0,119,182,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: '#a8780a', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actPaid:    { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
+  actDisabled:{ padding: '5px 10px', background: '#F0EDE5', color: '#9C978C', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, cursor: 'not-allowed', fontFamily: 'system-ui' },
   actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: 'var(--accent)' },
