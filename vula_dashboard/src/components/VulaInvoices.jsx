@@ -504,6 +504,12 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
                       <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
                       {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
+                      {inv.doc_type === 'invoice' && inv.status === 'draft' && (
+                        <button onClick={() => setStatus(inv, 'sent')} style={s.actMatch}
+                                title="Already sent this outside Vula (email/WhatsApp/in person)? Mark it sent so it shows up correctly on your dashboard and gets payment reminders.">
+                          📤 Mark as sent
+                        </button>
+                      )}
                       {inv.doc_type === 'invoice' && inv.status !== 'paid' && <button onClick={() => payLink(inv)} style={s.actPaid}>💳 Pay link</button>}
                       {inv.doc_type === 'invoice' && <button onClick={() => creditNote(inv)} style={s.actMatch}>↩️ Credit note</button>}
                       {inv.doc_type === 'invoice' && Array.isArray(inv.line_items) && inv.line_items.length > 1 && (
