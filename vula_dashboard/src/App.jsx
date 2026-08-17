@@ -3,6 +3,7 @@ import VulaLogin from "./components/VulaLogin";
 import VulaPrivacy from "./components/VulaPrivacy";
 // Lazy: pulls in @measured/puck (~1 MB) — only the public page-render route needs it.
 const VulaPageRender = lazy(() => import("./components/VulaPageRender"));
+const VulaInvoiceApproval = lazy(() => import("./components/VulaInvoiceApproval"));
 import { useAuthStore } from "./store/auth";
 import VulaDashboard from "./components/VulaDashboard";
 import VulaQS from "./components/VulaQS";
@@ -195,6 +196,17 @@ export default function App() {
     return (
       <Suspense fallback={<div style={{ padding: 24, fontFamily: "system-ui", color: "#8A8680" }}>Loading…</div>}>
         <VulaPageRender tenant={parts[0]} slug={parts.slice(1).join("/")} />
+      </Suspense>
+    );
+  }
+
+  // Public invoice client-approval page — #/approve-invoice/{tenant}/{invoiceId}?token=... —
+  // no auth, token in the query string is the only credential (see commerce.py's approve routes).
+  if (route.startsWith("#/approve-invoice/")) {
+    const parts = route.replace(/^#\/approve-invoice\//, "").split("?")[0].split("/");
+    return (
+      <Suspense fallback={<div style={{ padding: 24, fontFamily: "system-ui", color: "#8A8680" }}>Loading…</div>}>
+        <VulaInvoiceApproval tenant={parts[0]} invoiceId={parts[1]} />
       </Suspense>
     );
   }

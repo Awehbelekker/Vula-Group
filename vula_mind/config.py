@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
     whatsapp_verify_token: str = ""       # Meta webhook verification token
     vula_base_url: str = "https://app.vula.ai"
+    # The dashboard's actual reachable URL — vula_base_url above is a stale placeholder (see
+    # vula/api/links.py's own comment), not something to build a real customer-facing link on.
+    # Confirmed live 2026-08-17 via `vercel ls`; override with DASHBOARD_URL if a custom domain
+    # is set up later.
+    dashboard_url: str = "https://vuladashboard.vercel.app"
 
     # ── Cloud LLM fallback (used on Railway where local Ollama is unavailable) ──
     # Set OPENROUTER_API_KEY to enable cloud inference via OpenRouter.

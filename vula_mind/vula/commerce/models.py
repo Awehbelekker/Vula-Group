@@ -257,6 +257,7 @@ class InvoiceCreate(BaseModel):
     payment_method: Optional[str] = None
     order_id: Optional[UUID] = None
     project: Optional[str] = None          # link this invoice to a project (unified project financials)
+    requires_approval: bool = False        # opt-in client approval via a public link (migration 136)
 
     @field_validator("line_items")
     @classmethod

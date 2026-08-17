@@ -1267,18 +1267,20 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
         "order_id": str(data["order_id"]) if data.get("order_id") else None,
         "payment_method": data.get("payment_method"),
         "notes": data.get("notes"),
+        "requires_approval": bool(data.get("requires_approval")),
         "created_at": _now(),
         "updated_at": _now(),
     }
     try:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     except Exception as exc:
-        # discount_cents/deposit_cents (053) or project (055) columns may not exist yet — drop
-        # them and retry so invoicing never breaks on a missing column.
+        # discount_cents/deposit_cents (053), project (055), or requires_approval (136) columns
+        # may not exist yet — drop them and retry so invoicing never breaks on a missing column.
         invoice.pop("discount_cents", None)
         invoice.pop("deposit_cents", None)
         invoice.pop("project", None)
-        logger.warning("invoice insert retried without discount/deposit/project (run migrations 053/055?): %s", exc)
+        invoice.pop("requires_approval", None)
+        logger.warning("invoice insert retried without discount/deposit/project/approval (run migrations 053/055/136?): %s", exc)
         result = _client().table("commerce_invoices").insert(invoice).execute()
     return result.data[0]
 

@@ -25,6 +25,7 @@ const STATUS = {
   declined:  { label: 'Declined',   color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
   expired:   { label: 'Expired',    color: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
 }
+const SENT_CHANNEL_LABEL = { email: 'via Email', whatsapp: 'via WhatsApp', manual: 'manually' }
 
 export default function VulaInvoices({ tenantId, products = [], initialSupplierId = null, onClearSupplierFilter }) {
   const [invoices, setInvoices] = useState([])
@@ -137,12 +138,12 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     }
   }
 
-  async function setStatus(inv, status) {
-    // paid_at is stamped server-side now (never trust a client timestamp for this) — see
-    // markPaid() below for the 'paid' transition specifically.
+  async function setStatus(inv, status, extra = {}) {
+    // paid_at/sent_at are stamped server-side now (never trust a client timestamp for these) —
+    // see markPaid() below for the 'paid' transition specifically.
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, ...extra }),
       })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) {
@@ -243,7 +244,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     const msg = `Hi ${inv.customer_name}, here's your invoice ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
       (inv.due_date ? `Due ${inv.due_date}. ` : '') + `Download: ${pdfUrl}`
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank')
-    if (inv.status === 'draft') setStatus(inv, 'sent')
+    if (inv.status === 'draft') setStatus(inv, 'sent', { sent_channel: 'manual' })
   }
 
   async function sendWhatsApp(inv) {
@@ -501,6 +502,18 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       <span style={s.invNum}>{inv.invoice_number}</span>
                     )}
                     <span style={{ ...s.badge, color: st.color, background: st.bg }}>{st.label}</span>
+                    {inv.requires_approval && (
+                      inv.approved_at ? (
+                        <span style={{ ...s.badge, color: '#16a34a', background: 'rgba(34,197,94,0.12)' }}
+                              title={`Approved ${inv.approved_at.slice(0, 10)}`}>
+                          ✅ Approved{inv.approved_by ? ` by ${inv.approved_by}` : ''}
+                        </span>
+                      ) : (
+                        <span style={{ ...s.badge, color: '#a8780a', background: 'rgba(212,160,23,0.12)' }}>
+                          ⏳ Awaiting approval
+                        </span>
+                      )
+                    )}
                   </div>
                   <span style={s.amount}>{fmt(inv.total_cents)}</span>
                 </div>
@@ -514,6 +527,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                   {inv.due_date ? ` · Due ${inv.due_date}` : ''}
                   {inv.valid_until ? ` · Valid until ${inv.valid_until}` : ''}
                   {inv.project ? ` · ${inv.project}` : ''}
+                  {inv.sent_channel ? ` · Sent ${SENT_CHANNEL_LABEL[inv.sent_channel] || inv.sent_channel}` : ''}
                 </p>
                 <div style={s.cardActions}>
                   {inv.direction === 'inbound' ? (
@@ -544,7 +558,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                         )
                       )}
                       {inv.doc_type === 'invoice' && inv.status === 'draft' && (
-                        <button onClick={() => setStatus(inv, 'sent')} style={s.actMatch}
+                        <button onClick={() => setStatus(inv, 'sent', { sent_channel: 'manual' })} style={s.actMatch}
                                 title="Already sent this outside Vula (email/WhatsApp/in person)? Mark it sent so it shows up correctly on your dashboard and gets payment reminders.">
                           📤 Mark as sent
                         </button>
@@ -655,6 +669,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
   const [vatRate, setVatRate] = useState(editingInvoice?.vat_rate ?? 15)
   const [discountPct, setDiscountPct] = useState(editingInvoice?.discount_pct ? String(editingInvoice.discount_pct) : '')   // invoice-level discount %
   const [deposit, setDeposit] = useState(editingInvoice?.deposit_cents ? (editingInvoice.deposit_cents / 100).toFixed(2) : '')           // deposit already paid (rands)
+  const [requiresApproval, setRequiresApproval] = useState(!!editingInvoice?.requires_approval)
   const [saving, setSaving] = useState(false)
   const [savedClients, setSavedClients] = useState([])
   const [crmCustomers, setCrmCustomers] = useState([])  // real order/WhatsApp history — the larger, phone-deduplicated list
@@ -781,6 +796,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
           deposit_cents: depositCents,
           project: project || null,
           due_date: dueDate || null,
+          requires_approval: requiresApproval,
         }),
       })
       const d = await r.json().catch(() => ({}))
@@ -881,6 +897,13 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
           <label style={s.dueLabel}>Project
             <input list="proj-list" placeholder="none" value={project} onChange={e => setProject(e.target.value)} style={{ ...s.fInput, width: 150 }} />
             <datalist id="proj-list">{projectList.map(p => <option key={p} value={p} />)}</datalist>
+          </label>
+        )}
+        {docType === 'invoice' && (
+          <label style={{ ...s.dueLabel, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                 title="Include a link in the sent email/WhatsApp message so the client can click to approve — informational only, never blocks Mark paid.">
+            <input type="checkbox" checked={requiresApproval} onChange={e => setRequiresApproval(e.target.checked)} />
+            Require client approval
           </label>
         )}
       </div>

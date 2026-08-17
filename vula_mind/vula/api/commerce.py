@@ -592,6 +592,62 @@ async def get_order(tenant_id: str, order_id: str):
     return order
 
 
+# ── Invoice client approval (public, opt-in per invoice, migration 136) ───────
+# The token is the only credential — no login. It can only ever reveal or act on the ONE
+# invoice it was issued for; every failure mode (wrong invoice, wrong/missing token, approval
+# not enabled) returns the same 404 rather than distinguishing them, so a guess can't be used to
+# probe which part was wrong. Same "opaque scoped token, single allowed action" trust shape as
+# the existing Yoco pay-link/webhook flow.
+
+def _check_approval_token(invoice: dict, tenant_id: str, token: str) -> None:
+    import secrets as _secrets
+    real_token = invoice.get("approval_token") if invoice else None
+    if (not invoice or invoice.get("tenant_id") != tenant_id
+            or not invoice.get("requires_approval") or not real_token
+            or not _secrets.compare_digest(token, real_token)):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@router.get("/{tenant_id}/invoices/{invoice_id}/approve")
+async def get_invoice_for_approval(tenant_id: str, invoice_id: str, token: str = Query(...)):
+    """Read-only summary for the public approval page — no login."""
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    _check_approval_token(invoice, tenant_id, token)
+    return {
+        "invoice_number": invoice.get("invoice_number"),
+        "customer_name": invoice.get("customer_name"),
+        "line_items": invoice.get("line_items"),
+        "subtotal_cents": invoice.get("subtotal_cents"),
+        "vat_cents": invoice.get("vat_cents"),
+        "total_cents": invoice.get("total_cents"),
+        "due_date": invoice.get("due_date"),
+        "approved_at": invoice.get("approved_at"),
+        "approved_by": invoice.get("approved_by"),
+    }
+
+
+class InvoiceApprovalIn(BaseModel):
+    token: str
+    approved_by: Optional[str] = None
+
+
+@router.post("/{tenant_id}/invoices/{invoice_id}/approve")
+async def approve_invoice(tenant_id: str, invoice_id: str, body: InvoiceApprovalIn):
+    """Informational only — never gates Mark paid/Record payment, which stay fully usable
+    regardless of approval status."""
+    invoice = await service.get_invoice(tenant_id, invoice_id)
+    _check_approval_token(invoice, tenant_id, body.token)
+    if invoice.get("approved_at"):
+        return {"approved": True, "approved_at": invoice["approved_at"], "approved_by": invoice.get("approved_by")}
+    patch = {"approved_at": service._now()}
+    if body.approved_by and body.approved_by.strip():
+        patch["approved_by"] = body.approved_by.strip()[:200]
+    result = (service._client().table("commerce_invoices").update(patch)
+              .eq("tenant_id", tenant_id).eq("id", invoice_id).execute())
+    updated = result.data[0] if result.data else patch
+    return {"approved": True, "approved_at": updated.get("approved_at"), "approved_by": updated.get("approved_by")}
+
+
 # ── Admin endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/{tenant_id}/admin/orders")
@@ -2543,7 +2599,7 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
         "customer_address", "line_items", "subtotal_cents", "vat_rate",
         "vat_cents", "total_cents", "due_date", "notes", "payment_method",
         "yoco_checkout_id", "yoco_payment_id", "paid_at",
-        "discount_cents", "deposit_cents",
+        "discount_cents", "deposit_cents", "sent_channel", "requires_approval",
     }
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
@@ -2558,6 +2614,8 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
     update.pop("paid_at", None)
     if new_status:
         result = await service.update_invoice_status(tenant_id, invoice_id, new_status)
+        if new_status == "sent" and update.get("sent_channel"):
+            update["sent_at"] = service._now()  # server time, never trust a client value
         if update:  # any other fields sent in the same request still get applied
             update["updated_at"] = service._now()
             patched = (db.table("commerce_invoices").update(update)
@@ -2727,6 +2785,27 @@ async def admin_get_invoice_pdf(tenant_id: str, invoice_id: str):
     )
 
 
+def _ensure_approval_link(tenant_id: str, invoice: dict) -> str:
+    """When an invoice is opted into client approval (migration 136), generate its token on
+    first use and return the public link to embed in the outgoing message. Empty string when
+    approval isn't required — callers treat that as "don't include a link"."""
+    if not invoice.get("requires_approval"):
+        return ""
+    token = invoice.get("approval_token")
+    if not token:
+        import secrets
+        token = secrets.token_urlsafe(24)
+        try:
+            service._client().table("commerce_invoices").update(
+                {"approval_token": token}
+            ).eq("tenant_id", tenant_id).eq("id", invoice["id"]).execute()
+        except Exception as exc:
+            log.debug("approval_token save skipped (run migration 136?): %s", exc)
+            return ""
+    from config import settings as app_settings
+    return f"{app_settings.dashboard_url}/#/approve-invoice/{tenant_id}/{invoice['id']}?token={token}"
+
+
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/send-email")
 async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Optional[dict] = None):
     """Render the invoice/quote PDF and email it to the customer via Resend.
@@ -2755,9 +2834,10 @@ async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Option
         raise HTTPException(status_code=500, detail="PDF generation failed")
 
     tenant_name = branding.get("name") or tenant_id.replace("-", " ").title()
+    approval_link = _ensure_approval_link(tenant_id, invoice)
 
     from vula.api.email import send_invoice_email
-    sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name)
+    sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name, approval_link)
     if not sent:
         raise HTTPException(
             status_code=503,
@@ -2768,6 +2848,12 @@ async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Option
     if new_status == "draft":
         await service.update_invoice_status(tenant_id, invoice_id, "sent")
         new_status = "sent"
+    try:
+        service._client().table("commerce_invoices").update(
+            {"sent_channel": "email", "sent_at": service._now()}
+        ).eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+    except Exception as exc:
+        log.debug("sent_channel update skipped (run migration 135?): %s", exc)
 
     return {"sent": True, "to": recipient, "status": new_status}
 
@@ -2806,10 +2892,13 @@ async def admin_send_invoice_whatsapp(tenant_id: str, invoice_id: str, body: Opt
     )
     number = invoice.get("invoice_number", invoice_id)
     total = f"R{(int(invoice.get('total_cents') or 0) / 100):.2f}"
+    approval_link = _ensure_approval_link(tenant_id, invoice)
     caption = (
         f"Hi {invoice.get('customer_name', 'there')}, here is your {doc_label} "
         f"{number} for {total} from {tenant_name}. Thank you for your business!"
     )
+    if approval_link:
+        caption += f"\n\nPlease review and approve: {approval_link}"
     filename = f"{number}.pdf"
 
     from vula.api.whatsapp import _send_invoice_document
@@ -2824,6 +2913,12 @@ async def admin_send_invoice_whatsapp(tenant_id: str, invoice_id: str, body: Opt
     if new_status == "draft":
         await service.update_invoice_status(tenant_id, invoice_id, "sent")
         new_status = "sent"
+    try:
+        service._client().table("commerce_invoices").update(
+            {"sent_channel": "whatsapp", "sent_at": service._now()}
+        ).eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+    except Exception as exc:
+        log.debug("sent_channel update skipped (run migration 135?): %s", exc)
 
     return {"sent": True, "to": recipient, "status": new_status}
 

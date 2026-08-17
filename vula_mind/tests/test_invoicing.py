@@ -4,7 +4,7 @@ Uses an in-memory fake Supabase so the create → numbering → convert → list
 flows are exercised end-to-end. All money is integer cents (ZAR); every query
 is asserted tenant-scoped.
 """
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -828,3 +828,161 @@ async def test_cancel_invoice_rejects_quotes(fake_db):
 async def test_cancel_invoice_rejects_missing_invoice(fake_db):
     with pytest.raises(ValueError):
         await service.cancel_invoice(TENANT, "does-not-exist")
+
+
+# ── Send-channel honesty (2026-08-17, migration 135) ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_invoice_email_records_channel_and_timestamp(fake_db):
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "customer_email": "a@b.co.za", "line_items": _items()})
+    with (
+        patch("vula.commerce.pdf.render_invoice_pdf", return_value=b"%PDF"),
+        patch("vula.commerce.pdf.merge_branding", return_value={"name": "Off the Hook"}),
+        patch("vula.api.email.send_invoice_email", new=AsyncMock(return_value=True)),
+    ):
+        await commerce_api.admin_send_invoice_email(TENANT, inv["id"], body={})
+    refreshed = await service.get_invoice(TENANT, inv["id"])
+    assert refreshed["status"] == "sent"
+    assert refreshed["sent_channel"] == "email"
+    assert refreshed["sent_at"]
+
+
+@pytest.mark.asyncio
+async def test_send_invoice_whatsapp_records_channel(fake_db):
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "customer_phone": "27821234567", "line_items": _items()})
+    with (
+        patch("vula.commerce.pdf.render_invoice_pdf", return_value=b"%PDF"),
+        patch("vula.commerce.pdf.merge_branding", return_value={"name": "Off the Hook"}),
+        patch("vula.api.whatsapp._send_invoice_document", new=AsyncMock(return_value=True)),
+    ):
+        await commerce_api.admin_send_invoice_whatsapp(TENANT, inv["id"], body={})
+    refreshed = await service.get_invoice(TENANT, inv["id"])
+    assert refreshed["sent_channel"] == "whatsapp"
+
+
+@pytest.mark.asyncio
+async def test_mark_as_sent_manual_records_channel_and_server_timestamp(fake_db):
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    result = await commerce_api.admin_update_invoice(
+        TENANT, inv["id"], {"status": "sent", "sent_channel": "manual", "sent_at": "2000-01-01T00:00:00Z"})
+    assert result["sent_channel"] == "manual"
+    assert result["sent_at"] != "2000-01-01T00:00:00Z"  # server time, client value ignored
+
+
+# ── Client approval (2026-08-17, migration 136) ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_approval_link_generated_only_when_required(fake_db):
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    assert commerce_api._ensure_approval_link(TENANT, inv) == ""
+
+    inv2 = await service.create_invoice(
+        TENANT, {"customer_name": "B", "line_items": _items(), "requires_approval": True})
+    link = commerce_api._ensure_approval_link(TENANT, inv2)
+    assert link
+    assert inv2["id"] in link
+    refreshed = await service.get_invoice(TENANT, inv2["id"])
+    assert refreshed["approval_token"]
+    assert refreshed["approval_token"] in link
+
+
+@pytest.mark.asyncio
+async def test_get_invoice_for_approval_valid_token(fake_db):
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "line_items": _items(), "requires_approval": True})
+    commerce_api._ensure_approval_link(TENANT, inv)
+    refreshed = await service.get_invoice(TENANT, inv["id"])
+    result = await commerce_api.get_invoice_for_approval(TENANT, inv["id"], refreshed["approval_token"])
+    assert result["invoice_number"] == inv["invoice_number"]
+    assert result["approved_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_invoice_for_approval_wrong_token_404s(fake_db):
+    from fastapi import HTTPException
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "line_items": _items(), "requires_approval": True})
+    commerce_api._ensure_approval_link(TENANT, inv)
+    with pytest.raises(HTTPException) as exc:
+        await commerce_api.get_invoice_for_approval(TENANT, inv["id"], "wrong-token")
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_invoice_for_approval_404s_when_not_required(fake_db):
+    from fastapi import HTTPException
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})
+    with pytest.raises(HTTPException) as exc:
+        await commerce_api.get_invoice_for_approval(TENANT, inv["id"], "anything")
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approve_invoice_sets_approved_at_and_by(fake_db):
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "line_items": _items(), "requires_approval": True})
+    commerce_api._ensure_approval_link(TENANT, inv)
+    refreshed = await service.get_invoice(TENANT, inv["id"])
+    body = commerce_api.InvoiceApprovalIn(token=refreshed["approval_token"], approved_by="Judy Downing")
+    result = await commerce_api.approve_invoice(TENANT, inv["id"], body)
+    assert result["approved"] is True
+    assert result["approved_by"] == "Judy Downing"
+    final = await service.get_invoice(TENANT, inv["id"])
+    assert final["approved_at"]
+
+
+@pytest.mark.asyncio
+async def test_approve_invoice_is_idempotent(fake_db):
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "line_items": _items(), "requires_approval": True})
+    commerce_api._ensure_approval_link(TENANT, inv)
+    refreshed = await service.get_invoice(TENANT, inv["id"])
+    body = commerce_api.InvoiceApprovalIn(token=refreshed["approval_token"])
+    first = await commerce_api.approve_invoice(TENANT, inv["id"], body)
+    second = await commerce_api.approve_invoice(TENANT, inv["id"], body)
+    assert first["approved_at"] == second["approved_at"]
+
+
+@pytest.mark.asyncio
+async def test_approve_invoice_wrong_token_404s(fake_db):
+    from fastapi import HTTPException
+    from vula.api import commerce as commerce_api
+
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "line_items": _items(), "requires_approval": True})
+    commerce_api._ensure_approval_link(TENANT, inv)
+    body = commerce_api.InvoiceApprovalIn(token="wrong")
+    with pytest.raises(HTTPException) as exc:
+        await commerce_api.approve_invoice(TENANT, inv["id"], body)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approval_never_blocks_mark_paid(fake_db):
+    """Confirmed design: approval is informational only — Mark paid works identically whether
+    or not the invoice has been approved."""
+    inv = await service.create_invoice(
+        TENANT, {"customer_name": "A", "line_items": _items(), "requires_approval": True})
+    # Never approved — Mark paid must still work.
+    updated = await service.update_invoice_status(TENANT, inv["id"], "paid")
+    assert updated["status"] == "paid"

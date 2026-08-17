@@ -449,3 +449,29 @@ async def test_send_invoice_email_quote_label_in_subject():
         await email_mod.send_invoice_email("a@b.co.za", quote, b"%PDF", "Off the Hook")
     assert "Quotation" in mock_send.await_args.args[1]
     assert "OTH-QTE-00007" in mock_send.await_args.args[1]
+
+
+# ── Client approval link (2026-08-17, migration 136) ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_invoice_email_includes_approval_link_when_given():
+    from vula.api import email as email_mod
+
+    link = "https://vuladashboard.vercel.app/#/approve-invoice/off-the-hook/inv1?token=abc"
+    with patch.object(email_mod, "_send", new=AsyncMock(return_value=True)) as mock_send:
+        await email_mod.send_invoice_email(
+            "a@b.co.za", _SAMPLE_INVOICE, b"%PDF", "Off the Hook", approval_link=link)
+    html, text = mock_send.await_args.args[2], mock_send.await_args.args[3]
+    assert link in html
+    assert link in text
+
+
+@pytest.mark.asyncio
+async def test_send_invoice_email_no_approval_cta_when_link_omitted():
+    from vula.api import email as email_mod
+
+    with patch.object(email_mod, "_send", new=AsyncMock(return_value=True)) as mock_send:
+        await email_mod.send_invoice_email("a@b.co.za", _SAMPLE_INVOICE, b"%PDF", "Off the Hook")
+    html, text = mock_send.await_args.args[2], mock_send.await_args.args[3]
+    assert "approve" not in html.lower()
+    assert "approve" not in text.lower()

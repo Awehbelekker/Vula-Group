@@ -390,6 +390,7 @@ async def send_invoice_email(
     invoice: dict,
     pdf_bytes: bytes,
     tenant_name: str = "Vula Group",
+    approval_link: str = "",
 ) -> bool:
     """Email an invoice/quote PDF to a customer as an attachment.
 
@@ -398,6 +399,8 @@ async def send_invoice_email(
         invoice: The invoice row (for number, totals, customer name).
         pdf_bytes: Rendered PDF bytes (from render_invoice_pdf).
         tenant_name: Display name of the merchant, used in copy.
+        approval_link: When set (opt-in per invoice, migration 136), a public link the
+            recipient can click to approve the invoice — appended as its own call-to-action.
 
     Returns:
         True if the email was dispatched, False otherwise.
@@ -419,6 +422,15 @@ async def send_invoice_email(
         f"Please find attached your {doc_label.lower()} <strong>{number}</strong> "
         f"for <strong>{total}</strong>. {when}"
     )
+    approval_html = (
+        '<tr><td style="padding:0 0 16px">'
+        f'<a href="{approval_link}" style="display:inline-block;padding:10px 20px;'
+        'background:#2C5545;color:#fff;border-radius:6px;text-decoration:none;'
+        'font-size:14px;font-weight:600;">Review &amp; approve this invoice</a>'
+        "</td></tr>"
+    ) if approval_link else ""
+    approval_text = f"\n\nReview and approve this invoice: {approval_link}" if approval_link else ""
+
     html = (
         _HEADER
         + '<tr><td style="padding:0 0 16px">'
@@ -426,6 +438,7 @@ async def send_invoice_email(
         + '<p style="margin:8px 0 0;font-size:14px;color:#5A5A5A;line-height:1.6;">'
         + body_line
         + "</p></td></tr>"
+        + approval_html
         + '<tr><td style="padding:0 0 8px">'
         + '<p style="font-size:13px;color:#5A5A5A;line-height:1.6;">'
         + f"Thank you for your business.<br>{tenant_name}"
@@ -435,7 +448,7 @@ async def send_invoice_email(
     text = (
         f"Hi {customer},\n\n"
         f"Please find attached your {doc_label.lower()} {number} for {total}. "
-        f"{when}\n\nThank you for your business.\n{tenant_name}"
+        f"{when}{approval_text}\n\nThank you for your business.\n{tenant_name}"
     )
 
     attachments = [{
