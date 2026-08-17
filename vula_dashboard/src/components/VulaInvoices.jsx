@@ -480,7 +480,17 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       <input type="checkbox" checked={selectedQuotes.has(inv.id)} onChange={() => toggleQuoteSelect(inv.id)}
                         title="Select for bulk delete" style={{ cursor: 'pointer' }} />
                     )}
-                    <span style={s.invNum}>{inv.invoice_number}</span>
+                    {['draft', 'sent'].includes(inv.status) ? (
+                      <span
+                        style={{ ...s.invNum, cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                        title="Click to edit"
+                        onClick={() => { setEditingInvoice(inv); setShowCreate(inv.doc_type) }}
+                      >
+                        {inv.invoice_number}
+                      </span>
+                    ) : (
+                      <span style={s.invNum}>{inv.invoice_number}</span>
+                    )}
                     <span style={{ ...s.badge, color: st.color, background: st.bg }}>{st.label}</span>
                   </div>
                   <span style={s.amount}>{fmt(inv.total_cents)}</span>
@@ -513,9 +523,6 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                     </>
                   ) : (
                     <>
-                      {['draft', 'sent'].includes(inv.status) && (
-                        <button onClick={() => { setEditingInvoice(inv); setShowCreate(inv.doc_type) }} style={s.actMatch}>✏️ Edit</button>
-                      )}
                       {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
                       <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
                       {inv.customer_email && (
