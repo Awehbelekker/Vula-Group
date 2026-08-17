@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import tempfile
 import time
 import uuid
@@ -169,12 +170,30 @@ class OCRProcessor:
     Last resort: pytesseract (pure Python, no GPU/cloud needed) — only if no cloud key is set.
     """
 
+    # 2026-08-17: confirmed live against a real DIGG payment-notification page — GLM-OCR (the
+    # small 0.9B local model) didn't fail or time out, it confidently fabricated a completely
+    # different, plausible-looking generic business letter (wrong date, wrong amount, and
+    # literal "[Name Redacted]"/"[Company Name Redacted]" bracket placeholders) instead of
+    # actually reading the image. The old "non-empty text = success" check had no way to catch
+    # this, so it never escalated to the far more reliable cloud vision fallback. A genuine OCR
+    # read of a real document never contains meta-commentary bracket placeholders like this —
+    # only a model that gave up and generated a template instead does.
+    _HALLUCINATION_MARKERS = re.compile(
+        r"\[(?:name|company|position|amount|date|signature|redacted|unclear|illegible|"
+        r"unknown|placeholder)[^\]]{0,40}\]",
+        re.IGNORECASE,
+    )
+
+    def _looks_hallucinated(self, text: str) -> bool:
+        return bool(self._HALLUCINATION_MARKERS.search(text or ""))
+
     def __init__(self, ollama_base: str = OLLAMA_BASE):
         self.ollama_base = ollama_base
 
     async def process_image(self, image_path: Path) -> str:
         """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
-        failure or timeout, then to local pytesseract as the last resort."""
+        failure, timeout, OR a hallucinated-looking response, then to local pytesseract as the
+        last resort."""
         import base64
         with open(image_path, "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode()
@@ -188,6 +207,7 @@ class OCRProcessor:
             "options": {"temperature": 0.1, "num_predict": 4096},
         }
 
+        local_text = ""
         try:
             # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
             # (same ones llm_router uses) or this call is blocked at the edge with a redirect
@@ -199,16 +219,34 @@ class OCRProcessor:
                     headers=_ollama_headers() or None,
                 )
                 resp.raise_for_status()
-                text = resp.json().get("response", "").strip()
-                if text:
-                    return text
+                local_text = resp.json().get("response", "").strip()
+                if local_text and not self._looks_hallucinated(local_text):
+                    return local_text
+                if local_text:
+                    logger.warning(f"GLM-OCR output looks hallucinated (bracket placeholders) — "
+                                   f"escalating to cloud vision instead of trusting it: {local_text[:200]!r}")
         except Exception as e:
             logger.warning(f"GLM-OCR failed, escalating to cloud vision: {e}")
 
-        cloud_text = await self._cloud_vision_fallback(image_path, prompt)
-        if cloud_text:
-            return cloud_text
-        return await self._docling_fallback(image_path)
+        # 2026-08-17: cloud vision isn't immune either — reproduced live, the SAME image
+        # hallucinated on 2 of 3 consecutive cloud vision calls (identical bracket-placeholder
+        # pattern) and only returned the real content on the 3rd. A bounded retry mirrors that —
+        # cheap relative to a wrong financial figure being silently trusted.
+        cloud_text = ""
+        for attempt in range(2):
+            cloud_text = await self._cloud_vision_fallback(image_path, prompt)
+            if cloud_text and not self._looks_hallucinated(cloud_text):
+                return cloud_text
+            if cloud_text:
+                logger.warning(f"Cloud vision OCR attempt {attempt + 1} looks hallucinated too "
+                               f"(bracket placeholders): {cloud_text[:200]!r}")
+
+        tesseract_text = await self._docling_fallback(image_path)
+        if tesseract_text:
+            return tesseract_text
+        # Nothing came back clean — a flagged-but-real response beats an empty page, which
+        # upstream treats as a total ingestion failure.
+        return cloud_text or local_text or ""
 
     _IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                    ".webp": "image/webp", ".gif": "image/gif", ".tiff": "image/tiff"}
