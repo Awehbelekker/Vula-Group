@@ -489,6 +489,14 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       >
                         {inv.invoice_number}
                       </span>
+                    ) : inv.doc_type === 'quote' && inv.status === 'accepted' && quoteInvoicedCents(inv) < (inv.total_cents || 0) ? (
+                      <span
+                        style={{ ...s.invNum, cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                        title="Click to convert to an invoice (full amount or a deposit)"
+                        onClick={() => convertToInvoice(inv)}
+                      >
+                        {inv.invoice_number}
+                      </span>
                     ) : (
                       <span style={s.invNum}>{inv.invoice_number}</span>
                     )}
