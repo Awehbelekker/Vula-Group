@@ -47,6 +47,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [creditingInvoice, setCreditingInvoice] = useState(null)  // invoice row being partially credited
   const [editingInvoice, setEditingInvoice] = useState(null)      // quote/invoice row being edited (draft/sent only)
+  const [emailConfigured, setEmailConfigured] = useState(true)    // assume yes until told otherwise — avoids a flash of "disabled" on first paint
 
   // A fresh deep-link (e.g. clicking a different supplier while already on this tab) —
   // re-sync local state to match.
@@ -73,6 +74,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     setSelectedQuotes(new Set())
     if (sr) {
       setSettings(sr.settings || null)
+      setEmailConfigured(sr.email_configured !== false)
       // First visit: open the setup wizard once if the tenant hasn't onboarded.
       if (!sr.onboarded && !autoOpened.current) {
         autoOpened.current = true
@@ -228,8 +230,13 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }
 
   // Open the customer's WhatsApp with a prefilled message + PDF download link.
-  // Used as a fallback when the server-side document send is unavailable.
-  function whatsAppLinkFallback(inv) {
+  // Used as a fallback when the server-side document send is unavailable — e.g. WhatsApp's own
+  // 24-hour messaging window (Meta only allows a free-form document send to a customer who's
+  // messaged the business recently; outside that window a manual send is the only option).
+  // reason (optional) explains WHY the automatic send didn't happen — shown up front rather
+  // than silently swapping to the manual link with no context.
+  function whatsAppLinkFallback(inv, reason) {
+    if (reason) alert(`Couldn't send automatically (${reason}) — opening WhatsApp for you to send it yourself.`)
     const phone = toWhatsAppNumber(inv.customer_phone)
     const pdfUrl = `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`
     const msg = `Hi ${inv.customer_name}, here's your invoice ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
@@ -250,11 +257,12 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
         load()
         return
       }
-      // Server can't deliver the document (e.g. WhatsApp not configured) — fall
-      // back to opening WhatsApp with a PDF download link.
-      whatsAppLinkFallback(inv)
+      // Server can't deliver the document (e.g. WhatsApp not configured, or the customer
+      // hasn't messaged this business in the last 24 hours — Meta's own window for a free-form
+      // document send) — fall back to opening WhatsApp with a PDF download link.
+      whatsAppLinkFallback(inv, d.detail || `server error ${r.status}`)
     } catch {
-      whatsAppLinkFallback(inv)
+      whatsAppLinkFallback(inv, 'network error')
     }
   }
 
@@ -510,7 +518,16 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       )}
                       {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
                       <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
-                      {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
+                      {inv.customer_email && (
+                        emailConfigured ? (
+                          <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>
+                        ) : (
+                          <button disabled style={s.actDisabled}
+                                  title="Email sending isn't set up for this account yet — ask your Vula admin to configure it. Use WhatsApp or download the PDF instead.">
+                            ✉️ Email — not set up
+                          </button>
+                        )
+                      )}
                       {inv.doc_type === 'invoice' && inv.status === 'draft' && (
                         <button onClick={() => setStatus(inv, 'sent')} style={s.actMatch}
                                 title="Already sent this outside Vula (email/WhatsApp/in person)? Mark it sent so it shows up correctly on your dashboard and gets payment reminders.">

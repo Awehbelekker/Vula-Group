@@ -2838,7 +2838,9 @@ async def admin_get_invoice_settings(tenant_id: str):
     wizard, so the dashboard knows to show it.
     """
     settings = await service.get_invoice_settings(tenant_id)
-    return {"settings": settings, "onboarded": bool(settings and settings.get("onboarded"))}
+    from config import settings as app_settings
+    return {"settings": settings, "onboarded": bool(settings and settings.get("onboarded")),
+            "email_configured": bool(app_settings.resend_api_key)}
 
 
 @router.post("/{tenant_id}/admin/invoice-settings")
