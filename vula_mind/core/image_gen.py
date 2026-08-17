@@ -110,7 +110,7 @@ def build_product_prompt(
     return " ".join(parts)
 
 
-async def craft_photo_subject(product: dict) -> str:
+async def craft_photo_subject(product: dict, brand_context: str = "") -> str:
     """Prompt generator: turn a product's sales listing into a visually concrete
     subject description for image generation AND QA.
 
@@ -128,10 +128,12 @@ async def craft_photo_subject(product: dict) -> str:
     resp = await litellm.acompletion(
         model=model,
         messages=[{"role": "user", "content": (
-            "You write subject lines for professional product photography.\n"
+            "You write subject lines for professional product photography, following the "
+            "conventions of premium e-commerce in the product's category.\n"
             f"Product listing: name={product.get('name')!r}, category={product.get('category')!r}, "
             f"pack size={product.get('pack_size')!r}, description={(product.get('description') or '')[:200]!r}.\n"
-            "Write ONE sentence describing exactly what the photo should visibly show: the "
+            + (f"Brand context (match its tone and positioning): {brand_context[:200]}\n" if brand_context else "")
+            + "Write ONE sentence describing exactly what the photo should visibly show: the "
             "product's physical form, colour, texture, quantity and arrangement. Only what a "
             "camera can capture — never weights, grams, brand claims, or process words like "
             "'deboned' unless visually obvious. Raw/unprepared for fresh food, the retail item "

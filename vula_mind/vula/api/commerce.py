@@ -1022,10 +1022,19 @@ async def admin_generate_product_photo(tenant_id: str, product_id: str, body: Ge
         raise HTTPException(status_code=404, detail="Product not found")
     prod = prod[0]
     # Prompt generator: LLM crafts a visually concrete subject (works for any
-    # product vertical); the food template is only the fallback.
+    # product vertical); the food template is only the fallback. Brand kit
+    # (trading name + tagline) grounds it in the tenant's tone.
+    brand_context = ""
+    try:
+        bs = (db.table("commerce_invoice_settings").select("trading_as,company_name")
+              .eq("tenant_id", tenant_id).limit(1).execute()).data or []
+        if bs:
+            brand_context = bs[0].get("trading_as") or bs[0].get("company_name") or ""
+    except Exception:
+        pass
     try:
         from core.image_gen import craft_photo_subject
-        subject = await craft_photo_subject(prod)
+        subject = await craft_photo_subject(prod, brand_context)
     except Exception:
         subject = _photo_subject(prod)
 
@@ -3184,10 +3193,13 @@ async def admin_create_quote(tenant_id: str, body: InvoiceCreate):
 
 
 @router.post("/{tenant_id}/admin/quotes/{quote_id}/convert")
-async def admin_convert_quote(tenant_id: str, quote_id: str):
-    """Convert an accepted quote/proforma into a draft invoice, linking both."""
+async def admin_convert_quote(tenant_id: str, quote_id: str, body: dict = None):
+    """Convert an accepted quote/proforma into a draft invoice, linking both. Optional body
+    {"amount_cents": int} invoices only part of the quote (a deposit/progress invoice), leaving
+    the remainder convertible later — omit it to invoice whatever remains."""
+    amount_cents = (body or {}).get("amount_cents")
     try:
-        invoice = await service.convert_quote_to_invoice(tenant_id, quote_id)
+        invoice = await service.convert_quote_to_invoice(tenant_id, quote_id, amount_cents)
     except ValueError as exc:
         # "not found" is a real 404; "must be accepted"/"already converted" are business-rule
         # rejections (400), not a missing resource — distinct enough to matter to the caller.

@@ -338,6 +338,116 @@ async def test_convert_rejects_already_converted_quote(fake_db):
         await service.convert_quote_to_invoice(TENANT, quote["id"])
 
 
+# ── Partial (deposit/progress) invoicing from a quote (2026-08-17) ─────────────
+
+@pytest.mark.asyncio
+async def test_convert_partial_amount_creates_smaller_invoice_and_tracks_balance(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Judy", "line_items": _items(),
+                 "status": "accepted"}
+    )
+    total = quote["total_cents"]
+    deposit_amount = round(total * 0.3)
+
+    invoice = await service.convert_quote_to_invoice(TENANT, quote["id"], amount_cents=deposit_amount)
+
+    assert invoice["total_cents"] == deposit_amount
+    assert invoice["source_quote_id"] == quote["id"]
+    assert len(invoice["line_items"]) == 1
+    assert "30%" in invoice["line_items"][0]["description"]
+
+    refreshed = await service.get_invoice(TENANT, quote["id"])
+    assert refreshed["invoiced_cents"] == deposit_amount
+    assert refreshed["converted_invoice_id"] == invoice["id"]  # still set on the first conversion
+
+
+@pytest.mark.asyncio
+async def test_convert_remaining_after_partial_completes_the_quote(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Judy", "line_items": _items(),
+                 "status": "accepted"}
+    )
+    total = quote["total_cents"]
+    deposit_amount = round(total * 0.3)
+    await service.convert_quote_to_invoice(TENANT, quote["id"], amount_cents=deposit_amount)
+
+    balance_invoice = await service.convert_quote_to_invoice(TENANT, quote["id"])  # omitted = whatever remains
+    assert balance_invoice["total_cents"] == total - deposit_amount
+
+    refreshed = await service.get_invoice(TENANT, quote["id"])
+    assert refreshed["invoiced_cents"] == total
+
+    with pytest.raises(ValueError, match="already"):
+        await service.convert_quote_to_invoice(TENANT, quote["id"])
+
+
+@pytest.mark.asyncio
+async def test_convert_rejects_amount_exceeding_remaining_balance(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Judy", "line_items": _items(),
+                 "status": "accepted"}
+    )
+    with pytest.raises(ValueError, match="remains"):
+        await service.convert_quote_to_invoice(TENANT, quote["id"], amount_cents=quote["total_cents"] + 100)
+
+
+@pytest.mark.asyncio
+async def test_convert_rejects_zero_or_negative_amount(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Judy", "line_items": _items(),
+                 "status": "accepted"}
+    )
+    with pytest.raises(ValueError):
+        await service.convert_quote_to_invoice(TENANT, quote["id"], amount_cents=0)
+
+
+@pytest.mark.asyncio
+async def test_convert_partial_vat_scales_proportionally(fake_db):
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Judy",
+                 "line_items": [{"description": "Design fee", "quantity": 1, "unit_price_cents": 100000}],
+                 "vat_rate": 15.0, "status": "accepted"}
+    )
+    assert quote["total_cents"] == 115000 and quote["vat_cents"] == 15000
+    half = 57500  # exactly half
+    invoice = await service.convert_quote_to_invoice(TENANT, quote["id"], amount_cents=half)
+    assert invoice["vat_cents"] == 7500  # half the VAT, not the full quote's VAT
+    assert invoice["subtotal_cents"] + invoice["vat_cents"] == invoice["total_cents"]
+
+
+@pytest.mark.asyncio
+async def test_convert_full_single_shot_unchanged_line_items(fake_db):
+    """The common case — omitting amount_cents on a never-touched quote — must still copy the
+    original line items verbatim, not synthesize a summary line (regression guard for the
+    already-passing test_convert_quote_links_both_directions above)."""
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Judy", "line_items": _items(),
+                 "status": "accepted"}
+    )
+    invoice = await service.convert_quote_to_invoice(TENANT, quote["id"])
+    assert len(invoice["line_items"]) == len(_items())
+    assert invoice["line_items"][0]["description"] == "Fresh snoek"
+
+
+@pytest.mark.asyncio
+async def test_convert_pre_migration_converted_quote_still_blocks_reconversion(fake_db):
+    """A quote converted before migration 134 has converted_invoice_id set but invoiced_cents
+    still 0/absent — must be treated as fully invoiced, not reopened for a duplicate full
+    conversion now that invoiced_cents exists."""
+    quote = await service.create_invoice(
+        TENANT, {"doc_type": "quote", "customer_name": "Judy", "line_items": _items(),
+                 "status": "accepted"}
+    )
+    # Simulate the pre-migration state directly (bypassing convert_quote_to_invoice, which would
+    # already set invoiced_cents correctly on any conversion made through this codebase).
+    fake_db.store["commerce_invoices"] = [
+        {**r, "converted_invoice_id": "some-old-invoice-id"} if r["id"] == quote["id"] else r
+        for r in fake_db.store["commerce_invoices"]
+    ]
+    with pytest.raises(ValueError, match="already"):
+        await service.convert_quote_to_invoice(TENANT, quote["id"])
+
+
 @pytest.mark.asyncio
 async def test_get_invoice_scoped_to_tenant(fake_db):
     inv = await service.create_invoice(TENANT, {"customer_name": "A", "line_items": _items()})

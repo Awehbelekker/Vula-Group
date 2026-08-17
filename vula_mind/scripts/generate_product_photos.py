@@ -56,7 +56,7 @@ SUBJECT_OVERRIDES = {
     "whole-octopus-unclean": "one whole fresh raw octopus with curled tentacles, glistening, centred on the board",
     "deboned-whole-chicken-fresh": "one whole raw chicken butterflied open and flattened (spatchcock style), skin on, on the board",
     "deboned-whole-chicken-frozen": "one whole raw chicken butterflied open and flattened, skin on, with a light frost, on the board",
-    "snoek-head-off-gutted-flecked": "one long silver Cape snoek fish, headless and butterflied open lengthwise showing pale flesh, on the board",
+    "snoek-head-off-gutted-flecked": "a long headless silver fish body butterflied open completely flat like an open book, pale flesh facing up, the head has been removed and is absent from the image, cut neck end visible at one end, on the board",
     "smoked-trout-slices-80g": "thin translucent slices of deep orange smoked trout fanned out on the board",
     "half-shell-mussels-800g": "a dozen cooked mussels on the half shell, orange flesh visible, arranged on the board with light frost",
     "jacopever-fillets": "small red-skinned fish fillets with white flesh, arranged on the board",

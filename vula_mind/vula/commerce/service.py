@@ -1441,28 +1441,67 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
     return invoice
 
 
-async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
+async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
+                                    amount_cents: Optional[int] = None) -> dict:
     """Create an invoice from an accepted quote, linking both directions.
 
-    The quote is stamped with converted_invoice_id; the new invoice carries
-    source_quote_id back to the quote. Totals are copied as-is; issue_date is set to
-    today (the day it's actually being invoiced), not carried over from the quote.
+    The quote is stamped with converted_invoice_id (on the first conversion only) and its
+    invoiced_cents running total is incremented; the new invoice carries source_quote_id back
+    to the quote. issue_date is set to today (the day it's actually being invoiced), not
+    carried over from the quote.
+
+    amount_cents supports partial (deposit/progress) invoicing: pass it to invoice only part of
+    the quote's total, leaving the remainder invoiceable later via further calls. Omitting it
+    invoices whatever remains — the whole quote on a first call, preserving the exact original
+    line-items-copied-as-is behavior for that (still the overwhelmingly common) case. A partial
+    conversion instead generates a single summary line item (real per-line fractions on a formal
+    invoice read oddly) with VAT split proportionally, the same ratio-based math
+    ledger.py::post_invoice_payment already uses for a partial payment.
 
     Requires the quote to already be status="accepted" — invoicing for something the
-    customer hasn't agreed to yet isn't a real invoice (2026-08-15: previously
-    unenforced despite the docstring's own intent). Refuses a quote that's already been
-    converted (converted_invoice_id already set) rather than silently creating a
-    second, orphaned invoice.
+    customer hasn't agreed to yet isn't a real invoice (2026-08-15). Refuses once the quote is
+    fully invoiced, or if amount_cents exceeds what's left.
     """
     quote = await get_invoice(tenant_id, quote_id)
     if not quote:
         raise ValueError("quote not found")
     if quote.get("doc_type") not in ("quote", "proforma"):
         raise ValueError("source document is not a quote or proforma")
-    if quote.get("converted_invoice_id"):
-        raise ValueError("this quote has already been converted to an invoice")
     if quote.get("status") != "accepted":
         raise ValueError("quote must be marked accepted before it can be converted to an invoice")
+
+    quote_total = int(quote.get("total_cents") or 0)
+    already_invoiced = int(quote.get("invoiced_cents") or 0)
+    if already_invoiced == 0 and quote.get("converted_invoice_id"):
+        # Converted under the pre-partial-invoicing system (before migration 134) — that single
+        # conversion was always for the full quote total, so treat it as fully invoiced rather
+        # than allowing a second, duplicate full conversion now that invoiced_cents exists.
+        already_invoiced = quote_total
+    remaining = quote_total - already_invoiced
+    if remaining <= 0:
+        raise ValueError("this quote has already been fully invoiced")
+    if amount_cents is None:
+        amount_cents = remaining
+    if amount_cents <= 0:
+        raise ValueError("amount must be greater than zero")
+    if amount_cents > remaining:
+        raise ValueError(f"only R{remaining / 100:.2f} remains to be invoiced on this quote")
+
+    is_full_single_shot = already_invoiced == 0 and amount_cents == quote_total
+    if is_full_single_shot:
+        line_items = quote.get("line_items", [])
+        subtotal_cents = quote["subtotal_cents"]
+        vat_cents = quote["vat_cents"]
+    else:
+        quote_vat = int(quote.get("vat_cents") or 0)
+        vat_cents = (amount_cents * quote_vat // quote_total) if quote_total else 0
+        subtotal_cents = amount_cents - vat_cents
+        pct = round(amount_cents / quote_total * 100) if quote_total else 0
+        line_items = [{
+            "description": f"Progress invoice — {pct}% of quote {quote.get('invoice_number') or ''}".strip(),
+            "quantity": 1, "unit": "", "unit_price_cents": subtotal_cents,
+            "discount_pct": 0, "total_cents": subtotal_cents,
+        }]
 
     invoice = {
         "id": str(uuid.uuid4()),
@@ -1473,13 +1512,13 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
         "customer_email": quote.get("customer_email"),
         "customer_phone": quote.get("customer_phone"),
         "customer_address": quote.get("customer_address"),
-        "line_items": quote.get("line_items", []),
-        "subtotal_cents": quote["subtotal_cents"],
-        "discount_cents": quote.get("discount_cents", 0),
+        "line_items": line_items,
+        "subtotal_cents": subtotal_cents,
+        "discount_cents": quote.get("discount_cents", 0) if is_full_single_shot else 0,
         "vat_rate": quote["vat_rate"],
-        "vat_cents": quote["vat_cents"],
-        "total_cents": quote["total_cents"],
-        "deposit_cents": quote.get("deposit_cents", 0),
+        "vat_cents": vat_cents,
+        "total_cents": amount_cents,
+        "deposit_cents": quote.get("deposit_cents", 0) if is_full_single_shot else 0,
         "status": "draft",
         "project": quote.get("project"),
         "issue_date": _now()[:10],
@@ -1501,9 +1540,20 @@ async def convert_quote_to_invoice(tenant_id: str, quote_id: str) -> dict:
         result = _client().table("commerce_invoices").insert(invoice).execute()
     created = result.data[0]
 
-    _client().table("commerce_invoices").update(
-        {"converted_invoice_id": created["id"], "updated_at": _now()}
-    ).eq("tenant_id", tenant_id).eq("id", quote_id).execute()
+    quote_patch = {"invoiced_cents": already_invoiced + amount_cents, "updated_at": _now()}
+    if not quote.get("converted_invoice_id"):
+        quote_patch["converted_invoice_id"] = created["id"]
+    try:
+        _client().table("commerce_invoices").update(quote_patch).eq(
+            "tenant_id", tenant_id).eq("id", quote_id).execute()
+    except Exception as exc:
+        # invoiced_cents column may not exist yet (migration 134) — retry without it so the
+        # invoice creation already committed above never gets rolled back by this.
+        quote_patch.pop("invoiced_cents", None)
+        logger.warning("quote invoiced_cents update skipped (run migration 134?): %s", exc)
+        if quote_patch:
+            _client().table("commerce_invoices").update(quote_patch).eq(
+                "tenant_id", tenant_id).eq("id", quote_id).execute()
 
     return created
 
