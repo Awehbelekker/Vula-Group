@@ -46,6 +46,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   const [selectedQuotes, setSelectedQuotes] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [creditingInvoice, setCreditingInvoice] = useState(null)  // invoice row being partially credited
+  const [editingInvoice, setEditingInvoice] = useState(null)      // quote/invoice row being edited (draft/sent only)
 
   // A fresh deep-link (e.g. clicking a different supplier while already on this tab) —
   // re-sync local state to match.
@@ -83,14 +84,43 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
 
   useEffect(() => { load() }, [load])
 
+  // Quotes converted before migration 134 (invoiced_cents) have converted_invoice_id set but
+  // invoiced_cents still 0 — that single old-system conversion was always for the full total,
+  // so treat it as fully invoiced rather than reopening it for a "new" partial conversion.
+  function quoteInvoicedCents(inv) {
+    if (inv.invoiced_cents) return inv.invoiced_cents
+    return inv.converted_invoice_id ? (inv.total_cents || 0) : 0
+  }
+
   async function convertToInvoice(quote) {
-    if (!confirm(`Convert ${quote.invoice_number} to a tax invoice?`)) return
+    const remaining = (quote.total_cents || 0) - quoteInvoicedCents(quote)
+    let amountCents = null  // null = invoice whatever remains (the whole quote on a first call)
+    if (remaining > 0 && quoteInvoicedCents(quote) === 0) {
+      // First conversion of this quote — offer a deposit/portion instead of always the full amount.
+      const full = remaining / 100
+      const answer = window.prompt(
+        `Convert ${quote.invoice_number} to a tax invoice.\n\nInvoice the full R${full.toFixed(2)}, ` +
+        `or enter a deposit amount in Rand (e.g. ${(full * 0.3).toFixed(2)} for 30%):`,
+        full.toFixed(2),
+      )
+      if (answer === null) return
+      const parsed = Math.round(parseFloat(answer) * 100)
+      if (!parsed || parsed <= 0) { alert('Please enter a valid amount.'); return }
+      if (parsed > remaining) { alert(`Only R${full.toFixed(2)} remains on this quote.`); return }
+      if (parsed < remaining) amountCents = parsed
+    } else if (remaining > 0) {
+      // Already partially invoiced — this call is for the remaining balance.
+      if (!confirm(`Invoice the remaining R${(remaining / 100).toFixed(2)} balance on ${quote.invoice_number}?`)) return
+    } else {
+      return
+    }
     try {
       // NOTE: this is /admin/quotes/.../convert, not /admin/invoices/.../convert — the two
       // previously didn't match (the route lives under quotes, this used to call invoices),
       // so every conversion silently 404'd. Fixed 2026-08-15.
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/quotes/${quote.id}/convert`, {
-        method: 'POST'
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(amountCents ? { amount_cents: amountCents } : {}),
       })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) {
@@ -363,8 +393,9 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       tenantId={tenantId}
       products={products}
       docType={showCreate}
-      onDone={() => { setShowCreate(null); load() }}
-      onCancel={() => setShowCreate(null)}
+      editingInvoice={editingInvoice}
+      onDone={() => { setShowCreate(null); setEditingInvoice(null); load() }}
+      onCancel={() => { setShowCreate(null); setEditingInvoice(null) }}
     />
   }
 
@@ -467,6 +498,9 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                     </>
                   ) : (
                     <>
+                      {['draft', 'sent'].includes(inv.status) && (
+                        <button onClick={() => { setEditingInvoice(inv); setShowCreate(inv.doc_type) }} style={s.actMatch}>✏️ Edit</button>
+                      )}
                       {inv.customer_phone && <button onClick={() => sendWhatsApp(inv)} style={s.actWa}>💬 WhatsApp</button>}
                       <button onClick={() => downloadPdf(inv)} style={s.actPdf}>📄 PDF</button>
                       {inv.customer_email && <button onClick={() => emailInvoice(inv)} style={s.actEmail}>✉️ Email</button>}
@@ -487,13 +521,20 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                       {inv.doc_type === 'quote' && !['accepted', 'declined', 'expired'].includes(inv.status) && (
                         <button onClick={() => setStatus(inv, 'accepted')} style={s.actMatch}>✓ Mark accepted</button>
                       )}
-                      {inv.doc_type === 'quote' && !inv.converted_invoice_id && (
+                      {inv.doc_type === 'quote' && quoteInvoicedCents(inv) < (inv.total_cents || 0) && (
                         inv.status === 'accepted' ? (
-                          <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>Convert to Invoice</button>
+                          <button onClick={() => convertToInvoice(inv)} style={s.actPaid}>
+                            {quoteInvoicedCents(inv) > 0 ? 'Invoice remaining balance' : 'Convert to Invoice'}
+                          </button>
                         ) : (
                           <button disabled title="Mark this quote accepted before converting it to an invoice"
                                   style={s.actDisabled}>Convert to Invoice — mark accepted first</button>
                         )
+                      )}
+                      {inv.doc_type === 'quote' && quoteInvoicedCents(inv) > 0 && quoteInvoicedCents(inv) < (inv.total_cents || 0) && (
+                        <span style={s.balanceTag}>
+                          Balance: R{(((inv.total_cents || 0) - quoteInvoicedCents(inv)) / 100).toFixed(2)}
+                        </span>
                       )}
                       {inv.doc_type === 'invoice' && !['paid', 'cancelled'].includes(inv.status) && (
                         <button onClick={() => markPaid(inv)} style={s.actPaid}>✓ Mark paid</button>
@@ -535,18 +576,27 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
 
 // ── Create invoice form ─────────────────────────────────────────────────────
 
-function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
-  const [customer, setCustomer] = useState({ name: '', phone: '', email: '', address: '' })
-  const [items, setItems] = useState([{ description: '', quantity: 1, unit: '', unit_price: '', discount: '', section: '' }])
-  const [dueDate, setDueDate] = useState('')
-  const [validUntil, setValidUntil] = useState('')
-  const [vatRate, setVatRate] = useState(15)
-  const [discountPct, setDiscountPct] = useState('')   // invoice-level discount %
-  const [deposit, setDeposit] = useState('')           // deposit already paid (rands)
+function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, onCancel }) {
+  const [customer, setCustomer] = useState(editingInvoice
+    ? { name: editingInvoice.customer_name || '', phone: editingInvoice.customer_phone || '',
+        email: editingInvoice.customer_email || '', address: editingInvoice.customer_address || '' }
+    : { name: '', phone: '', email: '', address: '' })
+  const [items, setItems] = useState(editingInvoice && Array.isArray(editingInvoice.line_items) && editingInvoice.line_items.length
+    ? editingInvoice.line_items.map(it => ({
+        description: it.description || '', quantity: it.quantity ?? 1, unit: it.unit || '',
+        unit_price: it.unit_price_cents != null ? (it.unit_price_cents / 100).toFixed(2) : '',
+        discount: it.discount_pct || '', section: it.section || '',
+      }))
+    : [{ description: '', quantity: 1, unit: '', unit_price: '', discount: '', section: '' }])
+  const [dueDate, setDueDate] = useState(editingInvoice?.due_date || '')
+  const [validUntil, setValidUntil] = useState(editingInvoice?.valid_until || '')
+  const [vatRate, setVatRate] = useState(editingInvoice?.vat_rate ?? 15)
+  const [discountPct, setDiscountPct] = useState(editingInvoice?.discount_pct ? String(editingInvoice.discount_pct) : '')   // invoice-level discount %
+  const [deposit, setDeposit] = useState(editingInvoice?.deposit_cents ? (editingInvoice.deposit_cents / 100).toFixed(2) : '')           // deposit already paid (rands)
   const [saving, setSaving] = useState(false)
   const [savedClients, setSavedClients] = useState([])
   const [crmCustomers, setCrmCustomers] = useState([])  // real order/WhatsApp history — the larger, phone-deduplicated list
-  const [project, setProject] = useState('')
+  const [project, setProject] = useState(editingInvoice?.project || '')
   const [projectList, setProjectList] = useState([])
   const [catalogItems, setCatalogItems] = useState([])   // products & services quick-add catalog
   const [showCatalog, setShowCatalog] = useState(false)
@@ -656,6 +706,27 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
 
   async function save() {
     setSaving(true)
+    if (editingInvoice) {
+      // Edit never touches status — a draft stays draft, a sent document stays sent (the
+      // customer already has it; only its recorded numbers change here, not its lifecycle).
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${editingInvoice.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_name: customer.name, customer_phone: customer.phone,
+          customer_email: customer.email, customer_address: customer.address,
+          line_items: lineItems, subtotal_cents: subtotal, vat_rate: vatRate, vat_cents: vat,
+          total_cents: total, discount_cents: invDiscCents,
+          deposit_cents: depositCents,
+          project: project || null,
+          due_date: dueDate || null,
+        }),
+      })
+      const d = await r.json().catch(() => ({}))
+      setSaving(false)
+      if (!r.ok) { alert(d.detail || `Could not save changes to this ${docType}.`); return }
+      onDone()
+      return
+    }
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -684,7 +755,7 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
     <div>
       <div style={s.topBar}>
         <button onClick={onCancel} style={s.backBtn}>← Back</button>
-        <h3 style={s.formTitle}>New {docType}</h3>
+        <h3 style={s.formTitle}>{editingInvoice ? `Edit ${docType}` : `New ${docType}`}</h3>
       </div>
 
       <div style={s.formSection}>
@@ -762,7 +833,7 @@ function InvoiceCreate({ tenantId, products, docType, onDone, onCancel }) {
       </div>
 
       <button onClick={save} disabled={saving || !customer.name} style={s.saveInvBtn}>
-        {saving ? 'Saving…' : `Create ${docType}`}
+        {saving ? 'Saving…' : (editingInvoice ? 'Save changes' : `Create ${docType}`)}
       </button>
     </div>
   )
@@ -1396,6 +1467,7 @@ const s = {
   actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: '#a8780a', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actPaid:    { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
   actDisabled:{ padding: '5px 10px', background: '#F0EDE5', color: '#9C978C', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, cursor: 'not-allowed', fontFamily: 'system-ui' },
+  balanceTag: { padding: '5px 10px', fontSize: 12, color: '#a8780a', fontFamily: 'system-ui', fontWeight: 600, alignSelf: 'center' },
   actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
   matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: 'var(--accent)' },
