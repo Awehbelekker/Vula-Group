@@ -2574,8 +2574,21 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
 
 @router.delete("/{tenant_id}/admin/invoices/{invoice_id}")
 async def admin_delete_invoice(tenant_id: str, invoice_id: str):
-    service._client().table("commerce_invoices") \
-        .delete().eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+    try:
+        service._client().table("commerce_invoices") \
+            .delete().eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+    except Exception as exc:
+        # A quote linked to a converted invoice (converted_invoice_id / source_quote_id, both
+        # FKs) can't be deleted out from under the other side — surface a clear reason instead
+        # of a raw 500, more likely to be hit now that a quote can link to SEVERAL invoices
+        # (partial/deposit invoicing, 2026-08-17).
+        if "foreign key" in str(exc).lower() or "23503" in str(exc):
+            raise HTTPException(
+                status_code=400,
+                detail="Can't delete this — it's linked to a converted quote/invoice. "
+                       "Delete or cancel the linked document first.",
+            )
+        raise HTTPException(status_code=500, detail="Could not delete this document.")
     return {"deleted": invoice_id}
 
 

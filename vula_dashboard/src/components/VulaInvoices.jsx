@@ -166,7 +166,14 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
 
   async function del(id) {
     if (!confirm('Delete this invoice?')) return
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${id}`, { method: 'DELETE' })
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${id}`, { method: 'DELETE' })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { alert(d.detail || 'Could not delete this document.'); return }
+    } catch {
+      alert('Could not delete this document — please try again.')
+      return
+    }
     load()
   }
 
