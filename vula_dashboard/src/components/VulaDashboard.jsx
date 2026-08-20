@@ -599,7 +599,7 @@ export default function VulaDashboard() {
           {/* Footer */}
           <div style={{ textAlign: "center", marginTop: 40, paddingTop: 24, borderTop: `1px solid ${COLORS.border}` }}>
             <p style={{ fontSize: 11, color: COLORS.mutedLight, fontFamily: "'Source Code Pro', monospace" }}>
-              Vula AI · by Aweh Be Lekker (Pty) Ltd · Cape Town · POPIA Compliant · Zero Cloud Cost
+              Vula AI · by Aweh Be Lekker (Pty) Ltd · Cape Town · POPIA-aligned data practices · Zero Cloud Cost
             </p>
           </div>
         </div>

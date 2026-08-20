@@ -165,7 +165,7 @@ function StepIntro({ onNext }) {
         {headline}<span style={{ color: "#C4922A", opacity: headline.length > 0 ? 1 : 0 }}>_</span>
       </h1>
       <p style={{ color: "#888", fontSize: 16, lineHeight: 1.7, maxWidth: 480, margin: "0 auto 40px" }}>
-        Vula learns your business — your pricing, your clients, your voice — and works as your AI team member. POPIA-compliant. ZAR-native. Built in Cape Town.
+        Vula learns your business — your pricing, your clients, your voice — and works as your AI team member. Built for POPIA compliance. ZAR-native. Built in Cape Town.
       </p>
       <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap", marginBottom: 48 }}>
         {["30-day free trial", "No credit card", "Cancel anytime"].map(t => (
@@ -564,7 +564,7 @@ export default function VulaOnboarding() {
 
           {step < 5 && (
             <div style={{ display: "flex", justifyContent: "center", gap: 24, marginTop: 24, flexWrap: "wrap" }}>
-              {["🔒 POPIA Compliant", "🇿🇦 ZAR Billing via PayFast", "📍 Cape Town Built"].map(t => (
+              {["🔒 POPIA-aligned", "🇿🇦 ZAR Billing via PayFast", "📍 Cape Town Built"].map(t => (
                 <span key={t} style={{ fontSize: 11, color: "#3A3A3A", fontFamily: "monospace" }}>{t}</span>
               ))}
             </div>

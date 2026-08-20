@@ -148,6 +148,15 @@ function Privacy() {
         knowledge base. We retain your data only as long as your account is active or as
         required by law.
       </p>
+      <p style={style.p}>
+        Some of our infrastructure providers (listed in section 5) process data outside
+        South Africa. Where this happens, we rely on the safeguards recognised under
+        POPIA for cross-border transfers — including that the provider is subject to a
+        law, binding agreement, or set of practices that upholds principles substantially
+        similar to POPIA's. AI inference for your business's own conversations runs on a
+        South Africa-based server we control directly, kept private behind access-controlled
+        infrastructure.
+      </p>
 
       <h2 style={style.h2}>5. Sharing & sub-processors</h2>
       <p style={style.p}>
