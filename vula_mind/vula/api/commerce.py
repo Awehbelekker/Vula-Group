@@ -1729,7 +1729,7 @@ async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
     """Upload a statement PDF (base64) → decrypt, parse, reconcile. Returns immediately —
     reconciliation runs server-side (minutes); poll GET admin/bank/reconciliation. The owner
     gets a WhatsApp summary + review of anything unallocated."""
-    import asyncio, base64 as _b64, os, tempfile
+    import base64 as _b64, os, tempfile
     from pathlib import Path
     from vula.commerce import bank_rec
     data = body.pdf_base64.split(",", 1)[-1] if body.pdf_base64.startswith("data:") else body.pdf_base64
@@ -1751,26 +1751,24 @@ async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
             except Exception:
                 pass
 
-    asyncio.create_task(_statement_job(tenant_id, _run()))
+    _statement_job(tenant_id, _run())
     return {"processing": True,
             "note": "Statement received — reconciling now. Check back in a few minutes."}
 
 
-async def _statement_job(tenant_id: str, coro, notify: bool = True):
+def _statement_job(tenant_id: str, coro, notify: bool = True) -> None:
     """Run a statement-reconciliation coroutine to completion (statements take minutes —
     longer than the HTTP gateway allows), then WhatsApp the owner the summary and start
     the review loop for anything Vula couldn't allocate."""
-    try:
-        rec = await coro
-    except Exception as exc:
-        log.warning("statement job failed for %s: %s", tenant_id, exc)
-        return
-    if notify and isinstance(rec, dict) and not rec.get("error"):
-        try:
-            from vula.commerce import bank_review
-            await bank_review.kickoff(tenant_id, rec)
-        except Exception as exc:
-            log.debug("statement kickoff skipped: %s", exc)
+    from vula.commerce.background_tasks import run_background
+
+    async def _notify(rec):
+        if not (notify and isinstance(rec, dict) and not rec.get("error")):
+            return
+        from vula.commerce import bank_review
+        await bank_review.kickoff(tenant_id, rec)
+
+    run_background(tenant_id, "bank_statement", coro, notify_builder=_notify)
 
 
 @router.post("/{tenant_id}/admin/bank/statement/from-text")
@@ -1779,7 +1777,6 @@ async def admin_bank_statement_from_text(tenant_id: str, body: dict):
     decryption. Body: {text, filename?, background?=true}. Statements take minutes, so by
     default this returns immediately and the job continues server-side (poll
     GET admin/bank/reconciliation); the owner also gets a WhatsApp summary + review."""
-    import asyncio
     from vula.commerce import bank_rec
     text = (body or {}).get("text") or ""
     if not text.strip():
@@ -1793,7 +1790,7 @@ async def admin_bank_statement_from_text(tenant_id: str, body: dict):
                                         source_file=(body or {}).get("filename") or "pasted-statement")
 
     if (body or {}).get("background", True):
-        asyncio.create_task(_statement_job(tenant_id, _run()))
+        _statement_job(tenant_id, _run())
         return {"processing": True,
                 "note": "Statement is being reconciled — check the Bank tab in a few minutes."}
     return await _run()
@@ -1803,7 +1800,6 @@ async def admin_bank_statement_from_text(tenant_id: str, body: dict):
 async def admin_bank_statement_from_upload(tenant_id: str, body: dict):
     """Reconcile a statement PDF that was already uploaded (e.g. WhatsApp'd before statement
     detection existed). Body: {filename} — looked up in the tenant's upload directory."""
-    import asyncio
     from pathlib import Path
     from config import settings as _s
     from vula.commerce import bank_rec
@@ -1813,8 +1809,8 @@ async def admin_bank_statement_from_upload(tenant_id: str, body: dict):
     path = Path(_s.upload_dir) / tenant_id / fname
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"no uploaded file named {fname}")
-    asyncio.create_task(_statement_job(tenant_id, bank_rec.ingest_statement(
-        tenant_id, path, source_file=fname)))
+    _statement_job(tenant_id, bank_rec.ingest_statement(
+        tenant_id, path, source_file=fname))
     return {"processing": True, "note": "Reconciling — check the Bank tab in a few minutes."}
 
 
