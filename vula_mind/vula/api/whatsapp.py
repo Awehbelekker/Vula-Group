@@ -636,6 +636,23 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     db.save(tenant_id, thread_key, "user", text)
     history = db.format_for_prompt(tenant_id, thread_key, limit=12)
 
+    # Orchestration memory bridge: knowledge-mode (HRM) and commerce-mode routing stay
+    # separate (a WhatsApp number is one or the other, never both), but everyone reaching
+    # this branch is staff/admin — same population _run_commerce_admin serves. Mirror this
+    # turn into commerce_conversation_messages under the identical admin:{phone} session-key
+    # convention commerce already uses, so a tenant who later gets both modes bridged isn't
+    # starting from a context vacuum. Best-effort, never blocks the actual reply.
+    commerce_session_id = None
+    try:
+        from vula.commerce import service as _commerce_bridge_service
+        _bridge_session = await _commerce_bridge_service.get_or_create_session(
+            tenant_id, session_key=f"admin:{phone}", channel="whatsapp", customer_phone=phone
+        )
+        commerce_session_id = _bridge_session["id"]
+        await _commerce_bridge_service.append_message(tenant_id, commerce_session_id, "user", text)
+    except Exception as exc:
+        logger.debug("commerce-history bridge (user turn) skipped: %s", exc)
+
     # Make the chat project-aware: if the message references a known project,
     # prepend its context (client, applicable standards, team) so the answer scopes
     # to that project and cites the right codes.
@@ -659,6 +676,13 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     reply = await _maybe_escalate_and_learn(tenant_id, phone, text, reply, _LAST_CONF.get())
 
     db.save(tenant_id, thread_key, "assistant", reply)
+    if commerce_session_id:
+        try:
+            from vula.commerce import service as _commerce_bridge_service
+            await _commerce_bridge_service.append_message(
+                tenant_id, commerce_session_id, "assistant", reply)
+        except Exception as exc:
+            logger.debug("commerce-history bridge (assistant turn) skipped: %s", exc)
     # Pass tenant_id so the reply is sent FROM the tenant's own number
     # (per-tenant creds in vula_whatsapp_accounts), not the shared test line.
     await _send_reply(phone, reply, tenant_id=tenant_id)

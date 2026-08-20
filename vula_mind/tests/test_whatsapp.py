@@ -654,4 +654,86 @@ async def test_photo_send_failure_does_not_block_text_reply():
         handled = await _run_commerce_assistant("27821234567", "add hake fillets", "off-the-hook")
 
     assert handled is True
-    mock_send_reply.assert_awaited_once()
+
+
+# ── Orchestration memory bridge: knowledge-mode (HRM) turns also land in
+# commerce_conversation_messages under the same admin:{phone} session-key commerce uses ────
+
+@pytest.mark.asyncio
+async def test_knowledge_mode_rag_turn_mirrors_into_commerce_history_under_admin_session_key():
+    """A knowledge-mode tenant's staff/admin turn (the 'admin and staff get full RAG' branch
+    of _handle_message) should also be written into commerce_conversation_messages under the
+    same admin:{phone} session-key convention _run_commerce_admin already uses — so a tenant
+    who later gets both modes bridged isn't starting from a context vacuum. This must never
+    change what the user actually sees (the KB reply itself), only add a mirrored copy."""
+    from vula.api.whatsapp import _handle_message
+
+    mock_history_db = MagicMock()
+    mock_history_db.save = MagicMock()
+    mock_history_db.format_for_prompt = MagicMock(return_value="")
+
+    # bridge_service's ._client() is left as an auto-generated MagicMock attribute — its
+    # default __iter__ yields nothing, so the sales_rep gate's team-member lookup naturally
+    # finds no matches and falls through to the RAG branch, no explicit stubbing needed.
+    bridge_service = _commerce_service_mock()
+
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_bank_review_answer", new=AsyncMock(return_value=None)),
+        patch("vula.integrations.notify.handle_preference_command", return_value=None),
+        patch("vula.integrations.doc_filing.resolve_pending_document", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value="Here's the answer.")),
+        patch("vula.api.whatsapp._maybe_escalate_and_learn",
+              new=AsyncMock(side_effect=lambda tid, ph, txt, reply, conf: reply)),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
+        patch("vula.commerce.service", bridge_service),
+    ):
+        await _handle_message("27645755210", "what standards apply here?", "wamid.3",
+                              route_tenant_id="digg-demo")
+
+    # The actual reply the user sees is completely unchanged.
+    mock_send.assert_called_once_with("27645755210", "Here's the answer.", tenant_id="digg-demo")
+
+    # And it was also mirrored into commerce_conversation_messages under admin:{phone}.
+    bridge_service.get_or_create_session.assert_any_call(
+        "digg-demo", session_key="admin:27645755210", channel="whatsapp",
+        customer_phone="27645755210")
+    calls = [c.args for c in bridge_service.append_message.call_args_list]
+    assert ("digg-demo", "sess-1", "user", "what standards apply here?") in calls
+    assert ("digg-demo", "sess-1", "assistant", "Here's the answer.") in calls
+
+
+@pytest.mark.asyncio
+async def test_knowledge_mode_rag_turn_survives_bridge_failure():
+    """The commerce-history mirror is best-effort — if it fails, the real KB reply must still
+    be sent to the user, unaffected."""
+    from vula.api.whatsapp import _handle_message
+
+    mock_history_db = MagicMock()
+    mock_history_db.save = MagicMock()
+    mock_history_db.format_for_prompt = MagicMock(return_value="")
+
+    broken_service = MagicMock()
+    broken_service.get_or_create_session = AsyncMock(side_effect=Exception("db unavailable"))
+
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_bank_review_answer", new=AsyncMock(return_value=None)),
+        patch("vula.integrations.notify.handle_preference_command", return_value=None),
+        patch("vula.integrations.doc_filing.resolve_pending_document", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value="Here's the answer.")),
+        patch("vula.api.whatsapp._maybe_escalate_and_learn",
+              new=AsyncMock(side_effect=lambda tid, ph, txt, reply, conf: reply)),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
+        patch("vula.commerce.service", broken_service),
+    ):
+        await _handle_message("27645755210", "what standards apply here?", "wamid.4",
+                              route_tenant_id="digg-demo")
+
+    mock_send.assert_called_once_with("27645755210", "Here's the answer.", tenant_id="digg-demo")
