@@ -139,12 +139,23 @@ export default function VulaAgentActivity({ tenantId }) {
                 <div key={i} style={{ ...card, display: "flex", alignItems: "center", gap: 10, padding: "9px 12px" }}>
                   {e.kind === "tool" ? (
                     <>
-                      <span style={{ fontSize: 15 }}>🔧</span>
+                      <span style={{ fontSize: 15 }} title={e.consequential ? "Consequential action (money, stock, or a customer-facing change)" : undefined}>
+                        {e.consequential ? "⚠️" : "🔧"}
+                      </span>
                       <span style={{ flex: 1, fontSize: 13 }}>
-                        <b>{e.tool}</b>
-                        <span style={{ color: C.muted }}> · {e.who === "admin" ? "you (owner)" : "customer"}</span>
-                        {e.args && Object.keys(e.args).length > 0 &&
-                          <span style={{ color: C.muted, fontSize: 12 }}> · {Object.entries(e.args).map(([k, v]) => `${k}: ${v}`).join(", ").slice(0, 80)}</span>}
+                        {e.narrated ? (
+                          <>
+                            {e.narrated}
+                            <span style={{ color: C.muted }}> · {e.who === "admin" ? "you (owner)" : "customer"}</span>
+                          </>
+                        ) : (
+                          <>
+                            <b>{e.tool}</b>
+                            <span style={{ color: C.muted }}> · {e.who === "admin" ? "you (owner)" : "customer"}</span>
+                            {e.args && Object.keys(e.args).length > 0 &&
+                              <span style={{ color: C.muted, fontSize: 12 }}> · {Object.entries(e.args).map(([k, v]) => `${k}: ${v}`).join(", ").slice(0, 80)}</span>}
+                          </>
+                        )}
                       </span>
                     </>
                   ) : (

@@ -1331,9 +1331,98 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     return {"answer": answer, "ok": bool(out.success and out.answer)}
 
 
+# Tools that use the confirm=true two-layer gate (widened confirm-gate coverage) — a call with
+# confirm not truthy was only a PREVIEW, nothing actually happened yet. These are also the
+# highest-stakes actions (real spend, real stock, real money), so they get a visual marker in
+# the activity feed regardless of whether this particular call was a preview or a confirmed one.
+_CONSEQUENTIAL_TOOLS = {
+    "update_stock", "create_purchase_order", "send_purchase_order", "update_po_status",
+    "create_discount_code", "update_discount_code", "delete_discount_code", "cancel_booking",
+    "delete_supplier", "record_payment", "send_broadcast", "draft_storefront_page",
+    "add_storefront_section",
+}
+
+
+def _truthy(v) -> bool:
+    return str(v).strip().lower() in ("true", "1", "yes")
+
+
+def _confirmed_prefix(args: dict) -> str:
+    """For confirm-gated tools: say whether this call actually did anything or only previewed."""
+    return "Confirmed:" if _truthy(args.get("confirm")) else "Previewed (not yet confirmed):"
+
+
+def _narrate(tool: str, args: dict) -> Optional[str]:
+    """Turn a raw (tool_name, args) telemetry pair into a business-readable sentence for the
+    Agent Activity feed. `args` is the already-PII-stripped, value-truncated dict the tool was
+    actually called with — returns None for any tool without a template (the caller falls back
+    to showing the raw args, so unrecognised tools still render, just less prose-y)."""
+    try:
+        a = args if isinstance(args, dict) else {}
+        g = a.get
+        if tool == "update_stock":
+            return f"{_confirmed_prefix(a)} set {g('product', 'a product')} stock to {g('quantity', '?')}"
+        if tool == "create_purchase_order":
+            return f"{_confirmed_prefix(a)} created a purchase order for {g('supplier_name', 'a supplier')}"
+        if tool == "send_purchase_order":
+            return f"{_confirmed_prefix(a)} sent purchase order {g('po_ref', '')} via {g('channel', 'email')}"
+        if tool == "update_po_status":
+            return f"{_confirmed_prefix(a)} marked purchase order {g('po_ref', '')} as {g('status', '?')}"
+        if tool == "create_discount_code":
+            return f"{_confirmed_prefix(a)} created discount code {g('code', '')}"
+        if tool == "update_discount_code":
+            return f"{_confirmed_prefix(a)} updated discount code {g('code', '')}"
+        if tool == "delete_discount_code":
+            return f"{_confirmed_prefix(a)} deleted discount code {g('code', '')}"
+        if tool == "cancel_booking":
+            return f"{_confirmed_prefix(a)} cancelled booking {g('booking_id', '')}"
+        if tool == "delete_supplier":
+            return f"{_confirmed_prefix(a)} deleted supplier {g('name', '')}"
+        if tool == "record_payment":
+            amt = g("amount_rands")
+            return (f"{_confirmed_prefix(a)} recorded a payment of R{amt} against invoice "
+                    f"{g('invoice_number', '')}") if amt else \
+                   f"{_confirmed_prefix(a)} recorded a payment against invoice {g('invoice_number', '')}"
+        if tool == "send_broadcast":
+            return f"{_confirmed_prefix(a)} sent broadcast '{g('template_name', '')}' to {g('audience', 'all')}"
+        if tool == "draft_storefront_page":
+            return f"{_confirmed_prefix(a)} drafted a change to the '{g('slug', '')}' page: {g('instruction', '')}"
+        if tool == "add_storefront_section":
+            return f"{_confirmed_prefix(a)} added a {g('feature', '')} section to the '{g('slug', '')}' page"
+        if tool == "create_invoice":
+            doc = g("doc_type", "invoice")
+            return f"Created a {doc} for {g('customer_name', 'a customer')}"
+        if tool == "send_invoice":
+            return f"Sent invoice {g('invoice_number', '')} to the customer"
+        if tool == "convert_quote_to_invoice":
+            return f"Converted quote {g('quote_number', '')} to an invoice"
+        if tool == "update_quote_status":
+            return f"Marked quote {g('quote_number', '')} as {g('status', '?')}"
+        if tool == "update_order_status":
+            return f"Updated order {g('order_id') or g('display_id', '')} to {g('status', '?')}"
+        if tool == "create_booking":
+            return f"Booked an appointment for {g('customer_name', 'a customer')} at {g('start', '')}"
+        if tool == "add_expense":
+            return f"Logged an expense of R{g('amount_rands', '?')} ({g('description', '')})"
+        if tool == "create_manual_order":
+            return f"Logged an order for {g('customer_name', 'a customer')}"
+        if tool == "create_product":
+            return f"Added product {g('name', '')} at R{g('price_rands', '?')}"
+        if tool == "update_product":
+            return f"Updated product {g('product', '')}"
+        if tool == "upsert_supplier":
+            return f"Saved supplier {g('name', '')}"
+    except Exception:
+        return None
+    return None
+
+
 @router.get("/{tenant_id}/admin/agent-activity")
 async def admin_agent_activity(tenant_id: str, limit: int = 60):
-    """Observe the agent: recent tool calls + local/cloud routing decisions (from telemetry)."""
+    """Observe the agent: recent tool calls + local/cloud routing decisions (from telemetry).
+    Tool-call events are narrated into business-readable text where a template exists; anything
+    without one still renders via the raw `args` (graceful fallback, not blocking on 100%
+    template coverage)."""
     db = service._client()
     try:
         rows = (db.table("vula_reasoning_telemetry")
@@ -1346,8 +1435,12 @@ async def admin_agent_activity(tenant_id: str, limit: int = 60):
     events = []
     for r in rows:
         if r.get("system") == "vula-agent-tool":
-            events.append({"kind": "tool", "who": r.get("outcome"), "tool": r.get("task"),
-                           "args": (r.get("extra") or {}).get("args"), "at": r.get("created_at")})
+            tool = r.get("task")
+            args = (r.get("extra") or {}).get("args") or {}
+            events.append({"kind": "tool", "who": r.get("outcome"), "tool": tool,
+                           "args": args, "narrated": _narrate(tool, args),
+                           "consequential": tool in _CONSEQUENTIAL_TOOLS,
+                           "at": r.get("created_at")})
         else:  # router decision
             events.append({"kind": "route", "task": r.get("task"), "outcome": r.get("outcome"),
                            "backend": (r.get("extra") or {}).get("backend") or r.get("reason"),
