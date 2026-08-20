@@ -24,6 +24,12 @@ const EVENTS = [
   ["invoice_overdue_escalated", "Overdue invoice escalations (14+ days)"],
 ];
 const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
+// Friendly display label per role — the stored value stays the plain enum (used by the
+// backend's role checks), only the text shown to a tenant is reframed. sales_rep gets an
+// "AI-assisted" note since that role's WhatsApp number is backed by a scoped AI assistant
+// (contacts, meetings, proposals), same "AI team member" framing used elsewhere in the app.
+const ROLE_LABELS = { owner: "Owner", manager: "Manager", bookkeeper: "Bookkeeper",
+  staff: "Staff", sales_rep: "Sales Rep (AI-assisted)" };
 
 // Human-readable label per merchant_audit action (vula/api/merchant_audit.py).
 const AUDIT_LABELS = {
@@ -122,7 +128,7 @@ export default function VulaTeam({ tenantId }) {
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <input placeholder="staff@email.com" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, minWidth: 220 }} />
           <select value={loginForm.role} onChange={(e) => setLoginForm({ ...loginForm, role: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }}>
-            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+            {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
           </select>
           <button onClick={createLogin} style={{ padding: "8px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Create login</button>
         </div>
@@ -153,7 +159,7 @@ export default function VulaTeam({ tenantId }) {
         <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
         <input placeholder="WhatsApp e.g. 2782…" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
         <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }}>
-          {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+          {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
         </select>
         <button onClick={add} style={{ padding: "8px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Add member</button>
       </div>
@@ -166,7 +172,7 @@ export default function VulaTeam({ tenantId }) {
             <span style={{ fontWeight: 700, color: C.text }}>{m.name || m.whatsapp}</span>
             <span style={{ fontSize: 12, color: C.muted }}>{m.whatsapp}</span>
             <select value={m.role} onChange={(e) => patch(m.id, { role: e.target.value })} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11.5 }}>
-              {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+              {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
             </select>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <button onClick={() => patch(m.id, { active: !m.active })} style={{ fontSize: 11.5, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>{m.active ? "Disable" : "Enable"}</button>

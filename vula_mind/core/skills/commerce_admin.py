@@ -598,6 +598,39 @@ def _match_groups(message: str) -> Optional[set]:
     return hits or None
 
 
+# "AI employee" framing pass (2026-08): the owner/staff prompt introduces Vula by a role label
+# rather than just "the assistant" — plain dict, not tenant-overridable yet, easy to extend or
+# make configurable later if that proves worth it. Priority order matters: a tenant with both
+# "invoices" and "broadcasts" enabled gets "bookkeeper" (the earlier entry), since that's the
+# more central day-to-day framing for most small businesses on this platform.
+_ROLE_LABELS: List[tuple] = [
+    ("invoices", "AI bookkeeper"),
+    ("purchase_orders", "AI procurement assistant"),
+    ("broadcasts", "AI marketing assistant"),
+    ("discounts", "AI marketing assistant"),
+    ("bookings", "AI scheduling assistant"),
+    ("crm", "AI sales assistant"),
+    ("pages", "AI web assistant"),
+    ("products", "AI inventory assistant"),
+]
+_DEFAULT_ROLE_LABEL = "AI business assistant"
+
+
+def _role_label(tenant_id: str) -> str:
+    """Which "AI employee" role to introduce Vula as, based on the tenant's enabled modules —
+    e.g. a tenant with invoicing on hears "I'm your AI bookkeeper" rather than a generic
+    "assistant". Falls back to the generic label if nothing enabled matches, or on any error."""
+    try:
+        from vula.api.tenants import enabled_modules
+        mods = set(enabled_modules(tenant_id) or [])
+    except Exception:
+        return _DEFAULT_ROLE_LABEL
+    for mod, label in _ROLE_LABELS:
+        if mod in mods:
+            return label
+    return _DEFAULT_ROLE_LABEL
+
+
 def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") -> List[Dict[str, Any]]:
     """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
     role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
@@ -667,7 +700,8 @@ class CommerceAdminSkill(BaseSkill):
         if role == "sales_rep":
             who = f"{name} — a sales rep/agent" if name else "a sales rep/agent"
             return (
-                f"You are {who}'s personal WhatsApp business assistant. You are talking to THEM, "
+                f"You are {who}'s personal AI sales assistant, reachable on WhatsApp like any "
+                "other colleague they'd message. You are talking to THEM, "
                 "not a customer — help them run their day: capturing contacts (e.g. from a scanned "
                 "business card), logging what happened in a client meeting from a voice note, "
                 "drafting a proposal/letter onto branded letterhead, drafting (never sending) a "
@@ -681,8 +715,10 @@ class CommerceAdminSkill(BaseSkill):
                 "and wait for a clear 'yes' first.\n\n"
                 + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
             )
+        role_label = _role_label(tenant_id)
         return (
-            "You are the AI business assistant for the OWNER of a South African business "
+            f"You are the owner's {role_label}, reachable on WhatsApp like any other colleague "
+            "they'd message — for a South African business "
             "(you are talking to the owner/staff, not a customer). Help them run the business with "
             "the tools available to you — which may include sales, orders, stock, invoices/quotes, "
             "expenses, products, bookings/appointments, marketing copy, financial insights, recurring "

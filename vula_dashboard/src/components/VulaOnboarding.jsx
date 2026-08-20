@@ -271,8 +271,8 @@ function StepTraining({ data, onChange, onNext, onBack }) {
 
   return (
     <div>
-      <h2 style={{ fontSize: 28, color: "#F0EDE8", marginBottom: 8 }}>Train your AI</h2>
-      <p style={{ color: "#666", fontSize: 14, marginBottom: 28, fontFamily: "monospace" }}>Upload documents so your AI learns how your business works.</p>
+      <h2 style={{ fontSize: 28, color: "#F0EDE8", marginBottom: 8 }}>Train your AI team member</h2>
+      <p style={{ color: "#666", fontSize: 14, marginBottom: 28, fontFamily: "monospace" }}>Upload documents so it learns how your business works, the way you'd brief a new hire.</p>
 
       <div
         onDrop={e => { e.preventDefault(); setDragOver(false); addFiles(Array.from(e.dataTransfer.files)); }}

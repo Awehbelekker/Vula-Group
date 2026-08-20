@@ -72,7 +72,7 @@ export default function VulaAgentActivity({ tenantId }) {
       body: JSON.stringify({ question: q, answer: a }),
     }).then(r => r.json()).catch(() => ({ error: "network" }));
     if (r.error) setMsg(r.error);
-    else { setMsg("Learned ✓ — the assistant will use this from now on."); setQ(""); setA(""); }
+    else { setMsg("Learned ✓ — your AI assistant will use this from now on."); setQ(""); setA(""); }
     setTimeout(() => setMsg(""), 4000);
   };
 
@@ -117,9 +117,9 @@ export default function VulaAgentActivity({ tenantId }) {
 
       {/* Teach box */}
       <div style={{ ...card, background: C.alt, marginBottom: 16 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>✏️ Teach the assistant</div>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>✏️ Teach your AI assistant</div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
-          Got a wrong or missing answer? Give the correct one — Vula stores it and uses it in future replies.
+          Got a wrong or missing answer? Give the correct one — your AI assistant stores it and uses it in future replies.
         </div>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Question / topic (e.g. 'Do you deliver to Stellenbosch?')" style={{ ...input, width: "100%", marginBottom: 6 }} />
         <textarea value={a} onChange={e => setA(e.target.value)} placeholder="The correct answer Vula should give" style={{ ...input, width: "100%", minHeight: 54, resize: "vertical", boxSizing: "border-box" }} />
@@ -130,9 +130,9 @@ export default function VulaAgentActivity({ tenantId }) {
       </div>
 
       {/* Timeline */}
-      <div style={{ fontSize: 11, textTransform: "uppercase", color: C.muted, marginBottom: 8 }}>Recent activity</div>
+      <div style={{ fontSize: 11, textTransform: "uppercase", color: C.muted, marginBottom: 8 }}>What your AI team has been doing</div>
       {events === null ? <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
-        : events.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No activity yet. It appears here as customers and you chat with the assistant.</div>
+        : events.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No activity yet. It appears here as customers and you chat with your AI assistant.</div>
           : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {events.map((e, i) => (
