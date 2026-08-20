@@ -169,6 +169,24 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "mark_paid": {"type": "boolean"}},
             "required": ["customer_name", "customer_phone", "items"]},
     }},
+    {"type": "function", "function": {
+        "name": "create_automation_rule",
+        "description": "Teach Vula a standing rule from a plain-language description — e.g. "
+                       "\"when an order is dispatched, message the customer to say it's on its "
+                       "way\" or \"tell the team when stock runs low\". Vula can only automate "
+                       "on: an order reaching a chosen status, or a product's stock dropping to "
+                       "its reorder threshold — and can only message the customer or the team, "
+                       "never anything else. IMPORTANT: this creates a real standing rule — its "
+                       "matches still always wait for the owner's approval before anything "
+                       "actually sends (reviewed under Automations), but only pass confirm=true "
+                       "after the owner has clearly said to go ahead with creating the rule "
+                       "itself. Without confirm=true, describe back what rule would be created "
+                       "and ask them to confirm.",
+        "parameters": {"type": "object", "properties": {
+            "description": {"type": "string", "description": "The rule in the owner's own words."},
+            "confirm": {"type": "boolean"}},
+            "required": ["description"]},
+    }},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -907,6 +925,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_po_status":   return await self._update_po_status(tid, args.get("po_ref", ""), args.get("status", ""), bool(args.get("confirm")))
             if name == "send_purchase_order": return await self._send_purchase_order(tid, args.get("po_ref", ""), args.get("channel", "email"), bool(args.get("confirm")))
             if name == "create_manual_order": return await self._create_manual_order(tid, args)
+            if name == "create_automation_rule": return await self._create_automation_rule(tid, args.get("description", ""), bool(args.get("confirm")))
             if name == "list_discount_codes": return await self._list_discount_codes(tid)
             if name == "create_discount_code": return await self._create_discount_code(tid, args)
             if name == "update_discount_code": return await self._update_discount_code(tid, args)
@@ -1468,6 +1487,30 @@ class CommerceAdminSkill(BaseSkill):
                                  "please check the Orders tab."}
             result["verified"] = True
         return result
+
+    async def _create_automation_rule(self, tid: str, description: str, confirm: bool) -> Dict[str, Any]:
+        """"Teaching mode": create a standing automation from a plain-language description.
+        The rule itself only ever gets created after confirm=true — but even once created, its
+        matches still always wait for a separate owner approval before anything sends (see
+        vula/commerce/automations.py::_stage_firing), so this confirm only gates creating the
+        rule, not any future action it might propose."""
+        from vula.commerce import automations
+        description = (description or "").strip()
+        if not description:
+            return {"error": "Describe the rule you'd like, e.g. \"when an order is dispatched, "
+                              "message the customer to say it's on its way\"."}
+        if not confirm:
+            return {"preview": True, "description": description,
+                    "message": "Confirm to create this rule (call again with confirm=true). "
+                               "Its matches will still always wait for your approval before "
+                               "anything actually sends."}
+        result = await automations.parse_rule_from_text(tid, description)
+        if result.get("error"):
+            return result
+        return {"created": True, "automation": result.get("name"),
+                "trigger": result.get("trigger_type"), "action": result.get("action_type"),
+                "message": "Rule created. Matches will show up under Automations for your "
+                           "approval before anything sends."}
 
     async def _list_discount_codes(self, tid: str) -> Dict[str, Any]:
         codes = await service.list_discount_codes(tid)

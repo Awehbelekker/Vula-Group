@@ -5,6 +5,17 @@ Deliberately narrow v1: two triggers (an order reaches a chosen status / a produ
 reorder threshold — reusing the P3.3 fields) and two actions (WhatsApp the customer / WhatsApp
 the team helper). Evaluated by a poller against existing tables rather than hooked into every
 order/stock write path — much lower risk, same pattern as the campaign/subscription pollers.
+
+2026-08: two additions, both from the Warmwind-roadmap "teaching mode" step —
+  1. Approval gate (migration 137, commerce_automation_firings): a match used to fire its
+     WhatsApp action immediately — the one place in this platform where a trigger acted on a
+     customer with no human in the loop. A match now STAGES a pending firing instead; the owner
+     approves/rejects from the dashboard. Same propose-confirm posture as everything else this
+     platform automates.
+  2. parse_rule_from_text(): conversational rule authoring — an owner describes a rule in plain
+     language ("when an order is dispatched, message the customer") and an LLM call maps it onto
+     this SAME small, already-validated trigger/action vocabulary (constrained classification,
+     not open generation) — never a new trigger/action type the engine doesn't already support.
 """
 from __future__ import annotations
 
@@ -15,6 +26,7 @@ log = logging.getLogger(__name__)
 
 TRIGGER_TYPES = {"order_status", "low_stock"}
 ACTION_TYPES = {"whatsapp_customer", "whatsapp_team"}
+ORDER_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered", "cancelled"}
 
 
 def _client():
@@ -45,6 +57,7 @@ def create_automation(tenant_id: str, body: dict) -> dict:
         "trigger_type": trigger_type, "trigger_config": body.get("trigger_config") or {},
         "action_type": action_type, "action_config": body.get("action_config") or {},
         "enabled": bool(body.get("enabled", True)),
+        "created_from": body.get("created_from") or "dashboard",
     }
     try:
         res = _client().table("commerce_automations").insert(row).execute()
@@ -93,6 +106,9 @@ def _fill(template: str, ctx: dict) -> str:
 
 
 async def _run_action(tenant_id: str, automation: dict, ctx: dict) -> bool:
+    """Actually send the WhatsApp message. Only ever called from approve_firing() now — a
+    trigger match no longer reaches this directly, it stages a pending firing instead (see
+    _stage_firing below)."""
     from vula.api.whatsapp import _send_reply
     action_type = automation["action_type"]
     message = _fill((automation.get("action_config") or {}).get("message") or "", ctx)
@@ -110,6 +126,64 @@ async def _run_action(tenant_id: str, automation: dict, ctx: dict) -> bool:
             return False
         return await _send_reply(helper["whatsapp"], message, tenant_id=tenant_id)
     return False
+
+
+def _stage_firing(tenant_id: str, automation: dict, ctx: dict) -> bool:
+    """A trigger matched — stage it as a pending firing instead of sending anything. The owner
+    reviews and approves/rejects from the dashboard (list_pending_firings/approve_firing/
+    reject_firing below). Returns False (no message ready to stage) if the template renders
+    empty, same guard _run_action always had."""
+    message = _fill((automation.get("action_config") or {}).get("message") or "", ctx)
+    if not message:
+        return False
+    try:
+        _client().table("commerce_automation_firings").insert({
+            "tenant_id": tenant_id, "automation_id": automation["id"], "trigger_context": ctx,
+            "action_type": automation["action_type"],
+            "action_config": automation.get("action_config") or {}, "message": message,
+        }).execute()
+        return True
+    except Exception as exc:
+        log.warning("could not stage automation firing for %s (run migration 137?): %s",
+                    automation.get("id"), exc)
+        return False
+
+
+def list_pending_firings(tenant_id: str) -> list[dict]:
+    try:
+        return (_client().table("commerce_automation_firings").select("*")
+                .eq("tenant_id", tenant_id).eq("status", "pending")
+                .order("created_at", desc=True).limit(200).execute().data or [])
+    except Exception as exc:
+        log.debug("pending firings list skipped (run migration 137?): %s", exc)
+        return []
+
+
+async def approve_firing(tenant_id: str, firing_id: str) -> dict:
+    """Approve a staged firing: actually send its message, then mark it approved. Idempotent —
+    approving an already-decided firing is a no-op, not a double-send."""
+    from vula.commerce import service
+    rows = (_client().table("commerce_automation_firings").select("*")
+            .eq("tenant_id", tenant_id).eq("id", firing_id).limit(1).execute().data or [])
+    if not rows:
+        return {"error": "firing not found"}
+    firing = rows[0]
+    if firing["status"] != "pending":
+        return firing  # already decided — no-op
+    automation = {"action_type": firing["action_type"], "action_config": firing["action_config"]}
+    sent = await _run_action(tenant_id, automation, firing.get("trigger_context") or {})
+    upd = {"status": "approved" if sent else "rejected", "decided_at": service._now()}
+    res = (_client().table("commerce_automation_firings").update(upd)
+           .eq("tenant_id", tenant_id).eq("id", firing_id).execute())
+    return res.data[0] if res.data else {**firing, **upd}
+
+
+def reject_firing(tenant_id: str, firing_id: str) -> dict:
+    from vula.commerce import service
+    res = (_client().table("commerce_automation_firings")
+           .update({"status": "rejected", "decided_at": service._now()})
+           .eq("tenant_id", tenant_id).eq("id", firing_id).eq("status", "pending").execute())
+    return res.data[0] if res.data else {}
 
 
 async def _check_order_status(tenant_id: str, automation: dict) -> int:
@@ -134,7 +208,7 @@ async def _check_order_status(tenant_id: str, automation: dict) -> int:
             "order_id": o.get("display_id") or o.get("id"), "customer_name": o.get("customer_name") or "there",
             "customer_phone": o.get("customer_phone"), "status": to_status,
         }
-        if await _run_action(tenant_id, automation, ctx):
+        if _stage_firing(tenant_id, automation, ctx):
             fired += 1
         _mark_fired(automation["id"], key)
     return fired
@@ -177,7 +251,7 @@ async def _check_low_stock(tenant_id: str, automation: dict) -> int:
         if _already_fired(automation["id"], key):
             continue
         ctx = {"product_name": item["name"], "stock": item["stock"], "threshold": item["threshold"]}
-        if await _run_action(tenant_id, automation, ctx):
+        if _stage_firing(tenant_id, automation, ctx):
             fired += 1
         _mark_fired(automation["id"], key)
     return fired
@@ -210,3 +284,112 @@ async def process_due_automations() -> int:
         except Exception as exc:
             log.warning("automation %s failed: %s", automation.get("id"), exc)
     return total
+
+
+# ── Conversational rule authoring ("teaching mode") ──────────────────────────────
+
+_RULE_PARSE_PROMPT = (
+    "A South African small-business owner just described an automation rule in their own "
+    "words, over WhatsApp or chat. Map it onto EXACTLY this vocabulary — never invent a "
+    "trigger, action, or status outside these lists:\n\n"
+    "trigger_type: one of \"order_status\" (fires when an order reaches a chosen status) or "
+    "\"low_stock\" (fires when a product's stock drops to/below its reorder threshold, "
+    "configured separately in Products — this trigger takes no other config).\n"
+    f"If trigger_type is order_status, trigger_config.to_status must be one of: "
+    f"{sorted(ORDER_STATUSES)}.\n\n"
+    "action_type: one of \"whatsapp_customer\" (message the customer on the order — only valid "
+    "with trigger_type=order_status) or \"whatsapp_team\" (message the team helper).\n"
+    "action_config.message: the message to send, written in the owner's own words if they gave "
+    "one, otherwise write a short, sensible default. You may use {{order_id}}, "
+    "{{customer_name}}, {{status}} placeholders for order_status, or {{product_name}}, "
+    "{{stock}}, {{threshold}} for low_stock.\n\n"
+    "If the request doesn't clearly map onto this vocabulary (e.g. it asks for a trigger/action "
+    "this engine doesn't support), return {\"error\": \"<short plain-English reason>\"} instead.\n\n"
+    "Return STRICT JSON only, no other text, in exactly this shape:\n"
+    '{"name": "short label", "trigger_type": "...", "trigger_config": {...}, '
+    '"action_type": "...", "action_config": {"message": "..."}}\n\n'
+    "The owner's request:\n"
+)
+
+
+def _clean_json_response(raw: str) -> dict:
+    import json
+    text = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL).strip()
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        return {}
+    try:
+        obj = json.loads(m.group(0))
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _validate_parsed_rule(obj: dict) -> dict:
+    """Whitelist-validate the LLM's proposed rule against the same fixed vocabulary
+    create_automation already enforces — the LLM's output is never trusted as-is. Returns a
+    clean body ready for create_automation(), or {"error": ...}."""
+    if obj.get("error"):
+        return {"error": str(obj["error"])[:200]}
+    trigger_type = obj.get("trigger_type")
+    action_type = obj.get("action_type")
+    if trigger_type not in TRIGGER_TYPES:
+        return {"error": f"I can only automate on: {sorted(TRIGGER_TYPES)}."}
+    if action_type not in ACTION_TYPES:
+        return {"error": f"I can only take these actions: {sorted(ACTION_TYPES)}."}
+    if action_type == "whatsapp_customer" and trigger_type != "order_status":
+        return {"error": "Messaging the customer only works with the order-status trigger."}
+
+    trigger_config = {}
+    if trigger_type == "order_status":
+        to_status = (obj.get("trigger_config") or {}).get("to_status")
+        if to_status not in ORDER_STATUSES:
+            return {"error": f"Order status must be one of: {sorted(ORDER_STATUSES)}."}
+        trigger_config = {"to_status": to_status}
+
+    message = str((obj.get("action_config") or {}).get("message") or "").strip()
+    if not message:
+        return {"error": "I need a message to send for this rule."}
+
+    return {
+        "name": str(obj.get("name") or f"{trigger_type} → {action_type}")[:100],
+        "trigger_type": trigger_type, "trigger_config": trigger_config,
+        "action_type": action_type, "action_config": {"message": message[:500]},
+    }
+
+
+async def parse_rule_from_text(tenant_id: str, text: str) -> dict:
+    """Turn a plain-language rule description into a created automation, via an LLM call
+    constrained to this module's own TRIGGER_TYPES/ACTION_TYPES/ORDER_STATUSES vocabulary —
+    the same whitelist create_automation() enforces, applied a second time here since the LLM's
+    raw output is never trusted. Never auto-executes anything: the created rule inherits the
+    same approval-gated firing path every automation goes through (see _stage_firing above).
+    Returns the created automation row, or {"error": ...}."""
+    text = (text or "").strip()
+    if not text:
+        return {"error": "Describe the rule you'd like, e.g. \"when an order is dispatched, "
+                          "message the customer to say it's on its way\"."}
+
+    import litellm
+    from core.llm_router import resolve_generation_route
+    litellm.drop_params = True
+    model, api_key, api_base = await resolve_generation_route(task_type="automation_rule")
+    try:
+        resp = await litellm.acompletion(
+            model=model, messages=[{"role": "user", "content": _RULE_PARSE_PROMPT + text}],
+            temperature=0.2, max_tokens=400, api_key=api_key, api_base=api_base,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as exc:
+        log.warning("automation rule parse failed: %s", exc)
+        return {"error": "Could not understand that rule right now — please try again."}
+
+    parsed = _clean_json_response(raw)
+    if not parsed:
+        return {"error": "Could not understand that rule — try describing it more simply."}
+    validated = _validate_parsed_rule(parsed)
+    if validated.get("error"):
+        return validated
+    validated["created_from"] = "conversation"
+    return create_automation(tenant_id, validated)

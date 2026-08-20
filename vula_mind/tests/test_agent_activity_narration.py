@@ -45,6 +45,15 @@ def test_narrate_never_raises_on_malformed_args():
     assert commerce_api._narrate("update_stock", ["not", "a", "dict"]) is not None
 
 
+def test_narrate_create_automation_rule():
+    text = commerce_api._narrate(
+        "create_automation_rule",
+        {"description": "when an order is dispatched, message the customer", "confirm": "True"})
+    assert text.startswith("Confirmed:")
+    assert "when an order is dispatched" in text
+    assert "create_automation_rule" in commerce_api._CONSEQUENTIAL_TOOLS
+
+
 def test_consequential_tools_set_matches_step2_gated_tools():
     for tool in ("update_stock", "create_purchase_order", "send_purchase_order",
                  "update_po_status", "create_discount_code", "update_discount_code",

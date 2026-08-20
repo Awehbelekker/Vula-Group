@@ -1339,7 +1339,7 @@ _CONSEQUENTIAL_TOOLS = {
     "update_stock", "create_purchase_order", "send_purchase_order", "update_po_status",
     "create_discount_code", "update_discount_code", "delete_discount_code", "cancel_booking",
     "delete_supplier", "record_payment", "send_broadcast", "draft_storefront_page",
-    "add_storefront_section",
+    "add_storefront_section", "create_automation_rule",
 }
 
 
@@ -1389,6 +1389,8 @@ def _narrate(tool: str, args: dict) -> Optional[str]:
             return f"{_confirmed_prefix(a)} drafted a change to the '{g('slug', '')}' page: {g('instruction', '')}"
         if tool == "add_storefront_section":
             return f"{_confirmed_prefix(a)} added a {g('feature', '')} section to the '{g('slug', '')}' page"
+        if tool == "create_automation_rule":
+            return f"{_confirmed_prefix(a)} taught Vula a new automation rule: {g('description', '')}"
         if tool == "create_invoice":
             doc = g("doc_type", "invoice")
             return f"Created a {doc} for {g('customer_name', 'a customer')}"
@@ -5455,6 +5457,35 @@ async def admin_delete_automation(tenant_id: str, automation_id: str):
     from vula.commerce import automations
     automations.delete_automation(tenant_id, automation_id)
     return {"deleted": automation_id}
+
+
+# 2026-08 (migration 137): a trigger match used to send its WhatsApp action immediately —
+# now it stages a pending firing here instead; the owner approves/rejects before anything
+# actually sends. Also lets a plain-language rule description ("teaching mode") create a real
+# automation without a developer, via the same never-auto-execute firing path below.
+
+@router.get("/{tenant_id}/admin/automations/firings")
+async def admin_list_automation_firings(tenant_id: str):
+    from vula.commerce import automations
+    return {"firings": automations.list_pending_firings(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/automations/firings/{firing_id}/approve")
+async def admin_approve_automation_firing(tenant_id: str, firing_id: str):
+    from vula.commerce import automations
+    return await automations.approve_firing(tenant_id, firing_id)
+
+
+@router.post("/{tenant_id}/admin/automations/firings/{firing_id}/reject")
+async def admin_reject_automation_firing(tenant_id: str, firing_id: str):
+    from vula.commerce import automations
+    return automations.reject_firing(tenant_id, firing_id)
+
+
+@router.post("/{tenant_id}/admin/automations/from-text")
+async def admin_create_automation_from_text(tenant_id: str, body: dict):
+    from vula.commerce import automations
+    return await automations.parse_rule_from_text(tenant_id, (body or {}).get("text", ""))
 
 
 # ── Conversation flow builder (MVP, migration 118) ───────────────────────────

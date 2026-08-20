@@ -30,6 +30,12 @@ export default function VulaAutomations({ tenantId }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
+  const [firings, setFirings] = useState([])
+  const [teachText, setTeachText] = useState('')
+  const [teaching, setTeaching] = useState(false)
+  const [teachMsg, setTeachMsg] = useState('')
+  const [showTeach, setShowTeach] = useState(false)
+
   const load = useCallback(async () => {
     setLoading(true)
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations`).then(r => r.json()).catch(() => ({}))
@@ -37,6 +43,29 @@ export default function VulaAutomations({ tenantId }) {
     setLoading(false)
   }, [tenantId])
   useEffect(() => { load() }, [load])
+
+  const loadFirings = useCallback(async () => {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/firings`).then(r => r.json()).catch(() => ({}))
+    setFirings(r.firings || [])
+  }, [tenantId])
+  useEffect(() => { loadFirings() }, [loadFirings])
+
+  async function decide(firing, action) {
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/firings/${firing.id}/${action}`, { method: 'POST' })
+    loadFirings()
+  }
+
+  async function teach() {
+    setTeachMsg('')
+    if (!teachText.trim()) return
+    setTeaching(true)
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/from-text`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: teachText.trim() }),
+    }).then(r => r.json()).catch(() => ({ error: 'network' }))
+    setTeaching(false)
+    if (r.error) { setTeachMsg(r.error); return }
+    setTeachMsg('Rule created ✓'); setTeachText(''); setShowTeach(false); load()
+  }
 
   async function create() {
     setError('')
@@ -79,10 +108,45 @@ export default function VulaAutomations({ tenantId }) {
     <div>
       <div style={s.intro}>
         <h3 style={s.h3}>⚡ Automations</h3>
-        <p style={s.sub}>Set-and-forget rules — Vula checks every few minutes and messages automatically. No dashboard visit required.</p>
+        <p style={s.sub}>Standing rules — Vula checks every few minutes and, when one matches, stages the message below for your approval. Nothing sends until you say go.</p>
       </div>
 
-      <button onClick={() => setShowNew(v => !v)} style={s.newBtn}>{showNew ? 'Close' : '+ New automation'}</button>
+      {firings.length > 0 && (
+        <div style={{ ...s.card, marginBottom: 18, background: '#FFF9EC', borderColor: '#E8D9A8' }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>⏳ Waiting for your approval ({firings.length})</div>
+          <div style={s.list}>
+            {firings.map(f => (
+              <div key={f.id} style={{ ...s.row2, alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={s.name}>{f.message}</div>
+                  <div style={s.meta}>{ACTIONS[f.action_type]?.label || f.action_type}</div>
+                </div>
+                <button onClick={() => decide(f, 'approve')} style={{ ...s.miniBtn, color: '#fff', background: 'var(--accent, #2C5545)', borderColor: 'var(--accent, #2C5545)' }}>Approve & send</button>
+                <button onClick={() => decide(f, 'reject')} style={{ ...s.miniBtn, color: '#C0392B' }}>Reject</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...s.card, marginBottom: 18 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>✏️ Teach Vula a rule</div>
+        <p style={s.hint}>Describe it in plain language — e.g. "when an order is dispatched, message the customer to say it's on its way".</p>
+        {showTeach ? (
+          <>
+            <textarea value={teachText} onChange={e => setTeachText(e.target.value)} rows={2}
+              placeholder="When... then..." style={{ ...s.input, resize: 'vertical', marginTop: 8 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+              <button onClick={teach} disabled={teaching} style={s.saveBtn}>{teaching ? 'Teaching…' : 'Create rule'}</button>
+              {teachMsg && <span style={{ fontSize: 12, color: teachMsg.includes('✓') ? '#16a34a' : '#C0392B' }}>{teachMsg}</span>}
+            </div>
+          </>
+        ) : (
+          <button onClick={() => setShowTeach(true)} style={{ ...s.newBtn, marginTop: 8, marginBottom: 0 }}>Teach a rule</button>
+        )}
+      </div>
+
+      <button onClick={() => setShowNew(v => !v)} style={s.newBtn}>{showNew ? 'Close' : '+ New automation (form)'}</button>
 
       {showNew && (
         <div style={s.card}>
@@ -128,7 +192,8 @@ export default function VulaAutomations({ tenantId }) {
                   {TRIGGERS[r.trigger_type]?.label || r.trigger_type}
                   {r.trigger_config?.to_status ? ` → ${r.trigger_config.to_status}` : ''}
                   {' · '}{ACTIONS[r.action_type]?.label || r.action_type}
-                  {r.fire_count > 0 && ` · fired ${r.fire_count}×`}
+                  {r.fire_count > 0 && ` · matched ${r.fire_count}×`}
+                  {r.created_from === 'conversation' && ' · 💬 taught'}
                 </div>
               </div>
               <button onClick={() => toggle(r)} style={{ ...s.miniBtn, color: r.enabled ? '#16a34a' : '#8A8680' }}>
