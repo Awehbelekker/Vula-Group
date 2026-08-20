@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from core.llm_router import resolve_generation_route
 from core.prompt_safety import fence
@@ -17,9 +18,35 @@ from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_pream
 logger = logging.getLogger(__name__)
 
 
+# 2026-08-18: this business-figures/records marker list + verification_policy were added after
+# pulling DIGG's real chat history and finding a confirmed, zero-backing hallucination — "Logg
+# as expense" got "I've logged the screen bricks... for R70,400.00" with no such expense ever
+# created (this skill has no tools; it cannot actually log anything). A question that names an
+# invoice/expense/BOQ/project/payment/total etc. with no matching KB document is asking about
+# THIS tenant's own real records — there is no legitimate "general knowledge" answer to that,
+# unlike a standards/code question, which the model can reasonably speak to from training data
+# (with the existing "verify the official document" framing ETHICS_RULES already requires).
+_TENANT_DATA_MARKERS = re.compile(
+    r"\b(invoice|expense|receipt|boq|bill of quantities|project|order|payment|logged?|"
+    r"created?|saved?|allocat\w*|owe|owing|balance|quote|quotation|supplier|paid|deposit)\b",
+    re.IGNORECASE,
+)
+_LOCAL_TIMEOUT_S = 20.0
+_CLOUD_TIMEOUT_S = 30.0
+
+
+def _looks_like_tenant_data_question(question: str) -> bool:
+    return bool(_TENANT_DATA_MARKERS.search(question or ""))
+
+
 class ReasoningSkill(BaseSkill):
     name = "reasoning"
     description = "General-purpose reasoning and analysis — the default skill for open questions"
+    # 2026-08-18 accuracy audit: core/verification.py's adversarial checker was explicitly
+    # written anticipating this skill as a groundable "kb" source, but the one-line activation
+    # was never done — this is the default fallback skill for DIGG's whole general chat, so it
+    # had zero fact-checking while commerce_admin.py/finance_admin.py already had it.
+    verification_policy = "adversarial"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         # Retrieve KB context if tenant has one
@@ -42,12 +69,37 @@ class ReasoningSkill(BaseSkill):
         except Exception as exc:
             logger.debug("Reasoning skill KB retrieval skipped: %s", exc)
 
+        # 2026-08-18: a question naming an invoice/expense/BOQ/project/payment etc. with no
+        # matching document is asking about THIS tenant's own real records — this skill has no
+        # tools, so it can never actually check or perform anything, and there is no legitimate
+        # "general knowledge" answer to fall back on (unlike a standards/code question). Decline
+        # BEFORE spending an LLM call, rather than generating an answer and hoping the prompt
+        # stops it from guessing — this is exactly the shape of the confirmed R70,400 "logged"
+        # fabrication found in DIGG's real chat history, which had zero backing tool call.
+        if not kb_context and _looks_like_tenant_data_question(inp.question):
+            return SkillOutput(
+                answer=("I don't have a document on file for that, so I don't want to guess at "
+                        "a figure or confirm something happened without seeing it. Could you "
+                        "attach the relevant document (invoice, receipt, BOQ, etc.) or tell me "
+                        "more so I can find it?"),
+                skill_name=self.name,
+                confidence=0.3,
+                sources=sources,
+            )
+
         # Build prompt
         system_msg = (
             "You are Vula, an AI assistant for South African business and construction. "
             "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
             "Lead with the answer, skip preamble. "
             "Always work in ZAR for money, use SA conventions for dates and phone numbers.\n\n"
+            "You CANNOT perform actions yourself in this chat — you have no tools here, so you "
+            "can't log an expense, create a document, send anything, or save anything. If "
+            "someone asks you to DO something, say plainly you can't do that directly here and "
+            "tell them the real next step (e.g. 'attach the receipt photo and it'll be logged "
+            "automatically', or 'ask an admin to do that'). NEVER describe an action as done "
+            "unless the document context below actually shows it already happened — never "
+            "invent a confirmation, an amount, or an ID.\n\n"
             + behaviour_preamble(preferred_language=inp.metadata.get("preferred_language", "")) +
             "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
             "WhatsApp — you file them into the knowledge base automatically. If asked about "
@@ -80,7 +132,9 @@ class ReasoningSkill(BaseSkill):
         )
         user_msg = f"{context_block}{history}\nQuestion: {inp.question}\n\nAnswer:"
 
+        started = time.monotonic()
         try:
+            import asyncio
             import litellm
             from uuid import uuid4
             from config import settings
@@ -95,44 +149,73 @@ class ReasoningSkill(BaseSkill):
             model, api_key, api_base = await resolve_generation_route(
                 task_type="reasoning", messages=_msgs, run_id=run_id)
 
-            async def _complete(m, k, b):
-                return await litellm.acompletion(
+            async def _complete(m, k, b, timeout_s):
+                # 2026-08-18: no timeout existed here at all — same class of gap already fixed
+                # for GLM-OCR. resolve_generation_route()'s local-first check is only a cheap
+                # 1.5s health ping, not a real speed measurement; if the shared local GPU is
+                # slow under load, this used to just wait however long that took. A timed-out
+                # local call now escalates to cloud the same way an unreliable answer already
+                # did, instead of leaving the customer waiting indefinitely.
+                return await asyncio.wait_for(litellm.acompletion(
                     model=m, messages=_msgs, temperature=0.3,
                     max_tokens=inp.max_tokens, api_key=k, api_base=b,
                     # logprobs is only meaningful for the local Ollama path (see the
                     # looks_unreliable call below) — requested unconditionally since
                     # litellm.drop_params silently discards it where unsupported
                     # (cloud routes, older Ollama builds) rather than erroring.
-                    logprobs=True, top_logprobs=1)
+                    logprobs=True, top_logprobs=1), timeout=timeout_s)
 
-            resp = await _complete(model, api_key, api_base)
-            raw = resp.choices[0].message.content or ""
-            answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            escalated = False
+            try:
+                resp = await _complete(model, api_key, api_base, _LOCAL_TIMEOUT_S)
+                raw = resp.choices[0].message.content or ""
+                answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-            # Requirement (b): if the local answer is empty/refusal/low-confidence, escalate to
-            # cloud and log why. logprob_conf is None when the backend returned no logprobs
-            # (2026-08: previously always None — no caller requested them — so this branch of
-            # looks_unreliable was dead code; now wired via compute_confidence above).
-            if model.startswith("ollama/"):
-                logprob_conf = compute_confidence(resp)
-                if looks_unreliable(answer, confidence=logprob_conf,
-                                    confidence_threshold=settings.local_confidence_threshold):
-                    esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="reasoning")
-                    if esc:
-                        model, api_key, api_base = esc
-                        resp = await _complete(model, api_key, api_base)
-                        raw = resp.choices[0].message.content or ""
-                        answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+                # Requirement (b): if the local answer is empty/refusal/low-confidence, escalate
+                # to cloud and log why. logprob_conf is None when the backend returned no
+                # logprobs (2026-08: previously always None — no caller requested them — so this
+                # branch of looks_unreliable was dead code; now wired via compute_confidence).
+                unreliable = False
+                if model.startswith("ollama/"):
+                    logprob_conf = compute_confidence(resp)
+                    unreliable = looks_unreliable(
+                        answer, confidence=logprob_conf,
+                        confidence_threshold=settings.local_confidence_threshold)
+            except asyncio.TimeoutError:
+                logger.warning("Reasoning local completion timed out after %.0fs — escalating",
+                               _LOCAL_TIMEOUT_S)
+                answer, unreliable = "", True
 
-            confidence = 0.75 if kb_context else 0.55
+            if unreliable:
+                esc = escalate_to_cloud("local_unreliable", run_id=run_id, task_type="reasoning")
+                if esc:
+                    model, api_key, api_base = esc
+                    resp = await _complete(model, api_key, api_base, _CLOUD_TIMEOUT_S)
+                    raw = resp.choices[0].message.content or ""
+                    answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+                    escalated = True
+
+            # 2026-08-18: the true "asking about our own records with nothing to ground it"
+            # case now short-circuits before generation (above) — what reaches here without KB
+            # is a genuinely general question (e.g. a standards/code lookup), which the model can
+            # reasonably speak to from training data. Confidence is still marked down from the
+            # KB-grounded case so it's visibly less certain, without being pushed low enough to
+            # noisily human-escalate every ordinary general-knowledge question.
+            confidence = 0.75 if kb_context else 0.5
             if not kb_context:
-                # 2026-08 accuracy audit: confidence already dropped for a no-KB answer, but
-                # that score never reaches the WhatsApp user — this is the default fallback
-                # skill so it must still answer from general knowledge (can't refuse the way
-                # standards_lookup.py does), but the uncertainty should be visible, not just
-                # scored internally.
                 answer += ("\n\n⚠️ I couldn't find a specific document on this — worth "
                            "double-checking anything critical.")
+
+            latency_ms = int((time.monotonic() - started) * 1000)
+            try:
+                from core.reasoning_telemetry import emit as _emit
+                _emit(system="vula-reasoning", task="reasoning_reply", tenant_id=inp.tenant_id,
+                     outcome="ok", escalated=escalated,
+                     extra={"latency_ms": latency_ms, "confidence": confidence,
+                            "had_kb": bool(kb_context)})
+            except Exception:
+                pass
+
             return SkillOutput(
                 answer=answer,
                 skill_name=self.name,
@@ -142,6 +225,13 @@ class ReasoningSkill(BaseSkill):
 
         except Exception as exc:
             logger.error("Reasoning skill failed: %s", exc)
+            try:
+                from core.reasoning_telemetry import emit as _emit
+                _emit(system="vula-reasoning", task="reasoning_reply", tenant_id=inp.tenant_id,
+                     outcome="error", reason=str(exc)[:200],
+                     extra={"latency_ms": int((time.monotonic() - started) * 1000)})
+            except Exception:
+                pass
             return SkillOutput(
                 answer="",
                 skill_name=self.name,

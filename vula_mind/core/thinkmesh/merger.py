@@ -69,7 +69,13 @@ class ThinKMeshMerger:
         good = graph.successful_branches
 
         if not good:
-            graph.final_answer = "[No successful branches — all failed]"
+            # 2026-08-18: this literal internal string was reaching real WhatsApp customers
+            # verbatim (confirmed live in DIGG's chat history — "Hi what info do you have on
+            # solid Cape" got this exact text as the reply, twice) — _rag_reply's own fallback
+            # chain (vula/api/whatsapp.py) never distinguishes a genuine error string from a
+            # real answer, so it just gets sent as-is.
+            graph.final_answer = ("Sorry, I couldn't work that out — could you rephrase, or "
+                                  "try again in a moment?")
             graph.status = GraphStatus.ERROR
             return graph
 

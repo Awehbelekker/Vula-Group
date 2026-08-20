@@ -2354,6 +2354,20 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 _LAST_CONF.set(float(result.confidence or 0.0))
             except Exception:
                 pass
+            # 2026-08-18: no production-queryable latency telemetry existed for the WhatsApp
+            # chat path at all — confirmed via investigation, the only persistence was a local,
+            # per-instance, best-effort SQLite reflection file. Reuses the existing durable
+            # sink (vula_reasoning_telemetry, migration 045) already used elsewhere, rather than
+            # building new infrastructure — this is what makes "how slow is DIGG's chat really"
+            # answerable going forward instead of guessed at.
+            try:
+                from core.reasoning_telemetry import emit as _emit_rag
+                _emit_rag(system="vula-whatsapp-rag", task="rag_reply", tenant_id=tenant_id,
+                         outcome="ok", extra={"latency_ms": result.latency_ms,
+                                              "confidence": round(float(result.confidence or 0.0), 3),
+                                              "skill": result.skill_used})
+            except Exception:
+                pass
             return result.final_answer
     except Exception as exc:
         logger.warning("Agent runner failed for %s, falling back to RAG: %s", tenant_id, exc)

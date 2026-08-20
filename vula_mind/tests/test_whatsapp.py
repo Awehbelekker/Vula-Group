@@ -361,6 +361,34 @@ async def test_rag_reply_metadata_none_when_no_phone():
 
 
 @pytest.mark.asyncio
+async def test_rag_reply_emits_latency_telemetry():
+    """2026-08-18: no production-queryable latency telemetry existed for the WhatsApp chat path
+    at all — the only persistence was a local, per-instance, best-effort SQLite file. Reuses the
+    existing durable core.reasoning_telemetry sink instead of new infrastructure."""
+    from types import SimpleNamespace
+
+    class _FakeRunner:
+        async def run(self, **kwargs):
+            return SimpleNamespace(final_answer="ok", skill_used="reasoning",
+                                   confidence=0.62, latency_ms=1834)
+
+    with (
+        patch("core.agent_runner.get_agent_runner", return_value=_FakeRunner()),
+        patch("core.reasoning_telemetry.emit") as mock_emit,
+    ):
+        from vula.api.whatsapp import _rag_reply
+        await _rag_reply("digg-demo", "what standards apply?")
+
+    mock_emit.assert_called_once()
+    kwargs = mock_emit.call_args.kwargs
+    assert kwargs["tenant_id"] == "digg-demo"
+    assert kwargs["system"] == "vula-whatsapp-rag"
+    assert kwargs["extra"]["latency_ms"] == 1834
+    assert kwargs["extra"]["confidence"] == 0.62
+    assert kwargs["extra"]["skill"] == "reasoning"
+
+
+@pytest.mark.asyncio
 async def test_rag_reply_handles_pipeline_error():
     # Pipeline import itself raises (e.g. missing Qdrant dependency)
     import vula.ingestion.pipeline as _pip

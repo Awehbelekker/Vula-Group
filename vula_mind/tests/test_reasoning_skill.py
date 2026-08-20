@@ -177,10 +177,15 @@ async def test_low_logprob_confidence_triggers_cloud_escalation():
 
 @pytest.mark.asyncio
 async def test_no_kb_context_appends_accuracy_caveat():
-    """2026-08 accuracy audit: reasoning.py already quietly dropped confidence (0.75->0.55)
-    when nothing was retrieved, but that score never reached the WhatsApp user. It can't
-    refuse outright (it's the default fallback — must answer ordinary questions with zero
-    KB), so the fix is a visible caveat instead."""
+    """2026-08 accuracy audit: reasoning.py already quietly dropped confidence when nothing was
+    retrieved, but that score never reached the WhatsApp user. It can't refuse outright for a
+    genuinely general question (it's the default fallback — must answer ordinary questions with
+    zero KB), so the fix is a visible caveat instead. 2026-08-18: confidence lowered further
+    (0.55->0.5) as part of fixing the hardcoded-floor gap that kept escalation from ever
+    triggering — this case (a real general-knowledge question, no tenant-data markers) is
+    deliberately kept moderate rather than pushed low enough to noisily escalate every ordinary
+    question; see test_tenant_data_question_with_no_kb_declines_instead_of_guessing for the
+    actually-risky case, which now short-circuits before generation entirely."""
     async def _fake_completion(*a, **kw):
         return _Resp("Cape Town is the legislative capital of South Africa.")
 
@@ -194,7 +199,7 @@ async def test_no_kb_context_appends_accuracy_caveat():
 
     assert "⚠️" in out.answer
     assert "couldn't find a specific document" in out.answer
-    assert out.confidence == 0.55
+    assert out.confidence == 0.5
 
 
 @pytest.mark.asyncio
@@ -212,4 +217,111 @@ async def test_kb_context_present_has_no_caveat():
         out = await ReasoningSkill().run(SkillInput(question="what's the retention?", tenant_id="digg-demo"))
 
     assert "⚠️" not in out.answer
-    assert out.confidence == 0.75
+
+
+# ── 2026-08-18: real DIGG hallucination fix ─────────────────────────────────────
+# Pulled DIGG's real chat history and found a confirmed, zero-backing fabrication: "Logg as
+# expense" got "I've logged the screen bricks... for R70,400.00" with no such expense ever
+# created in commerce_expenses. reasoning.py has no tools — it can never actually log anything —
+# so a question naming an invoice/expense/BOQ/project/etc. with nothing retrieved must decline,
+# not guess.
+
+def test_verification_policy_is_adversarial():
+    """core/verification.py's adversarial checker was explicitly written anticipating this
+    skill but the one-line activation was never done — the single highest-leverage fix."""
+    assert ReasoningSkill.verification_policy == "adversarial"
+
+
+@pytest.mark.asyncio
+async def test_tenant_data_question_with_no_kb_declines_instead_of_guessing():
+    mock_completion = AsyncMock()  # must never be called
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=mock_completion),
+    ):
+        out = await ReasoningSkill().run(
+            SkillInput(question="Logg as expense", tenant_id="digg-demo"))
+
+    assert "don't want to guess" in out.answer
+    assert "R70,400" not in out.answer
+    assert out.confidence == 0.3
+    mock_completion.assert_not_awaited()  # no LLM call spent on a question we're declining
+
+
+@pytest.mark.asyncio
+async def test_tenant_data_markers_cover_the_real_confirmed_bug_phrasing():
+    """The exact real-world phrasing that produced the fabricated R70,400 claim."""
+    from core.skills.reasoning import _looks_like_tenant_data_question
+    assert _looks_like_tenant_data_question("Logg as expense") is True
+    assert _looks_like_tenant_data_question(
+        "On hPC project I need to order screen bricks, check the BOQ") is True
+
+
+@pytest.mark.asyncio
+async def test_genuine_general_question_still_answers_normally():
+    """Regression guard: a real general-knowledge question (no tenant-data markers) must still
+    reach the LLM and answer, not get swept into the decline path."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("The maximum travel distance is 45m per SANS 10400-T.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ReasoningSkill().run(SkillInput(
+            question="What is the maximum distance of escape for a hotel corridor",
+            tenant_id="digg-demo"))
+
+    assert "45m" in out.answer
+    assert out.confidence == 0.5
+
+
+@pytest.mark.asyncio
+async def test_local_timeout_escalates_to_cloud():
+    import asyncio as _asyncio
+
+    call_count = {"n": 0}
+
+    async def _slow_then_fast(*a, **kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _asyncio.TimeoutError()
+        return _Resp("Cloud answer.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        patch("core.llm_router.escalate_to_cloud",
+              return_value=("cloud/model", "key", "https://cloud")),
+        patch("asyncio.wait_for", side_effect=_slow_then_fast),
+    ):
+        out = await ReasoningSkill().run(SkillInput(
+            question="What is the maximum distance of escape", tenant_id="digg-demo"))
+
+    assert out.answer.startswith("Cloud answer.")
+    assert call_count["n"] == 2  # timed out once, then the cloud retry succeeded
+
+
+@pytest.mark.asyncio
+async def test_reasoning_emits_latency_telemetry():
+    async def _fake_completion(*a, **kw):
+        return _Resp("An answer.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        patch("core.reasoning_telemetry.emit") as mock_emit,
+    ):
+        await ReasoningSkill().run(SkillInput(
+            question="What is the maximum distance of escape", tenant_id="digg-demo"))
+
+    mock_emit.assert_called_once()
+    kwargs = mock_emit.call_args.kwargs
+    assert kwargs["tenant_id"] == "digg-demo"
+    assert kwargs["system"] == "vula-reasoning"
+    assert "latency_ms" in kwargs["extra"]
