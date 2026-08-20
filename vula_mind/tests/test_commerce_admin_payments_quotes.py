@@ -67,10 +67,24 @@ async def test_record_payment_readback_confirmed(skill, emits, monkeypatch):
         return [{"amount_cents": 5000}]
     monkeypatch.setattr(ca.service, "list_invoice_payments", list_invoice_payments)
 
-    res = await skill._record_payment(TID, {"invoice_number": "INV-001", "amount_rands": 50})
+    res = await skill._record_payment(TID, {"invoice_number": "INV-001", "amount_rands": 50, "confirm": True})
     assert res.get("verified") is True
     assert res["new_status"] == "part_paid"
     assert _gate_events(emits)[0]["outcome"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_record_payment_without_confirm_returns_preview_and_does_not_write(skill, monkeypatch):
+    monkeypatch.setattr(ca.service, "_client", lambda: _Q(
+        [{"id": "i1", "invoice_number": "INV-001", "total_paid_cents": 0}]))
+    called = {}
+    async def record_invoice_payment(tid, invoice_id, cents, method, note):
+        called["yes"] = True
+        return {"status": "part_paid", "balance_due_cents": 5000}
+    monkeypatch.setattr(ca.service, "record_invoice_payment", record_invoice_payment)
+    res = await skill._record_payment(TID, {"invoice_number": "INV-001", "amount_rands": 50})
+    assert res.get("preview") is True
+    assert "yes" not in called
 
 
 @pytest.mark.asyncio
@@ -86,7 +100,7 @@ async def test_record_payment_readback_mismatch(skill, emits, monkeypatch):
         return []  # nothing actually persisted
     monkeypatch.setattr(ca.service, "list_invoice_payments", list_invoice_payments)
 
-    res = await skill._record_payment(TID, {"invoice_number": "INV-001", "amount_rands": 50})
+    res = await skill._record_payment(TID, {"invoice_number": "INV-001", "amount_rands": 50, "confirm": True})
     assert "error" in res and "Not confirmed" in res["error"]
     assert _gate_events(emits)[0]["outcome"] == "mismatch"
 
@@ -99,7 +113,7 @@ async def test_record_payment_propagates_value_error(skill, monkeypatch):
         raise ValueError("invoice is already paid")
     monkeypatch.setattr(ca.service, "record_invoice_payment", record_invoice_payment)
 
-    res = await skill._record_payment(TID, {"invoice_number": "INV-001", "amount_rands": 50})
+    res = await skill._record_payment(TID, {"invoice_number": "INV-001", "amount_rands": 50, "confirm": True})
     assert res == {"error": "invoice is already paid"}
 
 
@@ -284,9 +298,21 @@ async def test_create_discount_code_percent_readback_confirmed(skill, emits, mon
     monkeypatch.setattr(ca.service, "create_discount_code", create_discount_code)
     monkeypatch.setattr(ca.service, "list_discount_codes", list_discount_codes)
 
-    res = await skill._create_discount_code(TID, {"code": "weekend10", "discount_type": "percent", "value": 10})
+    res = await skill._create_discount_code(TID, {"code": "weekend10", "discount_type": "percent", "value": 10, "confirm": True})
     assert res.get("verified") is True
     assert _gate_events(emits)[0]["outcome"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_create_discount_code_without_confirm_returns_preview_and_does_not_write(skill, monkeypatch):
+    called = {}
+    async def create_discount_code(tid, data):
+        called["yes"] = True
+        return {"code": "WEEKEND10", "type": "percent"}
+    monkeypatch.setattr(ca.service, "create_discount_code", create_discount_code)
+    res = await skill._create_discount_code(TID, {"code": "weekend10", "discount_type": "percent", "value": 10})
+    assert res.get("preview") is True
+    assert "yes" not in called
 
 
 @pytest.mark.asyncio
@@ -299,7 +325,7 @@ async def test_create_discount_code_fixed_converts_rands_to_cents(skill, monkeyp
     monkeypatch.setattr(ca.service, "create_discount_code", create_discount_code)
     monkeypatch.setattr(ca.service, "list_discount_codes", list_discount_codes)
 
-    res = await skill._create_discount_code(TID, {"code": "SAVE50", "discount_type": "fixed", "value": 50})
+    res = await skill._create_discount_code(TID, {"code": "SAVE50", "discount_type": "fixed", "value": 50, "confirm": True})
     assert res["created"] is True
 
 
@@ -308,7 +334,7 @@ async def test_create_discount_code_duplicate(skill, monkeypatch):
     async def create_discount_code(tid, data):
         raise Exception("duplicate key value violates unique constraint idx_discount_codes_tenant_code")
     monkeypatch.setattr(ca.service, "create_discount_code", create_discount_code)
-    res = await skill._create_discount_code(TID, {"code": "WEEKEND10", "discount_type": "percent", "value": 10})
+    res = await skill._create_discount_code(TID, {"code": "WEEKEND10", "discount_type": "percent", "value": 10, "confirm": True})
     assert "already exists" in res["error"]
 
 
@@ -332,7 +358,7 @@ async def test_update_discount_code_deactivate(skill, monkeypatch):
     monkeypatch.setattr(ca.service, "list_discount_codes", list_discount_codes)
     monkeypatch.setattr(ca.service, "update_discount_code", update_discount_code)
 
-    res = await skill._update_discount_code(TID, {"code": "weekend10", "active": False})
+    res = await skill._update_discount_code(TID, {"code": "weekend10", "active": False, "confirm": True})
     assert res == {"updated": "WEEKEND10", "active": False}
     assert updated == {"id": "d1", "patch": {"active": False}}
 
@@ -347,6 +373,6 @@ async def test_delete_discount_code(skill, monkeypatch):
     monkeypatch.setattr(ca.service, "list_discount_codes", list_discount_codes)
     monkeypatch.setattr(ca.service, "delete_discount_code", delete_discount_code)
 
-    res = await skill._delete_discount_code(TID, "weekend10")
+    res = await skill._delete_discount_code(TID, "weekend10", confirm=True)
     assert res == {"deleted": "WEEKEND10"}
     assert deleted == {"id": "d1"}

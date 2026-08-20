@@ -93,9 +93,12 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "update_stock",
-        "description": "Set a product's stock quantity by name or slug.",
+        "description": "Set a product's stock quantity by name or slug. Without confirm=true, "
+                       "returns a preview (current vs. new quantity) instead of applying it — "
+                       "only pass confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
-            "product": {"type": "string"}, "quantity": {"type": "integer"}},
+            "product": {"type": "string"}, "quantity": {"type": "integer"},
+            "confirm": {"type": "boolean"}},
             "required": ["product", "quantity"]},
     }},
     {"type": "function", "function": {
@@ -196,12 +199,14 @@ INVOICE_TOOLS = [
         "description": "Record a payment received against an existing invoice, by its number "
                        "(e.g. OTH-INV-00001). Supports partial payments — status becomes "
                        "'part_paid' until the running total reaches the invoice total, then "
-                       "flips to 'paid' automatically.",
+                       "flips to 'paid' automatically. Without confirm=true, returns a preview "
+                       "instead of recording it — only pass confirm=true after the owner has "
+                       "explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "invoice_number": {"type": "string"},
             "amount_rands": {"type": "number"},
             "payment_method": {"type": "string", "description": "e.g. eft, cash, card, snapscan"},
-            "note": {"type": "string"}},
+            "note": {"type": "string"}, "confirm": {"type": "boolean"}},
             "required": ["invoice_number", "amount_rands"]}}},
     {"type": "function", "function": {
         "name": "list_quotes",
@@ -238,8 +243,11 @@ PURCHASE_ORDER_TOOLS = [
             "required": ["name"]}}},
     {"type": "function", "function": {
         "name": "delete_supplier",
-        "description": "Remove a supplier by name.",
-        "parameters": {"type": "object", "properties": {"name": {"type": "string"}},
+        "description": "Remove a supplier by name. Without confirm=true, returns a preview "
+                       "instead of deleting — only pass confirm=true after the owner has "
+                       "explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {"name": {"type": "string"},
+                       "confirm": {"type": "boolean"}},
                        "required": ["name"]}}},
     {"type": "function", "function": {
         "name": "reorder_suggestions",
@@ -248,13 +256,15 @@ PURCHASE_ORDER_TOOLS = [
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "create_purchase_order",
-        "description": "Create a draft purchase order for a supplier with line items.",
+        "description": "Create a draft purchase order for a supplier with line items. Without "
+                       "confirm=true, returns a preview instead of creating it — only pass "
+                       "confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "supplier_name": {"type": "string"},
             "items": {"type": "array", "items": {"type": "object", "properties": {
                 "name": {"type": "string"}, "quantity": {"type": "number"},
                 "unit_cost_rands": {"type": "number"}}}},
-            "notes": {"type": "string"}},
+            "notes": {"type": "string"}, "confirm": {"type": "boolean"}},
             "required": ["supplier_name", "items"]}}},
     {"type": "function", "function": {
         "name": "list_purchase_orders",
@@ -264,18 +274,24 @@ PURCHASE_ORDER_TOOLS = [
         "name": "update_po_status",
         "description": "Change a purchase order's status by its short reference (first 8 "
                        "characters of its id, as shown by list_purchase_orders). Marking it "
-                       "'received' bumps real stock quantities for every line item.",
+                       "'received' bumps real stock quantities for every line item. Without "
+                       "confirm=true, returns a preview instead of applying it — only pass "
+                       "confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "po_ref": {"type": "string"},
-            "status": {"type": "string", "enum": ["draft", "sent", "received", "cancelled"]}},
+            "status": {"type": "string", "enum": ["draft", "sent", "received", "cancelled"]},
+            "confirm": {"type": "boolean"}},
             "required": ["po_ref", "status"]}}},
     {"type": "function", "function": {
         "name": "send_purchase_order",
         "description": "Actually dispatch a draft purchase order to its supplier by email "
-                       "and/or WhatsApp, by its short reference.",
+                       "and/or WhatsApp, by its short reference — commits real spend. Without "
+                       "confirm=true, returns a preview instead of sending — only pass "
+                       "confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "po_ref": {"type": "string"},
-            "channel": {"type": "string", "enum": ["email", "whatsapp", "both"]}},
+            "channel": {"type": "string", "enum": ["email", "whatsapp", "both"]},
+            "confirm": {"type": "boolean"}},
             "required": ["po_ref"]}}},
 ]
 DISCOUNT_TOOLS = [
@@ -285,26 +301,33 @@ DISCOUNT_TOOLS = [
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "create_discount_code",
-        "description": "Create a redeemable discount code for customers.",
+        "description": "Create a redeemable discount code for customers. Without confirm=true, "
+                       "returns a preview instead of creating it — only pass confirm=true "
+                       "after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "code": {"type": "string", "description": "e.g. WEEKEND10"},
             "discount_type": {"type": "string", "enum": ["percent", "fixed", "free_shipping"]},
             "value": {"type": "number", "description": "Percentage number (e.g. 10 for 10%) "
                       "for type=percent, or amount in Rands for type=fixed. Ignored for free_shipping."},
             "min_order_rands": {"type": "number"},
-            "usage_limit": {"type": "integer"}},
+            "usage_limit": {"type": "integer"}, "confirm": {"type": "boolean"}},
             "required": ["code", "discount_type"]}}},
     {"type": "function", "function": {
         "name": "update_discount_code",
-        "description": "Change an existing discount code's active state or other fields, by its code.",
+        "description": "Change an existing discount code's active state or other fields, by "
+                       "its code. Without confirm=true, returns a preview instead of applying "
+                       "it — only pass confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "code": {"type": "string"}, "active": {"type": "boolean"},
-            "usage_limit": {"type": "integer"}},
+            "usage_limit": {"type": "integer"}, "confirm": {"type": "boolean"}},
             "required": ["code"]}}},
     {"type": "function", "function": {
         "name": "delete_discount_code",
-        "description": "Delete a discount code by its code.",
-        "parameters": {"type": "object", "properties": {"code": {"type": "string"}},
+        "description": "Delete a discount code by its code. Without confirm=true, returns a "
+                       "preview instead of deleting — only pass confirm=true after the owner "
+                       "has explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {"code": {"type": "string"},
+                       "confirm": {"type": "boolean"}},
                        "required": ["code"]}}},
 ]
 PRODUCT_TOOLS = [
@@ -341,8 +364,11 @@ BOOKING_TOOLS = [
             "required": ["start", "customer_name"]}}},
     {"type": "function", "function": {
         "name": "cancel_booking",
-        "description": "Cancel an appointment by its id.",
-        "parameters": {"type": "object", "properties": {"booking_id": {"type": "string"}}, "required": ["booking_id"]}}},
+        "description": "Cancel an appointment by its id. Without confirm=true, returns a "
+                       "preview instead of cancelling — only pass confirm=true after the owner "
+                       "has explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {"booking_id": {"type": "string"},
+                       "confirm": {"type": "boolean"}}, "required": ["booking_id"]}}},
 ]
 MARKETING_TOOLS = [
     {"type": "function", "function": {
@@ -822,7 +848,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))
             if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""))
             if name == "stock_status":       return await self._stock_status(tid, bool(args.get("low_only")))
-            if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0))
+            if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
@@ -838,23 +864,23 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_quote_status": return await self._update_quote_status(tid, args.get("quote_number", ""), args.get("status", ""))
             if name == "list_suppliers":     return await self._list_suppliers(tid)
             if name == "upsert_supplier":    return await self._upsert_supplier(tid, args)
-            if name == "delete_supplier":    return await self._delete_supplier(tid, args.get("name", ""))
+            if name == "delete_supplier":    return await self._delete_supplier(tid, args.get("name", ""), bool(args.get("confirm")))
             if name == "reorder_suggestions": return await self._reorder_suggestions(tid)
             if name == "create_purchase_order": return await self._create_purchase_order(tid, args)
             if name == "list_purchase_orders": return await self._list_purchase_orders(tid, args.get("status"))
-            if name == "update_po_status":   return await self._update_po_status(tid, args.get("po_ref", ""), args.get("status", ""))
-            if name == "send_purchase_order": return await self._send_purchase_order(tid, args.get("po_ref", ""), args.get("channel", "email"))
+            if name == "update_po_status":   return await self._update_po_status(tid, args.get("po_ref", ""), args.get("status", ""), bool(args.get("confirm")))
+            if name == "send_purchase_order": return await self._send_purchase_order(tid, args.get("po_ref", ""), args.get("channel", "email"), bool(args.get("confirm")))
             if name == "create_manual_order": return await self._create_manual_order(tid, args)
             if name == "list_discount_codes": return await self._list_discount_codes(tid)
             if name == "create_discount_code": return await self._create_discount_code(tid, args)
             if name == "update_discount_code": return await self._update_discount_code(tid, args)
-            if name == "delete_discount_code": return await self._delete_discount_code(tid, args.get("code", ""))
+            if name == "delete_discount_code": return await self._delete_discount_code(tid, args.get("code", ""), bool(args.get("confirm")))
             if name == "create_product":     return await self._create_product(tid, args)
             if name == "update_product":     return await self._update_product(tid, args)
             if name == "booking_availability": return await self._booking_availability(tid, args.get("date", ""))
             if name == "list_bookings":      return await self._list_bookings(tid, args.get("status"))
             if name == "create_booking":     return await self._create_booking(tid, args)
-            if name == "cancel_booking":     return await self._cancel_booking(tid, args.get("booking_id", ""))
+            if name == "cancel_booking":     return await self._cancel_booking(tid, args.get("booking_id", ""), bool(args.get("confirm")))
             if name == "generate_marketing": return await self._generate_marketing(tid, args)
             if name == "create_subscription": return await self._create_subscription(tid, args)
             if name == "list_subscriptions": return await self._list_subscriptions(tid, args.get("status"))
@@ -941,7 +967,7 @@ class CommerceAdminSkill(BaseSkill):
             rows.append({"product": p["name"], "qty": qty, "in_stock": p.get("in_stock")})
         return rows or {"message": "All products well stocked." if low_only else "No products."}
 
-    async def _update_stock(self, tid: str, product_name: str, quantity: int) -> Dict[str, Any]:
+    async def _update_stock(self, tid: str, product_name: str, quantity: int, confirm: bool = False) -> Dict[str, Any]:
         name = (product_name or "").strip()
         prod = None
         if re.match(r"^[a-z0-9-]+$", name):
@@ -951,6 +977,10 @@ class CommerceAdminSkill(BaseSkill):
             prod = next((p for p in candidates if name.lower() in p["name"].lower()), None)
         if not prod:
             return {"error": f"No product matching '{name}'."}
+        if not confirm:
+            return {"preview": True, "product": prod["name"],
+                    "current_stock": prod.get("stock_quantity"), "new_stock": int(quantity),
+                    "message": "Confirm to apply (call again with confirm=true)."}
         await service.update_product(tid, prod["id"], {"stock_quantity": int(quantity), "in_stock": int(quantity) > 0})
         result = {"updated": prod["name"], "stock_quantity": int(quantity)}
         if settings.readback_verify_enabled:
@@ -1148,6 +1178,9 @@ class CommerceAdminSkill(BaseSkill):
         cents = int(round(float(args.get("amount_rands") or 0) * 100))
         if cents <= 0:
             return {"error": "amount_rands must be positive."}
+        if not args.get("confirm"):
+            return {"preview": True, "invoice_number": num, "amount": self._rands(cents),
+                    "message": "Confirm to record this payment (call again with confirm=true)."}
         try:
             updated = await service.record_invoice_payment(
                 tid, inv["id"], cents, args.get("payment_method"), args.get("note"))
@@ -1231,12 +1264,15 @@ class CommerceAdminSkill(BaseSkill):
         s = await service.upsert_supplier(tid, data)
         return {"saved": s.get("name")}
 
-    async def _delete_supplier(self, tid: str, name: str) -> Dict[str, Any]:
+    async def _delete_supplier(self, tid: str, name: str, confirm: bool = False) -> Dict[str, Any]:
         name = (name or "").strip().lower()
         suppliers = await service.list_suppliers(tid)
         s = next((x for x in suppliers if name and name in (x.get("name") or "").lower()), None)
         if not s:
             return {"error": f"No supplier matching '{name}'."}
+        if not confirm:
+            return {"preview": True, "supplier": s.get("name"),
+                    "message": "Confirm to delete this supplier (call again with confirm=true)."}
         await service.delete_supplier(tid, s["id"])
         return {"deleted": s.get("name")}
 
@@ -1272,6 +1308,11 @@ class CommerceAdminSkill(BaseSkill):
                  for it in (args.get("items") or []) if isinstance(it, dict) and it.get("name")]
         if not items:
             return {"error": "Need at least one item with a name and quantity."}
+        if not args.get("confirm"):
+            total = sum(it["quantity"] * it["unit_cost_cents"] for it in items)
+            return {"preview": True, "supplier": supplier["name"], "items": items,
+                    "total": self._rands(total),
+                    "message": "Confirm to create this draft PO (call again with confirm=true)."}
         from vula.api.commerce import admin_create_purchase_order
         po = await admin_create_purchase_order(tid, {
             "supplier_id": supplier["id"], "supplier_name": supplier["name"],
@@ -1300,13 +1341,18 @@ class CommerceAdminSkill(BaseSkill):
              "status": p.get("status"), "total": self._rands(p.get("total_cents"))}
             for p in pos[:15]]}
 
-    async def _update_po_status(self, tid: str, po_ref: str, status: str) -> Dict[str, Any]:
+    async def _update_po_status(self, tid: str, po_ref: str, status: str, confirm: bool = False) -> Dict[str, Any]:
         valid = {"draft", "sent", "received", "cancelled"}
         if status not in valid:
             return {"error": f"status must be one of {sorted(valid)}"}
         po = await self._resolve_po(tid, po_ref)
         if not po:
             return {"error": f"No purchase order matching '{po_ref}' — use list_purchase_orders to find its reference."}
+        if not confirm:
+            return {"preview": True, "po_ref": po_ref, "current_status": po.get("status"),
+                    "new_status": status,
+                    "message": "Confirm to apply (call again with confirm=true)."
+                               + (" Marking 'received' will increase real stock." if status == "received" else "")}
         from vula.api.commerce import admin_update_po_status
         await admin_update_po_status(tid, po["id"], {"status": status})
         result = {"updated": str(po["id"])[:8], "new_status": status}
@@ -1322,10 +1368,15 @@ class CommerceAdminSkill(BaseSkill):
             result["verified"] = True
         return result
 
-    async def _send_purchase_order(self, tid: str, po_ref: str, channel: str) -> Dict[str, Any]:
+    async def _send_purchase_order(self, tid: str, po_ref: str, channel: str, confirm: bool = False) -> Dict[str, Any]:
         po = await self._resolve_po(tid, po_ref)
         if not po:
             return {"error": f"No purchase order matching '{po_ref}' — use list_purchase_orders to find its reference."}
+        if not confirm:
+            return {"preview": True, "po_ref": po_ref, "supplier": po.get("supplier_name"),
+                    "total": self._rands(po.get("total_cents")), "via": channel or "email",
+                    "message": "This commits real spend with the supplier. Confirm to send "
+                               "(call again with confirm=true)."}
         from vula.commerce import purchase_orders
         res = await purchase_orders.send_purchase_order(tid, po["id"], channel or "email")
         if res.get("error"):
@@ -1404,6 +1455,9 @@ class CommerceAdminSkill(BaseSkill):
             data["min_order_cents"] = int(round(float(args["min_order_rands"]) * 100))
         if args.get("usage_limit") is not None:
             data["usage_limit"] = int(args["usage_limit"])
+        if not args.get("confirm"):
+            return {"preview": True, "code": code, "discount_type": dtype, "value": data.get("value"),
+                    "message": "Confirm to create this code (call again with confirm=true)."}
         try:
             c = await service.create_discount_code(tid, data)
         except Exception as exc:
@@ -1436,15 +1490,21 @@ class CommerceAdminSkill(BaseSkill):
             patch["usage_limit"] = int(args["usage_limit"])
         if not patch:
             return {"error": "Nothing to change (active / usage_limit)."}
+        if not args.get("confirm"):
+            return {"preview": True, "code": code, "changes": patch,
+                    "message": "Confirm to apply (call again with confirm=true)."}
         await service.update_discount_code(tid, row["id"], patch)
         return {"updated": code, **patch}
 
-    async def _delete_discount_code(self, tid: str, code: str) -> Dict[str, Any]:
+    async def _delete_discount_code(self, tid: str, code: str, confirm: bool = False) -> Dict[str, Any]:
         code = (code or "").strip().upper()
         codes = await service.list_discount_codes(tid)
         row = next((x for x in codes if (x.get("code") or "").upper() == code), None)
         if not row:
             return {"error": f"No discount code '{code}' found."}
+        if not confirm:
+            return {"preview": True, "code": code,
+                    "message": "Confirm to delete this code (call again with confirm=true)."}
         await service.delete_discount_code(tid, row["id"])
         return {"deleted": code}
 
@@ -1513,10 +1573,13 @@ class CommerceAdminSkill(BaseSkill):
             return res
         return {"booked": True, "when": res["booking"].get("start_local"), "service": res["booking"].get("service_name")}
 
-    async def _cancel_booking(self, tid: str, booking_id: str) -> Dict[str, Any]:
+    async def _cancel_booking(self, tid: str, booking_id: str, confirm: bool = False) -> Dict[str, Any]:
         from vula.bookings import service as bk
         if not booking_id:
             return {"error": "Need the booking id (use list_bookings to find it)."}
+        if not confirm:
+            return {"preview": True, "booking_id": booking_id,
+                    "message": "Confirm to cancel this booking (call again with confirm=true)."}
         await bk.set_status(tid, booking_id, "cancelled")
         return {"cancelled": True, "booking_id": booking_id}
 

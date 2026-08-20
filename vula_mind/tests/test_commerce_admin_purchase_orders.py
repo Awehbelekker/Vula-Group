@@ -78,7 +78,7 @@ async def test_delete_supplier(skill, monkeypatch):
         deleted["id"] = sid
     monkeypatch.setattr(ca.service, "list_suppliers", list_suppliers)
     monkeypatch.setattr(ca.service, "delete_supplier", delete_supplier)
-    res = await skill._delete_supplier(TID, "fresh fish")
+    res = await skill._delete_supplier(TID, "fresh fish", confirm=True)
     assert res == {"deleted": "Fresh Fish Co"}
     assert deleted["id"] == "s1"
 
@@ -144,7 +144,8 @@ async def test_create_purchase_order_no_supplier_match(skill, monkeypatch):
 async def test_create_purchase_order_readback_confirmed(skill, emits, monkeypatch):
     _po_create_setup(monkeypatch, [{"id": "po123456-abcd", "status": "draft"}])
     res = await skill._create_purchase_order(TID, {
-        "supplier_name": "fresh fish", "items": [{"name": "Hake", "quantity": 10, "unit_cost_rands": 50}]})
+        "supplier_name": "fresh fish", "items": [{"name": "Hake", "quantity": 10, "unit_cost_rands": 50}],
+        "confirm": True})
     assert res.get("verified") is True
     assert res["po_ref"] == "po123456"
     assert _gate_events(emits)[0]["outcome"] == "confirmed"
@@ -154,9 +155,27 @@ async def test_create_purchase_order_readback_confirmed(skill, emits, monkeypatc
 async def test_create_purchase_order_readback_missing(skill, emits, monkeypatch):
     _po_create_setup(monkeypatch, [])  # nothing found on re-read
     res = await skill._create_purchase_order(TID, {
-        "supplier_name": "fresh fish", "items": [{"name": "Hake", "quantity": 10, "unit_cost_rands": 50}]})
+        "supplier_name": "fresh fish", "items": [{"name": "Hake", "quantity": 10, "unit_cost_rands": 50}],
+        "confirm": True})
     assert "error" in res and "Not confirmed" in res["error"]
     assert _gate_events(emits)[0]["outcome"] == "mismatch"
+
+
+@pytest.mark.asyncio
+async def test_create_purchase_order_without_confirm_returns_preview_and_does_not_write(skill, monkeypatch):
+    called = {}
+    async def list_suppliers(tid):
+        return [{"id": "s1", "name": "Fresh Fish Co"}]
+    import vula.api.commerce as api_commerce
+    async def admin_create_purchase_order(tid, body):
+        called["yes"] = True
+        return {"id": "po123456-abcd", "supplier_name": body["supplier_name"], "total_cents": 5000}
+    monkeypatch.setattr(ca.service, "list_suppliers", list_suppliers)
+    monkeypatch.setattr(api_commerce, "admin_create_purchase_order", admin_create_purchase_order)
+    res = await skill._create_purchase_order(TID, {
+        "supplier_name": "fresh fish", "items": [{"name": "Hake", "quantity": 10, "unit_cost_rands": 50}]})
+    assert res.get("preview") is True
+    assert "yes" not in called
 
 
 # ── update_po_status ───────────────────────────────────────────────────────
@@ -203,9 +222,22 @@ async def test_update_po_status_readback_confirmed(skill, emits, monkeypatch):
         [{"id": "po123456-abcd", "status": "draft"}],   # initial resolve
         [{"id": "po123456-abcd", "status": "sent"}],    # readback after update
     ])
-    res = await skill._update_po_status(TID, "po123456", "sent")
+    res = await skill._update_po_status(TID, "po123456", "sent", confirm=True)
     assert res.get("verified") is True
     assert _gate_events(emits)[0]["outcome"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_update_po_status_without_confirm_returns_preview_and_does_not_write(skill, monkeypatch):
+    _po_status_setup(monkeypatch, [[{"id": "po123456-abcd", "status": "draft"}]])
+    called = {}
+    import vula.api.commerce as api_commerce
+    async def admin_update_po_status(tid, po_id, body):
+        called["yes"] = True
+    monkeypatch.setattr(api_commerce, "admin_update_po_status", admin_update_po_status)
+    res = await skill._update_po_status(TID, "po123456", "sent")
+    assert res.get("preview") is True
+    assert "yes" not in called
 
 
 @pytest.mark.asyncio
@@ -214,7 +246,7 @@ async def test_update_po_status_readback_mismatch(skill, emits, monkeypatch):
         [{"id": "po123456-abcd", "status": "draft"}],   # initial resolve
         [{"id": "po123456-abcd", "status": "draft"}],   # readback shows unchanged
     ])
-    res = await skill._update_po_status(TID, "po123456", "sent")
+    res = await skill._update_po_status(TID, "po123456", "sent", confirm=True)
     assert "error" in res and "Not confirmed" in res["error"]
     assert _gate_events(emits)[0]["outcome"] == "mismatch"
 
@@ -251,8 +283,30 @@ async def test_send_purchase_order_success(skill, monkeypatch):
         return {"ok": True, "sent_via": ["email"]}
     monkeypatch.setattr(po_mod, "send_purchase_order", send_purchase_order)
 
-    res = await skill._send_purchase_order(TID, "po123456", "email")
+    res = await skill._send_purchase_order(TID, "po123456", "email", confirm=True)
     assert res == {"sent": True, "po_ref": "po123456", "via": ["email"], "warnings": None}
+
+
+@pytest.mark.asyncio
+async def test_send_purchase_order_without_confirm_returns_preview_and_does_not_send(skill, monkeypatch):
+    class _Q:
+        def table(self, *a): return self
+        def select(self, *a): return self
+        def eq(self, *a): return self
+        def order(self, *a, **kw): return self
+        def limit(self, *a): return self
+        def execute(self): return type("R", (), {"data": [{"id": "po123456-abcd", "status": "draft",
+                                                              "supplier_name": "Fresh Fish Co", "total_cents": 5000}]})()
+    monkeypatch.setattr(ca.service, "_client", lambda: _Q())
+    from vula.commerce import purchase_orders as po_mod
+    called = {}
+    async def send_purchase_order(tid, po_id, channel):
+        called["yes"] = True
+        return {"ok": True, "sent_via": ["email"]}
+    monkeypatch.setattr(po_mod, "send_purchase_order", send_purchase_order)
+    res = await skill._send_purchase_order(TID, "po123456", "email")
+    assert res.get("preview") is True
+    assert "yes" not in called
 
 
 # ── keyword tool subsetting (_tools_for / _match_groups) ─────────────────

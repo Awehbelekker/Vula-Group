@@ -93,7 +93,7 @@ def _stock_service(monkeypatch, readback_qty):
 @pytest.mark.asyncio
 async def test_update_stock_readback_confirmed(skill, emits, monkeypatch):
     _stock_service(monkeypatch, readback_qty=20)
-    res = await skill._update_stock(TID, "hake", 20)
+    res = await skill._update_stock(TID, "hake", 20, confirm=True)
     assert res.get("verified") is True and res["stock_quantity"] == 20
     assert _gate_events(emits)[0]["outcome"] == "confirmed"
 
@@ -101,10 +101,51 @@ async def test_update_stock_readback_confirmed(skill, emits, monkeypatch):
 @pytest.mark.asyncio
 async def test_update_stock_readback_mismatch(skill, emits, monkeypatch):
     _stock_service(monkeypatch, readback_qty=5)
-    res = await skill._update_stock(TID, "hake", 20)
+    res = await skill._update_stock(TID, "hake", 20, confirm=True)
     assert "error" in res and "Not confirmed" in res["error"]
     e = _gate_events(emits)[0]
     assert e["task"] == "update_stock" and e["outcome"] == "mismatch"
+
+
+@pytest.mark.asyncio
+async def test_update_stock_without_confirm_returns_preview_and_does_not_write(skill, emits, monkeypatch):
+    _stock_service(monkeypatch, readback_qty=20)
+    written = {}
+    async def update_product(tid, pid, patch):
+        written["called"] = True
+    monkeypatch.setattr(ca.service, "update_product", update_product)
+    res = await skill._update_stock(TID, "hake", 20)
+    assert res.get("preview") is True
+    assert "called" not in written
+
+
+# ── cancel_booking confirm gate ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_cancel_booking_without_confirm_returns_preview_and_does_not_write(monkeypatch):
+    from vula.bookings import service as bk
+    called = {}
+    async def set_status(tid, booking_id, status):
+        called["yes"] = True
+    monkeypatch.setattr(bk, "set_status", set_status)
+    skill = CommerceAdminSkill()
+    res = await skill._cancel_booking(TID, "b1")
+    assert res.get("preview") is True
+    assert "yes" not in called
+
+
+@pytest.mark.asyncio
+async def test_cancel_booking_confirmed_applies(monkeypatch):
+    from vula.bookings import service as bk
+    called = {}
+    async def set_status(tid, booking_id, status):
+        called["booking_id"] = booking_id
+        called["status"] = status
+    monkeypatch.setattr(bk, "set_status", set_status)
+    skill = CommerceAdminSkill()
+    res = await skill._cancel_booking(TID, "b1", confirm=True)
+    assert res == {"cancelled": True, "booking_id": "b1"}
+    assert called == {"booking_id": "b1", "status": "cancelled"}
 
 
 # ── create_invoice ────────────────────────────────────────────────────────────
