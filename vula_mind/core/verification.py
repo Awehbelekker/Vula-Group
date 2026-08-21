@@ -136,8 +136,13 @@ def register_outcome(skill_name: str, tenant_id: str, verification: Dict[str, An
 
 
 # Caveat mirrors calculations.py's unanchored warning — same voice, same confidence floor.
+# 2026-08-21: the plain warning was cosmetic — a real transcript showed the owner correcting a
+# flagged answer twice and getting two more wrong answers in a row, because "double-check" gave
+# them nothing concrete to act on. Naming what to send back gives the next turn something to
+# actually use (e.g. commerce_admin's find_document can act on an invoice number).
 _CAVEAT = ("\n\n⚠️ Please double-check this answer — an automated review flagged possible "
-           "issues with it.")
+           "issues with it. If something's off, tell me specifically what's wrong (e.g. the "
+           "right invoice/order number or detail) and I'll fix it.")
 _DEFECT_CONFIDENCE = 0.45
 
 

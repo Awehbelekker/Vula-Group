@@ -107,6 +107,26 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {}},
     }},
     {"type": "function", "function": {
+        "name": "find_document",
+        "description": "Search filed documents (invoices, quotes, proof-of-payment, BOQs, "
+                       "receipts, etc.) by what they're about — a supplier/customer name, an "
+                       "invoice number, an amount, what it was for. Use this whenever the owner "
+                       "refers to a specific document/invoice/payment they've already sent "
+                       "('that invoice', 'the proof of payment I sent you', 'this payment on "
+                       "the bank statement') and you need to identify exactly which one before "
+                       "acting or answering — never guess by reaching for an unrelated tool "
+                       "(e.g. bookings, meetings, finance summary) just because nothing else "
+                       "matches. If no result matches well, say so and ask the owner for the "
+                       "invoice/document number, or to resend it — don't answer about something "
+                       "else instead.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Free text: supplier/customer name, "
+                      "invoice number, amount, or what the document was for."},
+            "category": {"type": "string", "description": "Optional filter, e.g. 'Invoice', "
+                        "'Proof of Payment', 'Quote / Estimate', 'Bill of Quantities (BOQ)'."}},
+            "required": ["query"]},
+    }},
+    {"type": "function", "function": {
         "name": "add_expense",
         "description": "Record a business expense in Rands.",
         "parameters": {"type": "object", "properties": {
@@ -169,6 +189,14 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "mark_paid": {"type": "boolean"}},
             "required": ["customer_name", "customer_phone", "items"]},
     }},
+]
+
+# ── Module-gated tools (added to the base set only for tenants with that module) ──
+# create_automation_rule is gated behind the "automations" module (same module the dashboard's
+# Automations tab checks) rather than being always-on — its default-food/retail scoping matches
+# the trigger vocabulary itself (order status, product stock), and a tenant without the module
+# has no dashboard tab to review/approve the pending firings this tool would create.
+AUTOMATION_TOOLS = [
     {"type": "function", "function": {
         "name": "create_automation_rule",
         "description": "Teach Vula a standing rule from a plain-language description — e.g. "
@@ -188,8 +216,6 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["description"]},
     }},
 ]
-
-# ── Module-gated tools (added to the base set only for tenants with that module) ──
 INVOICE_TOOLS = [
     {"type": "function", "function": {
         "name": "create_invoice",
@@ -570,6 +596,7 @@ _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
     ("pages", PAGE_TOOLS), ("purchase_orders", PURCHASE_ORDER_TOOLS), ("discounts", DISCOUNT_TOOLS),
+    ("automations", AUTOMATION_TOOLS),
 ]
 # Always available (universally useful, not tied to a business type): marketing copy, letter
 # drafting, and — since a sales rep's own contact book/meeting log is just as relevant to a
@@ -577,7 +604,7 @@ _GATED_GROUPS = [
 _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS
                    + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS
-                   + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS)
+                   + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS + AUTOMATION_TOOLS)
 
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
@@ -605,6 +632,7 @@ _KEYWORD_GROUPS: Dict[str, set] = {
     "pages": {"page", "website", "storefront", "section"},
     "purchase_orders": {"purchase order", "supplier", "reorder", "restock", "po "},
     "discounts": {"discount", "promo", "coupon", "voucher"},
+    "automations": {"automation", "automate", "rule", "trigger", "teach vula"},
 }
 
 
@@ -745,6 +773,13 @@ class CommerceAdminSkill(BaseSkill):
             "something, say so plainly. Use tools to read and change REAL data — never invent "
             "figures. Show money in ZAR (e.g. R1 250.00). Keep replies short and WhatsApp-friendly "
             "with the key numbers, and confirm back what you changed after any update.\n"
+            "IMPORTANT — if the owner refers to a specific document/invoice/payment they've "
+            "already sent or that's on a bank statement ('that invoice', 'the proof of payment "
+            "I sent you', 'this payment'), use find_document to identify exactly which one "
+            "BEFORE acting or answering. If it doesn't turn up a clear match, say so and ask for "
+            "the invoice/document number or for it to be resent — never answer about something "
+            "else (bookings, a meeting log, a finance summary) just because it's the "
+            "closest-sounding tool.\n"
             "IMPORTANT — confirm before acting on anything that spends money, sends messages to "
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding, or adopting a new voice/tone. Show the details and wait for a "
@@ -904,6 +939,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "stock_status":       return await self._stock_status(tid, bool(args.get("low_only")))
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
+            if name == "find_document":      return await self._find_document(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
@@ -1706,6 +1742,48 @@ class CommerceAdminSkill(BaseSkill):
         return {"count": len(rows), "subscriptions": [
             {"customer": s.get("customer_name") or s.get("customer_phone"), "cadence": s.get("cadence"),
              "next_run": s.get("next_run")} for s in rows[:15]]}
+
+    async def _find_document(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Search vula_filed_documents (invoices/quotes/proof-of-payment/BOQs/receipts) by free
+        text. 2026-08-21: added after a real transcript showed the admin loop guessing among
+        unrelated tools (bookings, log_meeting, finance_insights) three times in a row rather
+        than looking up the specific document the owner referenced — this gives the model
+        something correct to reach for instead. Mirrors vula/api/documents.py's list_filed
+        filter shape (filename/summary ilike) rather than inventing a new search path."""
+        query = (args.get("query") or "").strip()
+        if not query:
+            return {"error": "Give a few words about the document — supplier/customer name, "
+                              "invoice number, amount, or what it was for."}
+        category = (args.get("category") or "").strip()
+        # Commas/parens are PostgREST or_() filter syntax — strip them so free text (which may
+        # come straight from a WhatsApp message) can't alter the query's filter structure.
+        safe_query = re.sub(r"[,()]", " ", query).strip()[:100]
+        try:
+            q = (service._client().table("vula_filed_documents")
+                 .select("id,filename,category,summary,fields,status,created_at,customer_phone")
+                 .eq("tenant_id", tid).order("created_at", desc=True))
+            if category:
+                q = q.eq("category", category)
+            if safe_query:
+                q = q.or_(f"filename.ilike.%{safe_query}%,summary.ilike.%{safe_query}%")
+            rows = q.limit(5).execute().data or []
+        except Exception as exc:
+            logger.warning("find_document query failed: %s", exc)
+            return {"error": "Couldn't search documents right now."}
+        if not rows:
+            return {"message": f"No filed document matches '{query}'. Ask the owner for the "
+                                "invoice/document number, or to resend it — don't guess."}
+        results = []
+        for r in rows:
+            fields = r.get("fields") or {}
+            results.append({
+                "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
+                "summary": (r.get("summary") or "")[:200],
+                "amount": fields.get("amount") or fields.get("total") or fields.get("amount_rands"),
+                "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
+                "filed_at": r.get("created_at"),
+            })
+        return {"matches": results}
 
     async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
         from vula.api.commerce import _aggregate_customers, _norm_phone
