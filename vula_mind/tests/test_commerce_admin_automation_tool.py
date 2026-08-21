@@ -58,7 +58,31 @@ def test_create_automation_rule_excluded_from_sales_rep_toolset():
     assert "create_automation_rule" not in names
 
 
-def test_create_automation_rule_present_in_owner_toolset():
+def test_create_automation_rule_present_when_automations_module_enabled():
+    from unittest.mock import patch
     from core.skills.commerce_admin import _tools_for
-    names = {t["function"]["name"] for t in _tools_for(TID, role=None)}
+    with patch("vula.api.tenants.enabled_modules", return_value=["invoices", "automations"]):
+        names = {t["function"]["name"] for t in _tools_for(TID, role=None)}
+    assert "create_automation_rule" in names
+
+
+def test_create_automation_rule_hidden_when_automations_module_not_enabled():
+    """A tenant without the automations module (e.g. trades/services/health presets, which
+    don't include it by default) has no dashboard tab to review pending firings — the tool must
+    not be reachable via WhatsApp/chat either, or a rule could be created with nowhere to
+    approve/reject its matches."""
+    from unittest.mock import patch
+    from core.skills.commerce_admin import _tools_for
+    with patch("vula.api.tenants.enabled_modules", return_value=["invoices", "bookings"]):
+        names = {t["function"]["name"] for t in _tools_for(TID, role=None)}
+    assert "create_automation_rule" not in names
+
+
+def test_create_automation_rule_present_when_tenant_has_no_config_yet():
+    """No config at all → show_all behavior (matches every other gated tool group's own
+    fallback) — a brand-new tenant isn't locked out before onboarding sets real modules."""
+    from unittest.mock import patch
+    from core.skills.commerce_admin import _tools_for
+    with patch("vula.api.tenants.enabled_modules", return_value=[]):
+        names = {t["function"]["name"] for t in _tools_for(TID, role=None)}
     assert "create_automation_rule" in names
