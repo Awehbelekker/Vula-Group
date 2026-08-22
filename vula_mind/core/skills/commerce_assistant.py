@@ -973,6 +973,15 @@ class CommerceAssistantSkill(BaseSkill):
                 )
 
         # Tool budget exhausted — ask the model to summarise without more tools.
+        # See commerce_admin.py's _agent_loop for why this nudge exists (2026-08-22 real
+        # fabricated-success incident) — matters even more here since this skill talks straight
+        # to customers: a false "your order is placed" is the worst version of this bug.
+        messages.append({"role": "user", "content": (
+            "You were not able to complete this within the available attempts. Do NOT claim an "
+            "order, booking, or payment succeeded unless a tool result above actually shows "
+            "that. Tell the customer plainly what's missing or that you need to check with the "
+            "team instead."
+        )})
         resp = await litellm.acompletion(
             model=model,
             messages=messages,

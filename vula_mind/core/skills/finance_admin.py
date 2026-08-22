@@ -147,6 +147,13 @@ class FinanceAdminSkill(BaseSkill):
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
                                  "content": fence('TOOL_RESULT', json.dumps(result, default=str)[:1800])})
 
+        # See commerce_admin.py's _agent_loop for why this nudge exists (2026-08-22 real
+        # fabricated-success incident, a different skill but the same exhausted-budget shape).
+        messages.append({"role": "user", "content": (
+            "You were not able to get a clear answer within the available attempts. Do NOT "
+            "state a figure unless a tool result above actually returned it. Tell the user "
+            "plainly that you couldn't find it instead."
+        )})
         resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
             max_tokens=400, api_key=api_key, api_base=api_base)
         return (resp.choices[0].message.content or "").strip()

@@ -18,7 +18,7 @@ from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message
 from vula.email_imap import service
 from vula.email_imap.credentials import get_email_creds
 
@@ -113,6 +113,9 @@ class EmailAdminSkill(BaseSkill):
                 if inline:
                     name, args = inline
                     result = await self._dispatch(name, args, tenant_id, creds)
+                    need_info = need_info_message(result)
+                    if need_info:
+                        return need_info
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
                         f"[{name} returned]:{fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:1500])}\n"
@@ -129,9 +132,19 @@ class EmailAdminSkill(BaseSkill):
                 except Exception:
                     args = {}
                 result = await self._dispatch(tc.function.name, args, tenant_id, creds)
+                need_info = need_info_message(result)
+                if need_info:
+                    return need_info
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
                                  "content": fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:1800])})
 
+        # See commerce_admin.py's _agent_loop for why this nudge exists (2026-08-22 real
+        # fabricated-success incident) — same fix, same shared need_info_message() upstream.
+        messages.append({"role": "user", "content": (
+            "You were not able to complete this within the available attempts. Do NOT claim "
+            "an email was sent or drafted unless a tool result above actually shows that. Tell "
+            "the user plainly what's missing or what went wrong instead."
+        )})
         resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
             max_tokens=500, api_key=api_key, api_base=api_base)
         return (resp.choices[0].message.content or "").strip()

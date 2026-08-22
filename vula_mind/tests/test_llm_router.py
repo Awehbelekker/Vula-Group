@@ -257,6 +257,16 @@ def test_assess_complexity_frontier_type_and_token_cap():
         assert assess_complexity(messages=[{"role": "user", "content": "hi"}]) is None
 
 
+def test_verification_is_a_frontier_task_type():
+    # 2026-08-22: core.verification's adversarial checker (task_type="verification") was
+    # local-first and, in a real transcript, timed out at its 8s cap on every single call for
+    # one tenant's session — the whole safety net silently never ran (fails open by design).
+    # Forcing it to cloud, same as commerce_admin already does for its own tool-calling.
+    with patch("core.llm_router.settings") as s:
+        s.local_complexity_token_cap = 100
+        assert assess_complexity(task_type="verification") == "complexity:verification"
+
+
 @pytest.mark.asyncio
 async def test_complexity_routes_to_cloud_with_logged_reason():
     logged = {}

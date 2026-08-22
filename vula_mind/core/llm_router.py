@@ -37,7 +37,15 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 # Task types that genuinely need frontier (cloud) reasoning — the explicit part of the
 # requirement-(c) complexity threshold. Everything else stays local unless the token cap trips.
-_FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning", "page_copy"}
+# "verification" added 2026-08-22: a real transcript showed core.verification's adversarial
+# checker (called with task_type="verification", local-first before this fix) timing out at its
+# 8s cap on every single call for one tenant's whole session (5/5 checker_error) — the shared
+# local Ollama box was too slow under load. Fails open by design, so nothing errored — it just
+# silently never checked anything, letting a fabricated "invoice created" claim straight through
+# with no caveat. Low-volume (one short, ~300-token check per already-agentic reply) and needs
+# to be fast/reliable far more than it needs to be free — same reasoning commerce_admin already
+# applies to its own tool-calling completions.
+_FRONTIER_TASK_TYPES = {"architecture_planning", "standards_reasoning", "page_copy", "verification"}
 
 # Health-probe cache: base_url -> (checked_at_monotonic, is_up)
 _HEALTH_TTL_S = 30.0

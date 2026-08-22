@@ -32,7 +32,7 @@ from core.llm_router import (
 )
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message
 from vula.commerce import service
 
 logger = logging.getLogger(__name__)
@@ -839,6 +839,9 @@ class CommerceAdminSkill(BaseSkill):
                 if inline:
                     name, args = inline
                     result = await self._dispatch_tool(name, args, ctx)
+                    need_info = need_info_message(result)
+                    if need_info:
+                        return need_info
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content": (
                         f"[tool {name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str))}\n"
@@ -879,11 +882,27 @@ class CommerceAdminSkill(BaseSkill):
                 except (json.JSONDecodeError, TypeError):
                     args = {}
                 result = await self._dispatch_tool(tc.function.name, args, ctx)
+                need_info = need_info_message(result)
+                if need_info:
+                    return need_info
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "name": tc.function.name,
                                  "content": fence('TOOL_RESULT', json.dumps(result, default=str))})
 
         # Final pass — force a plain-language answer (no tools available now).
+        # 2026-08-22: a real transcript showed this exact call fabricate a full "I've created an
+        # invoice" narrative — plausible line items, a real-looking invoice number — after 3
+        # exhausted attempts that had ALL genuinely failed (a malformed line item kept tripping
+        # create_invoice's price gate). Nothing in this pass told it that running out of
+        # attempts isn't the same as succeeding. The _need_info_message short-circuits above
+        # remove the single most common way this happens, but this is the backstop for any
+        # other way the budget runs out.
+        messages.append({"role": "user", "content": (
+            "You were not able to complete this within the available attempts. Do NOT claim "
+            "anything was created, sent, updated, or otherwise succeeded unless a tool result "
+            "above actually shows that. Tell the owner plainly what's missing or what went "
+            "wrong instead."
+        )})
         resp = await litellm.acompletion(
             model=model, messages=messages, temperature=0.2, max_tokens=600,
             api_key=api_key, api_base=api_base,

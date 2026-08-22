@@ -179,6 +179,13 @@ class ClickUpAdminSkill(BaseSkill):
                                  "name": tc.function.name,
                                  "content": fence('TOOL_RESULT', json.dumps(result, default=str))})
 
+        # See commerce_admin.py's _agent_loop for why this nudge exists (2026-08-22 real
+        # fabricated-success incident, a different skill but the same exhausted-budget shape).
+        messages.append({"role": "user", "content": (
+            "You were not able to complete this within the available attempts. Do NOT claim a "
+            "task was created or updated unless a tool result above actually shows that. Tell "
+            "the user plainly what's missing or what went wrong instead."
+        )})
         resp = await litellm.acompletion(
             model=model, messages=messages, temperature=0.2, max_tokens=500,
             api_key=api_key, api_base=api_base,

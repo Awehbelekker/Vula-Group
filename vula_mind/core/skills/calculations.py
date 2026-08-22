@@ -202,6 +202,15 @@ class CalculationsSkill(BaseSkill):
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                     "name": tc.function.name, "content": fence('TOOL_RESULT', json.dumps(result))})
 
+        # See commerce_admin.py's _agent_loop for why this nudge exists (2026-08-22 real
+        # fabricated-success incident, a different skill but the same exhausted-budget shape).
+        # run()'s own anchor check (_verify_answer) still catches an unmatched headline number
+        # after this — this is the first line of defense, not the only one.
+        messages.append({"role": "user", "content": (
+            "You were not able to reach a verified calculation within the available attempts. "
+            "Do NOT state a final number unless it actually came from calculate() above. Tell "
+            "the user plainly what's missing instead."
+        )})
         resp = await litellm.acompletion(
             model=model, messages=messages, temperature=0.1, max_tokens=500,
             api_key=api_key, api_base=api_base)

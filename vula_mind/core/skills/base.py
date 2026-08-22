@@ -142,6 +142,25 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
     return head + "\n".join(parts)
 
 
+def need_info_message(result: Any) -> Optional[str]:
+    """If a tool result is the shared {"status": "need_info", "message": ...} shape (used by
+    commerce_admin's create_invoice, draft_admin's draft_letter, email_admin's send), return the
+    message to ask the user — else None.
+
+    2026-08-22: AGENTIC_RULES already told the model "don't retry need_info blindly, ask the
+    user" — a real transcript showed that instruction get ignored: the SAME broken tool call was
+    retried 3 times unchanged, burned the whole iteration budget, and the loop's final forced
+    text-only pass then fabricated a full success claim (a real-looking invoice number, never
+    actually created) rather than admitting nothing worked. A prompt-only instruction wasn't
+    enough — every agentic loop should call this right after dispatching a tool and return
+    immediately when it fires, rather than feeding need_info back in and hoping the model asks."""
+    if isinstance(result, dict) and result.get("status") == "need_info":
+        msg = result.get("message")
+        if msg:
+            return str(msg)
+    return None
+
+
 @dataclass
 class SkillInput:
     question: str
