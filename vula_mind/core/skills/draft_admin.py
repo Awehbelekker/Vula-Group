@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route
+from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
@@ -188,6 +188,8 @@ class DraftAdminSkill(BaseSkill):
         phone = inp.metadata.get("customer_phone") or ""
         try:
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id, phone)
+            if looks_degenerate(answer or ""):
+                answer = DEGENERATE_OUTPUT_FALLBACK
             return SkillOutput(answer=answer or "Done.", skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("draft_admin failed: %s", exc)
@@ -195,7 +197,12 @@ class DraftAdminSkill(BaseSkill):
 
     def _system(self) -> str:
         return ("You are Vula, drafting professional business letters for a South African "
-                "construction/professional-services business.\n\n" + behaviour_preamble() +
+                "construction/professional-services business.\n\n" +
+                # 2026-08-22: was calling behaviour_preamble() bare — the one tool-calling skill
+                # missing AGENTIC_RULES entirely (confirmed via a platform-wide audit), not just
+                # the guardrails added to it that day. agentic=True is free: this skill already
+                # has its own overlapping bespoke bullets below, which is harmless redundancy.
+                behaviour_preamble(agentic=True) +
                 "\n- Call draft_letter with a BRIEF that captures everything the user told you "
                 "(project, amounts, dates, scope) — the drafting model only sees what you pass in "
                 "brief/project_name/client_name, not this conversation. For a fee_proposal, also "

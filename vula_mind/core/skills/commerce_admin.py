@@ -27,7 +27,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from config import settings
-from core.llm_router import resolve_generation_route, escalate_to_cloud
+from core.llm_router import (
+    resolve_generation_route, escalate_to_cloud, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK,
+)
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
@@ -727,6 +729,10 @@ class CommerceAdminSkill(BaseSkill):
             answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx, tools)
             if not answer:
                 raise RuntimeError("empty answer from admin agent loop")
+            # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
+            # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
+            if looks_degenerate(answer):
+                answer = DEGENERATE_OUTPUT_FALLBACK
             return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("commerce_admin loop failed (%s)", exc)
@@ -1088,10 +1094,18 @@ class CommerceAdminSkill(BaseSkill):
         return result
 
     async def _outstanding_invoices(self, tid: str) -> Dict[str, Any]:
+        # 2026-08-22: was summing ALL directions — a real transcript (off-the-hook) showed this
+        # silently mixing inbound supplier bills (direction="inbound", money the tenant OWES,
+        # see commerce/service.py's commit_inbound_document) into what an owner reads as "money
+        # owed to me," inflating a real R37,938.69/25-invoice figure into a nonsense
+        # R109,743.11/79-invoice one as supplier bills kept arriving by email. direction="outbound"
+        # restricts this to the tenant's own issued invoices/quotes, matching what "outstanding
+        # invoices" actually means to a business owner. "draft" dropped too — an invoice that was
+        # never sent isn't outstanding to anyone yet.
         owed = 0
         invoices = []
-        for st in ("sent", "overdue", "draft"):
-            for inv in await service.list_invoices(tid, status=st, limit=100):
+        for st in ("sent", "overdue"):
+            for inv in await service.list_invoices(tid, status=st, direction="outbound", limit=100):
                 owed += int(inv.get("total_cents") or 0)
                 invoices.append({"invoice": inv.get("invoice_number"), "status": inv.get("status"),
                                  "total": self._rands(inv.get("total_cents")), "customer": inv.get("customer_name")})

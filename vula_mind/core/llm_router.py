@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -205,6 +206,29 @@ def looks_unreliable(text: str, confidence: Optional[float] = None,
     if confidence_threshold is not None and confidence is not None:
         return confidence < confidence_threshold
     return False
+
+
+# Single source of truth for the reply a caller substitutes when looks_degenerate() fires —
+# same wording everywhere a skill's agent loop hits this, so it reads as one platform, not nine.
+DEGENERATE_OUTPUT_FALLBACK = "Sorry, something went wrong generating that reply — could you try again?"
+
+
+def looks_degenerate(text: str, min_len: int = 20, run_threshold: int = 12,
+                     unique_ratio_threshold: float = 0.06) -> bool:
+    """Cheap, deterministic check for garbled/repeated-character LLM output — no extra LLM call,
+    since the whole point is catching a case where the LLM itself already misbehaved. Anchored
+    to a real production reply (off-the-hook, 2026-08-22): a WhatsApp reply that was ~1000
+    literal '!' characters and nothing else, sent straight to the owner with nothing catching it.
+    Two independent signals, either one enough: a long unbroken run of one character, or
+    near-zero character diversity across the whole reply (catches a slower-building repetition
+    loop that isn't one single run, e.g. alternating "!! !! !!..."). Short/normal replies (incl.
+    emoji-heavy WhatsApp ones) are always below min_len or have ordinary diversity — not flagged."""
+    t = (text or "").strip()
+    if len(t) < min_len:
+        return False
+    if re.search(r"(\S)\1{" + str(run_threshold - 1) + r",}", t):
+        return True
+    return (len(set(t)) / len(t)) < unique_ratio_threshold
 
 
 def _task_label(task_type: Optional[str], messages: Optional[list]) -> str:

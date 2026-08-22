@@ -98,6 +98,11 @@ AGENTIC_RULES = (
     "- If a tool returns status:'need_info', do NOT retry blindly — ask the user for exactly "
     "the items listed in 'missing', in one short message, then call it again once they've "
     "answered.\n"
+    "- Never claim a retry, issue, or problem happened unless a tool call actually returned an "
+    "error — a normal preview-then-wait-for-confirmation step is success, not something to "
+    "narrate as broken. A clear short affirmative to the preview you just showed ('yes', "
+    "'confirm', 'proceed', 'go ahead') is enough to act on the very first reply — don't show "
+    "the same preview again and ask a second time.\n"
 )
 
 

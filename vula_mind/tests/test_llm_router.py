@@ -10,6 +10,8 @@ from core.llm_router import (
     reset_health_cache,
     assess_complexity,
     looks_unreliable,
+    looks_degenerate,
+    DEGENERATE_OUTPUT_FALLBACK,
     compute_confidence,
     escalate_to_cloud,
     _task_label,
@@ -307,6 +309,31 @@ def test_looks_unreliable():
     assert looks_unreliable("okay", confidence=0.2, confidence_threshold=0.4) is True
     assert looks_unreliable("okay", confidence=0.9, confidence_threshold=0.4) is False
     assert looks_unreliable("okay", confidence=0.2) is False
+
+
+def test_looks_degenerate_catches_the_real_production_incident():
+    # off-the-hook, 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent
+    # straight to the owner with nothing catching it before commerce_admin's run() returned it.
+    assert looks_degenerate("!" * 1000) is True
+
+
+def test_looks_degenerate_catches_alternating_repetition_not_just_one_run():
+    assert looks_degenerate("!! !! !! !! !! !! !! !! !! !! !! !! !! !! !! !!") is True
+
+
+def test_looks_degenerate_false_positives():
+    assert looks_degenerate("") is False
+    assert looks_degenerate("Yes") is False
+    assert looks_degenerate("There are 12 unpaid invoices totaling R4,500.00.") is False
+    assert looks_degenerate("Got it! I've created the invoice for you 🎉") is False
+    # Legitimately repeated real content (a price repeated across several line items) must not
+    # trip the diversity check just because one substring recurs.
+    assert looks_degenerate("R100.00, R100.00, R100.00, R100.00, R100.00, R100.00") is False
+
+
+def test_degenerate_output_fallback_is_a_real_customer_facing_message():
+    assert DEGENERATE_OUTPUT_FALLBACK
+    assert "!" not in DEGENERATE_OUTPUT_FALLBACK[:-1]  # sanity: not degenerate itself
 
 
 # ── compute_confidence: the other half of the previously-dormant confidence path ─────

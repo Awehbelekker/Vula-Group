@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route
+from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
@@ -60,6 +60,8 @@ class FinanceAdminSkill(BaseSkill):
             if not answer:
                 return SkillOutput(answer="I couldn't find any financial records for that.",
                                    skill_name=self.name, confidence=0.8)
+            if looks_degenerate(answer):
+                return SkillOutput(answer=DEGENERATE_OUTPUT_FALLBACK, skill_name=self.name, confidence=0.0)
         except Exception as exc:
             logger.warning("finance_admin failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))

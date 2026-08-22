@@ -252,3 +252,15 @@ async def test_retrieve_context_no_rate_table_for_other_doc_types():
         await _retrieve_context("digg-demo", "letter brief", "appointment_letter", None)
 
     mock_search.assert_not_called()
+
+
+def test_system_prompt_includes_agentic_rules():
+    # 2026-08-22: a platform-wide audit of every tool-calling skill found draft_admin was the
+    # one calling behaviour_preamble() bare — missing AGENTIC_RULES entirely (the "don't guess a
+    # tool", "never claim success without a tool call", and "don't fabricate a retry/issue"
+    # rules other agentic skills already had). This is the regression guard for that gap.
+    from core.skills.draft_admin import DraftAdminSkill
+
+    prompt = DraftAdminSkill()._system()
+    assert "closest-sounding tool" in prompt
+    assert "Never claim a retry, issue, or problem happened" in prompt
