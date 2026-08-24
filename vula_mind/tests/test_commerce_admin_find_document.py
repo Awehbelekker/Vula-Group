@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.skills.commerce_admin import (
-    TOOL_SPECS, _REP_TOOL_SPECS, _tools_for, CommerceAdminSkill,
+    TOOL_SPECS, _REP_TOOL_SPECS, _tools_for, CommerceAdminSkill, _is_pure_create_invoice_request,
 )
 
 TID = "test-tenant"
@@ -42,6 +42,48 @@ def test_find_document_is_a_registered_tool_spec():
 def test_find_document_requires_query_arg():
     spec = next(t for t in TOOL_SPECS if t["function"]["name"] == "find_document")
     assert "query" in spec["function"]["parameters"]["required"]
+
+
+# ── deterministic create-request filter (2026-08-24) ─────────────────────────────
+# The benchmark's own re-runs showed the prompt-only "don't use find_document for a create
+# request" guidance wasn't reliably followed: the model kept calling find_document first for
+# "make a customer invoice for Regan...", then — after a no-match — wandered to add_expense or
+# create_manual_order instead of create_invoice, the tool that actually matched. This excludes
+# find_document from the offered tools outright for a pure creation request, deterministically.
+
+@pytest.mark.parametrize("message", [
+    "I would like to make a customer invoice for Regan for Angel fish at R100 per kg, 2kg "
+    "please include a delivery fee of R10.",
+    "Make a customer invoice for Priya: 3kg hake fillets at R120 per kg, plus a R15 delivery fee.",
+    "Create a quote for Acme Builders for 3 hours of consulting",
+    "Can you draft an invoice for the new client",
+])
+def test_pure_create_requests_are_detected(message):
+    assert _is_pure_create_invoice_request(message) is True
+
+
+@pytest.mark.parametrize("message", [
+    "You need to check that number it's incorrect, please re-look at the proof of payment",
+    "The invoice you just got, on the bank statement, might be the wrong invoice number",
+    "What invoices are outstanding?",
+    "Can you check the invoice I sent you yesterday",
+    "How's stock looking?",
+])
+def test_non_create_messages_are_not_flagged(message):
+    assert _is_pure_create_invoice_request(message) is False
+
+
+def test_find_document_excluded_from_tools_for_a_create_request():
+    tools = _tools_for(TID, role=None,
+                       message="Make a customer invoice for Regan for Angel fish at R100/kg")
+    names = [t["function"]["name"] for t in tools]
+    assert "find_document" not in names
+
+
+def test_find_document_still_offered_for_a_document_reference():
+    tools = _tools_for(TID, role=None, message="please re-look at the proof of payment")
+    names = [t["function"]["name"] for t in tools]
+    assert "find_document" in names
 
 
 def test_find_document_is_always_on_for_owner_role():

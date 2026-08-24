@@ -665,6 +665,29 @@ _KEYWORD_GROUPS: Dict[str, set] = {
 }
 
 
+# 2026-08-24: the Tier 2 benchmark's own re-runs showed find_document's tool description and
+# system-prompt guidance ("don't use this for a CREATE request") wasn't reliably followed — the
+# model kept calling find_document first for "make a customer invoice for X", and after a
+# no-match wandered to add_expense or create_manual_order instead of create_invoice, the tool
+# that actually matched. Same lesson as everywhere else this session: a prompt-only instruction
+# isn't reliable enough on its own. This excludes the tool outright for a message that reads as
+# a pure creation request, deterministically, rather than hoping the model reads the warning.
+_CREATE_INVOICE_REQUEST_RE = re.compile(
+    r"\b(make|create|draft|write|do)\s+(a|an|the)?\s*(new\s+)?(customer\s+)?(invoice|quote|quotation)s?\b",
+    re.IGNORECASE)
+_EXISTING_DOCUMENT_REFERENCE_RE = re.compile(
+    r"\b(that|this|the)\s+(invoice|quote|document|payment|proof)|\bi\s+(already\s+)?sent\b|"
+    r"\bresend\b|\bon\s+file\b|\byou\s+(just\s+)?(got|received)\b|\bre-?look\b",
+    re.IGNORECASE)
+
+
+def _is_pure_create_invoice_request(message: str) -> bool:
+    """True when the message reads as a request to CREATE a new invoice/quote with no
+    reference to a document that already exists — see the comment above."""
+    text = message or ""
+    return bool(_CREATE_INVOICE_REQUEST_RE.search(text)) and not _EXISTING_DOCUMENT_REFERENCE_RE.search(text)
+
+
 def _match_groups(message: str) -> Optional[set]:
     """Which gated tool-groups this message plausibly relates to, by keyword hit. Returns None
     (meaning: don't filter, show everything) if nothing matched confidently."""
@@ -720,6 +743,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     except Exception:
         mods = set()
     tools = list(TOOL_SPECS) + MARKETING_TOOLS + DRAFT_TOOLS + CONTACT_TOOLS + MEETING_TOOLS  # always on
+    if message and _is_pure_create_invoice_request(message):
+        tools = [t for t in tools if t["function"]["name"] != "find_document"]
     show_all = not mods                       # no config yet → show everything
     matched = _match_groups(message) if message else None
     for mod, group in _GATED_GROUPS:
