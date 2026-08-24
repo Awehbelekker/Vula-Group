@@ -18,7 +18,9 @@ from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import (
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source,
+)
 
 logger = logging.getLogger(__name__)
 MAX_TOOL_ITERATIONS = 3
@@ -55,16 +57,34 @@ class FinanceAdminSkill(BaseSkill):
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         self._verified: List[float] = []  # every numeric value seen in a tool result this turn
+        self._sources: List[Dict[str, Any]] = []
+        self._any_tool_dispatched = False
+        self._all_not_found = True
+        lang = inp.metadata.get("preferred_language", "")
         try:
-            answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id)
-            if not answer:
-                return SkillOutput(answer="I couldn't find any financial records for that.",
-                                   skill_name=self.name, confidence=0.8)
-            if looks_degenerate(answer):
-                return SkillOutput(answer=DEGENERATE_OUTPUT_FALLBACK, skill_name=self.name, confidence=0.0)
+            answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id, lang)
         except Exception as exc:
             logger.warning("finance_admin failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
+
+        # 2026-08-24: every dispatched tool this turn came back not-found — nothing to anchor a
+        # figure against, so don't let the model's free text assert one. Checked BEFORE the
+        # generic "empty answer" fallback below: an exhausted tool-budget loop where every tool
+        # came back empty often DOES end up with an empty final answer too, and that fallback
+        # used to unconditionally report confidence=0.8 — misleadingly high for exactly the case
+        # where nothing was actually found.
+        if self._any_tool_dispatched and self._all_not_found:
+            return SkillOutput(
+                answer=("I couldn't find any financial records matching that — no invoices or "
+                        "payments on file for it. Could you check the name/reference, or tell me "
+                        "more so I can look again?"),
+                skill_name=self.name, confidence=0.3, sources=self._sources)
+
+        if not answer:
+            return SkillOutput(answer="I couldn't find any financial records for that.",
+                               skill_name=self.name, confidence=0.8, sources=self._sources)
+        if looks_degenerate(answer):
+            return SkillOutput(answer=DEGENERATE_OUTPUT_FALLBACK, skill_name=self.name, confidence=0.0)
 
         # 2026-08 accuracy audit: unlike calculations.py (anchor check) or commerce_admin.py's
         # mutating tools (post-write readback), nothing previously verified that this skill's
@@ -77,22 +97,24 @@ class FinanceAdminSkill(BaseSkill):
             confidence = 0.45
             answer += ("\n\n⚠️ Please confirm these figures — some of the numbers above "
                        "couldn't be matched to what the ledger actually returned.")
-        return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence)
+        return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence,
+                           sources=self._sources)
 
-    def _system(self) -> str:
+    def _system(self, lang: str = "") -> str:
         return ("You are Vula, answering questions about the business's money from its project "
-                "finance ledger (invoices and payments filed from email/WhatsApp).\n\n" + behaviour_preamble(agentic=True) +
+                "finance ledger (invoices and payments filed from email/WhatsApp).\n\n"
+                + behaviour_preamble(agentic=True, preferred_language=lang) +
                 "\n- Use the tools to fetch real figures; never invent amounts.\n"
                 "- Format money as South African Rand (e.g. R18,000). Keep answers short and WhatsApp-friendly.\n"
                 "- If a project name is fuzzy, pass the user's wording; the tools match loosely.")
 
-    async def _loop(self, history: str, question: str, tenant_id: str) -> str:
+    async def _loop(self, history: str, question: str, tenant_id: str, lang: str = "") -> str:
         import litellm
         from config import settings
         from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route()
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system()}]
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system(lang)}]
         if history:
             messages.append({"role": "user", "content": f"(Conversation so far)\n{history}"})
         messages.append({"role": "user", "content": question})
@@ -110,7 +132,7 @@ class FinanceAdminSkill(BaseSkill):
                 if inline:
                     name, args = inline
                     result = self._dispatch(name, args, tenant_id)
-                    self._verified.extend(self._extract_candidates(result))
+                    self._record_dispatch(name, result)
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
                         f"[{name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str)[:1500])}\n"
@@ -143,7 +165,7 @@ class FinanceAdminSkill(BaseSkill):
                 except Exception:
                     args = {}
                 result = self._dispatch(tc.function.name, args, tenant_id)
-                self._verified.extend(self._extract_candidates(result))
+                self._record_dispatch(tc.function.name, result)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
                                  "content": fence('TOOL_RESULT', json.dumps(result, default=str)[:1800])})
 
@@ -177,24 +199,80 @@ class FinanceAdminSkill(BaseSkill):
     def _numbers(text: str) -> List[float]:
         return [float(m.replace(",", "")) for m in re.findall(r"-?\d[\d,]*\.?\d*", text or "")]
 
+    def _record_dispatch(self, name: str, result: Any) -> None:
+        """Bookkeeping shared by both dispatch call sites in _loop: anchor candidates, the
+        SkillOutput.sources this turn (2026-08-24 — lets the adversarial verifier actually
+        ground-check the reply instead of running blind), and whether every tool this turn
+        came back empty (drives the post-tool decline guard in run()). Lazy-inits its
+        bookkeeping attrs (same defensive pattern _verified already relied on) so a test or
+        caller that invokes _loop() directly — bypassing run() — doesn't need to know about
+        every internal attribute run() would normally set up first."""
+        if not hasattr(self, "_sources"):
+            self._sources: List[Dict[str, Any]] = []
+        if not hasattr(self, "_verified"):
+            self._verified: List[float] = []
+        if not hasattr(self, "_all_not_found"):
+            self._all_not_found = True
+        self._any_tool_dispatched = True
+        self._verified.extend(self._extract_candidates(result))
+        self._sources.append(tool_source(name, result))
+        not_found = isinstance(result, dict) and bool(result.get("error") or result.get("found") is False)
+        if not not_found:
+            self._all_not_found = False
+
     def _extract_candidates(self, result: Any) -> List[float]:
-        """Every numeric value in a tool result, plus its /100 form — vula_project_finances
-        stores rand directly (not cents, unlike the commerce_* tables), but this stays
-        defensive of either convention rather than assuming one."""
+        """Every numeric value in a tool result, plus its /100 AND *100 forms —
+        vula_project_finances stores rand directly (not cents, unlike the commerce_* tables),
+        but this stays defensive of either convention rather than assuming one. 2026-08-24: the
+        *100 direction was missing — only /100 was hedged, an asymmetric guard against the
+        same ambiguity it claims to cover both ways."""
         raw = self._numbers(json.dumps(result, default=str))
         out = set()
         for v in raw:
             out.add(round(v, 2))
             out.add(round(v / 100, 2))
+            out.add(round(v * 100, 2))
         return list(out)
 
+    @staticmethod
+    def _money_shaped_numbers(text: str) -> List[float]:
+        """Numbers in a REPLY (not a tool result) that look like a stated Rand figure —
+        2026-08-24: the original unfiltered version treated any digit string >=10 as money-
+        shaped, which caught years, percentages, invoice/account numbers, and transaction
+        counts, any of which could spuriously fail to match a ledger total and trigger an
+        unwarranted low-confidence caveat. Excludes: a number immediately followed by '%' (a
+        percentage, not money), and a bare 4-digit integer in a plausible year range with no
+        adjacent currency marker (a whole Rand amount that happens to equal a year is rare
+        enough, and 'R2026' patterns are still caught, that this trade-off favours fewer false
+        positives)."""
+        text = text or ""
+        out = []
+        for m in re.finditer(r"-?\d[\d,]*\.?\d*", text):
+            raw = m.group(0)
+            try:
+                val = float(raw.replace(",", ""))
+            except ValueError:
+                continue
+            if abs(val) < 10:
+                continue
+            if text[m.end():m.end() + 2].lstrip().startswith("%"):
+                continue
+            # Bare year check must compare the VALUE, not the raw matched text — [\d,]* can
+            # greedily swallow a trailing sentence comma (e.g. "2026," before "you've"), so a
+            # raw-string \d{4} fullmatch silently never fires and the year slips through.
+            if val == int(val) and "." not in raw and 1900 <= val <= 2099:
+                before = text[max(0, m.start() - 2):m.start()]
+                if "R" not in before and "r" not in before:
+                    continue
+            out.append(val)
+        return out
+
     def _verify_answer(self, answer: str):
-        """Every money-shaped number in the reply (>=10, to skip incidental small counts like
-        '3 projects') must be anchored to a real tool-returned figure. Returns
-        (all_anchored: True|False|None, unmatched_numbers)."""
+        """Every money-shaped number in the reply must be anchored to a real tool-returned
+        figure. Returns (all_anchored: True|False|None, unmatched_numbers)."""
         if not self._verified:
             return (None, [])
-        ans_nums = [n for n in self._numbers(answer) if abs(n) >= 10]
+        ans_nums = self._money_shaped_numbers(answer)
         if not ans_nums:
             return (None, [])
         unmatched = []
@@ -218,6 +296,25 @@ class FinanceAdminSkill(BaseSkill):
     def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
         from vula.integrations.finances import finance_summary, _client
         try:
+            if name == "budget_status" and not (args.get("project") or "").strip():
+                # 2026-08-24: confirmed real bug — with no project hint, _match_project always
+                # falls through and returns "" unchanged; finance_summary(tenant_id, "") then
+                # treats the falsy project as "no filter" (vula/integrations/finances.py:204)
+                # and returns ALL projects sorted by spend descending; the old code just took
+                # the FIRST one (the single highest-spending project) and presented it as "the"
+                # answer with no aggregate and no indication it was arbitrary. budget_status's
+                # own tool description explicitly allows "for a project, or all projects" — so
+                # no project now genuinely means all projects, aggregated.
+                full = finance_summary(tenant_id)
+                projects = full.get("projects", [])
+                total_budget = sum(p.get("budget") or 0 for p in projects)
+                total_out = sum(p.get("out") or 0 for p in projects)
+                return {"scope": "all_projects", "project_count": len(projects),
+                        "total_budget": round(total_budget, 2), "total_spent": round(total_out, 2),
+                        "total_remaining": round(total_budget - total_out, 2) if total_budget else None,
+                        "per_project": [{"project": p["project"], "budget": p.get("budget"),
+                                         "spent": p["out"], "remaining": p.get("remaining")}
+                                        for p in projects]}
             if name in ("project_spend", "budget_status"):
                 full = finance_summary(tenant_id)
                 proj = self._match_project(tenant_id, full, args.get("project", ""))

@@ -13,30 +13,25 @@ import time
 
 from core.llm_router import resolve_generation_route
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import (
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_tenant_data_question,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# 2026-08-18: this business-figures/records marker list + verification_policy were added after
-# pulling DIGG's real chat history and finding a confirmed, zero-backing hallucination — "Logg
-# as expense" got "I've logged the screen bricks... for R70,400.00" with no such expense ever
-# created (this skill has no tools; it cannot actually log anything). A question that names an
-# invoice/expense/BOQ/project/payment/total etc. with no matching KB document is asking about
-# THIS tenant's own real records — there is no legitimate "general knowledge" answer to that,
-# unlike a standards/code question, which the model can reasonably speak to from training data
-# (with the existing "verify the official document" framing ETHICS_RULES already requires).
-_TENANT_DATA_MARKERS = re.compile(
-    r"\b(invoice|expense|receipt|boq|bill of quantities|project|order|payment|logged?|"
-    r"created?|saved?|allocat\w*|owe|owing|balance|quote|quotation|supplier|paid|deposit)\b",
-    re.IGNORECASE,
-)
+# 2026-08-18: this skill's hard-decline guard was added after pulling DIGG's real chat history
+# and finding a confirmed, zero-backing hallucination — "Logg as expense" got "I've logged the
+# screen bricks... for R70,400.00" with no such expense ever created (this skill has no tools;
+# it cannot actually log anything). A question that names an invoice/expense/BOQ/project/
+# payment/total etc. with no matching KB document is asking about THIS tenant's own real
+# records — there is no legitimate "general knowledge" answer to that, unlike a standards/code
+# question, which the model can reasonably speak to from training data. 2026-08-24: the marker
+# regex + this guard's shape were centralized into core/skills/base.py (English-only was a real
+# gap given Vula's multi-language promise, and architecture_planning.py needed the same guard
+# but couldn't reuse a reasoning.py-local function) — see looks_like_tenant_data_question there.
 _LOCAL_TIMEOUT_S = 20.0
 _CLOUD_TIMEOUT_S = 30.0
-
-
-def _looks_like_tenant_data_question(question: str) -> bool:
-    return bool(_TENANT_DATA_MARKERS.search(question or ""))
 
 
 class ReasoningSkill(BaseSkill):
@@ -76,7 +71,7 @@ class ReasoningSkill(BaseSkill):
         # BEFORE spending an LLM call, rather than generating an answer and hoping the prompt
         # stops it from guessing — this is exactly the shape of the confirmed R70,400 "logged"
         # fabrication found in DIGG's real chat history, which had zero backing tool call.
-        if not kb_context and _looks_like_tenant_data_question(inp.question):
+        if not kb_context and looks_like_tenant_data_question(inp.question):
             return SkillOutput(
                 answer=("I don't have a document on file for that, so I don't want to guess at "
                         "a figure or confirm something happened without seeing it. Could you "

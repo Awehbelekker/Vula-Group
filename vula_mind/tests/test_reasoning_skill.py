@@ -251,9 +251,9 @@ async def test_tenant_data_question_with_no_kb_declines_instead_of_guessing():
 @pytest.mark.asyncio
 async def test_tenant_data_markers_cover_the_real_confirmed_bug_phrasing():
     """The exact real-world phrasing that produced the fabricated R70,400 claim."""
-    from core.skills.reasoning import _looks_like_tenant_data_question
-    assert _looks_like_tenant_data_question("Logg as expense") is True
-    assert _looks_like_tenant_data_question(
+    from core.skills.base import looks_like_tenant_data_question
+    assert looks_like_tenant_data_question("Logg as expense") is True
+    assert looks_like_tenant_data_question(
         "On hPC project I need to order screen bricks, check the BOQ") is True
 
 

@@ -16,7 +16,9 @@ import re
 from config import settings
 from core.llm_router import resolve_generation_route
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import (
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_tenant_data_question,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,12 @@ logger = logging.getLogger(__name__)
 class ArchitecturePlanningSkill(BaseSkill):
     name = "architecture_planning"
     description = "South African architecture and construction planning — SACAP, JBCC, NHBRC, SANS 10400, BOQ"
+    # 2026-08-24 chat-accuracy audit: per orchestrator.py's SKILL_KEYWORDS, this skill OWNS
+    # exactly the BOQ/retention/fee/contractor-shaped questions reasoning.py's hard-decline
+    # guard was built to stop — it was the one skill in that category that didn't have any such
+    # guard at all (only a soft caveat, see below). tenant_kb/training_kb sources already match
+    # verification.py's "kb" grounding filter, so this doesn't need the Phase-1 tool_source() fix.
+    verification_policy = "adversarial"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         # Retrieve from BOTH tenant KB and shared construction KB
@@ -37,6 +45,23 @@ class ArchitecturePlanningSkill(BaseSkill):
             # Tenant's own context — past projects, fee schedules
             tenant_pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
             tenant_chunks = await tenant_pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
+
+            # 2026-08-24: a question shaped like "what's the retention on OUR Riverside
+            # contract" with no matching tenant document is asking about this practice's own
+            # real records — same hallucination class the R70,400 fabrication guard exists to
+            # stop, just never ported here despite this skill owning exactly that question
+            # shape. Narrower than reasoning.py's guard (require_possessive=True): a GENERAL
+            # "what's a typical retention percentage on a JBCC contract" still gets answered
+            # from this skill's real domain expertise (training_kb / parametric SACAP/JBCC/SANS
+            # knowledge) — only a possessive, tenant-specific question declines.
+            if not tenant_chunks and looks_like_tenant_data_question(inp.question, require_possessive=True):
+                return SkillOutput(
+                    answer=("I don't have a document on file for that specific project/contract, "
+                            "so I don't want to guess at a figure or confirm a detail without "
+                            "seeing it. Could you attach the relevant document (contract, BOQ, "
+                            "fee schedule, etc.) or tell me more so I can find it?"),
+                    skill_name=self.name, confidence=0.3, sources=all_sources)
+
             if tenant_chunks:
                 contexts.append("## Your practice's knowledge\n" + "\n\n".join(
                     f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"
@@ -115,19 +140,38 @@ class ArchitecturePlanningSkill(BaseSkill):
             # (llama-3.3-70b) is plenty capable for SA construction Q&A.
             model, api_key, api_base = await resolve_generation_route(model=settings.model_worker)
 
+            _msgs = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ]
             resp = await litellm.acompletion(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.2,
-                max_tokens=inp.max_tokens,
-                api_key=api_key,
-                api_base=api_base,
+                model=model, messages=_msgs, temperature=0.2, max_tokens=inp.max_tokens,
+                api_key=api_key, api_base=api_base,
+                # Unconditional — dropped silently wherever unsupported (cloud routes, older
+                # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
+                logprobs=True, top_logprobs=1,
             )
             raw = resp.choices[0].message.content or ""
             answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+            # 2026-08-24 chat-accuracy audit: this skill had zero adoption of the logprob-
+            # confidence escalation wired into reasoning.py/commerce_admin.py/finance_admin.py —
+            # a domain-expert advisor answering life-safety-adjacent construction questions with
+            # no low-confidence-local-answer check at all.
+            if model.startswith("ollama/"):
+                from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
+                logprob_conf = compute_confidence(resp)
+                if looks_unreliable(answer, confidence=logprob_conf,
+                                    confidence_threshold=settings.local_confidence_threshold):
+                    esc = escalate_to_cloud("local_unreliable", task_type="architecture_planning")
+                    if esc:
+                        model, api_key, api_base = esc
+                        resp = await litellm.acompletion(
+                            model=model, messages=_msgs, temperature=0.2,
+                            max_tokens=inp.max_tokens, api_key=api_key, api_base=api_base,
+                            logprobs=True, top_logprobs=1)
+                        raw = resp.choices[0].message.content or ""
+                        answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
             confidence = 0.85 if contexts else 0.6
             if not contexts:

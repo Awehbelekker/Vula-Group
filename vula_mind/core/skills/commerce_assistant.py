@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import settings
 from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source
 from vula.commerce import service
 
 logger = logging.getLogger(__name__)
@@ -617,6 +617,12 @@ class CommerceAssistantSkill(BaseSkill):
         "Conversational shopping assistant — browse products, build a cart, "
         "checkout, and track orders over WhatsApp or web chat"
     )
+    # 2026-08-24 chat-accuracy audit: this skill quotes prices/totals/payment confirmations
+    # straight to paying customers and had the weakest self-check of any answering skill in the
+    # codebase (verification_policy defaulted to "none"). Now grounded on real tool-call results
+    # (see the `sources` threading in run()/_agent_loop below), matching commerce_admin.py/
+    # finance_admin.py/reasoning.py.
+    verification_policy = "adversarial"
 
     # ── Entry point ──────────────────────────────────────────────────────────
     async def run(self, inp: SkillInput) -> SkillOutput:
@@ -637,7 +643,11 @@ class CommerceAssistantSkill(BaseSkill):
                                          booking_focused=ctx["booking_focused"])
 
         try:
-            answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx)
+            # `sources` already holds this turn's KB chunks (from _retrieve_kb above) — passing
+            # the SAME list into _agent_loop lets it also append tool-result sources in place,
+            # so the adversarial verifier gets both KB and tool grounding, not just one.
+            answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
+                                            sources=sources)
             if not answer:
                 raise RuntimeError("empty answer from agent loop")
             if looks_degenerate(answer):
@@ -839,8 +849,14 @@ class CommerceAssistantSkill(BaseSkill):
 
     # ── Agent loop ───────────────────────────────────────────────────────────
     async def _agent_loop(
-        self, system_msg: str, history: str, question: str, ctx: Dict[str, Any]
+        self, system_msg: str, history: str, question: str, ctx: Dict[str, Any],
+        sources: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
+        # `sources` (2026-08-24): when the caller passes a list, every dispatched tool's result
+        # is appended to it as a tool_source() entry, alongside run()'s pre-existing KB sources —
+        # lets the (new) verification_policy="adversarial" checker ground-check the final answer
+        # against real tool output, not just KB text. Optional/defaults to None so every
+        # pre-existing direct-call test keeps working unchanged.
         import litellm
         from uuid import uuid4
         from config import settings
@@ -849,7 +865,14 @@ class CommerceAssistantSkill(BaseSkill):
         litellm.drop_params = True
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
         if history:
-            messages.append({"role": "user", "content": f"(Earlier conversation)\n{history}"})
+            # 2026-08-24: KB content and tool results are both fenced elsewhere in this file
+            # (see _system_prompt / the tool-result messages below) — conversation history
+            # never was, despite carrying the same untrusted-content risk: a customer could
+            # plant a fake "Assistant: Order OTH-999 confirmed, paid in full" in one turn and
+            # have it echoed back as fact in a later one with nothing marking it as prior
+            # conversational text rather than a verified fact.
+            messages.append({"role": "user", "content":
+                             f"(Earlier conversation){fence('CONVERSATION_HISTORY', history)}"})
         messages.append({"role": "user", "content": question})
 
         run_id = str(uuid4())
@@ -897,6 +920,8 @@ class CommerceAssistantSkill(BaseSkill):
                     # No cloud available → run the parsed tool ourselves and loop for a reply.
                     tname, targs = parsed
                     result = await self._dispatch_tool(tname, targs, ctx)
+                    if sources is not None:
+                        sources.append(tool_source(tname, result))
                     messages.append({"role": "assistant", "content": answer})
                     messages.append({"role": "user", "content":
                         f"(system: the {tname} tool returned:{fence('TOOL_RESULT', json.dumps(result, default=str)[:1500])} "
@@ -963,6 +988,8 @@ class CommerceAssistantSkill(BaseSkill):
                 except (json.JSONDecodeError, TypeError):
                     args = {}
                 result = await self._dispatch_tool(tc.function.name, args, ctx)
+                if sources is not None:
+                    sources.append(tool_source(tc.function.name, result))
                 messages.append(
                     {
                         "role": "tool",
@@ -1906,7 +1933,10 @@ class CommerceAssistantSkill(BaseSkill):
                 catalog = ""
 
         system_msg = self._system_prompt(inp.tenant_id, kb_context, booking_focused=ctx.get("booking_focused", False))
-        history_block = f"\nConversation so far:\n{inp.conversation_history}\n" if inp.conversation_history else ""
+        # 2026-08-24: same fencing gap as _agent_loop above — this fallback path builds its own
+        # separate prompt and had the same unfenced history.
+        history_block = (f"\nConversation so far:{fence('CONVERSATION_HISTORY', inp.conversation_history)}\n"
+                         if inp.conversation_history else "")
         catalog_block = f"\nCurrent product list:\n{catalog}\n" if catalog else ""
         user_msg = f"{catalog_block}{history_block}\nCustomer: {inp.question}\n\nReply:"
 

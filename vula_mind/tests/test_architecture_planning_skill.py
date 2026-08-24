@@ -134,3 +134,72 @@ async def test_context_present_has_no_caveat():
 
     assert "⚠️" not in out.answer
     assert out.confidence == 0.85
+
+
+# ── 2026-08-24 chat-accuracy audit: hard-decline guard for tenant-specific questions ──
+
+def test_verification_policy_is_adversarial():
+    assert ArchitecturePlanningSkill.verification_policy == "adversarial"
+
+
+@pytest.mark.asyncio
+async def test_declines_a_possessive_tenant_specific_question_with_no_tenant_docs():
+    """"what's the retention on OUR Riverside contract" with no matching tenant document is
+    asking about this practice's own real records — same hallucination class the R70,400
+    fabrication guard exists to stop. Must decline BEFORE calling the LLM."""
+    mock_completion = AsyncMock()
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=mock_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(
+            SkillInput(question="what's the retention on our Riverside contract?", tenant_id="digg-demo"))
+
+    mock_completion.assert_not_awaited()  # no LLM call spent on a question we're declining
+    assert "don't have a document on file" in out.answer
+    assert out.confidence == 0.3
+
+
+@pytest.mark.asyncio
+async def test_general_domain_question_still_answers_from_training_kb_when_no_tenant_docs():
+    """A GENERAL "what's a typical retention percentage" question must still be answered from
+    this skill's real domain expertise, not declined just because 'retention' matches the
+    marker regex — only a possessive, tenant-specific phrasing should decline."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("Typical retention on a JBCC contract is 5-10%.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(
+            SkillInput(question="what is a typical retention percentage on a JBCC contract?",
+                      tenant_id="digg-demo"))
+
+    assert "don't have a document on file" not in out.answer
+    assert "5-10%" in out.answer
+
+
+@pytest.mark.asyncio
+async def test_decline_guard_does_not_fire_when_tenant_docs_were_actually_retrieved():
+    """A possessive tenant-specific question with real matching tenant docs must answer
+    normally, not decline just because the question happens to be possessive."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("Per the filed BoQ, retention on our Riverside contract is 5%.")
+
+    chunks = [{"filename": "riverside_boq.pdf", "text": "Retention: 5%", "score": 0.9}]
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock(chunks)),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(
+            SkillInput(question="what's the retention on our Riverside contract?", tenant_id="digg-demo"))
+
+    assert "don't have a document on file" not in out.answer
+    assert "5%" in out.answer

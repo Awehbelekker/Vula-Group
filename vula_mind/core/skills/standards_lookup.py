@@ -61,15 +61,35 @@ class StandardsLookupSkill(BaseSkill):
         user_msg = f"{fence('LIBRARY_EXTRACTS', context)}{history}\nQuestion: {inp.question}\n\nAnswer:"
         try:
             import litellm
+            from config import settings
             litellm.drop_params = True
             model, api_key, api_base = await resolve_generation_route()
+            _msgs = [{"role": "system", "content": system_msg},
+                     {"role": "user", "content": user_msg}]
             resp = await litellm.acompletion(
-                model=model,
-                messages=[{"role": "system", "content": system_msg},
-                          {"role": "user", "content": user_msg}],
-                temperature=0.2, max_tokens=inp.max_tokens, api_key=api_key, api_base=api_base)
+                model=model, messages=_msgs, temperature=0.2, max_tokens=inp.max_tokens,
+                api_key=api_key, api_base=api_base,
+                # Unconditional — dropped silently wherever unsupported. See reasoning.py.
+                logprobs=True, top_logprobs=1)
             answer = re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content or "",
                             flags=re.DOTALL).strip()
+
+            # 2026-08-24 chat-accuracy audit: zero adoption of the logprob-confidence escalation
+            # wired into reasoning.py/commerce_admin.py/finance_admin.py/architecture_planning.py.
+            if model.startswith("ollama/"):
+                from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
+                logprob_conf = compute_confidence(resp)
+                if looks_unreliable(answer, confidence=logprob_conf,
+                                    confidence_threshold=settings.local_confidence_threshold):
+                    esc = escalate_to_cloud("local_unreliable", task_type="standards_lookup")
+                    if esc:
+                        model, api_key, api_base = esc
+                        resp = await litellm.acompletion(
+                            model=model, messages=_msgs, temperature=0.2,
+                            max_tokens=inp.max_tokens, api_key=api_key, api_base=api_base,
+                            logprobs=True, top_logprobs=1)
+                        answer = re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content or "",
+                                        flags=re.DOTALL).strip()
             return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8, sources=sources)
         except Exception as exc:
             logger.error("standards_lookup failed: %s", exc)

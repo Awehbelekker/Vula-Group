@@ -174,9 +174,14 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
         # "kb" (reasoning.py, commerce_assistant.py) and "tenant_kb"/"training_kb"
         # (architecture_planning.py's two-pipeline retrieval) are all groundable document
         # sources — match on substring so any future kb-ish source type is picked up too.
+        # "tool" (2026-08-24: commerce_admin.py/commerce_assistant.py/finance_admin.py, see
+        # core/skills/base.py::tool_source) is the equivalent for a tool-calling skill — without
+        # this, the adversarial checker for those three skills ran "blind": policy="adversarial"
+        # but SkillOutput.sources was never populated, so context was always empty and the
+        # checker could only judge (question, answer) with nothing to ground-check against.
         context = "\n\n".join(
             s.get("text", "") for s in (result.sources or [])
-            if "kb" in (s.get("type") or "") and s.get("text")
+            if ("kb" in (s.get("type") or "") or s.get("type") == "tool") and s.get("text")
         )
         check = await adversarial_check(inp.question, result.answer, context=context)
         verdict = check["verdict"]

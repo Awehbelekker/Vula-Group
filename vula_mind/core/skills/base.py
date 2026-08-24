@@ -10,6 +10,8 @@ dynamically by the HRM orchestrator.
 """
 from __future__ import annotations
 
+import json
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -140,6 +142,66 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
     if agentic:
         parts.append(AGENTIC_RULES)
     return head + "\n".join(parts)
+
+
+# 2026-08-24 chat-accuracy audit: commerce_admin.py/commerce_assistant.py/finance_admin.py all
+# set (or will set) verification_policy="adversarial" but never populated SkillOutput.sources —
+# core/verification.py::apply() only builds grounding context from sources whose type contains
+# "kb", so the checker ran blind for every tool-calling skill regardless of policy. Every
+# tool-calling agent loop should append one of these per dispatched tool call and pass the list
+# through as `sources` — 900-char cap matches the existing KB-source truncation convention.
+def tool_source(name: str, result: Any) -> Dict[str, Any]:
+    text = json.dumps(result, default=str)
+    return {"type": "tool", "name": name, "text": text[:900]}
+
+
+# Shared hard-decline guard: a question shaped like "what does MY invoice/BOQ/payment say" that
+# no retrieved context or tool result can back up should be declined BEFORE generating an
+# answer, not generated and hoped-to-be-caught by a prompt instruction. Added to reasoning.py
+# 2026-08-18 after a confirmed real hallucination (a fabricated "R70,400 logged" claim with zero
+# backing tool call); centralized here 2026-08-24 after the same class of gap was found
+# unpatched in architecture_planning.py (which OWNS exactly these tenant-record-shaped questions
+# per its orchestrator routing keywords) and the regex itself was found English-only despite
+# Vula's explicit Afrikaans/isiZulu/isiXhosa/Sesotho promise (CONVERSATION_RULES above).
+_TENANT_DATA_MARKERS = re.compile(
+    r"\b("
+    # English — reasoning.py's original list (2026-08-18), plus total/outstanding/account
+    # (the original code comment promised "total" but the regex never actually included it)
+    r"invoice|expense|receipt|boq|bill of quantities|project|order|payment|logged?|"
+    r"created?|saved?|allocat\w*|owe|owing|balance|quote|quotation|supplier|paid|deposit|"
+    r"total|outstanding|account|retention|provisional sum|practical completion|fees?|"
+    r"contractor|subcontract\w*|contract|certificate|"
+    # Afrikaans
+    r"faktuur|onkoste|kwitansie|projek|betaal|betaling|rekening|skuld|"
+    # isiZulu
+    r"inikwota|inkokhelo|i-akhawunti|isikweletu|"
+    # isiXhosa
+    r"iinvoyisi|intlawulo|ityala|"
+    # Sesotho
+    r"tefiso|akhaonto|sekoloto"
+    r")\b", re.IGNORECASE)
+
+# A "my/our/this project's" shape — distinguishes "what's a typical retention percentage on a
+# JBCC contract" (general knowledge, fine to answer from training/parametric knowledge) from
+# "what's the retention on OUR Riverside contract" (a specific record, must be backed by a
+# real retrieved/tool-returned fact or declined). Only architecture_planning.py uses this second
+# regex today — reasoning.py has zero tools/KB of its own for tenant records, so ANY match on
+# _TENANT_DATA_MARKERS with empty context is enough for it to decline.
+_POSSESSIVE_RE = re.compile(
+    r"\b(my|our|ons|we|this project|hierdie projek|the client|die klant)\b", re.IGNORECASE)
+
+
+def looks_like_tenant_data_question(text: str, require_possessive: bool = False) -> bool:
+    """True if `text` is shaped like a question about the tenant's OWN records (an invoice,
+    expense, BOQ, project, payment) rather than general knowledge. `require_possessive=True`
+    (architecture_planning.py's narrower use) additionally requires a "my/our/this project's"
+    marker, so a general "what's a typical X" question isn't declined just because 'project'
+    or 'invoice' appears in it."""
+    if not _TENANT_DATA_MARKERS.search(text or ""):
+        return False
+    if require_possessive:
+        return bool(_POSSESSIVE_RE.search(text or ""))
+    return True
 
 
 def need_info_message(result: Any) -> Optional[str]:
