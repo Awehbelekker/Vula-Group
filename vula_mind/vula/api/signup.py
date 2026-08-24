@@ -120,4 +120,18 @@ async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user
 
     _tenant_config_cache.pop(slug, None)
     log.info("New self-serve tenant: %s (owner=%s)", slug, user.get("email"))
+
+    # 2026-08-24 (structured starter KB): seed a small set of business_type-appropriate
+    # starter documents so this tenant's KB isn't empty on day one — reduces the "empty
+    # context -> hallucination risk" failure class the same audit found across several chat
+    # skills. Fire-and-forget (the same primitive the bank-statement job uses) — LLM
+    # generation takes a few seconds and must never delay the signup response or block
+    # account creation on failure.
+    try:
+        from vula.commerce.background_tasks import run_background
+        from vula.commerce.starter_kb import seed_starter_kb
+        run_background(slug, "starter_kb_seed", seed_starter_kb(slug, body.business_type or "other"))
+    except Exception as exc:
+        log.debug("starter_kb seeding skipped for %s: %s", slug, exc)
+
     return {"tenant": _public(row), "role": "owner"}

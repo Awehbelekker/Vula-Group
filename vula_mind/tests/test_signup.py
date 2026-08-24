@@ -107,6 +107,41 @@ def test_signup_creates_tenant_and_owner_login():
     assert inserts[1][2] == {"user_id": "user-abc-123", "tenant_id": "my-new-shop", "role": "owner"}
 
 
+def test_signup_fires_starter_kb_seeding_in_background():
+    """2026-08-24: a successful signup should kick off starter-KB seeding via the
+    fire-and-forget run_background primitive — must not block or fail the signup response,
+    and must be scoped to the new tenant's slug with the chosen business_type."""
+    fake_client = _FakeClient(tables={"vula_tenant_config": [], "vula_tenant_users": []})
+    with (
+        patch("vula.api.master_auth._verify_jwt", new=AsyncMock(return_value=VALID_USER)),
+        patch("vula.api.signup._client", return_value=fake_client),
+        patch("vula.commerce.background_tasks.run_background") as mock_run_background,
+    ):
+        resp = client.post("/v1/signup", headers=_auth_headers(), json={
+            "tenant_id": "Fish Shack", "business_type": "food",
+        })
+    assert resp.status_code == 200
+    mock_run_background.assert_called_once()
+    args = mock_run_background.call_args.args
+    assert args[0] == "fish-shack"
+    assert args[1] == "starter_kb_seed"
+
+
+def test_signup_succeeds_even_if_starter_kb_wiring_itself_raises():
+    """Best-effort: even an import/setup-time failure in the starter-KB wiring must never
+    turn a successful signup into an error response."""
+    fake_client = _FakeClient(tables={"vula_tenant_config": [], "vula_tenant_users": []})
+    with (
+        patch("vula.api.master_auth._verify_jwt", new=AsyncMock(return_value=VALID_USER)),
+        patch("vula.api.signup._client", return_value=fake_client),
+        patch("vula.commerce.background_tasks.run_background", side_effect=RuntimeError("boom")),
+    ):
+        resp = client.post("/v1/signup", headers=_auth_headers(), json={
+            "tenant_id": "Fish Shack Two", "business_type": "food",
+        })
+    assert resp.status_code == 200
+
+
 def test_signup_defaults_business_type_to_other():
     fake_client = _FakeClient(tables={"vula_tenant_config": [], "vula_tenant_users": []})
     with (

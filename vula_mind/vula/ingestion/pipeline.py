@@ -674,12 +674,19 @@ class QdrantStore:
         limit: int = 5,
         score_threshold: float = 0.3,
         exclude_source_types: Optional[List[str]] = None,
+        category: Optional[str] = None,
     ) -> List[dict]:
         """Semantic search across tenant's knowledge base.
 
         `exclude_source_types` filters out low-authority content (e.g. ingested chat
         exports / auto-learned Q&A tagged 'conversation'/'learned') so factual answers
         don't get polluted. Untagged legacy points are never excluded.
+
+        `category` (2026-08-24, structured starter KB): when given, narrows results to
+        chunks tagged with that category (see ingest_text's `category` param) — e.g. a
+        question that clearly implies "invoice" or "menu" can search just that slice
+        instead of ranking across the whole collection. None (default) searches
+        everything, unchanged from before this parameter existed.
         """
         name = self._collection_name(tenant_id)
         body: dict = {
@@ -688,13 +695,10 @@ class QdrantStore:
             "score_threshold": score_threshold,
             "with_payload": True,
         }
-        if exclude_source_types:
-            body["filter"] = {
-                "must_not": [
-                    {"key": "source_type", "match": {"value": t}}
-                    for t in exclude_source_types
-                ]
-            }
+        must_not = [{"key": "source_type", "match": {"value": t}} for t in (exclude_source_types or [])]
+        must = [{"key": "category", "match": {"value": category}}] if category else []
+        if must_not or must:
+            body["filter"] = {k: v for k, v in (("must_not", must_not), ("must", must)) if v}
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             resp = await client.post(
                 f"{self.base}/collections/{name}/points/search",
@@ -838,13 +842,23 @@ class VulaIngestionPipeline:
             )
 
     async def ingest_text(self, content: str, filename: str, doc_id: str | None = None,
-                          source_type: str = "document") -> IngestionResult:
-        """Ingest raw text directly — no file needed. Used to seed the training KB."""
+                          source_type: str = "document", category: str | None = None) -> IngestionResult:
+        """Ingest raw text directly — no file needed. Used to seed the training KB.
+
+        `category` (2026-08-24, structured starter KB): an optional doc-type tag (reuses
+        vula_filed_documents' existing category vocabulary — see whatsapp.py::_DOC_CATEGORIES)
+        stored on every chunk's payload (QdrantStore.upsert_chunks already spreads `metadata`
+        into the payload, so no store-layer change was needed) — lets query() narrow retrieval
+        to a specific document type when a question clearly implies one. None/omitted behaves
+        exactly as before this parameter existed."""
         started = time.time()
         if doc_id is None:
             doc_id = hashlib.md5(f"{self.tenant_id}:{filename}".encode()).hexdigest()[:16]
         try:
             raw_chunks = self.chunker.chunk(content)
+            chunk_metadata = {"source": "training_kb", "source_type": source_type}
+            if category:
+                chunk_metadata["category"] = category
             all_chunks = [
                 DocumentChunk(
                     chunk_id=f"{doc_id}_{i}",
@@ -854,7 +868,7 @@ class VulaIngestionPipeline:
                     page_num=1,
                     chunk_index=i,
                     text=chunk,
-                    metadata={"source": "training_kb", "source_type": source_type},
+                    metadata=dict(chunk_metadata),
                 )
                 for i, chunk in enumerate(raw_chunks)
             ]
@@ -892,20 +906,23 @@ class VulaIngestionPipeline:
     _NON_AUTHORITATIVE = ["conversation", "learned"]
 
     async def query(self, question: str, top_k: int = 5,
-                    authoritative_only: bool = False) -> List[dict]:
+                    authoritative_only: bool = False, category: str | None = None) -> List[dict]:
         """
         Semantic search across this tenant's knowledge base.
         Returns relevant document chunks for RAG.
 
         authoritative_only: exclude conversational/learned chunks (chat logs) so
         factual/code answers come only from real documents and references.
+
+        category (2026-08-24): narrow to one document-type slice (see QdrantStore.search) —
+        None (default) searches everything, unchanged from before this parameter existed.
         """
         query_embedding = await self.embedder.embed(question)
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
         return await self.store.search(
             self.tenant_id, query_embedding, limit=top_k,
             score_threshold=0.35 if authoritative_only else 0.3,
-            exclude_source_types=exclude,
+            exclude_source_types=exclude, category=category,
         )
 
     async def answer(

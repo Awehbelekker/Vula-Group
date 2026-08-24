@@ -1388,6 +1388,11 @@ _DOC_CATEGORIES = [
     "Quote / Estimate", "Invoice", "Drawing / Plan", "Specification",
     "Meeting Minutes", "Programme / Schedule", "Report", "Tender Document",
     "Business Card", "Proof of Payment", "General Document",
+    # 2026-08-24 (structured starter KB): this vocabulary was entirely trades/services-
+    # skewed — a food/retail/health tenant's real documents mostly landed in "General
+    # Document". Added categories each niche's KB actually needs, reusing this exact same
+    # vocabulary (vula/commerce/starter_kb.py's business_type -> category mapping).
+    "Menu / Price List", "Supplier Agreement", "Health & Safety Policy", "Booking Policy",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
