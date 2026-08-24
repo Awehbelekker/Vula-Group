@@ -58,6 +58,15 @@ def test_create_automation_rule_excluded_from_sales_rep_toolset():
     assert "create_automation_rule" not in names
 
 
+def test_finance_insights_excluded_from_sales_rep_toolset():
+    """2026-08-24: finance_insights (shop-wide revenue/margin/VAT) used to be included in the
+    rep toolset despite the code's own adjacent comment explicitly excluding shop-wide levers
+    from rep scope — confirmed a real gap, not an intentional exception, and removed."""
+    from core.skills.commerce_admin import _REP_TOOL_SPECS
+    names = {t["function"]["name"] for t in _REP_TOOL_SPECS}
+    assert "finance_insights" not in names
+
+
 def test_create_automation_rule_present_when_automations_module_enabled():
     from unittest.mock import patch
     from core.skills.commerce_admin import _tools_for

@@ -1340,6 +1340,13 @@ _CONSEQUENTIAL_TOOLS = {
     "create_discount_code", "update_discount_code", "delete_discount_code", "cancel_booking",
     "delete_supplier", "record_payment", "send_broadcast", "draft_storefront_page",
     "add_storefront_section", "create_automation_rule",
+    # 2026-08-24 (chat-accuracy audit Phase 5): create_invoice/send_invoice/
+    # convert_quote_to_invoice were confirm-gated-in-spirit already (real money, real customer
+    # messages) but never flagged consequential here — an owner reviewing Agent Activity had no
+    # visual cue these happened. Plus the 6 tools newly given a real confirm=true gate this pass.
+    "create_invoice", "send_invoice", "convert_quote_to_invoice",
+    "create_manual_order", "create_product", "update_product", "upsert_supplier",
+    "create_booking", "create_subscription",
 }
 
 
@@ -1403,17 +1410,19 @@ def _narrate(tool: str, args: dict) -> Optional[str]:
         if tool == "update_order_status":
             return f"Updated order {g('order_id') or g('display_id', '')} to {g('status', '?')}"
         if tool == "create_booking":
-            return f"Booked an appointment for {g('customer_name', 'a customer')} at {g('start', '')}"
+            return f"{_confirmed_prefix(a)} booked an appointment for {g('customer_name', 'a customer')} at {g('start', '')}"
         if tool == "add_expense":
             return f"Logged an expense of R{g('amount_rands', '?')} ({g('description', '')})"
         if tool == "create_manual_order":
-            return f"Logged an order for {g('customer_name', 'a customer')}"
+            return f"{_confirmed_prefix(a)} logged an order for {g('customer_name', 'a customer')}"
         if tool == "create_product":
-            return f"Added product {g('name', '')} at R{g('price_rands', '?')}"
+            return f"{_confirmed_prefix(a)} added product {g('name', '')} at R{g('price_rands', '?')}"
         if tool == "update_product":
-            return f"Updated product {g('product', '')}"
+            return f"{_confirmed_prefix(a)} updated product {g('product', '')}"
         if tool == "upsert_supplier":
-            return f"Saved supplier {g('name', '')}"
+            return f"{_confirmed_prefix(a)} saved supplier {g('name', '')}"
+        if tool == "create_subscription":
+            return f"{_confirmed_prefix(a)} set up a {g('cadence', 'recurring')} standing order for {g('customer_name', 'a customer')}"
     except Exception:
         return None
     return None

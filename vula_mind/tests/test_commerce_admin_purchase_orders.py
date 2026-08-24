@@ -56,8 +56,20 @@ async def test_upsert_supplier(skill, monkeypatch):
         assert data["name"] == "Fresh Fish Co"
         return {"name": "Fresh Fish Co"}
     monkeypatch.setattr(ca.service, "upsert_supplier", upsert_supplier)
-    res = await skill._upsert_supplier(TID, {"name": "Fresh Fish Co", "contact_email": "x@y.com"})
+    res = await skill._upsert_supplier(TID, {"name": "Fresh Fish Co", "contact_email": "x@y.com", "confirm": True})
     assert res == {"saved": "Fresh Fish Co"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_supplier_without_confirm_returns_preview_and_does_not_write(skill, monkeypatch):
+    called = {}
+    async def upsert_supplier(tid, data):
+        called["yes"] = True
+        return {"name": "Fresh Fish Co"}
+    monkeypatch.setattr(ca.service, "upsert_supplier", upsert_supplier)
+    res = await skill._upsert_supplier(TID, {"name": "Fresh Fish Co", "contact_email": "x@y.com"})
+    assert res.get("preview") is True
+    assert "yes" not in called
 
 
 @pytest.mark.asyncio

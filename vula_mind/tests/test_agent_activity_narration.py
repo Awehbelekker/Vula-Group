@@ -37,6 +37,51 @@ def test_narrate_unknown_tool_returns_none():
     assert commerce_api._narrate("some_new_tool_no_template", {"x": "1"}) is None
 
 
+# ── Phase 5 (2026-08-24): newly confirm-gated tools now reflect Confirmed/Previewed ────
+
+def test_narrate_create_product_reflects_preview_vs_confirmed():
+    preview = commerce_api._narrate("create_product", {"name": "Hake", "price_rands": "85"})
+    confirmed = commerce_api._narrate("create_product",
+                                       {"name": "Hake", "price_rands": "85", "confirm": "True"})
+    assert preview.startswith("Previewed (not yet confirmed):")
+    assert confirmed.startswith("Confirmed:")
+    assert "Hake" in preview and "Hake" in confirmed
+
+
+def test_narrate_update_product_reflects_preview_vs_confirmed():
+    text = commerce_api._narrate("update_product", {"product": "Hake", "confirm": "True"})
+    assert text == "Confirmed: updated product Hake"
+
+
+def test_narrate_create_manual_order():
+    text = commerce_api._narrate("create_manual_order", {"customer_name": "Jane", "confirm": "True"})
+    assert text == "Confirmed: logged an order for Jane"
+
+
+def test_narrate_upsert_supplier():
+    text = commerce_api._narrate("upsert_supplier", {"name": "Fresh Fish Co", "confirm": "True"})
+    assert text == "Confirmed: saved supplier Fresh Fish Co"
+
+
+def test_narrate_create_booking():
+    text = commerce_api._narrate("create_booking",
+                                  {"customer_name": "Jane", "start": "2026-08-25T10:00", "confirm": "True"})
+    assert "Jane" in text and "Confirmed:" in text
+
+
+def test_narrate_create_subscription():
+    text = commerce_api._narrate("create_subscription",
+                                  {"customer_name": "Jane", "cadence": "weekly", "confirm": "True"})
+    assert text == "Confirmed: set up a weekly standing order for Jane"
+
+
+def test_consequential_tools_includes_phase5_gated_tools():
+    for tool in ("create_manual_order", "create_product", "update_product",
+                 "upsert_supplier", "create_booking", "create_subscription",
+                 "create_invoice", "send_invoice", "convert_quote_to_invoice"):
+        assert tool in commerce_api._CONSEQUENTIAL_TOOLS
+
+
 def test_narrate_never_raises_on_malformed_args():
     # args is normally a dict, but the function must not crash the whole feed if it's not —
     # a malformed telemetry row shouldn't take down the rest of the activity feed; it degrades

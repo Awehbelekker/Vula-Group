@@ -238,7 +238,7 @@ async def test_create_manual_order_readback_confirmed(skill, emits, monkeypatch)
 
     res = await skill._create_manual_order(TID, {
         "customer_name": "Jane", "customer_phone": "0821234567",
-        "items": [{"product": "Hake", "quantity": 2}]})
+        "items": [{"product": "Hake", "quantity": 2}], "confirm": True})
     assert res.get("verified") is True
     assert res["order"] == "OTH-00099"
     assert added == [("p1", 2.0)]
@@ -276,8 +276,26 @@ async def test_create_manual_order_marks_paid(skill, monkeypatch):
 
     await skill._create_manual_order(TID, {
         "customer_name": "Jane", "customer_phone": "0821234567",
-        "items": [{"product": "Hake", "quantity": 1}], "mark_paid": True})
+        "items": [{"product": "Hake", "quantity": 1}], "mark_paid": True, "confirm": True})
     assert marked == {"order_id": "o1", "status": "paid"}
+
+
+@pytest.mark.asyncio
+async def test_create_manual_order_without_confirm_returns_preview_and_does_not_write(skill, monkeypatch):
+    async def list_products(tid, **kw):
+        return [{"id": "p1", "name": "Hake Fillets", "price_cents": 5000}]
+    called = {}
+    async def create_order(tid, cart, checkout_data):
+        called["yes"] = True
+        return {"id": "o1", "display_id": "OTH-00099", "total_cents": 5000}
+    monkeypatch.setattr(ca.service, "list_products", list_products)
+    monkeypatch.setattr(ca.service, "create_order", create_order)
+
+    res = await skill._create_manual_order(TID, {
+        "customer_name": "Jane", "customer_phone": "0821234567",
+        "items": [{"product": "Hake", "quantity": 2}]})
+    assert res.get("preview") is True
+    assert "yes" not in called
 
 
 # ── discount codes ─────────────────────────────────────────────────────────

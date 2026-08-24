@@ -32,7 +32,10 @@ from core.llm_router import (
 )
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message
+from core.skills.base import (
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message, tool_source,
+    looks_like_tenant_data_question,
+)
 from vula.commerce import service
 
 logger = logging.getLogger(__name__)
@@ -183,14 +186,17 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "name": "create_manual_order",
         "description": "Log an order taken by phone or in person on the customer's behalf — "
                        "uses the same cart/stock/pricing path as the storefront and WhatsApp "
-                       "ordering, so it behaves identically.",
+                       "ordering, so it behaves identically. Without confirm=true, returns a "
+                       "preview instead of creating it — only pass confirm=true after the owner "
+                       "has explicitly said to go ahead. If mark_paid is true, say so plainly in "
+                       "the preview since that also records a real payment.",
         "parameters": {"type": "object", "properties": {
             "customer_name": {"type": "string"}, "customer_phone": {"type": "string"},
             "items": {"type": "array", "items": {"type": "object", "properties": {
                 "product": {"type": "string"}, "quantity": {"type": "number"}}}},
             "delivery_address": {"type": "string"},
             "payment_method": {"type": "string", "enum": ["cod", "eft", "online"]},
-            "mark_paid": {"type": "boolean"}},
+            "mark_paid": {"type": "boolean"}, "confirm": {"type": "boolean"}},
             "required": ["customer_name", "customer_phone", "items"]},
     }},
 ]
@@ -284,10 +290,13 @@ PURCHASE_ORDER_TOOLS = [
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "upsert_supplier",
-        "description": "Add or update a supplier (matched by name).",
+        "description": "Add or update a supplier (matched by name). Without confirm=true, "
+                       "returns a preview instead of saving — only pass confirm=true after the "
+                       "owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string"}, "contact_email": {"type": "string"},
-            "contact_phone": {"type": "string"}, "payment_terms": {"type": "string"}},
+            "contact_phone": {"type": "string"}, "payment_terms": {"type": "string"},
+            "confirm": {"type": "boolean"}},
             "required": ["name"]}}},
     {"type": "function", "function": {
         "name": "delete_supplier",
@@ -381,17 +390,23 @@ DISCOUNT_TOOLS = [
 PRODUCT_TOOLS = [
     {"type": "function", "function": {
         "name": "create_product",
-        "description": "Add a new product/service to the catalogue with a price in Rands.",
+        "description": "Add a new product/service to the catalogue with a price in Rands. "
+                       "Without confirm=true, returns a preview instead of creating it — only "
+                       "pass confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string"}, "price_rands": {"type": "number"},
-            "description": {"type": "string"}, "category": {"type": "string"}},
+            "description": {"type": "string"}, "category": {"type": "string"},
+            "confirm": {"type": "boolean"}},
             "required": ["name", "price_rands"]}}},
     {"type": "function", "function": {
         "name": "update_product",
-        "description": "Change a product's price, name, or daily-catch flag (find it by name).",
+        "description": "Change a product's price, name, or daily-catch flag (find it by name). "
+                       "Without confirm=true, returns a preview instead of applying it — only "
+                       "pass confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "product": {"type": "string"}, "price_rands": {"type": "number"},
-            "new_name": {"type": "string"}, "is_daily_catch": {"type": "boolean"}},
+            "new_name": {"type": "string"}, "is_daily_catch": {"type": "boolean"},
+            "confirm": {"type": "boolean"}},
             "required": ["product"]}}},
 ]
 BOOKING_TOOLS = [
@@ -405,10 +420,14 @@ BOOKING_TOOLS = [
         "parameters": {"type": "object", "properties": {"status": {"type": "string"}}}}},
     {"type": "function", "function": {
         "name": "create_booking",
-        "description": "Book an appointment: start time (YYYY-MM-DDTHH:MM), customer name/phone, optional service.",
+        "description": "Book an appointment: start time (YYYY-MM-DDTHH:MM), customer name/phone, "
+                       "optional service. Without confirm=true, returns a preview instead of "
+                       "booking it — only pass confirm=true after the owner has explicitly said "
+                       "to go ahead.",
         "parameters": {"type": "object", "properties": {
             "start": {"type": "string"}, "customer_name": {"type": "string"},
-            "customer_phone": {"type": "string"}, "service": {"type": "string"}},
+            "customer_phone": {"type": "string"}, "service": {"type": "string"},
+            "confirm": {"type": "boolean"}},
             "required": ["start", "customer_name"]}}},
     {"type": "function", "function": {
         "name": "cancel_booking",
@@ -524,12 +543,16 @@ REMINDER_TOOLS = [
 SUBSCRIPTION_TOOLS = [
     {"type": "function", "function": {
         "name": "create_subscription",
-        "description": "Set up a recurring/standing order for a customer (weekly/biweekly/monthly).",
+        "description": "Set up a recurring/standing order for a customer (weekly/biweekly/"
+                       "monthly). Without confirm=true, returns a preview instead of creating "
+                       "it — only pass confirm=true after the owner has explicitly said to go "
+                       "ahead.",
         "parameters": {"type": "object", "properties": {
             "customer_name": {"type": "string"}, "customer_phone": {"type": "string"},
             "cadence": {"type": "string", "enum": ["weekly", "biweekly", "monthly"]},
             "items": {"type": "array", "items": {"type": "object", "properties": {
-                "product": {"type": "string"}, "quantity": {"type": "number"}}}}},
+                "product": {"type": "string"}, "quantity": {"type": "number"}}}},
+            "confirm": {"type": "boolean"}},
             "required": ["customer_phone", "cadence", "items"]}}},
     {"type": "function", "function": {
         "name": "list_subscriptions",
@@ -613,9 +636,11 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
 # (stock, invoices, broadcasts, products) an individual rep has no business touching.
+# 2026-08-24: finance_insights (shop-wide revenue/margin/VAT) used to be included here despite
+# directly contradicting this comment's own stated scope — confirmed a real gap, not an
+# intentional commission-visibility exception, and removed.
 _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + DRAFT_TOOLS + BOOKING_TOOLS
-                   + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS
-                   + [t for t in TOOL_SPECS if t["function"]["name"] == "finance_insights"])
+                   + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
 
 
 # 2026-08-16: keyword pre-filter for _tools_for's gated groups — added alongside the purchase-
@@ -727,15 +752,18 @@ class CommerceAdminSkill(BaseSkill):
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
                                          lang=inp.metadata.get("preferred_language", ""))
+        collected_sources: List[Dict[str, Any]] = []
         try:
-            answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx, tools)
+            answer = await self._agent_loop(system_msg, inp.conversation_history, inp.question, ctx,
+                                            tools, sources=collected_sources)
             if not answer:
                 raise RuntimeError("empty answer from admin agent loop")
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
             # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
             if looks_degenerate(answer):
                 answer = DEGENERATE_OUTPUT_FALLBACK
-            return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
+            return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8,
+                               sources=collected_sources)
         except Exception as exc:
             logger.warning("commerce_admin loop failed (%s)", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
@@ -802,12 +830,22 @@ class CommerceAdminSkill(BaseSkill):
             "(the owner still reviews and publishes from the dashboard), so they're lower-risk than "
             "a broadcast or invoice but still need a real go-ahead since a saved draft overwrites "
             "whatever draft existed before.\n\n"
-            + behaviour_preamble(agentic=True) + persona_block
+            # 2026-08-24: this branch (the common owner/staff case) never passed `lang` through
+            # despite computing it — only the sales_rep branch above did. A non-English-speaking
+            # owner got the generic "mirror their language" fallback instead of the explicit
+            # per-language block, letting the loop drift to English mid-multi-turn.
+            + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
         )
 
     # ── Agent loop (mirrors commerce_assistant) ──────────────────────────────
     async def _agent_loop(self, system_msg: str, history: str, question: str, ctx: Dict[str, Any],
-                          tools: Optional[List[Dict[str, Any]]] = None) -> str:
+                          tools: Optional[List[Dict[str, Any]]] = None,
+                          sources: Optional[List[Dict[str, Any]]] = None) -> str:
+        # `sources` (2026-08-24): when the caller passes a list, every dispatched tool's result
+        # is appended to it as a tool_source() entry — lets run() populate SkillOutput.sources so
+        # the adversarial verifier (verification_policy="adversarial") can actually ground-check
+        # the final answer against what the tools returned, instead of running blind. Optional
+        # and defaults to None so every existing direct-call test keeps working unchanged.
         import litellm
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route()
@@ -844,6 +882,8 @@ class CommerceAdminSkill(BaseSkill):
                 if inline:
                     name, args = inline
                     result = await self._dispatch_tool(name, args, ctx)
+                    if sources is not None:
+                        sources.append(tool_source(name, result))
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
@@ -855,6 +895,24 @@ class CommerceAdminSkill(BaseSkill):
                     )})
                     continue
                 answer = (msg.content or "").strip()
+                # 2026-08-24: considered porting reasoning.py's blanket "no tool + tenant-data-
+                # shaped question -> decline" guard here too, and deliberately did NOT. Unlike
+                # reasoning.py (zero tools — a match is unconditionally unanswerable) or
+                # finance_admin.py (a narrow, fixed 4-tool surface where "not found" is a clean
+                # per-turn signal), commerce_admin.py has ~40+ tools covering almost every
+                # tenant-data concept — "no tool was dispatched" here very often just means the
+                # model correctly followed AGENTIC_RULES' own "ask a clarifying question instead
+                # of guessing" instruction (e.g. user: "what's the status of my order" -> model:
+                # "Which order do you mean?"). A blanket keyword-based guard would silently
+                # replace that legitimate clarifying question with a generic canned decline —
+                # confirmed by testing: looks_like_tenant_data_question("Which order do you
+                # mean?"." is True, so the guard would fire on the model's OWN good clarifying
+                # reply just as readily as on a fabrication. Phase 1's verifier-grounding fix
+                # (SkillOutput.sources now populated from real tool calls) already gives the
+                # adversarial checker a genuine signal here: a money/status claim with zero
+                # backing tool_source this turn has nothing to ground against, so a fabrication
+                # still gets caught — just as a soft caveat, not a hard pre-LLM block, which is
+                # the right trade-off given this skill's much broader tool surface.
                 # 2026-08 accuracy audit: zero adoption of the logprob-confidence escalation
                 # wired into reasoning.py/commerce_assistant.py the same day. Only fires in
                 # the no-cloud-key fallback case (model.startswith("ollama/")) — when the
@@ -887,6 +945,8 @@ class CommerceAdminSkill(BaseSkill):
                 except (json.JSONDecodeError, TypeError):
                     args = {}
                 result = await self._dispatch_tool(tc.function.name, args, ctx)
+                if sources is not None:
+                    sources.append(tool_source(tc.function.name, result))
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
@@ -920,6 +980,8 @@ class CommerceAdminSkill(BaseSkill):
         if inline:
             name, args = inline
             result = await self._dispatch_tool(name, args, ctx)
+            if sources is not None:
+                sources.append(tool_source(name, result))
             resp = await litellm.acompletion(
                 model=model,
                 messages=[
@@ -1390,6 +1452,10 @@ class CommerceAdminSkill(BaseSkill):
             data["contact_phone"] = args["contact_phone"]
         if args.get("payment_terms"):
             data["payment_terms"] = args["payment_terms"]
+        if not args.get("confirm"):
+            return {"preview": True, "supplier": name, "contact_email": data.get("contact_email"),
+                    "contact_phone": data.get("contact_phone"), "payment_terms": data.get("payment_terms"),
+                    "message": "Confirm to save this supplier (call again with confirm=true)."}
         s = await service.upsert_supplier(tid, data)
         return {"saved": s.get("name")}
 
@@ -1530,6 +1596,14 @@ class CommerceAdminSkill(BaseSkill):
             if not p:
                 return {"error": f"No product matching '{it.get('product')}'."}
             resolved.append((p, float(it.get("quantity") or 1)))
+        if not args.get("confirm"):
+            preview_total = sum(int(p.get("price_cents") or 0) * qty for p, qty in resolved)
+            msg = "Confirm to create this order (call again with confirm=true)."
+            if args.get("mark_paid"):
+                msg += " This will also record it as already paid."
+            return {"preview": True, "customer": name,
+                    "items": [{"product": p.get("name"), "quantity": qty} for p, qty in resolved],
+                    "total": self._rands(int(preview_total)), "message": msg}
         from uuid import uuid4
         session_id = f"manual-{uuid4().hex[:12]}"
         cart = await service.get_or_create_cart(tid, session_id, customer_phone=phone)
@@ -1669,6 +1743,10 @@ class CommerceAdminSkill(BaseSkill):
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:50] or "product"
         data = {"name": name, "slug": slug, "description": args.get("description") or name,
                 "price_cents": price, "category": args.get("category") or "other", "in_stock": True}
+        if not args.get("confirm"):
+            return {"preview": True, "product": name, "price": self._rands(price),
+                    "category": data["category"],
+                    "message": "Confirm to add this product (call again with confirm=true)."}
         p = await service.create_product(tid, data)
         return {"created": p.get("name"), "price": self._rands(p.get("price_cents"))}
 
@@ -1687,10 +1765,33 @@ class CommerceAdminSkill(BaseSkill):
             patch["is_daily_catch"] = bool(args["is_daily_catch"])
         if not patch:
             return {"error": "Nothing to change (price_rands / new_name / is_daily_catch)."}
+        # 2026-08-24: previously the only price-mutating tool in this file with neither a
+        # confirm gate nor readback-verify — a misheard/misparsed product match could silently
+        # reprice the wrong item with nothing to catch it.
+        if not args.get("confirm"):
+            preview = {"preview": True, "product": p["name"],
+                       "message": "Confirm to apply this change (call again with confirm=true)."}
+            if "price_cents" in patch:
+                preview["current_price"] = self._rands(p.get("price_cents"))
+                preview["new_price"] = self._rands(patch["price_cents"])
+            if "name" in patch:
+                preview["new_name"] = patch["name"]
+            if "is_daily_catch" in patch:
+                preview["is_daily_catch"] = patch["is_daily_catch"]
+            return preview
         await service.update_product(tid, p["id"], patch)
         out = {"updated": p["name"]}
         if "price_cents" in patch:
             out["new_price"] = self._rands(patch["price_cents"])
+        if settings.readback_verify_enabled:
+            p2 = await service.get_product(tid, p["id"])
+            ok = p2 is not None and all(p2.get(k) == v for k, v in patch.items())
+            _readback_gate(tid, "update_product", ok, {"product_id": p["id"], **patch},
+                           {k: (p2 or {}).get(k) for k in patch})
+            if not ok:
+                return {"error": f"Update to {p['name']} could not be confirmed on re-read. "
+                                 "Not confirmed; please check the Products tab."}
+            out["verified"] = True
         return out
 
     async def _booking_availability(self, tid: str, date: str) -> Dict[str, Any]:
@@ -1718,6 +1819,10 @@ class CommerceAdminSkill(BaseSkill):
                 if svc_name.lower() in (s.get("name") or "").lower():
                     svc_id, svc_name = s["id"], s["name"]
                     break
+        if not args.get("confirm"):
+            return {"preview": True, "customer": args.get("customer_name"), "start": args.get("start"),
+                    "service": svc_name or None,
+                    "message": "Confirm to book this appointment (call again with confirm=true)."}
         res = await bk.create_booking(tid, {
             "service_id": svc_id, "service_name": svc_name or None,
             "customer_name": args.get("customer_name"), "customer_phone": args.get("customer_phone"),
@@ -1767,6 +1872,11 @@ class CommerceAdminSkill(BaseSkill):
                           "quantity": float(it.get("quantity") or 1), "unit_price_cents": p.get("price_cents") or 0})
         if not items:
             return {"error": "Need at least one product for the standing order."}
+        if not args.get("confirm"):
+            return {"preview": True, "customer": args.get("customer_name"),
+                    "cadence": args.get("cadence", "weekly"),
+                    "items": [{"product": it["product_name"], "quantity": it["quantity"]} for it in items],
+                    "message": "Confirm to set up this standing order (call again with confirm=true)."}
         res = await subs.create(tid, {"customer_name": args.get("customer_name"),
                                       "customer_phone": args.get("customer_phone"),
                                       "cadence": args.get("cadence", "weekly"), "items": items, "channel": "dashboard"})

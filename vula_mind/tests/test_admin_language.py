@@ -39,15 +39,27 @@ def test_behaviour_preamble_lang_block_survives_agentic_and_persona():
 # ── CommerceAdminSkill._system_prompt ────────────────────────────────────────
 
 def test_admin_system_prompt_includes_language_for_owner():
+    """2026-08-24: this assertion (bare "Afrikaans" in prompt) was a false-positive all
+    along — CONVERSATION_RULES' generic multi-language line always mentions "Afrikaans"
+    regardless of whether preferred_language is actually threaded through, so this test never
+    caught the real bug (confirmed live: the owner/staff branch computed `lang` but never
+    passed it to behaviour_preamble — only the sales_rep branch did). Now asserts the specific
+    per-language instruction block that only appears when preferred_language is genuinely used."""
     skill = CommerceAdminSkill()
     prompt = skill._system_prompt("digg-demo", role=None, name="Judy", lang="af")
-    assert "Afrikaans" in prompt
+    assert "Reply in Afrikaans by default" in prompt
+
+
+def test_admin_system_prompt_omits_language_block_for_owner_when_no_lang_given():
+    skill = CommerceAdminSkill()
+    prompt = skill._system_prompt("digg-demo", role=None, name="Judy", lang="")
+    assert "Reply in" not in prompt or "by default" not in prompt
 
 
 def test_admin_system_prompt_includes_language_for_sales_rep():
     skill = CommerceAdminSkill()
     prompt = skill._system_prompt("digg-demo", role="sales_rep", name="Thabo", lang="zu")
-    assert "isiZulu" in prompt
+    assert "Reply in isiZulu by default" in prompt
 
 
 def test_admin_system_prompt_no_language_block_when_unset():
