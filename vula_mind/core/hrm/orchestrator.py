@@ -69,19 +69,14 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "cancel my appointment", "cancel my booking",
                              "reschedule my appointment", "available slots",
                              "available times", "check availability"],
-    # Calculation intent BEFORE architecture_planning so "how many seats / what
-    # width / occupancy" get deterministic arithmetic (computed, not guessed).
-    "calculations":         ["how many seats", "how many people", "how many can", "how many bays",
-                             "how many parking", "parking bays", "occupant load", "occupancy load",
-                             "maximum occupancy", "max occupancy", "what width", "minimum width",
-                             "how wide", "calculate", "floor area", "how many units",
-                             "what does it cost", "what would it cost", "how much does", "how much will",
-                             "how much is", "using our rates", "cost of", "rate for", "what do we charge",
-                             "estimate the cost", "total cost", "what will it cost"],
     # Microsoft OneDrive + Outlook (draft-only email). Defers if not connected.
     "microsoft_admin":      ["onedrive", "one drive", "outlook", "sharepoint"],
     # Generic IMAP/SMTP mailbox (GoDaddy/cPanel/Zoho/etc.) — owns generic email phrasing.
-    # Money/budget/supplier questions answered from the finance ledger.
+    # Money/budget/supplier questions answered from the finance ledger. BEFORE calculations
+    # (2026-08-24: confirmed real collision — calculations' generic "how much is"/"how much
+    # does" was intercepting "how much is left on the budget for Stage 3" before finance_admin
+    # ever got a chance, even though finance_admin has the more specific "budget for"/"left on
+    # the budget" match for exactly this phrasing).
     "finance_admin":        ["spent on", "how much have we spent", "how much did we spend",
                              "money in", "money out", "money in and out", "in vs out",
                              "budget left", "budget remaining", "left on the budget",
@@ -102,10 +97,26 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "gmail", "google mail"],
     # Google Drive + Gmail — provider-named only (generic 'email' goes to email_admin).
     "google_admin":         ["google drive", "my drive", "in my drive", "google doc", "from drive"],
-    # Explicit standard/code lookup → cited search of the code library.
+    # Explicit standard/code lookup → cited search of the code library. BEFORE calculations
+    # (2026-08-24: same collision class as finance_admin above — calculations' generic
+    # "occupancy load"/"occupant load" was intercepting "what standard covers occupancy load
+    # calculations" before standards_lookup's more specific "standard cover" match ever fired).
     "standards_lookup":     ["look up", "which standard", "which code", "what standard",
                              "what does sans", "code library", "sans clause", "which sans",
                              "standard cover", "applicable standard"],
+    # Calculation intent BEFORE architecture_planning so "how many seats / what width /
+    # occupancy" get deterministic arithmetic (computed, not guessed) — but AFTER finance_admin
+    # and standards_lookup (see their own comments above) so their more specific phrasing wins
+    # over calculations' intentionally generic "how much is"/"occupancy load" — those are meant
+    # to catch a genuine arithmetic question, not a budget lookup or a standards citation that
+    # merely happens to use similar words.
+    "calculations":         ["how many seats", "how many people", "how many can", "how many bays",
+                             "how many parking", "parking bays", "occupant load", "occupancy load",
+                             "maximum occupancy", "max occupancy", "what width", "minimum width",
+                             "how wide", "calculate", "floor area", "how many units",
+                             "what does it cost", "what would it cost", "how much does", "how much will",
+                             "how much is", "using our rates", "cost of", "rate for", "what do we charge",
+                             "estimate the cost", "total cost", "what will it cost"],
     # Architecture/construction BEFORE file_parse so "Stage 4 documentation",
     # "fees", "SACAP" etc consult the SA construction KB (not just tenant docs).
     "architecture_planning":["sacap", "nhbrc", "jbcc", "nec ", "sans", "cidb", "procsa",

@@ -45,6 +45,23 @@ def test_skill_matching(hrm, prompt, expected_skill):
     assert hrm._match_skill(prompt) == expected_skill
 
 
+# ── 2026-08-24 chat-accuracy audit: routing-priority collisions ──────────────────
+# calculations' intentionally generic phrases ("how much is", "occupancy load") used to
+# intercept questions meant for finance_admin/standards_lookup before either got a chance,
+# since _match_skill returns the FIRST dict-order match. Fixed by moving calculations to
+# after both in SKILL_KEYWORDS — these pin the two real collisions the audit found, plus a
+# regression check that calculations still wins for genuine arithmetic questions.
+
+@pytest.mark.parametrize("prompt,expected_skill", [
+    ("How much is left on the budget for Stage 3", "finance_admin"),
+    ("What standard covers occupancy load calculations", "standards_lookup"),
+    ("how many seats fit in this hall", "calculations"),
+    ("what does sans 10400 say about fire escapes", "standards_lookup"),
+])
+def test_routing_priority_collision_fixes(hrm, prompt, expected_skill):
+    assert hrm._match_skill(prompt) == expected_skill
+
+
 def test_no_keyword_match_falls_back_to_reasoning_when_llm_fallback_disabled(hrm, monkeypatch):
     from config import settings
     monkeypatch.setattr(settings, "skill_llm_fallback_enabled", False)
