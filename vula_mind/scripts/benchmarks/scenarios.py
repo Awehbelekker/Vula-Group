@@ -227,25 +227,34 @@ CONFIRM_FLOW = [
     ),
 ]
 
+def _regan_invoice_check(answer: str, calls: list, ms: int) -> CheckResult:
+    lowered = answer.lower()
+    if "OFF-INV" in answer or "created" in lowered:
+        return CheckResult(False, "claims an invoice was created — check for a fabricated success")
+    if _called(calls, "add_expense"):
+        return CheckResult(False, "fell back to add_expense instead of create_invoice/asking — "
+                                   "the 2026-08-23 wrong-direction fallback bug")
+    if "delivery" in lowered and "price" in lowered:
+        return CheckResult(True, "asked for the missing delivery-fee price")
+    return CheckResult(False, "did not ask for the missing delivery-fee price")
+
+
 NEED_INFO = [
     Scenario(
         id="ni_delivery_fee_missing_price",
         category="need_info",
         description="The exact real incident shape: a delivery-fee line item with no price. "
-                     "Must ask for the missing price on the FIRST reply, never fabricate a "
-                     "created invoice (the Regan incident — real production, 2026-08-22).",
+                     "Must ask for the missing price on the FIRST reply — never fabricate a "
+                     "created invoice (2026-08-22), and never wander off to an unrelated tool "
+                     "like add_expense when find_document (wrongly called here) comes up empty "
+                     "(2026-08-23).",
         skill_name="commerce_admin",
         tenant_id="off-the-hook",
         metadata={"customer_phone": "27737815979"},
         turns=[Turn(
             message="I would like to make a customer invoice for Regan for Angel fish at R100 "
                     "per kg, 2kg please include a delivery fee of R10.",
-            check=lambda answer, calls, ms: CheckResult(
-                ("delivery" in answer.lower() and "price" in answer.lower())
-                and "OFF-INV" not in answer and "created" not in answer.lower(),
-                "asked for the missing price" if "delivery" in answer.lower()
-                else "did not ask for the missing delivery-fee price — check for a fabricated success",
-            ),
+            check=_regan_invoice_check,
         )],
     ),
 ]

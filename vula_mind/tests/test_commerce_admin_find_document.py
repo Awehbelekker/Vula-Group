@@ -64,6 +64,24 @@ def test_owner_prompt_tells_model_to_use_find_document_before_guessing(skill):
     assert "BEFORE acting or answering" in prompt
 
 
+def test_owner_prompt_excludes_create_requests_and_forbids_wrong_tool_fallback(skill):
+    # 2026-08-23 benchmark finding: "make a customer invoice for Regan for Angel fish..." made
+    # the model call find_document (nothing to look up — this is a create request), and when
+    # that came back empty, it fell back to add_expense — logging a real R210 "stock purchase
+    # from supplier Regan" for what should have been a sales invoice to a customer. Both
+    # guardrails below are the fix.
+    prompt = skill._system_prompt(TID, role=None, name="Test")
+    assert "does NOT apply to a request to CREATE something" in prompt
+    assert "logging an expense" in prompt
+
+
+def test_find_document_tool_spec_excludes_create_requests():
+    spec = next(t for t in TOOL_SPECS if t["function"]["name"] == "find_document")
+    desc = spec["function"]["description"]
+    assert "Do NOT use this for a request to CREATE something new" in desc
+    assert "do not fall back to a different, unrelated tool" in desc
+
+
 # ── _find_document handler ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

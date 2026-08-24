@@ -232,3 +232,15 @@ async def test_draft_admin_also_short_circuits_on_need_info():
 
     assert call_count["n"] == 1
     assert "project value" in answer
+
+
+# ── 7. find_document over-applied to a CREATE request, then a wrong-tool fallback (off-the-hook) ──
+# Found by the Tier 2 benchmark's first-ever run, 2026-08-23: "make a customer invoice for Regan
+# for Angel fish... delivery fee of R10" made the model call find_document (nothing to look up —
+# this is a create request), and when that came back empty with an explicit "don't guess, ask"
+# instruction in its own result, the model ignored that and called add_expense instead — logging
+# a real R210 "stock purchase from supplier Regan" for what should have been a sales invoice to a
+# customer. Never attempted create_invoice, the tool that actually matched the request. Fixed via
+# tightened find_document tool-spec + system-prompt guidance (excludes create-requests, forbids
+# falling back to an unrelated tool on a no-match). Covered by
+# tests/test_commerce_admin_find_document.py's guidance-text tests.
