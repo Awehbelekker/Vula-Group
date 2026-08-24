@@ -105,6 +105,13 @@ AGENTIC_RULES = (
     "narrate as broken. A clear short affirmative to the preview you just showed ('yes', "
     "'confirm', 'proceed', 'go ahead') is enough to act on the very first reply — don't show "
     "the same preview again and ask a second time.\n"
+    "- If the user is rephrasing or repeating themselves — especially with visible frustration "
+    "(ALL CAPS, 'that's not what I asked', 'you got it wrong', asking again shortly after your "
+    "last reply) — do NOT assume your previous interpretation of what they wanted was correct. "
+    "Re-read their CURRENT message on its own merits and pick the tool that actually fits it, "
+    "even if that's different from the tool you used last turn. Never call the same tool again "
+    "and repeat the same answer just because it matches what you said before — if you're not "
+    "sure what they mean now, ask a short clarifying question instead of guessing again.\n"
 )
 
 

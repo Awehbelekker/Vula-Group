@@ -44,6 +44,20 @@ def test_system_prompt_has_need_info_guardrail(skill, role):
     assert "need_info" in prompt
 
 
+@pytest.mark.parametrize("role", [None, "sales_rep"])
+def test_system_prompt_has_rephrase_reconsider_guardrail(skill, role):
+    """2026-08-24 (Phase 9 real-transcript review): a real digg-demo session (2026-07-09) had
+    three visibly-escalating, differently-worded user messages ("what do i need to chatup on
+    to dY" / "WHAT DO I NEED TO CATCH UP ON TO DAY]" / "WHAT DASH BOARD") all get the IDENTICAL
+    verbatim reply about a broadcast — confirmed via distinct message IDs/timestamps, not a
+    logging artifact. The agent anchored on its own first (wrong) interpretation and kept
+    re-running the same tool instead of reconsidering the clearer follow-ups on their own
+    merits. This guardrail is prompt-level, not a hard code gate — best-effort like every other
+    AGENTIC_RULES bullet — but targets exactly this failure shape."""
+    prompt = skill._system_prompt(TID, role=role, name="Test")
+    assert "do NOT assume your previous interpretation" in prompt
+
+
 # ── create_invoice price-completeness gate ──────────────────────────────────────
 
 @pytest.mark.asyncio
