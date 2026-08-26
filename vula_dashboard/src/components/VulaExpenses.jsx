@@ -24,6 +24,7 @@ export default function VulaExpenses({ tenantId, defaultPaidBy }) {
   const [projects, setProjects] = useState([]);
   const [categories, setCategories] = useState([]);
   const [sections, setSections] = useState([]);
+  const [purposeCategories, setPurposeCategories] = useState([]);
   const [rep, setRep] = useState(null);
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(false);
@@ -50,6 +51,7 @@ export default function VulaExpenses({ tenantId, defaultPaidBy }) {
     setProjects(d.projects || []);
     setCategories(d.categories || []);
     setSections(d.sections || []);
+    setPurposeCategories(d.purpose_categories || []);
     setRep(r);
     setCards(c.cards || []);
     setBusy(false);
@@ -143,13 +145,13 @@ export default function VulaExpenses({ tenantId, defaultPaidBy }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: C.muted, background: C.alt }}>
-              {["Date", "What", "Who paid", "Amount", "VAT", "Category", "Project", "Section", "Notes", "Status", ""].map(h =>
+              {["Date", "What", "Who paid", "Amount", "VAT", "Category", "Purpose", "Project", "Section", "Notes", "Status", ""].map(h =>
                 <th key={h} style={th}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
-            {busy && <tr><td colSpan={11} style={{ ...td, color: C.muted }}>Loading…</td></tr>}
-            {!busy && !rows.length && <tr><td colSpan={11} style={{ ...td, color: C.muted }}>No expenses yet. Snap a receipt on WhatsApp or add one.</td></tr>}
+            {busy && <tr><td colSpan={12} style={{ ...td, color: C.muted }}>Loading…</td></tr>}
+            {!busy && !rows.length && <tr><td colSpan={12} style={{ ...td, color: C.muted }}>No expenses yet. Snap a receipt on WhatsApp or add one.</td></tr>}
             {rows.map(e => {
               const st = STATUS[e.status] || { label: e.status, color: C.muted };
               return (
@@ -171,6 +173,20 @@ export default function VulaExpenses({ tenantId, defaultPaidBy }) {
                       style={{ ...miniInput, maxWidth: 130 }}>
                       <option value="">{e.category || "—"}</option>
                       {categories.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
+                    </select>
+                  </td>
+                  <td style={td}>
+                    {/* Auto-classified from the receipt (WhatsApp scan) or set here manually —
+                        unlike project/category, no NULL-vs-'' distinction: purpose is either a
+                        real known category or genuinely still pending (amber "set…"). Picking
+                        one here always overrides an auto-classified guess and clears any kept
+                        free-text detail, since an explicit choice supersedes it. */}
+                    <select value={e.purpose_category || ""} onChange={ev => ev.target.value && assign(e.id, { purpose_category: ev.target.value })}
+                      title={e.purpose_detail || ""}
+                      style={{ ...miniInput, maxWidth: 130, borderColor: e.purpose_category ? C.border : C.amber }}>
+                      <option value="">{e.purpose_category ? e.purpose_category[0].toUpperCase() + e.purpose_category.slice(1) : "⚠ set…"}</option>
+                      {purposeCategories.filter(p => p !== e.purpose_category).map(p =>
+                        <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}
                     </select>
                   </td>
                   <td style={td}>

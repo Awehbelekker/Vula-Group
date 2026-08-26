@@ -431,12 +431,21 @@ def set_status(tenant_id: str, expense_id: str, status: str) -> dict:
 
 def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,
            account_code: Optional[str] = None, category: Optional[str] = None,
-           notes: Optional[str] = None, section: Optional[str] = None) -> dict:
+           notes: Optional[str] = None, section: Optional[str] = None,
+           purpose_category: Optional[str] = None) -> dict:
     """Owner corrects/allocates a claim → apply + LEARN the account/project rule for next time."""
     db = _client()
     row = (db.table("commerce_expenses").select("*").eq("tenant_id", tenant_id)
            .eq("id", expense_id).limit(1).execute().data or [None])[0]
     patch: Dict[str, Any] = {"updated_at": _now()}
+    if purpose_category:
+        # A manual dashboard correction always overrides whatever auto-classify decided —
+        # clears purpose_detail too, since a fresh explicit pick supersedes the earlier
+        # free-text guess it was standing in for.
+        if purpose_category not in PURPOSE_CATEGORIES:
+            raise ValueError(f"purpose_category must be one of {PURPOSE_CATEGORIES}")
+        patch["purpose_category"] = purpose_category
+        patch["purpose_detail"] = None
     if project is not None:
         # 2026-08-12 fix: this used to be `project or None`, silently converting an explicit ""
         # (a real, deliberate "this has no project" answer) back into NULL (never decided) —

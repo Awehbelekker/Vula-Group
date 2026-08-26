@@ -2405,6 +2405,7 @@ class ExpenseAssignIn(BaseModel):
     category: Optional[str] = None
     notes: Optional[str] = None
     section: Optional[str] = None
+    purpose_category: Optional[str] = None   # 'petrol' | 'clients' | 'accommodation' | 'other'
 
 
 @router.get("/{tenant_id}/admin/expenses")
@@ -2421,7 +2422,8 @@ async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
                                              project=project, since=since, until=until, paid_by=paid_by),
             "sections": expenses.known_sections(tenant_id, project=project),
             "projects": expenses.known_projects(tenant_id),
-            "categories": [{"code": a["code"], "name": a["name"]} for a in accounts]}
+            "categories": [{"code": a["code"], "name": a["name"]} for a in accounts],
+            "purpose_categories": list(expenses.PURPOSE_CATEGORIES)}
 
 
 @router.post("/{tenant_id}/admin/expenses")
@@ -2461,7 +2463,10 @@ async def admin_create_expense(tenant_id: str, body: ExpenseIn):
 async def admin_assign_expense(tenant_id: str, expense_id: str, body: ExpenseAssignIn):
     """Allocate/correct a claim (project + account) and LEARN it for next time."""
     from vula.commerce import expenses
-    return {"expense": expenses.assign(tenant_id, expense_id, **body.model_dump())}
+    try:
+        return {"expense": expenses.assign(tenant_id, expense_id, **body.model_dump())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/{tenant_id}/admin/expenses/{expense_id}/status")
