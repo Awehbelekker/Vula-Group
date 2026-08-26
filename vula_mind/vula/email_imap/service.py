@@ -178,7 +178,8 @@ async def download_attachment(creds: dict, uid: str, filename: str = "") -> Opti
 
 # ── Draft (IMAP APPEND) / send (SMTP) ─────────────────────────────────────────
 
-def _build(creds: dict, to: str, subject: str, body: str) -> EmailMessage:
+def _build(creds: dict, to: str, subject: str, body: str,
+           attachments: Optional[list[dict]] = None) -> EmailMessage:
     msg = EmailMessage()
     frm = creds["email"]
     if creds.get("from_name"):
@@ -192,6 +193,11 @@ def _build(creds: dict, to: str, subject: str, body: str) -> EmailMessage:
     # AI-originated text polluting the sample.
     msg["X-Vula-Sent"] = "1"
     msg.set_content(body)
+    for att in (attachments or []):
+        mime = att.get("mimetype") or "application/octet-stream"
+        maintype, _, subtype = mime.partition("/")
+        msg.add_attachment(att["content"], maintype=maintype or "application",
+                            subtype=subtype or "octet-stream", filename=att["filename"])
     return msg
 
 
@@ -216,11 +222,12 @@ async def save_draft(creds: dict, to: str, subject: str, body: str) -> dict:
     return await asyncio.to_thread(_save_draft, creds, to, subject, body)
 
 
-def _send(creds: dict, to: str, subject: str, body: str) -> dict:
+def _send(creds: dict, to: str, subject: str, body: str,
+          attachments: Optional[list[dict]] = None) -> dict:
     host, port = creds.get("smtp_host"), int(creds.get("smtp_port") or 465)
     if not host:
         return {"error": "no SMTP host configured"}
-    msg = _build(creds, to, subject, body)
+    msg = _build(creds, to, subject, body, attachments=attachments)
     ctx = ssl.create_default_context()
     if port == 587:
         with smtplib.SMTP(host, port, timeout=20) as s:
@@ -234,8 +241,9 @@ def _send(creds: dict, to: str, subject: str, body: str) -> dict:
     return {"sent": True, "to": to, "subject": subject}
 
 
-async def send(creds: dict, to: str, subject: str, body: str) -> dict:
-    return await asyncio.to_thread(_send, creds, to, subject, body)
+async def send(creds: dict, to: str, subject: str, body: str,
+                attachments: Optional[list[dict]] = None) -> dict:
+    return await asyncio.to_thread(_send, creds, to, subject, body, attachments)
 
 
 def _send_batch(creds: dict, messages: list[dict]) -> list[dict]:

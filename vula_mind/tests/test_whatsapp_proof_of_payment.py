@@ -54,7 +54,7 @@ async def test_proof_of_payment_adds_new_supplier(tmp_path):
         patch("vula.commerce.service.match_supplier", new=AsyncMock(return_value=None)),
         patch("vula.commerce.service.upsert_supplier", new=AsyncMock(return_value={"name": "Solucent (Pty) Ltd"})) as mock_upsert,
     ):
-        note = await _file_uploaded_document(
+        note, _row = await _file_uploaded_document(
             TID, "27821234567", _result(), local_path, "application/pdf",
             "Proof of Payment", "Payment notification to Solucent", fields)
 
@@ -83,7 +83,7 @@ async def test_proof_of_payment_skips_existing_supplier():
         patch("vula.commerce.service.upsert_supplier", new=AsyncMock()) as mock_upsert,
         patch.object(Path, "read_bytes", return_value=b"%PDF-1.7 fake"),
     ):
-        note = await _file_uploaded_document(
+        note, _row = await _file_uploaded_document(
             TID, "27821234567", _result(), Path("Payment Notification.pdf"),
             "application/pdf", "Proof of Payment", "summary", fields)
 
@@ -105,7 +105,7 @@ async def test_proof_of_payment_no_payee_name_does_not_crash():
         patch("vula.commerce.service.upsert_supplier", new=AsyncMock()) as mock_upsert,
         patch.object(Path, "read_bytes", return_value=b"%PDF-1.7 fake"),
     ):
-        note = await _file_uploaded_document(
+        note, _row = await _file_uploaded_document(
             TID, "27821234567", _result(), Path("Payment Notification.pdf"),
             "application/pdf", "Proof of Payment", "summary", fields)
 
@@ -134,7 +134,7 @@ async def test_supplier_invoice_adds_new_supplier():
         patch("vula.commerce.service.upsert_supplier", new=AsyncMock(return_value={"name": "Cape Brick Suppliers"})) as mock_upsert,
         patch.object(Path, "read_bytes", return_value=b"%PDF-1.7 fake"),
     ):
-        note = await _file_uploaded_document(
+        note, _row = await _file_uploaded_document(
             TID, "27821234567", _result(filename="Invoice.pdf"), Path("Invoice.pdf"),
             "application/pdf", "Invoice", "summary", fields)
 
@@ -161,7 +161,7 @@ async def test_supplier_invoice_skips_existing_supplier():
         patch("vula.commerce.service.upsert_supplier", new=AsyncMock()) as mock_upsert,
         patch.object(Path, "read_bytes", return_value=b"%PDF-1.7 fake"),
     ):
-        note = await _file_uploaded_document(
+        note, _row = await _file_uploaded_document(
             TID, "27821234567", _result(filename="Invoice.pdf"), Path("Invoice.pdf"),
             "application/pdf", "Invoice", "summary", fields)
 

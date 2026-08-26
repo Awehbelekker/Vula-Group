@@ -874,6 +874,12 @@ async def _handle_document_ingest(
         # commerce_invoices/expenses — tells _file_uploaded_document not to commit it again
         # (e.g. via a deep-analysis "Quote / Estimate" category the shortcut doesn't cover).
         already_committed = False
+        # Set whenever an expense claim gets created below (either scan path) — its value is
+        # the exact receipt_doc_id that claim was stored under, used after filing to backfill
+        # commerce_expenses.receipt_url with the real durable Storage URL (previously always
+        # NULL: the claim is created here, BEFORE the storage upload below produces a real URL,
+        # and nothing ever linked them back — confirmed live 2026-08-26 against real claims).
+        expense_claim_img_ref = None
         if role == "admin" and local_path.suffix.lower() == ".pdf":
             try:
                 import base64, httpx as _httpx
@@ -896,6 +902,7 @@ async def _handle_document_ingest(
                         if doc_type in ("receipt", "petty_cash") and total > 0:
                             # A receipt = money spent for the business → log as an EXPENSE CLAIM
                             # (who paid it, categorised, VAT split, allocated to a project).
+                            expense_claim_img_ref = result.doc_id
                             scan_msg = await _log_expense_claim(
                                 tenant_id, phone, scan_data, result.doc_id)
                         elif doc_type in ("invoice", "delivery_note") and total > 0:
@@ -971,6 +978,7 @@ async def _handle_document_ingest(
                     import hashlib
                     from vula.commerce.party import resolve_party_name
                     img_ref = "img:" + hashlib.sha256(local_path.read_bytes()).hexdigest()[:40]
+                    expense_claim_img_ref = img_ref
                     scan_msg = await _log_expense_claim(tenant_id, phone, {
                         "total_cents": round(total_r * 100),
                         "vat_cents": round(vat_r * 100),
@@ -1004,10 +1012,12 @@ async def _handle_document_ingest(
         # File the document: durable copy + project link + ClickUp attachment. Also books it
         # via the shared commit path (same as email/Smart Scanner) unless the vision-scan
         # shortcut above already committed it.
-        file_note = await _file_uploaded_document(
+        file_note, filed_row = await _file_uploaded_document(
             tenant_id, phone, result, local_path, mime_type,
             doc_category, summary, fields, already_committed=already_committed,
         )
+        if expense_claim_img_ref:
+            await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
 
         if scan_msg and any(k in scan_msg for k in ("💳", "♻️", "📦", "⚠️", "📸")):
             # Money was booked (or deliberately not) — lead with THAT, not the filing mechanics.
@@ -1223,14 +1233,33 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
         return None
 
 
+async def _backfill_receipt_url(tenant_id: str, receipt_doc_id: str, filed_row: Optional[dict]) -> None:
+    """Link a just-created expense claim back to its real, durable receipt photo URL.
+    Confirmed live 2026-08-26: commerce_expenses.receipt_url was always NULL — the claim gets
+    created (via _log_expense_claim, keyed by receipt_doc_id) BEFORE the storage upload below
+    produces a real URL, and nothing ever wrote it back. Best-effort — a failure here never
+    affects the claim/filing that already succeeded."""
+    if not filed_row or not filed_row.get("file_url"):
+        return
+    try:
+        from vula.commerce import service as _cs_receipt
+        _cs_receipt._client().table("commerce_expenses").update(
+            {"receipt_url": filed_row["file_url"]}
+        ).eq("tenant_id", tenant_id).eq("receipt_doc_id", receipt_doc_id).execute()
+    except Exception as exc:
+        logger.debug("receipt_url backfill skipped for %s: %s", receipt_doc_id, exc)
+
+
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
                                   category, summary, fields, already_committed=False,
-                                  source="whatsapp") -> str:
+                                  source="whatsapp"):
     """Match the document to a project and file it (durable copy + record + ClickUp).
     Also books it via the shared commit path (same as email/Smart Scanner) when it's a
     financial category the vision-scan shortcut hasn't already committed.
-    Returns a WhatsApp note: either 'Filed under X' or a 'which project?' question.
-    """
+    Returns (note, row): note is a WhatsApp note ('Filed under X' or a 'which project?'
+    question); row is the vula_filed_documents row (has the real durable file_url) — the
+    caller uses this to backfill commerce_expenses.receipt_url when this same photo was
+    already turned into an expense claim (see _log_expense_claim's call site above)."""
     try:
         from vula.integrations.doc_filing import (match_project, file_document, project_examples,
                                                   lookup_learned_project)
@@ -1383,10 +1412,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 logger.warning("Supplier auto-add from %s failed for %s: %s",
                               category, result.filename, exc)
 
-        return note
+        return note, row
     except Exception as exc:
         logger.warning("Document filing failed for %s: %s", getattr(result, "filename", "?"), exc)
-        return ""
+        return "", None
 
 
 # Caption keywords that mark a photo as "money I spent" → route to the expense/books path.

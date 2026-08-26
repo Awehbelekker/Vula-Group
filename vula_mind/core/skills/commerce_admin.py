@@ -554,6 +554,22 @@ MEETING_TOOLS = [
             "confirm": {"type": "boolean", "description": "Only true once the rep has agreed "
                 "to the previewed change."}},
             "required": ["instruction"]}}},
+    {"type": "function", "function": {
+        "name": "configure_expense_sheet",
+        "description": (
+            "Set up or change your monthly expense claim sheet: who it goes to, which day of "
+            "the month, and an optional monthly budget (you'll get a WhatsApp warning at 90% "
+            "and 100%). Every receipt you scan is added to it automatically. Only pass the "
+            "fields you're changing — anything left out keeps its current value."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "recipient_name_or_phone": {"type": "string", "description": "Look up an existing "
+                "contact by name or phone, if that's how the recipient was referred to."},
+            "recipient_email": {"type": "string"},
+            "day_of_month": {"type": "integer", "description": "1-28."},
+            "budget_rands": {"type": "number", "description": "Monthly expense budget in Rand. "
+                "Pass 0 to clear it."}},
+            "required": []}}},
 ]
 REMINDER_TOOLS = [
     {"type": "function", "function": {
@@ -1180,6 +1196,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "configure_call_sheet": return await self._configure_call_sheet(tid, args, ctx)
             if name == "view_call_sheet":     return await self._view_call_sheet(tid, ctx)
             if name == "update_call_sheet":   return await self._update_call_sheet(tid, args, ctx)
+            if name == "configure_expense_sheet": return await self._configure_expense_sheet(tid, args, ctx)
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
@@ -2381,6 +2398,68 @@ class CommerceAdminSkill(BaseSkill):
         return {"applied": True, "action": parsed["action"],
                 "count": len(updated.get("entries") or []),
                 "message": "Updated your call sheet."}
+
+    async def _configure_expense_sheet(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        phone = ctx.get("phone") or ""
+        if not phone:
+            return {"error": "Couldn't identify you — try again."}
+
+        upd: Dict[str, Any] = {}
+
+        who = (args.get("recipient_name_or_phone") or "").strip()
+        looked_up_email = None
+        if who:
+            digits = re.sub(r"\D", "", who)
+            try:
+                q = service._client().table("commerce_contacts").select("phone,email,name").eq("tenant_id", tid)
+                rows = (q.eq("phone", digits).execute().data if digits
+                        else q.ilike("name", f"%{who}%").limit(1).execute().data) or []
+                if rows:
+                    looked_up_email = rows[0].get("email") or None
+            except Exception as exc:
+                logger.debug("expense sheet recipient lookup skipped: %s", exc)
+            if not looked_up_email:
+                return {"error": f"Couldn't find a contact matching \"{who}\" — try their email directly."}
+
+        if "recipient_email" in args:
+            email = (args.get("recipient_email") or "").strip()
+            if email and "@" not in email:
+                return {"error": "That doesn't look like a valid email address."}
+            upd["expense_sheet_recipient_email"] = email or None
+        elif looked_up_email:
+            upd["expense_sheet_recipient_email"] = looked_up_email
+
+        if args.get("day_of_month") is not None:
+            day = args["day_of_month"]
+            if not isinstance(day, int) or not (1 <= day <= 28):
+                return {"error": "day_of_month must be between 1 and 28."}
+            upd["expense_sheet_day_of_month"] = day
+
+        if args.get("budget_rands") is not None:
+            rands = args["budget_rands"]
+            upd["expense_budget_cents"] = int(round(rands * 100)) if rands else None
+
+        if not upd:
+            return {"error": "Tell me what to change — a recipient, day of month, or budget."}
+
+        try:
+            service._client().table("vula_team_members").update(upd) \
+                .eq("tenant_id", tid).eq("whatsapp", phone).execute()
+        except Exception as exc:
+            logger.warning("configure_expense_sheet failed for %s/%s: %s", tid, phone, exc)
+            return {"error": "Couldn't save that — please try again."}
+
+        rows = (service._client().table("vula_team_members").select(
+                    "expense_sheet_recipient_email,expense_sheet_day_of_month,expense_budget_cents")
+                .eq("tenant_id", tid).eq("whatsapp", phone).limit(1).execute().data or [])
+        cfg = rows[0] if rows else upd
+        target = cfg.get("expense_sheet_recipient_email") or "no one yet"
+        day = cfg.get("expense_sheet_day_of_month", 1)
+        budget_cents = cfg.get("expense_budget_cents")
+        budget_str = f" Budget: R{budget_cents / 100:,.2f}/month." if budget_cents else ""
+        return {"saved": True,
+                "message": (f"Your expense sheet will go to {target} on day {day} of every "
+                            f"month.{budget_str}")}
 
     async def _competitor_check(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         query = (args.get("query") or "").strip()
