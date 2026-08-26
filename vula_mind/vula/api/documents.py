@@ -30,7 +30,7 @@ async def list_filed(
     tenant_id: str, project: Optional[str] = None, commerce_invoice_id: Optional[str] = None,
     customer_phone: Optional[str] = None, category: Optional[str] = None,
     since: Optional[str] = None, until: Optional[str] = None, search: Optional[str] = None,
-    limit: int = 100, offset: int = 0,
+    filed_by: Optional[str] = None, limit: int = 100, offset: int = 0,
 ) -> dict:
     """Filed documents for a tenant (newest first) — real filters (customer/category/date-range/
     text search), not just project, and real pagination (limit/offset, not a flat 500-row cap) so
@@ -48,6 +48,8 @@ async def list_filed(
             q = q.eq("customer_phone", customer_phone)
         if category:
             q = q.eq("category", category)
+        if filed_by:
+            q = q.eq("filed_by", filed_by)
         if since:
             q = q.gte("created_at", since)
         if until:

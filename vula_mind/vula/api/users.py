@@ -58,14 +58,25 @@ async def _find_user_id(email: str) -> Optional[str]:
     return m[0]["id"] if m else None
 
 
+# vula_tenant_users.role is DB-locked to owner|staff|master (migrations/005_storage_auth.sql) —
+# any other vula_team_members-style role label (e.g. "sales_rep", "manager", "bookkeeper") must
+# map to a valid login role here. Previously this passed the raw label straight through, which
+# silently failed the CHECK constraint (caught by the bare except below) — the Supabase Auth
+# user still got created, but with no vula_tenant_users row, so on login they landed in "set up
+# your own workspace" instead of the tenant they were meant to join. The real restriction for a
+# non-owner role lives in vula_team_members.access (see create_user below), not in this value.
+_TENANT_USER_ROLES = {"owner", "staff", "master"}
+
+
 def _map_tenant_user(user_id: str, tenant: str, role: str) -> None:
+    login_role = role if role in _TENANT_USER_ROLES else "staff"
     db = _client()
     existing = (db.table("vula_tenant_users").select("user_id")
                 .eq("user_id", user_id).eq("tenant_id", tenant).limit(1).execute().data or [])
     if existing:
-        db.table("vula_tenant_users").update({"role": role}).eq("user_id", user_id).eq("tenant_id", tenant).execute()
+        db.table("vula_tenant_users").update({"role": login_role}).eq("user_id", user_id).eq("tenant_id", tenant).execute()
     else:
-        db.table("vula_tenant_users").insert({"user_id": user_id, "tenant_id": tenant, "role": role}).execute()
+        db.table("vula_tenant_users").insert({"user_id": user_id, "tenant_id": tenant, "role": login_role}).execute()
 
 
 class CreateUserIn(BaseModel):
@@ -100,14 +111,20 @@ async def create_user(tenant: str, body: CreateUserIn,
     except Exception as exc:
         log.warning("tenant_users map failed: %s", exc)
 
-    # Directory record (best-effort; skip if no whatsapp to avoid unique-null clashes)
-    if body.whatsapp:
+    # Directory record (best-effort). Previously only ran (and only matched/stored) by whatsapp —
+    # but /v1/team/{tenant}/me (the actual access-gating lookup the dashboard uses) matches by
+    # EMAIL, which was never being written here at all, so a login's chosen `access` list could
+    # never actually be found again after creation. Now matches by whatsapp OR email (whichever
+    # is available) and always stores email, so the restriction this endpoint is asked to set up
+    # is actually reachable afterward.
+    if body.whatsapp or body.email:
         try:
             db = _client()
-            ex = (db.table("vula_team_members").select("id")
-                  .eq("tenant_id", tenant).eq("whatsapp", body.whatsapp).limit(1).execute().data or [])
+            q = db.table("vula_team_members").select("id").eq("tenant_id", tenant)
+            q = q.eq("whatsapp", body.whatsapp) if body.whatsapp else q.eq("email", body.email)
+            ex = (q.limit(1).execute().data or [])
             row = {"tenant_id": tenant, "name": body.name or body.email, "whatsapp": body.whatsapp,
-                   "role": body.role, "access": body.access or [], "active": True}
+                   "email": body.email, "role": body.role, "access": body.access or [], "active": True}
             if ex:
                 db.table("vula_team_members").update(row).eq("id", ex[0]["id"]).execute()
             else:

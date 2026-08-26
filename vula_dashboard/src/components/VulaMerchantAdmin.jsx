@@ -53,6 +53,11 @@ import VulaCSMetrics from './VulaCSMetrics'
 import VulaQS from './VulaQS'
 import VulaQSPro from './VulaQSPro'
 import VulaTakeoff from './VulaTakeoff'
+import VulaRepHome from './VulaRepHome'
+import VulaRepCrmContacts from './VulaRepCrmContacts'
+import VulaRepCallSheet from './VulaRepCallSheet'
+import VulaRepReminders from './VulaRepReminders'
+import VulaRepCrmLookup from './VulaRepCrmLookup'
 import VulaDraft from './VulaDraft'
 import VulaTraining from './VulaTraining'
 import VulaAutomations from './VulaAutomations'
@@ -107,7 +112,7 @@ function subtabsFor(navGroups, sectionId) {
 // confirmed the only two real callers, both always pass these. (The old uncontrolled/modal mode,
 // with its own hand-rolled tab strip and gating, was dead code superseded by that shell takeover
 // — deleted 2026-07-21 rather than kept as an unused second nav path to drift out of sync again.)
-export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, activeTab, onTabChange }) {
+export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange }) {
   const tab = activeTab
   const setTab = onTabChange
   // A member with a defined access list sees only those modules (+ overview). Owners/
@@ -146,7 +151,14 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             switch, so no component can carry stale state across tenants — not a perf concern,
             this only remounts the one currently-visible tab, not the whole dashboard shell. */}
         <div key={tenantId} style={styles.contentBare}>
-          {tab === 'overview'  && <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />}
+          {/* A restricted sales_rep login gets their own summary here instead of the tenant-wide
+              owner overview — 'overview' itself stays always-visible (merchantVisible's own
+              rule), only WHAT renders on it differs for this one role. */}
+          {tab === 'overview'  && (teamRole === 'sales_rep' && !full
+            ? <VulaRepHome tenantId={tenantId} repPhone={teamPhone} onNavigate={navigateTo} />
+            : <OverviewTab tenantId={tenantId} onNavigate={navigateTo} />)}
+          {tab === 'my-work' && <MyWorkSection tenantId={tenantId} repPhone={teamPhone} subtabs={subtabsFor(navGroups, 'my-work')}
+            pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'inbox'     && <VulaInbox        tenantId={tenantId} />}
           {tab === 'assistant-hub' && <AssistantSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'assistant-hub')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
@@ -293,6 +305,23 @@ function OperateSection({ tenantId, subtabs, pendingSubtab, onConsumePendingNav 
       {active === 'labour' && <VulaLabour tenantId={tenantId} />}
       {active === 'qsrates' && <VulaQSRates tenantId={tenantId} />}
       {active === 'documents' && <VulaDocuments tenantId={tenantId} />}
+    </div>
+  )
+}
+
+function MyWorkSection({ tenantId, repPhone, subtabs, pendingSubtab, onConsumePendingNav }) {
+  const { tabs, active, setActive } = useSectionTabs(subtabs || [], { defaultTabId: 'rep-contacts' })
+  useEffect(() => { if (pendingSubtab) { setActive(pendingSubtab); onConsumePendingNav() } }, [pendingSubtab])  // eslint-disable-line
+  return (
+    <div>
+      <SectionTabs tabs={tabs} active={active} onChange={setActive} />
+      {active === 'rep-contacts' && <VulaRepCrmContacts tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-callsheet' && <VulaRepCallSheet tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-bookings' && <VulaBookings tenantId={tenantId} />}
+      {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
+      {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
+      {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} />}
+      {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} />}
     </div>
   )
 }

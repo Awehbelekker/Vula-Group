@@ -25,18 +25,25 @@ def _llm_response(payload: dict):
 
 
 class _CapturingClient:
-    """No contact match; captures every insert() call's rows for inspection."""
+    """No contact match; captures every vula_reminders insert() call's rows for inspection.
+    _log_meeting also best-effort appends to vula_call_sheets (2026-08) — that insert is
+    deliberately not captured here, this fixture is scoped to the reminders assertion only."""
     def __init__(self):
         self.inserted_rows = []
+        self._table = None
 
-    def table(self, *a): return self
+    def table(self, name, *a):
+        self._table = name
+        return self
+
     def select(self, *a): return self
     def eq(self, *a): return self
     def ilike(self, *a): return self
     def limit(self, *a): return self
 
     def insert(self, rows):
-        self.inserted_rows.extend(rows if isinstance(rows, list) else [rows])
+        if self._table == "vula_reminders":
+            self.inserted_rows.extend(rows if isinstance(rows, list) else [rows])
         return self
 
     def execute(self): return SimpleNamespace(data=[])

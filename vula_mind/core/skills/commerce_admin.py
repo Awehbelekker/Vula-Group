@@ -518,6 +518,42 @@ MEETING_TOOLS = [
             "to_email": {"type": "string"}, "meeting_notes": {"type": "string"},
             "subject": {"type": "string"}},
             "required": ["to_email", "meeting_notes"]}}},
+    {"type": "function", "function": {
+        "name": "configure_call_sheet",
+        "description": (
+            "Set up or change your weekly call sheet: who it goes to, which day/time, and "
+            "whether by email, WhatsApp, or both. Every meeting you log with log_meeting is "
+            "added to it automatically. Only pass the fields you're changing — anything left "
+            "out keeps its current value. Pass recipient_email=\"\" or recipient_phone=\"\" to "
+            "clear that channel's target."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "recipient_name_or_phone": {"type": "string", "description": "Look up an existing "
+                "contact by name or phone, if that's how the recipient was referred to."},
+            "recipient_email": {"type": "string"},
+            "recipient_phone": {"type": "string"},
+            "channel": {"type": "string", "enum": ["email", "whatsapp", "both"]},
+            "day_of_week": {"type": "string", "enum": ["Monday", "Tuesday", "Wednesday",
+                                                        "Thursday", "Friday", "Saturday", "Sunday"]},
+            "time": {"type": "string", "description": "24h HH:MM, e.g. \"17:00\"."}},
+            "required": []}}},
+    {"type": "function", "function": {
+        "name": "view_call_sheet",
+        "description": "Show what's on your call sheet so far this week.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "update_call_sheet",
+        "description": (
+            "Correct an entry on your call sheet, or add a section that didn't come from a "
+            "logged meeting. Describe the change in plain language (e.g. \"the Dick meeting was "
+            "actually about self-levelling, not HBC\" or \"add a note that Sarah wants a Q4 "
+            "review\"). Only takes effect once you confirm."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "instruction": {"type": "string"},
+            "confirm": {"type": "boolean", "description": "Only true once the rep has agreed "
+                "to the previewed change."}},
+            "required": ["instruction"]}}},
 ]
 REMINDER_TOOLS = [
     {"type": "function", "function": {
@@ -1103,6 +1139,9 @@ class CommerceAdminSkill(BaseSkill):
                 return await draft_letter(args, tid, ctx.get("phone") or "")
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
+            if name == "configure_call_sheet": return await self._configure_call_sheet(tid, args, ctx)
+            if name == "view_call_sheet":     return await self._view_call_sheet(tid, ctx)
+            if name == "update_call_sheet":   return await self._update_call_sheet(tid, args, ctx)
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
@@ -2162,6 +2201,20 @@ class CommerceAdminSkill(BaseSkill):
         result: Dict[str, Any] = {"logged": True, "summary": summary, "action_items": formatted_items,
                                   "linked_contact": bool(customer_phone)}
 
+        # Auto-feed the rep's standing weekly call sheet (migration 138) — best-effort, never
+        # blocks the meeting log itself (which has already succeeded above regardless).
+        try:
+            from vula.commerce import call_sheet
+            brief = summary
+            if contact_name or customer_phone:
+                brief = f"{contact_name or customer_phone} — {brief}"
+            if formatted_items:
+                brief += " | Action items: " + "; ".join(formatted_items)
+            call_sheet.append_entry(tid, ctx.get("phone") or "", "log_meeting", brief,
+                                     meeting_note_id=filed_row.get("id"))
+        except Exception as exc:
+            logger.warning("call sheet auto-entry failed for %s: %s", tid, exc)
+
         # 2026-08-17: a meeting log the owner never actually sees isn't much use — render it onto
         # the tenant's real letterhead as a PDF and send it back, reusing draft_letter's existing
         # generation/render/send pipeline exactly as-is (site_meeting_minutes is already a valid
@@ -2192,6 +2245,122 @@ class CommerceAdminSkill(BaseSkill):
                               f"they've confirmed a specific date/time.")
 
         return result
+
+    _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    async def _configure_call_sheet(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        phone = ctx.get("phone") or ""
+        if not phone:
+            return {"error": "Couldn't identify you — try again."}
+
+        upd: Dict[str, Any] = {}
+
+        who = (args.get("recipient_name_or_phone") or "").strip()
+        looked_up_email, looked_up_phone = None, None
+        if who:
+            digits = re.sub(r"\D", "", who)
+            try:
+                q = service._client().table("commerce_contacts").select("phone,email,name").eq("tenant_id", tid)
+                rows = (q.eq("phone", digits).execute().data if digits
+                        else q.ilike("name", f"%{who}%").limit(1).execute().data) or []
+                if rows:
+                    looked_up_email = rows[0].get("email") or None
+                    looked_up_phone = rows[0].get("phone") or None
+            except Exception as exc:
+                logger.debug("call sheet recipient lookup skipped: %s", exc)
+            if not looked_up_email and not looked_up_phone:
+                return {"error": f"Couldn't find a contact matching \"{who}\" — try their email or phone directly."}
+
+        if "recipient_email" in args:
+            email = (args.get("recipient_email") or "").strip()
+            if email and "@" not in email:
+                return {"error": "That doesn't look like a valid email address."}
+            upd["call_sheet_recipient_email"] = email or None
+        elif looked_up_email:
+            upd["call_sheet_recipient_email"] = looked_up_email
+
+        if "recipient_phone" in args:
+            upd["call_sheet_recipient_phone"] = (args.get("recipient_phone") or "").strip() or None
+        elif looked_up_phone:
+            upd["call_sheet_recipient_phone"] = looked_up_phone
+
+        if args.get("channel"):
+            channel = args["channel"]
+            if channel not in ("email", "whatsapp", "both"):
+                return {"error": "channel must be email, whatsapp, or both."}
+            upd["call_sheet_channel"] = channel
+
+        if args.get("day_of_week"):
+            day = args["day_of_week"]
+            if day not in self._DAY_NAMES:
+                return {"error": f"day_of_week must be one of: {', '.join(self._DAY_NAMES)}."}
+            upd["call_sheet_day_of_week"] = self._DAY_NAMES.index(day)
+
+        if args.get("time"):
+            m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", args["time"].strip())
+            if not m:
+                return {"error": "time must be 24h HH:MM, e.g. \"17:00\"."}
+            upd["call_sheet_hour"] = int(m.group(1))
+            upd["call_sheet_minute"] = int(m.group(2))
+
+        if not upd:
+            return {"error": "Tell me what to change — a recipient, day/time, or channel."}
+
+        try:
+            service._client().table("vula_team_members").update(upd) \
+                .eq("tenant_id", tid).eq("whatsapp", phone).execute()
+        except Exception as exc:
+            logger.warning("configure_call_sheet failed for %s/%s: %s", tid, phone, exc)
+            return {"error": "Couldn't save that — please try again."}
+
+        rows = (service._client().table("vula_team_members").select(
+                    "call_sheet_recipient_email,call_sheet_recipient_phone,call_sheet_channel,"
+                    "call_sheet_day_of_week,call_sheet_hour,call_sheet_minute")
+                .eq("tenant_id", tid).eq("whatsapp", phone).limit(1).execute().data or [])
+        cfg = rows[0] if rows else upd
+        day_name = self._DAY_NAMES[cfg.get("call_sheet_day_of_week", 4)]
+        time_str = f"{cfg.get('call_sheet_hour', 17):02d}:{cfg.get('call_sheet_minute', 0):02d}"
+        target = cfg.get("call_sheet_recipient_email") or cfg.get("call_sheet_recipient_phone") or "no one yet"
+        return {"saved": True,
+                "message": (f"Your call sheet will go to {target} every {day_name} at {time_str}, "
+                            f"by {cfg.get('call_sheet_channel', 'email')}.")}
+
+    async def _view_call_sheet(self, tid: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        phone = ctx.get("phone") or ""
+        if not phone:
+            return {"error": "Couldn't identify you — try again."}
+        from vula.commerce import call_sheet
+        row = call_sheet.get_or_create_open_call_sheet(tid, phone)
+        entries = row.get("entries") or []
+        return {"entries": entries, "count": len(entries),
+                "formatted": call_sheet.format_call_sheet(ctx.get("caller_name") or "You", entries)}
+
+    async def _update_call_sheet(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        phone = ctx.get("phone") or ""
+        instruction = (args.get("instruction") or "").strip()
+        if not phone:
+            return {"error": "Couldn't identify you — try again."}
+        if not instruction:
+            return {"error": "Describe the change you'd like."}
+
+        from vula.commerce import call_sheet
+        row = call_sheet.get_or_create_open_call_sheet(tid, phone)
+        entries = row.get("entries") or []
+        parsed = await call_sheet.parse_update_instruction(entries, instruction)
+        if parsed.get("error"):
+            return parsed
+
+        if not args.get("confirm"):
+            preview = (f"Add: \"{parsed['text']}\"" if parsed["action"] == "add"
+                       else f"Change entry to: \"{parsed['text']}\"" if parsed["action"] == "edit"
+                       else "Remove that entry")
+            return {"preview": True, "change": preview,
+                    "message": f"{preview}. Confirm to apply this (call again with confirm=true)."}
+
+        updated = call_sheet.apply_edit(tid, phone, parsed["action"], parsed.get("entry_id"), parsed.get("text"))
+        return {"applied": True, "action": parsed["action"],
+                "count": len(updated.get("entries") or []),
+                "message": "Updated your call sheet."}
 
     async def _competitor_check(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         query = (args.get("query") or "").strip()

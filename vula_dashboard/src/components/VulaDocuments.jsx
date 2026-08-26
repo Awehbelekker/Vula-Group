@@ -171,7 +171,7 @@ const GRID_STYLES = `
 `;
 
 const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-const CATEGORIES = ["invoice", "receipt", "quote", "delivery_note", "media", "other"];
+const CATEGORIES = ["invoice", "receipt", "quote", "delivery_note", "media", "meeting_notes", "other"];
 
 function DocTile({ doc, projects, onAssign, onOpenImage }) {
   const ext = "." + (doc.filename || "").split(".").pop().toLowerCase();
@@ -211,14 +211,14 @@ function DocTile({ doc, projects, onAssign, onOpenImage }) {
   );
 }
 
-export function FiledLibrary({ tenantId, customerPhone, title = "📂 Documents & media" }) {
+export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = "📂 Documents & media" }) {
   const [docs, setDocs] = useState([]);
   const [projects, setProjects] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
   const [lightboxDoc, setLightboxDoc] = useState(null);
-  const [filters, setFilters] = useState({ search: "", category: "", customer_phone: customerPhone || "", since: "", until: "" });
+  const [filters, setFilters] = useState({ search: "", category: "", customer_phone: customerPhone || "", since: "", until: "", filed_by: defaultFiledBy || "" });
   const [offset, setOffset] = useState(0);
   const PAGE = 24;
 
@@ -467,7 +467,7 @@ function DriveImport({ tenantId, onImported }) {
   );
 }
 
-export default function VulaDocuments({ tenantId: propTenantId }) {
+export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }) {
   const [tenantId, setTenantId] = useState(propTenantId || "default");
   useEffect(() => { if (propTenantId) setTenantId(propTenantId); }, [propTenantId]);
   const [docs, setDocs] = useState([]);
@@ -616,7 +616,7 @@ export default function VulaDocuments({ tenantId: propTenantId }) {
 
       {/* Filed documents — durable copies, modern grid+lightbox, filterable (project/customer/
           category/date/search). key bump forces a reload after a media upload lands. */}
-      <FiledLibrary key={libraryKey} tenantId={tenantId} />
+      <FiledLibrary key={libraryKey} tenantId={tenantId} defaultFiledBy={defaultFiledBy} />
 
       {/* Raw KB-ingest status list */}
       <div style={{

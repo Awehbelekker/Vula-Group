@@ -167,6 +167,25 @@ async def _weekly_rates_loop() -> None:
         await _asyncio.sleep(7 * 24 * 3600)  # sleep one week
 
 
+async def _call_sheet_loop() -> None:
+    """Weekly per-rep call-sheet digest. Own loop (not job_config-driven — see
+    vula/commerce/call_sheet.py's module docstring): a rep's schedule/recipient config lives on
+    vula_team_members, one row per rep, not on the tenant-scoped commerce_scheduled_job_config
+    table. Runs hourly — each rep's own configured day/hour (is_due()) is the real gate; this is
+    just a reasonably fresh polling cadence."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(900)  # settle on boot, after the other loops
+    while True:
+        try:
+            from vula.commerce.call_sheet import run_weekly_call_sheets
+            sent = await run_weekly_call_sheets()
+            if sent:
+                log.info("Weekly call sheet sent to %d rep(s)", sent)
+        except Exception as exc:
+            log.warning("Call sheet loop error: %s", exc)
+        await _asyncio.sleep(3600)  # check hourly; per-rep due-check makes this safe
+
+
 async def _daily_trial_expiry_loop() -> None:
     """Warn tenants whose free trial is expiring soon. Runs daily, starts 2h after boot."""
     import asyncio as _asyncio
@@ -767,6 +786,7 @@ def _start_scheduled_job_tasks() -> None:
     _asyncio.create_task(_daily_commerce_jobs_loop())
     _asyncio.create_task(_email_sync_loop())
     _asyncio.create_task(_weekly_rates_loop())
+    _asyncio.create_task(_call_sheet_loop())
     _asyncio.create_task(_daily_trial_expiry_loop())
     # One config-driven poller replaces the five fixed wall-clock loops (delivery briefing,
     # sales summary, unpaid chase, low stock, Friday reminder) — see migration 069 + the

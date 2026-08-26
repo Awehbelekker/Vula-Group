@@ -98,7 +98,27 @@ export const MERCHANT_GROUPS = [
     { id: "team", icon: "👥", label: "Team" },
     { id: "settings", icon: "⚙️", label: "Settings" },
   ]},
+  // Sales rep dashboard (2026-08): a genuinely separate, restricted view — a sales_rep team
+  // member's dashboard login has `access` set to exactly these ids (VulaTeam.jsx defaults this
+  // automatically when creating a sales_rep login), so merchantVisible hides every other group
+  // for them while an owner/staff login (full=true) sees this alongside everything else.
+  { label: "My Work", items: [
+    { id: "my-work", icon: "🧑‍💼", label: "My Work", subtabs: [
+      { id: "rep-contacts", icon: "📇", label: "Contacts" },
+      { id: "rep-callsheet", icon: "📋", label: "Call Sheet" },
+      { id: "rep-bookings", icon: "📅", label: "Bookings" },
+      { id: "rep-documents", icon: "📂", label: "Documents" },
+      { id: "rep-reminders", icon: "⏰", label: "Reminders" },
+      { id: "rep-expenses", icon: "💸", label: "Expenses" },
+      { id: "rep-crm", icon: "🔗", label: "Dynamics 365" },
+    ]},
+  ]},
 ];
+
+/** The full set of ids a fresh sales_rep dashboard login gets by default (VulaTeam.jsx uses
+ * this when creating a login with role="sales_rep") — every "My Work" leaf, nothing tenant-wide. */
+export const REP_DEFAULT_ACCESS = ["rep-contacts", "rep-callsheet", "rep-bookings",
+  "rep-documents", "rep-reminders", "rep-expenses", "rep-crm"];
 
 // Master shell (Vula operator console — NOT a tenant's own tools). ids = App.jsx TABS ids.
 // Construction-specific tools (QS/Takeoff/Draft/Training/Workspace/Projects/Field Ops/Docs) were
@@ -151,7 +171,11 @@ export const MASTER_GROUPS = MASTER_ZONES.flatMap((z) => z.groups);
 // This used to be a hand-copy of VulaMerchantAdmin's own internal CORE/MODMAP — and had already
 // drifted (missing `discounts: 'products'`) before that internal copy was deleted (2026-07-21).
 // This is now the ONLY copy, so it can't drift again by construction.
-const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'qsrates', 'pages', 'marketing', 'bank', 'books', 'labour', 'expenses', 'import', 'wa-templates', 'scheduling']);
+const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'qsrates', 'pages', 'marketing', 'bank', 'books', 'labour', 'expenses', 'import', 'wa-templates', 'scheduling',
+  // Sales rep dashboard tabs — not gated by tenant business-type modules (the sales_rep feature
+  // itself is already module-gated at the WhatsApp tool layer); the real gate here is the
+  // per-login `access` list, same as 'team'/'settings' are gated by `full` instead of modules.
+  'rep-contacts', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-crm']);
 const MERCHANT_MODMAP = {
   customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft', training: 'training',

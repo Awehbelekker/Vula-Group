@@ -292,7 +292,7 @@ async def create_claim(
 
 def list_claims(tenant_id: str, *, status: Optional[str] = None, reimbursable: Optional[bool] = None,
                 project: Optional[str] = None, since: Optional[str] = None,
-                until: Optional[str] = None, limit: int = 500) -> List[dict]:
+                until: Optional[str] = None, paid_by: Optional[str] = None, limit: int = 500) -> List[dict]:
     q = (_client().table("commerce_expenses").select("*").eq("tenant_id", tenant_id)
          .order("date", desc=True).limit(limit))
     if status:
@@ -305,6 +305,8 @@ def list_claims(tenant_id: str, *, status: Optional[str] = None, reimbursable: O
         q = q.gte("date", since)
     if until:
         q = q.lte("date", until)
+    if paid_by:
+        q = q.eq("paid_by", paid_by)
     try:
         return q.execute().data or []
     except Exception as exc:

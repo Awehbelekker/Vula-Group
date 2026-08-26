@@ -19,7 +19,7 @@ const STATUS = {
   rejected: { label: "Rejected", color: C.red },
 };
 
-export default function VulaExpenses({ tenantId }) {
+export default function VulaExpenses({ tenantId, defaultPaidBy }) {
   const [rows, setRows] = useState([]);
   const [projects, setProjects] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -36,7 +36,11 @@ export default function VulaExpenses({ tenantId }) {
 
   const load = async () => {
     setBusy(true);
-    const q = filter === "owed" ? "?reimbursable=true" : filter === "all" ? "" : `?status=${filter}`;
+    const params = new URLSearchParams();
+    if (filter === "owed") params.set("reimbursable", "true");
+    else if (filter !== "all") params.set("status", filter);
+    if (defaultPaidBy) params.set("paid_by", defaultPaidBy);
+    const q = params.toString() ? `?${params}` : "";
     const [d, r, c] = await Promise.all([
       api(tenantId, `/expenses${q}`).catch(() => ({ expenses: [] })),
       api(tenantId, `/reports/expenses`).catch(() => null),

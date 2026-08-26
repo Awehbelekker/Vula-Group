@@ -92,6 +92,25 @@ async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
         return _popup("Dynamics 365 connection failed. Please try again.", ok=False)
 
 
+@router.get("/{tenant_id}/search")
+async def search(tenant_id: str, query: str = "", kind: str = "contact", limit: int = 8) -> dict:
+    """Thin lookup endpoint for the dashboard's rep CRM screen — wraps the same client functions
+    the WhatsApp `dynamics_lookup` tool already uses (core/skills/commerce_admin.py)."""
+    if kind not in ("account", "contact", "opportunity"):
+        return {"error": "kind must be account, contact, or opportunity"}
+    try:
+        if kind == "account":
+            results = await client.search_accounts(tenant_id, query, limit)
+        elif kind == "contact":
+            results = await client.search_contacts(tenant_id, query, limit)
+        else:
+            results = await client.list_opportunities(tenant_id, query, limit)
+        return {"results": results}
+    except Exception as exc:
+        log.warning("Dynamics365 search failed for %s: %s", tenant_id, exc)
+        return {"error": str(exc)[:200]}
+
+
 @router.get("/status/{tenant_id}")
 async def status(tenant_id: str) -> dict:
     try:

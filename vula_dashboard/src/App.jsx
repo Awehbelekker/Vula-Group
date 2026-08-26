@@ -98,7 +98,7 @@ export default function App() {
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brandLogoUrl, setBrandLogoUrl] = useState(null); // live logo_url from Settings, overrides tenantThemes' static fallback
-  const { user, role, tenantId, logout, access, full, setMember } = useAuthStore();
+  const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
 
   // DB-driven tenant switcher: every configured tenant, not a hardcoded pair.
   useEffect(() => {
@@ -156,7 +156,7 @@ export default function App() {
     const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
     fetch(`${API}/v1/team/${tid}/me?email=${encodeURIComponent(user.email || "")}`)
       .then((r) => r.json())
-      .then((d) => setMember({ access: d.access, full: d.full }))
+      .then((d) => setMember({ access: d.access, full: d.full, role: d.role, whatsapp: d.whatsapp }))
       .catch(() => setMember({ access: [], full: true }));
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
@@ -243,7 +243,7 @@ export default function App() {
           onLogout={logout}
         >
           <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} navGroups={groups}
-            access={access} full={full} activeTab={merchTab} onTabChange={setMerchTab} />
+            access={access} full={full} teamRole={teamRole} teamPhone={teamPhone} activeTab={merchTab} onTabChange={setMerchTab} />
         </VulaShell>
         <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
       </div>

@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
+import { REP_DEFAULT_ACCESS } from "../navConfig.jsx";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
@@ -14,6 +15,11 @@ const MODULES = [
   ["invoices", "Invoices"], ["finances", "Finances"], ["budget", "Budget"], ["customers", "Customers"],
   ["contacts", "Contacts"], ["followups", "Follow-ups"], ["broadcast", "Broadcast"],
   ["projects", "Projects"], ["qsrates", "QS Rates"], ["documents", "Documents"], ["scanner", "Scanner"],
+  // Sales rep dashboard ("My Work") tabs — a sales_rep login gets these by default (see
+  // createLogin below); listed here too so any member's access can be manually adjusted.
+  ["rep-contacts", "My Contacts"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
+  ["rep-documents", "My Documents"], ["rep-reminders", "My Reminders"], ["rep-expenses", "My Expenses"],
+  ["rep-crm", "My Dynamics 365"],
 ];
 const EVENTS = [
   ["which_project", "Which-project?"], ["followup_digest", "Follow-up digest"],
@@ -43,7 +49,7 @@ export default function VulaTeam({ tenantId }) {
   const [members, setMembers] = useState([]);
   const [form, setForm] = useState({ name: "", whatsapp: "", role: "staff" });
   const [logins, setLogins] = useState([]);
-  const [loginForm, setLoginForm] = useState({ email: "", role: "staff" });
+  const [loginForm, setLoginForm] = useState({ email: "", role: "staff", whatsapp: "" });
   const [tempPw, setTempPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [msg, setMsg] = useState("");
@@ -69,11 +75,21 @@ export default function VulaTeam({ tenantId }) {
 
   const createLogin = async () => {
     if (!loginForm.email) return;
+    if (loginForm.role === "sales_rep" && !loginForm.whatsapp.trim()) {
+      setMsg("A Sales Rep login needs a WhatsApp number — it's how My Work scopes their data.");
+      return;
+    }
     setMsg(""); setTempPw("");
+    // A sales_rep login is meant to be a genuinely separate, restricted "My Work" view — default
+    // its access to exactly those tabs (still editable afterward via the team-directory chips
+    // below) rather than leaving it empty, which today's `full = !access.length` rule would
+    // otherwise treat as full owner-equivalent access.
+    const body = loginForm.role === "sales_rep"
+      ? { ...loginForm, access: REP_DEFAULT_ACCESS } : loginForm;
     const d = await fetch(`${VULA_API}/v1/users/${tenantId}/users`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(loginForm),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     }).then((x) => x.json());
-    if (d.temp_password) { setTempPw(`${d.email} — temporary password: ${d.temp_password}`); setLoginForm({ email: "", role: "staff" }); load(); }
+    if (d.temp_password) { setTempPw(`${d.email} — temporary password: ${d.temp_password}`); setLoginForm({ email: "", role: "staff", whatsapp: "" }); load(); }
     else setMsg(d.error || "Could not create login");
   };
   const resetPw = async (uid, email) => {
@@ -127,11 +143,17 @@ export default function VulaTeam({ tenantId }) {
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <input placeholder="staff@email.com" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, minWidth: 220 }} />
+          <input placeholder="WhatsApp e.g. 2782… (optional)" value={loginForm.whatsapp} onChange={(e) => setLoginForm({ ...loginForm, whatsapp: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, minWidth: 180 }} />
           <select value={loginForm.role} onChange={(e) => setLoginForm({ ...loginForm, role: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }}>
             {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
           </select>
           <button onClick={createLogin} style={{ padding: "8px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Create login</button>
         </div>
+        {loginForm.role === "sales_rep" && (
+          <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>
+            WhatsApp number is required for a Sales Rep login — it's how "My Work" scopes contacts, call sheet, reminders, and expenses to them specifically.
+          </div>
+        )}
 
         {tempPw && <div style={{ background: "#FBF7E9", border: "1px solid #E6D9A8", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: "#6B5A12", marginBottom: 10 }}>🔑 {tempPw} <span style={{ color: C.muted }}>(copy now — shown once)</span></div>}
         {msg && <div style={{ fontSize: 12.5, color: msg.includes("✓") ? "#2C7A4B" : "#A23B2D", marginBottom: 10 }}>{msg}</div>}

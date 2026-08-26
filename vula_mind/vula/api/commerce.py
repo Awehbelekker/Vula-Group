@@ -15,7 +15,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -1459,6 +1459,160 @@ async def admin_agent_activity(tenant_id: str, limit: int = 60):
     return {"events": events}
 
 
+# ── Sales rep dashboard: contacts, reminders, call sheet ────────────────────────
+# Thin admin endpoints backing the new "My Work" rep dashboard (2026-08). Each accepts an
+# optional rep-scoping param (created_by/filed_by/rep_phone) — the frontend already resolves
+# its own phone from the server-verified /v1/team/{tid}/me lookup, so this is a display filter,
+# not a new auth boundary (route-level access is still tenant_admin_guard, same as every other
+# /admin/ route).
+
+@router.get("/{tenant_id}/admin/contacts")
+async def admin_list_contacts(tenant_id: str, created_by: str = "", search: str = ""):
+    q = (service._client().table("commerce_contacts").select("*").eq("tenant_id", tenant_id))
+    if created_by:
+        q = q.eq("created_by", created_by)
+    if search:
+        q = q.ilike("name", f"%{search}%")
+    rows = q.order("created_at", desc=True).limit(200).execute().data or []
+    return {"contacts": rows}
+
+
+class ContactIn(BaseModel):
+    name: str
+    phone: str = ""
+    email: str = ""
+    company: str = ""
+    title: str = ""
+    notes: str = ""
+    created_by: str = ""
+
+
+@router.post("/{tenant_id}/admin/contacts")
+async def admin_upsert_contact(tenant_id: str, body: ContactIn):
+    from uuid import uuid4
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    phone = "".join(c for c in (body.phone or "") if c.isdigit())
+    if phone.startswith("0"):
+        phone = "27" + phone[1:]
+    if not phone:
+        phone = f"nophone-{uuid4().hex[:10]}"
+    row = {"tenant_id": tenant_id, "phone": phone, "name": name,
+           "email": body.email or None, "company": body.company or None,
+           "title": body.title or None, "notes": body.notes or None,
+           "source": "dashboard", "created_by": body.created_by or None}
+    res = (service._client().table("commerce_contacts")
+           .upsert(row, on_conflict="tenant_id,phone").execute())
+    return {"saved": True, "contact": (res.data or [row])[0]}
+
+
+@router.get("/{tenant_id}/admin/reminders")
+async def admin_list_reminders(tenant_id: str, created_by: str = "", status: str = "open"):
+    q = (service._client().table("vula_reminders").select("id,text,due_at,status,created_at")
+         .eq("tenant_id", tenant_id))
+    if created_by:
+        q = q.eq("created_by", created_by)
+    if status != "all":
+        q = q.eq("status", status)
+    rows = q.order("due_at", desc=False).limit(50).execute().data or []
+    return {"reminders": rows}
+
+
+@router.patch("/{tenant_id}/admin/reminders/{reminder_id}")
+async def admin_complete_reminder(tenant_id: str, reminder_id: str):
+    res = (service._client().table("vula_reminders")
+           .update({"status": "done", "completed_at": service._now()})
+           .eq("id", reminder_id).eq("tenant_id", tenant_id).execute())
+    if not res.data:
+        raise HTTPException(status_code=404, detail="reminder not found")
+    return {"completed": True}
+
+
+@router.get("/{tenant_id}/admin/call-sheet")
+async def admin_get_call_sheet(tenant_id: str, rep_phone: str):
+    """The calling rep's own standing config + current open call sheet — resolves strictly by
+    rep_phone (their vula_team_members.whatsapp), never returns another rep's data."""
+    if not rep_phone:
+        raise HTTPException(status_code=400, detail="rep_phone is required")
+    from vula.commerce import call_sheet
+    rows = (service._client().table("vula_team_members").select(
+                "whatsapp,name,call_sheet_recipient_email,call_sheet_recipient_phone,"
+                "call_sheet_channel,call_sheet_day_of_week,call_sheet_hour,call_sheet_minute,"
+                "call_sheet_last_sent_at")
+            .eq("tenant_id", tenant_id).eq("whatsapp", rep_phone).limit(1).execute().data or [])
+    config = rows[0] if rows else {}
+    sheet = call_sheet.get_or_create_open_call_sheet(tenant_id, rep_phone)
+    return {"config": config, "entries": sheet.get("entries") or []}
+
+
+class CallSheetConfigIn(BaseModel):
+    rep_phone: str
+    recipient_email: Optional[str] = None
+    recipient_phone: Optional[str] = None
+    channel: Optional[str] = None
+    day_of_week: Optional[int] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    budget_rands: Optional[float] = None
+
+
+@router.post("/{tenant_id}/admin/call-sheet/configure")
+async def admin_configure_call_sheet(tenant_id: str, body: CallSheetConfigIn):
+    upd: Dict[str, Any] = {}
+    if body.recipient_email is not None:
+        upd["call_sheet_recipient_email"] = body.recipient_email or None
+    if body.recipient_phone is not None:
+        upd["call_sheet_recipient_phone"] = body.recipient_phone or None
+    if body.channel is not None:
+        if body.channel not in ("email", "whatsapp", "both"):
+            raise HTTPException(status_code=400, detail="channel must be email, whatsapp, or both")
+        upd["call_sheet_channel"] = body.channel
+    if body.day_of_week is not None:
+        if not 0 <= body.day_of_week <= 6:
+            raise HTTPException(status_code=400, detail="day_of_week must be 0 (Monday)..6 (Sunday)")
+        upd["call_sheet_day_of_week"] = body.day_of_week
+    if body.hour is not None:
+        upd["call_sheet_hour"] = body.hour
+    if body.minute is not None:
+        upd["call_sheet_minute"] = body.minute
+    if body.budget_rands is not None:
+        upd["expense_budget_cents"] = round(body.budget_rands * 100)
+    if not upd:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    res = (service._client().table("vula_team_members").update(upd)
+           .eq("tenant_id", tenant_id).eq("whatsapp", body.rep_phone).execute())
+    if not res.data:
+        raise HTTPException(status_code=404, detail="rep not found")
+    return {"saved": True, "config": res.data[0]}
+
+
+class CallSheetUpdateIn(BaseModel):
+    rep_phone: str
+    instruction: str
+    confirm: bool = False
+
+
+@router.post("/{tenant_id}/admin/call-sheet/update")
+async def admin_update_call_sheet(tenant_id: str, body: CallSheetUpdateIn):
+    from vula.commerce import call_sheet
+    instruction = (body.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="instruction is required")
+    row = call_sheet.get_or_create_open_call_sheet(tenant_id, body.rep_phone)
+    parsed = await call_sheet.parse_update_instruction(row.get("entries") or [], instruction)
+    if parsed.get("error"):
+        return parsed
+    if not body.confirm:
+        preview = (f"Add: \"{parsed['text']}\"" if parsed["action"] == "add"
+                   else f"Change entry to: \"{parsed['text']}\"" if parsed["action"] == "edit"
+                   else "Remove that entry")
+        return {"preview": True, "change": preview}
+    updated = call_sheet.apply_edit(tenant_id, body.rep_phone, parsed["action"],
+                                     parsed.get("entry_id"), parsed.get("text"))
+    return {"applied": True, "entries": updated.get("entries") or []}
+
+
 class TeachRequest(BaseModel):
     question: str
     answer: str
@@ -2256,14 +2410,15 @@ class ExpenseAssignIn(BaseModel):
 @router.get("/{tenant_id}/admin/expenses")
 async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
                               reimbursable: Optional[bool] = None, project: Optional[str] = None,
-                              since: Optional[str] = None, until: Optional[str] = None):
+                              since: Optional[str] = None, until: Optional[str] = None,
+                              paid_by: Optional[str] = None):
     from vula.commerce import expenses, accounting
     # Real chart-of-accounts categories for the dashboard's category dropdown — deliberately
     # curated/finite (not free text), unlike `project` which is inherently open-ended. Expense
     # accounts only; an expense is never income.
     accounts = [a for a in accounting.ensure_chart(tenant_id) if a.get("type") == "expense"]
     return {"expenses": expenses.list_claims(tenant_id, status=status, reimbursable=reimbursable,
-                                             project=project, since=since, until=until),
+                                             project=project, since=since, until=until, paid_by=paid_by),
             "sections": expenses.known_sections(tenant_id, project=project),
             "projects": expenses.known_projects(tenant_id),
             "categories": [{"code": a["code"], "name": a["name"]} for a in accounts]}

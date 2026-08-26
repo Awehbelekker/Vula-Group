@@ -141,15 +141,15 @@ async def me(tenant: str, email: str = "") -> dict:
     """The logged-in member's profile (role/access/notify) — drives dashboard gating.
     Owners/unknown emails get full access (empty access list = see everything)."""
     try:
-        rows = (_client().table("vula_team_members").select("role,access,notify,name")
+        rows = (_client().table("vula_team_members").select("role,access,notify,name,whatsapp")
                 .eq("tenant_id", tenant).eq("email", email).limit(1).execute().data or [])
     except Exception:
         rows = []
     if not rows:
-        return {"role": "owner", "access": [], "notify": list(_EVENTS), "full": True}
+        return {"role": "owner", "access": [], "notify": list(_EVENTS), "full": True, "whatsapp": None}
     m = rows[0]
     return {"role": m.get("role"), "access": m.get("access") or [],
-            "notify": m.get("notify") or [], "name": m.get("name"),
+            "notify": m.get("notify") or [], "name": m.get("name"), "whatsapp": m.get("whatsapp"),
             "full": (m.get("role") in ("owner", "manager")) or not (m.get("access") or [])}
 
 
