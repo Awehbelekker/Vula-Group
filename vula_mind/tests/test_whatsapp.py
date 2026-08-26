@@ -132,6 +132,30 @@ def test_inbound_image_caption_from_sales_rep_reaches_commerce_admin():
     mock_ingest.assert_not_called()
 
 
+def test_inbound_image_caption_from_sales_rep_includes_photo_description():
+    """2026-08-26, same-day follow-on: a rep asking "could you see the architect details in the
+    picture?" previously only ever reached the bare caption — the agent had no way to actually
+    see the photo's content, so it just asked for the photo again. The caption now gets combined
+    with a real vision-description of the photo before reaching commerce_admin."""
+    with (
+        patch("vula.api.whatsapp._resolve_number_route", return_value=("gerflor", "knowledge")),
+        patch("vula.api.whatsapp._sender_is_sales_rep", new_callable=AsyncMock, return_value=True),
+        patch("vula.api.whatsapp._describe_photo_for_rep", new_callable=AsyncMock,
+              return_value="A business card for Jane Smith, ABC Architects, 082 555 1234."),
+        patch("vula.api.whatsapp._run_commerce_admin", new_callable=AsyncMock, return_value=True) as mock_admin,
+        patch("vula.api.whatsapp._handle_media", new_callable=AsyncMock) as mock_media,
+        patch("vula.commerce.service._client", return_value=MagicMock()),
+    ):
+        resp = client.post("/v1/whatsapp/webhook",
+                            json=_wa_image_payload("+27645755210", "Can you research this contact?",
+                                                    msg_id="wamid.img3"))
+    assert resp.status_code == 200
+    called_text = mock_admin.call_args.args[1]
+    assert "Can you research this contact?" in called_text
+    assert "Jane Smith, ABC Architects" in called_text
+    mock_media.assert_not_called()
+
+
 def test_inbound_image_caption_from_non_rep_falls_through_to_document_ingest():
     """A non-sales_rep sender's captioned photo keeps the existing behaviour (generic media/
     document handling) — this fix is scoped to sales_rep routing, not a change for everyone."""

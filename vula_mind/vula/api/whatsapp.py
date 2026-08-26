@@ -321,12 +321,20 @@ async def receive_message(
                             # Confirmed real gap (2026-08-26): without this, a captioned photo
                             # always fell through to generic document filing regardless of what
                             # the caption asked for — log_meeting was never reachable from an
-                            # image message at all. The photo itself isn't attached to the
-                            # resulting record in this pass — only the caption's instruction is
-                            # acted on; scoped to fixing the reachability gap, not adding photo
-                            # evidence to log_meeting.
-                            if caption.strip() and route_tenant and await _sender_is_sales_rep(phone, route_tenant):
-                                if await _run_commerce_admin(phone, caption, route_tenant):
+                            # image message at all.
+                            # 2026-08-26, same day: a rep asked "could you see the architect
+                            # details in the picture?" and Vula asked them to re-share it — the
+                            # caption alone reached the agent, never the photo's actual content.
+                            # Now also runs one vision-description pass (best-effort, real photo
+                            # content — a business card's printed text, a sign, a document —
+                            # never invented) and gives the agent both, so "research this"/
+                            # "who is this" work the same way "log as meeting" already does.
+                            if msg_type == "image" and caption.strip() and route_tenant and await _sender_is_sales_rep(phone, route_tenant):
+                                description = await _describe_photo_for_rep(media_id)
+                                effective_text = caption
+                                if description:
+                                    effective_text = f"{caption}\n\n[What's in the photo: {description}]"
+                                if await _run_commerce_admin(phone, effective_text, route_tenant):
                                     continue
                             # An explicit receipt/expense caption routes to the books even for a
                             # contractor (site crews buy materials + claim) — otherwise a registered
@@ -2159,6 +2167,44 @@ def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str
     """Upload an evidence photo to the 'evidence' bucket. Returns a public URL,
     or None on failure (caller falls back to the local path)."""
     return _upload_to_storage("evidence", object_path, data, content_type)
+
+
+async def _describe_photo_for_rep(media_id: str) -> str:
+    """ONE cloud-vision call transcribing/describing whatever's in a rep's photo (a business
+    card, a signboard, a document) — best-effort, empty string on any failure. Distinct from
+    _scan_financial_photo (which extracts a strict receipt/invoice JSON shape) — this is a
+    free-text description for a rep asking Vula to "research this"/"who is this" from a photo,
+    so the caption-routing fix (route the caption to commerce_admin) has real photo content to
+    reason from, not just the bare caption text."""
+    try:
+        data = await _download_media_bytes(media_id)
+        if not data:
+            return ""
+        from core.llm_router import resolve_cloud_vision_route
+        route = resolve_cloud_vision_route()
+        if not route:
+            return ""
+        model, api_key, api_base = route
+        import base64
+        import litellm
+        litellm.drop_params = True
+        img_b64 = base64.b64encode(data).decode()
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": (
+                    "Describe this photo in 2-3 short sentences for a sales rep's assistant. "
+                    "If it's a business card, document, or sign, transcribe the key text exactly "
+                    "as printed (name, company, phone, email, address) — never guess or invent "
+                    "anything not actually visible."
+                )},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+            ]}],
+            temperature=0, max_tokens=250, api_key=api_key, api_base=api_base)
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.debug("photo description failed for rep media_id=%s: %s", media_id, exc)
+        return ""
 
 
 async def _scan_financial_photo(photo_path: str) -> Optional[dict]:
