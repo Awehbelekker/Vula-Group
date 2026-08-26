@@ -354,9 +354,13 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "function": {
             "name": "create_quote",
             "description": (
-                "Generate a formal price quote for the customer. Use the items the customer "
-                "asks to be quoted, or leave items empty to quote everything currently in their "
-                "cart. Returns a quote number and total — quotes do not take payment."
+                "Generate a formal price quote for the customer AND send it to them as a real "
+                "WhatsApp PDF document (e.g. when they ask for a 'proforma invoice' for EFT "
+                "payment). Use the items the customer asks to be quoted, or leave items empty "
+                "to quote everything currently in their cart. Quotes do not take payment. "
+                "The result tells you whether the PDF actually sent — only say you've sent them "
+                "something if the result confirms it did; if it didn't, say so plainly rather "
+                "than claiming success."
             ),
             "parameters": {
                 "type": "object",
@@ -1603,11 +1607,38 @@ class CommerceAssistantSkill(BaseSkill):
                 "line_items": line_items,
             },
         )
-        return {
+        result: Dict[str, Any] = {
             "quote_number": quote["invoice_number"],
             "items": len(line_items),
             "total": f"R{quote['total_cents'] / 100:.2f}",
+            "pdf_sent": False,
         }
+        # Actually send the PDF — confirmed live 2026-08-26: this tool previously only created
+        # the DB row and returned a number/total, but the model would still narrate "I've sent
+        # it to you as a WhatsApp document" on its own, a real hallucination with nothing behind
+        # it. Reuses the exact render/send pattern already proven for resending an existing
+        # invoice (same file, ~line 1401-1416) — never claim success unless this actually sent.
+        if phone:
+            try:
+                from vula.commerce.pdf import render_invoice_pdf, merge_branding
+                from vula.api.whatsapp import _send_invoice_document
+                branding = merge_branding(tenant_id, await service.get_invoice_settings(tenant_id))
+                pdf_bytes = render_invoice_pdf(quote, branding)
+                tenant_name = branding.get("name") or tenant_id.replace("-", " ").title()
+                caption = f"Here's your quote {quote['invoice_number']} for {result['total']} from {tenant_name}."
+                sent = await _send_invoice_document(phone, pdf_bytes, f"{quote['invoice_number']}.pdf", caption, tenant_id)
+                result["pdf_sent"] = bool(sent)
+            except Exception as exc:
+                logger.warning("create_quote PDF send failed for %s: %s", tenant_id, exc)
+        if not result["pdf_sent"]:
+            result["note"] = ("The PDF could NOT be sent right now — tell the customer the quote "
+                              f"number ({quote['invoice_number']}) and total, and that you'll "
+                              "follow up with the document, rather than claiming it was sent.")
+        else:
+            result["instruction_to_assistant"] = ("The PDF was just sent as a separate WhatsApp "
+                                                   "document message — just confirm briefly, "
+                                                   "don't repeat the quote details in your text reply.")
+        return result
 
     async def _exec_review_order(
         self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]

@@ -1150,11 +1150,33 @@ async def get_recent_messages(tenant_id: str, session_id: str, limit: int = 12) 
     return list(reversed(rows))
 
 
+# Caveat suffixes appended to a reply AFTER the skill produces it (core/verification.py's
+# adversarial-review warning) — meant for a human reading the message/transcript, never for the
+# model itself. Confirmed live 2026-08-26: a customer-facing session that had one of these
+# appended once later re-fed it back into the model's own context via conversation_history, and
+# the model tried to actively "resolve" its own past self-doubt annotation out loud WITH THE
+# CUSTOMER ("I noticed the automated review flagged possible issues... could you confirm...") —
+# a real, confusing, unprofessional leak of internal machinery. Stripped here, not at the point
+# the reply is sent/persisted, so the caveat still reaches whoever's actually reading it live.
+_HISTORY_STRIP_MARKERS = (
+    "\n\n⚠️ Please double-check this answer",
+    "\n\n⚠️ I couldn't find a specific document",
+)
+
+
+def _strip_caveats_for_history(content: str) -> str:
+    for marker in _HISTORY_STRIP_MARKERS:
+        idx = content.find(marker)
+        if idx != -1:
+            content = content[:idx]
+    return content.strip()
+
+
 def format_history(messages: List[dict]) -> str:
     """Render messages into a compact transcript for the skill's conversation_history."""
     label = {"user": "Customer", "assistant": "Assistant"}
     return "\n".join(
-        f"{label.get(m['role'], m['role'].title())}: {m['content']}"
+        f"{label.get(m['role'], m['role'].title())}: {_strip_caveats_for_history(m['content'])}"
         for m in messages
         if m.get("role") in ("user", "assistant") and m.get("content")
     )

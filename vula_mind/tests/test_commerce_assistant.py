@@ -115,17 +115,28 @@ async def test_dispatch_track_order_found():
 
 @pytest.mark.asyncio
 async def test_dispatch_create_quote_from_explicit_items():
+    """2026-08-26: create_quote now actually sends the quote as a WhatsApp PDF (previously only
+    created the DB row, letting the model freely narrate an unbacked "I've sent it to you" claim
+    — confirmed live as a real hallucination). pdf_sent reflects the real send result."""
     skill = CommerceAssistantSkill()
     product = {"id": "p1", "name": "Fresh Snoek", "price_cents": 18500}
     created = {"invoice_number": "OFF-QTE-00001", "total_cents": 37000}
     with (
         patch("core.skills.commerce_assistant.service.get_product_by_slug", new=AsyncMock(return_value=product)),
         patch("core.skills.commerce_assistant.service.create_invoice", new=AsyncMock(return_value=created)) as mock_create,
+        patch("core.skills.commerce_assistant.service.get_invoice_settings", new=AsyncMock(return_value={})),
+        patch("vula.commerce.pdf.merge_branding", return_value={"name": "Off the Hook"}),
+        patch("vula.commerce.pdf.render_invoice_pdf", return_value=b"%PDF-fake"),
+        patch("vula.api.whatsapp._send_invoice_document", new=AsyncMock(return_value=True)) as mock_send,
     ):
         out = await skill._dispatch_tool(
             "create_quote", {"items": [{"product": "snoek", "quantity": 2}]}, CTX
         )
-    assert out == {"quote_number": "OFF-QTE-00001", "items": 1, "total": "R370.00"}
+    assert out["quote_number"] == "OFF-QTE-00001"
+    assert out["items"] == 1
+    assert out["total"] == "R370.00"
+    assert out["pdf_sent"] is True
+    mock_send.assert_awaited_once()
     payload = mock_create.await_args.args[1]
     assert payload["doc_type"] == "quote"
     assert payload["customer_phone"] == CTX["customer_phone"]
@@ -135,6 +146,30 @@ async def test_dispatch_create_quote_from_explicit_items():
         "unit_price_cents": 18500,
         "product_id": "p1",
     }
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_quote_reports_when_pdf_send_fails():
+    """The model must never claim success when the send genuinely failed — pdf_sent=False and
+    an explicit note telling it not to claim the document was sent."""
+    skill = CommerceAssistantSkill()
+    product = {"id": "p1", "name": "Fresh Snoek", "price_cents": 18500}
+    created = {"invoice_number": "OFF-QTE-00001", "total_cents": 37000}
+    with (
+        patch("core.skills.commerce_assistant.service.get_product_by_slug", new=AsyncMock(return_value=product)),
+        patch("core.skills.commerce_assistant.service.create_invoice", new=AsyncMock(return_value=created)),
+        patch("core.skills.commerce_assistant.service.get_invoice_settings", new=AsyncMock(return_value={})),
+        patch("vula.commerce.pdf.merge_branding", return_value={"name": "Off the Hook"}),
+        patch("vula.commerce.pdf.render_invoice_pdf", return_value=b"%PDF-fake"),
+        patch("vula.api.whatsapp._send_invoice_document", new=AsyncMock(return_value=False)),
+    ):
+        out = await skill._dispatch_tool(
+            "create_quote", {"items": [{"product": "snoek", "quantity": 2}]}, CTX
+        )
+    assert out["pdf_sent"] is False
+    assert "note" in out
+    assert "could not" in out["note"].lower() or "couldn't" in out["note"].lower() \
+        or "not" in out["note"].lower()
 
 
 @pytest.mark.asyncio
