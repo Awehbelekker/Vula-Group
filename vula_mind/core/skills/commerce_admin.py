@@ -562,7 +562,10 @@ REMINDER_TOOLS = [
                        "An undated reminder (no due date) is fine too.",
         "parameters": {"type": "object", "properties": {
             "text": {"type": "string", "description": "What to be reminded about."},
-            "due_at": {"type": "string", "description": "ISO datetime, if a specific time was given."},
+            "due_phrase": {"type": "string", "description": "The RAW date/time phrase as the "
+                "user said it (e.g. \"Friday\", \"next Tuesday\", \"tomorrow\", \"15 Sept\") — "
+                "copy it verbatim, do NOT compute or convert it to a date yourself, it's resolved "
+                "deterministically from today's real date on the server side."},
             "contact_name_or_phone": {"type": "string", "description": "Who this relates to, if known."}},
             "required": ["text"]}}},
     {"type": "function", "function": {
@@ -765,6 +768,32 @@ def _role_label(tenant_id: str) -> str:
     return _DEFAULT_ROLE_LABEL
 
 
+def _resolve_due_at(due_phrase: Optional[str]) -> Optional[str]:
+    """Deterministic, never LLM-computed — a wrong due date is worse than none. Only trusts
+    dateutil's fuzzy parse when the phrase actually contains a real date/weekday/relative-day
+    signal (fuzzy=True alone can false-positive on ordinary text). Shared by log_meeting's
+    action-item due dates and create_reminder — both need a raw phrase resolved this same way,
+    never a date the model computed itself (confirmed live, 2026-08-26: asked to produce an ISO
+    datetime directly, the model — correctly recognizing it doesn't know today's real date —
+    asked the user what today's date was instead of just resolving "next Tuesday" itself)."""
+    if not due_phrase:
+        return None
+    if not re.search(
+        r"\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|"
+        r"sun(day)?|today|tomorrow|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|"
+        r"jul(y)?|aug(ust)?|sep(tember)?|oct(ober)?|nov(ember)?|dec(ember)?|"
+        r"\d{1,2}[/-]\d{1,2}|\d{1,2}(st|nd|rd|th)?)\b",
+        due_phrase, re.IGNORECASE,
+    ):
+        return None
+    try:
+        from dateutil import parser as _date_parser
+        dt = _date_parser.parse(due_phrase, fuzzy=True, default=datetime.now(timezone.utc))
+        return dt.isoformat()
+    except Exception:
+        return None
+
+
 def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") -> List[Dict[str, Any]]:
     """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
     role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
@@ -831,6 +860,13 @@ class CommerceAdminSkill(BaseSkill):
 
     def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None,
                        lang: str = "") -> str:
+        # Ground the model in the real current date — without this it has no way to resolve
+        # "next Tuesday"/"tomorrow"/relative phrases at all, and (confirmed live, 2026-08-26) will
+        # either ask the user what today's date is or silently guess wrong. Still never trust the
+        # model's own date ARITHMETIC for anything that gets stored (see create_reminder/
+        # log_meeting's due_phrase + deterministic dateutil resolution) — this line only gives it
+        # enough grounding to phrase a sensible tool call/question, not to compute a final date.
+        today_line = f"Today's date is {datetime.now(timezone.utc).strftime('%A, %d %B %Y')}.\n\n"
         persona_block = ""
         try:
             from vula.api.tenants import get_config
@@ -843,6 +879,7 @@ class CommerceAdminSkill(BaseSkill):
         if role == "sales_rep":
             who = f"{name} — a sales rep/agent" if name else "a sales rep/agent"
             return (
+                today_line +
                 f"You are {who}'s personal AI sales assistant, reachable on WhatsApp like any "
                 "other colleague they'd message. You are talking to THEM, "
                 "not a customer — help them run their day: capturing contacts (e.g. from a scanned "
@@ -860,6 +897,7 @@ class CommerceAdminSkill(BaseSkill):
             )
         role_label = _role_label(tenant_id)
         return (
+            today_line +
             f"You are the owner's {role_label}, reachable on WhatsApp like any other colleague "
             "they'd message — for a South African business "
             "(you are talking to the owner/staff, not a customer). Help them run the business with "
@@ -2157,26 +2195,8 @@ class CommerceAdminSkill(BaseSkill):
                 text = f"{text} ({it['due_phrase']})"
             return text
 
-        def _resolve_due_at(due_phrase: Optional[str]) -> Optional[str]:
-            """Deterministic, never LLM-computed — a wrong due date is worse than none. Only
-            trusts dateutil's fuzzy parse when the phrase actually contains a real date/weekday/
-            relative-day signal (fuzzy=True alone can false-positive on ordinary text)."""
-            if not due_phrase:
-                return None
-            if not re.search(
-                r"\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|"
-                r"sun(day)?|today|tomorrow|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|"
-                r"jul(y)?|aug(ust)?|sep(tember)?|oct(ober)?|nov(ember)?|dec(ember)?|"
-                r"\d{1,2}[/-]\d{1,2}|\d{1,2}(st|nd|rd|th)?)\b",
-                due_phrase, re.IGNORECASE,
-            ):
-                return None
-            try:
-                from dateutil import parser as _date_parser
-                dt = _date_parser.parse(due_phrase, fuzzy=True, default=datetime.now(timezone.utc))
-                return dt.isoformat()
-            except Exception:
-                return None
+        # _resolve_due_at is now a shared module-level function (see above _role_label) — also
+        # reused by create_reminder.
 
         # Turn each extracted action item into a real, trackable reminder — previously these only
         # lived inside the filed document's fields jsonb and were forgotten the moment the
@@ -2461,7 +2481,7 @@ class CommerceAdminSkill(BaseSkill):
                 logger.debug("reminder contact lookup skipped: %s", exc)
         row = {
             "tenant_id": tid, "created_by": ctx.get("phone") or "", "text": text,
-            "due_at": args.get("due_at") or None, "linked_contact_phone": linked_phone,
+            "due_at": _resolve_due_at(args.get("due_phrase")), "linked_contact_phone": linked_phone,
         }
         try:
             res = service._client().table("vula_reminders").insert(row).execute()
