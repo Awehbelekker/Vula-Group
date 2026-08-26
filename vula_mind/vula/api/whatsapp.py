@@ -314,6 +314,20 @@ async def receive_message(
                         caption = media.get("caption", "")
                         mime_type = media.get("mime_type", "image/jpeg")
                         if phone and media_id:
+                            # A sales_rep captioning a photo with an instruction (e.g. "log as
+                            # meeting", "add this contact") means the CAPTION, not the photo
+                            # itself — route it through the same rep-scoped agent a text message
+                            # would reach (_sender_is_sales_rep / _run_commerce_admin above).
+                            # Confirmed real gap (2026-08-26): without this, a captioned photo
+                            # always fell through to generic document filing regardless of what
+                            # the caption asked for — log_meeting was never reachable from an
+                            # image message at all. The photo itself isn't attached to the
+                            # resulting record in this pass — only the caption's instruction is
+                            # acted on; scoped to fixing the reachability gap, not adding photo
+                            # evidence to log_meeting.
+                            if caption.strip() and route_tenant and await _sender_is_sales_rep(phone, route_tenant):
+                                if await _run_commerce_admin(phone, caption, route_tenant):
+                                    continue
                             # An explicit receipt/expense caption routes to the books even for a
                             # contractor (site crews buy materials + claim) — otherwise a registered
                             # contractor's photo is treated as task evidence first.
@@ -541,23 +555,10 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # invisible here regardless of their vula_team_members role. Deliberately scoped to ONLY
     # the "sales_rep" role (not owner/staff/admin/manager) so the existing RAG/KB behaviour a
     # tenant's real recognized team already relies on here is completely unchanged.
-    if tenant_id:
-        try:
-            from vula.commerce import service as _commerce_service
-
-            def _digits(p: str) -> str:
-                n = "".join(ch for ch in (p or "") if ch.isdigit())
-                return "27" + n[1:] if n.startswith("0") else n
-            target = _digits(phone)
-            rep_rows = (_commerce_service._client().table("vula_team_members")
-                       .select("whatsapp").eq("tenant_id", tenant_id).eq("role", "sales_rep")
-                       .eq("active", True).execute().data or [])
-            if any(_digits(r.get("whatsapp") or "") == target for r in rep_rows):
-                if await _run_commerce_admin(phone, text, tenant_id):
-                    return
-                # Admin agent failed → fall through to the normal KB/RAG flow below.
-        except Exception as exc:
-            logger.debug("sales_rep routing check skipped: %s", exc)
+    if tenant_id and await _sender_is_sales_rep(phone, tenant_id):
+        if await _run_commerce_admin(phone, text, tenant_id):
+            return
+        # Admin agent failed → fall through to the normal KB/RAG flow below.
 
     # ── Field-ops intents (any phone, no role check needed) ──────────────────
     if _DONE_RE.match(text):
@@ -3127,6 +3128,28 @@ async def check_and_nudge_due_reminders() -> int:
             except Exception as exc:
                 logger.debug("marking reminder %s as nudged failed: %s", r.get("id"), exc)
     return sent
+
+
+async def _sender_is_sales_rep(phone: str, tenant_id: str) -> bool:
+    """Is this phone a registered, active sales_rep for this tenant? Shared by both the text-
+    message dispatch (_handle_message) and the image-message dispatch (the inbound webhook's
+    image/video branch) — factored out after finding the image branch had no sales_rep
+    awareness at all, so a rep captioning a photo "log as meeting" fell through to generic
+    document filing instead of reaching commerce_admin/log_meeting."""
+    try:
+        from vula.commerce import service as _commerce_service
+
+        def _digits(p: str) -> str:
+            n = "".join(ch for ch in (p or "") if ch.isdigit())
+            return "27" + n[1:] if n.startswith("0") else n
+        target = _digits(phone)
+        rep_rows = (_commerce_service._client().table("vula_team_members")
+                   .select("whatsapp").eq("tenant_id", tenant_id).eq("role", "sales_rep")
+                   .eq("active", True).execute().data or [])
+        return any(_digits(r.get("whatsapp") or "") == target for r in rep_rows)
+    except Exception as exc:
+        logger.debug("sales_rep routing check skipped: %s", exc)
+        return False
 
 
 async def _run_commerce_admin(phone: str, text: str, tenant_id: str,

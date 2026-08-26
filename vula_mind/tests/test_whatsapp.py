@@ -96,6 +96,60 @@ def test_inbound_ignores_non_text_messages():
     mock_handle.assert_not_called()
 
 
+def _wa_image_payload(phone: str, caption: str, msg_id: str = "wamid.img1") -> dict:
+    return {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "pnid-123"},
+                    "messages": [{
+                        "type": "image", "from": phone, "id": msg_id,
+                        "image": {"id": "media-1", "caption": caption, "mime_type": "image/jpeg"},
+                    }]
+                }
+            }]
+        }]
+    }
+
+
+def test_inbound_image_caption_from_sales_rep_reaches_commerce_admin():
+    """2026-08-26 regression: a sales_rep captioning a photo with an instruction (e.g. "log as
+    meeting") previously always fell through to generic document filing — log_meeting was never
+    reachable from an image message at all, regardless of what the caption asked for."""
+    with (
+        patch("vula.api.whatsapp._resolve_number_route", return_value=("gerflor", "knowledge")),
+        patch("vula.api.whatsapp._sender_is_sales_rep", new_callable=AsyncMock, return_value=True),
+        patch("vula.api.whatsapp._run_commerce_admin", new_callable=AsyncMock, return_value=True) as mock_admin,
+        patch("vula.api.whatsapp._handle_media", new_callable=AsyncMock) as mock_media,
+        patch("vula.api.whatsapp._handle_document_ingest", new_callable=AsyncMock) as mock_ingest,
+        patch("vula.commerce.service._client", return_value=MagicMock()),
+    ):
+        resp = client.post("/v1/whatsapp/webhook",
+                            json=_wa_image_payload("+27645755210", "Please log as meeting about flooring"))
+    assert resp.status_code == 200
+    mock_admin.assert_called_once_with("+27645755210", "Please log as meeting about flooring", "gerflor")
+    mock_media.assert_not_called()
+    mock_ingest.assert_not_called()
+
+
+def test_inbound_image_caption_from_non_rep_falls_through_to_document_ingest():
+    """A non-sales_rep sender's captioned photo keeps the existing behaviour (generic media/
+    document handling) — this fix is scoped to sales_rep routing, not a change for everyone."""
+    with (
+        patch("vula.api.whatsapp._resolve_number_route", return_value=("gerflor", "knowledge")),
+        patch("vula.api.whatsapp._sender_is_sales_rep", new_callable=AsyncMock, return_value=False),
+        patch("vula.api.whatsapp._run_commerce_admin", new_callable=AsyncMock) as mock_admin,
+        patch("vula.api.whatsapp._handle_media", new_callable=AsyncMock, return_value=False),
+        patch("vula.api.whatsapp._handle_document_ingest", new_callable=AsyncMock) as mock_ingest,
+        patch("vula.commerce.service._client", return_value=MagicMock()),
+    ):
+        resp = client.post("/v1/whatsapp/webhook",
+                            json=_wa_image_payload("+27821234567", "some caption", msg_id="wamid.img2"))
+    assert resp.status_code == 200
+    mock_admin.assert_not_called()
+    mock_ingest.assert_called_once()
+
+
 def test_inbound_empty_payload():
     resp = client.post("/v1/whatsapp/webhook", json={})
     assert resp.status_code == 200
