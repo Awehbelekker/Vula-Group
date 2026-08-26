@@ -25,7 +25,7 @@ import hashlib
 import hmac
 import logging
 import re
-from typing import Optional
+from typing import Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -1126,6 +1126,23 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
             where = f" (on {claim['project']})" if claim.get("project") else ""
             return (f"\n\n♻️ I've already logged this one — *R{total/100:,.2f}*"
                     f"{(' from ' + supplier) if supplier else ''}{where}. Skipped the duplicate.")
+
+        # Purpose (petrol/clients/accommodation/other, migration 140/141) — cheap deterministic
+        # vendor match first, LLM fallback only when that's inconclusive; only a genuinely
+        # 'uncertain' result stays unclassified and asks, matching this platform's "auto-classify,
+        # ask only when unsure" discipline.
+        purpose_note = ""
+        try:
+            purpose = await expenses.classify_purpose_category(
+                tenant_id, supplier or "", total, scan_data.get("notes") or "")
+            if purpose in expenses.PURPOSE_CATEGORIES:
+                expenses.set_purpose_category(tenant_id, claim["id"], purpose)
+                claim["purpose_category"] = purpose
+                purpose_note = (f"\n🗂️ Logged as *{purpose.title()}* — reply to change it "
+                               f"if that's wrong.")
+        except Exception as exc:
+            logger.debug("purpose category classify skipped: %s", exc)
+
         cat = claim.get("category") or "expense"
         msg = f"\n\n💳 Logged as an expense: *R{total/100:,.2f}* → {cat}"
         if claim.get("vat_cents"):
@@ -1152,8 +1169,12 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
             asks.append("📍 Which project/site is this for? Reply with the site name, or 'none'.")
         if paid_with is None and expenses.list_cards(tenant_id):
             asks.append("💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'.")
+        if not claim.get("purpose_category"):
+            asks.append("🗂️ What was this for — fuel, a client visit/meal, or accommodation? "
+                        "Reply with the category.")
         if asks:
             msg += "\n" + "\n".join(asks)
+        msg += purpose_note
         return msg
     except Exception as exc:
         logger.warning("expense claim from receipt failed: %s", exc)
@@ -1217,19 +1238,76 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
                 .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
                 .eq("status", "submitted").is_("project", "null")
                 .order("updated_at", desc=True).limit(1).execute().data or [])
-        if not rows:
-            return None
-        claim = rows[0]
-        if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
-            expenses.assign(tenant_id, claim["id"], project="")   # '' = resolved, not re-asked
-            return "👍 Noted — no project. It's in your books."
-        proj = expenses.match_project(tenant_id, text)
-        if proj:
-            expenses.assign(tenant_id, claim["id"], project=proj)
-            return f"✅ Allocated that *R{int(claim.get('amount_cents') or 0)/100:,.2f}* expense to *{proj}*."
-        return None
+        if rows:
+            claim = rows[0]
+            if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
+                expenses.assign(tenant_id, claim["id"], project="")   # '' = resolved, not re-asked
+                return "👍 Noted — no project. It's in your books."
+            proj = expenses.match_project(tenant_id, text)
+            if proj:
+                expenses.assign(tenant_id, claim["id"], project=proj)
+                return f"✅ Allocated that *R{int(claim.get('amount_cents') or 0)/100:,.2f}* expense to *{proj}*."
+
+        # Last resort — a purpose-category question ("what was this for?") pending on one or
+        # more uncertain claims. Only reached when the message didn't already resolve a
+        # paid_with/project question above.
+        return await _maybe_allocate_pending_purpose(tenant_id, phone, text)
     except Exception as exc:
         logger.debug("pending-expense allocate skipped: %s", exc)
+        return None
+
+
+async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str) -> Optional[str]:
+    """Resolve a 'what was this for?' reply against the sender's purpose_category-pending
+    WhatsApp claims. A single pending claim takes a plain free-text answer; two or more pending
+    at once (several receipts scanned back-to-back before a reply) need an indexed reply
+    (\"1 fuel, 2 client lunch\") since a plain answer is ambiguous about which claim it means."""
+    try:
+        from vula.commerce import expenses, service
+        rows = (service._client().table("commerce_expenses").select("*")
+                .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
+                .eq("status", "submitted").is_("purpose_category", "null")
+                .order("updated_at", desc=True).execute().data or [])
+        if not rows:
+            return None
+
+        if len(rows) == 1:
+            claim = rows[0]
+            cat = expenses.match_purpose_category(text)
+            detail = None if cat else text
+            cat = cat or "other"
+            expenses.set_purpose_category(tenant_id, claim["id"], cat, detail=detail)
+            amt = int(claim.get("amount_cents") or 0) / 100
+            return f"👍 Logged that *R{amt:,.2f}* as *{cat.title()}*."
+
+        # 2+ pending — require an indexed reply matching every pending claim, oldest→newest by
+        # the same order they were listed in.
+        pairs = re.findall(r"(\d+)\s*[:.\-]?\s*([^,\n]+)", text)
+        n = len(rows)
+        parsed: Dict[int, str] = {}
+        if pairs:
+            for idx_s, val in pairs:
+                idx = int(idx_s)
+                if 1 <= idx <= n and idx not in parsed:
+                    parsed[idx] = val.strip()
+        if len(parsed) == n:
+            lines = []
+            for i, claim in enumerate(rows, start=1):
+                cat = expenses.match_purpose_category(parsed[i])
+                detail = None if cat else parsed[i]
+                cat = cat or "other"
+                expenses.set_purpose_category(tenant_id, claim["id"], cat, detail=detail)
+                lines.append(f"R{int(claim.get('amount_cents') or 0)/100:,.2f} → {cat.title()}")
+            return "👍 Logged:\n" + "\n".join(lines)
+
+        # Couldn't parse a full indexed reply — list them out and ask again.
+        listing = "\n".join(
+            f"{i}) R{int(c.get('amount_cents') or 0)/100:,.2f} {c.get('supplier') or ''}".strip()
+            for i, c in enumerate(rows, start=1))
+        return (f"You've got {n} receipts I need the purpose for:\n{listing}\n\n"
+                f"Reply like \"1 fuel, 2 client lunch\" so I know which is which.")
+    except Exception as exc:
+        logger.debug("pending purpose-category allocate skipped: %s", exc)
         return None
 
 

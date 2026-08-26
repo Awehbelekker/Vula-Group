@@ -118,6 +118,110 @@ def match_project(tenant_id: str, text: str, projects: Optional[List[str]] = Non
 _PROJ_STOP = {"the", "for", "site", "project", "job", "this", "that", "on", "at", "to"}
 
 
+# ── Purpose category (why was this spent — for the monthly Recon sheet) ────────
+# Real vocabulary from Ian's own already-in-use claim sheet (migration 140/141), not a generic
+# SARS category list: PETROL / CLIENTS (client refreshments/entertainment) / ACCOMMODATION,
+# plus OTHER as the catch-all.
+
+PURPOSE_CATEGORIES = ("petrol", "clients", "accommodation", "other")
+
+_PETROL_VENDOR_RE = re.compile(
+    r"\b(engen|shell|sasol|total|caltex|bp|garage|service station|fuel|petrol|diesel)\b", re.I)
+_ACCOMMODATION_VENDOR_RE = re.compile(
+    r"\b(hotel|lodge|guest ?house|b&b|bnb|inn|city lodge|protea|garden court|road lodge|"
+    r"holiday inn|premier hotel|airbnb|accommodation)\b", re.I)
+
+_PURPOSE_REPLY_KEYWORDS = {
+    "petrol": ("fuel", "petrol", "diesel", "gas", "garage"),
+    "clients": ("client", "customer", "meeting", "lunch", "dinner", "coffee", "refreshment", "entertain"),
+    "accommodation": ("hotel", "accommodation", "stay", "lodge", "night", "sleepover"),
+}
+
+
+def classify_purpose_category_deterministic(vendor: str) -> Optional[str]:
+    """Cheap, no-LLM first pass — a confident vendor-name match against a known fuel-station or
+    accommodation chain/keyword. Same 'check first, escalate only if needed' discipline as
+    extraction_quality.py's reconciliation-then-escalate pattern."""
+    v = (vendor or "").strip()
+    if not v:
+        return None
+    if _PETROL_VENDOR_RE.search(v):
+        return "petrol"
+    if _ACCOMMODATION_VENDOR_RE.search(v):
+        return "accommodation"
+    return None
+
+
+async def classify_purpose_category(tenant_id: str, vendor: str, amount_cents: int,
+                                    notes: str = "") -> str:
+    """Returns one of PURPOSE_CATEGORIES, or 'uncertain' when neither the deterministic pass nor
+    the LLM can confidently place it — the only case that should trigger a WhatsApp question.
+    Never raises — any failure degrades to 'uncertain' (ask, don't guess)."""
+    det = classify_purpose_category_deterministic(vendor)
+    if det:
+        return det
+
+    try:
+        import json
+        import litellm
+        from core.llm_router import resolve_generation_route
+        prompt = (
+            "A small-business sales rep scanned a receipt. Classify what it was for, choosing "
+            "ONLY ONE of: petrol (fuel/diesel), clients (a meal, coffee, or gift for a client — "
+            "client entertainment/refreshments), accommodation (a hotel/lodge stay), other (does "
+            "not clearly fit any of those — e.g. a car rental, vehicle repair, parking, office "
+            "supplies), or uncertain (genuinely can't tell from the vendor/amount alone — e.g. a "
+            "generic supermarket or shop where it could be personal, client-related, or business "
+            "supplies). Prefer 'other' over 'uncertain' whenever the vendor clearly ISN'T "
+            "petrol/clients/accommodation, even if you don't know exactly what it was for — only "
+            "use 'uncertain' when you genuinely cannot tell.\n\n"
+            f"Vendor: {vendor or 'unknown'}\nAmount: R{(amount_cents or 0) / 100:.2f}\n"
+            f"Notes: {notes or 'none'}\n\n"
+            "Reply with STRICT JSON only: {\"category\": \"...\"}"
+        )
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route(task_type="expense_classification")
+        resp = await litellm.acompletion(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=200, api_key=api_key, api_base=api_base,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+        i, j = raw.find("{"), raw.rfind("}")
+        if i < 0 or j <= i:
+            return "uncertain"
+        data = json.loads(raw[i:j + 1])
+        cat = str(data.get("category") or "").strip().lower()
+        return cat if cat in PURPOSE_CATEGORIES else "uncertain"
+    except Exception as exc:
+        log.debug("purpose category classification skipped for %s: %s", tenant_id, exc)
+        return "uncertain"
+
+
+def match_purpose_category(text: str) -> Optional[str]:
+    """Loose-match a purpose category from a free-text reply (e.g. 'coffee with a client').
+    Returns None if nothing matches — the caller then falls back to 'other', keeping the raw
+    text as purpose_detail rather than silently dropping it."""
+    low = (text or "").strip().lower()
+    if not low:
+        return None
+    for cat, kws in _PURPOSE_REPLY_KEYWORDS.items():
+        if any(kw in low for kw in kws):
+            return cat
+    return None
+
+
+def set_purpose_category(tenant_id: str, expense_id: str, category: str,
+                         detail: Optional[str] = None) -> dict:
+    """Apply a resolved purpose category (auto-classified or from a rep's reply)."""
+    patch: Dict[str, Any] = {"purpose_category": category, "updated_at": _now()}
+    if detail is not None:
+        patch["purpose_detail"] = detail
+    res = (_client().table("commerce_expenses").update(patch)
+           .eq("tenant_id", tenant_id).eq("id", expense_id).execute())
+    return (res.data or [{}])[0]
+
+
 # ── Company cards (whose money?) ───────────────────────────────────────────────
 
 def list_cards(tenant_id: str, active_only: bool = True) -> List[dict]:
