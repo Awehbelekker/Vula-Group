@@ -50,12 +50,18 @@ def store_connection(tenant_id: str, *, access_token: str, refresh_token: str | 
 
 async def _refresh(tenant_id: str, refresh_token: str) -> str | None:
     from vula.email_imap.credentials import encrypt_secret
+    # 2026-08-26 fix: this used to hardcode its own copy of the scope string, independent of
+    # service.SCOPES — adding a new scope there (e.g. Mail.Send) silently never reached a
+    # refreshed token, since Microsoft's refresh grant is itself scoped by what's requested here.
+    # Deferred import (not module-level) — service.py imports get_access_token from this module
+    # at import time, so a module-level import here would be a circular import.
+    from vula.microsoft.service import SCOPES
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_token_url(), data={
             "client_id": settings.microsoft_client_id,
             "client_secret": settings.microsoft_client_secret,
             "refresh_token": refresh_token, "grant_type": "refresh_token",
-            "scope": "offline_access User.Read Files.Read Mail.Read Mail.ReadWrite"})
+            "scope": " ".join(SCOPES)})
         if r.status_code != 200:
             logger.warning("MS token refresh failed for %s: %s", tenant_id, r.text[:200])
             return None

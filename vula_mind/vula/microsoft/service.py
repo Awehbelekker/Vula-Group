@@ -2,13 +2,18 @@
 vula/microsoft/service.py — OneDrive + Outlook via Microsoft Graph (per tenant).
 
 OAuth one-click connect. OneDrive: search + pull files (ingested into the KB).
-Outlook mail: list/read + create DRAFTS only (Vula never sends without approval —
-no Mail.Send scope is requested).
+Outlook mail: list/read/draft, plus a real send_mail() (2026-08-26) for tenants whose M365
+admin has disabled legacy IMAP/SMTP basic auth — increasingly the default, and one a
+username+password IMAP connection can never authenticate against no matter the password
+(confirmed live against a real M365 mailbox: "AUTHENTICATE failed. Provided authentication
+mechanism is not supported."). Used only for tenant-initiated system sends already proven safe
+elsewhere (call sheet, expense sheet) — draft_followup_email's separate "never auto-send" design
+is unaffected, it still only ever calls mail_create_draft.
 """
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -19,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 _GRAPH = "https://graph.microsoft.com/v1.0"
 
-SCOPES = ["offline_access", "User.Read", "Files.Read", "Mail.Read", "Mail.ReadWrite"]
+SCOPES = ["offline_access", "User.Read", "Files.Read", "Mail.Read", "Mail.ReadWrite", "Mail.Send"]
 
 
 class MicrosoftNotConnected(Exception):
@@ -141,3 +146,34 @@ async def mail_create_draft(tenant_id: str, to: str, subject: str, body: str,
         r.raise_for_status()
         d = r.json()
     return {"draft_id": d.get("id"), "to": to, "subject": subject}
+
+
+async def send_mail(tenant_id: str, to: str, subject: str, body: str,
+                    attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Actually send (not draft) via Graph's /me/sendMail — requires the Mail.Send scope
+    (added here 2026-08-26; an account connected before this change has to reconnect to grant
+    it — Graph will return a 403 until then, surfaced as {"error": ...} below, never raised).
+    Attachments go inline as base64 — fine for a small workbook/a few receipt photos, but Graph's
+    JSON sendMail has a real ~3MB total-request ceiling; a genuinely large attachment set would
+    need the chunked upload-session API instead (not built — no real case has hit this yet)."""
+    import base64
+    try:
+        token = await _token(tenant_id)
+    except MicrosoftNotConnected:
+        return {"error": "Microsoft not connected for this tenant"}
+    msg: Dict[str, Any] = {"subject": subject, "body": {"contentType": "Text", "content": body},
+                           "toRecipients": [{"emailAddress": {"address": to}}]}
+    if attachments:
+        msg["attachments"] = [{
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "name": a["filename"],
+            "contentType": a.get("mimetype") or "application/octet-stream",
+            "contentBytes": base64.b64encode(a["content"]).decode("ascii"),
+        } for a in attachments]
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(f"{_GRAPH}/me/sendMail",
+                             headers={**_hdr(token), "Content-Type": "application/json"},
+                             json={"message": msg, "saveToSentItems": True})
+    if r.status_code == 202:
+        return {"sent": True, "to": to, "subject": subject}
+    return {"error": f"Graph sendMail failed ({r.status_code}): {r.text[:300]}"}

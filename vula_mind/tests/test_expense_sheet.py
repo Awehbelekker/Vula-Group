@@ -4,7 +4,7 @@ tests/test_call_sheet.py.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -289,6 +289,9 @@ async def test_send_expense_sheet_no_connected_email_degrades(fake_client, monke
     fake_client.store["commerce_expenses"] = [_claim(date="2026-07-10")]
     monkeypatch.setattr(es_mod, "prior_month_range", lambda now=None: ("2026-07-01", "2026-07-31"))
     monkeypatch.setattr("vula.email_imap.credentials.get_email_creds", lambda tid: None)
+    # No IMAP mailbox — mail_router falls back to Microsoft Graph next; mock it as also not
+    # connected so this test doesn't make a real Supabase call for vula_microsoft_accounts.
+    monkeypatch.setattr("vula.microsoft.credentials.get_access_token", AsyncMock(return_value=None))
     ok = await es_mod.send_expense_sheet(TID, _rep())
     assert ok is False
 

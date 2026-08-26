@@ -214,25 +214,18 @@ async def send_expense_sheet(tenant_id: str, rep: Dict[str, Any]) -> bool:
                  tenant_id, rep["whatsapp"], month_start, month_end)
         return False
 
-    from vula.email_imap.credentials import get_email_creds
-    from vula.email_imap.service import send as email_send
-    creds = get_email_creds(tenant_id)
-    if not creds:
-        log.info("expense sheet email skipped for %s/%s — no connected email account", tenant_id, rep["whatsapp"])
-        return False
-
     subject = f"Expense Claim — {rep_name} — {month_start[:7]}"
     body = (f"Attached is {rep_name}'s expense claim sheet for {month_start} to {month_end}, "
             "compiled automatically from receipts scanned via WhatsApp.")
-    try:
-        result = await email_send(creds, recipient, subject, body, attachments=[
-            {"filename": f"expense-claim-{month_start[:7]}.xlsx", "content": workbook,
-             "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
-        ])
-        return bool(result.get("sent"))
-    except Exception as exc:
-        log.warning("expense sheet email failed for %s/%s: %s", tenant_id, rep["whatsapp"], exc)
-        return False
+    from vula.commerce.mail_router import send_tenant_email
+    sent = await send_tenant_email(tenant_id, recipient, subject, body, attachments=[
+        {"filename": f"expense-claim-{month_start[:7]}.xlsx", "content": workbook,
+         "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    ])
+    if not sent:
+        log.info("expense sheet email not sent for %s/%s — no working connected mailbox "
+                 "(IMAP or Microsoft)", tenant_id, rep["whatsapp"])
+    return sent
 
 
 def is_due(rep: Dict[str, Any], now: datetime) -> bool:

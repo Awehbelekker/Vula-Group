@@ -5,7 +5,7 @@ tests/test_purchase_orders.py.
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -211,7 +211,7 @@ async def test_send_call_sheet_email_only_success(fake_client, monkeypatch):
 
     sent = {}
 
-    async def _fake_send(creds, to, subject, body):
+    async def _fake_send(creds, to, subject, body, attachments=None):
         sent["to"] = to
         sent["body"] = body
         return {"sent": True}
@@ -230,6 +230,9 @@ async def test_send_call_sheet_email_only_success(fake_client, monkeypatch):
 async def test_send_call_sheet_no_connected_email_degrades(fake_client, monkeypatch):
     cs_mod.append_entry(TID, "27821234567", "log_meeting", "Some meeting")
     monkeypatch.setattr("vula.email_imap.credentials.get_email_creds", lambda tid: None)
+    # No IMAP mailbox — mail_router falls back to Microsoft Graph next; mock it as also not
+    # connected so this test doesn't make a real Supabase call for vula_microsoft_accounts.
+    monkeypatch.setattr("vula.microsoft.credentials.get_access_token", AsyncMock(return_value=None))
     rep = _rep()
     result = await cs_mod.send_call_sheet(TID, rep)
     assert result["email"] is False
@@ -252,7 +255,7 @@ async def test_send_call_sheet_whatsapp_leg_no_template_degrades_without_raising
 async def test_send_call_sheet_both_channels_one_fails_other_still_attempted(fake_client, monkeypatch):
     monkeypatch.setattr("vula.email_imap.credentials.get_email_creds", lambda tid: {"email": "rep@gerflor.co.za"})
 
-    async def _fake_send(creds, to, subject, body):
+    async def _fake_send(creds, to, subject, body, attachments=None):
         return {"sent": True}
     monkeypatch.setattr("vula.email_imap.service.send", _fake_send)
 

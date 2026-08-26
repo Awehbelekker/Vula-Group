@@ -12,8 +12,12 @@ requires Meta template approval (same constraint already accepted for the suppli
 leg, vula/commerce/purchase_orders.py) — free text would fail outright. Once sent, the row is
 marked 'sent' and the next entry lazily opens a fresh one.
 
-Plain text only, not a PDF attachment — vula/email_imap/service.py's send() has no attachment
-support today; a PDF upgrade is a natural future extension if that changes, not built here.
+Plain text only, no PDF attachment — email_imap.service.send() gained attachment support
+2026-08-26 (see expense_sheet.py, which uses it), a PDF upgrade here is a natural extension of
+that, just not built for the call sheet yet. Sends route through mail_router.send_tenant_email
+(2026-08-26), which falls back to Microsoft Graph when a tenant's IMAP/SMTP mailbox can't
+authenticate (a hardened M365 tenant with legacy auth disabled — confirmed a real, not
+hypothetical, failure mode).
 """
 from __future__ import annotations
 
@@ -197,21 +201,12 @@ async def send_call_sheet(tenant_id: str, rep: Dict[str, Any]) -> Dict[str, Any]
     channel = rep.get("call_sheet_channel") or "email"
 
     if channel in ("email", "both") and rep.get("call_sheet_recipient_email"):
-        from vula.email_imap.credentials import get_email_creds
-        from vula.email_imap.service import send as email_send
-        creds = get_email_creds(tenant_id)
-        if not creds:
-            log.info("call sheet email skipped for %s/%s — no connected email account", tenant_id, rep["whatsapp"])
-            result["email"] = False
-        else:
-            try:
-                sent = await email_send(creds, rep["call_sheet_recipient_email"], subject, body)
-                result["email"] = bool(sent.get("sent"))
-                if not result["email"]:
-                    log.warning("call sheet email failed for %s/%s: %s", tenant_id, rep["whatsapp"], sent.get("error"))
-            except Exception as exc:
-                log.warning("call sheet email raised for %s/%s: %s", tenant_id, rep["whatsapp"], exc)
-                result["email"] = False
+        from vula.commerce.mail_router import send_tenant_email
+        result["email"] = await send_tenant_email(
+            tenant_id, rep["call_sheet_recipient_email"], subject, body)
+        if not result["email"]:
+            log.info("call sheet email not sent for %s/%s — no working connected mailbox "
+                     "(IMAP or Microsoft)", tenant_id, rep["whatsapp"])
 
     if channel in ("whatsapp", "both") and rep.get("call_sheet_recipient_phone"):
         from vula.api.whatsapp import _send_wa_template
