@@ -1949,11 +1949,33 @@ async def _handle_voice_note(
         await _handle_message(phone, text, msg_id)
 
 
+def _clean_filename(filename: str) -> str:
+    """Strip an unrecoverably-mangled filename rather than let it propagate into storage
+    metadata/display. Confirmed live (2026-08-27): a WhatsApp-delivered filename with an
+    accented character (e.g. "Mipolam Classic - Catálogo.pdf") can arrive already containing a
+    literal U+FFFD replacement character — traced as far back as Vula's own webhook handler
+    (json.loads on the raw request body, which correctly UTF-8-decodes) with no corrupting step
+    found in between, meaning the sender's device or Meta's own backend already lost the
+    original byte before Vula ever saw it. Unrecoverable — U+FFFD is by definition a discarded
+    byte, not a wrong-codec artifact — so the fix is graceful degradation, not repair: any
+    replacement character (or other non-printable control character) anywhere in the name means
+    the WHOLE stem is untrustworthy, so it's swapped for a clean generic one. The extension is
+    kept as-is (mime-derived extensions are plain ASCII in practice)."""
+    if not filename:
+        return filename
+    if any(ch == "�" or (ord(ch) < 32 and ch not in "\t") for ch in filename):
+        stem, dot, ext = filename.rpartition(".")
+        return f"document.{ext}" if dot else "document"
+    return filename
+
+
 async def _download_document(media_id: str, tenant_id: str, filename: str, mime_type: str):
     """Download a document from Meta Graph API and save to the upload directory."""
     if not settings.whatsapp_token:
         logger.warning("WHATSAPP_TOKEN not set — cannot download media")
         return None
+
+    filename = _clean_filename(filename)
 
     # Determine file extension from mime type
     _MIME_EXT = {
