@@ -499,8 +499,11 @@ MEETING_TOOLS = [
             "Log a client/site meeting from a description (usually a voice note transcript): "
             "pulls out attendees, a summary, and any action items, files it against the contact, "
             "creates a real reminder for each action item, and sends back a PDF meeting-summary "
-            "document automatically — no separate step needed. If the notes mention a follow-up "
-            "date, ask the owner whether to book it before calling create_booking."
+            "document automatically — no separate step needed. Any photos this rep sent in the "
+            "last hour (site photos, building signage, etc.) are automatically embedded into the "
+            "same PDF, so a site visit can be photos-then-voice-note or voice-note-then-photos in "
+            "any order. If the notes mention a follow-up date, ask the owner whether to book it "
+            "before calling create_booking."
         ),
         "parameters": {"type": "object", "properties": {
             "notes": {"type": "string", "description": "The meeting description/transcript, as given."},
@@ -2188,6 +2191,28 @@ class CommerceAdminSkill(BaseSkill):
         except Exception as exc:
             logger.debug("meeting extraction failed, filing raw notes: %s", exc)
 
+        # 2026-08-27: pick up any photos this rep sent recently and not yet folded into a visit
+        # report (site/building photos, business cards, etc.) — "walk out, sit in the car,
+        # dictate what happened" should produce ONE compiled report with the photos in it, not a
+        # meeting log with no memory of the photos sent minutes earlier. A 60-minute lookback
+        # window scoped to this rep's own filed_by; each picked-up photo is marked
+        # fields.attached_to_meeting (the filed meeting row's id, set below) so a LATER,
+        # unrelated meeting log never re-attaches the same photo.
+        visit_photo_rows: list = []
+        try:
+            since_iso = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
+            resp = (service._client().table("vula_filed_documents")
+                    .select("id,file_url,mime,fields")
+                    .eq("tenant_id", tid).eq("filed_by", ctx.get("phone") or "")
+                    .gte("created_at", since_iso).order("created_at").execute())
+            for row in (resp.data or []):
+                mime = row.get("mime") or ""
+                f = row.get("fields") or {}
+                if mime.startswith("image/") and not f.get("attached_to_meeting") and row.get("file_url"):
+                    visit_photo_rows.append(row)
+        except Exception as exc:
+            logger.debug("visit-photo lookup skipped for %s: %s", tid, exc)
+
         from vula.integrations.doc_filing import file_document
         fname = f"meeting-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.txt"
         filed_row = await file_document(
@@ -2202,6 +2227,16 @@ class CommerceAdminSkill(BaseSkill):
         # to the rep as a successful log even though nothing was ever persisted.
         if not filed_row.get("id"):
             return {"error": "Couldn't save the meeting log — please try again or check with support."}
+
+        if visit_photo_rows:
+            try:
+                for row in visit_photo_rows:
+                    f = row.get("fields") or {}
+                    f["attached_to_meeting"] = filed_row["id"]
+                    service._client().table("vula_filed_documents").update(
+                        {"fields": f}).eq("id", row["id"]).execute()
+            except Exception as exc:
+                logger.warning("marking visit photos attached failed for %s: %s", tid, exc)
 
         def _format_action_item(it: Dict[str, Any]) -> str:
             text = it.get("text") or ""
@@ -2263,13 +2298,21 @@ class CommerceAdminSkill(BaseSkill):
                 brief_parts.append("Attendees: " + ", ".join(attendees))
             if formatted_items:
                 brief_parts.append("Action items:\n" + "\n".join(f"- {a}" for a in formatted_items))
+            # Photos picked up above are embedded VERBATIM (real ![](url) markdown, passed via
+            # extra_markdown so the LLM generation step can't paraphrase/drop them) — never fed
+            # into `brief`, which the model treats as prose to write FROM, not to reproduce.
+            photos_md = ("Site Photos:\n\n" + "\n\n".join(
+                f"![Photo]({r['file_url']})" for r in visit_photo_rows if r.get("file_url"))
+                if visit_photo_rows else None)
             from core.skills.draft_admin import draft_letter
             pdf_result = await draft_letter({
                 "document_type": "site_meeting_minutes",
                 "brief": "\n\n".join(brief_parts),
                 "client_name": contact_name,
-            }, tid, ctx.get("phone") or "")
+            }, tid, ctx.get("phone") or "", extra_markdown=photos_md)
             result["pdf_sent"] = bool(pdf_result.get("sent_via_whatsapp"))
+            if visit_photo_rows:
+                result["photos_attached"] = len(visit_photo_rows)
         except Exception as exc:
             logger.warning("Meeting-summary PDF failed for tenant %s: %s", tid, exc)
             result["pdf_sent"] = False

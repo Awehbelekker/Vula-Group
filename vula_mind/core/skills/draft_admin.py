@@ -89,11 +89,17 @@ def _fee_proposal_gaps(args: Dict[str, Any]) -> List[str]:
     return gaps
 
 
-async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict:
+async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
+                       extra_markdown: str | None = None) -> dict:
     """Generate a letter (grounded in the tenant's KB + shared standards), render it onto the
     tenant's branded letterhead, send it back as a WhatsApp document, and optionally upload to
     Drive. Standalone so both draft_admin (knowledge-mode tenants) and commerce_admin
-    (commerce-mode tenant owners) can call the identical draft_letter tool."""
+    (commerce-mode tenant owners) can call the identical draft_letter tool.
+
+    extra_markdown: literal markdown appended AFTER the LLM's generated content and BEFORE PDF
+    render — for content that must survive verbatim (e.g. real photo ![](url) embeds for
+    _log_meeting's visit-report photos, 2026-08-27) rather than being paraphrased by the
+    generation step, which treats `brief` as prose to write FROM, not markdown to reproduce."""
     from vula.api.draft import DOCUMENT_TYPES, _retrieve_context, _generate_document, _store
     import hashlib
     from datetime import datetime, timezone
@@ -145,6 +151,9 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str) -> dict
     ).hexdigest()[:16]
     _store.save(tenant_id=tenant_id, draft_id=draft_id, doc_type=doc_type, brief=brief,
                content=content, word_count=word_count, model=model_used, sources=sources)
+
+    if extra_markdown:
+        content = content + "\n\n" + extra_markdown
 
     from vula.commerce.pdf import render_letter_pdf, merge_branding
     from vula.commerce import service as commerce_service
