@@ -7,10 +7,14 @@ sheet grouping claims into PETROL / CLIENTS (client refreshments) / ACCOMMODATIO
 OTHER catch-all for anything that doesn't fit — with a per-category sheet holding the actual
 slip photos. Emailed on the rep's own configured day of the month (migration 140).
 
-Category classification: uses commerce_expenses.purpose_category once a rep has been asked
-"what was this for" (not yet built — flagged in the platform plan as a follow-on). Until then,
-falls back to a deterministic guess from the existing chart-of-accounts account_code (fuel →
-petrol, everything else → other) — real data today, not blocked on that follow-on shipping.
+Category classification: commerce_expenses.purpose_category, auto-classified at scan time
+(vula.commerce.expenses.classify_purpose_category — deterministic vendor match first, one LLM
+call only when that's inconclusive) or resolved from a rep's WhatsApp reply when genuinely
+uncertain. Falls back to the chart-of-accounts account_code (fuel → petrol) for any older claim
+that predates purpose_category ever being set.
+
+Petrol claims also carry odometer_km (migration 142) — a real KM logbook column from Ian's own
+original claim-sheet template, asked for automatically once a receipt classifies as petrol.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from vula.commerce import service
+from vula.commerce import expenses, service
 
 log = logging.getLogger(__name__)
 
@@ -131,16 +135,23 @@ async def build_expense_workbook(tenant_id: str, rep_name: str, paid_by: str,
         items = by_category[cat]
         if not items:
             continue
+        is_petrol = cat == "petrol"
         recon.cell(row=row, column=2, value=_CATEGORY_LABEL[cat]).font = font(bold=True, size=11, color=WHITE)
         recon.cell(row=row, column=2).fill = fill(GREEN)
         row += 1
-        headers = ["Date", "Vendor", "Amount"]
+        # KM/KM since last — real columns from Ian's own original claim-sheet template, only
+        # meaningful for petrol (a South African travel-logbook expectation, migration 142).
+        headers = ["Date", "Vendor", "Amount", "KM", "KM since last"] if is_petrol else ["Date", "Vendor", "Amount"]
         for i, h in enumerate(headers):
             cell = recon.cell(row=row, column=2 + i, value=h)
             cell.font = font(bold=True, size=9)
             cell.fill = fill(GREY)
         row += 1
         cat_total = 0
+        prev_km: Optional[int] = None
+        if is_petrol and items:
+            prev_km = expenses.last_odometer_before(
+                tenant_id, paid_by, items[0]["date"], exclude_id=items[0].get("id"))
         for c in items:
             amt = int(c.get("amount_cents") or 0)
             cat_total += amt
@@ -149,6 +160,13 @@ async def build_expense_workbook(tenant_id: str, rep_name: str, paid_by: str,
             amt_cell = recon.cell(row=row, column=4, value=amt / 100)
             amt_cell.number_format = 'R #,##0.00'
             amt_cell.alignment = Alignment(horizontal="right")
+            if is_petrol:
+                km = c.get("odometer_km")
+                recon.cell(row=row, column=5, value=km if km is not None else "—")
+                delta = (km - prev_km) if (km is not None and prev_km is not None and km > prev_km) else None
+                recon.cell(row=row, column=6, value=delta if delta is not None else "—")
+                if km is not None:
+                    prev_km = km
             row += 1
         total_cell = recon.cell(row=row, column=3, value=f"{_CATEGORY_LABEL[cat]} TOTAL")
         total_cell.font = font(bold=True, size=9)
@@ -165,7 +183,7 @@ async def build_expense_workbook(tenant_id: str, rep_name: str, paid_by: str,
     gt_cell.font = font(bold=True, size=11, color=GREEN)
     gt_cell.alignment = Alignment(horizontal="right")
 
-    for col, width in (("A", 3), ("B", 16), ("C", 28), ("D", 14)):
+    for col, width in (("A", 3), ("B", 16), ("C", 28), ("D", 14), ("E", 12), ("F", 14)):
         recon.column_dimensions[col].width = width
 
     # One sheet per non-empty category, with the real slip photos embedded — matching Ian's own

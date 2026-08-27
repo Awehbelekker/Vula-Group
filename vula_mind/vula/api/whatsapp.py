@@ -1172,6 +1172,9 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         if not claim.get("purpose_category"):
             asks.append("🗂️ What was this for — fuel, a client visit/meal, or accommodation? "
                         "Reply with the category.")
+        elif claim.get("purpose_category") == "petrol":
+            # Only ever asked for petrol — a real KM logbook column, not a general expense field.
+            asks.append("🚗 What's the odometer reading at this fill-up? Reply with the number.")
         if asks:
             msg += "\n" + "\n".join(asks)
         msg += purpose_note
@@ -1248,9 +1251,16 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
                 expenses.assign(tenant_id, claim["id"], project=proj)
                 return f"✅ Allocated that *R{int(claim.get('amount_cents') or 0)/100:,.2f}* expense to *{proj}*."
 
+        # Odometer reading for a petrol claim (migration 142) — checked before the purpose
+        # fallback since a bare number is unambiguous here and would otherwise risk being
+        # misread by _maybe_allocate_pending_purpose as an "other" answer with numeric detail.
+        odo_reply = await _maybe_allocate_pending_odometer(tenant_id, phone, text)
+        if odo_reply is not None:
+            return odo_reply
+
         # Last resort — a purpose-category question ("what was this for?") pending on one or
         # more uncertain claims. Only reached when the message didn't already resolve a
-        # paid_with/project question above.
+        # paid_with/project/odometer question above.
         return await _maybe_allocate_pending_purpose(tenant_id, phone, text)
     except Exception as exc:
         logger.debug("pending-expense allocate skipped: %s", exc)
@@ -1271,6 +1281,12 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
         if not rows:
             return None
 
+        # A bare number never describes a purpose — most likely an odometer reading that has
+        # nowhere else to land right now (e.g. no pending odometer question exists yet). Leave
+        # it unresolved rather than forcing it into "other" with a numeric detail.
+        if re.fullmatch(r"[\d,\s]+(?:kms?\.?)?", text, flags=re.IGNORECASE):
+            return None
+
         if len(rows) == 1:
             claim = rows[0]
             cat = expenses.match_purpose_category(text)
@@ -1278,7 +1294,10 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
             cat = cat or "other"
             expenses.set_purpose_category(tenant_id, claim["id"], cat, detail=detail)
             amt = int(claim.get("amount_cents") or 0) / 100
-            return f"👍 Logged that *R{amt:,.2f}* as *{cat.title()}*."
+            msg = f"👍 Logged that *R{amt:,.2f}* as *{cat.title()}*."
+            if cat == "petrol":
+                msg += "\n🚗 What's the odometer reading at this fill-up? Reply with the number."
+            return msg
 
         # 2+ pending — require an indexed reply matching every pending claim, oldest→newest by
         # the same order they were listed in.
@@ -1292,13 +1311,18 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
                     parsed[idx] = val.strip()
         if len(parsed) == n:
             lines = []
+            any_petrol = False
             for i, claim in enumerate(rows, start=1):
                 cat = expenses.match_purpose_category(parsed[i])
                 detail = None if cat else parsed[i]
                 cat = cat or "other"
                 expenses.set_purpose_category(tenant_id, claim["id"], cat, detail=detail)
+                any_petrol = any_petrol or cat == "petrol"
                 lines.append(f"R{int(claim.get('amount_cents') or 0)/100:,.2f} → {cat.title()}")
-            return "👍 Logged:\n" + "\n".join(lines)
+            result = "👍 Logged:\n" + "\n".join(lines)
+            if any_petrol:
+                result += "\n🚗 What's the odometer reading for the petrol one(s)? Reply with the number."
+            return result
 
         # Couldn't parse a full indexed reply — list them out and ask again.
         listing = "\n".join(
@@ -1308,6 +1332,60 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
                 f"Reply like \"1 fuel, 2 client lunch\" so I know which is which.")
     except Exception as exc:
         logger.debug("pending purpose-category allocate skipped: %s", exc)
+        return None
+
+
+async def _maybe_allocate_pending_odometer(tenant_id: str, phone: str, text: str) -> Optional[str]:
+    """Resolve 'what's the odometer reading at this fill-up?' against the sender's petrol
+    claims still missing one. Same single-vs-multi-pending shape as
+    _maybe_allocate_pending_purpose, keyed on odometer_km instead of purpose_category —
+    multi-pending needs an indexed reply too (a bare number alone can't say WHICH fill-up)."""
+    from vula.commerce import expenses
+    try:
+        from vula.commerce import service
+        rows = (service._client().table("commerce_expenses").select("*")
+                .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
+                .eq("status", "submitted").eq("purpose_category", "petrol")
+                .is_("odometer_km", "null").order("updated_at", desc=True).execute().data or [])
+        if not rows:
+            return None
+
+        if len(rows) == 1:
+            km = expenses.parse_odometer_reading(text)
+            if km is None:
+                return None
+            claim = rows[0]
+            expenses.set_odometer(tenant_id, claim["id"], km)
+            amt = int(claim.get("amount_cents") or 0) / 100
+            return f"👍 Noted — {km:,} km at that *R{amt:,.2f}* fill-up."
+
+        # 2+ pending — an indexed reply ("1 45280, 2 46100") is the only unambiguous shape;
+        # a bare number can't say which fill-up it belongs to.
+        pairs = re.findall(r"(\d+)\D+(\d+)", text)
+        n = len(rows)
+        parsed: Dict[int, int] = {}
+        for idx_s, km_s in pairs:
+            idx, km = int(idx_s), expenses.parse_odometer_reading(km_s)
+            if 1 <= idx <= n and idx not in parsed and km is not None:
+                parsed[idx] = km
+        if len(parsed) == n:
+            lines = []
+            for i, claim in enumerate(rows, start=1):
+                expenses.set_odometer(tenant_id, claim["id"], parsed[i])
+                lines.append(f"{parsed[i]:,} km → R{int(claim.get('amount_cents') or 0)/100:,.2f}")
+            return "👍 Noted:\n" + "\n".join(lines)
+
+        if not expenses.parse_odometer_reading(text) and not pairs:
+            return None  # doesn't look like an odometer reply at all — leave it unresolved
+
+        listing = "\n".join(
+            f"{i}) R{int(c.get('amount_cents') or 0)/100:,.2f} {c.get('supplier') or ''} "
+            f"({(c.get('date') or '')[:10]})".strip()
+            for i, c in enumerate(rows, start=1))
+        return (f"You've got {n} fill-ups I need the odometer reading for:\n{listing}\n\n"
+                f"Reply like \"1 45280, 2 46100\" so I know which is which.")
+    except Exception as exc:
+        logger.debug("pending odometer allocate skipped: %s", exc)
         return None
 
 

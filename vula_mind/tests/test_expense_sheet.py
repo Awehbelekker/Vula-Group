@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import vula.commerce.expense_sheet as es_mod
+from vula.commerce import expenses
 
 TID = "test-tenant"
 REP_PHONE = "27821234567"
@@ -19,12 +20,23 @@ class _Result:
         self.data = data
 
 
+class _NotProxy:
+    def __init__(self, query):
+        self._query = query
+
+    def is_(self, key, _val):
+        self._query._not_null.append(key)
+        return self._query
+
+
 class _FakeQuery:
     def __init__(self, table):
         self.table = table
         self.filters = []
         self._gte = []
         self._lte = []
+        self._lt = []
+        self._not_null = []
         self._limit = None
         self._patch = None
 
@@ -43,6 +55,14 @@ class _FakeQuery:
         self._lte.append((key, val))
         return self
 
+    def lt(self, key, val):
+        self._lt.append((key, val))
+        return self
+
+    @property
+    def not_(self):
+        return _NotProxy(self)
+
     def order(self, *_a, **_kw):
         return self
 
@@ -56,6 +76,10 @@ class _FakeQuery:
         if not all((row.get(k) or "") >= v for k, v in self._gte):
             return False
         if not all((row.get(k) or "") <= v for k, v in self._lte):
+            return False
+        if not all((row.get(k) or "") < v for k, v in self._lt):
+            return False
+        if not all(row.get(k) is not None for k in self._not_null):
             return False
         return True
 
@@ -104,6 +128,10 @@ class _FakeClient:
 def fake_client(monkeypatch):
     client = _FakeClient()
     monkeypatch.setattr(es_mod, "_client", lambda: client)
+    # last_odometer_before() is called directly on the expenses module (not through
+    # expense_sheet.py's own _client wrapper) — same in-memory store, or it'd silently hit
+    # the real DB from a unit test.
+    monkeypatch.setattr(expenses, "_client", lambda: client)
     return client
 
 
@@ -207,6 +235,59 @@ async def test_build_expense_workbook_builds_real_xlsx_bytes(fake_client):
     assert "Petrol slips" in wb.sheetnames
     assert "Clients slips" in wb.sheetnames
     assert "Accommodation slips" not in wb.sheetnames  # no accommodation claims this month
+
+
+@pytest.mark.asyncio
+async def test_build_expense_workbook_petrol_table_has_km_columns(fake_client):
+    fake_client.store["commerce_expenses"] = [
+        _claim(date="2026-07-10", supplier="Engen", amount_cents=55000,
+               purpose_category="petrol", odometer_km=45280, id="c1"),
+        _claim(date="2026-07-20", supplier="Shell", amount_cents=60000,
+               purpose_category="petrol", odometer_km=45930, id="c2"),
+    ]
+    import io
+    import openpyxl
+    data = await es_mod.build_expense_workbook(TID, "Richard", REP_PHONE, "2026-07-01", "2026-07-31")
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    recon = wb["Recon"]
+    values = [[c.value for c in row] for row in recon.iter_rows()]
+    flat = [str(v) for row in values for v in row if v is not None]
+    assert "KM" in flat
+    assert "KM since last" in flat
+    assert 45280 in [v for row in values for v in row]
+    assert 45930 in [v for row in values for v in row]
+    assert 650 in [v for row in values for v in row]  # 45930 - 45280 delta
+
+
+@pytest.mark.asyncio
+async def test_build_expense_workbook_non_petrol_table_has_no_km_columns(fake_client):
+    fake_client.store["commerce_expenses"] = [
+        _claim(date="2026-07-10", supplier="Woolworths", amount_cents=12000, purpose_category="clients"),
+    ]
+    import io
+    import openpyxl
+    data = await es_mod.build_expense_workbook(TID, "Richard", REP_PHONE, "2026-07-01", "2026-07-31")
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    recon = wb["Recon"]
+    values = [str(c.value) for row in recon.iter_rows() for c in row if c.value is not None]
+    assert "KM" not in values
+
+
+@pytest.mark.asyncio
+async def test_build_expense_workbook_petrol_seeds_delta_from_prior_month(fake_client):
+    fake_client.store["commerce_expenses"] = [
+        _claim(date="2026-06-25", supplier="Engen", amount_cents=50000,
+               purpose_category="petrol", odometer_km=44000, id="c0"),
+        _claim(date="2026-07-05", supplier="Shell", amount_cents=55000,
+               purpose_category="petrol", odometer_km=44500, id="c1"),
+    ]
+    import io
+    import openpyxl
+    data = await es_mod.build_expense_workbook(TID, "Richard", REP_PHONE, "2026-07-01", "2026-07-31")
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    recon = wb["Recon"]
+    values = [v for row in recon.iter_rows() for v in [c.value for c in row]]
+    assert 500 in values  # 44500 - 44000, seeded from the June fill-up outside this month's range
 
 
 @pytest.mark.asyncio

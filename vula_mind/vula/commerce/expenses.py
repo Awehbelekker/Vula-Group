@@ -222,6 +222,43 @@ def set_purpose_category(tenant_id: str, expense_id: str, category: str,
     return (res.data or [{}])[0]
 
 
+def parse_odometer_reading(text: str) -> Optional[int]:
+    """A rep's reply to 'what's the odometer reading at this fill-up?' — accepts '45280',
+    '45,280', '45280km', '45 280 kms'. Returns None if the text isn't a plausible reading
+    (so a genuinely unrelated message never gets silently misread as an odometer value)."""
+    cleaned = re.sub(r"(?i)\s*kms?\.?\s*$", "", (text or "").strip())
+    cleaned = cleaned.replace(",", "").replace(" ", "")
+    if not cleaned.isdigit():
+        return None
+    km = int(cleaned)
+    return km if 0 < km < 2_000_000 else None  # sanity ceiling — not a real odometer otherwise
+
+
+def set_odometer(tenant_id: str, expense_id: str, km: int) -> dict:
+    res = (_client().table("commerce_expenses").update(
+                {"odometer_km": km, "updated_at": _now()})
+           .eq("tenant_id", tenant_id).eq("id", expense_id).execute())
+    return (res.data or [{}])[0]
+
+
+def last_odometer_before(tenant_id: str, paid_by: str, before_date: str,
+                         exclude_id: Optional[str] = None) -> Optional[int]:
+    """This rep's most recent PRIOR petrol fill-up's odometer reading (any month, not just the
+    reporting period) — the seed value a KM-since-last-fill-up delta needs for the first petrol
+    claim of a given month."""
+    try:
+        q = (_client().table("commerce_expenses").select("id,odometer_km")
+             .eq("tenant_id", tenant_id).eq("paid_by", paid_by).eq("purpose_category", "petrol")
+             .not_.is_("odometer_km", "null").lt("date", before_date)
+             .order("date", desc=True).limit(5).execute().data or [])
+        for row in q:
+            if row["id"] != exclude_id:
+                return row["odometer_km"]
+    except Exception as exc:
+        log.debug("last_odometer_before lookup skipped: %s", exc)
+    return None
+
+
 # ── Company cards (whose money?) ───────────────────────────────────────────────
 
 def list_cards(tenant_id: str, active_only: bool = True) -> List[dict]:
