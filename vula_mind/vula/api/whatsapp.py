@@ -977,6 +977,23 @@ async def _handle_document_ingest(
                         research_note = (f"\n🔎 Found their {' and '.join(added)} via a web "
                                          f"search — please double-check it's correct.")
 
+            # Same fix class, 2026-08-27: a photo of a building's exterior/signage — the address
+            # is exactly the small/distant/angled street-sign text the OCR-text pass is
+            # unreliable on. Direct vision read overrides; if a business name is legible but the
+            # address isn't, fall back to a web search for it (never invented).
+            if doc_category == "Site / Building Photo" and local_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                site_fields = await _scan_site_photo(str(local_path))
+                if site_fields:
+                    for key in ("address", "business_name", "notes"):
+                        if site_fields.get(key):
+                            fields[key] = site_fields[key]
+                if fields.get("business_name") and not fields.get("address"):
+                    found_addr = await _research_missing_address(fields["business_name"])
+                    if found_addr.get("address"):
+                        fields["address"] = found_addr["address"]
+                        research_note = ("\n🔎 Found their address via a web search — please "
+                                         "double-check it's correct.")
+
             # Normalise a business-card phone ONCE, here — before it's shown in the WhatsApp
             # breakdown, stored in vula_document_extractions, or written to commerce_contacts
             # below, so the number displayed to the rep always matches what actually got saved
@@ -1649,6 +1666,12 @@ _DOC_CATEGORIES = [
     # Document". Added categories each niche's KB actually needs, reusing this exact same
     # vocabulary (vula/commerce/starter_kb.py's business_type -> category mapping).
     "Menu / Price List", "Supplier Agreement", "Health & Safety Policy", "Booking Policy",
+    # 2026-08-27: a photo of a building's exterior/signage (site visit, prospective client's
+    # premises) had no home — fell into "General Document" with whatever the OCR-text pass
+    # happened to guess. Same fix class as Business Card: a dedicated category + direct vision
+    # scan, since the thing worth extracting (a street-sign address) is exactly the small/
+    # angled/distant text the OCR-text pipeline is unreliable on.
+    "Site / Building Photo",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
@@ -1781,7 +1804,10 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
                     'string|null, "payee_branch_code": string|null, "payee_account_number": '
                     'string|null, "amount_cents": integer|null, "reference": string|null, '
                     '"trace_id": string|null, "date": "YYYY-MM-DD"|null} - money in CENTS. '
-                    "For every other category (fee "
+                    "For Site / Building Photo (a photo of a building's exterior/signage, not a "
+                    "document held up to the camera), fields MUST use this exact shape: "
+                    '{"address": string|null, "business_name": string|null, "notes": '
+                    "string|null}. For every other category (fee "
                     "proposal, contract, drawing, specification, etc.), use whatever key "
                     "structured data best fits — e.g. fee proposal: client, stages, total; "
                     "contract: parties, value, dates. Use null when unknown."},
@@ -1870,7 +1896,7 @@ def _friendly_document_name(category: str, fields: dict, original_filename: str)
 
     ext = _Path(original_filename).suffix or ".jpg"
     ident = (fields.get("name") or fields.get("supplier") or fields.get("client")
-            or fields.get("company") or "")
+            or fields.get("company") or fields.get("business_name") or "")
     ident = re.sub(r"[^A-Za-z0-9 ]+", "", ident).strip()
     label = category.split(" / ")[0].split(" (")[0].strip()  # "Quote / Estimate" -> "Quote"
     base = f"{label} - {ident}" if ident else label
@@ -2646,6 +2672,102 @@ async def _research_missing_contact_details(name: str, company: str) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception as exc:
         logger.debug("contact research skipped for %s/%s: %s", name, company, exc)
+        return {}
+
+
+async def _scan_site_photo(photo_path: str) -> Optional[dict]:
+    """ONE strong cloud-vision call on the actual IMAGE → strict JSON for a building
+    exterior/signage photo. Same fix as _scan_business_card_photo — the OCR-text pass reads a
+    document held up to the camera fine, but a street-sign/nameplate address in the background
+    of a site photo is exactly the small/angled/distant text it's unreliable on.
+    Returns {address, business_name, notes} or None."""
+    from pathlib import Path as _Path
+    try:
+        p = _Path(photo_path or "")
+        if not p.exists() or p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            return None
+        from core.llm_router import resolve_cloud_vision_route
+        route = resolve_cloud_vision_route()
+        if not route:
+            return None
+        model, api_key, api_base = route
+        import base64
+        import json as _json
+        import litellm
+        litellm.drop_params = True
+        img_b64 = base64.b64encode(p.read_bytes()).decode()
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text":
+                    "Look at this photo of a building's exterior. Return STRICT JSON only, no "
+                    'prose:\n{"address":string|null,"business_name":string|null,'
+                    '"notes":string|null}\n'
+                    "Rules: transcribe any street number/address genuinely visible on a sign, "
+                    "plaque, or nameplate EXACTLY as shown. business_name is any company/shop "
+                    "name visible on signage. notes is one short phrase for anything else "
+                    "notable (e.g. \"under construction\", \"security gate\") or null. null for "
+                    "any field not actually visible in the photo — never guess or invent an "
+                    "address."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+            ]}],
+            temperature=0, max_tokens=200, api_key=api_key, api_base=api_base)
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        i, j = raw.find("{"), raw.rfind("}")
+        if i < 0 or j <= i:
+            return None
+        data = _json.loads(raw[i:j + 1])
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.debug("site photo scan failed: %s", exc)
+        return None
+
+
+async def _research_missing_address(business_name: str) -> dict:
+    """Best-effort web search when a site photo's signage is legible but no street-sign address
+    is visible — same "Can you do web search" pattern already proven for business-card contact
+    details. Never invents an address — only returns what a real page actually states, and the
+    caller must present it as "found via web search, please verify"."""
+    query = f"{business_name} address".strip()
+    if not business_name:
+        return {}
+    try:
+        from core.skills.web_search import _ddg_search, _fetch_text
+        hits = await _ddg_search(query, limit=3)
+        if not hits:
+            return {}
+        contexts = []
+        for h in hits[:2]:
+            text = await _fetch_text(h["url"])
+            if text:
+                contexts.append(f"[{h['url']}] {h['title']}\n{text[:2000]}")
+        if not contexts:
+            return {}
+
+        import litellm
+        from core.llm_router import resolve_generation_route
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+        prompt = (
+            "Using ONLY the web page excerpts below, find the physical/street address for "
+            f"\"{business_name}\". Return STRICT JSON only: {{\"address\": string|null}}. "
+            "null if the address isn't actually stated in the excerpts — never guess or invent "
+            "one.\n\n" + "\n\n".join(contexts)
+        )
+        resp = await litellm.acompletion(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            temperature=0, max_tokens=120, api_key=api_key, api_base=api_base)
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        import json as _json
+        i, j = raw.find("{"), raw.rfind("}")
+        if i < 0 or j <= i:
+            return {}
+        data = _json.loads(raw[i:j + 1])
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.debug("address research skipped for %s: %s", business_name, exc)
         return {}
 
 
