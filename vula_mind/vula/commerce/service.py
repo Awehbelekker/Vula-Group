@@ -1121,7 +1121,10 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
     if not sessions.data:
         return None
     session = sessions.data[0]
-    messages = await get_recent_messages(tenant_id, session_id, limit=200)
+    # Staleness is only a MODEL-context concern (see get_recent_messages below) — a human
+    # reading the shared-inbox thread wants the full history regardless of age, so this call
+    # explicitly opts out of the age cutoff.
+    messages = await get_recent_messages(tenant_id, session_id, limit=200, max_age_hours=None)
     return {
         "session_id": session["id"],
         "customer": session.get("customer_name") or session.get("customer_phone") or session.get("session_key"),
@@ -1134,18 +1137,32 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
     }
 
 
-async def get_recent_messages(tenant_id: str, session_id: str, limit: int = 12) -> List[dict]:
-    """Return the most recent messages for a session, oldest first."""
-    result = (
+# Sessions never expire/rotate (commerce_conversation_sessions has no TTL — the same session_id
+# is reused forever, keyed only on phone number), so on a low-traffic session "last N messages"
+# by COUNT alone can silently reach back hours or days. Confirmed live, 2026-08-27 (gerflor): a
+# 7-hour-old, completely unrelated message was still well inside the last-12-messages window and
+# got echoed back as if it were fresh context. 24h is a deliberate balance — long enough that a
+# same-day, multi-hour gap (e.g. a lunch break mid-conversation) still keeps its context, short
+# enough that yesterday's finished topic never leaks into today's.
+HISTORY_MAX_AGE_HOURS = 24
+DEFAULT_HISTORY_LIMIT = 12
+
+
+async def get_recent_messages(tenant_id: str, session_id: str, limit: int = DEFAULT_HISTORY_LIMIT,
+                              max_age_hours: Optional[float] = HISTORY_MAX_AGE_HOURS) -> List[dict]:
+    """Return the most recent messages for a session, oldest first. max_age_hours additionally
+    bounds how far back to look (pass None to disable, e.g. for a human-facing thread view)."""
+    q = (
         _client()
         .table("commerce_conversation_messages")
         .select("role,content,created_at")
         .eq("tenant_id", tenant_id)
         .eq("session_id", session_id)
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
     )
+    if max_age_hours is not None:
+        from core.time_fmt import cutoff_iso
+        q = q.gte("created_at", cutoff_iso(max_age_hours))
+    result = q.order("created_at", desc=True).limit(limit).execute()
     rows = result.data or []
     return list(reversed(rows))
 
@@ -1173,13 +1190,21 @@ def _strip_caveats_for_history(content: str) -> str:
 
 
 def format_history(messages: List[dict]) -> str:
-    """Render messages into a compact transcript for the skill's conversation_history."""
+    """Render messages into a compact transcript for the skill's conversation_history. Each
+    line is tagged with its actual age (2026-08-27) — previously role+content only, giving the
+    model no way to tell a 7-hour-old line apart from one said seconds ago (see
+    HISTORY_MAX_AGE_HOURS above for the full incident)."""
+    from core.time_fmt import relative_age_label
     label = {"user": "Customer", "assistant": "Assistant"}
-    return "\n".join(
-        f"{label.get(m['role'], m['role'].title())}: {_strip_caveats_for_history(m['content'])}"
-        for m in messages
-        if m.get("role") in ("user", "assistant") and m.get("content")
-    )
+    lines = []
+    for m in messages:
+        if m.get("role") not in ("user", "assistant") or not m.get("content"):
+            continue
+        age = relative_age_label(m.get("created_at") or "")
+        age_tag = f" ({age})" if age else ""
+        lines.append(f"{label.get(m['role'], m['role'].title())}{age_tag}: "
+                     f"{_strip_caveats_for_history(m['content'])}")
+    return "\n".join(lines)
 
 
 # ── Invoices & Quotes ─────────────────────────────────────────────────────────

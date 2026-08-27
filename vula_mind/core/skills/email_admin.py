@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
+from core.llm_router import resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message
 from vula.email_imap import service
@@ -70,8 +70,7 @@ class EmailAdminSkill(BaseSkill):
                 skill_name=self.name, confidence=0.25)
         try:
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id, creds)
-            if looks_degenerate(answer or ""):
-                answer = DEGENERATE_OUTPUT_FALLBACK
+            answer = substitute_if_degenerate(answer or "", skill=self.name, tenant_id=inp.tenant_id)
             return SkillOutput(answer=answer or "Done.", skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("email_admin failed: %s", exc)

@@ -244,3 +244,55 @@ async def test_draft_admin_also_short_circuits_on_need_info():
 # tightened find_document tool-spec + system-prompt guidance (excludes create-requests, forbids
 # falling back to an unrelated tool on a no-match). Covered by
 # tests/test_commerce_admin_find_document.py's guidance-text tests.
+
+
+# ── 8. A 7-hour-old unrelated reply echoed back verbatim + a flooring rep told about paint
+#      brands (gerflor) ──────────────────────────────────────────────────────────────────────
+# Real transcript, 2026-08-27: a sales rep asked "On the range you got loaded" after a 7-hour
+# gap; Vula replied by regurgitating a stale, unrelated reminder-confirmation from 7 hours
+# earlier in the same session almost verbatim — conversation history had zero time signal
+# (role+content only, created_at discarded). Moments later, asked "Colour rang that we could
+# order" (a question about Gerflor's OWN flooring colours), Vula answered with "Prominent
+# Paints"/"Dulux Trade" — unrelated paint companies — because commerce_admin.py had NO KB-lookup
+# tool at all (owner OR rep), so the model reached for competitor_check, a generic unscoped web
+# search. Fixed: format_history()/format_for_prompt() now tag each line with its real age (see
+# tests/test_time_fmt.py, tests/test_format_history_strips_caveats.py,
+# tests/test_chat.py's max_age_hours tests); commerce_admin.py gained lookup_business_info,
+# reusing commerce_assistant.py's proven KB-retrieval pattern (see
+# tests/test_commerce_admin_kb_tool.py). This entry proves the age-tag actually reaches the
+# real prompt sent to the model, not just that format_history() can produce one in isolation.
+
+@pytest.mark.asyncio
+async def test_stale_history_line_is_age_tagged_in_the_real_prompt_sent_to_the_model():
+    from datetime import datetime, timedelta, timezone
+    from core.skills.commerce_admin import CommerceAdminSkill
+    from vula.commerce.service import format_history
+
+    now = datetime.now(timezone.utc)
+    stale_messages = [
+        {"role": "user", "content": "Had a meeting with Tersia", "created_at":
+         (now - timedelta(hours=7)).isoformat()},
+        {"role": "assistant", "content": "I've set a reminder to follow up with Tersia.",
+         "created_at": (now - timedelta(hours=7)).isoformat()},
+    ]
+    history = format_history(stale_messages)
+    assert "7 hr ago" in history  # the raw building block the prompt injection relies on
+
+    captured = {}
+
+    async def fake_completion(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return _resp(content="A fresh, unrelated answer.")
+
+    skill = CommerceAdminSkill()
+    with (
+        patch("core.skills.commerce_admin.resolve_generation_route", new=_fake_route),
+        patch("core.skills.commerce_admin.escalate_to_cloud", return_value=("openrouter/test", "k", None)),
+        patch("litellm.acompletion", new=fake_completion),
+    ):
+        await skill._agent_loop("system prompt", history, "On the range you got loaded",
+                                {"tenant_id": TID}, tools=[])
+
+    history_msg = next(m["content"] for m in captured["messages"] if "Earlier conversation" in m.get("content", ""))
+    assert "7 hr ago" in history_msg
+    assert "treat anything more than an hour or two old as background only" in history_msg

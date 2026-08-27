@@ -46,12 +46,16 @@ class ChatHistoryDB:
         except Exception as exc:  # never break a reply because history failed
             logger.debug("chat save skipped (run migration 034?): %s", exc)
 
-    def get(self, tenant_id: str, phone: str = "", limit: int = 20) -> List[ChatMessage]:
+    def get(self, tenant_id: str, phone: str = "", limit: int = 20,
+            max_age_hours: Optional[float] = 24) -> List[ChatMessage]:
         try:
-            rows = (_client().table(_TABLE)
-                    .select("role,text,created_at,phone,tenant_id")
-                    .eq("tenant_id", tenant_id).eq("phone", phone or "")
-                    .order("created_at", desc=True).limit(limit).execute().data or [])
+            q = (_client().table(_TABLE)
+                 .select("role,text,created_at,phone,tenant_id")
+                 .eq("tenant_id", tenant_id).eq("phone", phone or ""))
+            if max_age_hours is not None:
+                from core.time_fmt import cutoff_iso
+                q = q.gte("created_at", cutoff_iso(max_age_hours))
+            rows = q.order("created_at", desc=True).limit(limit).execute().data or []
         except Exception as exc:
             logger.debug("chat get skipped: %s", exc)
             return []
@@ -67,12 +71,22 @@ class ChatHistoryDB:
         except Exception:
             return 0
 
-    def format_for_prompt(self, tenant_id: str, phone: str = "", limit: int = 6) -> str:
-        """Last N exchanges as a formatted conversation string for prompt injection."""
-        msgs = self.get(tenant_id, phone, limit=limit * 2)
+    def format_for_prompt(self, tenant_id: str, phone: str = "", limit: int = 6,
+                          max_age_hours: Optional[float] = 24) -> str:
+        """Last N exchanges as a formatted conversation string for prompt injection. Each line
+        is tagged with its actual age (2026-08-27) — same fix as commerce/service.py's
+        format_history, same real incident (a stale message resurfacing hours later with no
+        way for the model to tell it wasn't fresh)."""
+        msgs = self.get(tenant_id, phone, limit=limit * 2, max_age_hours=max_age_hours)
         if not msgs:
             return ""
-        return "\n".join(f"{'Client' if m.role == 'user' else 'Vula AI'}: {m.text}" for m in msgs)
+        from core.time_fmt import relative_age_label
+        lines = []
+        for m in msgs:
+            age = relative_age_label(m.created_at) if m.created_at else ""
+            age_tag = f" ({age})" if age else ""
+            lines.append(f"{'Client' if m.role == 'user' else 'Vula AI'}{age_tag}: {m.text}")
+        return "\n".join(lines)
 
 
 _db: Optional[ChatHistoryDB] = None

@@ -38,3 +38,28 @@ def test_format_history_leaves_normal_content_untouched():
     ]
     result = format_history(messages)
     assert result == "Customer: Hi\nAssistant: Hello! How can I help?"
+
+
+# 2026-08-27: real incident, gerflor — a message from ~7 hours earlier in the same session got
+# echoed back almost verbatim as the answer to a brand-new, unrelated question, because the
+# model had zero signal that it wasn't fresh context. format_history now tags each line with
+# its actual age.
+
+def test_format_history_annotates_age():
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    messages = [
+        {"role": "user", "content": "Old question", "created_at": (now - timedelta(hours=7)).isoformat()},
+        {"role": "assistant", "content": "Old answer", "created_at": (now - timedelta(hours=7)).isoformat()},
+        {"role": "user", "content": "New question", "created_at": (now - timedelta(seconds=5)).isoformat()},
+    ]
+    result = format_history(messages)
+    assert "Customer (7 hr ago): Old question" in result
+    assert "Assistant (7 hr ago): Old answer" in result
+    assert "Customer (just now): New question" in result
+
+
+def test_format_history_missing_created_at_omits_age_tag():
+    messages = [{"role": "user", "content": "Hi"}]
+    result = format_history(messages)
+    assert result == "Customer: Hi"

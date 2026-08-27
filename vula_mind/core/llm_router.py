@@ -221,6 +221,26 @@ def looks_unreliable(text: str, confidence: Optional[float] = None,
 DEGENERATE_OUTPUT_FALLBACK = "Sorry, something went wrong generating that reply — could you try again?"
 
 
+def substitute_if_degenerate(answer: str, *, skill: str, tenant_id: Optional[str] = None) -> str:
+    """The shared guard every tool-calling skill applies after generating its final answer: if
+    looks_degenerate() fires, log the raw (truncated) garbled text and telemetry BEFORE
+    swapping in DEGENERATE_OUTPUT_FALLBACK. 2026-08-27: previously none of the 9 call sites
+    logged anything when this fired, so this whole class of incident (confirmed live,
+    2026-08-22: ~1000 literal '!' characters) was undiagnosable from Railway logs after the
+    fact — centralizing here fixes that for every skill at once, not just the one investigated."""
+    if not looks_degenerate(answer):
+        return answer
+    snippet = (answer or "")[:200]
+    logger.warning("degenerate output caught, skill=%s len=%d snippet=%r", skill, len(answer or ""), snippet)
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-degenerate-output", task=skill, outcome="substituted",
+             escalated=False, tenant_id=tenant_id, extra={"snippet": snippet, "length": len(answer or "")})
+    except Exception:
+        pass
+    return DEGENERATE_OUTPUT_FALLBACK
+
+
 def looks_degenerate(text: str, min_len: int = 20, run_threshold: int = 12,
                      unique_ratio_threshold: float = 0.06) -> bool:
     """Cheap, deterministic check for garbled/repeated-character LLM output — no extra LLM call,

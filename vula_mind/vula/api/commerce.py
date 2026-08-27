@@ -1310,7 +1310,8 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     try:
         session = await service.get_or_create_session(tenant_id, session_key=session_key, channel="web")
         sid = session["id"]
-        history = service.format_history(await service.get_recent_messages(tenant_id, sid, limit=12))
+        history = service.format_history(
+            await service.get_recent_messages(tenant_id, sid, limit=service.DEFAULT_HISTORY_LIMIT))
     except Exception as exc:
         log.debug("Assistant session/history load failed (non-fatal): %s", exc)
 

@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from core.llm_router import (
-    resolve_generation_route, escalate_to_cloud, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK,
+    resolve_generation_route, escalate_to_cloud, substitute_if_degenerate,
 )
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
@@ -446,6 +446,24 @@ MARKETING_TOOLS = [
             "topic": {"type": "string"}, "tone": {"type": "string"},
             "variant_count": {"type": "integer", "description": "How many options to generate (1-3, default 3)."}}}}},
 ]
+# 2026-08-27: real incident, gerflor — a sales rep asked "what colours do we have", and with no
+# KB tool anywhere in this file (owner OR rep toolset), the model reached for competitor_check
+# (a generic, unscoped web search) and answered with unrelated paint companies. This tool gives
+# both roles a real path to the tenant's own knowledge base instead, reusing the exact same
+# VulaIngestionPipeline.query() commerce_assistant.py's _retrieve_kb already proves works.
+KNOWLEDGE_TOOLS = [
+    {"type": "function", "function": {
+        "name": "lookup_business_info",
+        "description": (
+            "Look up facts about THIS business's own products, services, pricing, policies, or "
+            "documents from its knowledge base (uploaded docs, ingested website content). Use "
+            "this for 'what do WE sell/offer/charge/have available' questions. Do NOT use for "
+            "questions about a competitor or an outside company — use competitor_check for those."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "What to look up, in the owner/rep's own words."}},
+            "required": ["query"]}}},
+]
 DRAFT_TOOLS = [
     {"type": "function", "function": {
         "name": "draft_letter",
@@ -686,9 +704,10 @@ _GATED_GROUPS = [
 # drafting, and — since a sales rep's own contact book/meeting log is just as relevant to a
 # shop owner fielding a client relationship — contacts and meeting logging too.
 _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
-                   + MARKETING_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS + CRM_TOOLS
-                   + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS
-                   + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS + AUTOMATION_TOOLS)
+                   + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS
+                   + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
+                   + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
+                   + AUTOMATION_TOOLS)
 
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
@@ -696,8 +715,8 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
 # 2026-08-24: finance_insights (shop-wide revenue/margin/VAT) used to be included here despite
 # directly contradicting this comment's own stated scope — confirmed a real gap, not an
 # intentional commission-visibility exception, and removed.
-_REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + DRAFT_TOOLS + BOOKING_TOOLS
-                   + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
+_REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
+                   + BOOKING_TOOLS + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
 
 
 # 2026-08-16: keyword pre-filter for _tools_for's gated groups — added alongside the purchase-
@@ -825,7 +844,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         mods = set(enabled_modules(tenant_id) or [])
     except Exception:
         mods = set()
-    tools = list(TOOL_SPECS) + MARKETING_TOOLS + DRAFT_TOOLS + CONTACT_TOOLS + MEETING_TOOLS  # always on
+    tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
+             + CONTACT_TOOLS + MEETING_TOOLS)  # always on
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     show_all = not mods                       # no config yet → show everything
@@ -868,8 +888,7 @@ class CommerceAdminSkill(BaseSkill):
                 raise RuntimeError("empty answer from admin agent loop")
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
             # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
-            if looks_degenerate(answer):
-                answer = DEGENERATE_OUTPUT_FALLBACK
+            answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
             return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8,
                                sources=collected_sources)
         except Exception as exc:
@@ -910,7 +929,10 @@ class CommerceAdminSkill(BaseSkill):
                 "IMPORTANT — confirm before anything that can't be undone or reaches someone else: "
                 "sending a proposal document, drafting an email (drafts are safe/reversible so this is "
                 "lower-stakes, but still confirm the recipient), or booking a meeting. Show the details "
-                "and wait for a clear 'yes' first.\n\n"
+                "and wait for a clear 'yes' first.\n"
+                "IMPORTANT — for 'what do we sell/offer/charge/colours do we have' questions about "
+                "THIS business, call lookup_business_info first — never competitor_check, which is "
+                "only for researching an OUTSIDE competitor or market price.\n\n"
                 + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
             )
         role_label = _role_label(tenant_id)
@@ -936,6 +958,9 @@ class CommerceAdminSkill(BaseSkill):
             "different, unrelated tool (bookings, a meeting log, a finance summary, logging an "
             "expense) just because it's the closest-sounding one; either proceed with what was "
             "actually asked or ask a plain question.\n"
+            "IMPORTANT — for 'what do we sell/offer/charge/colours do we have' questions about "
+            "THIS business, call lookup_business_info first — never competitor_check, which is "
+            "only for researching an OUTSIDE competitor or market price.\n"
             "IMPORTANT — confirm before acting on anything that spends money, sends messages to "
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding, or adopting a new voice/tone. Show the details and wait for a "
@@ -976,7 +1001,15 @@ class CommerceAdminSkill(BaseSkill):
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
         if history:
-            messages.append({"role": "user", "content": f"(Earlier conversation)\n{history}"})
+            # 2026-08-27: each line is now tagged with its actual age (see
+            # vula/commerce/service.py::format_history) — this explicit instruction is the
+            # second half of that fix. Confirmed live, gerflor: a 7-hour-old, unrelated line
+            # got echoed back verbatim as if it were the answer to a brand-new question.
+            messages.append({"role": "user", "content": (
+                "(Earlier conversation — each line is tagged with how long ago it happened; "
+                "treat anything more than an hour or two old as background only, never as the "
+                "answer to a brand-new question unless the owner is clearly continuing that "
+                f"same topic)\n{history}")})
         messages.append({"role": "user", "content": question})
 
         for _ in range(MAX_TOOL_ITERATIONS):
@@ -1201,6 +1234,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "configure_expense_sheet": return await self._configure_expense_sheet(tid, args, ctx)
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
+            if name == "lookup_business_info": return await self._lookup_business_info(tid, args)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
             if name == "list_reminders":     return await self._list_reminders(tid, args, ctx)
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
@@ -2510,7 +2544,20 @@ class CommerceAdminSkill(BaseSkill):
         from core.skills.web_search import _ddg_search, _fetch_text
         from core.prompt_safety import UNTRUSTED_CONTENT_RULE
 
-        hits = await _ddg_search(f"{query} price buy South Africa", limit=5)
+        # 2026-08-27: a generic query with no tenant/industry context can drift into the wrong
+        # business entirely — confirmed live (gerflor, a flooring company): "colour range"
+        # surfaced paint brands, not flooring ones. Injecting business_type/display_name doesn't
+        # fix the underlying "no relevance guard on results" gap (a real fix would need a
+        # relevance classifier — disproportionate scope for this pass), but narrows the search
+        # itself for the common case.
+        try:
+            from vula.api.tenants import get_config
+            cfg = get_config(tid) or {}
+            biz_ctx = " ".join(x for x in (cfg.get("business_type"), cfg.get("display_name")) if x)
+        except Exception:
+            biz_ctx = ""
+        search_q = f"{query} {biz_ctx} price buy South Africa".strip() if biz_ctx else f"{query} price buy South Africa"
+        hits = await _ddg_search(search_q, limit=5)
         if not hits:
             return {"error": f"Couldn't find live web results for '{query}' right now."}
 
@@ -2550,6 +2597,31 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": f"Found results but couldn't summarise them: {exc}",
                     "links": sources}
         return {"summary": summary or "No clear findings from the search results.", "sources": sources}
+
+    async def _lookup_business_info(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Real fix for the gerflor incident (2026-08-27): commerce_admin had no path to the
+        tenant's own KB at all, for either owner/staff or sales_rep — the model's only
+        "lookup" tool was competitor_check, a generic web search, which is how a flooring
+        company's rep ended up being told about paint brands. Mirrors commerce_assistant.py's
+        proven _retrieve_kb exactly rather than reinventing retrieval."""
+        query = (args.get("query") or "").strip()
+        if not query:
+            return {"error": "Need something to look up."}
+        try:
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            chunks = await VulaIngestionPipeline(tenant_id=tid).query(query, top_k=4)
+        except Exception as exc:
+            logger.debug("lookup_business_info retrieval skipped: %s", exc)
+            return {"error": "Couldn't search the knowledge base right now."}
+        if not chunks:
+            # Explicit found=False (not a bare error) — lets the model say honestly "nothing in
+            # the knowledge base yet" instead of silently falling through to competitor_check's
+            # web search, which is the exact chain that produced the wrong-industry answer.
+            return {"found": False, "message": "Nothing in the knowledge base matches that yet."}
+        return {"found": True, "results": [
+            {"source": c.get("filename", "doc"), "text": c.get("text", "")[:400]}
+            for c in chunks
+        ]}
 
     async def _draft_followup_email(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         to = (args.get("to_email") or "").strip()

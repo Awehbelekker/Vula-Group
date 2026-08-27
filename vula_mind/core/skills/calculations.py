@@ -18,7 +18,7 @@ import operator
 import re
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
+from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
@@ -101,7 +101,9 @@ class CalculationsSkill(BaseSkill):
             if not answer:
                 raise RuntimeError("empty answer")
             if looks_degenerate(answer):
-                return SkillOutput(answer=DEGENERATE_OUTPUT_FALLBACK, skill_name=self.name, confidence=0.0)
+                return SkillOutput(
+                    answer=substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id),
+                    skill_name=self.name, confidence=0.0)
         except Exception as exc:
             logger.warning("calculations loop failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))

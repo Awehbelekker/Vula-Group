@@ -11,6 +11,7 @@ from core.llm_router import (
     assess_complexity,
     looks_unreliable,
     looks_degenerate,
+    substitute_if_degenerate,
     DEGENERATE_OUTPUT_FALLBACK,
     compute_confidence,
     escalate_to_cloud,
@@ -339,6 +340,40 @@ def test_looks_degenerate_false_positives():
     # Legitimately repeated real content (a price repeated across several line items) must not
     # trip the diversity check just because one substring recurs.
     assert looks_degenerate("R100.00, R100.00, R100.00, R100.00, R100.00, R100.00") is False
+
+
+# 2026-08-27: substitute_if_degenerate centralizes the repeated 2-line
+# "if looks_degenerate(x): x = DEGENERATE_OUTPUT_FALLBACK" pattern that used to exist,
+# unlogged, in 9 separate skills — none of them recorded WHAT the garbled text actually was,
+# making the class of incident that motivated looks_degenerate() itself undiagnosable after the
+# fact. This adds logging + telemetry at the one shared choke point instead.
+
+def test_substitute_if_degenerate_logs_and_substitutes():
+    with patch("core.reasoning_telemetry.emit") as mock_emit:
+        result = substitute_if_degenerate("!" * 1000, skill="commerce_admin", tenant_id="t1")
+    assert result == DEGENERATE_OUTPUT_FALLBACK
+    mock_emit.assert_called_once()
+    kwargs = mock_emit.call_args.kwargs
+    assert kwargs["system"] == "vula-degenerate-output"
+    assert kwargs["task"] == "commerce_admin"
+    assert kwargs["tenant_id"] == "t1"
+    assert kwargs["extra"]["snippet"] == "!" * 200
+    assert kwargs["extra"]["length"] == 1000
+
+
+def test_substitute_if_degenerate_passthrough_on_normal_text():
+    with patch("core.reasoning_telemetry.emit") as mock_emit:
+        result = substitute_if_degenerate("There are 12 unpaid invoices.", skill="finance_admin")
+    assert result == "There are 12 unpaid invoices."
+    mock_emit.assert_not_called()
+
+
+def test_substitute_if_degenerate_telemetry_failure_still_substitutes():
+    """Telemetry is best-effort — a broken emit() must never stop the fallback text itself
+    from reaching the user."""
+    with patch("core.reasoning_telemetry.emit", side_effect=RuntimeError("db down")):
+        result = substitute_if_degenerate("!" * 1000, skill="commerce_admin")
+    assert result == DEGENERATE_OUTPUT_FALLBACK
 
 
 def test_degenerate_output_fallback_is_a_real_customer_facing_message():

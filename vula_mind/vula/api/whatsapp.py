@@ -3786,7 +3786,7 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         session_id = session["id"]
         preferred_language = session.get("preferred_language")
         history = commerce_service.format_history(
-            await commerce_service.get_recent_messages(tenant_id, session_id, limit=12)
+            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT)
         )
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)
@@ -3871,7 +3871,7 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
         session_id = session["id"]
         preferred_language = session.get("preferred_language")
         history = commerce_service.format_history(
-            await commerce_service.get_recent_messages(tenant_id, session_id, limit=12)
+            await commerce_service.get_recent_messages(tenant_id, session_id, limit=commerce_service.DEFAULT_HISTORY_LIMIT)
         )
     except Exception as exc:
         logger.debug("Commerce session/history load failed (non-fatal): %s", exc)

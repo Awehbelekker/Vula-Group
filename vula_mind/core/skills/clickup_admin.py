@@ -21,7 +21,7 @@ import logging
 import re
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
+from core.llm_router import resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 from vula.clickup import service
@@ -103,8 +103,7 @@ class ClickUpAdminSkill(BaseSkill):
             answer = await self._agent_loop(inp.conversation_history, inp.question, ctx)
             if not answer:
                 raise RuntimeError("empty answer from clickup agent loop")
-            if looks_degenerate(answer):
-                answer = DEGENERATE_OUTPUT_FALLBACK
+            answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
             return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("clickup_admin loop failed (%s)", exc)

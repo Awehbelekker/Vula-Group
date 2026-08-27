@@ -30,6 +30,12 @@ class _FakeQuery:
         self._filters.append((key, value))
         return self
 
+    def gte(self, key, value):
+        # 2026-08-27: history.py's get() now bounds retrieval by age (see core/time_fmt.py) —
+        # ISO-8601 timestamps sort correctly as plain strings, so string comparison is exact.
+        self._filters.append((key, value, ">="))
+        return self
+
     def order(self, col, desc=False):
         self._order = (col, desc)
         return self
@@ -44,7 +50,18 @@ class _FakeQuery:
             row["_seq"] = len(self._rows)   # tiebreaker — created_at can tie at test speed
             self._rows.append(row)
             return _FakeResult([row])
-        matched = [r for r in self._rows if all(r.get(k) == v for k, v in self._filters)]
+        def _row_matches(r):
+            for f in self._filters:
+                if len(f) == 2:
+                    k, v = f
+                    if r.get(k) != v:
+                        return False
+                else:
+                    k, v, _op = f  # only ">=" (gte) exists today
+                    if not (r.get(k, "") >= v):
+                        return False
+            return True
+        matched = [r for r in self._rows if _row_matches(r)]
         if self._op == "delete":
             for r in matched:
                 self._rows.remove(r)
@@ -127,15 +144,62 @@ def test_clear_only_affects_matching_phone(chat_db):
 
 
 def test_format_for_prompt(chat_db):
+    # 2026-08-27: each line is now tagged with its age (core/time_fmt.py) — see
+    # test_format_for_prompt_annotates_age below for the real incident this fixes.
     chat_db.save("t1", "p1", "user", "What is your price?")
     chat_db.save("t1", "p1", "assistant", "R500 per hour.")
     result = chat_db.format_for_prompt("t1", "p1")
-    assert "Client: What is your price?" in result
-    assert "Vula AI: R500 per hour." in result
+    assert "Client (just now): What is your price?" in result
+    assert "Vula AI (just now): R500 per hour." in result
 
 
 def test_format_for_prompt_empty(chat_db):
     assert chat_db.format_for_prompt("nobody", "") == ""
+
+
+# 2026-08-27: real incident (gerflor) — the parallel commerce-session history path had the
+# identical bug (no time-based cutoff, no age signal reaching the model). Same fix here.
+
+def test_get_excludes_messages_older_than_max_age_hours(chat_db):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(hours=30)).isoformat()
+    fresh_ts = (now - timedelta(minutes=5)).isoformat()
+    chat_db.save("t1", "p1", "user", "old message")
+    chat_db.save("t1", "p1", "user", "fresh message")
+    # Rewrite the first row's created_at to be genuinely old (save() always stamps "now").
+    from vula.chat import history as history_mod
+    fake_client = history_mod._client()
+    fake_client._rows[0]["created_at"] = old_ts
+    fake_client._rows[1]["created_at"] = fresh_ts
+
+    msgs = chat_db.get("t1", "p1", max_age_hours=24)
+    assert len(msgs) == 1
+    assert msgs[0].text == "fresh message"
+
+
+def test_get_max_age_hours_none_includes_everything(chat_db):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    chat_db.save("t1", "p1", "user", "very old message")
+    from vula.chat import history as history_mod
+    fake_client = history_mod._client()
+    fake_client._rows[0]["created_at"] = (now - timedelta(days=10)).isoformat()
+
+    msgs = chat_db.get("t1", "p1", max_age_hours=None)
+    assert len(msgs) == 1
+
+
+def test_format_for_prompt_annotates_age(chat_db):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    chat_db.save("t1", "p1", "user", "Old question")
+    from vula.chat import history as history_mod
+    fake_client = history_mod._client()
+    fake_client._rows[0]["created_at"] = (now - timedelta(hours=7)).isoformat()
+
+    result = chat_db.format_for_prompt("t1", "p1", max_age_hours=None)
+    assert "Client (7 hr ago): Old question" in result
 
 
 def test_text_truncated_at_save(chat_db):

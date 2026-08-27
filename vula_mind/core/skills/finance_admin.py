@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route, looks_degenerate, DEGENERATE_OUTPUT_FALLBACK
+from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source,
@@ -84,7 +84,9 @@ class FinanceAdminSkill(BaseSkill):
             return SkillOutput(answer="I couldn't find any financial records for that.",
                                skill_name=self.name, confidence=0.8, sources=self._sources)
         if looks_degenerate(answer):
-            return SkillOutput(answer=DEGENERATE_OUTPUT_FALLBACK, skill_name=self.name, confidence=0.0)
+            return SkillOutput(
+                answer=substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id),
+                skill_name=self.name, confidence=0.0)
 
         # 2026-08 accuracy audit: unlike calculations.py (anchor check) or commerce_admin.py's
         # mutating tools (post-write readback), nothing previously verified that this skill's
