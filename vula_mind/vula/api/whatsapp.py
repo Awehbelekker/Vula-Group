@@ -948,6 +948,35 @@ async def _handle_document_ingest(
             summary = analysis.get("summary", "")
             fields = analysis.get("fields", {})
 
+            # A PHOTO of a business card = the OCR-text pass above reliably reads the email
+            # (a distinct @-pattern OCRs cleanly) but consistently misses the phone number
+            # (small print, varied formatting, icons) — confirmed live 2026-08-27. Same fix as
+            # the receipt-scan shortcut: one direct vision call on the actual image, preferring
+            # its result for each field over the weaker OCR-text one.
+            research_note = ""
+            if doc_category == "Business Card" and local_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                vision_fields = await _scan_business_card_photo(str(local_path))
+                if vision_fields:
+                    for key in ("name", "company", "title", "phone", "email"):
+                        if vision_fields.get(key):
+                            fields[key] = vision_fields[key]
+                # Genuinely nothing printed for phone/email on the card itself → best-effort web
+                # search, clearly flagged as researched rather than presented as if it were on
+                # the card (same "Can you do web search" pattern already proven finding real
+                # contact details).
+                if not fields.get("phone") or not fields.get("email"):
+                    found = await _research_missing_contact_details(fields.get("name") or "", fields.get("company") or "")
+                    added = []
+                    if found.get("phone") and not fields.get("phone"):
+                        fields["phone"] = found["phone"]
+                        added.append("phone")
+                    if found.get("email") and not fields.get("email"):
+                        fields["email"] = found["email"]
+                        added.append("email")
+                    if added:
+                        research_note = (f"\n🔎 Found their {' and '.join(added)} via a web "
+                                         f"search — please double-check it's correct.")
+
             # Normalise a business-card phone ONCE, here — before it's shown in the WhatsApp
             # breakdown, stored in vula_document_extractions, or written to commerce_contacts
             # below, so the number displayed to the rep always matches what actually got saved
@@ -979,7 +1008,7 @@ async def _handle_document_ingest(
                 }).execute()
             except Exception as exc:
                 logger.debug("Extraction store skipped (run migration 011?): %s", exc)
-            breakdown = _format_extraction(analysis)
+            breakdown = _format_extraction(analysis) + research_note
 
             # A PHOTO of a receipt/invoice = money spent for the business → expense claim.
             # ONE strong vision call reads the actual image (the OCR-text → small-model path
@@ -2521,6 +2550,103 @@ async def _scan_financial_photo(photo_path: str) -> Optional[dict]:
     except Exception as exc:
         logger.debug("financial photo scan failed: %s", exc)
         return None
+
+
+async def _scan_business_card_photo(photo_path: str) -> Optional[dict]:
+    """ONE strong cloud-vision call on the actual IMAGE → strict JSON for a business card.
+    Same fix as _scan_financial_photo, applied here 2026-08-27 after a real report: the
+    OCR-text → cheap-model path (_analyze_document) reliably read an email off a card but
+    consistently missed the phone number — small print, varied formatting, icons — while an
+    email's distinct @-pattern OCRs cleanly. Reading the image directly avoids that gap.
+    Returns {name, company, title, phone, email} or None."""
+    from pathlib import Path as _Path
+    try:
+        p = _Path(photo_path or "")
+        if not p.exists() or p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            return None
+        from core.llm_router import resolve_cloud_vision_route
+        route = resolve_cloud_vision_route()
+        if not route:
+            return None
+        model, api_key, api_base = route
+        import base64
+        import json as _json
+        import litellm
+        litellm.drop_params = True
+        img_b64 = base64.b64encode(p.read_bytes()).decode()
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text":
+                    "Read this business card image carefully. Return STRICT JSON only, no "
+                    'prose:\n{"name":string|null,"company":string|null,"title":string|null,'
+                    '"phone":string|null,"email":string|null}\n'
+                    "Rules: transcribe the printed phone number and email EXACTLY as shown, "
+                    "including country/area codes and symbols. If more than one phone number is "
+                    "printed, prefer a mobile/cell number. null for any field genuinely not "
+                    "printed on the card — never guess or invent one."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+            ]}],
+            temperature=0, max_tokens=200, api_key=api_key, api_base=api_base)
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        i, j = raw.find("{"), raw.rfind("}")
+        if i < 0 or j <= i:
+            return None
+        data = _json.loads(raw[i:j + 1])
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.debug("business card photo scan failed: %s", exc)
+        return None
+
+
+async def _research_missing_contact_details(name: str, company: str) -> dict:
+    """Best-effort web search when a business card genuinely doesn't print a phone/email —
+    same real "Can you do web search" pattern already proven finding a contractor's real
+    contact details (confirmed live, gerflor, 2026-08-26). Never invents a number/address —
+    only returns what a real page actually states, and the caller must present it as
+    "found via web search, please verify", never as if it came from the card itself."""
+    query = " ".join(p for p in (name, company, "contact") if p).strip()
+    if not query:
+        return {}
+    try:
+        from core.skills.web_search import _ddg_search, _fetch_text
+        hits = await _ddg_search(query, limit=3)
+        if not hits:
+            return {}
+        contexts = []
+        for h in hits[:2]:
+            text = await _fetch_text(h["url"])
+            if text:
+                contexts.append(f"[{h['url']}] {h['title']}\n{text[:2000]}")
+        if not contexts:
+            return {}
+
+        import litellm
+        from core.llm_router import resolve_generation_route
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+        prompt = (
+            "Using ONLY the web page excerpts below, find a phone number and/or email address "
+            f"for \"{name or company}\"" + (f" at \"{company}\"" if name and company else "") +
+            ". Return STRICT JSON only: {\"phone\": string|null, \"email\": string|null}. "
+            "null for anything not actually stated in the excerpts — never guess or invent a "
+            "number.\n\n" + "\n\n".join(contexts)
+        )
+        resp = await litellm.acompletion(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            temperature=0, max_tokens=150, api_key=api_key, api_base=api_base)
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        import json as _json
+        i, j = raw.find("{"), raw.rfind("}")
+        if i < 0 or j <= i:
+            return {}
+        data = _json.loads(raw[i:j + 1])
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.debug("contact research skipped for %s/%s: %s", name, company, exc)
+        return {}
 
 
 async def _is_receipt_photo(photo_path: str) -> bool:
