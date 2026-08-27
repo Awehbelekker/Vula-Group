@@ -973,6 +973,17 @@ async def _handle_document_ingest(
                     # misread — drop it and let the books compute it from the category instead.
                     if not (0 <= vat_r <= total_r * 0.16):
                         vat_r = 0
+                    # Flatten to a clean, flat-scan-style crop when the vision call confidently
+                    # found the receipt's 4 corners (2026-08-27) — overwritten in place BEFORE
+                    # hashing, so the dedup hash, the storage upload, and the workbook's embedded
+                    # slip photo all pick up the cleaned-up version automatically, with no
+                    # separate wiring. Best-effort: a bad/missing corner detection is a no-op.
+                    try:
+                        from vula.commerce.image_prep import flatten_receipt
+                        flattened = flatten_receipt(local_path.read_bytes(), fin.get("corners"))
+                        local_path.write_bytes(flattened)
+                    except Exception as exc:
+                        logger.debug("receipt flatten skipped for %s: %s", filename, exc)
                     # Dedup on the image CONTENT — a re-sent photo has identical bytes even though
                     # it gets a new media id, so this catches re-sends AND Meta redeliveries.
                     import hashlib
@@ -2423,7 +2434,8 @@ async def _scan_financial_photo(photo_path: str) -> Optional[dict]:
                     '"currency":"ZAR"|"USD"|"EUR"|"other"|"unknown",'
                     '"total":number|null,"vat":number|null,'
                     '"payment_method":"card"|"cash"|"eft"|"unknown","card_last4":string|null,'
-                    '"reference":string|null,"payee":string|null}\n'
+                    '"reference":string|null,"payee":string|null,'
+                    '"corners":[[x,y],[x,y],[x,y],[x,y]]|null}\n'
                     "Rules: total = the single final amount PAYABLE printed on the document "
                     "(grand total / amount due) — copy the printed number exactly, do not compute. "
                     "vat = the printed VAT/tax amount, null if not shown. R means ZAR. "
@@ -2434,10 +2446,15 @@ async def _scan_financial_photo(photo_path: str) -> Optional[dict]:
                     "screenshot (e.g. FNB/Capitec/Absa/PayShap/SnapScan confirming money was "
                     "sent) → doc_type=payment_confirmation, total=the amount paid, "
                     "reference=any transaction/reference number shown, payee=who received the "
-                    "payment if shown."},
+                    "payment if shown. corners = the 4 corners of the physical receipt/invoice "
+                    "AS PHOTOGRAPHED (only if it's a paper document shot at an angle, not already "
+                    "a flat screenshot), clockwise starting top-left — top-left, top-right, "
+                    "bottom-right, bottom-left — each as [x,y] FRACTIONS of the image width/height "
+                    "(0.0-1.0, not pixels). null if you can't confidently see all 4 corners, if "
+                    "it's already a flat screenshot, or if it's not a single rectangular document."},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
             ]}],
-            temperature=0, max_tokens=200, api_key=api_key, api_base=api_base)
+            temperature=0, max_tokens=280, api_key=api_key, api_base=api_base)
         raw = (resp.choices[0].message.content or "").strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         i, j = raw.find("{"), raw.rfind("}")
