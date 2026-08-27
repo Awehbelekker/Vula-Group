@@ -4,47 +4,55 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from vula.api.server import app
+from vula.api.onboarding import settings as onboarding_settings
 
 client = TestClient(app)
 
 
 # ── Input validation ──────────────────────────────────────────────────────────
+# /onboard is admin-gated (2026-08-15, see "Admin auth" below) — these tests care about
+# Pydantic validation only, so the gate is neutralised the same way
+# test_onboard_accepts_valid_api_key already does, rather than re-asserting auth here too.
 
 def test_onboard_rejects_missing_fields():
-    resp = client.post("/v1/onboard", json={})
+    with patch.object(onboarding_settings, "api_key", ""):
+        resp = client.post("/v1/onboard", json={})
     assert resp.status_code == 422
 
 
 def test_onboard_rejects_invalid_email():
-    resp = client.post("/v1/onboard", json={
-        "company_name": "Test Co",
-        "industry": "Construction",
-        "contact_name": "Jane",
-        "email": "not-an-email",
-        "plan": "starter",
-    })
+    with patch.object(onboarding_settings, "api_key", ""):
+        resp = client.post("/v1/onboard", json={
+            "company_name": "Test Co",
+            "industry": "Construction",
+            "contact_name": "Jane",
+            "email": "not-an-email",
+            "plan": "starter",
+        })
     assert resp.status_code == 422
 
 
 def test_onboard_rejects_invalid_plan():
-    resp = client.post("/v1/onboard", json={
-        "company_name": "Test Co",
-        "industry": "Construction",
-        "contact_name": "Jane",
-        "email": "jane@test.co.za",
-        "plan": "enterprise",  # not a valid plan
-    })
+    with patch.object(onboarding_settings, "api_key", ""):
+        resp = client.post("/v1/onboard", json={
+            "company_name": "Test Co",
+            "industry": "Construction",
+            "contact_name": "Jane",
+            "email": "jane@test.co.za",
+            "plan": "enterprise",  # not a valid plan
+        })
     assert resp.status_code == 422
 
 
 def test_onboard_rejects_empty_company_name():
-    resp = client.post("/v1/onboard", json={
-        "company_name": "   ",
-        "industry": "Construction",
-        "contact_name": "Jane",
-        "email": "jane@test.co.za",
-        "plan": "starter",
-    })
+    with patch.object(onboarding_settings, "api_key", ""):
+        resp = client.post("/v1/onboard", json={
+            "company_name": "   ",
+            "industry": "Construction",
+            "contact_name": "Jane",
+            "email": "jane@test.co.za",
+            "plan": "starter",
+        })
     assert resp.status_code == 422
 
 
@@ -52,7 +60,10 @@ def test_onboard_rejects_empty_company_name():
 
 def test_onboard_success_when_supabase_not_configured():
     """When Supabase is not configured the API still provisions in-memory."""
-    with patch("vula.api.onboarding._supabase") as mock_sb:
+    with (
+        patch.object(onboarding_settings, "api_key", ""),
+        patch("vula.api.onboarding._supabase") as mock_sb,
+    ):
         mock_sb.select = AsyncMock(return_value=[])   # no duplicate
         mock_sb.insert = AsyncMock(return_value={})
         mock_sb.update = AsyncMock(return_value=None)
@@ -76,7 +87,10 @@ def test_onboard_success_when_supabase_not_configured():
 
 
 def test_onboard_409_on_duplicate_email():
-    with patch("vula.api.onboarding._supabase") as mock_sb:
+    with (
+        patch.object(onboarding_settings, "api_key", ""),
+        patch("vula.api.onboarding._supabase") as mock_sb,
+    ):
         mock_sb.select = AsyncMock(return_value=[{"email": "judy@digg.co.za"}])
 
         resp = client.post("/v1/onboard", json={
@@ -208,7 +222,6 @@ def test_onboard_requires_key_when_configured():
 
 
 def test_onboard_accepts_valid_api_key():
-    from vula.api.onboarding import settings as onboarding_settings
     with (
         patch.object(onboarding_settings, "api_key", "secret123"),
         patch("vula.api.onboarding._supabase") as mock_sb,
