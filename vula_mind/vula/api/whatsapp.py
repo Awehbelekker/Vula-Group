@@ -25,7 +25,7 @@ import hashlib
 import hmac
 import logging
 import re
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -1098,19 +1098,32 @@ async def _handle_document_ingest(
         if expense_claim_img_ref:
             await _backfill_receipt_url(tenant_id, expense_claim_img_ref, filed_row)
 
+        # 2026-08-27 fix: _file_uploaded_document() degrades to ("", None) on ANY failure (e.g.
+        # the real DB-constraint bug this same day, confirmed live on a gerflor billboard photo
+        # — filing failed outright with Postgres error 42P10, yet the reply below still claimed
+        # "✅ Filed" unconditionally). filed_row only has a real "id" when the write actually
+        # persisted — check it before claiming success, so a genuine filing failure is reported
+        # honestly instead of silently lying to the rep.
+        filed_ok = bool(filed_row and filed_row.get("id"))
+
         if scan_msg and any(k in scan_msg for k in ("💳", "♻️", "📦", "⚠️", "📸")):
             # Money was booked (or deliberately not) — lead with THAT, not the filing mechanics.
-            msg = scan_msg.strip() + "\n\n🗂 The document itself is filed — ask me about it any time."
+            msg = scan_msg.strip() + (
+                "\n\n🗂 The document itself is filed — ask me about it any time." if filed_ok
+                else "\n\n⚠️ I couldn't file the document itself just now — please try resending it.")
         else:
             msg = (
-                f"✅ Filed '{result.filename}' as *{doc_category}* — "
+                (f"✅ Filed '{result.filename}' as *{doc_category}* — " if filed_ok
+                 else f"📖 Read '{result.filename}' as *{doc_category}* — ") +
                 f"{result.chunks_stored} chunks added."
             )
             if summary:
                 msg += f"\n\n📄 {summary}"
             if breakdown:
                 msg += f"\n\n{breakdown}"
-            if file_note:
+            if not filed_ok:
+                msg += "\n\n⚠️ I understood it but couldn't file it just now — please try resending."
+            elif file_note:
                 msg += f"\n\n{file_note}"
             else:
                 msg += "\n\nAsk me anything about it."
@@ -1905,6 +1918,30 @@ def _friendly_document_name(category: str, fields: dict, original_filename: str)
     return f"{base} {ts}{ext}"
 
 
+def _flatten_extraction_item(item: Any) -> str:
+    """Compact one-line rendering of a dict/list-of-scalars value found inside a list field
+    (e.g. one entry of a project billboard's "team" array: role/company/contact_details) —
+    joins whatever scalar values are actually present, recursing one level into a nested dict
+    (e.g. contact_details: {email, phone, website}). Never invents structure that isn't there."""
+    if isinstance(item, dict):
+        parts = []
+        for v in item.values():
+            if v is None or v == "":
+                continue
+            if isinstance(v, dict):
+                sub = _flatten_extraction_item(v)
+                if sub:
+                    parts.append(sub)
+            elif isinstance(v, list):
+                continue  # avoid unbounded nesting inside a list-of-dicts item
+            else:
+                parts.append(str(v))
+        return ", ".join(parts)
+    if item is None or item == "":
+        return ""
+    return str(item)
+
+
 def _format_extraction(analysis: dict) -> str:
     """Turn a structured analysis into a short WhatsApp breakdown.
 
@@ -1912,13 +1949,36 @@ def _format_extraction(analysis: dict) -> str:
     field (e.g. amount_cents=280000) that meant a customer-facing reply literally saying
     "Amount Cents: 280000" instead of "Amount: R2,800.00". Confirmed live on a real digg-demo
     payment notification. Any `*_cents` field is now converted to Rand and has "Cents" dropped
-    from its label; everything else is unchanged."""
+    from its label; everything else is unchanged.
+
+    2026-08-27, same day: this ALSO used to silently drop any field whose value was a list or
+    dict entirely — confirmed live on a real project billboard photo (gerflor): the extraction
+    correctly pulled a "team" array (architect/engineer/contractor/H&S consultant, each with
+    email/phone/website) but every one of those contacts vanished from the WhatsApp reply,
+    leaving only the project name and address — "missed all the context". Financial line_items
+    stay a count-only summary (a full itemised breakdown would make every invoice/quote reply
+    huge); every OTHER list-of-dicts field (team, transactions, etc.) now renders as compact
+    sub-bullets instead of disappearing."""
     lines = []
     fields = analysis.get("fields") or {}
     for k, v in fields.items():
-        if v is None or v == "" or k == "items":
+        if v is None or v == "" or k in ("items", "line_items"):
             continue
-        if isinstance(v, (dict, list)):
+        if isinstance(v, list):
+            if not v:
+                continue
+            label = k.replace("_", " ").title()
+            lines.append(f"• {label}:")
+            for item in v[:5]:
+                rendered = _flatten_extraction_item(item)
+                if rendered:
+                    lines.append(f"   - {rendered}")
+            continue
+        if isinstance(v, dict):
+            rendered = _flatten_extraction_item(v)
+            if rendered:
+                label = k.replace("_", " ").title()
+                lines.append(f"• {label}: {rendered}")
             continue
         if k.endswith("_cents"):
             try:
@@ -1928,10 +1988,10 @@ def _format_extraction(analysis: dict) -> str:
             k = k[: -len("_cents")]
         label = k.replace("_", " ").title()
         lines.append(f"• {label}: {v}")
-    items = fields.get("items")
-    if isinstance(items, list) and items:
-        lines.append(f"• Line items: {len(items)}")
-    return "\n".join(lines[:8])
+    line_items = fields.get("line_items") or fields.get("items")
+    if isinstance(line_items, list) and line_items:
+        lines.append(f"• Line items: {len(line_items)}")
+    return "\n".join(lines[:16])
 
 
 def _classify_document(filename: str, path) -> str:
