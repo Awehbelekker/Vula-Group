@@ -34,7 +34,6 @@ from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message, tool_source,
-    looks_like_tenant_data_question,
 )
 from vula.commerce import service
 
