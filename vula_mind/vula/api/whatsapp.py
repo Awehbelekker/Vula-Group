@@ -816,6 +816,28 @@ async def _handle_document_ingest(
             await _send_reply(phone, f"Sorry, I couldn't download '{filename}'. Please try again.", tenant_id)
             return
 
+        # Redelivery guard (2026-08-27) — confirmed live: WhatsApp/Meta can redeliver the same
+        # document, and since Vula's own auto-generated filename bakes in a processing-time
+        # timestamp, each redelivery looked like a "new" file to every downstream check, running
+        # the full (expensive) vision-scan + KB-ingestion + a confusing burst of near-identical
+        # replies 3-4 times for one real document. Content hash is the only reliable "is this the
+        # same file" signal; check it BEFORE any real work starts, not just at the filing step
+        # (migration 143 closes that later, narrower gap too, but this stops the wasted work).
+        try:
+            import hashlib as _hashlib_dedup
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            content_hash = _hashlib_dedup.sha256(local_path.read_bytes()).hexdigest()
+            from vula.commerce import service as _svc_dedup
+            cutoff = (_dt.now(_tz.utc) - _td(minutes=10)).isoformat()
+            recent_dup = (_svc_dedup._client().table("vula_filed_documents").select("id")
+                          .eq("tenant_id", tenant_id).eq("content_hash", content_hash)
+                          .gte("created_at", cutoff).limit(1).execute().data or [])
+            if recent_dup:
+                await _send_reply(phone, "♻️ Already processed this one a moment ago — skipped the duplicate.", tenant_id)
+                return
+        except Exception as exc:
+            logger.debug("document redelivery guard skipped for %s: %s", filename, exc)
+
         # Ingest via pipeline — always adds to KB so Vula learns from every doc
         from vula.ingestion.pipeline import VulaIngestionPipeline
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
@@ -1829,7 +1851,13 @@ def _friendly_document_name(category: str, fields: dict, original_filename: str)
 
 
 def _format_extraction(analysis: dict) -> str:
-    """Turn a structured analysis into a short WhatsApp breakdown."""
+    """Turn a structured analysis into a short WhatsApp breakdown.
+
+    2026-08-27 fix: this used to print every field's raw key/value verbatim — for a `*_cents`
+    field (e.g. amount_cents=280000) that meant a customer-facing reply literally saying
+    "Amount Cents: 280000" instead of "Amount: R2,800.00". Confirmed live on a real digg-demo
+    payment notification. Any `*_cents` field is now converted to Rand and has "Cents" dropped
+    from its label; everything else is unchanged."""
     lines = []
     fields = analysis.get("fields") or {}
     for k, v in fields.items():
@@ -1837,6 +1865,12 @@ def _format_extraction(analysis: dict) -> str:
             continue
         if isinstance(v, (dict, list)):
             continue
+        if k.endswith("_cents"):
+            try:
+                v = f"R{int(v) / 100:,.2f}"
+            except (TypeError, ValueError):
+                continue  # not actually numeric — drop rather than show a bogus "R" value
+            k = k[: -len("_cents")]
         label = k.replace("_", " ").title()
         lines.append(f"• {label}: {v}")
     items = fields.get("items")

@@ -279,19 +279,20 @@ def _existing_project_task(tenant_id: str, project: str) -> Optional[tuple]:
 
 def _existing_filed_doc(tenant_id: str, project: str, filename: str,
                         content_hash: Optional[str] = None) -> Optional[dict]:
-    """Newest already-filed row with the same tenant+project+filename, or None.
+    """Newest already-filed row for the same tenant+project with the same CONTENT, or None.
 
-    content_hash, when given, narrows the match to the SAME bytes (migration 092) — a generic,
-    reused filename (e.g. a bank's "Payment Notification.pdf") is not a reliable proxy for "same
-    file", so without this a second distinct document sharing that name would be silently
-    treated as a re-file of the first and never get its own row."""
-    if not project or not filename:
+    Matches on content_hash alone when given (migration 143) — a generic, reused filename (e.g.
+    a bank's "Payment Notification.pdf") is not a reliable proxy for "same file" (a genuine
+    second, different document can share it), and Vula's OWN auto-generated filenames bake in a
+    processing-time timestamp, so a genuine WhatsApp redelivery of the exact same bytes gets a
+    DIFFERENT filename each attempt — confirmed live (2026-08-27) letting a redelivered payment
+    notification file twice. Falls back to filename only for pre-101 rows with no hash at all."""
+    if not project or (not filename and not content_hash):
         return None
     try:
         q = (_client().table("vula_filed_documents").select("*")
-             .eq("tenant_id", tenant_id).eq("project", project)
-             .eq("filename", filename).eq("status", "filed"))
-        q = q.eq("content_hash", content_hash) if content_hash else q.is_("content_hash", "null")
+             .eq("tenant_id", tenant_id).eq("project", project).eq("status", "filed"))
+        q = q.eq("content_hash", content_hash) if content_hash else q.eq("filename", filename).is_("content_hash", "null")
         res = q.order("created_at", desc=True).limit(1).execute()
         rows = res.data or []
     except Exception:
@@ -383,21 +384,24 @@ async def file_document(
     }
     try:
         # ignore_duplicates=True (Postgres ON CONFLICT DO NOTHING) against the unique
-        # (tenant_id, source, filename, content_hash) index (migrations 081 + 092): with two
-        # worker processes racing the same email-sync poll or WhatsApp attachment, whichever
-        # insert lands first wins and the other is a silent no-op — never a second row for the
-        # SAME bytes, and never clobbers an already-resolved row's project/status back to
-        # unfiled. Different bytes under the same filename are a different row, correctly.
+        # (tenant_id, source, content_hash) index (migrations 081 + 101 + 143 — content_hash is
+        # now the SOLE dedup key, filename dropped 2026-08-27): two worker processes racing the
+        # same email-sync poll or WhatsApp attachment, OR — the case that slipped through until
+        # 143 — a genuine WhatsApp redelivery of the exact same bytes that happens to get a
+        # freshly time-stamped filename each attempt, all land on the same row; whichever insert
+        # lands first wins and the rest are silent no-ops. Different bytes are still a different
+        # row regardless of filename, and content_hash=None rows (no bytes) never collide with
+        # each other (partial index), matching the original behaviour for those.
         ins = _client().table("vula_filed_documents").upsert(
-            row, on_conflict="tenant_id,source,filename,content_hash", ignore_duplicates=True
+            row, on_conflict="tenant_id,source,content_hash", ignore_duplicates=True
         ).execute()
         if ins.data:
             row["id"] = ins.data[0].get("id")
         else:
             # Lost the race — fetch the row the winner created so the caller still gets an id.
             q = (_client().table("vula_filed_documents").select("*")
-                 .eq("tenant_id", tenant_id).eq("source", source).eq("filename", filename))
-            q = q.eq("content_hash", content_hash) if content_hash else q.is_("content_hash", "null")
+                 .eq("tenant_id", tenant_id).eq("source", source))
+            q = q.eq("content_hash", content_hash) if content_hash else q.eq("filename", filename).is_("content_hash", "null")
             existing = q.limit(1).execute().data or []
             if existing:
                 row = existing[0]
