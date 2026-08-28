@@ -32,6 +32,34 @@ def test_get_configs_includes_stale_escalation_nudge(monkeypatch):
     assert "stale_escalation_nudge" in cfgs
 
 
+# ── pending_project_nudge (2026-08-28, unassigned-document backlog reminder) ────────────
+
+def test_pending_project_nudge_registered():
+    assert "pending_project_nudge" in job_config.JOB_TYPES
+    assert job_config.JOB_TYPES["pending_project_nudge"]["kind"] == "weekly"
+
+
+def test_pending_project_nudge_effective_config_defaults():
+    cfg = job_config.effective_config("t1", "pending_project_nudge", row=None)
+    assert cfg["enabled"] is True
+    assert cfg["kind"] == "weekly"
+    assert cfg["hour"] == 8
+    assert cfg["day_of_week"] == 0
+
+
+def test_pending_project_nudge_respects_tenant_override():
+    cfg = job_config.effective_config(
+        "t1", "pending_project_nudge", row={"enabled": False, "day_of_week": 2})
+    assert cfg["enabled"] is False
+    assert cfg["day_of_week"] == 2
+
+
+def test_get_configs_includes_pending_project_nudge(monkeypatch):
+    monkeypatch.setattr(job_config, "_client", lambda: _EmptyDB())
+    cfgs = job_config.get_configs("t1")
+    assert "pending_project_nudge" in cfgs
+
+
 class _EmptyDB:
     def table(self, name):
         return self

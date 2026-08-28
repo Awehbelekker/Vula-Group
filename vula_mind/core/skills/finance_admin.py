@@ -40,6 +40,15 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "name": "supplier_lookup",
         "description": "Find a supplier/beneficiary by bank account number or name; shows their payments + projects.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "lookup_finance_knowledge",
+        "description": ("Look up GENERAL finance/business knowledge (not this tenant's own "
+                         "figures) — e.g. 'what's a typical professional fee percentage', "
+                        "'what's a healthy profit margin', 'how does VAT work', pricing/margin "
+                        "guidance. Use this instead of declining when the question is a general "
+                        "how-does-this-work question rather than a request for this business's "
+                        "own ledger data."),
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
 ]
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
 
@@ -108,7 +117,13 @@ class FinanceAdminSkill(BaseSkill):
                 + behaviour_preamble(agentic=True, preferred_language=lang) +
                 "\n- Use the tools to fetch real figures; never invent amounts.\n"
                 "- Format money as South African Rand (e.g. R18,000). Keep answers short and WhatsApp-friendly.\n"
-                "- If a project name is fuzzy, pass the user's wording; the tools match loosely.")
+                "- If a project name is fuzzy, pass the user's wording; the tools match loosely.\n"
+                "- If the question is a GENERAL how-does-this-work question (e.g. 'what's a "
+                "typical professional fee percentage', 'what's a healthy profit margin', 'how "
+                "does VAT work') rather than a request for THIS business's own figures, call "
+                "lookup_finance_knowledge instead of the ledger tools — don't tell the user "
+                "you couldn't find financial records for a question that was never about their "
+                "own ledger in the first place.")
 
     async def _loop(self, history: str, question: str, tenant_id: str, lang: str = "") -> str:
         import litellm
@@ -133,7 +148,7 @@ class FinanceAdminSkill(BaseSkill):
                 inline = self._inline(msg.content or "")
                 if inline:
                     name, args = inline
-                    result = self._dispatch(name, args, tenant_id)
+                    result = await self._dispatch(name, args, tenant_id)
                     self._record_dispatch(name, result)
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
@@ -166,7 +181,7 @@ class FinanceAdminSkill(BaseSkill):
                     args = json.loads(tc.function.arguments or "{}")
                 except Exception:
                     args = {}
-                result = self._dispatch(tc.function.name, args, tenant_id)
+                result = await self._dispatch(tc.function.name, args, tenant_id)
                 self._record_dispatch(tc.function.name, result)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
                                  "content": fence('TOOL_RESULT', json.dumps(result, default=str)[:1800])})
@@ -295,7 +310,7 @@ class FinanceAdminSkill(BaseSkill):
                 return p["project"]
         return hint
 
-    def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
+    async def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
         from vula.integrations.finances import finance_summary, _client
         try:
             if name == "budget_status" and not (args.get("project") or "").strip():
@@ -356,7 +371,43 @@ class FinanceAdminSkill(BaseSkill):
                 return {"query": q, "found": True, "names": names, "account": next(
                     (h.get("bank_account") for h in hits if h.get("bank_account")), None),
                     "total": total, "payments": len(hits), "projects": projects}
+            if name == "lookup_finance_knowledge":
+                return await self._dispatch_finance_knowledge(args.get("query") or "")
         except Exception as exc:
             logger.warning("finance tool %s failed: %s", name, exc)
             return {"error": str(exc)}
         return {"error": f"unknown tool {name}"}
+
+    async def _dispatch_finance_knowledge(self, query: str) -> Dict[str, Any]:
+        """General (not this tenant's own figures) finance/business knowledge — the shared SA
+        construction-rates KB (professional_fees.md etc.) and the shared general SA
+        small-business KB (pricing_and_margins.md, vat_basics.md etc.), same "shared training
+        KB" pattern already proven in architecture_planning.py / commerce_admin.py's
+        lookup_business_info. 2026-08 audit: finance_admin previously had NO fallback for a
+        general how-does-this-work question — every tool being ledger-lookups meant it declined
+        with 'no financial records' even when a real, good answer existed in shared content."""
+        if not query.strip():
+            return {"found": False, "message": "No query given."}
+        results: List[Dict[str, Any]] = []
+        try:
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            from vula.training.content import TRAINING_TENANT_ID
+            from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+            for tid, source in ((TRAINING_TENANT_ID, "construction_kb"),
+                                 (BUSINESS_TRAINING_TENANT_ID, "general_sa_business")):
+                try:
+                    chunks = await VulaIngestionPipeline(tenant_id=tid).query(
+                        query, top_k=3, authoritative_only=True)
+                except Exception as exc:
+                    logger.debug("finance knowledge lookup skipped for %s: %s", tid, exc)
+                    continue
+                for c in chunks:
+                    results.append({
+                        "source": source, "filename": c.get("filename", "?"),
+                        "text": (c.get("text") or "")[:900],
+                    })
+        except Exception as exc:
+            logger.debug("finance knowledge lookup failed: %s", exc)
+        if not results:
+            return {"found": False, "message": "Nothing in the knowledge base matches that."}
+        return {"found": True, "results": results}

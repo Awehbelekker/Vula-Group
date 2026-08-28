@@ -33,7 +33,8 @@ async def _fake_route(*a, **kw):
 
 # ── budget_status no-project aggregate fix ────────────────────────────────────────
 
-def test_budget_status_with_no_project_returns_real_aggregate_not_arbitrary_project():
+@pytest.mark.asyncio
+async def test_budget_status_with_no_project_returns_real_aggregate_not_arbitrary_project():
     skill = FinanceAdminSkill()
     fake_full = {
         "projects": [
@@ -45,7 +46,7 @@ def test_budget_status_with_no_project_returns_real_aggregate_not_arbitrary_proj
         "transactions": [], "total_in": 40000.0, "total_out": 32000.0,
     }
     with patch("vula.integrations.finances.finance_summary", return_value=fake_full):
-        result = skill._dispatch("budget_status", {}, TENANT)
+        result = await skill._dispatch("budget_status", {}, TENANT)
 
     assert result["scope"] == "all_projects"
     assert result["project_count"] == 2
@@ -58,7 +59,8 @@ def test_budget_status_with_no_project_returns_real_aggregate_not_arbitrary_proj
     assert names == {"HPC", "Bokaap"}
 
 
-def test_budget_status_with_a_project_still_returns_single_project_shape():
+@pytest.mark.asyncio
+async def test_budget_status_with_a_project_still_returns_single_project_shape():
     """Regression: the aggregate branch must only fire when no project is given — a real
     single-project request keeps its existing shape."""
     skill = FinanceAdminSkill()
@@ -67,7 +69,7 @@ def test_budget_status_with_a_project_still_returns_single_project_shape():
     fake_one = {"projects": [{"project": "HPC", "in": 30000.0, "out": 28000.0, "net": 2000.0,
                                "budget": 30000.0, "remaining": 2000.0, "count": 10}]}
     with patch("vula.integrations.finances.finance_summary", side_effect=[fake_full, fake_one]):
-        result = skill._dispatch("budget_status", {"project": "HPC"}, TENANT)
+        result = await skill._dispatch("budget_status", {"project": "HPC"}, TENANT)
 
     assert "scope" not in result
     assert result["project"] == "HPC"

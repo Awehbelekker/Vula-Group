@@ -299,10 +299,12 @@ async def _run_commerce_job(tenant_id: str, job_type: str, tpl: str) -> None:
         await _send_friday_catch_reminder(only_tenant=tenant_id, template_override=tpl)
     elif job_type == "sales_summary":
         await _send_oth_sales_summary(only_tenant=tenant_id, template_override=tpl)
+    elif job_type == "pending_project_nudge":
+        await _send_pending_project_nudge(only_tenant=tenant_id, template_override=tpl)
 
 
 async def _commerce_jobs_scheduler_loop() -> None:
-    """Config-driven scheduler for the 5 system WhatsApp jobs (replaces the five fixed
+    """Config-driven scheduler for the system WhatsApp jobs (replaces the original five fixed
     wall-clock loops, migration 069). Polls every 5 minutes; per tenant + job it checks the
     ⏰ Scheduling tab's config (defaults where unset), and claim_run() atomically decides
     "due now AND not already fired this window" — so times/templates are admin-editable and
@@ -486,6 +488,38 @@ async def _send_low_stock_alert(only_tenant: str | None = None,
                 log.info("%s auto-drafted %d supplier PO(s) for review", tenant_id, len(drafted))
         except Exception as exc:
             log.warning("%s auto-draft POs failed: %s", tenant_id, exc)
+
+
+async def _send_pending_project_nudge(only_tenant: str | None = None,
+                                      template_override: str | None = None) -> None:
+    """WhatsApp each commerce tenant's team a count-only reminder when filed documents are
+    sitting with status='pending_project' (never assigned to a project) — confirmed real,
+    unaddressed backlog (2026-08-28 platform review: 472 documents across tenants, no existing
+    reminder/nudge mechanism at all)."""
+    if not settings.whatsapp_token:
+        return
+    from vula.commerce import service as _cs
+
+    for tenant_id in ([only_tenant] if only_tenant else await _commerce_tenant_ids()):
+        phones = _commerce_notify_phones(tenant_id)
+        if not phones:
+            continue
+        try:
+            count = (_cs._client().table("vula_filed_documents").select("id", count="exact")
+                     .eq("tenant_id", tenant_id).eq("status", "pending_project")
+                     .execute().count or 0)
+        except Exception as exc:
+            log.warning("%s pending-project count failed: %s", tenant_id, exc)
+            continue
+        if not count:
+            continue
+
+        log.info("%s pending-project nudge: %d unassigned document(s)", tenant_id, count)
+        tpl = template_override or _commerce_template_name(tenant_id, "pending_project_nudge")
+        for phone in phones:
+            ok = await _send_wa_template(tenant_id, phone, tpl, str(count))
+            log.info("%s pending-project nudge to %s: %s (%d docs)",
+                     tenant_id, phone, "sent" if ok else "FAILED", count)
 
 
 async def _send_friday_catch_reminder(only_tenant: str | None = None,

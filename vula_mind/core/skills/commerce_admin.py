@@ -646,7 +646,10 @@ CRM_TOOLS = [
     {"type": "function", "function": {
         "name": "dynamics_lookup",
         "description": "Search the connected Dynamics 365 CRM for an account (company), contact (person), "
-                       "or opportunity by name. Only works once Dynamics 365 is connected for this account.",
+                       "or opportunity by name. Only works once Dynamics 365 is connected for this account. "
+                       "Only call this when the rep is EXPLICITLY asking to look someone/something up in the "
+                       "CRM — never just because a shared document or photo happens to mention a company or "
+                       "person's name; sharing a document is not a lookup request.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Name to search for."},
             "kind": {"type": "string", "enum": ["account", "contact", "opportunity"],
@@ -941,7 +944,14 @@ class CommerceAdminSkill(BaseSkill):
                 "small-business knowledge base when nothing tenant-specific is found. Never "
                 "competitor_check for either — that's only for researching an OUTSIDE competitor "
                 "or market price. Only answer from your own general knowledge, and say so "
-                "plainly, if lookup_business_info comes back empty.\n\n"
+                "plainly, if lookup_business_info comes back empty.\n"
+                "IMPORTANT — when the message is really just a shared photo/document (you'll see "
+                "'[What's in the photo: ...]') and the caption doesn't clearly ask you to DO "
+                "something specific with it (look someone up, log a meeting, save a contact): "
+                "don't reach for a tool speculatively just because the document mentions a "
+                "company or person's name — that's not the same as being asked to act on it. "
+                "Just say plainly what you can see in it and ask what they'd like done with it "
+                "(log it as a meeting note, save the contact, or nothing at all) — don't guess.\n\n"
                 + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
             )
         role_label = _role_label(tenant_id)

@@ -4,7 +4,7 @@ vula/commerce/job_config.py — per-tenant config for the system WhatsApp schedu
 The scheduler (vula/api/server.py) and the admin endpoints (vula/api/commerce.py) both need the
 job registry + config resolution, so it lives here to avoid a server↔commerce circular import.
 
-Five of these jobs are commerce-specific and only ever run for tenants with the "orders" module
+Six of these jobs are commerce-specific and only ever run for tenants with the "orders" module
 (_commerce_jobs_scheduler_loop's tenant list). "stale_escalation_nudge" is the one exception —
 server.py's _stale_escalation_scheduler_loop runs it for every tenant, reusing this same
 config/interval-claim machinery purely for admin visibility and per-tenant enable/disable.
@@ -49,6 +49,11 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Unpaid-order customer chase", "kind": "interval",
         "interval_minutes": 30, "template_suffix": "unpaid_order_chase",
         "description": "Nudges customers whose orders sit unpaid 2–4h (once per order)."},
+    "pending_project_nudge": {
+        "label": "Unassigned documents reminder", "kind": "weekly",
+        "hour": 8, "minute": 0, "day_of_week": 0, "template_suffix": "pending_project_nudge",
+        "description": "Weekly reminder when filed documents are sitting unassigned to a "
+                       "project (default: Mondays) — skipped when there are none."},
     # The only job here NOT commerce-specific — runs for every tenant (server.py's
     # _stale_escalation_scheduler_loop iterates all tenants, not just ones with the "orders"
     # module), reusing this same config/interval-claim machinery for admin visibility and
@@ -95,7 +100,7 @@ def effective_config(tenant_id: str, job_type: str, row: Optional[dict]) -> Dict
 
 
 def get_configs(tenant_id: str) -> Dict[str, Dict[str, Any]]:
-    """All 5 jobs' effective config for a tenant (defaults where unset)."""
+    """All jobs' effective config for a tenant (defaults where unset)."""
     rows: Dict[str, dict] = {}
     try:
         data = (_client().table("commerce_scheduled_job_config").select("*")

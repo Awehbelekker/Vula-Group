@@ -54,7 +54,10 @@ _SKILLS: Dict[str, BaseSkill] = {
 _FALLBACK_ALIASES = {
     "code_execution": "reasoning",
     "image_analysis": "file_parse",       # file_parse handles image OCR via pipeline
-    "financial_reasoning": "architecture_planning",  # construction $ → arch skill
+    # 2026-08-28: was "architecture_planning" (construction-professional framing) — wrong for
+    # a generic revenue/profit/budget/cashflow question. finance_admin.py (real, tool-grounded
+    # money reporting, shipped this session) is now implemented — route there instead.
+    "financial_reasoning": "finance_admin",
 }
 
 
