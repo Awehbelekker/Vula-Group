@@ -288,12 +288,15 @@ def test_booking_focused_prompt_has_no_storefront_copy():
     assert "cancel_appointment" in prompt
 
 
-def test_storefront_prompt_real_food_tenant_gets_food_persona():
-    # TENANT ("off-the-hook") is a real production tenant with business_type="food" — this
-    # exercises the real _tenant_business_type()/get_config() call path, not a mock, so it also
-    # guards against the persona lookup itself breaking against real data.
+def test_storefront_prompt_food_tenant_gets_food_persona():
+    # 2026-08-28 fix: this test originally called the real, unmocked get_config() network path
+    # against off-the-hook's real production business_type ("food") — passed locally (real
+    # Supabase creds available) but FAILED in CI (no such access there, get_config() degrades to
+    # {} and the persona silently falls back to "other"). Mock _tenant_business_type directly,
+    # like every other persona test here, so this is deterministic in every environment.
     skill = CommerceAssistantSkill()
-    prompt = skill._system_prompt(TENANT, kb_context="")
+    with patch("core.skills.commerce_assistant._tenant_business_type", return_value="food"):
+        prompt = skill._system_prompt(TENANT, kb_context="")
     assert "food business" in prompt
     assert "get_daily_catch" in prompt
     assert "suggest_recipe" in prompt
