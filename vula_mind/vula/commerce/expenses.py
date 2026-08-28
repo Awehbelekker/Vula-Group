@@ -455,6 +455,56 @@ def list_claims(tenant_id: str, *, status: Optional[str] = None, reimbursable: O
         return []
 
 
+def budget_warning_line(tenant_id: str, paid_by: str) -> Optional[str]:
+    """After a claim is logged for a sales_rep with expense_budget_cents set (migration 139),
+    checks month-to-date spend against budget and returns a short WhatsApp heads-up line if the
+    90%/100% threshold was just crossed for the first time this month, else None. Never raises —
+    degrades silently to None on any failure, matching this module's established discipline.
+
+    Implicit monthly reset: a stale expense_budget_warned_month from a prior month simply won't
+    match the current month below, so the first crossing each new month always re-warns — no
+    separate reset job needed, per migration 139's own design note."""
+    try:
+        rows = (_client().table("vula_team_members").select(
+                    "expense_budget_cents,expense_budget_warned_month,expense_budget_warned_pct")
+                .eq("tenant_id", tenant_id).eq("whatsapp", paid_by).eq("role", "sales_rep")
+                .limit(1).execute().data or [])
+        if not rows:
+            return None
+        rep = rows[0]
+        budget = int(rep.get("expense_budget_cents") or 0)
+        if not budget:
+            return None
+
+        now = _now()
+        cur_month = now[:7]
+        month_start = f"{cur_month}-01"
+        spend = sum(int(c.get("amount_cents") or 0) for c in
+                    list_claims(tenant_id, paid_by=paid_by, since=month_start, until=now[:10], limit=2000))
+        pct = (spend * 100) // budget
+        threshold = 100 if pct >= 100 else (90 if pct >= 90 else None)
+        if threshold is None:
+            return None
+
+        warned_month = rep.get("expense_budget_warned_month")
+        warned_pct = int(rep.get("expense_budget_warned_pct") or 0)
+        if warned_month == cur_month and warned_pct >= threshold:
+            return None
+
+        try:
+            _client().table("vula_team_members").update({
+                "expense_budget_warned_month": cur_month, "expense_budget_warned_pct": threshold,
+            }).eq("tenant_id", tenant_id).eq("whatsapp", paid_by).execute()
+        except Exception as exc:
+            log.warning("budget warning stamp failed for %s/%s: %s", tenant_id, paid_by, exc)
+
+        return (f"\n\n⚠️ *Budget alert:* you've reached *{threshold}%* of your monthly expense "
+                f"budget (R{spend / 100:,.2f} of R{budget / 100:,.2f}).")
+    except Exception as exc:
+        log.warning("budget_warning_line failed for %s/%s: %s", tenant_id, paid_by, exc)
+        return None
+
+
 def set_status(tenant_id: str, expense_id: str, status: str) -> dict:
     patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
     if status == "reimbursed":

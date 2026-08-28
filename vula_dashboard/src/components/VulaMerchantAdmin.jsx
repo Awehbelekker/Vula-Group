@@ -56,6 +56,7 @@ import VulaTakeoff from './VulaTakeoff'
 import VulaRepHome from './VulaRepHome'
 import VulaRepCrmContacts from './VulaRepCrmContacts'
 import VulaRepCallSheet from './VulaRepCallSheet'
+import VulaRepExpenseSheet from './VulaRepExpenseSheet'
 import VulaRepReminders from './VulaRepReminders'
 import VulaRepCrmLookup from './VulaRepCrmLookup'
 import VulaDraft from './VulaDraft'
@@ -321,6 +322,7 @@ function MyWorkSection({ tenantId, repPhone, subtabs, pendingSubtab, onConsumePe
       {active === 'rep-documents' && <VulaDocuments tenantId={tenantId} defaultFiledBy={repPhone} />}
       {active === 'rep-reminders' && <VulaRepReminders tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-expenses' && <VulaExpenses tenantId={tenantId} defaultPaidBy={repPhone} />}
+      {active === 'rep-expense-sheet' && <VulaRepExpenseSheet tenantId={tenantId} repPhone={repPhone} />}
       {active === 'rep-crm' && <VulaRepCrmLookup tenantId={tenantId} />}
     </div>
   )

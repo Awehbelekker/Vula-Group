@@ -1614,6 +1614,58 @@ async def admin_update_call_sheet(tenant_id: str, body: CallSheetUpdateIn):
     return {"applied": True, "entries": updated.get("entries") or []}
 
 
+@router.get("/{tenant_id}/admin/expense-sheet")
+async def admin_get_expense_sheet(tenant_id: str, rep_phone: str):
+    """The calling rep's own standing expense-sheet config + this month's spend-vs-budget
+    progress. Resolves strictly by rep_phone (vula_team_members.whatsapp), never another rep's
+    data — same shape as admin_get_call_sheet. mtd_spend_cents reuses expenses.list_claims, the
+    same summing approach expenses.budget_warning_line uses server-side for the WhatsApp
+    warning — no separate stats endpoint (the tenant-wide /admin/reports/expenses has no
+    paid_by filter, so it isn't reusable for a per-rep figure)."""
+    if not rep_phone:
+        raise HTTPException(status_code=400, detail="rep_phone is required")
+    from vula.commerce import expenses
+    rows = (service._client().table("vula_team_members").select(
+                "whatsapp,name,expense_sheet_recipient_email,expense_sheet_day_of_month,"
+                "expense_sheet_last_sent_at,expense_budget_cents,expense_budget_warned_month,"
+                "expense_budget_warned_pct")
+            .eq("tenant_id", tenant_id).eq("whatsapp", rep_phone).limit(1).execute().data or [])
+    config = rows[0] if rows else {}
+    now = service._now()
+    month_start = f"{now[:7]}-01"
+    mtd_cents = sum(int(c.get("amount_cents") or 0) for c in
+                    expenses.list_claims(tenant_id, paid_by=rep_phone, since=month_start,
+                                         until=now[:10], limit=2000))
+    return {"config": config, "mtd_spend_cents": mtd_cents}
+
+
+class ExpenseSheetConfigIn(BaseModel):
+    rep_phone: str
+    recipient_email: Optional[str] = None
+    day_of_month: Optional[int] = None
+    budget_rands: Optional[float] = None  # None = leave unchanged; 0 = clear
+
+
+@router.post("/{tenant_id}/admin/expense-sheet/configure")
+async def admin_configure_expense_sheet(tenant_id: str, body: ExpenseSheetConfigIn):
+    upd: Dict[str, Any] = {}
+    if body.recipient_email is not None:
+        upd["expense_sheet_recipient_email"] = body.recipient_email or None
+    if body.day_of_month is not None:
+        if not 1 <= body.day_of_month <= 28:
+            raise HTTPException(status_code=400, detail="day_of_month must be between 1 and 28")
+        upd["expense_sheet_day_of_month"] = body.day_of_month
+    if body.budget_rands is not None:
+        upd["expense_budget_cents"] = round(body.budget_rands * 100) if body.budget_rands else None
+    if not upd:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    res = (service._client().table("vula_team_members").update(upd)
+           .eq("tenant_id", tenant_id).eq("whatsapp", body.rep_phone).execute())
+    if not res.data:
+        raise HTTPException(status_code=404, detail="rep not found")
+    return {"saved": True, "config": res.data[0]}
+
+
 class TeachRequest(BaseModel):
     question: str
     answer: str

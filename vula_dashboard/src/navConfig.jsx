@@ -110,6 +110,7 @@ export const MERCHANT_GROUPS = [
       { id: "rep-documents", icon: "📂", label: "Documents" },
       { id: "rep-reminders", icon: "⏰", label: "Reminders" },
       { id: "rep-expenses", icon: "💸", label: "Expenses" },
+      { id: "rep-expense-sheet", icon: "🧮", label: "Expense Sheet" },
       { id: "rep-crm", icon: "🔗", label: "Dynamics 365" },
     ]},
   ]},
@@ -118,7 +119,7 @@ export const MERCHANT_GROUPS = [
 /** The full set of ids a fresh sales_rep dashboard login gets by default (VulaTeam.jsx uses
  * this when creating a login with role="sales_rep") — every "My Work" leaf, nothing tenant-wide. */
 export const REP_DEFAULT_ACCESS = ["rep-contacts", "rep-callsheet", "rep-bookings",
-  "rep-documents", "rep-reminders", "rep-expenses", "rep-crm"];
+  "rep-documents", "rep-reminders", "rep-expenses", "rep-expense-sheet", "rep-crm"];
 
 // Master shell (Vula operator console — NOT a tenant's own tools). ids = App.jsx TABS ids.
 // Construction-specific tools (QS/Takeoff/Draft/Training/Workspace/Projects/Field Ops/Docs) were
@@ -175,7 +176,7 @@ const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'se
   // Sales rep dashboard tabs — not gated by tenant business-type modules (the sales_rep feature
   // itself is already module-gated at the WhatsApp tool layer); the real gate here is the
   // per-login `access` list, same as 'team'/'settings' are gated by `full` instead of modules.
-  'rep-contacts', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-crm']);
+  'rep-contacts', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-expense-sheet', 'rep-crm']);
 const MERCHANT_MODMAP = {
   customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft', training: 'training',

@@ -1270,6 +1270,12 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         if asks:
             msg += "\n" + "\n".join(asks)
         msg += purpose_note
+        try:
+            warn_line = expenses.budget_warning_line(tenant_id, phone)
+            if warn_line:
+                msg += warn_line
+        except Exception as exc:
+            logger.debug("expense budget warning skipped: %s", exc)
         return msg
     except Exception as exc:
         logger.warning("expense claim from receipt failed: %s", exc)

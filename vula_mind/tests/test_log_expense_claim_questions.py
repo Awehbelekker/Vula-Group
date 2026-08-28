@@ -36,13 +36,18 @@ def _patches(*, needs_project: bool, has_project: bool, paid_with, cards_registe
         # question is asked (added to `asks`, tolerated by every assertion below since they only
         # check for the presence/absence of the OTHER questions, never assert exact message text).
         patch("vula.commerce.expenses.classify_purpose_category", new=AsyncMock(return_value="uncertain")),
+        # 2026-08-28: budget_warning_line now runs unconditionally at the end of
+        # _log_expense_claim — patched to None here since these tests are about the
+        # project/payment-method question logic, not the budget warning (see
+        # test_log_expense_claim_budget_warning.py for that).
+        patch("vula.commerce.expenses.budget_warning_line", return_value=None),
     )
 
 
 @pytest.mark.asyncio
 async def test_asks_both_questions_when_both_are_needed():
     patches = _patches(needs_project=True, has_project=False, paid_with=None, cards_registered=True)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
         msg = await _log_expense_claim(TID, PHONE, SCAN_DATA)
     assert "Which project/site is this for?" in msg
     assert "company card" in msg and "own money" in msg
@@ -51,7 +56,7 @@ async def test_asks_both_questions_when_both_are_needed():
 @pytest.mark.asyncio
 async def test_asks_only_project_when_payment_method_already_known():
     patches = _patches(needs_project=True, has_project=False, paid_with="personal", cards_registered=True)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
         msg = await _log_expense_claim(TID, PHONE, SCAN_DATA)
     assert "Which project/site is this for?" in msg
     assert "Reply 'company' or 'own'" not in msg
@@ -60,7 +65,7 @@ async def test_asks_only_project_when_payment_method_already_known():
 @pytest.mark.asyncio
 async def test_asks_only_payment_method_when_project_already_known():
     patches = _patches(needs_project=False, has_project=True, paid_with=None, cards_registered=True)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
         msg = await _log_expense_claim(TID, PHONE, SCAN_DATA)
     assert "Which project/site is this for?" not in msg
     assert "company card" in msg and "own money" in msg
@@ -69,7 +74,7 @@ async def test_asks_only_payment_method_when_project_already_known():
 @pytest.mark.asyncio
 async def test_asks_neither_when_both_already_resolved():
     patches = _patches(needs_project=False, has_project=True, paid_with="company_card", cards_registered=True)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
         msg = await _log_expense_claim(TID, PHONE, SCAN_DATA)
     assert "Which project/site is this for?" not in msg
     assert "Reply 'company' or 'own'" not in msg
@@ -87,7 +92,7 @@ async def test_uses_learned_project_before_asking():
         "project": "HPC_Bokaap", "reimbursable": True, "needs_project": False,
     })
     with (
-        patches[1], patches[3], patches[4], patches[5], patches[6],
+        patches[1], patches[3], patches[4], patches[5], patches[6], patches[7],
         patch("vula.commerce.expenses.create_claim", new=create_claim_mock),
         patch("vula.commerce.expenses.match_project") as mock_match_project,
         patch("vula.integrations.doc_filing.lookup_learned_project",
@@ -105,7 +110,7 @@ async def test_uses_learned_project_before_asking():
 async def test_falls_back_to_text_match_when_learned_rule_is_ambiguous():
     patches = _patches(needs_project=True, has_project=False, paid_with="personal", cards_registered=True)
     with (
-        patches[0], patches[1], patches[3], patches[4], patches[5], patches[6],
+        patches[0], patches[1], patches[3], patches[4], patches[5], patches[6], patches[7],
         patch("vula.commerce.expenses.match_project", return_value=None) as mock_match_project,
         patch("vula.integrations.doc_filing.lookup_learned_project",
               return_value={"project": None, "ambiguous": True, "candidates": ["HPC_Bokaap", "SPORTY.TV"]}),
