@@ -1373,6 +1373,26 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
         if not rows:
             return None
 
+        # 2026-08-28: real incident — a claim's supplier ("Tony Beato Service Station")
+        # deterministically matches expenses.classify_purpose_category_deterministic's petrol
+        # regex, yet its purpose_category sat NULL in the DB (the initial auto-classify attempt
+        # at claim-creation time must have hit a transient failure — silently swallowed there by
+        # design). This function kept re-asking about it on every reply instead of ever
+        # re-checking, so the rep never got a way out. Self-heal here: re-run the cheap,
+        # no-LLM deterministic pass on every still-pending claim before doing anything else —
+        # anything that now confidently matches gets classified immediately and drops out of
+        # the pending list, rather than being asked about again.
+        still_pending = []
+        for row in rows:
+            det = expenses.classify_purpose_category_deterministic(row.get("supplier") or "")
+            if det:
+                expenses.set_purpose_category(tenant_id, row["id"], det)
+            else:
+                still_pending.append(row)
+        rows = still_pending
+        if not rows:
+            return None
+
         # A bare number never describes a purpose — most likely an odometer reading that has
         # nowhere else to land right now (e.g. no pending odometer question exists yet). Leave
         # it unresolved rather than forcing it into "other" with a numeric detail.

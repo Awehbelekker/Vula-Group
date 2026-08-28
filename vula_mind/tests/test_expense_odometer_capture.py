@@ -168,7 +168,10 @@ async def test_purpose_resolver_ignores_bare_number():
 
 @pytest.mark.asyncio
 async def test_purpose_resolver_petrol_answer_asks_for_odometer_too():
-    rows = [{"id": "c1", "amount_cents": 74580, "supplier": "Some Garage"}]
+    # Vendor deliberately non-matching against classify_purpose_category_deterministic (2026-08-28
+    # self-heal fix) — this test's whole point is resolving via the REPLY text ("fuel"), not
+    # having the vendor name pre-empt it.
+    rows = [{"id": "c1", "amount_cents": 74580, "supplier": "Corner Shop"}]
     with (
         patch("vula.commerce.service._client", return_value=_fake_purpose_client(rows)),
         patch("vula.commerce.expenses.set_purpose_category"),

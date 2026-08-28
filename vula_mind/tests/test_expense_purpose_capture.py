@@ -117,7 +117,7 @@ async def test_no_pending_claims_returns_none():
 async def test_multi_pending_indexed_reply_resolves_each_by_id():
     rows = [
         {"id": "c1", "amount_cents": 8500, "supplier": "Woolworths"},
-        {"id": "c2", "amount_cents": 45000, "supplier": "Engen"},
+        {"id": "c2", "amount_cents": 45000, "supplier": "Makro"},
     ]
     with (
         patch("vula.commerce.service._client", return_value=_fake_service_client(rows)),
@@ -134,7 +134,7 @@ async def test_multi_pending_indexed_reply_resolves_each_by_id():
 async def test_multi_pending_unparseable_reply_lists_and_reasks():
     rows = [
         {"id": "c1", "amount_cents": 8500, "supplier": "Woolworths"},
-        {"id": "c2", "amount_cents": 45000, "supplier": "Engen"},
+        {"id": "c2", "amount_cents": 45000, "supplier": "Makro"},
     ]
     with (
         patch("vula.commerce.service._client", return_value=_fake_service_client(rows)),
@@ -143,14 +143,55 @@ async def test_multi_pending_unparseable_reply_lists_and_reasks():
         reply = await _maybe_allocate_pending_purpose(TID, PHONE, "fuel")
     mock_set.assert_not_called()
     assert "1)" in reply and "2)" in reply
-    assert "Woolworths" in reply and "Engen" in reply
+    assert "Woolworths" in reply and "Makro" in reply
+
+
+# ── Self-healing (2026-08-28) ─────────────────────────────────────────────────
+# Real incident, gerflor: "Tony Beato Service Station" (R745.80) deterministically matches
+# classify_purpose_category_deterministic's petrol regex, yet its purpose_category sat NULL in
+# the DB — the initial auto-classify at claim-creation time must have hit a transient failure,
+# silently swallowed there by design. This function kept re-listing it on every reply instead of
+# ever re-checking, so the rep had no way out. Fixed: re-run the deterministic pass on every
+# still-pending claim before doing anything else.
+
+@pytest.mark.asyncio
+async def test_self_heals_a_deterministically_classifiable_claim_before_listing():
+    rows = [
+        {"id": "c1", "amount_cents": 74580, "supplier": "Tony Beato Service Station"},
+        {"id": "c2", "amount_cents": 9400, "supplier": "VIC PROCTER MOTORS"},
+        {"id": "c3", "amount_cents": 157600, "supplier": "AVIS"},
+    ]
+    with (
+        patch("vula.commerce.service._client", return_value=_fake_service_client(rows)),
+        patch("vula.commerce.expenses.set_purpose_category") as mock_set,
+    ):
+        reply = await _maybe_allocate_pending_purpose(TID, PHONE, "not a valid reply at all")
+
+    # c1 (Tony Beato) is self-healed to petrol — never re-listed as still needing an answer.
+    mock_set.assert_any_call(TID, "c1", "petrol")
+    assert "Tony Beato" not in reply
+    # the genuinely ambiguous two remain, listed for a real answer.
+    assert "VIC PROCTER MOTORS" in reply
+    assert "AVIS" in reply
+
+
+@pytest.mark.asyncio
+async def test_self_heal_resolves_all_pending_returns_none():
+    rows = [{"id": "c1", "amount_cents": 74580, "supplier": "Engen"}]
+    with (
+        patch("vula.commerce.service._client", return_value=_fake_service_client(rows)),
+        patch("vula.commerce.expenses.set_purpose_category") as mock_set,
+    ):
+        reply = await _maybe_allocate_pending_purpose(TID, PHONE, "some unrelated message")
+    mock_set.assert_called_once_with(TID, "c1", "petrol")
+    assert reply is None
 
 
 @pytest.mark.asyncio
 async def test_multi_pending_partial_indexed_reply_still_reasks():
     rows = [
         {"id": "c1", "amount_cents": 8500, "supplier": "Woolworths"},
-        {"id": "c2", "amount_cents": 45000, "supplier": "Engen"},
+        {"id": "c2", "amount_cents": 45000, "supplier": "Makro"},
     ]
     with (
         patch("vula.commerce.service._client", return_value=_fake_service_client(rows)),
