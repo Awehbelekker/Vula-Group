@@ -101,6 +101,68 @@ async def training_kb_status() -> dict:
         return {"seeded": False, "chunks": 0, "error": str(exc)}
 
 
+async def seed_business_kb(force: bool = False) -> SeedResult:
+    """Ingest all general SA small-business documents into the business_basics collection.
+    Mirrors seed_training_kb exactly — a separate corpus (general SME operations, not
+    construction), same idempotent doc_id shape, never touches vula_training itself."""
+    from vula.training.business_content import BUSINESS_TRAINING_DOCUMENTS, BUSINESS_TRAINING_TENANT_ID
+
+    started = time.time()
+    pipeline = VulaIngestionPipeline(tenant_id=BUSINESS_TRAINING_TENANT_ID)
+    total_chunks = 0
+    failed: List[str] = []
+
+    logger.info("Seeding Vula business KB: %d documents", len(BUSINESS_TRAINING_DOCUMENTS))
+
+    for doc in BUSINESS_TRAINING_DOCUMENTS:
+        doc_id = hashlib.md5(f"{BUSINESS_TRAINING_TENANT_ID}:{doc.filename}".encode()).hexdigest()[:16]
+        try:
+            result = await pipeline.ingest_text(
+                content=doc.content,
+                filename=doc.filename,
+                doc_id=doc_id,
+            )
+            if result.status == "success":
+                total_chunks += result.chunks_stored
+                logger.info("Seeded %s → %d chunks", doc.filename, result.chunks_stored)
+            else:
+                logger.error("Failed to seed %s: %s", doc.filename, result.error)
+                failed.append(doc.filename)
+        except Exception as exc:
+            logger.error("Exception seeding %s: %s", doc.filename, exc)
+            failed.append(doc.filename)
+
+    duration = round(time.time() - started, 2)
+    logger.info(
+        "Business KB seeding complete: %d docs, %d chunks, %d failed, %.1fs",
+        len(BUSINESS_TRAINING_DOCUMENTS), total_chunks, len(failed), duration,
+    )
+    return SeedResult(
+        total_documents=len(BUSINESS_TRAINING_DOCUMENTS),
+        total_chunks=total_chunks,
+        failed=failed,
+        duration_s=duration,
+    )
+
+
+async def business_kb_status() -> dict:
+    """Return stats on the current state of the shared business_basics collection."""
+    from config import settings
+    from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+
+    collection = f"vula_{BUSINESS_TRAINING_TENANT_ID}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{settings.qdrant_base}/collections/{collection}")
+            if resp.status_code == 404:
+                return {"seeded": False, "chunks": 0, "collection": collection}
+            data = resp.json()
+            points = data.get("result", {}).get("points_count", 0)
+            return {"seeded": points > 0, "chunks": points, "collection": collection}
+    except Exception as exc:
+        return {"seeded": False, "chunks": 0, "error": str(exc)}
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

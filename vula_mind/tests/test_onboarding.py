@@ -1,6 +1,8 @@
 """Tests for the onboarding API — no Supabase or WhatsApp needed."""
 import hashlib as _hashlib
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 from vula.api.server import app
@@ -130,6 +132,78 @@ def test_tenant_status_returns_fields():
     assert data["status"] == "active"
     assert data["plan"] == "growth"
     assert data["trial_ends"] == "2026-06-21"
+
+
+# ── _provision starter_kb widening (2026-08-28) ───────────────────────────────
+# This onboarding flow previously never seeded starter KB docs at all — a third, entirely
+# separate tenant-creation path from signup.py's self-serve flow, which was the only one wired
+# up. Same fire-and-forget, best-effort shape — must never block provisioning on failure, and
+# must only fire once the vula_tenant_config row it depends on actually landed.
+
+@pytest.mark.asyncio
+async def test_provision_calls_seed_starter_kb_when_supabase_configured():
+    from vula.api.onboarding import OnboardingRequest, _provision, settings as ob_settings
+
+    req = OnboardingRequest(
+        company_name="New Trades Co", industry="Construction & Engineering",
+        contact_name="Jane", email="jane@newtrades.co.za", plan="starter",
+    )
+    with (
+        patch.object(ob_settings, "supabase_url", "https://real-project.supabase.co"),
+        patch("vula.api.onboarding._supabase") as mock_sb,
+        patch("vula.models.tenants.get_tenant_db") as mock_get_db,
+        patch("vula.commerce.background_tasks.run_background") as mock_run_bg,
+    ):
+        mock_sb.insert = AsyncMock(return_value={})
+        mock_get_db.return_value.upsert = MagicMock()
+        record, temp_password = await _provision(req)
+
+    assert record["company_name"] == "New Trades Co"
+    mock_run_bg.assert_called_once()
+    args = mock_run_bg.call_args.args
+    assert args[0] == record["workspace_slug"]
+    assert args[1] == "starter_kb_seed"
+
+
+@pytest.mark.asyncio
+async def test_provision_skips_seed_starter_kb_when_supabase_not_configured():
+    from vula.api.onboarding import OnboardingRequest, _provision, settings as ob_settings
+
+    req = OnboardingRequest(
+        company_name="Local Only Co", industry="Retail",
+        contact_name="Jane", email="jane@localonly.co.za", plan="starter",
+    )
+    with (
+        patch.object(ob_settings, "supabase_url", "your-project.supabase.co"),  # placeholder default
+        patch("vula.models.tenants.get_tenant_db") as mock_get_db,
+        patch("vula.commerce.background_tasks.run_background") as mock_run_bg,
+    ):
+        mock_get_db.return_value.upsert = MagicMock()
+        await _provision(req)
+
+    mock_run_bg.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_provision_starter_kb_failure_does_not_break_provisioning():
+    from vula.api.onboarding import OnboardingRequest, _provision, settings as ob_settings
+
+    req = OnboardingRequest(
+        company_name="Resilient Co", industry="Health & Wellness",
+        contact_name="Jane", email="jane@resilient.co.za", plan="starter",
+    )
+    with (
+        patch.object(ob_settings, "supabase_url", "https://real-project.supabase.co"),
+        patch("vula.api.onboarding._supabase") as mock_sb,
+        patch("vula.models.tenants.get_tenant_db") as mock_get_db,
+        patch("vula.commerce.background_tasks.run_background", side_effect=RuntimeError("boom")),
+    ):
+        mock_sb.insert = AsyncMock(return_value={})
+        mock_get_db.return_value.upsert = MagicMock()
+        record, temp_password = await _provision(req)
+
+    assert record["company_name"] == "Resilient Co"
+    assert temp_password
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

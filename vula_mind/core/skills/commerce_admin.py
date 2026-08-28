@@ -456,9 +456,13 @@ KNOWLEDGE_TOOLS = [
         "name": "lookup_business_info",
         "description": (
             "Look up facts about THIS business's own products, services, pricing, policies, or "
-            "documents from its knowledge base (uploaded docs, ingested website content). Use "
-            "this for 'what do WE sell/offer/charge/have available' questions. Do NOT use for "
-            "questions about a competitor or an outside company — use competitor_check for those."
+            "documents from its knowledge base (uploaded docs, ingested website content) — AND "
+            "general South African small-business know-how (VAT/tax basics, BCEA/HR basics, "
+            "bookkeeping, customer service, marketing, business planning) when nothing "
+            "tenant-specific applies. Use this for 'what do WE sell/offer/charge/have available' "
+            "questions AND generic 'how do I...' SA small-business procedural questions. Do NOT "
+            "use for questions about a competitor or an outside company — use competitor_check "
+            "for those."
         ),
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "What to look up, in the owner/rep's own words."}},
@@ -931,8 +935,13 @@ class CommerceAdminSkill(BaseSkill):
                 "lower-stakes, but still confirm the recipient), or booking a meeting. Show the details "
                 "and wait for a clear 'yes' first.\n"
                 "IMPORTANT — for 'what do we sell/offer/charge/colours do we have' questions about "
-                "THIS business, call lookup_business_info first — never competitor_check, which is "
-                "only for researching an OUTSIDE competitor or market price.\n\n"
+                "THIS business, AND for a general SA small-business 'how do I...' question (VAT, "
+                "tax, BCEA/HR, bookkeeping, customer service, marketing, business planning), call "
+                "lookup_business_info first — it now also searches a shared general SA "
+                "small-business knowledge base when nothing tenant-specific is found. Never "
+                "competitor_check for either — that's only for researching an OUTSIDE competitor "
+                "or market price. Only answer from your own general knowledge, and say so "
+                "plainly, if lookup_business_info comes back empty.\n\n"
                 + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
             )
         role_label = _role_label(tenant_id)
@@ -959,8 +968,13 @@ class CommerceAdminSkill(BaseSkill):
             "expense) just because it's the closest-sounding one; either proceed with what was "
             "actually asked or ask a plain question.\n"
             "IMPORTANT — for 'what do we sell/offer/charge/colours do we have' questions about "
-            "THIS business, call lookup_business_info first — never competitor_check, which is "
-            "only for researching an OUTSIDE competitor or market price.\n"
+            "THIS business, AND for a general SA small-business 'how do I...' question (VAT, "
+            "tax, BCEA/HR, bookkeeping, customer service, marketing, business planning), call "
+            "lookup_business_info first — it now also searches a shared general SA "
+            "small-business knowledge base when nothing tenant-specific is found. Never "
+            "competitor_check for either — that's only for researching an OUTSIDE competitor "
+            "or market price. Only answer from your own general knowledge, and say so "
+            "plainly, if lookup_business_info comes back empty.\n"
             "IMPORTANT — confirm before acting on anything that spends money, sends messages to "
             "customers, or can't be undone: creating/sending an invoice, sending a broadcast, "
             "cancelling/refunding, or adopting a new voice/tone. Show the details and wait for a "
@@ -2603,7 +2617,14 @@ class CommerceAdminSkill(BaseSkill):
         tenant's own KB at all, for either owner/staff or sales_rep — the model's only
         "lookup" tool was competitor_check, a generic web search, which is how a flooring
         company's rep ended up being told about paint brands. Mirrors commerce_assistant.py's
-        proven _retrieve_kb exactly rather than reinventing retrieval."""
+        proven _retrieve_kb exactly rather than reinventing retrieval.
+
+        2026-08-28: now also falls back to the shared general SA small-business knowledge base
+        (vat/tax/HR/customer-service/marketing basics, vula/training/business_content.py) when
+        the tenant's own KB has nothing — mirrors architecture_planning.py's already-proven
+        "tenant KB + shared training KB" pattern exactly, closing the gap where commerce-mode
+        owners asking a generic 'how do I...' question got answered from raw, ungrounded LLM
+        parametric knowledge with zero real grounding."""
         query = (args.get("query") or "").strip()
         if not query:
             return {"error": "Need something to look up."}
@@ -2613,14 +2634,26 @@ class CommerceAdminSkill(BaseSkill):
         except Exception as exc:
             logger.debug("lookup_business_info retrieval skipped: %s", exc)
             return {"error": "Couldn't search the knowledge base right now."}
-        if not chunks:
+        if chunks:
+            return {"found": True, "source_kb": "tenant", "results": [
+                {"source": c.get("filename", "doc"), "text": c.get("text", "")[:400]}
+                for c in chunks
+            ]}
+        try:
+            from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+            shared_chunks = await VulaIngestionPipeline(tenant_id=BUSINESS_TRAINING_TENANT_ID).query(
+                query, top_k=4, authoritative_only=True)
+        except Exception as exc:
+            logger.debug("lookup_business_info shared-KB fallback skipped: %s", exc)
+            shared_chunks = []
+        if not shared_chunks:
             # Explicit found=False (not a bare error) — lets the model say honestly "nothing in
             # the knowledge base yet" instead of silently falling through to competitor_check's
             # web search, which is the exact chain that produced the wrong-industry answer.
             return {"found": False, "message": "Nothing in the knowledge base matches that yet."}
-        return {"found": True, "results": [
+        return {"found": True, "source_kb": "general_sa_business", "results": [
             {"source": c.get("filename", "doc"), "text": c.get("text", "")[:400]}
-            for c in chunks
+            for c in shared_chunks
         ]}
 
     async def _draft_followup_email(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:

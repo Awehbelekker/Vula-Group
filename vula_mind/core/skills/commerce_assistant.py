@@ -56,6 +56,74 @@ def _tenant_business_type(tenant_id: str) -> str:
 def _is_booking_focused(tenant_id: str) -> bool:
     return _tenant_has_bookings(tenant_id) and _tenant_business_type(tenant_id) in _BOOKING_FOCUSED_TYPES
 
+
+# 2026-08-28: real incident — this skill's single hardcoded storefront default assumed every
+# commerce tenant was Off The Hook (a fresh fish and chicken delivery business), so a brand-new
+# retail/trades tenant's customer bot introduced itself as a fish shop. One persona per
+# business_type with genuinely different identity/goal/tool-guidance (not find-replace on the
+# fish text) — the tenant's own real persona_prompt (see persona_block in _system_prompt) is
+# layered on AFTER this and always wins on tone, same "real data overrides template default"
+# precedent already used for VulaPages.jsx's niche templates and starter_kb.py's per-business_type
+# slots. highlight_tools stays empty for verticals where get_daily_catch/suggest_recipe (real,
+# food-specific tool executors) don't apply — those tools remain technically callable (TOOL_SPECS
+# is shared across all tenants) but the prompt never tells a non-food model to reach for them.
+_STOREFRONT_PERSONAS: Dict[str, Dict[str, str]] = {
+    "food": {
+        "identity": "You are a friendly, knowledgeable WhatsApp assistant for a South African "
+                    "food business — restaurant, takeaway, grocery, or delivery service.",
+        "goal": "help customers find great food, inspire them with recipes, build their cart, "
+                "and check out",
+        "highlight_tools": (
+            "- On first contact or when asked what's good/fresh/special, call get_daily_catch "
+            "to show today's highlights before anything else.\n"
+            "- When a customer mentions a dish, ingredient, or asks what to cook, call "
+            "suggest_recipe — it returns a recipe AND shows which ingredients are in stock.\n"
+            "- After suggesting a recipe, offer to add the available ingredients to their cart.\n"
+            "- Be proactive: if a customer buys a popular item, suggest a recipe or pairing for "
+            "it unprompted.\n"
+        ),
+    },
+    "retail": {
+        "identity": "You are a friendly, knowledgeable WhatsApp assistant for a South African "
+                    "retail/e-commerce business.",
+        "goal": "help customers find the right products, answer questions about stock, sizing, "
+                "and colours, build their cart, and check out",
+        "highlight_tools": (
+            "- If a customer asks what's new, on special, or in a category, call list_products "
+            "to show REAL options — never invent an item that isn't in the catalogue.\n"
+        ),
+    },
+    "trades": {
+        "identity": "You are a friendly, professional WhatsApp assistant for a South African "
+                    "trades/building-supplies business (materials, hardware, or equipment).",
+        "goal": "help customers or contractors find the right products or materials, quote "
+                "pricing, build their order, and check out",
+        "highlight_tools": (
+            "- Trade customers often want a formal price quote before committing — offer "
+            "create_quote when they're pricing a job rather than ordering immediately.\n"
+        ),
+    },
+    "health": {
+        "identity": "You are a friendly, professional WhatsApp assistant for a South African "
+                    "health/wellness business.",
+        "goal": "help customers find the right product or service, build their order, and check out",
+        "highlight_tools": "",
+    },
+    "services": {
+        "identity": "You are a friendly, professional WhatsApp assistant for a South African "
+                    "professional-services business.",
+        "goal": "help customers understand what's on offer, build an order, and check out",
+        "highlight_tools": "",
+    },
+    "other": {
+        "identity": "You are a friendly, knowledgeable WhatsApp assistant for a South African "
+                    "small business selling directly to customers over WhatsApp.",
+        "goal": "help customers find what they need, build their cart, and check out",
+        "highlight_tools": "",
+    },
+}
+_DEFAULT_STOREFRONT_PERSONA = _STOREFRONT_PERSONAS["other"]
+
 # Known tool names — so we only treat text as a tool call when it actually names one of ours.
 # Populated from TOOL_SPECS + BOOKING_TOOL_SPECS after they're defined (end of module) — was a
 # hand-maintained set that silently drifted: cancel_order was added to TOOL_SPECS but not here,
@@ -281,7 +349,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "function": {
             "name": "track_order",
             "description": (
-                "Check an order's delivery/preparation STATUS by its order number (e.g. OTH-00042). "
+                "Check an order's delivery/preparation STATUS by its order number (e.g. ORD-1042). "
                 "Does NOT know about invoices/receipts — for those, or anything the customer wants "
                 "sent/resent as a document, use resend_invoice instead."
             ),
@@ -330,7 +398,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "description": (
                 "Suggest a South African recipe when the customer asks what to cook, "
                 "mentions a fish or ingredient, or wants meal ideas. Returns a short "
-                "recipe and lists which ingredients Off the Hook has in stock so they "
+                "recipe and lists which ingredients we have in stock so they "
                 "can be added to the cart."
             ),
             "parameters": {
@@ -766,10 +834,9 @@ class CommerceAssistantSkill(BaseSkill):
                 "book_appointment. To cancel, call cancel_appointment. Never promise a time you haven't "
                 "confirmed via list_availability."
             )
+        persona = _STOREFRONT_PERSONAS.get(_tenant_business_type(tenant_id), _DEFAULT_STOREFRONT_PERSONA)
         return (
-            "You are a friendly, knowledgeable WhatsApp assistant for a South African fresh "
-            "fish and chicken delivery business. Your goals: help customers find great products, "
-            "inspire them with recipes, build their cart, and check out.\n\n"
+            f"{persona['identity']} Your goals: {persona['goal']}.\n\n"
             "Guidelines:\n"
             "- Reply in the SAME language the customer writes in. South Africans message in English, "
             "Afrikaans, isiZulu, isiXhosa, Sesotho and more — mirror their language naturally and "
@@ -783,19 +850,14 @@ class CommerceAssistantSkill(BaseSkill):
             "- CART DISCIPLINE (important): only add a product to the cart when the customer has "
             "clearly named THAT specific item AND a quantity. NEVER add several products at once, and "
             "NEVER add items they didn't ask for. If they only greet, ask what's available, or are "
-            "vague, call list_products or get_daily_catch and let them choose — add nothing yet.\n"
+            "vague, call list_products and let them choose — add nothing yet.\n"
             "- Voice notes and accents can make numbers unclear. If a quantity is large or surprising "
             "(say 10 or more), repeat it back and ask them to confirm before adding — e.g. 'Just to "
-            "check — did you want 10 hake, or 1?'. When unsure of a quantity, ask; don't guess.\n"
+            "check — did you want 10, or 1?'. When unsure of a quantity, ask; don't guess.\n"
             "- Some products are sold by the *kilogram* (their price shows as R…/kg). For those, ask "
             "the customer HOW MANY KG they'd like — halves are fine (0.5, 1, 1.5, 2) — and pass that "
             "as the quantity to add_to_cart. For packs, quantity is simply the number of packs.\n"
-            "- On first contact or when asked what's good/fresh/special, call get_daily_catch "
-            "to show today's highlights before anything else.\n"
-            "- When a customer mentions a dish, ingredient, or asks what to cook, call "
-            "suggest_recipe — it returns a recipe AND shows which ingredients are in stock.\n"
-            "- After suggesting a recipe, offer to add the available ingredients to their cart.\n"
-            "- Be proactive: if a customer buys yellowtail, suggest a recipe for it unprompted.\n"
+            + persona["highlight_tools"] +
             "- To ORDER over WhatsApp: confirm the cart, get the delivery address, then ask how "
             "they'd like to pay — *online card*, *pay on delivery*, or *EFT / bank transfer*.\n"
             "- Then call *review_order* and send the customer the summary it returns. WAIT for them "
@@ -813,7 +875,7 @@ class CommerceAssistantSkill(BaseSkill):
             "- Only use start_checkout if the customer specifically wants to pay on the website.\n"
             "- For a price quote without ordering, call create_quote and share the number and total.\n"
             "- track_order is ONLY for checking an order's delivery/preparation STATUS by its order "
-            "number (e.g. OTH-00042) — it does not know about invoices and will never find one. If "
+            "number (e.g. ORD-1042) — it does not know about invoices and will never find one. If "
             "a customer wants a document — their invoice, receipt, a copy, wants it 'resent' — call "
             "resend_invoice instead, even if the number they gave you looks like an order number; it "
             "tries both. Never call track_order with something that looks like an invoice number "
@@ -1487,7 +1549,7 @@ class CommerceAssistantSkill(BaseSkill):
                      if kb_recipe.strip() else "")
 
         # Live web inspiration (B): fresh chef-style ideas. Used as INSPIRATION only — the model
-        # writes an Off the Hook-voiced recipe, never copies wording (copyright-safe). Best-effort.
+        # writes the business's own-voiced recipe, never copies wording (copyright-safe). Best-effort.
         web_ref = ""
         try:
             from core.skills.web_search import _ddg_search
@@ -1496,12 +1558,13 @@ class CommerceAssistantSkill(BaseSkill):
                                 for h in (hits or [])[:4] if h.get("title"))
         except Exception:
             web_ref = ""
-        inspiration = (f"\nFresh ideas from the web for INSPIRATION ONLY — adapt into Off the Hook's own "
-                       f"voice, do NOT copy any wording; you may nod to the dish or chef style:\n{web_ref}\n"
+        inspiration = (f"\nFresh ideas from the web for INSPIRATION ONLY — adapt into the "
+                       f"business's own voice, do NOT copy any wording; you may nod to the dish "
+                       f"or chef style:\n{web_ref}\n"
                        if web_ref.strip() else "")
 
         prompt = (
-            f"You are a South African recipe assistant for a fresh fish and chicken delivery business.\n"
+            f"You are a South African recipe assistant for a food business.\n"
             f"A customer wants to cook: {dish} (serves {serves}).\n"
             f"{grounding}{inspiration}\n"
             f"These ingredients are currently in stock and available to order:\n{catalog_str}\n\n"
@@ -1509,7 +1572,7 @@ class CommerceAssistantSkill(BaseSkill):
             f"- Recipe name\n"
             f"- Ingredients list (highlight which ones are available to order)\n"
             f"- Quick method (4–6 steps)\n"
-            f"- A 'From Off the Hook' section listing ONLY the in-stock items needed, "
+            f"- An 'Available to order' section listing ONLY the in-stock items needed, "
             f"with their exact names from the catalog so they can be added to the cart.\n\n"
             f"Keep it warm, South African, and appetising. "
             f"If the dish doesn't need any fish/chicken, suggest a protein that works well."

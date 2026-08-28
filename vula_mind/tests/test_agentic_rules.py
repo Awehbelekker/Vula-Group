@@ -67,6 +67,45 @@ def test_clickup_admin_prompt_has_agentic_rules():
     assert "how-to/procedural question" in prompt
 
 
+# 2026-08-28: real incident, gerflor — a commerce-mode owner's "how do I..." question got
+# answered from raw ungrounded LLM knowledge because AGENTIC_RULES told every agentic skill to
+# always "answer directly in plain text" for a how-to question, even one that now has a real
+# lookup tool (commerce_admin's lookup_business_info) that should be tried first. Generalized to
+# be tool-agnostic so every OTHER agentic skill without such a tool degrades to the exact same
+# behaviour as before.
+
+def test_agentic_rules_how_to_bullet_is_tool_agnostic():
+    # The shared rule must never hardcode a specific tool name — it has to make sense for every
+    # agentic skill, most of which have no lookup tool at all.
+    assert "lookup_business_info" not in AGENTIC_RULES
+    assert "call it first" in AGENTIC_RULES
+
+
+def test_clickup_admin_without_a_lookup_tool_still_answers_plain_text_when_nothing_relevant():
+    # No lookup tool exists for clickup_admin — the generalized wording ("or you have no such
+    # tool at all") must still resolve to the original behaviour for every skill like this one.
+    from core.skills.clickup_admin import ClickUpAdminSkill
+    skill = ClickUpAdminSkill()
+    prompt = skill._system_prompt()
+    assert "you have no such tool at all" in prompt
+
+
+def test_commerce_admin_owner_prompt_prefers_lookup_business_info_for_how_to_questions():
+    from core.skills.commerce_admin import CommerceAdminSkill
+    skill = CommerceAdminSkill()
+    prompt = skill._system_prompt("off-the-hook", role=None)
+    assert "general SA small-business" in prompt
+    assert "lookup_business_info" in prompt
+
+
+def test_commerce_admin_sales_rep_prompt_prefers_lookup_business_info_for_how_to_questions():
+    from core.skills.commerce_admin import CommerceAdminSkill
+    skill = CommerceAdminSkill()
+    prompt = skill._system_prompt("off-the-hook", role="sales_rep")
+    assert "general SA small-business" in prompt
+    assert "lookup_business_info" in prompt
+
+
 def test_email_admin_send_mode_prompt_confirms_before_sending():
     skill = EmailAdminSkill()
     prompt = skill._system("send")

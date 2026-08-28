@@ -288,10 +288,67 @@ def test_booking_focused_prompt_has_no_storefront_copy():
     assert "cancel_appointment" in prompt
 
 
-def test_storefront_prompt_unchanged_by_default():
+def test_storefront_prompt_real_food_tenant_gets_food_persona():
+    # TENANT ("off-the-hook") is a real production tenant with business_type="food" — this
+    # exercises the real _tenant_business_type()/get_config() call path, not a mock, so it also
+    # guards against the persona lookup itself breaking against real data.
     skill = CommerceAssistantSkill()
     prompt = skill._system_prompt(TENANT, kb_context="")
-    assert "fresh fish and chicken delivery business" in prompt
+    assert "food business" in prompt
+    assert "get_daily_catch" in prompt
+    assert "suggest_recipe" in prompt
+
+
+# 2026-08-28: real incident — this skill's single hardcoded storefront default assumed every
+# commerce tenant was Off The Hook (a fresh fish and chicken delivery business), so a brand-new
+# retail/trades tenant's customer bot introduced itself as a fish shop. One persona per
+# business_type now — these tests mock _tenant_business_type directly (rather than the real
+# get_config network call TENANT's own test above exercises) so each vertical is tested in
+# isolation, deterministically.
+
+def test_storefront_prompt_retail_gets_retail_persona_no_food_tools():
+    skill = CommerceAssistantSkill()
+    with patch("core.skills.commerce_assistant._tenant_business_type", return_value="retail"):
+        prompt = skill._system_prompt(TENANT, kb_context="")
+    assert "retail/e-commerce business" in prompt
+    assert "fish" not in prompt.lower()
+    assert "get_daily_catch" not in prompt
+    assert "suggest_recipe" not in prompt
+    assert "list_products" in prompt
+
+
+def test_storefront_prompt_trades_gets_trades_persona():
+    skill = CommerceAssistantSkill()
+    with patch("core.skills.commerce_assistant._tenant_business_type", return_value="trades"):
+        prompt = skill._system_prompt(TENANT, kb_context="")
+    assert "trades/building-supplies business" in prompt
+    assert "get_daily_catch" not in prompt
+    assert "create_quote" in prompt
+
+
+def test_storefront_prompt_unknown_business_type_falls_back_to_other():
+    skill = CommerceAssistantSkill()
+    with patch("core.skills.commerce_assistant._tenant_business_type", return_value=""):
+        prompt = skill._system_prompt(TENANT, kb_context="")
+    assert "small business selling directly to customers" in prompt
+    assert "fish" not in prompt.lower()
+
+
+def test_persona_prompt_still_overrides_template_tone():
+    skill = CommerceAssistantSkill()
+    with (
+        patch("core.skills.commerce_assistant._tenant_business_type", return_value="retail"),
+        patch("vula.api.tenants.get_config", return_value={"persona_prompt": "Speak like a cheerful surf shop."}),
+    ):
+        prompt = skill._system_prompt(TENANT, kb_context="")
+    assert "Speak like a cheerful surf shop." in prompt
+
+
+def test_suggest_recipe_tool_spec_has_no_hardcoded_business_name():
+    import json
+    from core.skills.commerce_assistant import TOOL_SPECS
+    assert "Off the Hook" not in json.dumps(TOOL_SPECS)
+    assert "OTH-00042" not in json.dumps(TOOL_SPECS)
 
 
 @pytest.mark.asyncio

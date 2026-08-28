@@ -88,8 +88,11 @@ REASONING_RULES = (
 AGENTIC_RULES = (
     "Working with tools:\n"
     "- If the message is a how-to/procedural question (e.g. 'how do I...', 'where do I...') "
-    "rather than a request for data or an action, answer directly in plain text — don't call a "
-    "tool just to have something to say.\n"
+    "rather than a request for data or an action: if you have a tool for looking up this "
+    "business's own knowledge base or reference material, call it first — a real citation "
+    "beats a guess. Only answer directly from general knowledge, in plain text, once that tool "
+    "comes back with nothing relevant (or you have no such tool at all) — never call a tool "
+    "just to have something to say.\n"
     "- If the message doesn't clearly map to any tool or data request, ask a short clarifying "
     "question instead of guessing the closest-sounding tool.\n"
     "- Never mention internal tool/function names in a reply — describe what you did or found "

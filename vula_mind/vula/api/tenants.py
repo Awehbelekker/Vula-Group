@@ -268,6 +268,19 @@ async def create_tenant(body: TenantIn, identity: dict = Depends(require_master)
     except Exception as exc:
         return {"error": f"{exc} (run migration 040?)"}
     _CACHE.pop(body.tenant_id, None)
+    if not existing:
+        # 2026-08-28: widen starter_kb seeding to this (master-created) tenant path — previously
+        # only signup.py's self-serve flow got starter KB docs, leaving master-created tenants
+        # with an empty KB on day one. Same fire-and-forget, best-effort shape as signup.py —
+        # never blocks the response. Gated on first-creation only (not the update branch above)
+        # so a routine master edit never wastes an LLM call re-generating starter content.
+        try:
+            from vula.commerce.background_tasks import run_background
+            from vula.commerce.starter_kb import seed_starter_kb
+            run_background(body.tenant_id, "starter_kb_seed",
+                            seed_starter_kb(body.tenant_id, body.business_type or "other"))
+        except Exception as exc:
+            log.debug("starter_kb seeding skipped for %s: %s", body.tenant_id, exc)
     try:
         from vula.api.master import audit
         audit(identity, "tenant_created", body.tenant_id, business_type=body.business_type)

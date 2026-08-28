@@ -7,7 +7,7 @@ KB instead, mirroring commerce_assistant.py's proven _retrieve_kb exactly.
 
 Also covers the accompanying competitor_check query-template hardening (tenant business_type/
 display_name injected so a generic phrase drifts less easily into the wrong industry)."""
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -59,6 +59,7 @@ async def test_lookup_business_info_returns_found_results(skill):
         mock_pipeline_cls.return_value.query = AsyncMock(return_value=chunks)
         result = await skill._lookup_business_info(TID, {"query": "what colours do we have"})
     assert result["found"] is True
+    assert result["source_kb"] == "tenant"
     assert result["results"][0]["source"] == "products.html"
     assert "40 stock colours" in result["results"][0]["text"]
 
@@ -68,6 +69,76 @@ async def test_lookup_business_info_empty_kb_returns_found_false(skill):
     with patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline_cls:
         mock_pipeline_cls.return_value.query = AsyncMock(return_value=[])
         result = await skill._lookup_business_info(TID, {"query": "what colours do we have"})
+    assert result == {"found": False, "message": "Nothing in the knowledge base matches that yet."}
+
+
+# 2026-08-28: real incident, gerflor — a commerce-mode owner asking a generic SA small-business
+# "how do I..." question (VAT, HR, etc.) previously got answered from raw ungrounded LLM
+# parametric knowledge. lookup_business_info now falls back to the shared business_basics KB
+# (vula/training/business_content.py) when the tenant's own KB has nothing — mirrors
+# architecture_planning.py's already-proven "tenant KB + shared training KB" pattern.
+
+@pytest.mark.asyncio
+async def test_lookup_business_info_falls_back_to_shared_kb_when_tenant_kb_empty(skill):
+    shared_chunks = [{"filename": "vat_basics.md", "text": "VAT registration is compulsory once turnover exceeds R1 million."}]
+    call_tenant_ids = []
+
+    def _pipeline_factory(tenant_id):
+        call_tenant_ids.append(tenant_id)
+        m = MagicMock()
+        m.query = AsyncMock(return_value=[] if tenant_id == TID else shared_chunks)
+        return m
+
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", side_effect=_pipeline_factory):
+        result = await skill._lookup_business_info(TID, {"query": "how do I register for VAT"})
+
+    assert result["found"] is True
+    assert result["source_kb"] == "general_sa_business"
+    assert result["results"][0]["source"] == "vat_basics.md"
+    assert "R1 million" in result["results"][0]["text"]
+    assert call_tenant_ids == [TID, "business_basics"]  # tenant tried first, shared second
+
+
+@pytest.mark.asyncio
+async def test_lookup_business_info_prefers_tenant_kb_over_shared(skill):
+    tenant_chunks = [{"filename": "products.html", "text": "Real tenant content."}]
+    shared_pipeline_called = {"n": 0}
+
+    def _pipeline_factory(tenant_id):
+        m = MagicMock()
+        if tenant_id == "business_basics":
+            shared_pipeline_called["n"] += 1
+        m.query = AsyncMock(return_value=tenant_chunks)
+        return m
+
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", side_effect=_pipeline_factory):
+        result = await skill._lookup_business_info(TID, {"query": "what do we sell"})
+
+    assert result["source_kb"] == "tenant"
+    assert shared_pipeline_called["n"] == 0  # shared KB never even instantiated
+
+
+@pytest.mark.asyncio
+async def test_lookup_business_info_both_kbs_empty_returns_found_false(skill):
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.query = AsyncMock(return_value=[])
+        result = await skill._lookup_business_info(TID, {"query": "something obscure"})
+    assert result == {"found": False, "message": "Nothing in the knowledge base matches that yet."}
+
+
+@pytest.mark.asyncio
+async def test_lookup_business_info_shared_kb_failure_degrades_to_found_false(skill):
+    def _pipeline_factory(tenant_id):
+        m = MagicMock()
+        if tenant_id == "business_basics":
+            m.query = AsyncMock(side_effect=RuntimeError("qdrant down"))
+        else:
+            m.query = AsyncMock(return_value=[])
+        return m
+
+    with patch("vula.ingestion.pipeline.VulaIngestionPipeline", side_effect=_pipeline_factory):
+        result = await skill._lookup_business_info(TID, {"query": "how do I register for VAT"})
+
     assert result == {"found": False, "message": "Nothing in the knowledge base matches that yet."}
 
 

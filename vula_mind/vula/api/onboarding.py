@@ -413,6 +413,18 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
             logger.info("Tenant config seeded: %s (business_type=%s)", slug, bt)
         except Exception as exc:
             logger.warning("Tenant config seed failed (non-fatal): %s", exc)
+        else:
+            # 2026-08-28: same starter_kb widening as tenants.py's create_tenant — this
+            # onboarding flow previously never seeded starter KB docs at all (a third, entirely
+            # separate tenant-creation path from signup.py). Fire-and-forget, best-effort —
+            # never blocks provisioning. Inside the `else:` so it only fires once the config row
+            # it depends on actually landed.
+            try:
+                from vula.commerce.background_tasks import run_background
+                from vula.commerce.starter_kb import seed_starter_kb
+                run_background(slug, "starter_kb_seed", seed_starter_kb(slug, bt, req.industry or ""))
+            except Exception as exc:
+                logger.debug("starter_kb seeding skipped for %s: %s", slug, exc)
 
     return record, temp_password
 
