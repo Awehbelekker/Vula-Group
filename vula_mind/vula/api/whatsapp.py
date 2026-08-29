@@ -243,8 +243,7 @@ async def receive_message(
                                 # Unmapped number → fall back to sender-based lookup
                                 await _handle_message(phone, text, msg_id)
 
-                    elif msg_type == "interactive" and commerce_tenant:
-                        # Handle list/button replies from WhatsApp catalog menu
+                    elif msg_type == "interactive":
                         interactive = msg.get("interactive", {})
                         reply_id = (
                             interactive.get("list_reply", {}).get("id")
@@ -256,7 +255,17 @@ async def receive_message(
                             or interactive.get("button_reply", {}).get("title")
                             or ""
                         )
-                        if phone and reply_id:
+                        # 2026-08-25: commerce_admin's confirm/cancel buttons (see
+                        # ConfirmationRequired / _send_wa_buttons) — works on ANY route_mode
+                        # (the owner's admin session exists on both commerce- and knowledge-mode
+                        # tenants), so this is checked before the commerce_tenant-only branch
+                        # below, using route_tenant rather than commerce_tenant.
+                        if phone and reply_id and (
+                            reply_id.startswith("admin_confirm:") or reply_id.startswith("admin_cancel:")
+                        ) and route_tenant:
+                            await _handle_admin_confirm_reply(phone, reply_id, route_tenant)
+                        elif phone and reply_id and commerce_tenant:
+                            # Handle list/button replies from WhatsApp catalog menu
                             await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
 
                     elif msg_type == "audio":
@@ -3862,7 +3871,26 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         logger.warning("commerce_admin returned no answer: %s", output.error)
         return False
 
-    await _send_reply(phone, output.answer, tenant_id)
+    if output.confirm_request:
+        # Real reply buttons instead of a plain-text "reply yes to confirm" — see
+        # core.skills.commerce_admin.ConfirmationRequired / _send_wa_buttons.
+        cr = output.confirm_request
+        number = _wa_number(phone)
+        creds = await _get_tenant_wa_creds(tenant_id)
+        sent = False
+        if creds:
+            sent = await _send_wa_buttons(
+                creds, number, cr["summary"],
+                [{"id": f"admin_confirm:{cr['id']}", "title": cr.get("confirm_label") or "Confirm"},
+                 {"id": f"admin_cancel:{cr['id']}", "title": cr.get("cancel_label") or "Cancel"}],
+            )
+        if not sent:
+            # No creds resolved, or the Graph API call failed — fall back to plain text rather
+            # than leaving the owner with nothing at all; the pending row is still there so a
+            # typed "yes" still works via the normal free-text path on the next turn.
+            await _send_reply(phone, f"{cr['summary']}\n\nReply 'yes' to confirm.", tenant_id)
+    else:
+        await _send_reply(phone, output.answer, tenant_id)
     if session_id:
         try:
             await commerce_service.append_message(tenant_id, session_id, "user", text)
@@ -3870,6 +3898,96 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         except Exception:
             pass
     return True
+
+
+async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str) -> None:
+    """A tap on commerce_admin's Confirm/Cancel buttons (see ConfirmationRequired /
+    _send_wa_buttons). Re-dispatches the ORIGINAL tool call with confirm=True baked in — no LLM
+    involved in interpreting the reply at all, since the whole point is removing that ambiguity.
+    """
+    from datetime import datetime, timezone
+    from vula.commerce import service as commerce_service
+
+    action, _, pending_id = reply_id.partition(":")
+    if not pending_id:
+        return
+    db = commerce_service._client()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    try:
+        # Atomic claim: only a still-pending, unexpired row can be resolved, and the UPDATE
+        # itself flips status so a double-tap (or the retry-safe webhook redelivering) can never
+        # process the same confirmation twice. Whichever request's UPDATE actually matches a row
+        # wins; the other gets .data == [] and does nothing.
+        new_status = "cancelled" if action == "admin_cancel" else "confirmed"
+        upd = (db.table("commerce_pending_confirmations")
+               .update({"status": new_status, "resolved_at": now_iso})
+               .eq("id", pending_id).eq("tenant_id", tenant_id).eq("status", "pending")
+               .gt("expires_at", now_iso)
+               .execute())
+        row = (upd.data or [None])[0]
+    except Exception as exc:
+        logger.warning("pending-confirmation claim failed (run migration 146?): %s", exc)
+        row = None
+
+    if not row:
+        await _send_reply(phone, "That confirmation has already been handled or has expired — "
+                                  "please ask again if you still want to do this.", tenant_id)
+        return
+
+    if action == "admin_cancel":
+        await _send_reply(phone, "Cancelled — nothing was changed.", tenant_id)
+        return
+
+    try:
+        from core.skills.commerce_admin import CommerceAdminSkill
+        skill = CommerceAdminSkill()
+        ctx = {"tenant_id": tenant_id, "phone": phone, "caller_name": None, "caller_role": None}
+        confirmed_args = dict(row["tool_args"] or {})
+        confirmed_args["confirm"] = True
+        result = await skill._dispatch_tool(row["tool_name"], confirmed_args, ctx)
+    except Exception as exc:
+        logger.warning("admin confirm re-dispatch failed: %s", exc)
+        await _send_reply(phone, "Something went wrong applying that — please try again.", tenant_id)
+        return
+
+    # Summarise the raw tool result into plain WhatsApp language — same established pattern as
+    # commerce_admin._agent_loop's own weak-model safety net, reused here since there's no
+    # agent loop turn at all for this step (deliberately — that's the whole fix).
+    reply_text = None
+    try:
+        import json
+        import litellm
+        from core.llm_router import resolve_generation_route, looks_degenerate
+        from core.prompt_safety import fence
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+        resp = await litellm.acompletion(
+            model=model, temperature=0.2, max_tokens=300, api_key=api_key, api_base=api_base,
+            messages=[
+                {"role": "system", "content": "Summarise this data for a shop owner in short, "
+                                              "plain WhatsApp language. No JSON."},
+                {"role": "user", "content": fence('TOOL_RESULT', json.dumps(result, default=str))},
+            ])
+        reply_text = (resp.choices[0].message.content or "").strip()
+        if reply_text and looks_degenerate(reply_text):
+            reply_text = None
+    except Exception as exc:
+        logger.debug("admin confirm result summarise skipped: %s", exc)
+    if not reply_text:
+        # Deterministic fallback — never worse than silence, and never a garbled reply.
+        reply_text = ("Error: " + str(result.get("error"))) if result.get("error") else \
+                     ("Done: " + ", ".join(f"{k}: {v}" for k, v in result.items()
+                                           if k not in ("verified",) and v not in (None, "", [])))
+
+    await _send_reply(phone, reply_text, tenant_id)
+    try:
+        session = await commerce_service.get_or_create_session(
+            tenant_id, session_key=f"admin:{phone}", channel="whatsapp", customer_phone=phone)
+        await commerce_service.append_message(tenant_id, session["id"], "user", f"[tapped {action}]")
+        await commerce_service.append_message(tenant_id, session["id"], "assistant", reply_text)
+    except Exception:
+        pass
 
 
 async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
@@ -4010,6 +4128,33 @@ def _product_desc(p: dict) -> str:
         if room >= 10:
             return f"{base} · {extra[:room]}"
     return base[:72]
+
+
+async def _send_wa_buttons(creds: dict, number: str, body: str, buttons: list) -> bool:
+    """Send a real WhatsApp interactive reply-button message (max 3, each `id`/`title` a short
+    string). 2026-08-25: backs the confirm/cancel flow for commerce_admin's mutating tools — see
+    core.skills.commerce_admin.ConfirmationRequired. A button tap comes back as an exact,
+    unambiguous button_reply id (handled in the webhook's msg_type == "interactive" branch),
+    replacing the free-text "yes"/"confirm" parsing that produced a real fabricated-success
+    incident (2026-08-22/24: the model misread its own tool results and invented an invoice)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
+                      "interactive": {"type": "button",
+                                      "body": {"text": body[:1024]},
+                                      "action": {"buttons": [
+                                          {"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}}
+                                          for b in buttons[:3]
+                                      ]}}},
+            )
+            resp.raise_for_status()
+            return True
+    except Exception as exc:
+        logger.error("WA buttons send failed to %s: %s", number, exc)
+        return False
 
 
 async def _send_wa_list(creds: dict, number: str, header: str, body: str,

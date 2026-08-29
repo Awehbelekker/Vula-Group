@@ -260,6 +260,13 @@ class SkillOutput:
     # carries a real image_url. Optional and unused by most skills; None means text-only, same
     # as before this field existed.
     media_url: Optional[str] = None
+    # 2026-08-25: a pending confirmation an owner needs to approve/reject via real WhatsApp
+    # reply buttons rather than free text — {"id", "summary", "confirm_label", "cancel_label"}.
+    # Set when a skill's tool call returned {"preview": True, ...} (see core.skills.commerce_
+    # admin.ConfirmationRequired). Buttons remove the exact ambiguity ("yes"/"confirm"/"proceed"
+    # misread, blind retries, an eventual fabricated success) confirmed in a real transcript.
+    # None means no confirmation pending — reply normally with `answer`.
+    confirm_request: Optional[Dict[str, Any]] = None
 
     @property
     def success(self) -> bool:

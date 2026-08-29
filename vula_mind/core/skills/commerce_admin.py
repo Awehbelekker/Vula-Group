@@ -865,6 +865,37 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     return tools
 
 
+class ConfirmationRequired(Exception):
+    """Raised from _agent_loop when a dispatched tool returns {"preview": True, ...} (22 tools
+    use this exact shape — update_stock, record_payment, create_purchase_order, ...). Caught in
+    run(), which stores the pending action (migration 146: commerce_pending_confirmations) and
+    asks via real WhatsApp reply buttons instead of a sentence the owner has to type "yes" back
+    to. 2026-08-25: built after a real transcript showed the free-text version of this exchange
+    fail three different ways in a row — misread confirmations, a blind retry, and eventually a
+    fully fabricated "invoice created" success for an invoice that was never actually made. A
+    button tap sends back an exact, unambiguous payload; there is nothing left for the model to
+    misinterpret."""
+    def __init__(self, tool_name: str, args: Dict[str, Any], result: Dict[str, Any]):
+        self.tool_name = tool_name
+        # NOT self.args — that name collides with BaseException's own `.args` (the tuple passed
+        # to super().__init__() below), which would silently clobber this back to a 1-tuple of
+        # the message string. Caught by this file's own test suite before shipping.
+        self.tool_args = args
+        self.result = result
+        super().__init__(f"confirmation required for {tool_name}")
+
+
+def _preview_summary(result: Dict[str, Any]) -> str:
+    """A short WhatsApp-friendly confirmation prompt built ONLY from the preview dict's own
+    structured fields — deliberately not the tool's free-text `message` (written assuming a
+    model would paraphrase it for a human; here there's no model in the loop for this step at
+    all, so the summary needs to already be exactly what the owner should read)."""
+    fields = {k: v for k, v in result.items()
+             if k not in ("preview", "message") and v not in (None, "", [])}
+    lines = [f"{k.replace('_', ' ').capitalize()}: {v}" for k, v in fields.items()]
+    return "\n".join(lines) if lines else "Confirm this action?"
+
+
 class CommerceAdminSkill(BaseSkill):
     name = "commerce_admin"
     description = (
@@ -898,6 +929,28 @@ class CommerceAdminSkill(BaseSkill):
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
             return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8,
                                sources=collected_sources)
+        except ConfirmationRequired as cr:
+            summary = _preview_summary(cr.result)
+            row = {
+                "tenant_id": inp.tenant_id, "phone": ctx["phone"] or "", "skill_name": self.name,
+                "tool_name": cr.tool_name, "tool_args": cr.tool_args, "summary": summary,
+            }
+            try:
+                ins = service._client().table("commerce_pending_confirmations").insert(row).execute()
+                pending_id = ins.data[0]["id"] if ins.data else None
+            except Exception as exc:
+                # migration 146 not run yet, or a transient DB error — fail open to the old
+                # free-text confirm path rather than losing the preview entirely.
+                logger.warning("pending-confirmation insert failed (run migration 146?): %s", exc)
+                pending_id = None
+            if not pending_id:
+                return SkillOutput(answer=f"{summary}\n\nReply 'yes' to confirm.",
+                                   skill_name=self.name, confidence=0.8)
+            return SkillOutput(
+                answer=summary, skill_name=self.name, confidence=0.8,
+                confirm_request={"id": pending_id, "summary": summary,
+                                 "confirm_label": "Confirm", "cancel_label": "Cancel"},
+            )
         except Exception as exc:
             logger.warning("commerce_admin loop failed (%s)", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
@@ -1058,6 +1111,8 @@ class CommerceAdminSkill(BaseSkill):
                     result = await self._dispatch_tool(name, args, ctx)
                     if sources is not None:
                         sources.append(tool_source(name, result))
+                    if isinstance(result, dict) and result.get("preview") is True:
+                        raise ConfirmationRequired(name, args, result)
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
@@ -1121,6 +1176,8 @@ class CommerceAdminSkill(BaseSkill):
                 result = await self._dispatch_tool(tc.function.name, args, ctx)
                 if sources is not None:
                     sources.append(tool_source(tc.function.name, result))
+                if isinstance(result, dict) and result.get("preview") is True:
+                    raise ConfirmationRequired(tc.function.name, args, result)
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
