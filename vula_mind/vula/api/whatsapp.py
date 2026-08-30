@@ -268,6 +268,13 @@ async def receive_message(
                             # Handle list/button replies from WhatsApp catalog menu
                             await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
 
+                    elif msg_type == "order" and commerce_tenant:
+                        # A customer checked out via WhatsApp's native product catalog cart —
+                        # see _handle_native_order / scripts/sync_meta_catalog.py.
+                        order = msg.get("order") or {}
+                        if phone and order.get("product_items"):
+                            await _handle_native_order(phone, order, commerce_tenant)
+
                     elif msg_type == "audio":
                         # Voice note → transcribe → route the text like a normal message.
                         audio = msg.get("audio") or {}
@@ -3988,6 +3995,73 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         await commerce_service.append_message(tenant_id, session["id"], "assistant", reply_text)
     except Exception:
         pass
+
+
+async def _handle_native_order(phone: str, order: dict, tenant_id: str) -> None:
+    """A customer checked out via WhatsApp's native product catalog cart (built from
+    scripts/sync_meta_catalog.py's synced products — see there for the id convention). Seeds a
+    REAL Vula cart deterministically from product_retailer_id/quantity — no LLM involved in
+    matching products or pricing at all, the same principle behind commerce_admin's confirm
+    buttons. Deliberately does NOT trust the webhook's own item_price (add_to_cart always
+    re-prices from the live commerce_products row — same "never trust the client" principle
+    vula/commerce/service.py's create_order already applies to a client-supplied discount code).
+    The existing commerce_assistant text flow picks this cart back up on the customer's very
+    next message (get_or_create_cart is keyed by session_id=phone, the same convention
+    _run_commerce_assistant already uses) — this only needs to seed the cart and ask for
+    delivery details, not reimplement checkout."""
+    from vula.commerce import service as commerce_service
+
+    product_items = order.get("product_items") or []
+    if not product_items:
+        return
+
+    try:
+        cart = await commerce_service.get_or_create_cart(tenant_id, phone, phone)
+    except Exception as exc:
+        logger.warning("native-order cart creation failed: %s", exc)
+        return
+
+    added, missing = [], []
+    for item in product_items:
+        retailer_id = str(item.get("product_retailer_id") or "").strip()
+        try:
+            quantity = float(item.get("quantity") or 1)
+        except (TypeError, ValueError):
+            quantity = 1.0
+        if not retailer_id:
+            continue
+        try:
+            rows = (commerce_service._client().table("commerce_products")
+                    .select("id,name").eq("tenant_id", tenant_id).eq("slug", retailer_id)
+                    .limit(1).execute().data or [])
+        except Exception as exc:
+            logger.debug("native-order product lookup failed for %s: %s", retailer_id, exc)
+            rows = []
+        if not rows:
+            missing.append(retailer_id)
+            continue
+        try:
+            await commerce_service.add_to_cart(tenant_id, cart["id"], rows[0]["id"], quantity)
+            qty_label = int(quantity) if quantity == int(quantity) else quantity
+            added.append(f"{qty_label}x {rows[0]['name']}")
+        except Exception as exc:
+            logger.warning("native-order add_to_cart failed for %s: %s", retailer_id, exc)
+            missing.append(retailer_id)
+
+    lines = []
+    if added:
+        lines.append("Got your order: " + ", ".join(added) + ".")
+    if missing:
+        lines.append(f"Couldn't match {len(missing)} item(s) from the catalog to a current "
+                      "product — the team will follow up on those.")
+    if not added and not missing:
+        return
+    note = (order.get("text") or "").strip()
+    if note:
+        lines.append(f"Note: {note}")
+    if added:
+        lines.append("What's the delivery address?")
+    await _send_reply(phone, "\n".join(lines), tenant_id)
 
 
 async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
