@@ -34,8 +34,15 @@ async def sync_catalog(tenant_id: str) -> dict:
     from vula.api.whatsapp import _get_tenant_wa_creds
 
     c = service._client()
-    cfg_rows = (c.table("vula_tenant_config").select("meta_catalog_id,store_url")
-                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    try:
+        cfg_rows = (c.table("vula_tenant_config").select("meta_catalog_id,store_url")
+                    .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+    except Exception as exc:
+        # migration 147 not run yet — report cleanly rather than a raw APIError. Confirmed live,
+        # 2026-08-25: this is the actual current state for every tenant on the platform.
+        return {"status": "no_catalog_id",
+                "message": f"Couldn't read vula_tenant_config.meta_catalog_id (run migration "
+                           f"147?): {exc}"}
     if not cfg_rows or not cfg_rows[0].get("meta_catalog_id"):
         return {"status": "no_catalog_id",
                 "message": "vula_tenant_config.meta_catalog_id not set — connect a Commerce "
