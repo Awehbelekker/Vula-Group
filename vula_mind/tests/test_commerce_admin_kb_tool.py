@@ -200,3 +200,31 @@ async def test_competitor_check_get_config_failure_never_blocks_search(skill):
         result = await skill._competitor_check(TID, {"query": "colour range"}, {})
     mock_search.assert_called_once()
     assert "error" in result  # no results — but it ran, didn't crash
+
+
+# ── distributor-vs-competitor disambiguation (2026-08-31) ────────────────────────
+# Real incident, gerflor: a rep asked "what's the best price on a vinyl roll" and "check
+# Decotrader costs" (Decor Trader — a real distributor OF Gerflor's own products, not a rival).
+# Telemetry confirmed the model called competitor_check both times, not lookup_business_info —
+# root cause traced to competitor_check's own tool description literally saying "a competitor or
+# market price", broad enough to swallow the tenant's own product pricing. A real, correct price
+# list for these exact products was already sitting in the tenant's KB
+# ("PERSQUARE NETT PRICELIST - 1 MARCH 2026.pdf") and never got consulted — the model invented a
+# specific, wrong figure (R129.90/m²) instead, which the adversarial verifier then passed as
+# accepted (a real false negative). Fixed by removing the ambiguous "or market price" phrasing
+# and explicitly telling both tools that a distributor/reseller of the tenant's OWN products is
+# not a competitor.
+
+def test_competitor_check_description_no_longer_says_market_price():
+    spec = next(t for t in ca.DRAFT_TOOLS if t["function"]["name"] == "competitor_check")
+    desc = spec["function"]["description"]
+    assert "or market price" not in desc
+    assert "rival business" in desc
+    assert "distributor" in desc.lower()
+
+
+def test_lookup_business_info_description_covers_distributor_pricing():
+    spec = next(t for t in ca.KNOWLEDGE_TOOLS if t["function"]["name"] == "lookup_business_info")
+    desc = spec["function"]["description"]
+    assert "distributor" in desc.lower()
+    assert "not a competitor" in desc

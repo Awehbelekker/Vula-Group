@@ -456,13 +456,17 @@ KNOWLEDGE_TOOLS = [
         "name": "lookup_business_info",
         "description": (
             "Look up facts about THIS business's own products, services, pricing, policies, or "
-            "documents from its knowledge base (uploaded docs, ingested website content) — AND "
-            "general South African small-business know-how (VAT/tax basics, BCEA/HR basics, "
-            "bookkeeping, customer service, marketing, business planning) when nothing "
-            "tenant-specific applies. Use this for 'what do WE sell/offer/charge/have available' "
-            "questions AND generic 'how do I...' SA small-business procedural questions. Do NOT "
-            "use for questions about a competitor or an outside company — use competitor_check "
-            "for those."
+            "documents from its knowledge base (uploaded docs, ingested website content, real "
+            "supplier/distributor price lists) — AND general South African small-business "
+            "know-how (VAT/tax basics, BCEA/HR basics, bookkeeping, customer service, marketing, "
+            "business planning) when nothing tenant-specific applies. Use this for 'what do WE "
+            "sell/offer/charge/have available' questions AND generic 'how do I...' SA "
+            "small-business procedural questions — INCLUDING when a supplier or distributor name "
+            "is mentioned (e.g. 'what does <distributor> charge for our stock', 'check <supplier> "
+            "pricing') — a distributor selling THIS business's own products is not a competitor, "
+            "and any real price list from them may already be in this knowledge base; check here "
+            "FIRST, before ever reaching for competitor_check. Do NOT use for a genuinely "
+            "different, rival business (a competitor) — use competitor_check for that."
         ),
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "What to look up, in the owner/rep's own words."}},
@@ -492,13 +496,19 @@ DRAFT_TOOLS = [
     {"type": "function", "function": {
         "name": "competitor_check",
         "description": (
-            "Research a competitor or market price online — searches the live web and "
+            "Research a genuinely different, rival business online — searches the live web and "
             "summarises what's found into price position, notable differentiators, and a "
-            "one-line recommendation."
+            "one-line recommendation. Do NOT use this for THIS business's own products, "
+            "services, or pricing — including through a distributor/reseller/supplier that "
+            "sells this business's own stock — that's lookup_business_info, and its real price "
+            "list may already be in the knowledge base; check there first. A random web search "
+            "result about a real distributor is not the same as this business's own verified "
+            "current price."
         ),
         "parameters": {"type": "object", "properties": {
-            "query": {"type": "string", "description": "What to research — a competitor name, "
-                      "or e.g. 'eFoil pricing South Africa'."},
+            "query": {"type": "string", "description": "What to research — a rival business's "
+                      "name, or a truly external market question, e.g. 'eFoil pricing South "
+                      "Africa' when this business doesn't sell eFoils."},
         }, "required": ["query"]}}},
 ]
 CONTACT_TOOLS = [
