@@ -138,14 +138,22 @@ async def test_email_draft_sends_with_a_valid_address():
 
 
 @pytest.mark.asyncio
-async def test_email_draft_in_draft_mode_ignores_address_validity():
-    """Draft-mode is never a real send, so a malformed address there just makes an unsendable
-    draft — the gate only applies to send_mode='send'."""
+async def test_email_draft_requires_a_real_address_in_draft_mode_too():
+    """Reverses the original 2026-08-08 rule that draft-mode "ignores address validity".
+
+    That rule was argued on harm — a malformed address in draft mode is never a real send — and
+    on harm alone it was right. But it also meant the model could put a bare NAME in `to` and
+    call the job done, producing a draft addressed to "Jack" that a human still has to go and
+    address properly. Being permissive here is precisely what let the recipient lookup be
+    skipped. Refusing is what forces find_contact to run (2026-09-01), which is the actual point:
+    resolve the person, confirm the company, then draft.
+    """
     skill = EmailAdminSkill()
     creds = {"send_mode": "draft"}
     with patch("core.skills.email_admin.service.save_draft",
                new=AsyncMock(return_value={"draft": True})) as mock_draft:
         result = await skill._dispatch(
             "email_draft", {"to": "not an email", "subject": "Hi", "body": "Body"}, TENANT, creds)
-    assert result == {"draft": True}
-    mock_draft.assert_called_once()
+    assert result["status"] == "need_info"
+    assert "find_contact" in result["message"]
+    mock_draft.assert_not_called()
