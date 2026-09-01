@@ -46,14 +46,26 @@ def _cf_access_headers() -> dict:
     return {"CF-Access-Client-Id": cid, "CF-Access-Client-Secret": csec} if cid and csec else {}
 
 
-def _provider() -> Optional[tuple[str, str, str]]:
-    """Return (base_url, api_key, model) for the first configured provider, else None."""
+def _providers() -> list[tuple[str, str, str]]:
+    """Every configured provider, in try-order: local/primary first, then cloud fallbacks.
+
+    2026-09-01: this used to return only the FIRST configured provider, so despite the
+    module docstring promising a fallback there never was one — whenever the SA GPU tunnel
+    was down the voice note was simply lost. Confirmed against real telemetry: every
+    off-the-hook voice note (2026-07-16) and several digg-demo ones failed with a bare 530
+    from whisper.vula-ai.com and the customer was told to type instead. With OTH about to
+    take real WhatsApp orders that's a silent order-loss path, so failure now falls through
+    to the next provider rather than giving up.
+    """
+    out: list[tuple[str, str, str]] = []
     if settings.transcribe_base:
-        base = settings.transcribe_base.rstrip("/")
-        return base, settings.transcribe_api_key, settings.transcribe_model
+        out.append((settings.transcribe_base.rstrip("/"),
+                    settings.transcribe_api_key, settings.transcribe_model))
+    if settings.groq_api_key:
+        out.append(("https://api.groq.com/openai/v1", settings.groq_api_key, "whisper-large-v3"))
     if settings.openai_api_key:
-        return "https://api.openai.com/v1", settings.openai_api_key, "whisper-1"
-    return None
+        out.append(("https://api.openai.com/v1", settings.openai_api_key, "whisper-1"))
+    return out
 
 
 async def transcribe_audio(
@@ -66,40 +78,48 @@ async def transcribe_audio(
     """Transcribe audio bytes → (text, language_code). Both None if no provider is configured
     or the call fails — the caller must handle that gracefully (never guess). The language code
     is Whisper's own detection (e.g. 'en', 'af', 'zu') and is a reliable per-customer signal."""
-    prov = _provider()
-    if not prov or not audio:
-        if not prov:
+    provs = _providers()
+    if not provs or not audio:
+        if not provs:
             logger.info("voice note received but no transcription provider configured")
         return None, None
-    base, key, model = prov
-    t0 = time.monotonic()
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
-    # Local-first: if the endpoint is the SA GPU behind Cloudflare Access, attach the service token.
-    headers.update(_cf_access_headers())
-    files = {"file": (filename, audio, mime_type)}
-    data = {"model": model, "response_format": "json"}
-    try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                f"{base}/audio/transcriptions", headers=headers, files=files, data=data
+
+    for idx, (base, key, model) in enumerate(provs):
+        t0 = time.monotonic()
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        # Local-first: if the endpoint is the SA GPU behind Cloudflare Access, attach the token.
+        # Only the primary sits behind Access; a cloud fallback must not receive those headers.
+        if idx == 0:
+            headers.update(_cf_access_headers())
+        files = {"file": (filename, audio, mime_type)}
+        data = {"model": model, "response_format": "json"}
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(
+                    f"{base}/audio/transcriptions", headers=headers, files=files, data=data
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                text = (payload.get("text") or "").strip()
+                language = (payload.get("language") or None)
+            _telemetry.emit(
+                system="vula-transcribe", task="voice_note", outcome="ok",
+                tenant_id=tenant_id, reason=base,
+                extra={"ms": int((time.monotonic() - t0) * 1000), "bytes": len(audio),
+                       "model": model, "language": language, "attempt": idx + 1,
+                       "fellback": idx > 0},
             )
-            resp.raise_for_status()
-            payload = resp.json()
-            text = (payload.get("text") or "").strip()
-            language = (payload.get("language") or None)
-        _telemetry.emit(
-            system="vula-transcribe", task="voice_note", outcome="ok",
-            tenant_id=tenant_id, reason=base,
-            extra={"ms": int((time.monotonic() - t0) * 1000), "bytes": len(audio),
-                   "model": model, "language": language},
-        )
-        logger.info("transcribed voice note (%d bytes, lang=%s) in %dms via %s",
-                    len(audio), language, int((time.monotonic() - t0) * 1000), base)
-        return (text or None), language
-    except Exception as exc:
-        logger.warning("voice-note transcription failed via %s: %s", base, exc)
-        _telemetry.emit(
-            system="vula-transcribe", task="voice_note", outcome="error",
-            tenant_id=tenant_id, reason=str(exc)[:120],
-        )
-        return None, None
+            logger.info("transcribed voice note (%d bytes, lang=%s) in %dms via %s%s",
+                        len(audio), language, int((time.monotonic() - t0) * 1000), base,
+                        " (FALLBACK)" if idx else "")
+            return (text or None), language
+        except Exception as exc:
+            is_last = idx == len(provs) - 1
+            logger.warning("voice-note transcription failed via %s (%s): %s",
+                           base, "no fallback left" if is_last else "trying fallback", exc)
+            _telemetry.emit(
+                system="vula-transcribe", task="voice_note",
+                outcome="error" if is_last else "fallback",
+                tenant_id=tenant_id, reason=f"{base}: {str(exc)[:100]}",
+            )
+    return None, None

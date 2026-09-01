@@ -43,6 +43,10 @@ CONVERSATION_RULES = (
     "- On WhatsApp, lead with a short summary (the headline number/total/what matters) before "
     "listing more than a few items — don't open with a raw table dump. Offer to send the full "
     "list as a document if there's a lot to show.\n"
+    "- When sharing a link (checkout, invoice, storefront, anything), paste the raw URL on its "
+    "own, e.g. https://example.com/pay-now — never markdown link syntax like [click here]"
+    "(https://example.com/pay-now). WhatsApp doesn't render markdown; a formatted link shows as "
+    "literal unclickable text instead of a real tappable link.\n"
 )
 
 ETHICS_RULES = (

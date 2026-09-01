@@ -12,6 +12,7 @@ session is keyed on the customer's phone (metadata['session_id']).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -303,7 +304,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_products",
-            "description": "List in-stock products, optionally filtered by category or a free-text search term.",
+            "description": "List in-stock products, optionally filtered by category or a "
+                           "free-text search term. Each result includes size (pack size or "
+                           "weight) and sold_by — mention these when listing products so the "
+                           "customer knows what quantity/unit they're actually buying.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -402,9 +406,11 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "name": "suggest_recipe",
             "description": (
                 "Suggest a South African recipe when the customer asks what to cook, "
-                "mentions a fish or ingredient, or wants meal ideas. Returns a short "
-                "recipe and lists which ingredients we have in stock so they "
-                "can be added to the cart."
+                "mentions a fish or ingredient, or wants meal ideas. Returns short "
+                "recipe(s) and lists which ingredients we have in stock so they "
+                "can be added to the cart. If the customer asks for a specific number of "
+                "recipes/ideas/options (e.g. '3 hake recipes', 'a couple of ideas'), pass that "
+                "as count — do not just return one when they clearly asked for more."
             ),
             "parameters": {
                 "type": "object",
@@ -416,6 +422,12 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                     "serves": {
                         "type": "integer",
                         "description": "Number of people to serve, default 4.",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "How many DIFFERENT recipes to suggest, if the customer "
+                                      "asked for more than one (e.g. '3 hake recipes' -> 3). "
+                                      "Default 1. Capped at 3 to keep the reply WhatsApp-length.",
                     },
                 },
                 "required": ["dish"],
@@ -741,8 +753,17 @@ class CommerceAssistantSkill(BaseSkill):
             "current_message": inp.question,
         }
         kb_context, sources = await self._retrieve_kb(inp)
+        # What we already know about this customer, so a repeat buyer isn't asked for their name
+        # and address all over again (2026-09-01). Best-effort — never block a live order on it.
+        profile = None
+        if ctx["customer_phone"] and not ctx["booking_focused"]:
+            try:
+                profile = await service.get_customer_profile(inp.tenant_id, ctx["customer_phone"])
+            except Exception as exc:
+                logger.debug("customer profile lookup skipped: %s", exc)
         system_msg = self._system_prompt(inp.tenant_id, kb_context, inp.metadata.get("preferred_language"),
-                                         booking_focused=ctx["booking_focused"])
+                                         booking_focused=ctx["booking_focused"],
+                                         customer_profile=profile)
 
         try:
             # `sources` already holds this turn's KB chunks (from _retrieve_kb above) — passing
@@ -765,8 +786,46 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._fallback(inp, ctx, kb_context, sources)
 
     # ── Prompt + grounding ───────────────────────────────────────────────────
+    @staticmethod
+    def _returning_customer_block(profile: Optional[Dict[str, Any]]) -> str:
+        """Prompt context for a customer we've served before, so they aren't re-interrogated for
+        details already on file (2026-09-01, ahead of OTH going live for real WhatsApp orders).
+        Deliberately phrased as 'offer and confirm', never 'assume' — an address can change, and
+        silently reusing a stale one puts a real delivery at the wrong door."""
+        if not profile:
+            return ""
+        bits = []
+        if profile.get("name"):
+            bits.append(f"name: {profile['name']}")
+        if profile.get("delivery_address"):
+            bits.append(f"last delivery address: {profile['delivery_address']}")
+        if profile.get("delivery_slot"):
+            bits.append(f"usual slot: {profile['delivery_slot']}")
+        if not bits:
+            return ""
+        n = profile.get("order_count") or 1
+        return (
+            f"\n\nRETURNING CUSTOMER — they've ordered from us before ({n} order"
+            f"{'s' if n != 1 else ''}, most recently {profile.get('last_order') or 'previously'}). "
+            f"On file: {'; '.join(bits)}.\n"
+            f"- Greet them like a regular, by name if you have it. Don't make them repeat "
+            f"details we already have.\n"
+            f"- Before placing the order, READ THE DETAILS ON FILE BACK TO THEM and ask if "
+            f"anything has changed — name, delivery address, and time slot together, in one "
+            f"short message. e.g. 'Got you down as {profile.get('name') or 'before'}, delivering "
+            f"to {profile.get('delivery_address') or 'the usual address'}"
+            f"{', ' + profile['delivery_slot'] if profile.get('delivery_slot') else ''}. "
+            f"Want to change anything?'\n"
+            f"- ALWAYS give them that chance to change something — never just assume the old "
+            f"details still hold and place the order silently. A stale address means a real "
+            f"delivery goes to the wrong door.\n"
+            f"- If they say anything has changed, use what they give you for THIS order.\n"
+            f"- If they say 'the usual' or 'same as last time' for ITEMS, use the reorder tool."
+        )
+
     def _system_prompt(self, tenant_id: str, kb_context: str, preferred_language: str = None,
-                       booking_focused: bool = False) -> str:
+                       booking_focused: bool = False,
+                       customer_profile: Optional[Dict[str, Any]] = None) -> str:
         # 2026-08-08: this skill never called the platform's shared behaviour_preamble() at
         # all (confirmed while auditing every tool-calling skill for the same gap fixed in
         # commerce_admin.py earlier the same day) — it hand-rolled just an UNTRUSTED_CONTENT_RULE
@@ -917,6 +976,7 @@ class CommerceAssistantSkill(BaseSkill):
             + lang_block
             + booking_block
             + persona_block
+            + self._returning_customer_block(customer_profile)
             + "\n\n" + behaviour_preamble(agentic=True)
             + kb_block
         )
@@ -1334,12 +1394,18 @@ class CommerceAssistantSkill(BaseSkill):
                 return f"From R{rng['min'] / 100:.2f}" if rng["min"] != rng["max"] else f"R{rng['min'] / 100:.2f}"
             return f"R{p['price_cents'] / 100:.2f}"
 
+        # 2026-09-01: real complaint, off-the-hook — the customer-facing product list had no
+        # weight/pack/volume info at all, even though every real product row has it (sold_by,
+        # weight_grams, pack_size) — this method was simply never asked for it. Without it a
+        # customer can't tell a 1kg pack from a per-kg loose item from a 6-piece pack.
         return [
             {
                 "slug": p["slug"],
                 "name": p["name"],
                 "price": _price(p),
                 "category": p.get("category"),
+                "sold_by": p.get("sold_by"),
+                "size": p.get("pack_size") or (f"{p['weight_grams']}g" if p.get("weight_grams") else None),
                 **({"options": p["options"]} if p.get("options") else {}),
             }
             for p in products[:20]
@@ -1545,6 +1611,7 @@ class CommerceAssistantSkill(BaseSkill):
                     "name": p["name"],
                     "slug": p["slug"],
                     "price": f"R{p['price_cents'] / 100:.2f}/kg" if p.get("sold_by") == "kg" else f"R{p['price_cents'] / 100:.2f}",
+                    "size": p.get("pack_size") or (f"{p['weight_grams']}g" if p.get("weight_grams") else None),
                     "description": (p.get("description") or "")[:120],
                     "is_highlight": p.get("is_daily_catch", False),
                 }
@@ -1559,6 +1626,10 @@ class CommerceAssistantSkill(BaseSkill):
 
         dish = (args.get("dish") or "fish").strip()
         serves = max(1, int(args.get("serves") or 4))
+        # 2026-09-01: real incident, off-the-hook — "Do you have a 3 hake recipes" got back
+        # exactly one recipe, no acknowledgement it was short of what was actually asked.
+        # Capped at 3 to keep the reply a real WhatsApp-length message, not an essay.
+        count = max(1, min(3, int(args.get("count") or 1)))
 
         # Fetch catalog so we know what's actually available
         try:
@@ -1582,12 +1653,24 @@ class CommerceAssistantSkill(BaseSkill):
 
         # Live web inspiration (B): fresh chef-style ideas. Used as INSPIRATION only — the model
         # writes the business's own-voiced recipe, never copies wording (copyright-safe). Best-effort.
+        # 2026-09-01: this used to pass only search-result TITLES and URLs to the model, which is
+        # not research — with no page text to work from, the recipe body came straight out of the
+        # model's own general knowledge and the "inspiration" was decorative. Now it reads the
+        # actual pages (same _fetch_text the real web_search skill uses), so a dish outside the
+        # tenant's own recipe KB is grounded in something real instead of recalled.
         web_ref = ""
         try:
-            from core.skills.web_search import _ddg_search
-            hits = await _ddg_search(f"{dish} recipe", limit=4)
-            web_ref = "\n".join(f"- {h.get('title', '')} ({h.get('url', '')})"
-                                for h in (hits or [])[:4] if h.get("title"))
+            from core.skills.web_search import _ddg_search, _fetch_text
+            hits = [h for h in (await _ddg_search(f"{dish} recipe", limit=4) or []) if h.get("url")][:3]
+            pages = await asyncio.gather(
+                *[_fetch_text(h["url"], max_chars=1200) for h in hits], return_exceptions=True)
+            parts = []
+            for h, body in zip(hits, pages):
+                if isinstance(body, str) and body.strip():
+                    parts.append(f"- {h.get('title', '')} ({h.get('url', '')}):\n{body.strip()}")
+                elif h.get("title"):
+                    parts.append(f"- {h.get('title')} ({h.get('url')})")
+            web_ref = "\n\n".join(parts)
         except Exception:
             web_ref = ""
         inspiration = (f"\nFresh ideas from the web for INSPIRATION ONLY — adapt into the "
@@ -1595,12 +1678,20 @@ class CommerceAssistantSkill(BaseSkill):
                        f"or chef style:\n{web_ref}\n"
                        if web_ref.strip() else "")
 
+        count_instruction = (
+            f"Write exactly {count} DIFFERENT recipes — genuinely different dishes/methods, not "
+            f"minor variations of the same one, numbered 1-{count}. Keep EACH recipe shorter "
+            f"(max {180 // count if count > 1 else 180} words) so the whole reply stays a real "
+            f"WhatsApp-length message.\n"
+            if count > 1 else
+            "Write a SHORT, practical South African recipe (max 180 words):\n"
+        )
         prompt = (
             f"You are a South African recipe assistant for a food business.\n"
             f"A customer wants to cook: {dish} (serves {serves}).\n"
             f"{grounding}{inspiration}\n"
             f"These ingredients are currently in stock and available to order:\n{catalog_str}\n\n"
-            f"Write a SHORT, practical South African recipe (max 180 words):\n"
+            f"{count_instruction}"
             f"- Recipe name\n"
             f"- Ingredients list (highlight which ones are available to order)\n"
             f"- Quick method (4–6 steps)\n"
@@ -1617,7 +1708,7 @@ class CommerceAssistantSkill(BaseSkill):
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=500,
+                max_tokens=500 * count,
                 api_key=api_key,
                 api_base=api_base,
             )

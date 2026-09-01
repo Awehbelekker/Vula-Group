@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     transcribe_base: str = ""          # e.g. https://api.groq.com/openai/v1  or  http://whisper.vula-ai.com/v1
     transcribe_api_key: str = ""       # key for that endpoint (blank for a local server)
     transcribe_model: str = "whisper-large-v3"
+    # Cloud FALLBACK, tried automatically when the primary (usually the SA GPU tunnel) errors
+    # or times out. Without one of these set, a voice note is lost whenever the GPU box is down
+    # — confirmed live: every OTH voice note on 2026-07-16 failed with a 530 from the tunnel.
+    groq_api_key: str = ""             # fallback: https://api.groq.com/openai/v1 (whisper-large-v3)
     openai_api_key: str = ""           # fallback: transcribe via api.openai.com (whisper-1)
 
     # ── Twilio WhatsApp (alternative to Meta — test via Twilio Sandbox) ─────────

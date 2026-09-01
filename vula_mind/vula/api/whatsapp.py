@@ -229,6 +229,13 @@ async def receive_message(
                         logger.info("Dropping inbound WA message for suspended tenant %s", route_tenant)
                         continue
 
+                # Blue-tick it and show "typing…" before we start work. Placed after the dedup
+                # and suspended-tenant guards (so a dropped message never gets false ticks) and
+                # before every handler below — all of which do reply, which is Meta's own
+                # condition for showing the indicator at all.
+                if msg_id and route_tenant:
+                    await _mark_read_and_typing(msg_id, route_tenant)
+
                 try:
                     if msg_type == "text":
                         text = msg.get("text", {}).get("body", "").strip()
@@ -3186,32 +3193,95 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
         return False
 
 
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^\s)]+)\)")
+
+
 def _sanitize_outbound(message: str) -> str:
-    """FINAL choke-point guard (2026-07-17): no matter which code path produced the text —
-    agent loop, learned answer, n8n relay, admin agent — a message that parses as a raw JSON
-    object must never reach a customer. Raw model JSON leaked to a real customer three separate
-    times via three different paths; per-path guards keep missing new paths, so the send
-    function itself now enforces it. Unwraps a human-readable field if present, else replaces
-    with a safe apology, and logs loudly so the leaking path can be found."""
+    """FINAL choke-point guard: no matter which code path produced the text — agent loop,
+    learned answer, n8n relay, admin agent — the same two fixes apply before anything reaches a
+    real customer, rather than trusting every model call to get it right every time.
+
+    1. (2026-09-01) A markdown-style link [text](url) shows as literal, unclickable text in
+       WhatsApp, which doesn't render markdown — real complaint, off-the-hook: "the link you
+       can't select". Deterministic rewrite to a plain, tappable URL — the prompt rule
+       (CONVERSATION_RULES) is the first line of defense, this is the backstop.
+    2. (2026-07-17) A message that parses as a raw JSON object must never reach a customer. Raw
+       model JSON leaked to a real customer three separate times via three different paths;
+       per-path guards keep missing new paths, so the send function itself enforces it. Unwraps
+       a human-readable field if present, else replaces with a safe apology, and logs loudly so
+       the leaking path can be found.
+    """
     text = (message or "").strip()
-    if not text.startswith("{"):
-        return message
-    import json as _json
+    text = _MD_LINK_RE.sub(
+        lambda m: f"{m.group(1)}: {m.group(2)}" if m.group(1).strip() else m.group(2), text)
     import re as _re2
+    # Caught by this file's own new test suite: a code-fenced JSON leak (```json\n{...}\n```)
+    # starts with a backtick, not "{" — the old startswith("{") check on the raw text meant
+    # this class never reached the unwrap logic below at all, despite the fence-stripping regex
+    # existing specifically to handle it. Strip fences BEFORE the shape check, not after.
     s = _re2.sub(r"^\s*```(?:json)?|```\s*$", "", text, flags=_re2.IGNORECASE).strip()
+    if not s.startswith("{"):
+        return text
+    import json as _json
     try:
         d = _json.loads(s)
     except Exception:
-        return message
+        return text
     if not isinstance(d, dict):
-        return message
+        return text
     for k in ("message", "reply", "text", "answer"):
         v = d.get(k)
         if isinstance(v, str) and v.strip():
             logger.warning("OUTBOUND JSON LEAK caught at _send_reply — unwrapped %r field: %.120s", k, text)
-            return v.strip()
+            return _MD_LINK_RE.sub(
+                lambda m: f"{m.group(1)}: {m.group(2)}" if m.group(1).strip() else m.group(2),
+                v.strip())
     logger.warning("OUTBOUND JSON LEAK caught at _send_reply — suppressed: %.200s", text)
     return "Sorry — I got a bit tangled up there. Could you say that again? 🙏"
+
+
+async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
+    """Blue-tick the customer's message and show 'typing…' while we work on the reply.
+
+    2026-09-01, ahead of off-the-hook taking real WhatsApp orders: a customer got total
+    silence between sending a message and the full reply landing — no ticks, no typing dots —
+    which can be many seconds (voice transcription alone measured 3–10s in real telemetry,
+    before the LLM even starts). That dead air is the single most bot-like thing about the
+    experience; a real shop assistant visibly reads your message first.
+
+    Endpoint/shape verified against Meta's own docs (developers.facebook.com,
+    /docs/whatsapp/cloud-api/typing-indicators): one POST does both. Meta dismisses the
+    indicator when we reply or after 25s, whichever comes first — so this is only ever called
+    on a path that IS about to reply.
+
+    Best-effort and deliberately silent on failure: a cosmetic nicety must never be able to
+    block or break a real order.
+    """
+    if not message_id:
+        return
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds:
+        if settings.whatsapp_token and settings.whatsapp_phone_id:
+            creds = {"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+        else:
+            return
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={
+                    "Authorization": f"Bearer {creds['token']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "status": "read",
+                    "message_id": message_id,
+                    "typing_indicator": {"type": "text"},
+                },
+            )
+    except Exception as exc:
+        logger.debug("read/typing indicator skipped for %s: %s", message_id, exc)
 
 
 async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:

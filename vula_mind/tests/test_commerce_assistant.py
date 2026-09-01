@@ -23,10 +23,36 @@ def _msg(content="", tool_calls=None):
 @pytest.mark.asyncio
 async def test_dispatch_list_products_formats_prices():
     skill = CommerceAssistantSkill()
-    products = [{"slug": "snoek", "name": "Fresh Snoek", "price_cents": 18500, "category": "linefish", "description": ""}]
+    products = [{"slug": "snoek", "name": "Fresh Snoek", "price_cents": 18500, "category": "linefish",
+                "description": "", "sold_by": "kg", "pack_size": None, "weight_grams": None}]
     with patch("core.skills.commerce_assistant.service.list_products", new=AsyncMock(return_value=products)):
         out = await skill._dispatch_tool("list_products", {}, CTX)
-    assert out == [{"slug": "snoek", "name": "Fresh Snoek", "price": "R185.00", "category": "linefish"}]
+    assert out == [{"slug": "snoek", "name": "Fresh Snoek", "price": "R185.00", "category": "linefish",
+                    "sold_by": "kg", "size": None}]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_list_products_includes_size_from_pack_size():
+    # 2026-09-01: real complaint, off-the-hook — "the menu still has no weight or volume
+    # options" — the underlying product data always had this, list_products just never asked
+    # for it.
+    skill = CommerceAssistantSkill()
+    products = [{"slug": "prawns", "name": "Prawn Meat", "price_cents": 26000, "category": "seafood",
+                "description": "", "sold_by": "pack", "pack_size": "800g", "weight_grams": 800}]
+    with patch("core.skills.commerce_assistant.service.list_products", new=AsyncMock(return_value=products)):
+        out = await skill._dispatch_tool("list_products", {}, CTX)
+    assert out[0]["size"] == "800g"
+    assert out[0]["sold_by"] == "pack"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_list_products_falls_back_to_weight_grams_when_no_pack_size():
+    skill = CommerceAssistantSkill()
+    products = [{"slug": "hake", "name": "Hake Fillets", "price_cents": 16000, "category": "seafood",
+                "description": "", "sold_by": "kg", "pack_size": None, "weight_grams": 500}]
+    with patch("core.skills.commerce_assistant.service.list_products", new=AsyncMock(return_value=products)):
+        out = await skill._dispatch_tool("list_products", {}, CTX)
+    assert out[0]["size"] == "500g"
 
 
 @pytest.mark.asyncio

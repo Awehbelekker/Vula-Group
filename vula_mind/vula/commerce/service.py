@@ -808,6 +808,47 @@ async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     return {"display_id": last.get("display_id"), "items": items}
 
 
+async def get_customer_profile(tenant_id: str, phone: str) -> Optional[dict]:
+    """What we already know about a returning customer, from their most recent real order.
+
+    2026-09-01, ahead of OTH taking real WhatsApp orders: nothing reused a known customer's
+    details, so a repeat buyer was asked for their name and delivery address from scratch on
+    every single order even though both were already on file. That's the friction most likely
+    to make someone abandon a WhatsApp order. Returns None for a genuinely new customer (never
+    invents details), and only ever returns what the customer themselves supplied before.
+
+    Matched on the last 9 digits of the phone number, same defensive suffix matching as
+    reorder_from_last_order — stored customer_phone formatting isn't perfectly consistent.
+    """
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if not digits:
+        return None
+    try:
+        orders = (_client().table("commerce_orders")
+                  .select("display_id,customer_name,customer_phone,customer_email,"
+                          "delivery_address,delivery_slot,created_at")
+                  .eq("tenant_id", tenant_id)
+                  .not_.in_("status", ["cancelled", "refunded"])
+                  .order("created_at", desc=True).limit(50).execute().data or [])
+    except Exception as exc:  # never block a live order on a profile lookup
+        logger.warning("get_customer_profile lookup failed (tenant=%s): %s", tenant_id, exc)
+        return None
+    mine = [o for o in orders
+            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
+    if not mine:
+        return None
+    last = mine[0]
+    return {
+        "name": (last.get("customer_name") or "").strip() or None,
+        "email": (last.get("customer_email") or "").strip() or None,
+        "delivery_address": (last.get("delivery_address") or "").strip() or None,
+        "delivery_slot": (last.get("delivery_slot") or "").strip() or None,
+        "last_order": last.get("display_id"),
+        "last_order_at": last.get("created_at"),
+        "order_count": len(mine),
+    }
+
+
 async def get_delivery_list(tenant_id: str, date_str: Optional[str] = None) -> List[dict]:
     """Return all orders for a given date (default today) with items, paid/unpaid status."""
     from datetime import date as _date
