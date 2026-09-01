@@ -808,9 +808,23 @@ async def process_all_email_sync() -> int:
     """Sync every connected mailbox, tenant or not (called by the background loop). Each
     connected account is its own row now (migration 093) — iterate rows directly rather than
     tenant_id, which would otherwise sync the same tenant's several mailboxes redundantly."""
+    # 'error' accounts are included ON PURPOSE. Until 2026-09-01 this filtered on
+    # status == "connected" only, which made the error state a ONE-WAY TRAP: three consecutive
+    # failures set status='error' (see _record_sync_failure), and the account was then dropped
+    # from this loop forever — never retried, so it could never recover even once the mail
+    # server came back, and _record_sync_recovery below was unreachable in practice.
+    #
+    # Confirmed live: off-the-hook (info@offthehook.capetown) stopped syncing on 2026-08-24 with
+    # "[Errno 110] Connection timed out" and sat dark for 8 days. Its sync_fail_count was frozen
+    # at exactly 3 — the threshold — proving nothing had tried it since, where an hourly retry
+    # would have shown ~190. The tenant about to take live WhatsApp orders had silently stopped
+    # ingesting supplier invoices and customer mail entirely.
+    #
+    # Retrying hourly is cheap (one IMAP connect) and does not re-nag: _record_sync_failure only
+    # notifies AT the threshold crossing, not on every subsequent failure.
     try:
         rows = (_client().table("vula_email_accounts").select("id,tenant_id,notify_phone")
-                .eq("status", "connected").execute().data or [])
+                .in_("status", ["connected", "error"]).execute().data or [])
     except Exception:
         return 0
     total = 0
