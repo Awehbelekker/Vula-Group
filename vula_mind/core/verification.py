@@ -92,12 +92,24 @@ async def adversarial_check(question: str, answer: str, context: str = "") -> Di
             timeout=settings.verification_checker_timeout_s)
         text = resp.choices[0].message.content or ""
         verdict, defects = _parse_verdict(text)
-        return {"verdict": verdict, "defects": defects,
-                "checker_ms": int((time.monotonic() - started) * 1000)}
+        out = {"verdict": verdict, "defects": defects,
+               "checker_ms": int((time.monotonic() - started) * 1000)}
+        if verdict == "unparseable":
+            # The checker answered but not in a readable shape. Log a bounded sample so the
+            # prompt can be fixed — this is the checker's OWN output, not customer data.
+            logger.warning("verification checker returned an unreadable verdict: %.160s", text)
+            out["reason"] = "unparseable_verdict"
+        return out
     except Exception as exc:
-        logger.debug("adversarial check failed open: %s", exc)
+        # A silently-failing safety net is worse than no safety net, because it looks fine.
+        # 2026-09-01: 47 real checker_error events carried no cause at all because this was
+        # logged at debug and the reason was never recorded. Warn, and keep the exception TYPE
+        # (never the message, which can quote customer content) in telemetry.
+        logger.warning("verification checker failed open after %dms: %s: %s",
+                       int((time.monotonic() - started) * 1000), type(exc).__name__, exc)
         return {"verdict": "checker_error", "defects": [],
-                "checker_ms": int((time.monotonic() - started) * 1000)}
+                "checker_ms": int((time.monotonic() - started) * 1000),
+                "reason": f"exception:{type(exc).__name__}"}
 
 
 def _parse_verdict(text: str) -> tuple[str, list]:
@@ -117,7 +129,10 @@ def _parse_verdict(text: str) -> tuple[str, list]:
     lowered = text.strip().lower()
     if re.fullmatch(r'"?(pass|fail)"?\.?', lowered):
         return lowered.strip('".'), []
-    return "checker_error", []
+    # Distinct from an exception (see adversarial_check): the checker DID run and answered, we
+    # just couldn't read a verdict out of it. Collapsing both into "checker_error" is why 47
+    # real events on 2026-09-01 carried no usable cause.
+    return "unparseable", []
 
 
 def register_outcome(skill_name: str, tenant_id: str, verification: Dict[str, Any]) -> None:
@@ -140,10 +155,31 @@ def register_outcome(skill_name: str, tenant_id: str, verification: Dict[str, An
 # flagged answer twice and getting two more wrong answers in a row, because "double-check" gave
 # them nothing concrete to act on. Naming what to send back gives the next turn something to
 # actually use (e.g. commerce_admin's find_document can act on an invoice number).
-_CAVEAT = ("\n\n⚠️ Please double-check this answer — an automated review flagged possible "
-           "issues with it. If something's off, tell me specifically what's wrong (e.g. the "
-           "right invoice/order number or detail) and I'll fix it.")
+_CAVEAT = ("\n\n⚠️ Worth double-checking — if anything's off, tell me what and I'll fix it.")
 _DEFECT_CONFIDENCE = 0.45
+
+# The caveat is for the PERSON reading the reply, not for the model's own memory.
+# 2026-09-01, real Gerflor transcript: the caveat was appended to result.answer, that answer was
+# persisted verbatim to commerce_conversation_messages, and on the NEXT turn the model read its
+# own caveat back as conversation history and started discussing it with the user —
+#   "However, I noticed that the automated review flagged possible issues with the previous
+#    answers, specifically the ones related to the proforma invoice..."
+# — talking about its internal review machinery instead of answering. The caveat also stacked up
+# on nearly every reply in that session, which is caveat fatigue: a warning on everything warns
+# about nothing. Strip it before anything is stored or fed back.
+_CAVEAT_MARKER = "⚠️ Worth double-checking"
+
+
+def strip_caveat(text: str) -> str:
+    """Remove the verification caveat from a reply before persisting it to conversation
+    history. Also strips the older, longer wording so existing stored history stays clean."""
+    if not text:
+        return text
+    for marker in (_CAVEAT_MARKER, "⚠️ Please double-check this answer"):
+        idx = text.find(marker)
+        if idx != -1:
+            return text[:idx].rstrip()
+    return text
 
 
 async def apply(skill: Any, inp: Any, result: Any) -> None:
@@ -185,7 +221,8 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
         )
         check = await adversarial_check(inp.question, result.answer, context=context)
         verdict = check["verdict"]
-        outcome = {"pass": "accepted", "fail": "defect_found"}.get(verdict, "checker_error")
+        outcome = {"pass": "accepted", "fail": "defect_found",
+                   "unparseable": "checker_unparseable"}.get(verdict, "checker_error")
         if verdict == "fail":
             # "escalate" (forced cloud re-run) is reserved until the router grows a force-cloud
             # hook — until then every defect takes the caveat path, matching digg.calc.
@@ -193,6 +230,10 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
             result.answer += _CAVEAT
         extra = {"verdict": verdict, "defect_count": len(check.get("defects", [])),
                  "checker_ms": check.get("checker_ms", 0)}
+        if check.get("reason"):
+            # Exception CLASS or "unparseable_verdict" only — never a message, which can quote
+            # customer content into the telemetry sink (POPIA).
+            extra["reason"] = check["reason"]
         if verdict in ("pass", "fail"):
             # `anchored` rides pull_prod.py's existing mapping (False → "caught a wrong
             # proposal"). A checker_error is neither — omit so it isn't counted as a catch.
@@ -205,4 +246,7 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
         }
         register_outcome(skill.name, inp.tenant_id, result.verification)
     except Exception as exc:
-        logger.debug("verification hook failed open: %s", exc)
+        # Failing open is correct — verification must never break a real reply — but it must
+        # not fail INVISIBLY. See the 2026-09-01 note in adversarial_check.
+        logger.warning("verification hook failed open for %s: %s: %s",
+                       getattr(skill, "name", "?"), type(exc).__name__, exc)

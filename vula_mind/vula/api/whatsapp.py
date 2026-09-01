@@ -33,6 +33,7 @@ from fastapi.responses import PlainTextResponse
 
 from config import settings
 from core.transcribe import transcribe_audio
+from core.verification import strip_caveat
 
 logger = logging.getLogger(__name__)
 
@@ -4101,7 +4102,8 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     if session_id:
         try:
             await commerce_service.append_message(tenant_id, session_id, "user", text)
-            await commerce_service.append_message(tenant_id, session_id, "assistant", output.answer)
+            await commerce_service.append_message(
+                tenant_id, session_id, "assistant", strip_caveat(output.answer))
         except Exception:
             pass
     return True
@@ -4192,7 +4194,8 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         session = await commerce_service.get_or_create_session(
             tenant_id, session_key=f"admin:{phone}", channel="whatsapp", customer_phone=phone)
         await commerce_service.append_message(tenant_id, session["id"], "user", f"[tapped {action}]")
-        await commerce_service.append_message(tenant_id, session["id"], "assistant", reply_text)
+        await commerce_service.append_message(
+            tenant_id, session["id"], "assistant", strip_caveat(reply_text))
     except Exception:
         pass
 
@@ -4345,7 +4348,8 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     if session_id:
         try:
             await commerce_service.append_message(tenant_id, session_id, "user", text)
-            await commerce_service.append_message(tenant_id, session_id, "assistant", reply)
+            await commerce_service.append_message(
+                tenant_id, session_id, "assistant", strip_caveat(reply))
         except Exception as exc:
             logger.debug("Commerce message persistence failed (non-fatal): %s", exc)
 

@@ -1325,7 +1325,7 @@ async def admin_assistant(tenant_id: str, body: AssistantRequest):
     if sid:
         try:
             await service.append_message(tenant_id, sid, "user", body.message)
-            await service.append_message(tenant_id, sid, "assistant", answer)
+            await service.append_message(tenant_id, sid, "assistant", strip_caveat(answer))
         except Exception:
             pass
 
@@ -5340,6 +5340,7 @@ _SCAN_PROMPTS = {
 # document pipeline can share the same arithmetic-verification heuristic — kept as a local alias
 # so every existing call site below is unchanged.
 from vula.commerce.extraction_quality import scan_quality_ok as _scan_quality_ok
+from core.verification import strip_caveat
 
 
 @router.post("/{tenant_id}/admin/scan")

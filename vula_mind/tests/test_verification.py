@@ -379,5 +379,76 @@ def test_parse_verdict_lenient():
         'Sure! {"verdict": "fail", "defects": ["bad math"]} hope that helps'
     ) == ("fail", ["bad math"])
     assert verification._parse_verdict("<think>hmm</think>PASS") == ("pass", [])
-    assert verification._parse_verdict("I think the answer might pass muster")[0] == "checker_error"
-    assert verification._parse_verdict("")[0] == "checker_error"
+    # 2026-09-01: an unreadable verdict is now reported as "unparseable" rather than
+    # "checker_error", so it can be told apart from the checker actually throwing. Both still
+    # fail open; 47 real events carried no usable cause because they were collapsed together.
+    assert verification._parse_verdict("I think the answer might pass muster")[0] == "unparseable"
+    assert verification._parse_verdict("")[0] == "unparseable"
+
+
+# ── diagnosability of a failing checker (2026-09-01) ────────────────────────────
+# Real audit: 47 checker_error events in 10 days, ALL for commerce_admin, all with
+# checker_ms=0 and no reason recorded — verification was silently not running for roughly half
+# of off-the-hook's traffic and there was no way to tell why. The failure was swallowed at
+# logger.debug, and an exception was indistinguishable from the model returning junk. A safety
+# net that fails invisibly is worse than none, because it looks fine.
+
+@pytest.mark.asyncio
+async def test_checker_exception_records_the_exception_type(monkeypatch):
+    async def _boom(*a, **kw):
+        raise RuntimeError("no route")
+    monkeypatch.setattr(verification, "resolve_generation_route", _boom, raising=False)
+    import core.llm_router as router
+    monkeypatch.setattr(router, "resolve_generation_route", _boom)
+    out = await verification.adversarial_check("q", "a")
+    assert out["verdict"] == "checker_error"
+    assert out["reason"] == "exception:RuntimeError", "the cause must be recorded"
+
+
+@pytest.mark.asyncio
+async def test_unparseable_verdict_is_reported_separately_from_an_exception(monkeypatch):
+    import litellm
+
+    class _Msg:
+        content = "I reckon it is probably fine honestly"
+
+    async def _resp(*a, **kw):
+        return type("R", (), {"choices": [type("C", (), {"message": _Msg()})()]})()
+
+    async def _route(*a, **kw):
+        return "ollama/test", None, "http://localhost:11434"
+
+    monkeypatch.setattr(litellm, "acompletion", _resp)
+    import core.llm_router as router
+    monkeypatch.setattr(router, "resolve_generation_route", _route)
+    out = await verification.adversarial_check("q", "a")
+    assert out["verdict"] == "unparseable"
+    assert out["reason"] == "unparseable_verdict"
+
+
+@pytest.mark.asyncio
+async def test_reason_reaches_telemetry_without_leaking_content(emits, monkeypatch):
+    """The exception CLASS is diagnostic; its message can quote customer content (POPIA)."""
+    async def _err(question, answer, context=""):
+        return {"verdict": "checker_error", "defects": [], "checker_ms": 0,
+                "reason": "exception:TimeoutError"}
+    monkeypatch.setattr(verification, "adversarial_check", _err)
+    skill = DummySkill()
+    skill.verification_policy = "adversarial"
+    await skill(_inp())
+    assert emits[0]["outcome"] == "checker_error"
+    assert emits[0]["extra"]["reason"] == "exception:TimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_unparseable_gets_its_own_outcome(emits, monkeypatch):
+    async def _unp(question, answer, context=""):
+        return {"verdict": "unparseable", "defects": [], "checker_ms": 300,
+                "reason": "unparseable_verdict"}
+    monkeypatch.setattr(verification, "adversarial_check", _unp)
+    skill = DummySkill()
+    skill.verification_policy = "adversarial"
+    out = await skill(_inp())
+    assert emits[0]["outcome"] == "checker_unparseable"
+    assert "anchored" not in emits[0]["extra"], "neither a pass nor a catch"
+    assert out.answer == "the answer is 42", "must still fail open"
