@@ -4,6 +4,8 @@ produced it. Covers both the markdown-link fix (2026-09-01, real complaint: "the
 select") and the pre-existing raw-JSON-leak guard (2026-07-17) — no dedicated test file existed
 for either before this.
 """
+import pytest
+
 from vula.api.whatsapp import _sanitize_outbound
 
 
@@ -67,3 +69,117 @@ def test_not_actually_json_despite_starting_with_brace_passes_through():
 def test_empty_message_returns_empty():
     assert _sanitize_outbound("") == ""
     assert _sanitize_outbound(None) == ""
+
+
+# ── generic "anything else?" closers (2026-09-01) ───────────────────────────────
+# CONVERSATION_RULES has forbidden this since 2026-08-08 and it is still emitted: a real Gerflor
+# reply closed "Let me know if there's anything else I can help you with." after saving a pricing
+# rule. Another prompt rule that doesn't hold on its own, so it gets a deterministic strip.
+
+REAL_CLOSER = ("I've saved the pricing policy: Per-Square price list is NETT, DT gets 7% trade "
+               "discount excluding Mactile which is NETT. "
+               "Let me know if there's anything else I can help you with.")
+
+
+def test_the_real_gerflor_closer_is_stripped():
+    out = _sanitize_outbound(REAL_CLOSER)
+    assert out.endswith("which is NETT.")
+    assert "anything else" not in out.lower()
+
+
+@pytest.mark.parametrize("text,keep", [
+    ("Order confirmed. Is there anything else I can help you with?", "Order confirmed."),
+    ("Done. Let me know if there is anything else.", "Done."),
+    ("Noted. Feel free to ask if there's anything else I can help with!", "Noted."),
+    ("Saved. Anything else I can help with?", "Saved."),
+    ("Klaar. Laat my weet as daar iets anders is.", "Klaar."),
+])
+def test_generic_closers_are_stripped(text, keep):
+    assert _sanitize_outbound(text) == keep
+
+
+@pytest.mark.parametrize("text", [
+    # A SPECIFIC follow-up names a real next step and is a genuine question — it must survive.
+    "I've added 2kg of Hake to your cart. Let me know if you'd like the Prawns as well.",
+    "Let me know which delivery slot suits you — morning or afternoon.",
+    "Shall I add the Hake Fillets to your cart?",
+    "Is there a specific reference number on that invoice?",
+    "The price is R198.00 per square metre.",
+])
+def test_specific_follow_ups_are_kept(text):
+    assert _sanitize_outbound(text) == text
+
+
+def test_a_message_that_is_only_a_closer_is_not_emptied():
+    """Sending an empty WhatsApp message would be worse than sending a bland one."""
+    only = "Is there anything else I can help you with?"
+    assert _sanitize_outbound(only) == only
+
+
+# ── WhatsApp markup (2026-09-01) ────────────────────────────────────────────────
+# WhatsApp's markup is single-character: *bold*, _italic_, ~strike~. Markdown's doubled forms
+# render as literal punctuation on a phone. Confirmed in real traffic: 6 of 187 recent replies
+# carried "**...**", e.g. "**New Project: Belladonna**" sent to DIGG exactly like that.
+
+def test_markdown_bold_becomes_whatsapp_bold():
+    assert _sanitize_outbound("**New Project: Belladonna**") == "*New Project: Belladonna*"
+
+
+def test_markdown_bold_mid_sentence():
+    out = _sanitize_outbound("The total is **R42,522.48** including VAT.")
+    assert out == "The total is *R42,522.48* including VAT."
+
+
+def test_markdown_heading_becomes_bold():
+    assert _sanitize_outbound("## Order Summary\nTwo items.") == "*Order Summary*\nTwo items."
+
+
+def test_double_underscore_becomes_italic():
+    assert _sanitize_outbound("That is __urgent__ today.") == "That is _urgent_ today."
+
+
+@pytest.mark.parametrize("text", [
+    "Use 2 * 3 for the area.",            # a bare asterisk is not emphasis
+    "* Hake Fillets\n* Snoek",            # an asterisked bullet list must survive
+    "Delivery is 5**",                    # unmatched markers left alone
+    "snake_case_name stays intact",       # single underscores untouched
+])
+def test_non_emphasis_asterisks_and_underscores_survive(text):
+    assert _sanitize_outbound(text) == text
+
+
+# ── long replies are split, not truncated ───────────────────────────────────────
+# The send path did message[:4096], silently cutting mid-sentence. Latent only because long
+# replies were separately being discarded by the degenerate-output length bug; with that fixed,
+# a real 79-invoice list would now be cut off.
+
+def test_a_short_message_is_one_part():
+    from vula.api.whatsapp import _split_for_whatsapp
+    assert _split_for_whatsapp("Order confirmed.") == ["Order confirmed."]
+
+
+def test_a_long_reply_splits_on_a_natural_boundary():
+    from vula.api.whatsapp import _split_for_whatsapp
+    body = "\n".join(f"{i}. OFF-INV-{i:05d} — R{i * 137}.50 outstanding" for i in range(1, 200))
+    parts = _split_for_whatsapp(body)
+    assert len(parts) > 1
+    assert all(len(p) <= 3900 for p in parts)
+    assert all(p.strip() for p in parts), "no empty parts"
+    # nothing is lost: every invoice id still appears somewhere
+    joined = "\n".join(parts)
+    for i in (1, 99, 199):
+        assert f"OFF-INV-{i:05d}" in joined
+
+
+def test_splitting_does_not_cut_mid_word_when_avoidable():
+    from vula.api.whatsapp import _split_for_whatsapp
+    body = ("The delivery is scheduled for Monday morning. " * 200).strip()
+    parts = _split_for_whatsapp(body)
+    assert len(parts) > 1
+    for p in parts[:-1]:
+        assert not p.endswith(("Th", "Mo", "deliver")), "cut mid-word"
+
+
+def test_empty_message_yields_no_parts():
+    from vula.api.whatsapp import _split_for_whatsapp
+    assert _split_for_whatsapp("") == []

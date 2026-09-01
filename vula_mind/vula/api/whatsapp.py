@@ -3326,6 +3326,114 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
 
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^\s)]+)\)")
 
+# A trailing GENERIC offer of further help. CONVERSATION_RULES has forbidden this since
+# 2026-08-08, and it is still being emitted — confirmed 2026-09-01 in a real Gerflor reply that
+# closed "Let me know if there's anything else I can help you with." after saving a pricing rule.
+# Another instance of a prompt rule not holding on its own, so it gets a deterministic strip.
+#
+# Deliberately narrow: it matches only the CONTENTLESS form (the giveaway is "anything else" /
+# "anything I can help with"). A specific, useful follow-up — "Let me know if you'd like the Hake
+# added to your cart" — names a real next step and must survive untouched, because that is a
+# genuine question a shop assistant would ask.
+_GENERIC_CLOSER_RE = re.compile(
+    r"(?:^|(?<=[.!?\n]))\s*"
+    r"(?:[-—•*]\s*)?"
+    r"(?:but\s+)?(?:please\s+)?"
+    r"(?:let me know|just let me know|feel free to (?:ask|reach out)|do let me know|"
+    r"is there|was there|anything else|laat my weet|laat weet)"
+    r"[^.!?\n]{0,80}?"
+    r"(?:anything else|anything more|something else|anything i can help|how else can i help|"
+    r"iets anders)"
+    r"[^.!?\n]{0,60}[.!?]?\s*$",
+    re.IGNORECASE,
+)
+
+# The same closer with "anything else" as the OPENER rather than following a lead-in
+# ("Saved. Anything else I can help with?"), which the two-part pattern above can't reach.
+_GENERIC_CLOSER_BARE_RE = re.compile(
+    r"(?:^|(?<=[.!?\n]))\s*(?:[-—•*]\s*)?"
+    r"(?:anything else|anything more|something else|iets anders)"
+    r"[^.!?\n]{0,60}[.!?]?\s*$",
+    re.IGNORECASE,
+)
+
+
+# WhatsApp's own markup is SINGLE-character: *bold*, _italic_, ~strike~. Markdown's doubled
+# forms render as literal asterisks/underscores on a phone. Confirmed 2026-09-01 in real traffic:
+# 6 of 187 recent replies carried "**...**", e.g. "**New Project: Belladonna**" sent to DIGG
+# exactly like that. Headings are markdown-only and have no WhatsApp equivalent, so they become
+# bold, which is what a heading is for here.
+_MD_BOLD_RE = re.compile(r"\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*")
+_MD_ITALIC_RE = re.compile(r"__(?!\s)([^_\n]+?)(?<!\s)__")
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
+
+
+_WA_TEXT_LIMIT = 4096
+_WA_SPLIT_AT = 3900   # headroom under Meta's hard cap
+
+
+def _split_for_whatsapp(text: str, limit: int = _WA_SPLIT_AT) -> list[str]:
+    """Break an over-long reply into WhatsApp-sized parts on a natural boundary.
+
+    2026-09-01: the send path did `message[:4096]`, silently truncating mid-sentence with
+    nothing telling the customer the rest existed. That was latent only because long replies
+    were separately being discarded by the degenerate-output length bug (fixed the same day) —
+    with those flowing again, a real 79-invoice list or a full price list would now be cut off.
+
+    Splits on the largest natural boundary that fits: paragraph, then line, then sentence, then
+    a hard cut as a last resort. Never returns an empty part.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return [text] if text else []
+
+    parts: list[str] = []
+    rest = text
+    while len(rest) > limit:
+        window = rest[:limit]
+        cut = -1
+        for sep in ("\n\n", "\n", ". ", "! ", "? ", " "):
+            idx = window.rfind(sep)
+            # Require the break to be past the halfway mark, else a stray early newline would
+            # produce a one-line message followed by a wall of text.
+            if idx > limit // 2:
+                cut = idx + (len(sep) if sep != "\n\n" else 0)
+                break
+        if cut <= 0:
+            cut = limit
+        chunk = rest[:cut].strip()
+        if chunk:
+            parts.append(chunk)
+        rest = rest[cut:].lstrip()
+    if rest.strip():
+        parts.append(rest.strip())
+    return parts or [text[:limit]]
+
+
+def _whatsapp_markup(text: str) -> str:
+    """Convert markdown emphasis to WhatsApp's own, so it renders instead of showing as
+    literal punctuation. Deliberately conservative: only doubled markers with non-space
+    content are touched, so a bare '**' or an asterisked bullet is left alone."""
+    if not text:
+        return text
+    text = _MD_HEADING_RE.sub(lambda m: f"*{m.group(1).strip()}*", text)
+    text = _MD_BOLD_RE.sub(lambda m: f"*{m.group(1)}*", text)
+    return _MD_ITALIC_RE.sub(lambda m: f"_{m.group(1)}_", text)
+
+
+def _strip_generic_closer(text: str) -> str:
+    """Drop a trailing contentless "anything else?" sign-off.
+
+    Never strips the whole message: if removing it would leave nothing, the original is kept —
+    a bare "Is there anything else I can help with?" is a real (if weak) reply on its own, and
+    sending an empty WhatsApp message would be worse than sending a bland one.
+    """
+    if not text:
+        return text
+    stripped = _GENERIC_CLOSER_RE.sub("", text).rstrip()
+    stripped = _GENERIC_CLOSER_BARE_RE.sub("", stripped).rstrip()
+    return stripped if stripped else text
+
 
 def _sanitize_outbound(message: str) -> str:
     """FINAL choke-point guard: no matter which code path produced the text — agent loop,
@@ -3345,6 +3453,8 @@ def _sanitize_outbound(message: str) -> str:
     text = (message or "").strip()
     text = _MD_LINK_RE.sub(
         lambda m: f"{m.group(1)}: {m.group(2)}" if m.group(1).strip() else m.group(2), text)
+    text = _whatsapp_markup(text)
+    text = _strip_generic_closer(text)
     import re as _re2
     # Caught by this file's own new test suite: a code-fenced JSON leak (```json\n{...}\n```)
     # starts with a backtick, not "{" — the old startswith("{") check on the raw text meant
@@ -3434,23 +3544,32 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
     if number.startswith("0"):
         number = "27" + number[1:]
 
+    # Long replies go as several messages rather than one truncated one — see
+    # _split_for_whatsapp. Sent in order; a failure part-way stops rather than sending the tail
+    # out of context.
+    parts = _split_for_whatsapp(message) or [message]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
-                headers={
-                    "Authorization": f"Bearer {creds['token']}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": number,
-                    "type": "text",
-                    "text": {"body": message[:4096]},
-                },
-            )
-            resp.raise_for_status()
-            logger.info("WhatsApp reply sent to %s", to)
+            for i, part in enumerate(parts):
+                resp = await client.post(
+                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                    headers={
+                        "Authorization": f"Bearer {creds['token']}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": number,
+                        "type": "text",
+                        "text": {"body": part[:_WA_TEXT_LIMIT]},
+                    },
+                )
+                resp.raise_for_status()
+            if len(parts) > 1:
+                logger.info("WhatsApp reply sent to %s in %d parts (%d chars)",
+                            to, len(parts), len(message or ""))
+            else:
+                logger.info("WhatsApp reply sent to %s", to)
             return True
     except httpx.HTTPStatusError as exc:
         # Surface Meta's actual reason (e.g. #131030 recipient not in allowed list,
