@@ -81,6 +81,11 @@ _STOREFRONT_PERSONAS: Dict[str, Dict[str, str]] = {
             "- After suggesting a recipe, offer to add the available ingredients to their cart.\n"
             "- Be proactive: if a customer buys a popular item, suggest a recipe or pairing for "
             "it unprompted.\n"
+            "- When a customer asks a factual question about a product/fish/ingredient — is it "
+            "local, sustainable, in season, what does it taste like — call research_product "
+            "rather than answering from general knowledge; it's grounded in the business's own "
+            "records first, then real research, and will say plainly if nothing reliable is "
+            "found instead of guessing.\n"
         ),
     },
     "retail": {
@@ -414,6 +419,31 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                     },
                 },
                 "required": ["dish"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "research_product",
+            "description": (
+                "Answer a factual question about a product, ingredient, or fish/food type — "
+                "origin, sustainability, local vs imported, taste, nutrition, or general facts. "
+                "Use for questions like 'is snoek local', 'is kingklip sustainable', 'what does "
+                "hake taste like'. NOT for recipes (use suggest_recipe) and NOT for prices/stock "
+                "(use list_products). Grounds the answer in the business's own product records "
+                "and knowledge base first, then real web research — never invents facts; says "
+                "plainly when nothing reliable is found rather than guessing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "What the customer is asking about, e.g. 'snoek sustainability', 'kingklip origin', 'is hake local'.",
+                    },
+                },
+                "required": ["topic"],
             },
         },
     },
@@ -1121,6 +1151,8 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_get_daily_catch(tid)
         if name == "suggest_recipe":
             return await self._exec_suggest_recipe(tid, args)
+        if name == "research_product":
+            return await self._exec_research_product(tid, args)
         if name == "create_quote":
             return await self._exec_create_quote(tid, sid, phone, args)
         if name == "review_order":
@@ -1619,6 +1651,81 @@ class CommerceAssistantSkill(BaseSkill):
                 "Let me know what else I can help you with."
             ),
         }
+
+    async def _exec_research_product(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Grounded factual research about a product/ingredient/fish type — the business's own
+        product records first (catch_source/fisherman_name/cooking_tips/notes — real, most
+        trusted), then the tenant KB (same VulaIngestionPipeline.query() everything else uses),
+        then a full live web research pass (web_search skill — fetches real page content and
+        synthesises, not just link titles). Mirrors _exec_suggest_recipe's proven KB-first +
+        web-fallback grounding pattern; never invents facts, says plainly when nothing reliable
+        is found."""
+        topic = (args.get("topic") or "").strip()
+        if not topic:
+            return {"error": "Need something to research."}
+        topic_lower = topic.lower()
+
+        own_info: List[str] = []
+        try:
+            products = await service.list_products(tenant_id, in_stock_only=False, statuses={"active"})
+            for p in products:
+                name_lower = (p.get("name") or "").lower()
+                first_word = name_lower.split()[0] if name_lower else ""
+                if name_lower and (name_lower in topic_lower
+                                   or (len(first_word) > 3 and first_word in topic_lower)):
+                    bits = [b for b in (p.get("catch_source"), p.get("fisherman_name"),
+                                        p.get("cooking_tips"), p.get("notes")) if b]
+                    if bits:
+                        own_info.append(f"{p['name']}: " + "; ".join(bits))
+        except Exception as exc:
+            logger.debug("research_product own-catalog lookup skipped: %s", exc)
+
+        kb_text = ""
+        try:
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(topic, top_k=3)
+            kb_text = "\n\n".join((c.get("text") or "")[:500] for c in (chunks or []) if c.get("text"))
+        except Exception as exc:
+            logger.debug("research_product KB lookup skipped: %s", exc)
+
+        grounding = "\n".join(own_info) + ("\n\n" + kb_text if kb_text.strip() else "")
+        if grounding.strip():
+            return await self._synthesize_research_answer(topic, grounding, "our own records")
+
+        # Nothing of our own — a full, real, grounded web research pass (fetches actual page
+        # content, not just link titles — see core/skills/web_search.py's WebSearchSkill).
+        try:
+            from core.skills.loader import get_skill
+            web_result = await get_skill("web_search")(SkillInput(question=topic, tenant_id=tenant_id))
+            if web_result.success and web_result.confidence >= 0.3:
+                return {"found": True, "source": "web", "answer": web_result.answer}
+        except Exception as exc:
+            logger.debug("research_product web fallback skipped: %s", exc)
+        return {"found": False,
+               "message": "Nothing reliable found on that — best to check with the team directly."}
+
+    async def _synthesize_research_answer(self, topic: str, grounding: str, source: str) -> Dict[str, Any]:
+        import litellm
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+        try:
+            resp = await litellm.acompletion(
+                model=model, temperature=0.3, max_tokens=250, api_key=api_key, api_base=api_base,
+                messages=[
+                    {"role": "system", "content": (
+                        "Answer the customer's question in 2-4 short, friendly sentences, using "
+                        "ONLY the real information given below. Never add facts that aren't "
+                        "there — if the information doesn't fully answer the question, say what "
+                        "IS known and that you're not certain about the rest."
+                    )},
+                    {"role": "user", "content": f"Question: {topic}\n\nReal information from "
+                                                f"{source}:\n{grounding[:1500]}"},
+                ])
+            answer = (resp.choices[0].message.content or "").strip()
+        except Exception as exc:
+            logger.warning("research_product synthesis failed: %s", exc)
+            return {"found": True, "source": source, "answer": grounding[:400]}
+        return {"found": True, "source": source, "answer": answer}
 
     async def _resolve_product(self, tenant_id: str, name: str) -> Optional[Dict[str, Any]]:
         """Find an in-stock product by slug or fuzzy name match."""

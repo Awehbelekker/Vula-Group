@@ -34,6 +34,7 @@ from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message, tool_source,
+    unverified_prices,
 )
 from vula.commerce import service
 
@@ -937,6 +938,19 @@ class CommerceAdminSkill(BaseSkill):
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
             # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
+            # 2026-08-31: a real transcript showed a specific price (R129.90/m²) stated with
+            # total confidence that appeared nowhere in what lookup_business_info actually
+            # returned — the adversarial verifier had that same text as grounding and still
+            # passed it. Deterministic backstop for exactly that: see
+            # core.skills.base.unverified_prices.
+            bad_prices = unverified_prices(answer, collected_sources,
+                                           {"lookup_business_info", "competitor_check"})
+            if bad_prices:
+                logger.warning("commerce_admin unverified price(s) in answer, tenant=%s: %s",
+                               inp.tenant_id, bad_prices)
+                answer = ("I found some information but couldn't confirm the exact price from "
+                          "our documents — could you check the price list directly, or ask me "
+                          "to search again with more specific details?")
             return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8,
                                sources=collected_sources)
         except ConfirmationRequired as cr:

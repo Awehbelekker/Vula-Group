@@ -165,6 +165,34 @@ def tool_source(name: str, result: Any) -> Dict[str, Any]:
     return {"type": "tool", "name": name, "text": text[:900]}
 
 
+# 2026-08-31: real incident, gerflor — a rep asked about vinyl roll pricing, the model called a
+# free-text KB/web-search tool (lookup_business_info), and stated a specific price (R129.90/m²)
+# that appeared nowhere in what that tool actually returned — a real price list was sitting in
+# the KB and simply wasn't consulted correctly. The adversarial verifier (a fuzzy LLM pass) had
+# the tool's real text as grounding context and STILL passed the fabricated figure as accepted —
+# a confirmed false negative. This is a deterministic backstop for exactly that failure class:
+# structured/DB-backed tools (sales_summary, stock_status, ...) are already ground truth by
+# construction and don't need this: the risk is specifically a free-text KB/web-search tool
+# whose prose the model has to extract a number FROM, which is exactly where invention creeps in.
+_PRICE_RE = re.compile(r"R\s?\d[\d,]*(?:\.\d{1,2})?")
+
+
+def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tools: set) -> List[str]:
+    """Any R-prefixed price stated in `answer` that doesn't appear (digits only, ignoring
+    spacing/commas) anywhere in the combined text of `sources` whose tool name is in
+    `grounding_tools`. Returns [] when none of those tools were even called this turn — nothing
+    to check a structured-tool answer against, and nothing to falsely flag."""
+    relevant_text = " ".join(s.get("text", "") for s in sources
+                             if s.get("name") in grounding_tools and s.get("text"))
+    if not relevant_text:
+        return []
+    def _digits(s: str) -> str:
+        return re.sub(r"[^\d.]", "", s)
+    source_digits = _digits(relevant_text)
+    return [m.group(0) for m in _PRICE_RE.finditer(answer)
+           if _digits(m.group(0)) and _digits(m.group(0)) not in source_digits]
+
+
 # Shared hard-decline guard: a question shaped like "what does MY invoice/BOQ/payment say" that
 # no retrieved context or tool result can back up should be declined BEFORE generating an
 # answer, not generated and hoped-to-be-caught by a prompt instruction. Added to reasoning.py
