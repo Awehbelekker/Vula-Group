@@ -34,7 +34,7 @@ from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message, tool_source,
-    unverified_prices,
+    unverified_prices, wrong_arithmetic,
 )
 from vula.commerce import service
 
@@ -472,6 +472,18 @@ KNOWLEDGE_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "What to look up, in the owner/rep's own words."}},
             "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "calculate",
+        "description": (
+            "Work out an arithmetic expression EXACTLY and return the number. Use this for EVERY "
+            "calculation — areas, quantities, line totals, VAT, discounts, margins — never do the "
+            "sum in your head, however simple it looks. Supports + - * / // % ** (), and ceil(), "
+            "floor(), round(), min(), max(), sqrt(), abs()."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "expression": {"type": "string",
+                           "description": "e.g. '11.8 * 18.2' or 'round(214.76 * 198.00, 2)'"}},
+            "required": ["expression"]}}},
 ]
 DRAFT_TOOLS = [
     {"type": "function", "function": {
@@ -951,7 +963,23 @@ class CommerceAdminSkill(BaseSkill):
                 answer = ("I found some information but couldn't confirm the exact price from "
                           "our documents — could you check the price list directly, or ask me "
                           "to search again with more specific details?")
-            return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8,
+
+            # 2026-08-31, real Gerflor quote: "11.8 × 18.2 = 215.56" (correct 214.76), then a
+            # total that didn't follow from even that wrong figure. Prompt rules don't fix this
+            # — the model was already told to use tools. Recompute what it actually claimed.
+            confidence = 0.8
+            bad_maths = wrong_arithmetic(answer)
+            if bad_maths:
+                logger.warning("commerce_admin WRONG ARITHMETIC, tenant=%s: %s",
+                               inp.tenant_id, bad_maths)
+                fixes = "\n".join(
+                    f"• {b['claim']} — that should be {b['actual']:,.2f}, not {b['stated']:,.2f}"
+                    for b in bad_maths)
+                answer += ("\n\n⚠️ Hold on — I need to correct my own maths before you use "
+                           f"these figures:\n{fixes}\n\nLet me redo the quote properly rather "
+                           "than you working off a wrong total.")
+                confidence = 0.3
+            return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence,
                                sources=collected_sources)
         except ConfirmationRequired as cr:
             summary = _preview_summary(cr.result)
@@ -1340,6 +1368,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
             if name == "lookup_business_info": return await self._lookup_business_info(tid, args)
+            if name == "calculate": return self._calculate(args)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
             if name == "list_reminders":     return await self._list_reminders(tid, args, ctx)
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
@@ -2702,6 +2731,25 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": f"Found results but couldn't summarise them: {exc}",
                     "links": sources}
         return {"summary": summary or "No clear findings from the search results.", "sources": sources}
+
+    def _calculate(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Exact arithmetic, reusing calculations.py's AST evaluator (no eval, no LLM).
+
+        2026-08-31, real Gerflor quote: the model computed 11.8 × 18.2 as 215.56 (correct 214.76)
+        and then produced a total that didn't follow from even its own wrong figure. commerce_admin
+        had no calculation tool at all, so every sum on a real quote was done in the model's head.
+        """
+        from core.skills.calculations import safe_eval
+        expr = (args.get("expression") or "").strip()
+        if not expr:
+            return {"error": "Pass the expression to work out, e.g. '11.8 * 18.2'."}
+        try:
+            value = safe_eval(expr)
+        except Exception as exc:
+            return {"error": f"Couldn't work that out ({exc}). Use plain arithmetic only."}
+        rounded = round(float(value), 2)
+        return {"expression": expr, "result": rounded,
+                "formatted": f"{rounded:,.2f}"}
 
     async def _lookup_business_info(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Real fix for the gerflor incident (2026-08-27): commerce_admin had no path to the

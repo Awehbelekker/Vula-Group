@@ -99,6 +99,9 @@ AGENTIC_RULES = (
     "just to have something to say.\n"
     "- If the message doesn't clearly map to any tool or data request, ask a short clarifying "
     "question instead of guessing the closest-sounding tool.\n"
+    "- If you have a calculate tool, use it for EVERY sum — areas, quantities, line totals, VAT, "
+    "discounts, margins — even one that looks trivial, and use its result verbatim. Never do "
+    "arithmetic in your head: a quote with a wrong total costs someone real money.\n"
     "- Never mention internal tool/function names in a reply — describe what you did or found "
     "in plain business language.\n"
     "- Never say an action (exported, uploaded, sent, synced, created) succeeded unless a tool "
@@ -195,6 +198,65 @@ def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tool
     source_digits = _digits(relevant_text)
     return [m.group(0) for m in _PRICE_RE.finditer(answer)
            if _digits(m.group(0)) and _digits(m.group(0)) not in source_digits]
+
+
+# Arithmetic stated in an answer, e.g. "11.8 x 18.2 = 215.56" or "214.76 × R198.00 = R42,522.48".
+# Currency symbols, thousands separators and the various multiplication glyphs a model reaches
+# for (x, ×, *) are all tolerated.
+_ARITHMETIC_RE = re.compile(
+    r"(?<![\d.])R?\s?(\d[\d\s,]*(?:\.\d+)?)\s*([x×*+\-/])\s*R?\s?(\d[\d\s,]*(?:\.\d+)?)\s*="
+    r"\s*R?\s?(\d[\d\s,]*(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _as_number(raw: str) -> Optional[float]:
+    try:
+        return float(re.sub(r"[\s,]", "", raw))
+    except Exception:
+        return None
+
+
+def wrong_arithmetic(answer: str, tolerance: float = 0.02) -> List[Dict[str, Any]]:
+    """Every "A op B = C" claim in `answer` where C is not actually A op B.
+
+    2026-08-31, real incident on a live Gerflor quote: the model wrote "11.8 × 18.2 = 215.56"
+    (correct: 214.76) and then "215.56 × 198.00 = R42,731.08" — a total that didn't even follow
+    from its own wrong intermediate (the correct chain gives R42,522.48). Nothing checked it,
+    so a wrong price went to a real customer.
+
+    Prompt instructions demonstrably do not fix this — commerce_admin was already told to use
+    tools and still did the sums in its head. This is the same deterministic-backstop pattern as
+    unverified_prices() above: recompute what was actually claimed and compare. A tolerance of
+    2 cents absorbs honest display rounding without letting a real error through.
+    """
+    bad: List[Dict[str, Any]] = []
+    for m in _ARITHMETIC_RE.finditer(answer or ""):
+        left, op, right, stated = (_as_number(m.group(1)), m.group(2),
+                                   _as_number(m.group(3)), _as_number(m.group(4)))
+        if left is None or right is None or stated is None:
+            continue
+        try:
+            if op in ("x", "×", "*", "X"):
+                actual = left * right
+            elif op == "+":
+                actual = left + right
+            elif op == "-":
+                actual = left - right
+            elif op == "/":
+                if right == 0:
+                    continue
+                actual = left / right
+            else:
+                continue
+        except Exception:
+            continue
+        # Compare against the stated value at its own precision, so "= 214.76" isn't flagged
+        # against 214.759999. Anything beyond the tolerance is a real arithmetic error.
+        if abs(actual - stated) > tolerance:
+            bad.append({"claim": m.group(0).strip(), "stated": stated,
+                        "actual": round(actual, 2)})
+    return bad
 
 
 # Shared hard-decline guard: a question shaped like "what does MY invoice/BOQ/payment say" that
