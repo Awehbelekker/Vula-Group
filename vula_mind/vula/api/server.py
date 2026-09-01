@@ -648,6 +648,69 @@ async def _daily_commerce_jobs_loop() -> None:
         await _asyncio.sleep(86400)  # daily
 
 
+async def _voice_retry_scheduler_loop() -> None:
+    """Retry voice notes whose transcription failed, locally (2026-09-01).
+
+    Real telemetry: 26% of every voice note ever received (6 of 23) was lost to the local
+    Whisper tunnel being unreachable — never to an actual transcription failure. Rather than
+    ship customer audio to a third-party cloud transcriber, the note is parked and retried
+    here once the box is back, so an outage costs a delay instead of an order.
+    """
+    import asyncio as _asyncio
+    from core.transcribe import transcribe_audio
+    from vula import voice_retry
+    from vula.api.whatsapp import _handle_commerce_message, _handle_message, _send_reply
+    from core.lang import is_voice_supported
+
+    await _asyncio.sleep(120)  # settle on boot
+    while True:
+        try:
+            for row in voice_retry.pending():
+                rid, tenant_id = row["id"], row.get("tenant_id") or ""
+                phone = row.get("customer_phone") or ""
+                attempts = int(row.get("attempts") or 0)
+
+                if voice_retry.too_old(row) or attempts >= voice_retry.MAX_ATTEMPTS:
+                    voice_retry.give_up(rid)
+                    await _send_reply(phone, (
+                        "Sorry — I still couldn't listen to that voice note. 🎙️ Could you type "
+                        "it out for me? I'll help right away."
+                    ), tenant_id)
+                    log.warning("gave up on queued voice note %s after %d attempts", rid, attempts)
+                    continue
+
+                audio = voice_retry.audio_of(row)
+                if not audio:
+                    voice_retry.give_up(rid)
+                    continue
+
+                text, lang = await transcribe_audio(
+                    audio, mime_type=row.get("mime_type") or "audio/ogg",
+                    filename=f"voice-retry-{rid}.ogg", tenant_id=tenant_id,
+                )
+                if not text:
+                    voice_retry.mark_failed_attempt(rid, attempts, "transcription still failing")
+                    continue
+
+                # Transcribed at last — drop the audio first so a routing error can never cause
+                # the same note to be replayed to the customer twice.
+                voice_retry.mark_done(rid)
+                if lang and not is_voice_supported(lang):
+                    await _send_reply(phone, (
+                        "👋 I can only understand *voice notes* in English and Afrikaans right "
+                        "now. Please type your message — I'll reply in your language."
+                    ), tenant_id)
+                    continue
+                log.info("recovered queued voice note %s (lang=%s): %r", rid, lang, text[:80])
+                if (row.get("route_mode") or "commerce") == "commerce":
+                    await _handle_commerce_message(phone, text, None, tenant_id, detected_lang=lang)
+                else:
+                    await _handle_message(phone, text, None, route_tenant_id=tenant_id)
+        except Exception as exc:
+            log.warning("voice retry scheduler tick failed: %s", exc)
+        await _asyncio.sleep(120)  # the box usually comes back quickly; retry often
+
+
 async def _stale_escalation_scheduler_loop() -> None:
     """Tenant-agnostic 'conversation gone stale' nudge (2026-07-28) — generalizes proactive
     re-engagement past commerce-only tenants. _commerce_jobs_scheduler_loop only ever iterates
@@ -686,6 +749,23 @@ async def _stale_escalation_scheduler_loop() -> None:
                               f"with the answer — I'll send it to them and remember it.")
                         if await _send_reply(row["helper_phone"], msg, tenant_id=tenant_id):
                             esc.mark_stale_notified(row["id"])
+
+                    # Close the loop with the CUSTOMER on anything the helper never answered.
+                    # Silence is the worst reply to a real buying question — see
+                    # find_abandoned_escalations for the incident this comes from.
+                    for row in esc.find_abandoned_escalations(tenant_id):
+                        q = (row.get("question") or "").strip()
+                        apology = (
+                            "Hi 👋 You asked me earlier:\n\n"
+                            f"\"{q}\"\n\n"
+                            "I'm sorry — I checked with the team and haven't been able to get "
+                            "you a firm answer. I didn't want to leave you waiting with no "
+                            "reply. Please send me a message and I'll get someone onto it "
+                            "right away."
+                        )
+                        if await _send_reply(row["customer_phone"], apology, tenant_id=tenant_id):
+                            esc.mark_customer_notified(row["id"])
+                            log.info("apologised to customer for unanswered escalation %s", row["id"])
                 except Exception as exc:
                     log.warning("stale escalation nudge failed for %s: %s", tenant_id, exc)
         except Exception as exc:
@@ -846,6 +926,8 @@ def _start_scheduled_job_tasks() -> None:
     _asyncio.create_task(_commerce_jobs_scheduler_loop())
     # Runs for EVERY tenant (not just ones with the "orders" module) — see its own docstring.
     _asyncio.create_task(_stale_escalation_scheduler_loop())
+    # Retries voice notes parked when transcription was unreachable (migration 148).
+    _asyncio.create_task(_voice_retry_scheduler_loop())
 
 
 async def _scheduler_leadership_loop() -> None:

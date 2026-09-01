@@ -2118,10 +2118,31 @@ async def _handle_voice_note(
         audio, mime_type=mime_type, filename=f"voice-{msg_id}.ogg", tenant_id=route_tenant
     )
     if not text:
-        await _send_reply(phone, (
-            "I couldn't make out that voice note. 🎙️ Could you type it out for me? "
-            "/ Ek kon nie die stemboodskap hoor nie — tik dit asseblief."
-        ), route_tenant or "")
+        # Transcription is down (real telemetry: 26% of all voice notes ever received were lost
+        # to the local Whisper tunnel being unreachable, never to a genuine transcription
+        # failure). Park the audio and retry locally rather than lose the order — and say so
+        # honestly, instead of blaming the customer's recording.
+        queued = False
+        if route_tenant:
+            try:
+                from vula import voice_retry
+                queued = voice_retry.enqueue(
+                    route_tenant, phone, audio, mime_type=mime_type, msg_id=msg_id,
+                    route_mode=route_mode,
+                )
+            except Exception as exc:
+                logger.warning("voice retry enqueue failed: %s", exc)
+        if queued:
+            await _send_reply(phone, (
+                "Sorry — I can't listen to voice notes right this second. 🎙️ I've saved yours "
+                "and I'll come back to you as soon as I can. If it's urgent, type it out and "
+                "I'll help right away."
+            ), route_tenant or "")
+        else:
+            await _send_reply(phone, (
+                "I couldn't make out that voice note. 🎙️ Could you type it out for me? "
+                "/ Ek kon nie die stemboodskap hoor nie — tik dit asseblief."
+            ), route_tenant or "")
         return
     # We only understand SPEECH in English & Afrikaans. If Whisper labels the note as another
     # language, the transcript is unreliable — ask them to type (we CAN reply in text in their

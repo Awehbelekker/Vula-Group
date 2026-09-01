@@ -118,3 +118,53 @@ def test_mark_stale_notified_updates_row():
 def test_mark_stale_notified_never_raises_on_error():
     with patch("vula.escalation._client", side_effect=RuntimeError("down")):
         esc.mark_stale_notified("e1")  # must not raise
+
+
+# ── find_abandoned_escalations / mark_customer_notified (2026-09-01) ─────────────
+# The helper side of this loop works — confirmed against real production data, every
+# escalation raised since the stale-nudge shipped on 2026-07-28 was chased. The CUSTOMER
+# side was never closed: a real off-the-hook customer asked on 2026-08-25 whether they
+# could collect 100kg of hake instead of having it delivered, Staci was nudged the next
+# day, never answered, and the customer has heard nothing since.
+
+def _mock_db_abandoned(rows):
+    mock_table = MagicMock()
+    chain = mock_table.select.return_value.eq.return_value.in_.return_value \
+        .lt.return_value.is_.return_value.is_.return_value.limit.return_value
+    chain.execute.return_value = MagicMock(data=rows)
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    return mock_db, mock_table
+
+
+def test_find_abandoned_escalations_returns_unanswered_rows():
+    row = {"id": "e9", "tenant_id": "off-the-hook", "customer_phone": "27786537562",
+           "question": "Can the customer collect 100kg Hake instead of delivery?",
+           "status": "open", "answered_at": None, "customer_notified_at": None,
+           "created_at": (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()}
+    mock_db, mock_table = _mock_db_abandoned([row])
+    with patch("vula.escalation._client", return_value=mock_db):
+        assert esc.find_abandoned_escalations("off-the-hook") == [row]
+    mock_table.select.return_value.eq.assert_called_with("tenant_id", "off-the-hook")
+
+
+def test_find_abandoned_escalations_empty_before_migration_149():
+    with patch("vula.escalation._client", side_effect=RuntimeError("column does not exist")):
+        assert esc.find_abandoned_escalations("off-the-hook") == []
+
+
+def test_mark_customer_notified_stamps_and_expires():
+    mock_table = MagicMock()
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    with patch("vula.escalation._client", return_value=mock_db):
+        esc.mark_customer_notified("e9")
+    patch_dict = mock_table.update.call_args[0][0]
+    assert "customer_notified_at" in patch_dict
+    assert patch_dict["status"] == "expired"
+    mock_table.update.return_value.eq.assert_called_with("id", "e9")
+
+
+def test_mark_customer_notified_never_raises_on_error():
+    with patch("vula.escalation._client", side_effect=RuntimeError("down")):
+        esc.mark_customer_notified("e9")  # must not raise

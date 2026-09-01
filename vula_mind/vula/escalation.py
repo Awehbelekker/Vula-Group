@@ -185,6 +185,44 @@ def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Opt
     return row
 
 
+def find_abandoned_escalations(tenant_id: str, hours: float = 48.0) -> list[dict]:
+    """Open escalations past the give-up window that the CUSTOMER was never told about.
+
+    2026-09-01, ahead of off-the-hook going live: the helper-side of this loop works — every
+    escalation since the nudge shipped (2026-07-28) was chased, confirmed against real data.
+    The customer side was never closed. A real off-the-hook customer asked on 2026-08-25
+    whether they could collect 100kg of hake instead of having it delivered; Staci was nudged
+    the next day, never answered, and the customer has heard nothing since. Silence is the
+    worst possible answer to a real buying question — worse than "I couldn't find out".
+
+    Uses answered_at IS NULL as the "customer never heard back" test, so a question that WAS
+    answered can never be apologised for a second time.
+    """
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    try:
+        return (_client().table("vula_escalations").select("*")
+                .eq("tenant_id", tenant_id).in_("status", ["open", "expired"])
+                .lt("created_at", cutoff)
+                .is_("answered_at", "null")
+                .is_("customer_notified_at", "null")
+                .limit(50).execute().data or [])
+    except Exception as exc:
+        log.debug("abandoned escalation lookup skipped (run migration 149?): %s", exc)
+        return []
+
+
+def mark_customer_notified(escalation_id: str) -> None:
+    """Stamped only after the apology actually reaches the customer, so a send failure means
+    we try again next tick rather than silently dropping them."""
+    try:
+        _client().table("vula_escalations").update(
+            {"customer_notified_at": _now(), "status": "expired"}
+        ).eq("id", escalation_id).execute()
+    except Exception as exc:
+        log.debug("customer-notified stamp failed for %s: %s", escalation_id, exc)
+
+
 def find_stale_open_escalations(tenant_id: str, hours: float = 6.0) -> list[dict]:
     """This tenant's open escalations older than `hours` that haven't been nudged yet —
     part of generalizing proactive re-engagement past commerce-only tenants (2026-07-28).
