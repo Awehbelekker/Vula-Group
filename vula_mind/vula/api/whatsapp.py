@@ -271,6 +271,12 @@ async def receive_message(
                             reply_id.startswith("admin_confirm:") or reply_id.startswith("admin_cancel:")
                         ) and route_tenant:
                             await _handle_admin_confirm_reply(phone, reply_id, route_tenant)
+                        elif phone and reply_id and route_tenant and (
+                            reply_id.startswith("learn_keep:") or reply_id.startswith("learn_bin:")
+                        ):
+                            # Owner reviewing an answer Vula just learned from a handoff
+                            # (migration 150) — like the admin confirm buttons, no LLM involved.
+                            await _handle_learn_review_reply(phone, reply_id, route_tenant)
                         elif phone and reply_id and commerce_tenant:
                             # Handle list/button replies from WhatsApp catalog menu
                             await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
@@ -447,11 +453,114 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     info = esc.answer_escalation(open_esc, text.strip())
     if not info:
         return True  # already answered by a concurrent delivery — consume silently, no double relay
-    await _send_reply(info["customer_phone"],
-                      f"About your question — {text.strip()}", tenant_id=info["tenant_id"])
-    await _send_reply(phone, "✅ Sent to the customer and saved — I'll handle this one myself next time.",
-                      tenant_id=info["tenant_id"])
+    tid = info["tenant_id"]
+    relay = await _voice_the_relay(tid, info.get("question") or "", text.strip())
+    await _send_reply(info["customer_phone"], relay, tenant_id=tid)
+
+    # Record the relayed answer as an AGENT turn so voice_profile can learn the business's real
+    # tone from it (vula/commerce/voice_profile.py::_whatsapp_agent_replies reads role='agent').
+    # 2026-09-01: the handoff relay never wrote back to the conversation at all, so the one place
+    # a real human answer enters a customer chat contributed nothing to tone learning — only 1
+    # role='agent' message existed platform-wide. Best-effort; never block the relay.
+    try:
+        from vula.commerce import service as _cs
+        await _cs.append_message(tid, info["customer_phone"], "agent", relay)
+    except Exception as exc:
+        logger.debug("agent-turn record skipped for escalation relay: %s", exc)
+
+    # One-tap review before this answer is ever reused for someone else (migration 150).
+    learned_id = info.get("learned_id")
+    if learned_id:
+        creds = await _get_tenant_wa_creds(tid)
+        sent = False
+        if creds:
+            sent = await _send_wa_buttons(
+                creds, phone,
+                (f"✅ Sent to the customer.\n\nShould I reuse this next time someone asks "
+                 f"\"{(info.get('question') or '').strip()[:120]}\"?"),
+                [{"id": f"learn_keep:{learned_id}", "title": "Yes, reuse it"},
+                 {"id": f"learn_bin:{learned_id}", "title": "No, just once"}],
+            )
+        if not sent:
+            await _send_reply(phone, "✅ Sent to the customer.", tenant_id=tid)
+    else:
+        await _send_reply(phone, "✅ Sent to the customer.", tenant_id=tid)
     return True
+
+
+async def _handle_learn_review_reply(phone: str, reply_id: str, tenant_id: str) -> None:
+    """A tap on the Keep/Bin buttons for an answer Vula learned from a handoff (migration 150).
+
+    Only an APPROVED answer is ever reused for another customer — see
+    escalation.find_learned_answer. Both learned answers found in production on 2026-09-01 were
+    wrong, which is why this gate exists at all.
+    """
+    from vula import escalation as esc
+    action, _, learned_id = reply_id.partition(":")
+    if not learned_id:
+        return
+    row = esc.get_learned_answer(learned_id)
+    if not row or row.get("tenant_id") != tenant_id:
+        await _send_reply(phone, "That one's no longer around to review. 🙏", tenant_id)
+        return
+    if action == "learn_keep":
+        ok = esc.approve_learned_answer(learned_id, approved_by=phone)
+        await _send_reply(phone, (
+            "👍 Saved — I'll answer that one myself next time."
+            if ok else "Couldn't save that just now, sorry."
+        ), tenant_id)
+    else:
+        esc.reject_learned_answer(learned_id)
+        await _send_reply(phone, "👌 Noted — I'll ask you again next time rather than guess.",
+                          tenant_id)
+
+
+async def _voice_the_relay(tenant_id: str, question: str, answer: str) -> str:
+    """Put the helper's answer into the business's own voice before it reaches the customer.
+
+    2026-09-01: the relay was a bare f"About your question — {raw text}", so a customer got the
+    helper's internal shorthand verbatim. Rewrites using the tenant's persona_prompt, the same
+    tone source commerce_assistant._system_prompt honours. Falls back to the original wording on
+    any failure — a clumsy relay is far better than none, and this must never lose an answer.
+
+    The rewrite is explicitly forbidden from adding facts: it may only re-word what the helper
+    actually said.
+    """
+    original = f"About your question — {answer}"
+    try:
+        persona = ""
+        try:
+            from vula.api.tenants import get_config
+            persona = (get_config(tenant_id) or {}).get("persona_prompt") or ""
+        except Exception:
+            persona = ""
+
+        import litellm
+        from core.llm_router import resolve_generation_route
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route(task_type="escalation_relay")
+        resp = await litellm.acompletion(
+            model=model, api_key=api_key, api_base=api_base, max_tokens=220, temperature=0.3,
+            messages=[{"role": "user", "content": (
+                "A customer asked a business a question. A member of staff wrote the answer in "
+                "shorthand. Rewrite it as the business's own short, warm WhatsApp reply to the "
+                "customer.\n\n"
+                "RULES — these matter more than style:\n"
+                "- Use ONLY what the staff member actually said. Add no facts, prices, times, "
+                "or promises of your own.\n"
+                "- If the staff answer is vague, stay vague. Do not invent specifics.\n"
+                "- Keep it to 2 sentences or fewer. No greeting preamble, no sign-off.\n"
+                f"{'- Match this tone: ' + persona if persona else ''}\n\n"
+                f"Customer asked: {question}\n"
+                f"Staff answered: {answer}\n\n"
+                "Reply to the customer:"
+            )}],
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        return out or original
+    except Exception as exc:
+        logger.debug("relay voicing skipped, sending verbatim: %s", exc)
+        return original
 
 
 async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,

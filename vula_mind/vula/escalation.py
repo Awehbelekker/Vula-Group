@@ -30,6 +30,31 @@ _NO_ANSWER = re.compile(
 # message, independent of how confident the bot's own reply looked. Before this, staff only
 # got pulled in when the bot doubted itself; an upset customer getting a calm, confidently
 # wrong or unhelpful reply never escalated at all.
+# A helper's reply that is an INSTRUCTION TO VULA, not an answer to the customer. Real incident
+# (2026-09-01): Staci replied "Respond to Richard Downing via WhatsApp business and say delivery
+# will be on Monday between 10:00 - 12:00" to a delivery question. That was her telling Vula what
+# to do — it got stored verbatim as the canonical customer-facing answer, naming a real customer.
+# Same class of bug as the bare-greeting and helper-counter-question guards already in
+# vula/api/whatsapp.py; this is the third variant.
+_INSTRUCTION_TO_VULA = re.compile(
+    r"^\s*(please\s+)?(respond|reply|answer|tell|let|inform|send|forward|advise|ask)\b"
+    r"[^.?!]{0,60}\b(him|her|them|the customer|the client|to\s+\w+)\b"
+    r"|^\s*(please\s+)?(say|state|mention|confirm)\s+(that|to)\b"
+    r"|\b(sê vir|antwoord vir|laat weet)\b",
+    re.IGNORECASE,
+)
+
+
+def reply_is_instruction_to_vula(text: str) -> bool:
+    """True when the helper is directing Vula rather than answering the customer.
+
+    Such a reply is still RELAYED (the helper did intend the customer to hear something) but is
+    never LEARNED — storing a directive as the canonical answer is what produced the worst of the
+    two bad rows found in production.
+    """
+    return bool(_INSTRUCTION_TO_VULA.search((text or "").strip()))
+
+
 _FRUSTRATION_WORDS = re.compile(
     r"(ridiculous|terrible|useless|pathetic|waste of (my )?(time|money)|not happy|"
     r"unacceptable|disgusted|disgusting|(this is |so )?annoying|angry|furious|fed up|"
@@ -69,6 +94,48 @@ def _tokens(s: str) -> set:
     return {w for w in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(w) > 2}
 
 
+# Same redaction as vula/commerce/voice_profile.py — a stored answer is replayed to OTHER
+# customers, so it must never carry the contact details of the one who prompted it.
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_PHONE_RE = re.compile(r"(?<!\w)(\+?\d[\d\s\-()]{6,}\d)(?!\w)")
+
+
+def _redact_contacts(text: str) -> str:
+    return _PHONE_RE.sub("[phone]", _EMAIL_RE.sub("[email]", text or ""))
+
+
+def approve_learned_answer(learned_id: str, approved_by: str = "") -> bool:
+    """Owner tapped Keep — this answer may now be reused for similar questions."""
+    try:
+        _client().table("vula_learned_answers").update({
+            "status": "approved", "approved_at": _now(), "approved_by": approved_by or None,
+        }).eq("id", learned_id).execute()
+        return True
+    except Exception as exc:
+        log.warning("learned-answer approve failed for %s: %s", learned_id, exc)
+        return False
+
+
+def reject_learned_answer(learned_id: str) -> bool:
+    """Owner tapped Bin — never reuse this one."""
+    try:
+        _client().table("vula_learned_answers").update(
+            {"status": "rejected"}).eq("id", learned_id).execute()
+        return True
+    except Exception as exc:
+        log.warning("learned-answer reject failed for %s: %s", learned_id, exc)
+        return False
+
+
+def get_learned_answer(learned_id: str) -> Optional[dict]:
+    try:
+        rows = (_client().table("vula_learned_answers").select("*")
+                .eq("id", learned_id).limit(1).execute().data or [])
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 def should_escalate(answer: str, confidence: float, threshold: float = 0.4,
                     customer_text: str = "") -> bool:
     if not answer or not answer.strip():
@@ -80,12 +147,57 @@ def should_escalate(answer: str, confidence: float, threshold: float = 0.4,
     return confidence is not None and confidence < threshold
 
 
+# Words that carry no distinguishing meaning — a difference in these is fine, a difference in
+# anything else (a place, a product, a quantity) means it is a DIFFERENT question.
+_COMMON_WORDS = {
+    "the", "and", "for", "you", "your", "yours", "our", "ours", "are", "can", "could", "would",
+    "will", "does", "did", "have", "has", "had", "was", "were", "with", "what", "whats", "when",
+    "where", "which", "who", "why", "how", "there", "they", "them", "this", "that", "these",
+    "those", "from", "about", "any", "all", "get", "got", "please", "thanks", "thank", "hello",
+    "hi", "still", "just", "some", "much", "many", "make", "made", "take", "want", "need",
+    "order", "orders", "buy", "know", "tell", "say", "not", "but", "yes", "day", "days",
+}
+
+# The real protection is _distinguishing_tokens below, not this number: two questions can only
+# reach the threshold at all if they differ ONLY in common words. Raising it further starts
+# rejecting genuine paraphrase ("what is in the box" vs "whats in the box") without adding safety.
+MATCH_THRESHOLD = 0.6
+
+
+def _distinguishing_tokens(a: set, b: set) -> set:
+    """Tokens present in exactly one question that actually change its meaning.
+
+    2026-09-01, real incident: "do you deliver to Milnerton" matched the stored answer for
+    "do you deliver to Timbuktu" — Jaccard 3/5 = 0.6, comfortably over the old 0.5 bar. The ONLY
+    differing token was the place name, i.e. the single word that decides the answer. A customer
+    in Milnerton would have been sent internal instructions naming a different customer.
+
+    Numbers and any non-trivial word outside the common-word list count as distinguishing, so a
+    difference in place, product or quantity blocks the match outright regardless of score. This
+    is deliberately deterministic — the same lesson as unverified_prices() in core/skills/base.py:
+    on this platform the structural check is what holds, not a tuned threshold.
+    """
+    return {t for t in (a ^ b) if t not in _COMMON_WORDS and (len(t) > 3 or t.isdigit())}
+
+
 def find_learned_answer(tenant_id: str, question: str) -> Optional[str]:
-    """Best stored answer for a similar past question (token-overlap match)."""
+    """Best stored answer for a similar past question.
+
+    Only APPROVED answers are ever returned (migration 150): both learned answers that existed
+    in production on 2026-09-01 were wrong — one was the helper replying about something else
+    entirely, the other was the helper instructing Vula rather than answering the customer — so
+    an unreviewed answer must never reach a customer.
+    """
     try:
-        rows = (_client().table("vula_learned_answers").select("question,answer")
-                .eq("tenant_id", tenant_id).order("created_at", desc=True)
-                .limit(200).execute().data or [])
+        q = (_client().table("vula_learned_answers").select("question,answer,status")
+             .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(200))
+        try:
+            rows = q.eq("status", "approved").execute().data or []
+        except Exception:
+            # Before migration 150 there is no status column. Fail CLOSED: serving unreviewed
+            # answers is exactly the defect this guard exists to stop.
+            log.debug("learned-answer status filter unavailable (run migration 150?)")
+            return None
     except Exception as exc:
         log.debug("learned-answer lookup skipped (run migration 042?): %s", exc)
         return None
@@ -97,10 +209,12 @@ def find_learned_answer(tenant_id: str, question: str) -> Optional[str]:
         lt = _tokens(r.get("question", ""))
         if not lt:
             continue
+        if _distinguishing_tokens(qt, lt):
+            continue  # different place/product/quantity — not the same question
         score = len(qt & lt) / len(qt | lt)   # Jaccard
         if score > best_score:
             best, best_score = r.get("answer"), score
-    return best if best_score >= 0.5 else None
+    return best if best_score >= MATCH_THRESHOLD else None
 
 
 def _pick_helper(tenant_id: str) -> Optional[dict]:
@@ -269,17 +383,27 @@ def answer_escalation(escalation: dict, answer: str) -> Optional[dict]:
     except Exception as exc:
         log.warning("escalation update failed: %s", exc)
         return None
-    try:
-        import uuid
-        db.table("vula_learned_answers").insert({
-            "id": str(uuid.uuid4()), "tenant_id": escalation["tenant_id"],
-            "question": escalation["question"], "answer": answer,
-            "source": "escalation", "created_at": _now(),
-        }).execute()
-    except Exception as exc:
-        log.debug("learned-answer store skipped: %s", exc)
+    # Relay always happens (below) — but LEARNING is gated. Both learned answers that existed in
+    # production on 2026-09-01 were wrong, and both would have been caught here.
+    learned_id = None
+    if reply_is_instruction_to_vula(answer):
+        log.info("not learning escalation %s — helper reply is an instruction, not an answer",
+                 escalation.get("id"))
+    else:
+        try:
+            import uuid
+            learned_id = str(uuid.uuid4())
+            db.table("vula_learned_answers").insert({
+                "id": learned_id, "tenant_id": escalation["tenant_id"],
+                "question": escalation["question"], "answer": _redact_contacts(answer),
+                "source": "escalation", "status": "pending", "created_at": _now(),
+            }).execute()
+        except Exception as exc:
+            learned_id = None
+            log.debug("learned-answer store skipped: %s", exc)
     return {
         "tenant_id": escalation["tenant_id"],
         "customer_phone": escalation["customer_phone"],
         "question": escalation["question"],
+        "learned_id": learned_id,
     }
