@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 def _enabled() -> bool:
+    # 2026-09-01: the test suite was writing real rows into the PRODUCTION telemetry sink.
+    # Confirmed while investigating a degenerate-output incident: every "!!!!" event in
+    # vula_reasoning_telemetry belonged to tenant "test-tenant", and 198 of ~300 verification
+    # events over ten days were test runs, not traffic. That distorts exactly the numbers this
+    # sink exists to inform. pytest sets PYTEST_CURRENT_TEST for every test it runs, so this is
+    # a reliable signal and needs no per-test opt-out; a test that wants to assert on emitted
+    # envelopes patches emit() directly (see tests/test_verification.py::emits) rather than
+    # reading them back from the database.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
     return os.environ.get("VULA_TELEMETRY_DB", "true").lower() in ("1", "true", "yes", "on")
 
 

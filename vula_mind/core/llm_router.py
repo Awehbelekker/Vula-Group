@@ -242,21 +242,41 @@ def substitute_if_degenerate(answer: str, *, skill: str, tenant_id: Optional[str
 
 
 def looks_degenerate(text: str, min_len: int = 20, run_threshold: int = 12,
-                     unique_ratio_threshold: float = 0.06) -> bool:
+                     min_unique_chars: int = 12, diversity_min_len: int = 200,
+                     min_unique_chars_short: int = 4) -> bool:
     """Cheap, deterministic check for garbled/repeated-character LLM output — no extra LLM call,
     since the whole point is catching a case where the LLM itself already misbehaved. Anchored
     to a real production reply (off-the-hook, 2026-08-22): a WhatsApp reply that was ~1000
     literal '!' characters and nothing else, sent straight to the owner with nothing catching it.
-    Two independent signals, either one enough: a long unbroken run of one character, or
-    near-zero character diversity across the whole reply (catches a slower-building repetition
-    loop that isn't one single run, e.g. alternating "!! !! !!..."). Short/normal replies (incl.
-    emoji-heavy WhatsApp ones) are always below min_len or have ordinary diversity — not flagged."""
+
+    Two independent signals, either one enough: a long unbroken run of one character, or too few
+    DISTINCT characters overall (catches a slower-building repetition loop that isn't one single
+    run, e.g. alternating "!! !! !!...").
+
+    2026-09-01: the diversity signal was a RATIO (unique/length < 0.06), which scales the wrong
+    way — the longer a perfectly normal reply got, the more certainly it was flagged, because
+    plain text has a roughly fixed alphabet (~27-60 distinct characters) no matter how long it
+    is. At 648 characters ordinary English already tripped it; a 1421-character Gerflor price
+    list — a real, correct answer of exactly the kind being asked for — was thrown away and
+    replaced with "Sorry, something went wrong generating that reply". That also explains why no
+    stored reply anywhere exceeded ~1200 characters: long answers were being suppressed
+    wholesale.
+
+    An absolute floor is the right shape: garbled output has 1-3 distinct characters, while any
+    real sentence has well over 12, and that stays true at any length.
+
+    Two floors, because short legitimate content can genuinely be low-diversity:
+    "R100.00, R100.00, R100.00" is 6 distinct characters and perfectly valid (a real price
+    repeated across line items), while "!! !! !! !!" is 2 and is garbage. So short text needs
+    only `min_unique_chars_short` distinct characters to pass, and the stricter floor applies
+    once the text is long enough for a real answer to have a full alphabet."""
     t = (text or "").strip()
     if len(t) < min_len:
         return False
     if re.search(r"(\S)\1{" + str(run_threshold - 1) + r",}", t):
         return True
-    return (len(set(t)) / len(t)) < unique_ratio_threshold
+    floor = min_unique_chars if len(t) >= diversity_min_len else min_unique_chars_short
+    return len(set(t)) < floor
 
 
 def _task_label(task_type: Optional[str], messages: Optional[list]) -> str:
