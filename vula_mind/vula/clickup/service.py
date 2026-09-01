@@ -381,8 +381,25 @@ async def attach_file_to_list(tenant_id: str, list_id: str, filename: str,
     return {"task_id": task_id, "attachment_id": d.get("id")}
 
 
+# Everything that meaningfully changes a task the team cares about. Verified against ClickUp's
+# published event list (developer.clickup.com/docs/webhooks). Previously only taskStatusUpdated
+# and taskUpdated were subscribed, and the handler dropped everything that wasn't a status
+# change — so an assignment, a due-date move, a priority bump or a comment in ClickUp never
+# reached the person on WhatsApp.
+WEBHOOK_EVENTS = [
+    "taskCreated", "taskUpdated", "taskDeleted", "taskStatusUpdated",
+    "taskAssigneeUpdated", "taskDueDateUpdated", "taskPriorityUpdated",
+    "taskCommentPosted", "taskMoved",
+]
+
+
 async def register_webhook(tenant_id: str, callback_url: str) -> dict:
-    """Register a ClickUp webhook on the tenant's team for task status changes."""
+    """Register a ClickUp webhook on the tenant's team.
+
+    Returns ClickUp's response, which includes the per-webhook `secret` used to sign every
+    delivery (X-Signature). That secret MUST be stored — without it the inbound endpoint can't
+    tell a real ClickUp delivery from anyone else's POST. See migration 151.
+    """
     creds = _creds_or_raise(tenant_id)
     team_id = creds.get("team_id")
     if not team_id:
@@ -390,7 +407,61 @@ async def register_webhook(tenant_id: str, callback_url: str) -> dict:
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(
             f"{_BASE}/team/{team_id}/webhook", headers=_headers(creds["token"]),
-            json={"endpoint": callback_url, "events": ["taskStatusUpdated", "taskUpdated"]},
+            json={"endpoint": callback_url, "events": WEBHOOK_EVENTS},
         )
         r.raise_for_status()
         return r.json()
+
+
+async def add_comment(tenant_id: str, task_id: str, text: str,
+                      notify_all: bool = True) -> dict:
+    """Post a comment onto a ClickUp task, so a WhatsApp reply lands where the team works."""
+    creds = _creds_or_raise(tenant_id)
+    if not (task_id and (text or "").strip()):
+        return {"error": "Need a task and something to say."}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(
+            f"{_BASE}/task/{task_id}/comment", headers=_headers(creds["token"]),
+            json={"comment_text": text.strip(), "notify_all": notify_all},
+        )
+        r.raise_for_status()
+        d = r.json()
+    return {"id": d.get("id"), "task_id": task_id}
+
+
+async def list_comments(tenant_id: str, task_id: str, limit: int = 20) -> list[dict]:
+    """Recent comments on a task, newest first — [{id, text, by, at}]."""
+    creds = _creds_or_raise(tenant_id)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{_BASE}/task/{task_id}/comment",
+                             headers=_headers(creds["token"]))
+        r.raise_for_status()
+        items = r.json().get("comments", []) or []
+    out = []
+    for c in items[:limit]:
+        out.append({
+            "id": c.get("id"),
+            "text": (c.get("comment_text") or "").strip(),
+            "by": (c.get("user") or {}).get("username"),
+            "at": c.get("date"),
+        })
+    return out
+
+
+async def assign_task(tenant_id: str, task_id: str, assignee_name: str) -> dict:
+    """Assign a task to a workspace member by name. Never guesses: if the name doesn't resolve
+    to a real member, it says so rather than leaving the task quietly unassigned."""
+    creds = _creds_or_raise(tenant_id)
+    member = await resolve_assignee(tenant_id, assignee_name)
+    if not member:
+        members = await list_team_members(tenant_id)
+        names = ", ".join(m.get("username") or "" for m in members if m.get("username"))
+        return {"error": f"No ClickUp member matching '{assignee_name}'."
+                         + (f" Workspace has: {names}" if names else "")}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.put(
+            f"{_BASE}/task/{task_id}", headers=_headers(creds["token"]),
+            json={"assignees": {"add": [member["id"]], "rem": []}},
+        )
+        r.raise_for_status()
+    return {"task_id": task_id, "assigned_to": member.get("username"), "assignee_id": member["id"]}

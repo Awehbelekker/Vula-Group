@@ -2,9 +2,28 @@
 and the webhook's procurement dispatch path (vula/api/clickup.py) — the plumbing that
 lets a native ClickUp task (no field-ops mirror link) reach the procurement completion
 hook. See tests/test_procurement.py for the completion-hook logic itself."""
+import hashlib
+import hmac
+import json as _json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# 2026-09-01: the webhook now requires a valid ClickUp signature (X-Signature = HMAC-SHA256 of
+# the raw body) before it will touch any state — it was previously wide open to anonymous POSTs
+# despite updating field-ops status and triggering procurement. These tests exercise what
+# happens AFTER authentication, so they now sign their payloads like ClickUp does. The
+# rejection paths themselves are covered in tests/test_clickup_webhook_security.py.
+_SECRET = "test-webhook-secret"
+
+
+def _signed_request(payload: dict):
+    raw = _json.dumps(payload).encode()
+    request = MagicMock()
+    request.body = AsyncMock(return_value=raw)
+    request.json = AsyncMock(return_value=payload)
+    request.headers = {"X-Signature": hmac.new(_SECRET.encode(), raw, hashlib.sha256).hexdigest()}
+    return request
 
 
 def _mock_httpx_get(json_data=None, status_code=200):
@@ -53,23 +72,17 @@ async def test_get_task_parses_status_list_and_tags():
 async def test_webhook_routes_unmapped_task_to_procurement():
     from vula.api.clickup import webhook
 
-    request = MagicMock()
-    request.json = AsyncMock(return_value={
+    request = _signed_request({
         "task_id": "t1",
         "history_items": [{"after": {"status": "complete"}}],
     })
-
-    mock_table = MagicMock()
-    mock_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
-        data=[{"tenant_id": "digg-demo"}])
-    mock_db = MagicMock()
-    mock_db.table.return_value = mock_table
 
     task = {"id": "t1", "title": "Order tiles", "status": "complete", "tags": ["procurement"], "list_id": "L1"}
 
     with (
         patch("vula.integrations.clickup_sync.field_task_for_clickup", return_value=None),
-        patch("vula.api.clickup._client", return_value=mock_db),
+        patch("vula.api.clickup._any_stored_webhook_secret",
+              return_value=[("digg-demo", _SECRET)]),
         patch("vula.clickup.service.get_task", new=AsyncMock(return_value=task)),
         patch("vula.integrations.procurement.handle_task_status_change",
               new=AsyncMock(return_value={"id": "row1"})) as mock_handle,
@@ -84,8 +97,7 @@ async def test_webhook_routes_unmapped_task_to_procurement():
 async def test_webhook_still_prefers_field_ops_mapped_task():
     from vula.api.clickup import webhook
 
-    request = MagicMock()
-    request.json = AsyncMock(return_value={
+    request = _signed_request({
         "task_id": "t2",
         "history_items": [{"after": {"status": "complete"}}],
     })
@@ -93,6 +105,8 @@ async def test_webhook_still_prefers_field_ops_mapped_task():
     with (
         patch("vula.integrations.clickup_sync.field_task_for_clickup",
               return_value={"tenant_id": "off-the-hook", "field_task_id": "f1"}),
+        patch("vula.api.clickup._any_stored_webhook_secret",
+              return_value=[("off-the-hook", _SECRET)]),
         patch("vula.models.field_ops.get_field_ops_db") as mock_db,
     ):
         result = await webhook(request)

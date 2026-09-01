@@ -12,6 +12,8 @@ One-click flow (mirrors WhatsApp connect):
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 from typing import Optional
 from urllib.parse import urlencode
@@ -53,13 +55,78 @@ def _store_connection(tenant_id: str, token: str, team_id: Optional[str],
 
 
 async def _register_webhook(tenant_id: str) -> bool:
+    """Register the webhook AND keep the signing secret it returns.
+
+    2026-09-01: the secret was previously discarded (only "id" was checked), leaving the inbound
+    endpoint with nothing to authenticate against — see migration 151 and _verify_signature.
+    """
     try:
         res = await service.register_webhook(
             tenant_id, f"{settings.public_base_url}/v1/clickup/webhook")
-        return "id" in res
+        if "id" not in res:
+            return False
+        secret = res.get("secret") or (res.get("webhook") or {}).get("secret")
+        wid = res.get("id") or (res.get("webhook") or {}).get("id")
+        if secret:
+            try:
+                from vula.email_imap.credentials import encrypt_secret
+                _client().table("vula_clickup_accounts").update({
+                    "webhook_secret": encrypt_secret(secret), "webhook_id": wid,
+                }).eq("tenant_id", tenant_id).execute()
+                invalidate(tenant_id)
+            except Exception as exc:
+                log.warning("ClickUp webhook secret not stored (run migration 151?): %s", exc)
+        else:
+            log.warning("ClickUp webhook registered for %s but returned no secret", tenant_id)
+        return True
     except Exception as exc:
         log.warning("ClickUp webhook registration failed for %s: %s", tenant_id, exc)
         return False
+
+
+def _webhook_secret_for(tenant_id: str) -> Optional[str]:
+    try:
+        rows = (_client().table("vula_clickup_accounts").select("webhook_secret")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        if rows and rows[0].get("webhook_secret"):
+            from vula.email_imap.credentials import decrypt_secret
+            return decrypt_secret(rows[0]["webhook_secret"])
+    except Exception as exc:
+        log.debug("ClickUp webhook secret lookup failed for %s: %s", tenant_id, exc)
+    return None
+
+
+def _verify_signature(raw_body: bytes, signature: str, secret: str) -> bool:
+    """ClickUp signs every delivery: X-Signature = HMAC-SHA256(raw body, webhook secret), hex.
+    Verified against ClickUp's own docs (developer.clickup.com/docs/webhooksignature)."""
+    if not (signature and secret):
+        return False
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature.strip(), expected)
+
+
+def _any_stored_webhook_secret() -> list[tuple[str, str]]:
+    """(tenant_id, secret) for every tenant with a stored webhook secret.
+
+    ClickUp's payload carries no tenant id, so the signature is what identifies the sender:
+    whichever tenant's secret validates the body IS the tenant. That makes verification and
+    tenant resolution the same step, and removes the old token-probing guesswork.
+    """
+    out: list[tuple[str, str]] = []
+    try:
+        rows = (_client().table("vula_clickup_accounts").select("tenant_id,webhook_secret")
+                .eq("status", "connected").execute().data or [])
+    except Exception as exc:
+        log.debug("ClickUp webhook secret sweep failed: %s", exc)
+        return out
+    from vula.email_imap.credentials import decrypt_secret
+    for r in rows:
+        if r.get("webhook_secret"):
+            try:
+                out.append((r["tenant_id"], decrypt_secret(r["webhook_secret"])))
+            except Exception:
+                continue
+    return out
 
 
 # ── One-click OAuth ───────────────────────────────────────────────────────────
@@ -225,11 +292,38 @@ async def sync_kb(tenant_id: str) -> dict:
 
 @router.post("/webhook")
 async def webhook(request: Request) -> dict:
+    # 2026-09-01 SECURITY: this endpoint mutates real state — it updates field-ops task status
+    # and can trigger procurement posting — and until now accepted ANY unauthenticated POST.
+    # Same class of hole as the unauthenticated Yoco webhook. ClickUp signs every delivery
+    # (X-Signature = HMAC-SHA256 of the raw body, hex), and since the payload carries no tenant
+    # id, whichever tenant's stored secret validates the body IS the sender — verification and
+    # tenant resolution in one step.
+    raw = await request.body()
+    signature = request.headers.get("X-Signature") or request.headers.get("x-signature") or ""
+    verified_tenant: Optional[str] = None
+    secrets = _any_stored_webhook_secret()
+    for tid, secret in secrets:
+        if _verify_signature(raw, signature, secret):
+            verified_tenant = tid
+            break
+    if not verified_tenant:
+        if not secrets:
+            # No secret stored for anyone yet (pre-migration-151, or a webhook registered before
+            # secrets were kept). Refuse rather than fall back to trusting the caller: an
+            # unverifiable request is exactly what this check exists to stop. Re-connect ClickUp
+            # to register a fresh webhook and store its secret.
+            log.warning("ClickUp webhook rejected — no signing secret stored for any tenant "
+                        "(run migration 151 and reconnect ClickUp)")
+            return {"status": "unverified", "reason": "no_secret_stored"}
+        log.warning("ClickUp webhook rejected — bad or missing X-Signature")
+        return {"status": "unverified"}
+
     try:
         body = await request.json()
     except Exception:
         return {"status": "ignored"}
 
+    event = body.get("event") or ""
     clickup_task_id = body.get("task_id")
     if not clickup_task_id:
         return {"status": "ignored"}
@@ -240,7 +334,10 @@ async def webhook(request: Request) -> dict:
         if isinstance(after, dict) and after.get("status"):
             new_status = after["status"]
     if not new_status:
-        return {"status": "no_status_change"}
+        # Not a status change — but the team still cares about assignments, due-date moves,
+        # priority changes and comments, all of which used to be dropped silently here even
+        # though taskUpdated was already subscribed.
+        return await _handle_non_status_event(verified_tenant, event, clickup_task_id, body)
 
     from vula.integrations.clickup_sync import field_task_for_clickup
     link = field_task_for_clickup(clickup_task_id)
@@ -260,10 +357,9 @@ async def webhook(request: Request) -> dict:
         return {"status": "ok", "field_task": link["field_task_id"], "new_status": fo_status}
 
     # Not a field-ops-mirrored task — try procurement (a native ClickUp task tagged
-    # procurement/stock). The webhook payload carries no tenant, so probe each
-    # ClickUp-connected tenant's token for this task id — fine at today's scale
-    # (a handful of connected tenants, webhooks fire rarely).
-    tenant_id = await _resolve_tenant_for_task(clickup_task_id)
+    # procurement/stock). The tenant is already known: it's whichever tenant's signing secret
+    # validated this delivery, which is stronger than the old token-probing guess.
+    tenant_id = verified_tenant
     if not tenant_id:
         return {"status": "unmapped"}
     try:
@@ -277,6 +373,98 @@ async def webhook(request: Request) -> dict:
     except Exception as exc:
         log.warning("Procurement webhook handling failed for %s: %s", clickup_task_id, exc)
         return {"status": "error"}
+
+
+def _history_change(body: dict, field: str) -> Optional[str]:
+    """Human-readable 'after' value for a changed field in the webhook's history_items."""
+    for h in body.get("history_items", []) or []:
+        if h.get("field") != field:
+            continue
+        after = h.get("after")
+        if isinstance(after, dict):
+            return (after.get("username") or after.get("status") or after.get("priority")
+                    or after.get("date") or after.get("name"))
+        if isinstance(after, list) and after:
+            first = after[0]
+            return first.get("username") if isinstance(first, dict) else str(first)
+        if after not in (None, ""):
+            return str(after)
+    return None
+
+
+async def _handle_non_status_event(tenant_id: str, event: str, task_id: str,
+                                   body: dict) -> dict:
+    """Assignments, due-date moves, priority changes and comments.
+
+    2026-09-01: taskUpdated was already subscribed but the handler returned early on anything
+    that wasn't a status change, so none of this ever reached the team. Now the people who work
+    on WhatsApp hear about ClickUp changes without having to sit in ClickUp.
+    """
+    from vula.clickup.service import get_task
+
+    try:
+        task = await get_task(tenant_id, task_id)
+    except Exception as exc:
+        log.debug("ClickUp task fetch failed for %s: %s", task_id, exc)
+        task = None
+    title = (task or {}).get("name") or "a task"
+    url = (task or {}).get("url") or ""
+
+    msg = None
+    if event == "taskCommentPosted":
+        # The comment text isn't always in the payload; read it back so the team sees the words,
+        # not just "someone commented".
+        text, who = None, None
+        for h in body.get("history_items", []) or []:
+            c = h.get("comment") or {}
+            if isinstance(c, dict) and c.get("text_content"):
+                text = c["text_content"].strip()
+            who = ((h.get("user") or {}).get("username")) or who
+        if not text:
+            try:
+                comments = await service.list_comments(tenant_id, task_id, limit=1)
+                if comments:
+                    text, who = comments[0].get("text"), comments[0].get("by") or who
+            except Exception:
+                pass
+        if text:
+            msg = (f"💬 {who or 'Someone'} commented on *{title}*:\n\n\"{text[:400]}\""
+                   + (f"\n\n{url}" if url else ""))
+    elif event == "taskAssigneeUpdated":
+        who = _history_change(body, "assignee_add") or _history_change(body, "assignees")
+        if who:
+            msg = f"👤 *{title}* is now assigned to {who}." + (f"\n{url}" if url else "")
+    elif event == "taskDueDateUpdated":
+        due = (task or {}).get("due_date")
+        when = ""
+        if due:
+            try:
+                from datetime import datetime, timezone
+                when = datetime.fromtimestamp(int(due) / 1000, timezone.utc).strftime("%a %d %b")
+            except Exception:
+                when = ""
+        msg = (f"📅 Due date changed on *{title}*" + (f" — now {when}." if when else ".")
+               + (f"\n{url}" if url else ""))
+    elif event == "taskPriorityUpdated":
+        pri = _history_change(body, "priority")
+        if pri:
+            msg = f"⚡ *{title}* is now {pri} priority." + (f"\n{url}" if url else "")
+    elif event == "taskCreated":
+        msg = f"🆕 New ClickUp task: *{title}*" + (f"\n{url}" if url else "")
+    elif event == "taskDeleted":
+        msg = f"🗑️ A ClickUp task was deleted ({task_id})."
+    else:
+        return {"status": "ignored_event", "event": event}
+
+    if not msg:
+        return {"status": "no_detail", "event": event}
+    try:
+        from vula.integrations.notify import notify_team
+        await notify_team(tenant_id, "clickup_update", msg)
+    except Exception as exc:
+        log.warning("ClickUp notify failed for %s: %s", tenant_id, exc)
+        return {"status": "error", "event": event}
+    return {"status": "ok", "event": event, "notified": True}
 
 
 async def _resolve_tenant_for_task(clickup_task_id: str) -> Optional[str]:

@@ -83,6 +83,35 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                         "do NOT compute the date yourself, the tool resolves it."}},
             "required": ["title", "due_date"]},
     }},
+    {"type": "function", "function": {
+        "name": "add_comment",
+        "description": "Post a comment on an existing ClickUp task, by matching its title. Use "
+                       "this to leave an update, answer, or note where the team will see it — "
+                       "e.g. 'add a note on the site inspection task that the client rescheduled'.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "A fragment of the task title to match"},
+            "comment": {"type": "string", "description": "What to say, in plain language"}},
+            "required": ["title", "comment"]},
+    }},
+    {"type": "function", "function": {
+        "name": "list_comments",
+        "description": "Read the recent comments on a ClickUp task, by matching its title — use "
+                       "when asked what's been said, discussed, or decided on a task.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "A fragment of the task title to match"},
+            "limit": {"type": "integer", "description": "How many comments (default 10)"}},
+            "required": ["title"]},
+    }},
+    {"type": "function", "function": {
+        "name": "assign_task",
+        "description": "Assign an existing ClickUp task to a workspace member, by matching the "
+                       "task title. If the person isn't in the workspace the tool says so — "
+                       "never assume an assignment succeeded.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "A fragment of the task title to match"},
+            "assignee": {"type": "string", "description": "The person's name, e.g. 'Nolo'"}},
+            "required": ["title", "assignee"]},
+    }},
 ]
 
 
@@ -273,6 +302,26 @@ class ClickUpAdminSkill(BaseSkill):
                 return await service.list_tasks(tid, status=args.get("status"),
                                                limit=args.get("limit", 15),
                                                assignee_id=assignee_id)
+            if name in ("add_comment", "list_comments", "assign_task"):
+                # All three act on an EXISTING task, matched by title fragment — the same
+                # resolve-first pattern update_task_status_by_name uses, so a typo'd title says
+                # so plainly instead of silently doing nothing.
+                task = await service.find_task(tid, args.get("title", ""))
+                if not task:
+                    return {"error": f"No ClickUp task found matching '{args.get('title', '')}'."}
+                task_id = task.get("id")
+                if name == "add_comment":
+                    text = (args.get("comment") or "").strip()
+                    if not text:
+                        return {"error": "Nothing to comment — pass the note to add."}
+                    res = await service.add_comment(tid, task_id, text)
+                    return {**res, "task": task.get("name")}
+                if name == "list_comments":
+                    comments = await service.list_comments(tid, task_id,
+                                                           limit=args.get("limit", 10))
+                    return {"task": task.get("name"), "count": len(comments),
+                            "comments": comments}
+                return await service.assign_task(tid, task_id, args.get("assignee", ""))
             if name == "update_task_status":
                 return await service.update_task_status_by_name(tid, args.get("title", ""),
                                                                args.get("status", ""))
