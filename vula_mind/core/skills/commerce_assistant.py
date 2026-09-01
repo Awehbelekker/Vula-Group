@@ -842,6 +842,15 @@ class CommerceAssistantSkill(BaseSkill):
                     f"\n\nThis customer usually speaks {name}. Greet and reply in {name} by default, "
                     f"unless they clearly switch to another language in this message — then follow them."
                 )
+            elif name == "English":
+                # 2026-09-01: a KNOWN-English customer previously got no language instruction at
+                # all, while the prompt above advertises isiZulu/isiXhosa/Sesotho — and a real
+                # off-the-hook reply opened "Sawubona!" mid-thread to someone writing English
+                # throughout. Say the quiet part explicitly.
+                lang_block = (
+                    "\n\nThis customer writes in English. Reply in English — do not open with a "
+                    "greeting or phrase in another language unless they use one first."
+                )
         except Exception:
             pass
 

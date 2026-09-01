@@ -484,6 +484,34 @@ KNOWLEDGE_TOOLS = [
             "expression": {"type": "string",
                            "description": "e.g. '11.8 * 18.2' or 'round(214.76 * 198.00, 2)'"}},
             "required": ["expression"]}}},
+    {"type": "function", "function": {
+        "name": "remember_rule",
+        "description": (
+            "Save a STANDING INSTRUCTION the owner or rep has just given you about how to do "
+            "the work — pricing policy, discounts, who must approve what, delivery rules. Call "
+            "this whenever they tell you how something should be handled from now on (e.g. "
+            "'Per-Square is always NETT', 'DT gets 7% trade discount', 'check with Michelle "
+            "before pricing SPM'). Save it in THEIR words, then confirm back what you saved. "
+            "Do NOT use this for a one-off request, a question, or a fact about a single "
+            "order — only for a rule meant to apply going forward."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "rule": {"type": "string", "description": "The instruction, in the owner's own words."},
+            "topic": {"type": "string", "description": "Short label, e.g. 'pricing', 'discounts', "
+                                                       "'delivery', 'approvals'."}},
+            "required": ["rule"]}}},
+    {"type": "function", "function": {
+        "name": "list_rules",
+        "description": "Show the standing instructions currently being followed — use when "
+                       "asked what you remember, what the rules are, or what you've been told.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "forget_rule",
+        "description": "Stop following a standing instruction, matched by a fragment of it "
+                       "(e.g. 'the DT discount one'). Confirm which rule before doing it.",
+        "parameters": {"type": "object", "properties": {
+            "match": {"type": "string", "description": "Part of the rule or its topic."}},
+            "required": ["match"]}}},
 ]
 DRAFT_TOOLS = [
     {"type": "function", "function": {
@@ -1007,6 +1035,17 @@ class CommerceAdminSkill(BaseSkill):
             logger.warning("commerce_admin loop failed (%s)", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
+    @staticmethod
+    def _rules_block(tenant_id: str) -> str:
+        """The owner's standing instructions, applied to every answer (migration 152).
+        Best-effort — a rules lookup must never take down a real reply."""
+        try:
+            from vula.commerce import business_rules
+            return business_rules.rules_block(tenant_id)
+        except Exception as exc:
+            logger.debug("business rules block skipped: %s", exc)
+            return ""
+
     def _system_prompt(self, tenant_id: str, role: Optional[str] = None, name: Optional[str] = None,
                        lang: str = "") -> str:
         # Ground the model in the real current date — without this it has no way to resolve
@@ -1058,6 +1097,7 @@ class CommerceAdminSkill(BaseSkill):
                 "Just say plainly what you can see in it and ask what they'd like done with it "
                 "(log it as a meeting note, save the contact, or nothing at all) — don't guess.\n\n"
                 + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
+                + self._rules_block(tenant_id)
             )
         role_label = _role_label(tenant_id)
         return (
@@ -1106,6 +1146,7 @@ class CommerceAdminSkill(BaseSkill):
             # owner got the generic "mirror their language" fallback instead of the explicit
             # per-language block, letting the loop drift to English mid-multi-turn.
             + behaviour_preamble(agentic=True, preferred_language=lang) + persona_block
+                + self._rules_block(tenant_id)
         )
 
     # ── Agent loop (mirrors commerce_assistant) ──────────────────────────────
@@ -1369,6 +1410,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
             if name == "lookup_business_info": return await self._lookup_business_info(tid, args)
             if name == "calculate": return self._calculate(args)
+            if name in ("remember_rule", "list_rules", "forget_rule"):
+                return self._rule_tool(name, tid, args, ctx)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
             if name == "list_reminders":     return await self._list_reminders(tid, args, ctx)
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)
@@ -2731,6 +2774,35 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": f"Found results but couldn't summarise them: {exc}",
                     "links": sources}
         return {"summary": summary or "No clear findings from the search results.", "sources": sources}
+
+    def _rule_tool(self, name: str, tid: str, args: Dict[str, Any],
+                   ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """Standing instructions the owner has given (migration 152).
+
+        2026-08-28, real Gerflor message: the owner dictated a full pricing policy — Per-Square
+        NETT, DT 7% trade discount except Mactile, zone rules, check with Michelle before pricing
+        SPM. Vula replied "I was unable to find the correct pricing structure" and kept none of
+        it. Three days later the same question got the same empty answer.
+        """
+        from vula.commerce import business_rules as br
+        if name == "remember_rule":
+            phone = (ctx or {}).get("phone") or (ctx or {}).get("customer_phone") or ""
+            return br.add_rule(tid, args.get("rule", ""), topic=args.get("topic", ""),
+                               created_by=phone)
+        if name == "list_rules":
+            rules = br.active_rules(tid)
+            return {"count": len(rules),
+                    "rules": [{"id": r.get("id"), "topic": r.get("topic"), "rule": r.get("rule")}
+                              for r in rules],
+                    "message": ("Nothing saved yet — tell me how you want things handled and "
+                                "I'll remember it." if not rules else None)}
+        match = (args.get("match") or "").strip()
+        found = br.find_rule(tid, match)
+        if not found:
+            return {"error": f"No standing rule matching '{match}'. Call list_rules to see them."}
+        ok = br.archive_rule(tid, found["id"])
+        return ({"status": "forgotten", "rule": found.get("rule")} if ok
+                else {"error": "Couldn't remove that rule just now."})
 
     def _calculate(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Exact arithmetic, reusing calculations.py's AST evaluator (no eval, no LLM).
