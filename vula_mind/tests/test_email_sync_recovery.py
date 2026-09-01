@@ -157,3 +157,60 @@ async def test_the_threshold_crossing_still_notifies_once():
             db, "off-the-hook", "a1", "info@x.co.za",
             email_sync._FAIL_NOTIFY_THRESHOLD - 1, "boom")
     notify.assert_awaited_once()
+
+
+# ── the second half of the same trap (found live, 2026-09-01) ───────────────────
+# Fixing process_all_email_sync's selection was not enough: off-the-hook was then selected but
+# still bailed instantly, because get_email_creds ALSO filtered on status == "connected". The
+# forced retry returned a bare {"synced": 0} without even incrementing the failure count — it
+# never opened a connection at all. A mailbox still could not recover.
+
+def _creds_db(sink, rows):
+    class _Q:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, col, val):
+            sink.setdefault("eq", []).append((col, val))
+            return self
+
+        def in_(self, col, vals):
+            sink.setdefault("in_", []).append((col, list(vals)))
+            return self
+
+        def order(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": rows})()
+    return type("C", (), {"table": lambda self, n: _Q()})()
+
+
+def test_a_specific_errored_account_still_returns_its_credentials():
+    from vula.email_imap import credentials as cr
+    cr._CACHE.pop("acct-1", None)
+    sink = {}
+    row = {"id": "acct-1", "tenant_id": "off-the-hook", "email": "info@offthehook.capetown",
+           "imap_host": "mail.offthehook.capetown", "imap_port": 993,
+           "smtp_host": "mail.offthehook.capetown", "smtp_port": 465,
+           "secret": None, "send_mode": "draft", "status": "error"}
+    with patch.object(cr, "_client", lambda: _creds_db(sink, [row])), \
+         patch.object(cr, "_row_to_creds", lambda r: {"id": r["id"], "email": r["email"]}):
+        creds = cr.get_email_creds("off-the-hook", "acct-1")
+    assert creds is not None, "an errored mailbox must still be retriable"
+    statuses = [v for c, v in sink.get("in_", []) if c == "status"]
+    assert statuses and "error" in statuses[0]
+    cr._CACHE.pop("acct-1", None)
+
+
+def test_the_default_mailbox_lookup_still_requires_connected():
+    """Picking a tenant's primary mailbox to read or draft from must not hand out a broken one."""
+    from vula.email_imap import credentials as cr
+    sink = {}
+    with patch.object(cr, "_client", lambda: _creds_db(sink, [])):
+        cr.get_email_creds("off-the-hook")
+    statuses = [v for c, v in sink.get("in_", []) if c == "status"]
+    assert statuses and statuses[0] == ["connected"]

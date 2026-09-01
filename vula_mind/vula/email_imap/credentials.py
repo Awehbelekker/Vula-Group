@@ -87,7 +87,18 @@ def get_email_creds(tenant_id: str, account_id: Optional[str] = None) -> Optiona
     if account_id and account_id in _CACHE:
         return _CACHE[account_id]
     try:
-        q = _client().table("vula_email_accounts").select(_SELECT_COLS).eq("tenant_id", tenant_id).eq("status", "connected")
+        # 2026-09-01: when a SPECIFIC account_id is asked for, an 'error' account must still
+        # return its credentials — otherwise a mailbox can never be retried and so can never
+        # recover. This was the second half of the same one-way trap fixed in sync.py:
+        # process_all_email_sync was corrected to select errored accounts, and off-the-hook
+        # then still bailed here, silently, with a bare {"synced": 0} that didn't even bump the
+        # failure count. Confirmed live — the forced retry never opened a connection at all.
+        #
+        # The no-account_id path (pick the tenant's primary mailbox for reading/drafting) still
+        # requires 'connected': a broken mailbox shouldn't be handed out as a working default.
+        statuses = ["connected", "error"] if account_id else ["connected"]
+        q = (_client().table("vula_email_accounts").select(_SELECT_COLS)
+             .eq("tenant_id", tenant_id).in_("status", statuses))
         q = q.eq("id", account_id) if account_id else q.eq("is_primary", True)
         rows = q.limit(1).execute().data or []
         if not rows and not account_id:
