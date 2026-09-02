@@ -374,6 +374,32 @@ async def receive_message(
                             handled = False
                             if not expense_intent:
                                 handled = await _handle_media(phone, media_id, caption, msg_id)
+                            # An UNCAPTIONED photo from a rep that wasn't a receipt used to be
+                            # filed silently as a document — so a screenshot of a company's
+                            # details, or a business card snapped between meetings, vanished
+                            # into storage with no acknowledgement and nothing logged. Reps are
+                            # busy and often send a photo with no caption at all (Ian,
+                            # 2026-09-02). Read it and ASK, rather than guessing or filing mute.
+                            #
+                            # Deliberately placed AFTER _handle_media: an uncaptioned receipt
+                            # must still reach the books through the existing scanner, which is
+                            # a real working flow and must not be diverted to the agent.
+                            if (not handled and msg_type == "image" and not caption.strip()
+                                    and route_tenant
+                                    and await _sender_is_sales_rep(phone, route_tenant)):
+                                description = await _describe_photo_for_rep(media_id)
+                                if description:
+                                    prompt = (
+                                        f"[The rep sent this photo with no caption. "
+                                        f"What's in the photo: {description}]\n\n"
+                                        f"Tell them briefly what you can see, then ask what "
+                                        f"they'd like done with it — save it as a contact, log "
+                                        f"a meeting, file it against a project — unless one is "
+                                        f"obviously right, in which case do that and say so. "
+                                        f"Never invent details that aren't visible in the photo."
+                                    )
+                                    if await _run_commerce_admin(phone, prompt, route_tenant):
+                                        continue
                             if not handled:
                                 if route_mode == "knowledge" or route_tenant or expense_intent:
                                     # Tenant line (or an expense photo) → ingest + auto-log expenses.
