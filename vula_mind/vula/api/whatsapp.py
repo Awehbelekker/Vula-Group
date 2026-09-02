@@ -3410,6 +3410,45 @@ def _split_for_whatsapp(text: str, limit: int = _WA_SPLIT_AT) -> list[str]:
     return parts or [text[:limit]]
 
 
+# A dense block of text is the last obviously bot-like thing about a Vula reply: a real person
+# sends the answer, then the follow-up question, as separate messages. Only applied to a reply
+# that is genuinely long AND already has paragraph structure — and it NEVER breaks inside a
+# paragraph or a list, so a split can't land mid-thought. Capped at 3 so a reply can't turn into
+# a burst of notifications.
+_NATURAL_SPLIT_MIN_CHARS = 700
+_NATURAL_MAX_PARTS = 3
+_NATURAL_PART_TARGET = 1200
+
+
+def _natural_parts(text: str) -> list[str]:
+    """Group an already-structured long reply into a few messages, the way a person sends them.
+
+    Returns [text] unchanged when the reply is short, has no paragraph breaks, or would only
+    produce one part — so ordinary replies are completely unaffected.
+    """
+    text = (text or "").strip()
+    if len(text) < _NATURAL_SPLIT_MIN_CHARS:
+        return [text] if text else []
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+    if len(blocks) < 2:
+        return [text]
+
+    parts: list[str] = []
+    current = ""
+    for b in blocks:
+        candidate = f"{current}\n\n{b}" if current else b
+        # Start a new message once this one is a reasonable size, but never exceed the cap —
+        # the tail is always appended to the last part rather than spawning a fourth.
+        if current and len(candidate) > _NATURAL_PART_TARGET and len(parts) < _NATURAL_MAX_PARTS - 1:
+            parts.append(current)
+            current = b
+        else:
+            current = candidate
+    if current:
+        parts.append(current)
+    return parts if len(parts) > 1 else [text]
+
+
 def _whatsapp_markup(text: str) -> str:
     """Convert markdown emphasis to WhatsApp's own, so it renders instead of showing as
     literal punctuation. Deliberately conservative: only doubled markers with non-space
@@ -3419,6 +3458,75 @@ def _whatsapp_markup(text: str) -> str:
     text = _MD_HEADING_RE.sub(lambda m: f"*{m.group(1).strip()}*", text)
     text = _MD_BOLD_RE.sub(lambda m: f"*{m.group(1)}*", text)
     return _MD_ITALIC_RE.sub(lambda m: f"_{m.group(1)}_", text)
+
+
+# Meta error codes worth telling a human about, vs ones that are just noise.
+# 131047 re-engagement: outside the 24-hour customer service window, only an approved template
+#        may be sent — the single likeliest reason a real answer never arrives.
+# 131026 undeliverable: the number can't receive WhatsApp (wrong number, not on WhatsApp).
+# 131030 not in allowed list: a dev-mode restriction, a configuration problem.
+# 131031 account locked / 133x quality issues: the line itself is in trouble.
+_SEND_FAILURE_MEANING = {
+    "131047": "outside the 24-hour reply window — needs an approved template to reach them",
+    "131026": "that number can't receive WhatsApp messages",
+    "131030": "that number isn't on the allowed-recipients list for this line",
+    "131031": "this WhatsApp account is restricted",
+    "131049": "Meta throttled this send for quality reasons",
+    "132000": "the message template didn't match its expected shape",
+}
+
+# (phone, code) -> monotonic time of last owner notification. A number that has gone dead
+# would otherwise generate an alert on every single reply attempt.
+_send_failure_notified: dict = {}
+_SEND_FAILURE_NOTIFY_COOLDOWN_S = 3600.0
+
+
+async def _record_send_failure(to: str, tenant_id: str, body: str, exc_text: str) -> None:
+    """Make a failed WhatsApp send VISIBLE.
+
+    2026-09-02: a send that failed was logged to Railway and nothing else — no telemetry, no
+    human told. 71 call sites send replies and only 4 check the return value, so 67 paths were
+    send-and-forget. On the main client-facing channel that means a customer's answer can simply
+    never arrive, and the business finds out only if the customer chases.
+
+    Records telemetry always (so the failure rate is measurable at all), and notifies the team
+    once per hour per number for failures a human can actually act on — chiefly the 24-hour
+    window, where the fix is to reach the customer another way.
+
+    Never raises and never notifies about a failure to notify: this runs inside the send path.
+    """
+    import re as _re3
+    code = ""
+    m = _re3.search(r'"code"\s*:\s*(\d+)', body or "")
+    if m:
+        code = m.group(1)
+    meaning = _SEND_FAILURE_MEANING.get(code, "")
+
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-wa-send", task="send_reply", outcome="failed",
+             tenant_id=tenant_id or None, reason=(meaning or exc_text)[:120],
+             extra={"code": code or "unknown"})
+    except Exception:
+        pass
+
+    if not (tenant_id and meaning):
+        return   # nothing a human could usefully do with a transient/unknown failure
+    try:
+        import time as _time
+        key = (to, code)
+        now = _time.monotonic()
+        last = _send_failure_notified.get(key)
+        if last and (now - last) < _SEND_FAILURE_NOTIFY_COOLDOWN_S:
+            return
+        _send_failure_notified[key] = now
+        from vula.integrations.notify import notify_team
+        await notify_team(tenant_id, "wa_send_failed", (
+            f"⚠️ A reply to {to} didn't go through — {meaning}.\n\n"
+            f"They haven't received it. Worth reaching them another way if it was urgent."
+        ))
+    except Exception as exc:
+        logger.debug("send-failure notification skipped: %s", exc)
 
 
 def _strip_generic_closer(text: str) -> str:
@@ -3477,8 +3585,42 @@ def _sanitize_outbound(message: str) -> str:
             return _MD_LINK_RE.sub(
                 lambda m: f"{m.group(1)}: {m.group(2)}" if m.group(1).strip() else m.group(2),
                 v.strip())
+    # A leaked TOOL CALL is genuinely unusable — apologise. But a flat data object is a real
+    # answer wearing the wrong clothes, and apologising throws it away.
+    # 2026-09-02, reproduced on the real off-the-hook tenant: finance_admin answered
+    # "how many unpaid invoices and what's the total?" with {"unpaid_invoices": 0, "total": "R0"}
+    # — correct, and the owner received "Sorry — I got a bit tangled up there" instead.
+    if not _looks_like_tool_call(d):
+        rendered = _render_flat_json(d)
+        if rendered:
+            logger.warning("OUTBOUND JSON caught at _send_reply — rendered as text: %.160s", text)
+            return rendered
     logger.warning("OUTBOUND JSON LEAK caught at _send_reply — suppressed: %.200s", text)
     return "Sorry — I got a bit tangled up there. Could you say that again? 🙏"
+
+
+def _looks_like_tool_call(d: dict) -> bool:
+    """A model emitting an unexecuted tool call, not an answer — nothing to salvage."""
+    return "name" in d and ("parameters" in d or "arguments" in d)
+
+
+def _render_flat_json(d: dict) -> str:
+    """Turn a simple {key: scalar} answer object into a readable line.
+
+    Only handles the flat, obviously-presentable case — nested structures, empty objects and
+    anything with a non-scalar value fall through to the apology rather than being mangled into
+    something that looks like a real answer but isn't.
+    """
+    if not d or len(d) > 6:
+        return ""
+    bits = []
+    for k, v in d.items():
+        if v is None or isinstance(v, (dict, list)):
+            return ""
+        label = str(k).replace("_", " ").strip()
+        label = label[:1].upper() + label[1:]
+        bits.append(f"{label}: {v}")
+    return ". ".join(bits) + "." if bits else ""
 
 
 async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
@@ -3547,7 +3689,10 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
     # Long replies go as several messages rather than one truncated one — see
     # _split_for_whatsapp. Sent in order; a failure part-way stops rather than sending the tail
     # out of context.
-    parts = _split_for_whatsapp(message) or [message]
+    parts = []
+    for _p in _natural_parts(message):
+        parts.extend(_split_for_whatsapp(_p))
+    parts = parts or [message]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for i, part in enumerate(parts):
@@ -3580,9 +3725,11 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
         except Exception:
             pass
         logger.error("WhatsApp reply failed to %s (%s): %s", to, exc, body)
+        await _record_send_failure(to, tenant_id, body, str(exc))
         return False
     except Exception as exc:
         logger.error("WhatsApp reply failed to %s: %s", to, exc)
+        await _record_send_failure(to, tenant_id, "", str(exc))
         return False
 
 

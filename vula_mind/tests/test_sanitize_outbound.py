@@ -183,3 +183,111 @@ def test_splitting_does_not_cut_mid_word_when_avoidable():
 def test_empty_message_yields_no_parts():
     from vula.api.whatsapp import _split_for_whatsapp
     assert _split_for_whatsapp("") == []
+
+
+# ── chunking as style (2026-09-02) ──────────────────────────────────────────────
+# A dense block is the last obviously bot-like thing about a Vula reply: a person sends the
+# answer, then the follow-up question, as separate messages. Only applied to a reply that is
+# genuinely long AND already has paragraph structure, and it never breaks inside a paragraph or
+# a list, so a split can't land mid-thought.
+
+def _parts(text):
+    from vula.api.whatsapp import _natural_parts
+    return _natural_parts(text)
+
+
+def test_a_short_reply_is_never_split():
+    for t in ["Order confirmed.",
+              "R160.00 per kg.",
+              "Yes — Monday morning works. I'll put you down for 10am."]:
+        assert _parts(t) == [t]
+
+
+def test_a_long_reply_with_no_paragraphs_is_left_alone():
+    """Nothing to split on — better one block than a cut mid-thought."""
+    t = "The delivery is scheduled for Monday morning. " * 30
+    assert _parts(t.strip()) == [t.strip()]
+
+
+def test_a_structured_long_reply_becomes_a_few_messages():
+    text = (
+        "Here are our fresh fish prices for this week.\n\n"
+        + "\n".join(f"* Line item {i} — R{100 + i}.00 per kg" for i in range(40))
+        + "\n\nAll of these are available for delivery tomorrow if you order before 4pm.\n\n"
+        "Would you like me to add any of these to your cart?"
+    )
+    parts = _parts(text)
+    assert 1 < len(parts) <= 3
+    assert all(p.strip() for p in parts)
+    # the closing question travels as its own message, like a person would send it
+    assert parts[-1].endswith("add any of these to your cart?")
+
+
+def test_a_split_never_lands_inside_a_paragraph():
+    text = ("First paragraph. " * 40).strip() + "\n\n" + ("Second paragraph. " * 40).strip()
+    for p in _parts(text):
+        assert not p.startswith("paragraph"), "split landed mid-sentence"
+        assert p == p.strip()
+
+
+def test_never_more_than_three_messages():
+    text = "\n\n".join(f"Block number {i}. " * 20 for i in range(30))
+    assert len(_parts(text)) <= 3
+
+
+def test_nothing_is_lost_when_splitting():
+    text = ("Intro paragraph here.\n\n"
+            + "\n".join(f"* Item {i}" for i in range(60))
+            + "\n\nClosing question?")
+    parts = _parts(text)
+    joined = "\n\n".join(parts)
+    for probe in ("Intro paragraph here.", "* Item 0", "* Item 59", "Closing question?"):
+        assert probe in joined
+
+
+def test_empty_input_is_safe():
+    assert _parts("") == []
+    assert _parts("   ") == []
+
+
+# ── a data object is an answer wearing the wrong clothes (2026-09-02) ───────────
+# Reproduced on the real off-the-hook tenant: finance_admin answered "how many unpaid invoices
+# and what's the total?" with {"unpaid_invoices": 0, "total": "R0"} — correct — and the owner
+# received "Sorry, I got a bit tangled up there" because the JSON guard suppressed it wholesale.
+# A leaked TOOL CALL is unusable and must still be suppressed; flat data should be read out.
+
+def test_the_real_finance_answer_is_rendered_not_apologised_for():
+    out = _sanitize_outbound('{"unpaid_invoices": 0, "total": "R0"}')
+    assert out == "Unpaid invoices: 0. Total: R0."
+    assert "tangled" not in out
+
+
+def test_a_leaked_tool_call_is_still_suppressed():
+    for leak in ['{"name": "create_quote", "parameters": {"items": []}}',
+                 '{"name": "add_to_cart", "arguments": {"product": "Hake"}}']:
+        assert _sanitize_outbound(leak).startswith("Sorry")
+
+
+def test_a_message_field_still_wins_over_rendering():
+    out = _sanitize_outbound('{"message": "Your order is confirmed.", "total": 450}')
+    assert out == "Your order is confirmed."
+
+
+@pytest.mark.parametrize("leak", [
+    '{"a": {"nested": 1}}',          # nested — would render as junk
+    '{"items": [1, 2, 3]}',          # list value
+    '{"x": null}',                   # nothing to say
+    '{}',                            # empty
+])
+def test_anything_not_plainly_presentable_still_apologises(leak):
+    assert _sanitize_outbound(leak).startswith("Sorry")
+
+
+def test_an_over_long_object_is_not_rendered_as_a_sentence():
+    big = "{" + ", ".join(f'"k{i}": {i}' for i in range(9)) + "}"
+    assert _sanitize_outbound(big).startswith("Sorry")
+
+
+def test_rendered_keys_read_as_words():
+    out = _sanitize_outbound('{"outstanding_balance": "R1,200.00"}')
+    assert out == "Outstanding balance: R1,200.00."
