@@ -4350,6 +4350,27 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     except Exception as exc:
         logger.debug("Admin session/history load failed (non-fatal): %s", exc)
 
+    # A link the person pasted is part of what they're asking about, not decoration.
+    # 2026-09-02, real Gerflor transcript: a rep shared a Google Maps link for Danielle's
+    # company, then asked "What the company details" — and got Sports Flooring Warehouse's
+    # phone and email from the knowledge base, presented as the answer. Confirmed by the rep:
+    # "not the same company". Nothing had ever resolved a pasted link, and asked about "the
+    # company" the assistant answered from unrelated KB rather than admitting it hadn't looked.
+    # Resolving it here means the following turn knows WHICH company is meant — and when the
+    # link can't be opened, says so instead of substituting a different business.
+    link_context = ""
+    try:
+        from vula.commerce import shared_link
+        urls = shared_link.find_urls(text)[:2]
+        if urls:
+            lines = []
+            for u in urls:
+                lines.append(shared_link.describe(await shared_link.resolve_shared_link(u)))
+            link_context = "\n\n" + "\n".join(lines)
+            logger.info("resolved %d shared link(s) for %s", len(urls), tenant_id)
+    except Exception as exc:
+        logger.debug("shared-link resolution skipped: %s", exc)
+
     # 2026-08-17: the owner/staff admin path never tracked a language preference at all —
     # only commerce_assistant.py (the customer path) did, which is exactly backwards, since
     # the owner is the one actually using this path for real business chat. Same pattern.
@@ -4385,7 +4406,8 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     skill = get_skill("commerce_admin")
     output = await skill(
         SkillInput(
-            question=text, tenant_id=tenant_id, conversation_history=history,
+            question=text, tenant_id=tenant_id,
+            conversation_history=history + link_context,
             metadata={"session_id": admin_session_key, "customer_phone": phone,
                       "caller_name": caller_name, "caller_role": caller_role,
                       "preferred_language": preferred_language},
