@@ -2863,12 +2863,21 @@ async def admin_list_invoices(
     tenant_id: str,
     status: Optional[str] = Query(None),
     doc_type: Optional[str] = Query(None),  # invoice | quote | proforma
-    direction: str = Query("outbound"),     # outbound | inbound
+    direction: Optional[str] = Query(None), # outbound | inbound | None = both
     supplier_id: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    """List all invoices/quotes for a tenant."""
+    """List all invoices/quotes for a tenant.
+
+    2026-09-02: `direction` used to default to "outbound", so the Invoices tab showed only
+    documents the tenant had ISSUED. Reported as "all the old invoices are not showing" — DIGG
+    was seeing 6 of 134, with the other 128 (supplier bills filed from email) invisible and no
+    indication they existed. Defaulting to BOTH is safe now that inbound documents carry a
+    distinct BILL reference instead of drawing from the tenant's own INV series (see
+    service._next_invoice_number), so the two are tellable apart on sight. Callers that want
+    one side still pass ?direction= explicitly.
+    """
     rows = await service.list_invoices(
         tenant_id, status=status, doc_type=doc_type, direction=direction,
         supplier_id=supplier_id, limit=limit, offset=offset,

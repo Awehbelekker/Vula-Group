@@ -1335,7 +1335,8 @@ def _compute_totals(line_items: List[dict], vat_rate: float,
     return entered, discount_cents, vat_cents, after_discount + vat_cents, normalised
 
 
-async def _next_invoice_number(tenant_id: str, doc_type: str) -> str:
+async def _next_invoice_number(tenant_id: str, doc_type: str,
+                               direction: str = "outbound") -> str:
     """Sequential, tenant-scoped, doc-type-scoped number e.g. OTH-INV-00001.
 
     Race-safe (migration 122): the number comes from a single atomic
@@ -1343,10 +1344,24 @@ async def _next_invoice_number(tenant_id: str, doc_type: str) -> str:
     SELECT-last-then-add-1-in-Python read/write pair, which two concurrent
     invoice creations could both read before either had written back,
     minting the same number twice.
+
+    2026-09-02: INBOUND documents (a supplier's invoice, filed from email) used to draw from the
+    SAME counter as the tenant's own outgoing invoices. Confirmed on real DIGG data: 74 of the
+    77 issued DIG-INV numbers had gone to other companies' invoices, leaving DIGG's own series
+    reading 51 -> 61 -> 74 -> 85 with large unexplained gaps. SARS expects an unbroken
+    sequential tax-invoice series, so that made their books look like dozens of invoices had
+    been issued and voided.
+
+    Inbound now uses its own counter and a BILL code, so a supplier bill is clearly OUR internal
+    reference for someone else's document and never consumes a number the tenant could be asked
+    to account for. Existing rows keep the numbers they were given — renumbering issued
+    documents would be worse than the gaps.
     """
-    code = _DOC_TYPE_CODE.get(doc_type, "INV")
+    inbound = (direction or "outbound").lower() == "inbound"
+    code = "BILL" if inbound else _DOC_TYPE_CODE.get(doc_type, "INV")
+    counter_key = f"inbound_{doc_type}" if inbound else doc_type
     result = _client().rpc(
-        "next_document_number", {"p_tenant_id": tenant_id, "p_counter_key": doc_type}
+        "next_document_number", {"p_tenant_id": tenant_id, "p_counter_key": counter_key}
     ).execute()
     num = int(result.data)
     prefix = tenant_id.upper()[:3]
@@ -2178,7 +2193,10 @@ async def commit_inbound_document(
             tenant_name = tenant_id
         row = {
             "id": record_id, "tenant_id": tenant_id, "direction": "inbound", "doc_type": doc_type,
-            "invoice_number": await _next_invoice_number(tenant_id, doc_type),
+            # A supplier's document must not draw from the tenant's OWN invoice sequence —
+            # see _next_invoice_number for the real DIGG numbering damage this caused.
+            "invoice_number": await _next_invoice_number(tenant_id, doc_type,
+                                                         direction="inbound"),
             "customer_name": tenant_name,
             "status": "draft", "supplier": supplier_name, "supplier_id": supplier_id,
             "project": project,
