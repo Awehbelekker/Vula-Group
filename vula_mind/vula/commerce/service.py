@@ -808,6 +808,40 @@ async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     return {"display_id": last.get("display_id"), "items": items}
 
 
+def _coerce_line_items(value) -> List[dict]:
+    """Always store line_items as a real LIST of dicts.
+
+    2026-09-02, real DIGG incident: the document-scan commit path wrote
+    `json.dumps(line_items)` while every other write path stored the list itself. The column
+    holds JSON, so the dumped string was stored as a JSON *string* — and reading it back gives
+    a string, which len() and iteration treat CHARACTER BY CHARACTER. A R1,599.90 supplier
+    invoice came back with 260 "line items": '[', '{', '"', 'd', 'e', 's', 'c', ... Every
+    email-scanned invoice and expense since the feature shipped is affected, and opening one
+    shows hundreds of single-character rows.
+
+    Accepts what the scanner might realistically produce — a list, a JSON string (including a
+    double-encoded one), or nothing — and always returns a list of dicts.
+    """
+    import json as _json
+    for _ in range(3):          # unwrap double-encoding rather than trusting one pass
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return [i for i in value if isinstance(i, dict)]
+        if isinstance(value, dict):
+            return [value]
+        if isinstance(value, str):
+            try:
+                value = _json.loads(value)
+            except Exception:
+                logger.warning("line_items was an unparseable string (%d chars) — storing empty",
+                               len(value))
+                return []
+        else:
+            return []
+    return []
+
+
 async def get_customer_profile(tenant_id: str, phone: str) -> Optional[dict]:
     """What we already know about a returning customer, from their most recent real order.
 
@@ -2039,7 +2073,6 @@ async def commit_inbound_document(
       written to that row) rather than guessing or creating a possible duplicate supplier. This
       is the one case that should route to human approval (see vula/commerce/approvals.py).
     """
-    import json as _j
     from uuid import uuid4
     from datetime import date, timedelta
 
@@ -2153,7 +2186,7 @@ async def commit_inbound_document(
             "payment_terms_days": payment_terms_days,
             "subtotal_cents": total_cents - vat_cents, "vat_rate": 15.0, "vat_cents": vat_cents,
             "total_cents": total_cents, "discount_cents": 0, "deposit_cents": 0,
-            "line_items": _j.dumps(extracted.get("line_items", [])),
+            "line_items": _coerce_line_items(extracted.get("line_items")),
             "notes": extracted.get("notes"), "source": source,
             "scan_confidence": extracted.get("confidence"),
         }
@@ -2195,7 +2228,7 @@ async def commit_inbound_document(
             "amount_cents": total_cents, "supplier": supplier_name, "supplier_id": supplier_id,
             "project": project,
             "payment_terms_days": payment_terms_days, "status": "pending", "source": source,
-            "doc_type": doc_type, "line_items": _j.dumps(extracted.get("line_items", [])),
+            "doc_type": doc_type, "line_items": _coerce_line_items(extracted.get("line_items")),
             "scan_confidence": extracted.get("confidence"),
             "paid_with": paid_with, "reimbursable": reimbursable, "paid_by_name": paid_by_name,
         }
