@@ -53,6 +53,42 @@ TOOL_SPECS: List[Dict[str, Any]] = [
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
 
 
+def _is_empty_ledger_result(result: dict) -> bool:
+    """True when a finance tool succeeded but the ledger simply holds nothing.
+
+    2026-09-02: the not-found guard only recognised an `error` or `found: False`. A result like
+    {"period": "all", "money_in": 0, "money_out": 0, "net": 0, "transactions": 0} is a
+    SUCCESSFUL call over an empty ledger, so the guard never fired — and instead of one clean
+    "nothing on file" answer the model rambled about its own tool calls and pasted raw tool JSON
+    to the user. Reproduced on off-the-hook, whose project-finance ledger is genuinely empty
+    (its money lives in the commerce tables), across three different real questions:
+
+        "Sawubona! I couldn't find the amount spent at suppliers this month. The tool calls
+         returned the following results: * Tool call 1: {"period": "all", "money_in": 0, ...}"
+
+    `transactions == 0` is the load-bearing signal: a real zero with transactions behind it
+    ("you're owed R0" because everything is paid) is a genuine answer and must NOT be treated as
+    missing data.
+    """
+    if not isinstance(result, dict):
+        return False
+    if "transactions" not in result:
+        return False
+    try:
+        if int(result.get("transactions") or 0) != 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    money_keys = ("money_in", "money_out", "net", "total", "spend", "amount")
+    present = [k for k in money_keys if k in result]
+    if not present:
+        return False
+    try:
+        return all(float(result.get(k) or 0) == 0 for k in present)
+    except (TypeError, ValueError):
+        return False
+
+
 class FinanceAdminSkill(BaseSkill):
     name = "finance_admin"
     description = "Answer money/budget/supplier questions from the project finance ledger."
@@ -116,6 +152,15 @@ class FinanceAdminSkill(BaseSkill):
                 "finance ledger (invoices and payments filed from email/WhatsApp).\n\n"
                 + behaviour_preamble(agentic=True, preferred_language=lang) +
                 "\n- Use the tools to fetch real figures; never invent amounts.\n"
+                "- NEVER mention your tool calls, quote raw tool output, or describe what a "
+                "tool returned. Real replies sent to owners on 2026-09-02 included 'The tool "
+                "calls returned the following results: * Tool call 1: {\"period\": \"all\", "
+                "\"money_in\": 0...}' — that is internal machinery, and pasting it is worse "
+                "than saying nothing. State the figure, or say plainly there's nothing on "
+                "file.\n"
+                "- Never say you couldn't find something and then state it anyway. If the "
+                "ledger holds nothing for the question, say exactly that in one sentence and "
+                "stop — don't narrate the attempt.\n"
                 "- Format money as South African Rand (e.g. R18,000). Keep answers short and WhatsApp-friendly.\n"
                 "- If a project name is fuzzy, pass the user's wording; the tools match loosely.\n"
                 "- If the question is a GENERAL how-does-this-work question (e.g. 'what's a "
@@ -233,11 +278,14 @@ class FinanceAdminSkill(BaseSkill):
         self._any_tool_dispatched = True
         self._verified.extend(self._extract_candidates(result))
         self._sources.append(tool_source(name, result))
-        not_found = isinstance(result, dict) and bool(result.get("error") or result.get("found") is False)
+        not_found = isinstance(result, dict) and bool(
+            result.get("error") or result.get("found") is False
+            or _is_empty_ledger_result(result))
         if not not_found:
             self._all_not_found = False
 
     def _extract_candidates(self, result: Any) -> List[float]:
+        # (see _is_empty_ledger_result below for the 2026-09-02 empty-ledger fix)
         """Every numeric value in a tool result, plus its /100 AND *100 forms —
         vula_project_finances stores rand directly (not cents, unlike the commerce_* tables),
         but this stays defensive of either convention rather than assuming one. 2026-08-24: the
