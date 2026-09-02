@@ -39,6 +39,34 @@ def _headers(token: str) -> dict:
     return {"Authorization": token, "Content-Type": "application/json"}
 
 
+# People say "in two weeks", not "in 2 weeks" — especially in a voice note.
+# 2026-09-02, real Gerflor transcript: "Please remind me to contact Danielle in two weeks" came
+# back as "I couldn't set a reminder", because the resolver only understood digits. "in 2 weeks"
+# worked; the identical request in words did not. Also normalises the trailing "time" in
+# "in two weeks time", and "a"/"an"/"a couple of" which are the same thought spoken differently.
+_NUMBER_WORDS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "couple": 2, "few": 3, "fortnight": 14,
+}
+
+
+def _normalise_number_words(text: str) -> str:
+    """Rewrite spoken quantities into the digit form the patterns below expect."""
+    t = re.sub(r"\bin a fortnight\b", "in 14 days", text)
+    t = re.sub(r"\ba couple of\b", "2", t)
+    t = re.sub(r"\ba few\b", "3", t)
+    t = re.sub(r"\s+time$", "", t)          # "in two weeks time"
+    t = re.sub(r"\s+from now$", "", t)      # "in two weeks from now"
+
+    def _sub(m):
+        word = m.group(1)
+        return str(_NUMBER_WORDS[word]) if word in _NUMBER_WORDS else m.group(0)
+
+    pattern = r"\b(" + "|".join(_NUMBER_WORDS) + r")\b(?=\s+(?:day|week|month)s?\b)"
+    return re.sub(pattern, _sub, t)
+
+
 def _resolve_relative_date(text: str) -> Optional[datetime]:
     """Deterministically resolve common relative-date phrases ('today', 'tomorrow',
     'Friday', 'next Friday', 'in 3 days') against the server's real current date.
@@ -56,6 +84,7 @@ def _resolve_relative_date(text: str) -> Optional[datetime]:
     already is that weekday).
     """
     text = re.sub(r"\s+", " ", (text or "").strip().lower())
+    text = _normalise_number_words(text)
     today = datetime.now(_SAST).date()
 
     if text == "today":
@@ -66,6 +95,8 @@ def _resolve_relative_date(text: str) -> Optional[datetime]:
         target = today + timedelta(days=int(m.group(1)))
     elif (m := re.fullmatch(r"in (\d+) weeks?", text)):
         target = today + timedelta(weeks=int(m.group(1)))
+    elif (m := re.fullmatch(r"in (\d+) months?", text)):
+        target = today + timedelta(days=30 * int(m.group(1)))
     elif (m := re.fullmatch(r"(next |this )?(\w+day)", text)) and m.group(2) in _WEEKDAYS:
         prefix, day_name = (m.group(1) or "").strip(), m.group(2)
         delta = (_WEEKDAYS[day_name] - today.weekday()) % 7

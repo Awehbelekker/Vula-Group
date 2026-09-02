@@ -1498,6 +1498,44 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
         return None
 
 
+# A message that is plainly a REQUEST, not an answer to "what was this receipt for?".
+# 2026-09-02, real Gerflor transcript: with two receipts pending, the rep asked
+# "Get company details and set reminder" TWICE and got the identical receipts listing back both
+# times — their actual request never reached the agent at all. The pending-purpose handler
+# swallowed every unparseable message and re-prompted, so the only way out of the conversation
+# was to answer about the receipts. That is the "stuck in a loop" Ian reported.
+_REQUEST_SHAPED = re.compile(
+    r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
+    r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
+    r"kry|stuur|wys|maak)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_purpose_attempt(text: str, parsed: dict) -> bool:
+    """True when the message plausibly IS an answer to the pending purpose question.
+
+    Deliberately conservative in the direction of letting a message THROUGH: re-prompting over
+    somebody's real request is the failure that traps them, whereas passing a genuine purpose
+    reply to the agent merely means it gets answered conversationally and asked again later.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if parsed:
+        return True            # at least one "1 fuel"-shaped pair — a real, if partial, attempt
+    from vula.commerce import expenses
+    if expenses.match_purpose_category(t):
+        return True            # names a real category ("fuel", "client lunch") — unambiguous
+    # Otherwise assume it IS a purpose unless it plainly isn't. A purpose is often free text
+    # with no category word at all ("printer ink for the office"), so requiring a category
+    # match here would reject real answers; the question was just asked, so a short, non-
+    # request reply is far more likely to be the answer than a new topic.
+    if t.endswith("?") or _REQUEST_SHAPED.match(t):
+        return False           # a question or an instruction — a different ask entirely
+    return len(t) <= 60        # purposes are short; anything longer is prose, not a reason
+
+
 async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str) -> Optional[str]:
     """Resolve a 'what was this for?' reply against the sender's purpose_category-pending
     WhatsApp claims. A single pending claim takes a plain free-text answer; two or more pending
@@ -1541,6 +1579,13 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
         if len(rows) == 1:
             claim = rows[0]
             cat = expenses.match_purpose_category(text)
+            # With one claim pending, ANY free text used to be accepted as its purpose — so a
+            # rep asking an unrelated question got their question filed as the expense reason
+            # AND never got an answer. Same trap as the multi-pending path below.
+            if not cat and not _looks_like_purpose_attempt(text, {}):
+                logger.info("single pending purpose left alone — message isn't a purpose: %.60s",
+                            text)
+                return None
             detail = None if cat else text
             cat = cat or "other"
             expenses.set_purpose_category(tenant_id, claim["id"], cat, detail=detail)
@@ -1575,7 +1620,12 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
                 result += "\n🚗 What's the odometer reading for the petrol one(s)? Reply with the number."
             return result
 
-        # Couldn't parse a full indexed reply — list them out and ask again.
+        # Couldn't parse a full indexed reply. If the message wasn't even an ATTEMPT at one,
+        # it's a different request and must reach the agent — see _looks_like_purpose_attempt.
+        if not _looks_like_purpose_attempt(text, parsed):
+            logger.info("pending-purpose prompt skipped — message isn't a purpose reply: %.60s",
+                        text)
+            return None
         listing = "\n".join(
             f"{i}) R{int(c.get('amount_cents') or 0)/100:,.2f} {c.get('supplier') or ''}".strip()
             for i, c in enumerate(rows, start=1))
