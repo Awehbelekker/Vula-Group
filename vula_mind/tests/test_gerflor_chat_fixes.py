@@ -158,3 +158,51 @@ def test_a_restart_fails_toward_letting_messages_through():
     """In-memory by design: forgetting we asked must never trap somebody."""
     _wa._purpose_prompted_at.clear()          # simulates a fresh process
     assert _wa._recently_asked_about_purpose(PHONE) is False
+
+
+# ── the residual, found by live-verifying the fix itself ────────────────────────
+# The just-asked window fixed the reported case (37 minutes after the prompt), but INSIDE the
+# window the verb list still decided — and "tell" was still missing from it. Three independent
+# signals now, the primary one vocabulary-free:
+#   1. did Vula actually just ask                (no vocabulary at all)
+#   2. does the message address Vula             ("tell ME", "send US") — catches the whole
+#                                                 "<any verb> me/us" family at once
+#   3. request-shaped opening verb               (a secondary net, checked BEFORE the category
+#                                                 match so "Schedule a meeting" isn't logged as
+#                                                 the "meeting" expense category)
+
+@pytest.mark.parametrize("text", [
+    "Tell me taralay impressions",
+    "Give me the price list",
+    "Show me the stock",
+    "Send us the quote",
+    "Look up Winelands Flooring",
+    "Research this company",
+    "Schedule a meeting",
+    "Arrange a site visit",
+    "Open a WhatsApp group",
+])
+def test_requests_are_never_taken_as_a_receipt_purpose(text):
+    assert _wa._looks_like_purpose_attempt(text, {}) is False
+
+
+@pytest.mark.parametrize("text", [
+    "fuel",
+    "client lunch",
+    "printer ink for the office",
+    "petrol for my car",          # "my" must NOT read as addressing Vula
+    "parking at the site",
+    "lunch with the architect",
+    "toll fees",
+    "accommodation",
+    "order forms",                # noun that doubles as a verb
+    "quote printing",
+])
+def test_real_purposes_are_still_accepted(text):
+    assert _wa._looks_like_purpose_attempt(text, {}) is True
+
+
+def test_a_request_containing_a_category_word_is_still_a_request():
+    """"Schedule a meeting" contains "meeting"; checking the category first logged it as one."""
+    assert _wa._looks_like_purpose_attempt("Schedule a meeting", {}) is False
+    assert _wa._looks_like_purpose_attempt("client meeting", {}) is True

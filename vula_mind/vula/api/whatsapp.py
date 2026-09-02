@@ -1538,7 +1538,9 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
 _REQUEST_SHAPED = re.compile(
     r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
     r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
-    r"kry|stuur|wys|maak)\b",
+    r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
+    r"forward|schedule|arrange|"
+    r"kry|stuur|wys|maak|soek|skryf)\b",
     re.IGNORECASE,
 )
 
@@ -1567,6 +1569,10 @@ def _recently_asked_about_purpose(phone: str) -> bool:
     return bool(last and (_t.monotonic() - last) < _PURPOSE_PROMPT_WINDOW_S)
 
 
+# Second-person / object pronouns mean the message is aimed AT Vula, not describing a purchase.
+_ADDRESSES_ASSISTANT = re.compile(r"\b(me|us|you|your|yours)\b", re.IGNORECASE)
+
+
 def _looks_like_purpose_attempt(text: str, parsed: dict) -> bool:
     """True when the message plausibly IS an answer to the pending purpose question.
 
@@ -1579,15 +1585,23 @@ def _looks_like_purpose_attempt(text: str, parsed: dict) -> bool:
         return False
     if parsed:
         return True            # at least one "1 fuel"-shaped pair — a real, if partial, attempt
+    # Request-shape is checked FIRST: "Schedule a meeting" contains the category word
+    # "meeting" but is plainly an instruction, and matching the category first would have
+    # logged it as an expense purpose.
+    if t.endswith("?") or _REQUEST_SHAPED.match(t):
+        return False           # a question or an instruction — a different ask entirely
+    # A purpose describes a THING BOUGHT ("printer ink for the office"); a request addresses
+    # Vula ("tell me...", "send us..."). Addressing the assistant is the generic signal the
+    # verb list kept missing — it catches the whole "<any verb> me/us/you" family at once,
+    # including the "Tell me taralay impressions" that re-broke this inside the ask window.
+    # "my"/"our" are deliberately absent: "petrol for my car" is a perfectly good purpose.
+    if _ADDRESSES_ASSISTANT.search(t):
+        return False
     from vula.commerce import expenses
     if expenses.match_purpose_category(t):
         return True            # names a real category ("fuel", "client lunch") — unambiguous
-    # Otherwise assume it IS a purpose unless it plainly isn't. A purpose is often free text
-    # with no category word at all ("printer ink for the office"), so requiring a category
-    # match here would reject real answers; the question was just asked, so a short, non-
-    # request reply is far more likely to be the answer than a new topic.
-    if t.endswith("?") or _REQUEST_SHAPED.match(t):
-        return False           # a question or an instruction — a different ask entirely
+    # Otherwise assume it IS a purpose: a purpose is often free text with no category word at
+    # all ("printer ink for the office"), so requiring a match here would reject real answers.
     return len(t) <= 60        # purposes are short; anything longer is prose, not a reason
 
 
