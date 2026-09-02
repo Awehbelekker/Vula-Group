@@ -94,3 +94,67 @@ def test_a_long_message_is_not_a_purpose():
 def test_an_empty_message_is_not_an_attempt():
     assert _looks_like_purpose_attempt("", {}) is False
     assert _looks_like_purpose_attempt("   ", {}) is False
+
+
+# ── the loop came BACK (2026-09-02, second Gerflor transcript) ──────────────────
+#     [12:59] rep:  Please remind me to open a WhatsApp group for the two numbers
+#     [12:59] Vula: I've set a reminder... 📅
+#     [13:36] rep:  Tell me taralay impressions
+#     [13:36] Vula: You've got 2 receipts I need the purpose for: ...
+#
+# "tell" was simply not in my request-verb allowlist. Any verb not thought of re-traps the
+# user, so guessing at verbs was the wrong shape of solution. What actually settles it is
+# whether Vula JUST ASKED — which needs no vocabulary at all.
+
+import vula.api.whatsapp as _wa
+
+
+@pytest.fixture(autouse=True)
+def _clear_prompt_memory():
+    _wa._purpose_prompted_at.clear()
+    yield
+    _wa._purpose_prompted_at.clear()
+
+
+PHONE = "27645755210"
+
+
+@pytest.mark.parametrize("text", [
+    "Tell me taralay impressions",          # the exact message that re-broke it
+    "Tell me about the Mipolam range",
+    "Give me the price list",
+    "Look up Winelands Flooring",
+    "Research this company",
+    "Open a WhatsApp group for those two",
+    "Explain the zone pricing",
+])
+def test_a_request_long_after_the_question_is_never_intercepted(text):
+    """No prompt was sent recently, so nothing here can be a receipt answer."""
+    assert _wa._recently_asked_about_purpose(PHONE) is False
+    assert not (_wa._recently_asked_about_purpose(PHONE)
+                and _wa._looks_like_purpose_attempt(text, {}))
+
+
+def test_a_purpose_reply_right_after_the_question_is_still_taken():
+    _wa._note_purpose_prompt(PHONE)
+    assert _wa._recently_asked_about_purpose(PHONE) is True
+    for answer in ("fuel", "client lunch", "printer ink for the office"):
+        assert _wa._looks_like_purpose_attempt(answer, {}) is True
+
+
+def test_the_window_expires():
+    import time
+    _wa._note_purpose_prompt(PHONE)
+    _wa._purpose_prompted_at[PHONE] = time.monotonic() - (_wa._PURPOSE_PROMPT_WINDOW_S + 1)
+    assert _wa._recently_asked_about_purpose(PHONE) is False
+
+
+def test_the_window_is_per_person():
+    _wa._note_purpose_prompt(PHONE)
+    assert _wa._recently_asked_about_purpose("27000000000") is False
+
+
+def test_a_restart_fails_toward_letting_messages_through():
+    """In-memory by design: forgetting we asked must never trap somebody."""
+    _wa._purpose_prompted_at.clear()          # simulates a fresh process
+    assert _wa._recently_asked_about_purpose(PHONE) is False

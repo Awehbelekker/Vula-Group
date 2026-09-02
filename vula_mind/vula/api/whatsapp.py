@@ -1423,6 +1423,11 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         if not claim.get("purpose_category"):
             asks.append("🗂️ What was this for — fuel, a client visit/meal, or accommodation? "
                         "Reply with the category.")
+            # This is where the purpose question is FIRST asked; the re-prompt in
+            # _maybe_allocate_pending_purpose is only ever a follow-up. Both have to record it,
+            # or a genuine first answer would arrive with no record of the question and be
+            # treated as a new topic.
+            _note_purpose_prompt(phone)
         elif claim.get("purpose_category") == "petrol":
             # Only ever asked for petrol — a real KM logbook column, not a general expense field.
             asks.append("🚗 What's the odometer reading at this fill-up? Reply with the number.")
@@ -1538,6 +1543,30 @@ _REQUEST_SHAPED = re.compile(
 )
 
 
+# When we last asked THIS person "what was this receipt for?". Only a message arriving shortly
+# after that question can plausibly be its answer.
+#
+# 2026-09-02: an allowlist of "request-shaped" verbs was the first attempt at this, and it broke
+# again immediately — "Tell me taralay impressions" got the receipts prompt back because "tell"
+# wasn't in the list. Any verb not thought of re-traps the user, so guessing at verbs is the
+# wrong shape of solution entirely. Whether we JUST ASKED is the real signal, and it needs no
+# vocabulary. In-memory by design: a restart forgets we asked, which fails toward letting
+# messages through — the safe direction.
+_purpose_prompted_at: dict = {}
+_PURPOSE_PROMPT_WINDOW_S = 900.0     # 15 minutes
+
+
+def _note_purpose_prompt(phone: str) -> None:
+    import time as _t
+    _purpose_prompted_at[phone] = _t.monotonic()
+
+
+def _recently_asked_about_purpose(phone: str) -> bool:
+    import time as _t
+    last = _purpose_prompted_at.get(phone)
+    return bool(last and (_t.monotonic() - last) < _PURPOSE_PROMPT_WINDOW_S)
+
+
 def _looks_like_purpose_attempt(text: str, parsed: dict) -> bool:
     """True when the message plausibly IS an answer to the pending purpose question.
 
@@ -1608,9 +1637,10 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
             # With one claim pending, ANY free text used to be accepted as its purpose — so a
             # rep asking an unrelated question got their question filed as the expense reason
             # AND never got an answer. Same trap as the multi-pending path below.
-            if not cat and not _looks_like_purpose_attempt(text, {}):
-                logger.info("single pending purpose left alone — message isn't a purpose: %.60s",
-                            text)
+            if not cat and not (_recently_asked_about_purpose(phone)
+                                and _looks_like_purpose_attempt(text, {})):
+                logger.info("single pending purpose left alone — we didn't just ask, or the "
+                            "message isn't a purpose: %.60s", text)
                 return None
             detail = None if cat else text
             cat = cat or "other"
@@ -1648,13 +1678,15 @@ async def _maybe_allocate_pending_purpose(tenant_id: str, phone: str, text: str)
 
         # Couldn't parse a full indexed reply. If the message wasn't even an ATTEMPT at one,
         # it's a different request and must reach the agent — see _looks_like_purpose_attempt.
-        if not _looks_like_purpose_attempt(text, parsed):
-            logger.info("pending-purpose prompt skipped — message isn't a purpose reply: %.60s",
-                        text)
+        if not (parsed or (_recently_asked_about_purpose(phone)
+                           and _looks_like_purpose_attempt(text, parsed))):
+            logger.info("pending-purpose prompt skipped — we didn't just ask, or the message "
+                        "isn't a purpose reply: %.60s", text)
             return None
         listing = "\n".join(
             f"{i}) R{int(c.get('amount_cents') or 0)/100:,.2f} {c.get('supplier') or ''}".strip()
             for i, c in enumerate(rows, start=1))
+        _note_purpose_prompt(phone)
         return (f"You've got {n} receipts I need the purpose for:\n{listing}\n\n"
                 f"Reply like \"1 fuel, 2 client lunch\" so I know which is which.")
     except Exception as exc:

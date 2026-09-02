@@ -6,6 +6,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from vula.api.whatsapp import _log_expense_claim, _maybe_allocate_pending_purpose
+import vula.api.whatsapp as _wa
+
+
+@pytest.fixture(autouse=True)
+def _purpose_question_was_asked():
+    """These tests exercise the reply to "what was this for?", which in real life is
+    only ever sent right after Vula asked. Since 2026-09-02 that question has to have
+    actually been asked for a reply to be treated as its answer — otherwise an
+    unrelated request gets swallowed by the receipts prompt (the Gerflor loop).
+    """
+    _wa._note_purpose_prompt(PHONE)
+    yield
+    _wa._purpose_prompted_at.clear()
 
 TID = "gerflor"
 PHONE = "27739852984"
