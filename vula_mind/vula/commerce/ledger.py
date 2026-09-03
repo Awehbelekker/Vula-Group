@@ -113,6 +113,71 @@ def post_invoice_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict[
           source_type="invoice_payment", source_id=payment.get("id"), lines=lines)
 
 
+def _supplier_account_code(tenant_id: Optional[str], supplier_id: Optional[str],
+                           supplier_name: Optional[str]) -> str:
+    """The expense account for a supplier, from their stored category — or "other_expense".
+
+    Only an EXACT match against a real chart-of-accounts expense code is accepted. Supplier
+    categories are free text ("food", "packaging"), so "packaging" maps cleanly while "food"
+    deliberately does not — inventing a mapping would silently file spend under an account the
+    tenant never chose, which is harder to spot than an honestly generic one.
+    """
+    if not tenant_id or not (supplier_id or supplier_name):
+        return "other_expense"
+    try:
+        from vula.commerce import accounting, service
+        q = service._client().table("commerce_suppliers").select("category") \
+            .eq("tenant_id", tenant_id)
+        q = q.eq("id", supplier_id) if supplier_id else q.eq("name", supplier_name)
+        rows = q.limit(1).execute().data or []
+        cat = ((rows[0].get("category") if rows else "") or "").strip().lower().replace(" ", "_")
+        if not cat:
+            return "other_expense"
+        expense_codes = {a["code"] for a in accounting.ensure_chart(tenant_id)
+                         if a.get("type") == "expense"}
+        return cat if cat in expense_codes else "other_expense"
+    except Exception as exc:
+        log.debug("supplier account-code lookup skipped: %s", exc)
+        return "other_expense"
+
+
+def post_supplier_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
+    """We paid a SUPPLIER's invoice — money leaving, not revenue.
+
+    2026-09-03: the only invoice postings were sales-side (post_invoice_paid credits `sales`,
+    post_invoice_payment debits `bank_cash`). update_invoice_status called post_invoice_paid
+    unconditionally, so marking an INBOUND supplier bill paid would have booked money going out
+    as revenue — inventing income and inflating VAT output at the same time. Nothing had marked
+    an inbound bill paid yet, so no live damage, but bank reconciliation matching outgoing
+    payments was about to.
+
+    Mirrors post_expense: credit bank_cash, debit the expense account, VAT to input (reclaimable)
+    rather than output (owed).
+    """
+    amount = int(invoice.get("total_cents") or 0)
+    if amount <= 0:
+        return
+    vat = max(0, min(int(invoice.get("vat_cents") or 0), amount))
+    # commerce_invoices carries no account_code column, so without this every supplier payment
+    # would land in "other_expense" and the trial balance would show all supplier spend in one
+    # undifferentiated bucket. The supplier record does carry a category; use it only when it
+    # names a REAL expense account — never a guess, since a wrong account is worse than a
+    # deliberately generic one.
+    account_code = invoice.get("account_code") or _supplier_account_code(
+        invoice.get("tenant_id"), invoice.get("supplier_id"), invoice.get("supplier"))
+    lines = [{"account_code": "bank_cash", "debit_cents": 0, "credit_cents": amount}]
+    if vat > 0:
+        lines.append({"account_code": account_code, "debit_cents": amount - vat, "credit_cents": 0})
+        lines.append({"account_code": "vat_input", "debit_cents": vat, "credit_cents": 0})
+    else:
+        lines.append({"account_code": account_code, "debit_cents": amount, "credit_cents": 0})
+    _post(tenant_id, entry_date=(invoice.get("paid_at") or _today()),
+          description=f"Paid supplier invoice "
+                      f"{invoice.get('invoice_number') or invoice.get('id')}"
+                      f" ({invoice.get('supplier') or 'supplier'})",
+          source_type="supplier_invoice_paid", source_id=invoice.get("id"), lines=lines)
+
+
 def post_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
     amount = int(expense.get("amount_cents") or 0)
     if amount <= 0:

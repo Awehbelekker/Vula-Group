@@ -272,6 +272,10 @@ async def receive_message(
                             reply_id.startswith("admin_confirm:") or reply_id.startswith("admin_cancel:")
                         ) and route_tenant:
                             await _handle_admin_confirm_reply(phone, reply_id, route_tenant)
+                        elif phone and reply_id and route_tenant and reply_id.startswith("docdir:"):
+                            # Owner classifying an ambiguous document (see ask_document_kind) —
+                            # supplier bill / our invoice / an expense.
+                            await _handle_document_kind_reply(phone, reply_id, route_tenant)
                         elif phone and reply_id and route_tenant and (
                             reply_id.startswith("learn_keep:") or reply_id.startswith("learn_bin:")
                         ):
@@ -513,6 +517,104 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     else:
         await _send_reply(phone, "✅ Sent to the customer.", tenant_id=tid)
     return True
+
+
+async def ask_document_kind(tenant_id: str, invoice_id: str, supplier: str,
+                            total_cents: int, doc_type: str = "invoice") -> bool:
+    """Ask the owner whether an ambiguous document is a supplier bill, a client invoice, or an
+    expense — because we genuinely cannot tell.
+
+    2026-09-03: the scan-commit path can only see who ISSUED a document; there is no bill-to
+    field. When the issuer is neither this business nor a known supplier, the direction is a
+    coin flip — a new supplier, or a client whose invoice is being imported in bulk. Filing it
+    silently put 51 of off-the-hook's own sales invoices (R32,307.97) on the wrong side of the
+    books; flagging it with needs_review is no better on its own, because the only consumer of
+    that flag requires a supplier match, which by definition this case does not have.
+
+    The document may arrive by email or dashboard upload with nobody watching, so the question
+    goes to the owner on WhatsApp regardless of how it came in. Returns False when there is
+    nobody to ask, so the caller keeps its filed-but-flagged fallback rather than losing it.
+    """
+    try:
+        from vula.commerce.approvals import tenant_admin_approvers
+        approvers = await tenant_admin_approvers(tenant_id)
+    except Exception as exc:
+        logger.debug("document-kind ask skipped (no approvers): %s", exc)
+        return False
+    if not approvers:
+        return False
+
+    who = (supplier or "").strip() or "an unnamed party"
+    body = (f"📄 I filed a {doc_type} from *{who}* for *R{total_cents/100:,.2f}*, but I'm not "
+            f"sure what it is — I don't recognise them as a supplier, and it wasn't issued by "
+            f"you.\n\nWhich is it?")
+    sent_any = False
+    for a in approvers[:2]:                      # the owner, not the whole team
+        creds = await _get_tenant_wa_creds(tenant_id)
+        if not creds:
+            break
+        sent = await _send_wa_buttons(creds, a["phone"], body, [
+            {"id": f"docdir:supplier:{invoice_id}", "title": "Supplier bill"},
+            {"id": f"docdir:client:{invoice_id}", "title": "Our invoice"},
+            {"id": f"docdir:expense:{invoice_id}", "title": "An expense"},
+        ])
+        sent_any = sent_any or sent
+    return sent_any
+
+
+async def _handle_document_kind_reply(phone: str, reply_id: str, tenant_id: str) -> None:
+    """A tap on the Supplier bill / Our invoice / An expense buttons (see ask_document_kind)."""
+    from vula.commerce import service as cs
+    try:
+        _, kind, invoice_id = reply_id.split(":", 2)
+    except ValueError:
+        return
+    try:
+        rows = (cs._client().table("commerce_invoices").select("*")
+                .eq("tenant_id", tenant_id).eq("id", invoice_id).limit(1).execute().data or [])
+    except Exception as exc:
+        logger.warning("document-kind lookup failed for %s: %s", invoice_id, exc)
+        rows = []
+    if not rows:
+        await _send_reply(phone, "That document isn't around to reclassify any more. 🙏", tenant_id)
+        return
+    inv = rows[0]
+    amount = f"R{(inv.get('total_cents') or 0)/100:,.2f}"
+    who = inv.get("supplier") or "that party"
+
+    if kind == "expense":
+        # Deliberately NOT auto-converted: moving money between an invoice and an expense record
+        # changes the books, and doing it silently from a button tap is exactly the kind of
+        # invisible write this whole pass has been correcting. Flag it and say so plainly.
+        try:
+            cs._client().table("commerce_invoices").update(
+                {"needs_review": True, "notes": "Owner says: expense, not an invoice"}
+            ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+        except Exception as exc:
+            logger.warning("expense reclassify flag failed for %s: %s", invoice_id, exc)
+        await _send_reply(phone, (
+            f"👍 Noted — {amount} from {who} is an expense, not an invoice. I've marked it for "
+            f"the books rather than moving it myself, so nothing shifts without you seeing it."
+        ), tenant_id)
+        return
+
+    direction = "inbound" if kind == "supplier" else "outbound"
+    try:
+        cs._client().table("commerce_invoices").update(
+            {"direction": direction, "needs_review": False}
+        ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+    except Exception as exc:
+        logger.warning("document direction update failed for %s: %s", invoice_id, exc)
+        await _send_reply(phone, "Couldn't file that just now, sorry.", tenant_id)
+        return
+    if direction == "inbound":
+        await _send_reply(phone, (
+            f"👍 Filed as a *supplier bill* — {amount} owed to {who}. It'll show in what's due "
+            f"to go out."), tenant_id)
+    else:
+        await _send_reply(phone, (
+            f"👍 Filed as *your invoice* — {amount} owed to you. It'll count as money in."),
+            tenant_id)
 
 
 async def _handle_learn_review_reply(phone: str, reply_id: str, tenant_id: str) -> None:

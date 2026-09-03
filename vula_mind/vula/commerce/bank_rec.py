@@ -236,6 +236,19 @@ def _match_order(txn: Dict[str, Any], orders: List[dict]) -> Optional[dict]:
     return _match_by_amount(txn, orders, "total_cents", ("customer_name", "display_id"))
 
 
+def _match_supplier_bill(txn: Dict[str, Any], bills: List[dict]) -> Optional[dict]:
+    """An outgoing payment against a supplier's invoice.
+
+    2026-09-03: money OUT was matched against casual labour and card expenses, but never against
+    inbound supplier INVOICES — so paying a supplier confirmed the money left the bank while the
+    bill stayed 'draft' forever. That is why off-the-hook showed R80,542.72 "still owed",
+    including bills from 2020-2023 that were certainly settled, and why a payables report could
+    not be trusted. Same amount-anchored matching as the money-in side, keyed on the supplier's
+    name instead of the customer's.
+    """
+    return _match_by_amount(txn, bills, "total_cents", ("supplier", "invoice_number"))
+
+
 def _digits(phone: Optional[str]) -> str:
     n = "".join(ch for ch in (phone or "") if ch.isdigit())
     return "27" + n[1:] if n.startswith("0") else n
@@ -367,6 +380,23 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         log.debug("reconcile: invoice load skipped: %s", exc)
         invoices = []
 
+    # Supplier bills still owed — the money-OUT counterpart of the list above. Loaded separately
+    # because they sit in 'draft' (that is how a scanned supplier invoice arrives), so the
+    # sent/overdue filter above would never see them. 2026-09-03: without this, paying a
+    # supplier confirmed the money left the bank while the bill stayed unpaid forever.
+    try:
+        supplier_bills = (db.table("commerce_invoices")
+                          .select("id,invoice_number,supplier,total_cents,status,doc_type,"
+                                  "direction,vat_cents,paid_at")
+                          .eq("tenant_id", tenant_id).eq("direction", "inbound")
+                          .in_("status", ["draft", "sent", "overdue", "part_paid"])
+                          .limit(2000).execute().data or [])
+        supplier_bills = [b for b in supplier_bills
+                          if (b.get("doc_type") or "invoice") == "invoice"]
+    except Exception as exc:
+        log.debug("reconcile: supplier-bill load skipped: %s", exc)
+        supplier_bills = []
+
     # Orders awaiting an EFT payment (checkout has always offered EFT as a payment method,
     # alongside online/COD) — a customer's proof-of-payment email needs to reconcile against
     # THESE too, not just invoices.
@@ -433,9 +463,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     batch_cats = await accounting.categorize_batch(tenant_id, txns, accounts)
 
     matched_invoices, unmatched_in, unmatched_out, saved, matched_workers, needs_input = 0, 0, 0, 0, 0, 0
-    matched_expenses, matched_orders = 0, 0
+    matched_expenses, matched_orders, matched_bills = 0, 0, 0
     used_invoice_ids: set = set()
     used_order_ids: set = set()
+    used_bill_ids: set = set()
     for idx, t in enumerate(txns):
         status, inv_id, order_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None, None
         if t["direction"] == "in":
@@ -484,7 +515,23 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                     except Exception:
                         pass
                 else:
-                    unmatched_out += 1
+                    # Last fallback: an outgoing payment settling a SUPPLIER'S INVOICE. Placed
+                    # after worker and card-expense matching so nothing that already matches
+                    # changes behaviour — this only catches what previously fell straight to
+                    # unmatched_out, leaving the bill owed forever.
+                    bill_candidates = [b for b in supplier_bills if b["id"] not in used_bill_ids]
+                    bm = _match_supplier_bill(t, bill_candidates)
+                    if bm:
+                        try:
+                            await service.update_invoice_status(tenant_id, bm["id"], "paid")
+                            inv_id, status = bm["id"], "matched"
+                            used_bill_ids.add(bm["id"])
+                            matched_bills += 1
+                        except Exception as exc:
+                            log.warning("mark supplier bill paid failed: %s", exc)
+                            unmatched_out += 1
+                    else:
+                        unmatched_out += 1
 
         # Allocate to a chart-of-accounts category + VAT. Invoice-matched credits → sales;
         # worker-matched debits → casual labour (and learn the mapping); expense-matched

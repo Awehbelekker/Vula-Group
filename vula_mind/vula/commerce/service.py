@@ -1647,7 +1647,14 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
     if status == "paid" and invoice:
         try:
             from vula.commerce import ledger
-            ledger.post_invoice_paid(tenant_id, invoice)
+            # 2026-09-03: this used to post the SALES entry unconditionally. An inbound supplier
+            # bill marked paid would then have been booked as revenue — inventing income and
+            # inflating VAT output — because the ledger had no payables posting at all. Which
+            # side of the books this belongs on depends entirely on who issued the document.
+            if (invoice.get("direction") or "outbound") == "inbound":
+                ledger.post_supplier_invoice_paid(tenant_id, invoice)
+            else:
+                ledger.post_invoice_paid(tenant_id, invoice)
         except Exception as exc:
             logger.warning("ledger hook failed for invoice %s: %s", invoice_id, exc)
     return invoice
@@ -2181,6 +2188,7 @@ async def commit_inbound_document(
     payment_terms_days = 30
     supplier_row = None
     needs_review = False
+    ask_direction_of = None      # set when we can't tell whose document this is
 
     supplier_match = await match_supplier(
         tenant_id, name=supplier_name or None, tax_id=tax_id or None, layout_signature=layout_signature,
@@ -2275,6 +2283,12 @@ async def commit_inbound_document(
             needs_review = True
             logger.info("direction unconfident for %s (%s): filed as %s pending review",
                         tenant_id, dir_reason, direction)
+            # needs_review alone is NOT enough: the only other consumer of that flag requires a
+            # supplier match, which this case by definition doesn't have, so the flag would sit
+            # in a column nobody reads. Ask the owner directly instead (supplier bill / our
+            # invoice / an expense). Best-effort — if there's nobody to ask, the row stays filed
+            # and flagged rather than lost.
+            ask_direction_of = record_id
         row = {
             "id": record_id, "tenant_id": tenant_id, "direction": direction, "doc_type": doc_type,
             # A supplier's document must not draw from the tenant's OWN invoice sequence —
@@ -2382,6 +2396,18 @@ async def commit_inbound_document(
             }).eq("id", filed_document_id).execute()
         except Exception as exc:
             logger.warning("Failed to bridge filed_document %s to commit result: %s", filed_document_id, exc)
+
+    # We couldn't tell whose document this is (see classify_direction). Ask the owner on
+    # WhatsApp — supplier bill / our invoice / an expense — because filing it silently is what
+    # put 51 of off-the-hook's own sales invoices on the wrong side of the books, and a
+    # needs_review flag on its own reaches nobody in this case.
+    if ask_direction_of:
+        try:
+            from vula.api.whatsapp import ask_document_kind
+            await ask_document_kind(tenant_id, ask_direction_of, supplier_name,
+                                    total_cents, doc_type)
+        except Exception as exc:
+            logger.debug("document-kind ask skipped: %s", exc)
 
     # Genuine ambiguity (Tier 3 fuzzy-below-auto-apply or Tier 4 layout-only) on a real
     # supplier bill — route the candidate match to the tenant's own admin team for a yes/no,
