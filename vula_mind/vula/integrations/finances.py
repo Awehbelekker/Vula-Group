@@ -196,6 +196,63 @@ def _dedupe_reconciled(rows: list) -> list:
     return out
 
 
+_ledger_cache: dict = {}
+_LEDGER_TTL_S = 300.0
+
+
+def has_project_ledger(tenant_id: str) -> bool:
+    """Does this tenant actually keep a project finance ledger?
+
+    2026-09-03: vula_project_finances holds 4 rows across the WHOLE platform, all digg-demo,
+    while off-the-hook has R148,112.69 of real invoices and gerflor R-thousands more — both with
+    zero ledger rows. The ledger is project-scoped (project, budget, reconciled) and correct for
+    construction work; a shop has no projects to scope money to, so it will never be populated
+    for one. finance_admin reads only this table, which is why a commerce tenant's money question
+    reached a skill with nothing to answer from.
+
+    Cached briefly: this is asked on the routing path, and the answer changes rarely.
+    """
+    import time
+    hit = _ledger_cache.get(tenant_id)
+    now = time.monotonic()
+    if hit and (now - hit[0]) < _LEDGER_TTL_S:
+        return hit[1]
+    try:
+        rows = (_client().table("vula_project_finances").select("id")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        present = bool(rows)
+    except Exception as exc:
+        logger.debug("project-ledger check failed for %s: %s", tenant_id, exc)
+        present = True      # fail toward today's behaviour rather than silently rerouting
+    _ledger_cache[tenant_id] = (now, present)
+    return present
+
+
+def has_commerce_money(tenant_id: str) -> bool:
+    """Does this tenant have money data in the COMMERCE tables worth answering from?
+
+    Paired with has_project_ledger: finance_admin only hands a question to commerce_admin when
+    that skill can genuinely do better — no project ledger, but real invoices. A tenant with
+    neither keeps finance_admin's honest "nothing on file" answer rather than being bounced
+    between two skills that both have nothing.
+    """
+    import time
+    key = f"commerce:{tenant_id}"
+    hit = _ledger_cache.get(key)
+    now = time.monotonic()
+    if hit and (now - hit[0]) < _LEDGER_TTL_S:
+        return hit[1]
+    try:
+        rows = (_client().table("commerce_invoices").select("id")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        present = bool(rows)
+    except Exception as exc:
+        logger.debug("commerce-money check failed for %s: %s", tenant_id, exc)
+        present = False     # can't confirm -> don't reroute
+    _ledger_cache[key] = (now, present)
+    return present
+
+
 def finance_summary(tenant_id: str, project: str = None) -> dict:
     """Per-project totals (in/out/net) + budget-vs-actual, plus recent transactions."""
     try:

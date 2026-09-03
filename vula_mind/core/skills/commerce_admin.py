@@ -156,6 +156,19 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "days": {"type": "integer", "description": "Look-back window, default 30."}}},
     }},
     {"type": "function", "function": {
+        "name": "cash_summary",
+        "description": (
+            "Money in vs money out, with a breakdown by supplier. Answers 'what's our money in "
+            "and out', 'what have we spent', 'total invoiced', 'cash in/out', 'who are we "
+            "spending the most with'. Reports BILLED and PAID separately — a supplier invoice "
+            "that has arrived is money owed, which is not the same as money that has left the "
+            "bank — so quote whichever the person asked for, and say which is which."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "days": {"type": "integer",
+                     "description": "Look-back window in days. Omit for all time."}}},
+    }},
+    {"type": "function", "function": {
         "name": "reimbursement_balance",
         "description": "What the business owes a specific person for money they paid out of pocket "
                        "(e.g. stock/materials bought on a personal card or cash) that hasn't been "
@@ -1359,6 +1372,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
+            if name == "cash_summary":       return await self._cash_summary(tid, args)
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""))
@@ -2774,6 +2788,103 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": f"Found results but couldn't summarise them: {exc}",
                     "links": sources}
         return {"summary": summary or "No clear findings from the search results.", "sources": sources}
+
+    @staticmethod
+    def _normalise_supplier(name: str) -> str:
+        """Group a supplier's spellings together for the breakdown.
+
+        Real off-the-hook data carries "Atlantis Seafood Distributors (Pty" and "Atlantis
+        Seafood Distributors(Pty)" as separate names — R27,296.75 and R24,907.87 — which would
+        show as two suppliers and understate the biggest one by half.
+        """
+        s = re.sub(r"[^a-z0-9 ]", " ", (name or "").lower())
+        # "the" is deliberately NOT stripped: it is not a company suffix, and removing it turned
+        # "Off the Hook" into "offhook" while "OfftheHook" stayed "offthehook" — the exact pair
+        # it was meant to merge.
+        s = re.sub(r"\b(pty|ltd|limited|inc|cc)\b", " ", s)
+        # Spacing varies too: real OTH data carries both "OfftheHook" and "Off the Hook", which
+        # a space-preserving key would report as two different suppliers.
+        return re.sub(r"\s+", "", s) or "unknown"
+
+    async def _cash_summary(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Money in vs money out from the COMMERCE tables, with a supplier breakdown.
+
+        2026-09-03: commerce tenants have no project ledger — off-the-hook has 0 rows in
+        vula_project_finances against R148,112.69 of real invoices — so finance_admin, which
+        reads only that ledger, had nothing to answer with. This is the commerce-side equivalent.
+
+        BILLED and PAID are reported separately on purpose. A supplier invoice that has arrived
+        is money owed; money that has actually left the bank is a different number, and Ian
+        confirmed Staci wants both. On real OTH data every invoice is still 'draft' — R112,850.69
+        billed, R0 marked paid — so the paid figures reflect what has been RECORDED in Vula, not
+        the bank, and the result says so rather than implying nothing has been paid.
+        """
+        from datetime import datetime, timedelta, timezone
+        from collections import defaultdict
+
+        days = args.get("days")
+        since = None
+        if days:
+            try:
+                since = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+            except (TypeError, ValueError):
+                since = None
+
+        db = service._client()
+        try:
+            q = db.table("commerce_invoices").select(
+                "direction,status,total_cents,supplier,created_at").eq("tenant_id", tid)
+            if since:
+                q = q.gte("created_at", since)
+            invoices = q.limit(2000).execute().data or []
+            eq = db.table("commerce_expenses").select(
+                "amount_cents,status,category,created_at").eq("tenant_id", tid)
+            if since:
+                eq = eq.gte("created_at", since)
+            expenses = eq.limit(2000).execute().data or []
+        except Exception as exc:
+            logger.warning("cash_summary read failed for %s: %s", tid, exc)
+            return {"error": "Couldn't read the books just now."}
+
+        def _r(cents) -> float:
+            return round((cents or 0) / 100, 2)
+
+        out_inv = [i for i in invoices if i.get("direction") != "inbound"]
+        in_inv = [i for i in invoices if i.get("direction") == "inbound"]
+
+        invoiced = _r(sum(i.get("total_cents") or 0 for i in out_inv))
+        received = _r(sum(i.get("total_cents") or 0 for i in out_inv if i.get("status") == "paid"))
+        billed = _r(sum(i.get("total_cents") or 0 for i in in_inv))
+        paid_out = _r(sum(i.get("total_cents") or 0 for i in in_inv if i.get("status") == "paid"))
+        exp_total = _r(sum(e.get("amount_cents") or 0 for e in expenses))
+
+        per = defaultdict(lambda: {"billed": 0.0, "name": "", "bills": 0})
+        for i in in_inv:
+            raw = (i.get("supplier") or "").strip() or "(unknown supplier)"
+            k = self._normalise_supplier(raw)
+            per[k]["billed"] += (i.get("total_cents") or 0) / 100
+            per[k]["bills"] += 1
+            if len(raw) > len(per[k]["name"]):
+                per[k]["name"] = raw          # keep the fullest spelling seen
+        top = sorted(per.values(), key=lambda x: -x["billed"])[:8]
+
+        result = {
+            "period": f"last {days} days" if days else "all time",
+            "money_in": {"invoiced": invoiced, "received": received,
+                         "still_owed_to_us": round(invoiced - received, 2)},
+            "money_out": {"billed_by_suppliers": billed, "paid_to_suppliers": paid_out,
+                          "still_owed_by_us": round(billed - paid_out, 2),
+                          "other_expenses": exp_total},
+            "top_suppliers": [{"supplier": t["name"], "billed": round(t["billed"], 2),
+                               "bills": t["bills"]} for t in top],
+            "counts": {"invoices_out": len(out_inv), "supplier_bills": len(in_inv),
+                       "expenses": len(expenses)},
+        }
+        if billed and not paid_out:
+            result["note"] = ("No supplier bills are marked paid in Vula, so 'paid' reflects what "
+                              "has been recorded here — not necessarily the bank. Quote the "
+                              "billed figure and say it's what suppliers have invoiced.")
+        return result
 
     def _rule_tool(self, name: str, tid: str, args: Dict[str, Any],
                    ctx: Dict[str, Any]) -> Dict[str, Any]:

@@ -88,13 +88,21 @@ async def test_direction_defaults_to_outbound_so_existing_callers_are_unchanged(
     assert a == b == "OFF-INV-00007"
 
 
-def test_the_scan_commit_path_marks_its_number_inbound():
-    """Guards the exact regression at the write site."""
+def test_the_scan_commit_path_passes_a_detected_direction():
+    """Guards the write site.
+
+    Updated 2026-09-03: direction is no longer hardcoded "inbound". Filing every scanned document
+    as a supplier bill put 51 of off-the-hook's own sales invoices — R32,307.97 — on the wrong
+    side of the ledger, so it is now detected per document (service.classify_direction) and the
+    invoice number must follow whatever direction was detected.
+    """
     import pathlib
     src = pathlib.Path(__file__).resolve().parents[1] / "vula" / "commerce" / "service.py"
     text = src.read_text(encoding="utf-8")
-    assert 'direction="inbound")' in text
-    assert '"direction": "inbound", "doc_type": doc_type,\n' in text
+    assert '"direction": "inbound", "doc_type": doc_type,' not in text, \
+        "direction must be detected, not hardcoded"
+    assert "classify_direction(" in text
+    assert "direction=direction)" in text, "the number must follow the detected direction"
 
 
 # ── the Invoices tab must not hide most of the tenant's documents ───────────────

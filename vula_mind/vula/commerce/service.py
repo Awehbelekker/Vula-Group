@@ -808,6 +808,79 @@ async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     return {"display_id": last.get("display_id"), "items": items}
 
 
+def _same_business(a: str, b: str) -> bool:
+    """Are these two names the same business, allowing for spelling and spacing?
+
+    Real off-the-hook data carries "OfftheHook" (50 rows) and "Off the Hook" (1) for the same
+    entity, and the tenant's own display name is "Off the Hook".
+    """
+    def _key(s) -> str:
+        # Coerced rather than assumed a string: the tenant display-name lookup can hand back
+        # None, and a caller may pass anything. A crash here would take down document intake
+        # for the sake of a name comparison.
+        if not isinstance(s, str):
+            s = "" if s is None else str(s)
+        s = re.sub(r"[^a-z0-9]", "", s.lower())
+        # Repeatedly: "ACME (Pty) Ltd" -> "acmeptyltd" needs BOTH suffixes off to match
+        # "Acme Pty" -> "acmepty". A single pass left them as "acmepty" vs "acme".
+        for _ in range(3):
+            stripped = re.sub(r"(pty|ltd|limited|inc|cc)$", "", s)
+            if stripped == s:
+                break
+            s = stripped
+        return s
+    ka, kb = _key(a), _key(b)
+    return bool(ka) and ka == kb
+
+
+def classify_direction(supplier_name: str, tenant_name: str, tenant_id: str,
+                       supplier_known: bool = False) -> tuple:
+    """Work out whether a scanned document is ours or theirs, and how sure we are.
+
+    Returns (direction, confident, reason).
+
+    Bulk historical imports are the hard case (Ian, 2026-09-03): a tenant uploads a folder of old
+    paperwork that mixes their own client invoices, supplier bills and expense slips. The
+    extractor gives us the ISSUER only — there is no bill-to field — so:
+
+      • issuer IS this tenant            -> outbound, confident   (they wrote it)
+      • issuer is an ALREADY-KNOWN supplier -> inbound, confident (we buy from them)
+      • issuer is an unknown third party -> inbound, NOT confident
+
+    That last case is genuinely ambiguous: an unknown name is equally likely to be a new supplier
+    or a client whose invoice is being imported. Guessing corrupts the books in a way that is
+    invisible afterwards — it was a silent hardcoded "inbound" that put 51 of off-the-hook's own
+    sales invoices (R32,307.97) on the wrong side of the ledger. So the caller marks it for
+    review and asks a human rather than committing a guess.
+    """
+    if _same_business(supplier_name, tenant_name) or _same_business(supplier_name, tenant_id):
+        return "outbound", True, "issued by this business"
+    if supplier_known:
+        return "inbound", True, "known supplier"
+    if not (supplier_name or "").strip():
+        return "inbound", False, "no issuer found on the document"
+    return "inbound", False, "unrecognised party — could be a new supplier or a client"
+
+
+def _detect_direction(supplier_name: str, tenant_name: str, tenant_id: str) -> str:
+    """Did the tenant ISSUE this document, or receive it?
+
+    2026-09-03, confirmed on real off-the-hook data: the scan-commit path hardcoded
+    direction="inbound", so EVERY document scanned from email became a supplier bill — including
+    51 of OTH's own outgoing sales invoices, R32,307.97, where both `supplier` and
+    `customer_name` came out as "Off the Hook". That is ~29% of their reported money OUT, and it
+    is money IN. Any cash-flow or payables report built on it would be wrong in both directions
+    at once, which is precisely the error an owner must never be shown.
+
+    The signal is already in hand at commit time: the issuer of the document. If the issuer IS
+    this tenant, the tenant wrote it, so it is outbound. Anything else stays inbound, which
+    preserves today's behaviour for genuine supplier bills.
+    """
+    if _same_business(supplier_name, tenant_name) or _same_business(supplier_name, tenant_id):
+        return "outbound"
+    return "inbound"
+
+
 def _coerce_line_items(value) -> List[dict]:
     """Always store line_items as a real LIST of dicts.
 
@@ -2191,12 +2264,27 @@ async def commit_inbound_document(
             tenant_name = (_get_tenant_config(tenant_id) or {}).get("display_name") or tenant_id
         except Exception:
             tenant_name = tenant_id
+        # Who issued this? A document the tenant wrote is THEIR invoice (money in), not a
+        # supplier bill (money out) — see classify_direction for the real 51-invoice,
+        # R32,307.97 misclassification this corrects. When the issuer is an unrecognised party
+        # the direction is a genuine coin-flip (new supplier vs an imported client invoice), so
+        # it is flagged for review rather than committed as a guess.
+        direction, dir_confident, dir_reason = classify_direction(
+            supplier_name, tenant_name, tenant_id, supplier_known=bool(supplier_row))
+        if not dir_confident:
+            needs_review = True
+            logger.info("direction unconfident for %s (%s): filed as %s pending review",
+                        tenant_id, dir_reason, direction)
         row = {
-            "id": record_id, "tenant_id": tenant_id, "direction": "inbound", "doc_type": doc_type,
+            "id": record_id, "tenant_id": tenant_id, "direction": direction, "doc_type": doc_type,
             # A supplier's document must not draw from the tenant's OWN invoice sequence —
             # see _next_invoice_number for the real DIGG numbering damage this caused.
             "invoice_number": await _next_invoice_number(tenant_id, doc_type,
-                                                         direction="inbound"),
+                                                         direction=direction),
+            # customer_name is NOT NULL and designed for the outbound case (who WE are billing).
+            # For an inbound bill there is no real customer, so the tenant's own name goes there
+            # (semantically: who the bill is addressed to). For an outbound one we don't know the
+            # customer from the scan alone, so it stays the tenant name until someone edits it.
             "customer_name": tenant_name,
             "status": "draft", "supplier": supplier_name, "supplier_id": supplier_id,
             "project": project,

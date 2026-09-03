@@ -51,6 +51,11 @@ async def test_finance_admin_escalates_on_low_confidence():
               return_value=("ollama/test", None, "http://localhost:11434")),
         patch("litellm.acompletion", new=_fake_completion),
         patch("core.llm_router.escalate_to_cloud", side_effect=_fake_escalate),
+        # 2026-09-03: finance_admin now hands a tenant with NO project ledger over to
+        # commerce_admin, and off-the-hook is exactly such a tenant (0 ledger rows against R148k
+        # of real invoices). This test is about escalation, not routing, so it pins a tenant
+        # that does keep a project ledger — otherwise finance_admin never runs at all.
+        patch("vula.integrations.finances.has_project_ledger", return_value=True),
     ):
         out = await FinanceAdminSkill().run(SkillInput(question="how much on HPC?", tenant_id=TENANT))
 

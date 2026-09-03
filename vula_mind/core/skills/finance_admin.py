@@ -101,6 +101,31 @@ class FinanceAdminSkill(BaseSkill):
     verification_policy = "adversarial"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
+        # A tenant with no PROJECT ledger cannot be answered from one. 2026-09-03: off-the-hook
+        # has R148,112.69 of real invoices and zero rows in vula_project_finances, because the
+        # ledger is project-scoped and a shop has no projects — so every money question here
+        # produced "no financial records on file" while the money sat in the commerce tables.
+        # commerce_admin already owns those tables (sales_summary, outstanding_invoices,
+        # cash_summary), so hand over rather than answer badly from the wrong ledger.
+        #
+        # Routing on DATA rather than on the question's wording: the orchestrator matches
+        # "money in"/"total invoiced"/"cash out" on keywords alone and carries no tenant context
+        # at all, so this is the first point that knows which ledger the tenant actually keeps.
+        try:
+            from vula.integrations.finances import has_project_ledger, has_commerce_money
+            # Hand over only when the other skill can actually do BETTER — no project ledger to
+            # answer from, but real commerce data that it owns. A tenant with neither keeps
+            # today's behaviour and its honest "nothing on file" answer.
+            if not has_project_ledger(inp.tenant_id) and has_commerce_money(inp.tenant_id):
+                from core.skills.loader import get_skill
+                commerce = get_skill("commerce_admin")
+                if commerce is not None:
+                    logger.info("finance_admin -> commerce_admin for %s (no project ledger)",
+                                inp.tenant_id)
+                    return await commerce.run(inp)
+        except Exception as exc:
+            logger.debug("project-ledger routing check skipped: %s", exc)
+
         self._verified: List[float] = []  # every numeric value seen in a tool result this turn
         self._sources: List[Dict[str, Any]] = []
         self._any_tool_dispatched = False
