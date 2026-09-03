@@ -237,6 +237,95 @@ async def _apply_invoice_match(tenant_id: str, txn: dict, invoice: dict) -> str:
                    f"({invoice.get('customer_name') or 'customer'}) — marked paid.")
 
 
+async def _apply_supplier_bill_match(tenant_id: str, txn: dict, bill: dict) -> str:
+    """Settle a supplier bill from a proof of payment the owner sent. update_invoice_status
+    reads the bill's direction and posts the payables side of the ledger (money out of
+    bank_cash, VAT to vat_input) — never post_invoice_paid, which would credit sales and
+    invent revenue from a payment the business MADE."""
+    from vula.commerce import service
+    await service.update_invoice_status(tenant_id, bill["id"], "paid")
+    try:
+        _client().table("commerce_bank_transactions").update(
+            {"matched_invoice_id": bill["id"], "match_status": "matched"}).eq("id", txn["id"]).execute()
+    except Exception as exc:
+        log.warning("supplier pop txn update failed: %s", exc)
+    amt = int(txn.get("amount_cents") or 0) / 100
+    return (f"✅ R{amt:,.2f} → bill *{bill.get('invoice_number') or bill['id']}* "
+            f"({bill.get('supplier') or 'supplier'}) — marked paid.")
+
+
+async def _handle_supplier_pop_answer(tenant_id: str, text: str, txn: dict) -> Optional[str]:
+    """Reply handler for the money-OUT proof-of-payment question. Kept separate from the
+    money-in flow below so that flow's behaviour is untouched: nothing but a supplier POP
+    produces an 'asked' row with direction 'out'."""
+    db = _client()
+    low = text.lower()
+    if low in ("stop", "later", "cancel", "end"):
+        db.table("commerce_bank_transactions").update(
+            {"match_status": "unmatched"}).eq("id", txn["id"]).execute()
+        return "👍 No problem — it's waiting in your 🏦 Bank tab whenever you're ready."
+    if low in ("skip", "next", "dunno", "not sure"):
+        db.table("commerce_bank_transactions").update(
+            {"match_status": "ignored"}).eq("id", txn["id"]).execute()
+        return "⏭ Skipped — the payment is recorded but not linked to a bill."
+
+    from vula.commerce.bank_rec import _open_supplier_bills, _match_supplier_bill, _tok
+    bills = _open_supplier_bills(tenant_id)
+    if low in ("yes", "y", "confirm", "confirmed", "correct"):
+        mid = txn.get("proposed_match_id") if txn.get("proposed_match_type") == "supplier_bill" else None
+        match = next((b for b in bills if b.get("id") == mid), None) if mid else None
+        if match:
+            return await _apply_supplier_bill_match(tenant_id, txn, match)
+        return ("🤔 That bill isn't open any more — reply with the bill number instead, "
+                "or 'skip'.")
+
+    # An explicit bill number is direct human intent — trust it over the amount tolerance.
+    exact = next((b for b in bills
+                  if (b.get("invoice_number") or "").lower() == low), None)
+    if exact:
+        return await _apply_supplier_bill_match(tenant_id, txn, exact)
+
+    name_toks = _tok(text)
+    hits = [b for b in bills if name_toks & _tok(b.get("supplier"))]
+    if hits:
+        bm = _match_supplier_bill(dict(txn, reference=f"{txn.get('reference') or ''} {text}"), hits)
+        if bm:
+            return await _apply_supplier_bill_match(tenant_id, txn, bm)
+        return ("🤔 Found that supplier but the amount doesn't line up — reply with the exact "
+                "bill number instead, or 'skip'.")
+    return ("🤔 I couldn't find an open bill matching that. Try the bill number or the exact "
+            "supplier name — or 'skip'.")
+
+
+_I_PAID = {"i paid", "i paid them", "we paid", "we paid them", "paid them", "i paid it",
+           "that was me", "money out", "outgoing", "out", "i sent it", "we sent it",
+           "it went out", "paid out"}
+
+
+async def _flip_pop_to_money_out(tenant_id: str, txn: dict, payee: str) -> str:
+    """The owner answered that an ambiguous proof of payment went OUT. Re-stage it against
+    supplier bills rather than leaving it queued as a customer payment forever."""
+    from vula.commerce.bank_rec import _open_supplier_bills, _match_supplier_bill
+    bills = _open_supplier_bills(tenant_id)
+    cand = _match_supplier_bill(
+        {"amount_cents": int(txn.get("amount_cents") or 0), "description": payee,
+         "reference": txn.get("reference") or ""}, bills)
+    patch_ = {"direction": "out",
+              "proposed_match_type": "supplier_bill" if cand else None,
+              "proposed_match_id": (cand or {}).get("id")}
+    try:
+        _client().table("commerce_bank_transactions").update(patch_).eq("id", txn["id"]).execute()
+    except Exception as exc:
+        log.warning("pop direction flip failed: %s", exc)
+    amt = int(txn.get("amount_cents") or 0) / 100
+    if cand:
+        return (f"👍 Money out, then. That looks like bill "
+                f"*{cand.get('invoice_number') or cand.get('id')}* "
+                f"({cand.get('supplier') or payee}). Reply *yes* to mark it paid.")
+    return (f"👍 Money out, then — R{amt:,.2f} to *{payee}* is recorded as an outgoing "
+            f"payment. Reply with the bill number if there's one to settle, or 'skip'.")
+
+
 async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
     """If a client-matching question is outstanding, treat `text` as the order number or
     customer name it's for. Returns the reply (confirmation + next question), or None if this
@@ -245,6 +334,18 @@ async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
     if not text or len(text) > 60:
         return None
     db = _client()
+    # A supplier proof of payment (money OUT) is asked about the same way but settles a bill,
+    # not an invoice — and pending_client_txns/the money-in query below both filter on
+    # direction 'in', so it would otherwise never be seen again.
+    try:
+        asked_out = (db.table("commerce_bank_transactions").select("*")
+                     .eq("tenant_id", tenant_id).eq("direction", "out")
+                     .eq("match_status", "asked").eq("source_file", "whatsapp_pop")
+                     .limit(1).execute().data or [])
+    except Exception:
+        asked_out = []
+    if asked_out:
+        return await _handle_supplier_pop_answer(tenant_id, text, asked_out[0])
     try:
         asked = (db.table("commerce_bank_transactions").select("*")
                  .eq("tenant_id", tenant_id).eq("direction", "in")
@@ -264,6 +365,13 @@ async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
         db.table("commerce_bank_transactions").update(
             {"match_status": "ignored"}).eq("id", txn["id"]).execute()
         return _next_client_or_done(tenant_id, "⏭ Skipped.")
+
+    # An ambiguous proof of payment asked which way the money went (bank_rec.stage_pop_for_review).
+    # Narrowly gated on a POP row so an ordinary bank-statement credit can't be flipped by a
+    # stray phrase.
+    if low in _I_PAID and txn.get("source_file") == "whatsapp_pop":
+        payee = (txn.get("description") or "").replace("WhatsApp proof of payment", "").strip(" —")
+        return await _flip_pop_to_money_out(tenant_id, txn, payee or "them")
 
     # A proof-of-payment screenshot (vula/commerce/bank_rec.py::stage_pop_for_review) may have
     # already proposed a specific candidate — "yes" confirms it directly rather than making the

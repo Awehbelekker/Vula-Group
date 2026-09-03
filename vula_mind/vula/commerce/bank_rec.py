@@ -310,6 +310,98 @@ def propose_pop_match(tenant_id: str, amount_cents: int, reference: Optional[str
     return None
 
 
+def _known_supplier_names(tenant_id: str) -> List[str]:
+    try:
+        rows = (_client().table("commerce_suppliers").select("name")
+                .eq("tenant_id", tenant_id).limit(500).execute().data or [])
+    except Exception as exc:
+        log.debug("supplier-name load skipped for %s: %s", tenant_id, exc)
+        return []
+    return [r.get("name") or "" for r in rows]
+
+
+def _open_supplier_bills(tenant_id: str) -> List[dict]:
+    """Bills still owed — the same draft-inclusive load reconcile() uses, since that is the
+    status a scanned supplier invoice arrives in."""
+    try:
+        bills = (_client().table("commerce_invoices")
+                 .select("id,invoice_number,supplier,total_cents,status,doc_type,direction")
+                 .eq("tenant_id", tenant_id).eq("direction", "inbound")
+                 .in_("status", ["draft", "sent", "overdue", "part_paid"])
+                 .limit(500).execute().data or [])
+    except Exception as exc:
+        log.debug("supplier-bill load skipped for %s: %s", tenant_id, exc)
+        return []
+    return [b for b in bills if (b.get("doc_type") or "invoice") == "invoice"]
+
+
+def classify_pop_direction(tenant_id: str, payee: Optional[str]) -> tuple:
+    """Which way did the money move? Returns (direction, confident, reason).
+
+    2026-09-03: this path hardcoded direction="in", so a proof of payment the OWNER sent for a
+    bill THEY paid was staged as a customer paying them, and matched against their own
+    outstanding invoices. The PDF path already got this right (see _SUPPLIER_CHECK_FIELD in
+    vula/api/whatsapp.py, added for DIGG's real FNB payment notifications); the photo path
+    did not, and a photographed POP is the common case for an owner on the move.
+
+    The payee — who RECEIVED the money — settles it, so this reuses the same issuer test
+    service.classify_direction uses for documents rather than inventing a second rule:
+    paid to us is money in, paid to a supplier we know is money out. Anything unrecognised
+    stays 'in' (the prior behaviour) but unconfident, so the review question still gets asked
+    instead of a guess being applied."""
+    from vula.commerce.service import _same_business
+    payee = (payee or "").strip()
+    if not payee:
+        return "in", False, "no payee on the document"
+    try:
+        from vula.api.tenants import get_config as _get_tenant_config
+        tenant_name = (_get_tenant_config(tenant_id) or {}).get("display_name") or tenant_id
+    except Exception:
+        tenant_name = tenant_id
+    if _same_business(payee, tenant_name) or _same_business(payee, tenant_id):
+        return "in", True, "paid to this business"
+    for name in _known_supplier_names(tenant_id):
+        if name and _same_business(payee, name):
+            return "out", True, "paid to a known supplier"
+    if any(_same_business(payee, b.get("supplier") or "") for b in _open_supplier_bills(tenant_id)):
+        return "out", True, "paid to a supplier we owe"
+    return "in", False, "unrecognised payee"
+
+
+def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str],
+                        reference: Optional[str], payee: Optional[str]) -> str:
+    """The owner paid a supplier and sent the confirmation. Stage it as money OUT against a
+    bill, and ask before settling it — same never-auto-apply rule as the money-in side."""
+    bills = _open_supplier_bills(tenant_id)
+    cand = _match_supplier_bill(
+        {"amount_cents": amount_cents, "description": payee or "", "reference": reference or ""},
+        bills)
+    row = {
+        "tenant_id": tenant_id,
+        "txn_date": (txn_date or _now())[:10],
+        "description": "WhatsApp proof of payment" + (f" — {payee}" if payee else ""),
+        "amount_cents": amount_cents,
+        "direction": "out",
+        "reference": reference,
+        "match_status": "asked",
+        "source_file": "whatsapp_pop",
+        "proposed_match_type": "supplier_bill" if cand else None,
+        "proposed_match_id": (cand or {}).get("id"),
+    }
+    try:
+        _client().table("commerce_bank_transactions").insert(row).execute()
+    except Exception as exc:
+        log.debug("supplier pop staging insert failed (run migration 132?): %s", exc)
+
+    amt = amount_cents / 100
+    if cand:
+        return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. That looks like "
+                f"bill *{cand.get('invoice_number') or cand.get('id')}*. Reply *yes* to mark it "
+                f"paid, or tell me the right bill number.")
+    return (f"📸 Got the payment confirmation — R{amt:,.2f} to *{payee}*. I couldn't find a "
+            f"matching open bill — reply with the bill number if you have it, or 'skip'.")
+
+
 def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[str] = None,
                          reference: Optional[str] = None, payee: Optional[str] = None,
                          sender_phone: Optional[str] = None) -> str:
@@ -322,7 +414,14 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
 
     sender_phone should be the WhatsApp sender's number whenever known (both a customer texting
     the storefront line and an owner forwarding a screenshot have a real sender number) — it
-    scopes matching to that person's own open invoices/orders first, see propose_pop_match."""
+    scopes matching to that person's own open invoices/orders first, see propose_pop_match.
+
+    A POP the owner sent for a bill THEY paid moves money the other way — see
+    classify_pop_direction — and is staged against supplier bills instead."""
+    direction, _confident, reason = classify_pop_direction(tenant_id, payee)
+    if direction == "out":
+        log.info("pop for %s staged as money out (%s): %s", tenant_id, reason, payee)
+        return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee)
     candidate = propose_pop_match(tenant_id, amount_cents, reference, payee, sender_phone)
     match_type, cand = candidate if candidate else (None, None)
     row = {
@@ -343,6 +442,14 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
         log.debug("pop staging insert failed (run migration 132?): %s", exc)
 
     amt = amount_cents / 100
+    # Neither us nor a supplier we know, and nothing matched on the money-in side either. The
+    # real case: DIGG's "Mr Onito Tiler" — a subcontractor paid ad hoc, so no supplier record
+    # and no bill to match. Asking "which order is this for?" is the wrong question, and it sat
+    # unanswered for weeks. Ask which WAY the money went instead; "I paid" flips it to a bill.
+    if not _confident and payee and not match_type:
+        return (f"📸 Got the payment confirmation for R{amt:,.2f} — *{payee}*. Did you pay "
+                f"them, or is this someone paying you? Reply *I paid* if it went out, or "
+                f"the order/invoice number if it came in.")
     if match_type == "invoice":
         return (f"📸 Got your payment screenshot — R{amt:,.2f}. Looks like it matches invoice "
                 f"*{cand.get('invoice_number')}* ({cand.get('customer_name') or 'customer'}). "

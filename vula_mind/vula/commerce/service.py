@@ -1105,11 +1105,26 @@ async def find_by_barcode(tenant_id: str, barcode: str) -> Optional[dict]:
     return result.data[0] if result.data else None
 
 
-async def update_order_status(order_id: str, status: str, yoco_checkout_id: Optional[str] = None) -> None:
+async def update_order_status(order_id: str, status: str, yoco_checkout_id: Optional[str] = None,
+                              payment_method: Optional[str] = None) -> None:
+    """payment_method records HOW a walk-in paid (cash, card, eft, snapscan). Invoices have
+    carried this since migration 130 via record_invoice_payment; orders — where a shop's cash
+    sales actually land — did not, so 'paid' said nothing about whether the money was in the
+    till or the bank. Optional and best-effort: the column arrived in migration 044, so a
+    failure retries without it rather than losing the status change itself."""
     update = {"status": status, "updated_at": _now()}
     if yoco_checkout_id:
         update["yoco_checkout_id"] = yoco_checkout_id
-    result = _client().table("commerce_orders").update(update).eq("id", order_id).execute()
+    if payment_method:
+        update["payment_method"] = payment_method
+    try:
+        result = _client().table("commerce_orders").update(update).eq("id", order_id).execute()
+    except Exception as exc:
+        if not payment_method:
+            raise
+        logger.warning("order update retried without payment_method (%s): %s", payment_method, exc)
+        update.pop("payment_method", None)
+        result = _client().table("commerce_orders").update(update).eq("id", order_id).execute()
     if status in ("paid", "refunded") and result.data:
         try:
             from vula.commerce import ledger

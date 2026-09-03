@@ -85,10 +85,14 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "update_order_status",
-        "description": "Update an order's fulfilment status by its display id (e.g. OTH-00042).",
+        "description": "Update an order's fulfilment status by its display id (e.g. OTH-00042). "
+                       "When marking one paid, pass payment_method if the owner said how they "
+                       "were paid (e.g. 'paid cash', 'she did an EFT').",
         "parameters": {"type": "object", "properties": {
             "order_id": {"type": "string"},
-            "status": {"type": "string", "enum": sorted(_VALID_ORDER_STATUS)}},
+            "status": {"type": "string", "enum": sorted(_VALID_ORDER_STATUS)},
+            "payment_method": {"type": "string",
+                               "description": "e.g. cash, eft, card, snapscan — only with status=paid"}},
             "required": ["order_id", "status"]},
     }},
     {"type": "function", "function": {
@@ -1364,7 +1368,7 @@ class CommerceAdminSkill(BaseSkill):
         try:
             if name == "sales_summary":      return await self._sales_summary(tid, args.get("period", "today"))
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))
-            if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""))
+            if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""), args.get("payment_method"))
             if name == "stock_status":       return await self._stock_status(tid, bool(args.get("low_only")))
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
@@ -1464,15 +1468,25 @@ class CommerceAdminSkill(BaseSkill):
                  "total": self._rands(o.get("total_cents")), "customer": o.get("customer_name")}
                 for o in orders] or {"message": "No orders found."}
 
-    async def _update_order_status(self, tid: str, display_id: str, status: str) -> Dict[str, Any]:
+    async def _update_order_status(self, tid: str, display_id: str, status: str,
+                                   payment_method: Optional[str] = None) -> Dict[str, Any]:
         if status not in _VALID_ORDER_STATUS:
             return {"error": f"status must be one of {sorted(_VALID_ORDER_STATUS)}"}
         orders = await service.list_orders(tid, limit=200)
         match = next((o for o in orders if (o.get("display_id") or "").upper() == display_id.strip().upper()), None)
         if not match:
             return {"error": f"No order {display_id} found."}
-        await service.update_order_status(match["id"], status)
+        # Only meaningful alongside 'paid' — recording "cash" against a dispatch would be noise.
+        method = payment_method if status == "paid" else None
+        # Passed only when there is one, so the ordinary status change keeps its long-standing
+        # two-argument call shape.
+        if method:
+            await service.update_order_status(match["id"], status, payment_method=method)
+        else:
+            await service.update_order_status(match["id"], status)
         result = {"updated": match["display_id"], "new_status": status}
+        if method:
+            result["payment_method"] = method
         if settings.readback_verify_enabled:
             row = await service.get_order(match["id"])
             observed = (row or {}).get("status")

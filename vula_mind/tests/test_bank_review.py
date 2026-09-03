@@ -20,21 +20,35 @@ def test_client_question_format():
 
 
 class _FakeTable:
-    """Minimal chainable Supabase-table mock: any .select/.eq/.ilike/.in_/.order/.limit call
-    returns self; .execute() returns whatever rows were configured for this table name."""
+    """Minimal chainable Supabase-table mock: .select/.ilike/.in_/.order/.limit return self;
+    .execute() returns the rows configured for this table name.
+
+    .eq() IS honoured (on keys the row actually carries), because handle_client_answer now
+    runs two differently-scoped queries against this same table — money-out proof-of-payment
+    rows first, then the money-in flow. A mock that ignored filters returned the money-in row
+    to both and sent every answer down the supplier path."""
     def __init__(self, rows):
         self._rows = rows
+        self._filters = {}
 
     def select(self, *a, **k): return self
-    def eq(self, *a, **k): return self
     def ilike(self, *a, **k): return self
     def in_(self, *a, **k): return self
     def order(self, *a, **k): return self
     def limit(self, *a, **k): return self
     def update(self, *a, **k): return self
 
+    def eq(self, col, val):
+        self._filters[col] = val
+        return self
+
     def execute(self):
-        return MagicMock(data=self._rows)
+        # Filters are per-query: the same table object is reused across calls, so they must not
+        # accumulate from one query into the next.
+        filters, self._filters = self._filters, {}
+        rows = [r for r in self._rows
+                if all(r.get(col) == val for col, val in filters.items() if col in r)]
+        return MagicMock(data=rows)
 
 
 class _FakeDB:
@@ -47,7 +61,8 @@ class _FakeDB:
 
 @pytest.mark.asyncio
 async def test_handle_client_answer_stop():
-    txn = {"id": "txn1", "amount_cents": 22000, "txn_date": "2026-07-17", "description": "x"}
+    txn = {"id": "txn1", "amount_cents": 22000, "txn_date": "2026-07-17", "description": "x",
+           "direction": "in"}
     db = _FakeDB({"commerce_bank_transactions": _FakeTable([txn])})
     with patch("vula.commerce.bank_review._client", return_value=db):
         from vula.commerce.bank_review import handle_client_answer
@@ -66,7 +81,8 @@ async def test_handle_client_answer_no_pending_question_returns_none():
 
 @pytest.mark.asyncio
 async def test_handle_client_answer_exact_order_number_marks_paid():
-    txn = {"id": "txn1", "amount_cents": 22000, "txn_date": "2026-07-17", "description": "x"}
+    txn = {"id": "txn1", "amount_cents": 22000, "txn_date": "2026-07-17", "description": "x",
+           "direction": "in"}
     order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
              "customer_phone": "27821234567", "total_cents": 22000, "status": "pending_payment"}
     db = _FakeDB({
@@ -90,7 +106,7 @@ async def test_handle_client_answer_exact_order_number_marks_paid():
 @pytest.mark.asyncio
 async def test_handle_client_answer_yes_confirms_proposed_invoice():
     txn = {"id": "txn1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
-           "proposed_match_type": "invoice", "proposed_match_id": "inv1"}
+           "direction": "in", "proposed_match_type": "invoice", "proposed_match_id": "inv1"}
     invoice = {"id": "inv1", "invoice_number": "OTH-0042", "customer_name": "Thabo",
                "total_cents": 15000, "status": "sent"}
     db = _FakeDB({
@@ -111,7 +127,7 @@ async def test_handle_client_answer_yes_confirms_proposed_invoice():
 @pytest.mark.asyncio
 async def test_handle_client_answer_yes_confirms_proposed_order():
     txn = {"id": "txn1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
-           "proposed_match_type": "order", "proposed_match_id": "ord1"}
+           "direction": "in", "proposed_match_type": "order", "proposed_match_id": "ord1"}
     order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
              "customer_phone": "27821234567", "total_cents": 15000, "status": "pending_payment"}
     db = _FakeDB({
@@ -134,7 +150,8 @@ async def test_handle_client_answer_yes_without_a_proposal_falls_through_to_norm
     # No proposed_match_type at all (an ordinary statement-sourced unmatched credit) — "yes"
     # isn't a real order number or customer name, so it should behave like any other miss,
     # never crash trying to look up a candidate that was never proposed.
-    txn = {"id": "txn1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x"}
+    txn = {"id": "txn1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
+           "direction": "in"}
     db = _FakeDB({
         "commerce_bank_transactions": _FakeTable([txn]),
         "commerce_orders": _FakeTable([]),
