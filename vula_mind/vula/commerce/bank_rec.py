@@ -201,9 +201,20 @@ def _tok(s: str) -> set:
 
 
 def _match_by_amount(txn: Dict[str, Any], candidates: List[dict], amount_key: str,
-                     name_fields: tuple) -> Optional[dict]:
+                     name_fields: tuple, require_name: bool = False) -> Optional[dict]:
     """Confident match of a credit to an outstanding invoice/order by amount (+ name/reference
-    boost). Shared by _match_invoice and _match_order — same tolerance + ambiguity rules."""
+    boost). Shared by _match_invoice and _match_order — same tolerance + ambiguity rules.
+
+    require_name makes name/reference evidence MANDATORY rather than a score boost. Amount alone
+    is reasonable evidence for money IN — a credit of exactly R1,152.93 against the single
+    outstanding invoice for R1,152.93 is specific. It is not reasonable for money OUT against
+    supplier bills, where payments are round (R400, R1,500) and dozens of open bills compete.
+    Measured against production 2026-09-06: matching the existing backlog on amount alone paired
+    "The Crazy Store R99.90" with a Pick n Pay bill, "Vida e Caffe R98" with Yoco, and
+    "Int On Debit Balance R0.11" with SOLID CAPE — 66 such matches across two tenants, nearly
+    all wrong, each of which would have marked a real supplier bill paid and posted a payables
+    entry for it.
+    """
     amt = txn["amount_cents"]
     tol = max(100, int(amt * 0.01))          # R1 or 1%
     blob = _tok(txn.get("description")) | _tok(txn.get("reference"))
@@ -222,6 +233,8 @@ def _match_by_amount(txn: Dict[str, Any], candidates: List[dict], amount_key: st
     # Require amount match; if multiple candidates share the amount and none name-matched, ambiguous.
     if best is None:
         return None
+    if require_name and best_score < 5:
+        return None                          # amount alone is not evidence for this side
     same_amt = [c for c in candidates if abs(int(c.get(amount_key) or 0) - amt) <= tol]
     if len(same_amt) > 1 and best_score < 5:
         return None                          # ambiguous → leave for review
@@ -246,7 +259,8 @@ def _match_supplier_bill(txn: Dict[str, Any], bills: List[dict]) -> Optional[dic
     not be trusted. Same amount-anchored matching as the money-in side, keyed on the supplier's
     name instead of the customer's.
     """
-    return _match_by_amount(txn, bills, "total_cents", ("supplier", "invoice_number"))
+    return _match_by_amount(txn, bills, "total_cents", ("supplier", "invoice_number"),
+                            require_name=True)
 
 
 def _digits(phone: Optional[str]) -> str:

@@ -15,7 +15,8 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -2322,6 +2323,216 @@ async def admin_categorize_txn(tenant_id: str, txn_id: str, body: CategorizeIn):
     ).eq("id", txn_id).execute()
     accounting.learn_category_rule(tenant_id, txn, body.account_code)   # so similar txns auto-fill
     return {"ok": True, "account_code": body.account_code, "vat_cents": vat}
+
+
+class BulkCategorizeIn(BaseModel):
+    txn_ids: List[str]
+    account_code: str
+
+
+class BulkDismissIn(BaseModel):
+    txn_ids: List[str]
+    reason: Optional[str] = None
+
+
+class DismissByFilterIn(BaseModel):
+    """Dismiss a whole slice without listing 404 ids. Requires confirm=true — without it this
+    reports what WOULD go, which is the same preview-then-confirm shape record_payment uses for
+    anything that changes the books."""
+    direction: Optional[str] = None          # in | out
+    account_code: Optional[str] = None
+    before_date: Optional[str] = None        # YYYY-MM-DD, exclusive
+    confirm: bool = False
+
+
+_BULK_LIMIT = 500
+
+
+@router.get("/{tenant_id}/admin/bank/transactions/groups")
+async def admin_bank_transaction_groups(tenant_id: str, direction: Optional[str] = None,
+                                        group_by: str = "merchant", limit: int = 2000):
+    """Unreviewed transactions collapsed into merchant-shaped GROUPS.
+
+    2026-09-06: off-the-hook had 738 unmatched rows and digg-demo 54, spanning 2026-05-11 to
+    2026-08-31, reviewable only one at a time over WhatsApp. Three months of banking cannot
+    clear through a chat queue. Grouping is what makes it tractable — the same 738 rows are a
+    few dozen merchants, so "all 47 Engen lines are fuel" is one decision instead of 47.
+
+    Grouped on the leading description tokens (skipping accounting._STOP's bank noise: EFT,
+    PAYMENT, CARD, CAPITEC...), which is what actually distinguishes one merchant from another
+    on a South African statement. Deliberately NOT amount-based: amount is precisely the signal
+    that produced 66 wrong supplier-bill matches, see bank_rec._match_by_amount.
+    """
+    from vula.commerce.accounting import _STOP
+    db = service._client()
+    try:
+        q = (db.table("commerce_bank_transactions").select("*")
+             .eq("tenant_id", tenant_id).in_("match_status", ["unmatched", "asked"]))
+        if direction in ("in", "out"):
+            q = q.eq("direction", direction)
+        rows = q.order("txn_date", desc=True).limit(min(limit, 5000)).execute().data or []
+    except Exception as exc:
+        return {"groups": [], "error": f"{exc} (run migration 057?)"}
+
+    def _merchant_key(txn: dict) -> str:
+        toks = [t for t in re.findall(r"[a-z][a-z0-9]{2,}", (txn.get("description") or "").lower())
+                if t not in _STOP]
+        return " ".join(toks[:2]) or "(no description)"
+
+    def _account_key(txn: dict) -> str:
+        return f"{txn.get('direction') or '?'} · {txn.get('account_code') or 'uncategorised'}"
+
+    # Merchant grouping is the right view for card spend, but it fragments on payer names:
+    # measured on off-the-hook's real backlog it turned 739 rows into 273 groups, because every
+    # "Payment Received: <a different person>" became its own. The account view collapses the
+    # same rows to ~16 — 404 of them are one group, money IN already categorised as sales with
+    # no open invoice behind it (counter sales that will never match anything and simply need
+    # to leave the queue). Neither view is right for everything, so the caller picks.
+    _key = _account_key if group_by == "account" else _merchant_key
+
+    groups: Dict[str, dict] = {}
+    for r in rows:
+        k = _key(r)
+        g = groups.setdefault(k, {
+            "key": k, "count": 0, "total_cents": 0, "direction": r.get("direction"),
+            "account_code": r.get("account_code"), "mixed_direction": False,
+            "txn_ids": [], "sample": (r.get("description") or "")[:80],
+            "oldest": r.get("txn_date"), "newest": r.get("txn_date"),
+        })
+        g["count"] += 1
+        g["total_cents"] += int(r.get("amount_cents") or 0)
+        g["txn_ids"].append(r["id"])
+        if r.get("direction") != g["direction"]:
+            g["mixed_direction"] = True
+        d = r.get("txn_date") or ""
+        if d and d < (g["oldest"] or d):
+            g["oldest"] = d
+        if d and d > (g["newest"] or ""):
+            g["newest"] = d
+
+    out = sorted(groups.values(), key=lambda g: g["count"], reverse=True)
+    return {"groups": out, "total_rows": len(rows), "group_count": len(out)}
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/bulk-categorize")
+async def admin_bulk_categorize(tenant_id: str, body: BulkCategorizeIn):
+    """Apply one account to many transactions, and learn the rule once so the NEXT statement
+    files them automatically. The bulk counterpart of admin_categorize_txn."""
+    from vula.commerce import accounting
+    if not body.txn_ids:
+        raise HTTPException(status_code=400, detail="no transactions given")
+    if len(body.txn_ids) > _BULK_LIMIT:
+        raise HTTPException(status_code=400, detail=f"at most {_BULK_LIMIT} at a time")
+    db = service._client()
+    accts = {a["code"]: a for a in accounting.ensure_chart(tenant_id)}
+    acc = accts.get(body.account_code)
+    if not acc:
+        raise HTTPException(status_code=400, detail="unknown account_code")
+
+    # Scoped to this tenant so an id from another tenant cannot be touched.
+    rows = (db.table("commerce_bank_transactions").select("*")
+            .eq("tenant_id", tenant_id).in_("id", body.txn_ids).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="no matching transactions")
+
+    vat_reg = accounting.is_vat_registered(tenant_id)
+    updated = 0
+    for txn in rows:
+        vat = accounting.vat_for(acc, int(txn.get("amount_cents") or 0), vat_reg)
+        try:
+            db.table("commerce_bank_transactions").update(
+                {"account_code": body.account_code, "vat_cents": vat,
+                 "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
+            ).eq("id", txn["id"]).execute()
+            updated += 1
+        except Exception as exc:
+            log.warning("bulk categorize skipped %s: %s", txn.get("id"), exc)
+    # Learn from ONE representative row, not all of them: learn_category_rule increments a hit
+    # count per signal, and replaying 400 identical rows would drown every other learned rule.
+    try:
+        accounting.learn_category_rule(tenant_id, rows[0], body.account_code)
+    except Exception as exc:
+        log.debug("bulk rule learning skipped: %s", exc)
+    return {"ok": True, "updated": updated, "requested": len(body.txn_ids),
+            "account_code": body.account_code}
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/bulk-dismiss")
+async def admin_bulk_dismiss(tenant_id: str, body: BulkDismissIn):
+    """Take transactions out of the review queue without matching them to anything.
+
+    Most of the backlog is not matchable and never will be: off-the-hook's 404 money-in rows
+    are counter sales with no invoice behind them, and the card spend has no bill to settle.
+    They still need to LEAVE the queue, or the queue stays permanently full and nobody reviews
+    anything. 'ignored' is the status the existing per-transaction review flow already uses, so
+    the ledger and reports treat these exactly as they always have — this only changes how many
+    can be dismissed at once.
+    """
+    if not body.txn_ids:
+        raise HTTPException(status_code=400, detail="no transactions given")
+    if len(body.txn_ids) > _BULK_LIMIT:
+        raise HTTPException(status_code=400, detail=f"at most {_BULK_LIMIT} at a time")
+    db = service._client()
+    rows = (db.table("commerce_bank_transactions").select("id")
+            .eq("tenant_id", tenant_id).in_("id", body.txn_ids).execute().data or [])
+    ids = [r["id"] for r in rows]
+    if not ids:
+        raise HTTPException(status_code=404, detail="no matching transactions")
+    try:
+        db.table("commerce_bank_transactions").update(
+            {"match_status": "ignored"}).in_("id", ids).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"dismiss failed: {exc}")
+    return {"ok": True, "dismissed": len(ids), "requested": len(body.txn_ids)}
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/dismiss-by-filter")
+async def admin_dismiss_by_filter(tenant_id: str, body: DismissByFilterIn):
+    """Clear a whole slice of the review queue in one decision.
+
+    The id-list endpoints cap at 500 and require the caller to enumerate every row; off-the-hook
+    has 739 to clear, 404 of them a single "money in, already categorised as sales, no invoice
+    behind it" slice. Enumerating those through a paged UI is the same problem as reviewing them
+    one at a time.
+
+    Always scoped to the caller's tenant, and only ever touches rows still awaiting review, so
+    it can never un-match something already reconciled.
+    """
+    db = service._client()
+    try:
+        q = (db.table("commerce_bank_transactions").select("id,amount_cents,direction")
+             .eq("tenant_id", tenant_id).in_("match_status", ["unmatched", "asked"]))
+        if body.direction in ("in", "out"):
+            q = q.eq("direction", body.direction)
+        if body.account_code:
+            q = q.eq("account_code", body.account_code)
+        if body.before_date:
+            q = q.lt("txn_date", body.before_date)
+        rows = q.limit(5000).execute().data or []
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"lookup failed: {exc}")
+
+    total = sum(int(r.get("amount_cents") or 0) for r in rows)
+    if not body.confirm:
+        return {"preview": True, "would_dismiss": len(rows), "total_cents": total,
+                "message": (f"{len(rows)} transactions (R{total / 100:,.2f}) would be taken out "
+                            f"of the review queue. Send the same request with confirm=true.")}
+    if not rows:
+        return {"ok": True, "dismissed": 0}
+    ids = [r["id"] for r in rows]
+    dismissed = 0
+    # Chunked: a single .in_() of several thousand ids is a URL long enough for PostgREST to
+    # reject, which would fail after the earlier chunks had already been applied.
+    for i in range(0, len(ids), _BULK_LIMIT):
+        chunk = ids[i:i + _BULK_LIMIT]
+        try:
+            db.table("commerce_bank_transactions").update(
+                {"match_status": "ignored"}).in_("id", chunk).execute()
+            dismissed += len(chunk)
+        except Exception as exc:
+            log.warning("dismiss-by-filter chunk failed at %d: %s", i, exc)
+            break
+    return {"ok": True, "dismissed": dismissed, "total_cents": total}
 
 
 @router.get("/{tenant_id}/admin/reports/pnl")

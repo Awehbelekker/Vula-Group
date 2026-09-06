@@ -441,6 +441,13 @@ async def receive_message(
                         record_message_status(wamid, st, err)
                     except Exception as exc:
                         logger.debug("status update skipped: %s", exc)
+                    # record_message_status only knows about BROADCAST recipients — it returns
+                    # silently for anything else, which is every ordinary reply. Track those
+                    # here so a message that failed after acceptance is not invisible.
+                    try:
+                        await _record_outbound_status(wamid, st, err)
+                    except Exception as exc:
+                        logger.debug("outbound status update skipped: %s", exc)
 
     return {"status": "ok"}
 
@@ -3705,6 +3712,85 @@ _send_failure_notified: dict = {}
 _SEND_FAILURE_NOTIFY_COOLDOWN_S = 3600.0
 
 
+# Meta reports a message's life cycle out of order often enough that a later 'sent' must not
+# overwrite an earlier 'read'. Same never-downgrade rule record_message_status uses.
+_WA_STATUS_RANK = {"accepted": 0, "sent": 1, "failed": 1, "delivered": 2, "read": 3}
+
+
+async def _record_outbound_status(wamid: str, status: str, error: Optional[str] = None) -> None:
+    """Apply a delivery callback to a tracked outbound message, and tell the team when one
+    actually FAILED — the whole point of migration 153. Silent for a wamid we don't track
+    (a broadcast, or anything sent before this shipped)."""
+    from vula.commerce import service as _svc
+    db = _svc._client()
+    rows = (db.table("vula_wa_outbound")
+            .select("id,tenant_id,to_phone,status,body_preview,notified_at")
+            .eq("wamid", wamid).limit(1).execute().data or [])
+    if not rows:
+        return
+    row = rows[0]
+    cur = row.get("status") or "accepted"
+    if _WA_STATUS_RANK.get(status, 0) < _WA_STATUS_RANK.get(cur, 0):
+        return
+    db.table("vula_wa_outbound").update(
+        {"status": status, "error": error, "updated_at": "now()"}).eq("id", row["id"]).execute()
+
+    if status != "failed" or row.get("notified_at"):
+        return
+    tenant_id, to_phone = row.get("tenant_id") or "", row.get("to_phone") or ""
+    meaning = ""
+    for code, text in _SEND_FAILURE_MEANING.items():
+        if code in (error or ""):
+            meaning = text
+            break
+    try:
+        from vula.integrations.notify import notify_team
+        preview = (row.get("body_preview") or "").strip()
+        await notify_team(tenant_id, "wa_send_failed", (
+            f"⚠️ A WhatsApp message to {to_phone} did NOT arrive"
+            + (f" — {meaning}" if meaning else (f" ({error})" if error else "")) + ".\n\n"
+            + (f'It started: "{preview[:120]}"\n\n' if preview else "")
+            + "They haven't seen it. Worth reaching them another way if it was urgent."
+        ))
+        db.table("vula_wa_outbound").update(
+            {"notified_at": "now()"}).eq("id", row["id"]).execute()
+    except Exception as exc:
+        logger.debug("failed-delivery notification skipped: %s", exc)
+
+
+def _record_outbound(resp: Any, tenant_id: str, to_phone: str, body: str,
+                     kind: str = "text") -> None:
+    """Remember an accepted outbound message by its Meta message id (wamid).
+
+    2026-09-06: nothing did this for ordinary replies. The send response was discarded, so when
+    Meta later reported the message failed, record_message_status looked the wamid up in
+    commerce_broadcast_recipients, found nothing (it was a conversation reply, not a broadcast)
+    and returned silently. Delivery outcomes existed and were thrown away for every message
+    that wasn't part of a campaign.
+
+    Best-effort by design: this runs inside the send path, so a bookkeeping failure must never
+    turn a delivered message into a reported failure.
+    """
+    try:
+        wamid = ((resp.json().get("messages") or [{}])[0] or {}).get("id")
+    except Exception:
+        wamid = None
+    if not wamid:
+        return
+    try:
+        from vula.commerce import service as _svc
+        _svc._client().table("vula_wa_outbound").insert({
+            "tenant_id": tenant_id or "",
+            "wamid": wamid,
+            "to_phone": to_phone,
+            "kind": kind,
+            "body_preview": (body or "")[:200],
+            "status": "accepted",
+        }).execute()
+    except Exception as exc:
+        logger.debug("outbound wamid not recorded (run migration 153?): %s", exc)
+
+
 async def _record_send_failure(to: str, tenant_id: str, body: str, exc_text: str) -> None:
     """Make a failed WhatsApp send VISIBLE.
 
@@ -3934,6 +4020,11 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
                     },
                 )
                 resp.raise_for_status()
+                # A 200 here means Meta ACCEPTED the message, not that it arrived. Keep the
+                # message id so the asynchronous delivery callback can be matched back to it —
+                # see _record_outbound and migration 153 for the real "tenants aren't receiving
+                # messages" report this closes.
+                _record_outbound(resp, tenant_id, number, part, kind="text")
             if len(parts) > 1:
                 logger.info("WhatsApp reply sent to %s in %d parts (%d chars)",
                             to, len(parts), len(message or ""))
@@ -4017,10 +4108,25 @@ async def _send_invoice_document(
                 },
             )
             resp.raise_for_status()
+            _record_outbound(resp, tenant_id, number, caption or filename, kind="document")
             logger.info("WhatsApp document sent to %s", to)
             return True
+    except httpx.HTTPStatusError as exc:
+        # 2026-09-06: this path caught bare Exception and only logged — so an invoice PDF that
+        # never reached the customer produced a Railway line and nothing else. No telemetry, no
+        # one told, and the caller's `False` is discarded at most call sites. An invoice is the
+        # single most consequential thing Vula sends; it now reports like every other send.
+        body = ""
+        try:
+            body = exc.response.text[:600]
+        except Exception:
+            pass
+        logger.error("WhatsApp document send failed to %s (%s): %s", to, exc, body)
+        await _record_send_failure(to, tenant_id, body, str(exc))
+        return False
     except Exception as exc:
         logger.error("WhatsApp document send failed to %s: %s", to, exc)
+        await _record_send_failure(to, tenant_id, "", str(exc))
         return False
 
 
