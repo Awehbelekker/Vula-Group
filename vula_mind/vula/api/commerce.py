@@ -2229,17 +2229,39 @@ async def admin_ask_merchants(tenant_id: str, limit: int = 5):
     # skipped by this query AND ineligible for apply_profiles, so never asked and never used.
     # decided_by is the real state — only an owner's answer settles a merchant.
     try:
-        pend = [r for r in (db.table("commerce_merchant_profiles").select("*")
-                            .eq("tenant_id", tenant_id).is_("asked_at", "null")
-                            .limit(200).execute().data or [])
-                if (r.get("decided_by") or "") != "owner"][:max(1, min(limit, 20))]
+        candidates = [r for r in (db.table("commerce_merchant_profiles").select("*")
+                                  .eq("tenant_id", tenant_id).is_("asked_at", "null")
+                                  .limit(500).execute().data or [])
+                      if (r.get("decided_by") or "") != "owner"]
     except Exception as exc:
         return {"asked": 0, "error": f"{exc} (run migration 154?)"}
+
+    # A document reference is not a party, so there is nothing an owner can usefully answer about
+    # it. 2026-09-07: the first live question sent to a real owner was "invoice inv — 2
+    # transactions, R2,800.00", with no trade and no suggestion, because looks_like_reference
+    # stopped research from INVENTING a company for it but nothing stopped the queue asking.
+    # These belong in the Bank tab, allocated against the document they name.
+    candidates = [r for r in candidates
+                  if not merchants.looks_like_reference(r.get("merchant_key") or "")]
 
     # Same broad scope the research pass uses: the owner is being asked about EVERY transaction
     # from this merchant they haven't allocated by hand, not just the ones Vula gave up on. The
     # count and total in the question would otherwise understate what their answer settles.
     rows = merchants.reallocatable(tenant_id)
+    weight = {}
+    for r in rows:
+        k = merchants.merchant_key(r.get("description"))
+        if k:
+            w = weight.setdefault(k, [0, 0])
+            w[0] += 1
+            w[1] += int(r.get("amount_cents") or 0)
+
+    # Biggest first, by money then by count: an owner answering three questions should have
+    # settled the three merchants that matter most, not three arbitrary ones.
+    candidates.sort(key=lambda p: weight.get(p.get("merchant_key") or "", [0, 0])[1],
+                    reverse=True)
+    pend = candidates[:max(1, min(limit, 20))]
+
     asked = 0
     for p in pend:
         key = p.get("merchant_key") or ""
@@ -2251,7 +2273,7 @@ async def admin_ask_merchants(tenant_id: str, limit: int = 5):
         if sent:
             merchants.save_profile(tenant_id, key, asked_at=service._now())
             asked += 1
-    return {"asked": asked, "pending": len(pend)}
+    return {"asked": asked, "remaining": max(0, len(candidates) - asked)}
 
 
 @router.post("/{tenant_id}/admin/bank/review/start")

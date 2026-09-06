@@ -237,6 +237,57 @@ async def test_a_merchant_is_queued_on_decided_by_not_on_confidence():
 
 
 @pytest.mark.asyncio
+async def test_a_document_reference_is_never_asked_about():
+    """2026-09-07, sent to a real owner before this guard existed: "invoice inv — 2
+    transactions, R2,800.00", no trade, no suggestion. looks_like_reference stopped research
+    inventing a company for it, but nothing stopped the queue asking about it."""
+    profiles = [
+        {"merchant_key": "invoice inv", "decided_by": "research", "display_name": "invoice inv",
+         "what_they_sell": None, "account_code": None, "asked_at": None},
+        {"merchant_key": "crazy store", "decided_by": "research", "display_name": "Crazy Store",
+         "what_they_sell": "variety retailer", "account_code": "other_expense", "asked_at": None},
+    ]
+    asked = []
+
+    async def _ask(tid, key, name, trade, n, total, suggested_code=""):
+        asked.append(key)
+        return True
+
+    with patch.object(capi.service, "_client", lambda: _db(rows=profiles)), \
+         patch("vula.api.whatsapp.ask_merchant_account", _ask), \
+         patch("vula.commerce.merchants.reallocatable", lambda t, limit=5000: []), \
+         patch("vula.commerce.merchants.save_profile", lambda *a, **k: None):
+        await capi.admin_ask_merchants(TENANT, limit=5)
+    assert asked == ["crazy store"]
+
+
+@pytest.mark.asyncio
+async def test_the_biggest_merchants_are_asked_about_first():
+    """An owner answering three questions should have settled the three merchants that matter,
+    not three arbitrary ones."""
+    profiles = [
+        {"merchant_key": "small", "decided_by": "research", "display_name": "S",
+         "what_they_sell": "x", "account_code": None, "asked_at": None},
+        {"merchant_key": "big", "decided_by": "research", "display_name": "B",
+         "what_they_sell": "y", "account_code": None, "asked_at": None},
+    ]
+    txns = [{"description": "small", "direction": "out", "amount_cents": 100},
+            {"description": "big", "direction": "out", "amount_cents": 900000}]
+    asked = []
+
+    async def _ask(tid, key, name, trade, n, total, suggested_code=""):
+        asked.append(key)
+        return True
+
+    with patch.object(capi.service, "_client", lambda: _db(rows=profiles)), \
+         patch("vula.api.whatsapp.ask_merchant_account", _ask), \
+         patch("vula.commerce.merchants.reallocatable", lambda t, limit=5000: txns), \
+         patch("vula.commerce.merchants.save_profile", lambda *a, **k: None):
+        await capi.admin_ask_merchants(TENANT, limit=1)
+    assert asked == ["big"]
+
+
+@pytest.mark.asyncio
 async def test_the_researched_account_becomes_the_suggested_button():
     profiles = [{"merchant_key": "sporty paint", "confidence": "ambiguous",
                  "decided_by": "research", "display_name": "Sporty Paint",
