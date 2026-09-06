@@ -574,7 +574,8 @@ async def ask_document_kind(tenant_id: str, invoice_id: str, supplier: str,
 
 
 async def ask_merchant_account(tenant_id: str, merchant_key: str, display_name: str,
-                               what_they_sell: str, txn_count: int, total_cents: int) -> bool:
+                               what_they_sell: str, txn_count: int, total_cents: int,
+                               suggested_code: str = "") -> bool:
     """Ask the owner, ONCE EVER, which account a merchant's spending belongs to.
 
     2026-09-06: research can establish what a business SELLS but not whose money it was. Staci's
@@ -603,13 +604,28 @@ async def ask_merchant_account(tenant_id: str, merchant_key: str, display_name: 
     # The button id carries the merchant key, so the answer applies to the whole group. Meta
     # caps a button title at 20 characters and the id at 256.
     key = (merchant_key or "")[:180]
+    # Offer the RESEARCHED account as the first button when there is one. Research is only a
+    # suggestion (it never files anything on its own — see merchants.research_merchant), but it
+    # is reliable about what a business sells, so it makes the owner's answer one tap instead of
+    # a guess. Meta caps a button title at 20 characters.
+    first_code = (suggested_code or "").strip().lower() or "cost_of_sales"
+    if first_code == "owner_drawings":
+        first_code = "cost_of_sales"       # "Personal" is already the second button
+    titles = {
+        "cost_of_sales": "Stock / supplies", "casual_labour": "Labour", "equipment": "Equipment",
+        "packaging": "Packaging", "fuel": "Fuel", "utilities": "Utilities",
+        "professional_fees": "Professional fees", "marketing": "Marketing", "rent": "Rent",
+        "insurance": "Insurance", "delivery": "Delivery", "bank_charges": "Bank charges",
+        "wages": "Wages", "other_expense": "Business expense",
+    }
     sent_any = False
     for a in approvers[:2]:
         creds = await _get_tenant_wa_creds(tenant_id)
         if not creds:
             break
         sent = await _send_wa_buttons(creds, a["phone"], body, [
-            {"id": f"merchacct:cost_of_sales:{key}", "title": "Stock / supplies"},
+            {"id": f"merchacct:{first_code}:{key}",
+             "title": titles.get(first_code, "Business expense")[:20]},
             {"id": f"merchacct:owner_drawings:{key}", "title": "Personal"},
             {"id": f"merchacct:ask:{key}", "title": "Ask me each time"},
         ])
@@ -672,7 +688,7 @@ async def _handle_merchant_account_reply(phone: str, reply_id: str, tenant_id: s
     except Exception as exc:
         logger.warning("merchant back-apply failed for %s/%s: %s", tenant_id, key, exc)
 
-    label = "stock/supplies" if choice == "cost_of_sales" else "personal drawings"
+    label = "personal drawings" if choice == "owner_drawings" else choice.replace("_", " ")
     await _send_reply(
         phone,
         f"✅ *{name}* filed as {label}"

@@ -2239,7 +2239,8 @@ async def admin_ask_merchants(tenant_id: str, limit: int = 5):
         mine = [r for r in rows if merchants.merchant_key(r.get("description")) == key]
         total = sum(int(r.get("amount_cents") or 0) for r in mine)
         sent = await ask_merchant_account(tenant_id, key, p.get("display_name") or key,
-                                          p.get("what_they_sell") or "", len(mine), total)
+                                          p.get("what_they_sell") or "", len(mine), total,
+                                          suggested_code=p.get("account_code") or "")
         if sent:
             merchants.save_profile(tenant_id, key, asked_at=service._now())
             asked += 1

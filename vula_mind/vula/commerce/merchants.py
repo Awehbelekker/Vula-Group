@@ -234,27 +234,54 @@ async def research_merchant(tenant_id: str, key: str, sample_description: str,
     if code and not any(a["code"] == code for a in expense):
         code = ""
     trade = (verdict.get("what_they_sell") or "").strip()
-    confidence = (verdict.get("confidence") or "").strip().lower()
-    if confidence not in ("confident", "ambiguous"):
-        confidence = "ambiguous"
-    # Structural override: whatever the model claims, a supermarket or pharmacy cannot be
-    # settled from the trade alone. Same deterministic-backstop rule the rest of this codebase
-    # uses where a prompt instruction has already proved insufficient.
-    if any(w in trade.lower() for w in _AMBIGUOUS_TRADES):
-        confidence = "ambiguous"
-    if not code:
-        confidence = "ambiguous"
 
+    # 2026-09-06: research is a SUGGESTION, never a verdict that files money.
+    #
+    # Measured on digg-demo by running it twice with identical inputs: 19 of 33 answers changed
+    # between runs, and 6 of the 18 "confident" ones were plainly wrong — telecoms filed as
+    # fuel, painting supplies as packaging, a painter moved off casual_labour, and two merchants
+    # that had honestly said "Unknown" came back CONFIDENT with no new information. A ~33% error
+    # rate on the one path that writes to the books, and non-deterministic besides.
+    #
+    # What research IS reliably good at is saying what a business SELLS. So it keeps that job:
+    # it makes the owner's one-time question specific and easy to answer, and their answer is
+    # what allocates. See apply_profiles for what may be applied without being asked.
     save_profile(
         tenant_id, key,
         display_name=(verdict.get("display_name") or key)[:120],
         what_they_sell=trade[:300] or None,
-        account_code=code or None,
-        confidence=confidence,
+        account_code=code or None,          # a SUGGESTION — gated by decided_by below
+        confidence="ambiguous",
         decided_by="research",
         researched_at=_now(),
     )
     return get_profile(tenant_id, key)
+
+
+def deterministic_account(tenant_id: str, key: str) -> Optional[str]:
+    """An account backed by evidence rather than inference: a merchant the tenant has already
+    entered in their own supplier list, with a category that is a real chart code.
+
+    This is the only thing allowed to allocate without asking. `commerce_suppliers` rows are
+    tenant-entered, so a match is the owner's own prior statement about who that party is —
+    the same standard `ledger._supplier_account_code` applies (exact match, no fuzzy mapping)."""
+    from vula.commerce.accounting import ensure_chart
+    try:
+        rows = (_client().table("commerce_suppliers").select("name,category")
+                .eq("tenant_id", tenant_id).limit(500).execute().data or [])
+    except Exception as exc:
+        log.debug("supplier lookup skipped for %s: %s", tenant_id, exc)
+        return None
+    codes = {a["code"] for a in ensure_chart(tenant_id)
+             if a.get("type") in ("expense", "equity")}
+    for r in rows:
+        if merchant_key(r.get("name")) != key:
+            continue
+        cat = (r.get("category") or "").strip().lower()
+        if cat in codes:
+            return cat
+        return "cost_of_sales" if "cost_of_sales" in codes else None
+    return None
 
 
 async def _classify(key: str, sample_description: str, pages: str,
@@ -335,13 +362,22 @@ def apply_profiles(tenant_id: str, txns: List[dict]) -> Dict[int, Dict[str, Any]
         return {}
 
     out: Dict[int, Dict[str, Any]] = {}
+    decided = {}
     for r in rows:
-        code = r.get("account_code")
-        # 'ambiguous' profiles deliberately allocate nothing until the owner has answered —
-        # that is the whole point of asking rather than guessing.
-        if not code or r.get("confidence") == "ambiguous" and r.get("decided_by") != "owner":
+        # ONLY the owner's own answer allocates. A researched suggestion sits in account_code
+        # to make the question specific, and never files anything by itself — see
+        # research_merchant for the 33%-wrong, run-to-run-unstable measurement behind that.
+        if r.get("decided_by") == "owner" and r.get("account_code"):
+            decided[r.get("merchant_key")] = r["account_code"]
+
+    for key, idxs in keys.items():
+        code = decided.get(key)
+        if not code:
+            # Second and last thing allowed without asking: the tenant's OWN supplier record.
+            code = deterministic_account(tenant_id, key)
+        if not code:
             continue
-        for i in keys.get(r.get("merchant_key") or "", []):
+        for i in idxs:
             out[i] = {"account_code": code, "source": "merchant"}
     return out
 

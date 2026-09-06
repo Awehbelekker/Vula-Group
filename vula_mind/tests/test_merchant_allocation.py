@@ -310,7 +310,13 @@ async def test_the_tenants_own_trade_is_given_to_the_classifier():
 
 
 @pytest.mark.asyncio
-async def test_an_unmistakable_trade_is_confident():
+async def test_research_never_produces_an_appliable_verdict_however_sure_it_sounds():
+    """Even an unmistakable trade only SUGGESTS. Running research twice over digg-demo with
+    identical inputs changed 19 of 33 answers, and 6 of the 18 'confident' ones were plainly
+    wrong — telecoms filed as fuel, painting supplies as packaging, a painter moved off
+    casual_labour, and two merchants that had honestly answered "Unknown" came back confident
+    with no new information. The suggestion is kept (it makes the owner's question one tap);
+    the confidence is not."""
     saved = {}
     with patch.object(merchants, "_search_pages", AsyncMock(return_value="page text")), \
          patch.object(merchants, "_classify", AsyncMock(return_value={
@@ -321,8 +327,50 @@ async def test_an_unmistakable_trade_is_confident():
          patch.object(merchants, "get_profile", lambda t, k: dict(saved)), \
          patch("vula.commerce.accounting.ensure_chart", lambda t: CHART):
         out = await merchants.research_merchant(TENANT, "atlantis seafoods", "Atlantis Seafoods")
-    assert out["confidence"] == "confident"
-    assert out["account_code"] == "cost_of_sales"
+    assert out["confidence"] == "ambiguous"
+    assert out["decided_by"] == "research"
+    assert out["account_code"] == "cost_of_sales", "kept as the suggested button, not a verdict"
+    assert out["what_they_sell"] == "a wholesale seafood distributor"
+
+
+def test_a_researched_suggestion_alone_files_nothing():
+    txns = [{"description": "Atlantis Seafoods", "direction": "out", "amount_cents": 5000}]
+    db = _profiles_db([{"merchant_key": "atlantis seafoods", "account_code": "cost_of_sales",
+                        "confidence": "ambiguous", "decided_by": "research"}])
+    with patch.object(merchants, "_client", lambda: db), \
+         patch.object(merchants, "deterministic_account", lambda t, k: None):
+        assert merchants.apply_profiles(TENANT, txns) == {}
+
+
+def test_the_owners_answer_is_what_allocates():
+    txns = [{"description": "Atlantis Seafoods", "direction": "out", "amount_cents": 5000}]
+    db = _profiles_db([{"merchant_key": "atlantis seafoods", "account_code": "cost_of_sales",
+                        "confidence": "confident", "decided_by": "owner"}])
+    with patch.object(merchants, "_client", lambda: db), \
+         patch.object(merchants, "deterministic_account", lambda t, k: None):
+        out = merchants.apply_profiles(TENANT, txns)
+    assert out[0]["account_code"] == "cost_of_sales"
+
+
+def test_the_tenants_own_supplier_record_allocates_without_asking():
+    """The other thing that may file without a question: a merchant the OWNER already entered
+    in their supplier list. That is their own prior statement about who this party is."""
+    txns = [{"description": "Atlantis Seafoods IN50135117", "direction": "out",
+             "amount_cents": 5000}]
+    with patch.object(merchants, "_client", lambda: _profiles_db([])), \
+         patch.object(merchants, "deterministic_account",
+                      lambda t, k: "cost_of_sales" if k == "atlantis seafoods" else None):
+        out = merchants.apply_profiles(TENANT, txns)
+    assert out[0]["account_code"] == "cost_of_sales"
+
+
+def test_an_unknown_supplier_category_does_not_invent_an_account():
+    rows = [{"name": "Mystery Traders", "category": "not_a_chart_code"}]
+    with patch.object(merchants, "_client", lambda: _profiles_db(rows)), \
+         patch("vula.commerce.accounting.ensure_chart", lambda t: CHART):
+        # falls back to cost_of_sales only because the name matched a real supplier row
+        assert merchants.deterministic_account(TENANT, "mystery traders") == "cost_of_sales"
+        assert merchants.deterministic_account(TENANT, "someone else entirely") is None
 
 
 @pytest.mark.asyncio
