@@ -106,6 +106,11 @@ _AMBIGUOUS_TRADES = (
     "supermarket", "grocer", "pharmacy", "chemist", "convenience", "general retail",
     "variety", "department store", "hardware", "fuel", "petrol", "filling station",
     "restaurant", "takeaway", "cafe", "liquor", "clothing", "online retail", "marketplace",
+    # 2026-09-06 live run: "Fast food" and "Food or beverages" sailed past as CONFIDENT
+    # cost_of_sales for an architecture practice, because neither string contains "restaurant"
+    # or "takeaway". Hospitality is a judgement call in every set of books except a caterer's.
+    "fast food", "food or beverage", "coffee", "bakery", "steakhouse", "sushi", "catering",
+    "hotel", "accommodation", "travel", "entertainment", "unknown",
 )
 
 
@@ -163,6 +168,42 @@ async def _search_pages(name: str, limit: int = 3) -> str:
     return "\n\n".join(parts)
 
 
+# Keys that are a document reference, not a party. Researching "invoice fc6780" or "hpc qu132910"
+# produces a confident-sounding hallucination about an unrelated company — the live digg-demo run
+# turned "hpc doors" (a doors purchase on DIGG's HPC project) into "Aquaponics systems and
+# training", and "invoice invfire" into "Invoicing services".
+_REFERENCE_KEY_RE = re.compile(
+    r"^(invoice|inv|quote|qu|est|ref|order|po)\b|"      # leading document word
+    r"\b[a-z]{0,4}\d{4,}\b"                            # an embedded document number
+)
+
+
+def looks_like_reference(key: str) -> bool:
+    """True when a merchant key is really a document reference, so research must be skipped."""
+    return bool(_REFERENCE_KEY_RE.search((key or "").lower()))
+
+
+def _tenant_context(tenant_id: str) -> str:
+    """What the TENANT does — without it, research maps a merchant's trade to an account with no
+    idea whose books it is. The live digg-demo run filed McDonald's, a sushi place and a
+    steakhouse as cost_of_sales for an ARCHITECTURE practice, because "food" means cost of sales
+    for a fish shop and staff welfare or drawings for everyone else."""
+    try:
+        from vula.api.tenants import get_config
+        cfg = get_config(tenant_id) or {}
+    except Exception:
+        return ""
+    name = cfg.get("display_name") or tenant_id
+    btype = (cfg.get("business_type") or "").strip()
+    desc = (cfg.get("description") or "").strip()
+    bits = [f"The business whose books these are: {name}"]
+    if btype:
+        bits.append(f"(a {btype} business)")
+    if desc:
+        bits.append(f"— {desc[:200]}")
+    return " ".join(bits)
+
+
 async def research_merchant(tenant_id: str, key: str, sample_description: str,
                             accounts: Optional[List[dict]] = None) -> Optional[dict]:
     """Identify a merchant and propose an account. Caches the result — INCLUDING a miss, so an
@@ -176,8 +217,16 @@ async def research_merchant(tenant_id: str, key: str, sample_description: str,
     expense = [a for a in accounts if a.get("type") in ("expense", "equity")]
     listing = "\n".join(f"- {a['code']}: {a['name']}" for a in expense)
 
+    if looks_like_reference(key):
+        # Cached as a researched miss so it is never looked up again, and left for the owner.
+        save_profile(tenant_id, key, display_name=key, what_they_sell=None,
+                     account_code=None, confidence="ambiguous", decided_by="research",
+                     researched_at=_now())
+        return get_profile(tenant_id, key)
+
     pages = await _search_pages(key)
-    verdict = await _classify(key, sample_description, pages, listing)
+    verdict = await _classify(key, sample_description, pages, listing,
+                              _tenant_context(tenant_id))
     if verdict is None:
         return None                                   # transient — don't poison the cache
 
@@ -209,7 +258,7 @@ async def research_merchant(tenant_id: str, key: str, sample_description: str,
 
 
 async def _classify(key: str, sample_description: str, pages: str,
-                    account_listing: str) -> Optional[dict]:
+                    account_listing: str, tenant_context: str = "") -> Optional[dict]:
     """Ask the model who this is. Returns None on failure (retryable), a dict otherwise."""
     import litellm
     from core.llm_router import resolve_generation_route
@@ -218,15 +267,21 @@ async def _classify(key: str, sample_description: str, pages: str,
     prompt = (
         "You identify merchants on South African bank statements for a small business's books.\n"
         + UNTRUSTED_CONTENT_RULE
+        + "\n" + (tenant_context + "\n" if tenant_context else "")
         + "\nGiven the merchant name and any web pages about it, say what the business SELLS and "
-          "which account its purchases usually belong to.\n\n"
+          "which account ITS PURCHASES BELONG TO IN THESE BOOKS.\n\n"
           "Expense accounts available:\n" + account_listing + "\n\n"
           'Reply with ONLY JSON: {"display_name": str, "what_they_sell": str, '
           '"suggested_account_code": str, "confidence": "confident"|"ambiguous"}\n'
-          'Use "ambiguous" whenever purchases there could reasonably be either business stock OR '
-          "the owner's personal spending — supermarkets, pharmacies, fuel, general retail. Only "
-          'use "confident" for a trade that is unmistakably one or the other (a seafood '
-          "wholesaler, a packaging supplier, an accountant).\n"
+          "The account depends on the BUSINESS ABOVE, not on the merchant alone: a fish "
+          "wholesaler is cost_of_sales for a seafood shop and an odd one-off for an architect; "
+          "a restaurant or fast-food meal is cost_of_sales for nobody except a caterer — for "
+          "everyone else it is staff welfare or the owner's own spending.\n"
+          'Use "ambiguous" whenever purchases there could reasonably be either a business cost '
+          "OR the owner's personal spending — supermarkets, pharmacies, fuel, general retail, "
+          'restaurants. Use "ambiguous" ALSO when the web pages do not clearly describe THIS '
+          "merchant: an unrecognised name is not a licence to guess. Only use \"confident\" for "
+          "a trade that is unmistakable in these books.\n"
         + fence("MERCHANT NAME", f"{key} (as it appears: {sample_description[:160]})")
         + fence("WEB PAGES", pages[:4000])
     )

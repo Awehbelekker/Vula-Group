@@ -243,6 +243,72 @@ async def test_a_supermarket_is_ambiguous_however_confident_the_model_sounds():
     assert out["confidence"] == "ambiguous"
 
 
+@pytest.mark.parametrize("key", ["invoice inv", "invoice fc6780", "hpc qu132910",
+                                 "invoice invfire", "est00028"])
+def test_a_document_reference_is_not_researched_as_a_merchant(key):
+    """Live digg-demo run: researching "hpc doors" (a doors purchase on DIGG's HPC project)
+    returned "Aquaponics systems and training", and "invoice invfire" became "Invoicing
+    services". A reference number is not a party, and searching one invents a company."""
+    assert merchants.looks_like_reference(key) is True
+
+
+@pytest.mark.parametrize("key", ["crazy store", "dis chem", "atlantis seafoods",
+                                 "bwh tableview", "skipp rubble"])
+def test_a_real_merchant_is_not_mistaken_for_a_reference(key):
+    assert merchants.looks_like_reference(key) is False
+
+
+@pytest.mark.asyncio
+async def test_a_reference_key_is_cached_as_a_miss_without_a_web_lookup():
+    saved = {}
+    with patch.object(merchants, "_search_pages", AsyncMock()) as search, \
+         patch.object(merchants, "save_profile", lambda t, k, **kw: saved.update(kw)), \
+         patch.object(merchants, "get_profile", lambda t, k: dict(saved)), \
+         patch("vula.commerce.accounting.ensure_chart", lambda t: CHART):
+        out = await merchants.research_merchant(TENANT, "invoice fc6780", "Invoice FC6780")
+    search.assert_not_awaited(), "no web lookup for a reference number"
+    assert out["account_code"] is None and out["confidence"] == "ambiguous"
+
+
+@pytest.mark.parametrize("trade", ["Fast food", "Food or beverages", "Steakhouse food",
+                                   "a coffee shop", "Unknown"])
+@pytest.mark.asyncio
+async def test_hospitality_is_never_confidently_cost_of_sales(trade):
+    """Live digg-demo run filed McDonald's, a sushi place and a steakhouse as cost_of_sales for
+    an ARCHITECTURE practice — none of those trade strings contained 'restaurant' or 'takeaway',
+    so the deterministic override missed them."""
+    saved = {}
+    with patch.object(merchants, "_search_pages", AsyncMock(return_value="x")), \
+         patch.object(merchants, "_classify", AsyncMock(return_value={
+             "display_name": "M", "what_they_sell": trade,
+             "suggested_account_code": "cost_of_sales", "confidence": "confident"})), \
+         patch.object(merchants, "save_profile", lambda t, k, **kw: saved.update(kw)), \
+         patch.object(merchants, "get_profile", lambda t, k: dict(saved)), \
+         patch("vula.commerce.accounting.ensure_chart", lambda t: CHART):
+        out = await merchants.research_merchant(TENANT, "m", "M")
+    assert out["confidence"] == "ambiguous"
+
+
+@pytest.mark.asyncio
+async def test_the_tenants_own_trade_is_given_to_the_classifier():
+    """Without it, 'food' maps to cost_of_sales whether the books belong to a fish shop or an
+    architect. The classifier was never told whose books these are."""
+    seen = {}
+
+    async def _cap(key, sample, pages, listing, tenant_context=""):
+        seen["ctx"] = tenant_context
+        return None
+
+    with patch.object(merchants, "_search_pages", AsyncMock(return_value="")), \
+         patch.object(merchants, "_classify", _cap), \
+         patch("vula.api.tenants.get_config",
+               lambda t: {"display_name": "DIGG Architecture", "business_type": "services"}), \
+         patch("vula.commerce.accounting.ensure_chart", lambda t: CHART):
+        await merchants.research_merchant("digg-demo", "mcd tableview", "MCD Tableview")
+    assert "DIGG Architecture" in seen["ctx"]
+    assert "services" in seen["ctx"]
+
+
 @pytest.mark.asyncio
 async def test_an_unmistakable_trade_is_confident():
     saved = {}
