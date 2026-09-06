@@ -291,6 +291,31 @@ def apply_profiles(tenant_id: str, txns: List[dict]) -> Dict[int, Dict[str, Any]
     return out
 
 
+# An allocation nobody should overwrite: the owner set it by hand, or it came from a
+# deterministic match (a receipt, a worker, an invoice) that is stronger evidence than any
+# merchant-level guess.
+AUTHORITATIVE = ("owner", "receipt", "labour", "matched", "skipped")
+
+
+def reallocatable(tenant_id: str, limit: int = 5000) -> List[dict]:
+    """Money-out transactions a merchant verdict is allowed to (re)file.
+
+    NOT bank_review.pending_txns, which returns only categorized_by in ('default','asked') —
+    the rows where Vula gave up. The transactions this feature exists for are the opposite:
+    already allocated by the model, just allocated INCONSISTENTLY. off-the-hook's 176 scattered
+    rows are all categorized_by='ai', so a pending-only scope would never have reached a single
+    one of them.
+    """
+    try:
+        rows = (_client().table("commerce_bank_transactions").select("*")
+                .eq("tenant_id", tenant_id).eq("direction", "out")
+                .limit(limit).execute().data or [])
+    except Exception as exc:
+        log.debug("reallocatable read skipped: %s", exc)
+        return []
+    return [r for r in rows if (r.get("categorized_by") or "") not in AUTHORITATIVE]
+
+
 def unknown_merchants(tenant_id: str, txns: List[dict]) -> List[tuple]:
     """(merchant_key, sample_description, count) for money-out merchants with no profile yet —
     the work list for the background research pass."""

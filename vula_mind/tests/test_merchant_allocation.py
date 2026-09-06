@@ -145,6 +145,33 @@ def test_unknown_merchants_are_listed_busiest_first():
     assert all("received" not in k for k, _, _ in out), "money-in is not researched"
 
 
+# ── what a merchant verdict is allowed to re-file ───────────────────────────────
+
+def test_already_ai_allocated_rows_are_in_scope():
+    """The transactions this feature exists for are NOT the ones Vula gave up on — they are the
+    ones it allocated confidently but inconsistently. All 176 of off-the-hook's scattered rows
+    are categorized_by='ai', so a bank_review.pending_txns scope (default/asked only) would
+    never have reached a single one. Caught live after the first digg-demo run saw 1 row."""
+    rows = [
+        {"id": "a", "direction": "out", "categorized_by": "ai", "description": "Crazy Store"},
+        {"id": "b", "direction": "out", "categorized_by": "default", "description": "Crazy Store"},
+        {"id": "c", "direction": "out", "categorized_by": "learned", "description": "Crazy Store"},
+    ]
+    with patch.object(merchants, "_client", lambda: _profiles_db(rows)):
+        got = merchants.reallocatable(TENANT)
+    assert {r["id"] for r in got} == {"a", "b", "c"}
+
+
+@pytest.mark.parametrize("categorized_by", ["owner", "receipt", "labour", "matched", "skipped"])
+def test_an_authoritative_allocation_is_never_overwritten(categorized_by):
+    """The owner's own answer, and deterministic receipt/worker/invoice matches, are stronger
+    evidence than any merchant-level guess."""
+    rows = [{"id": "x", "direction": "out", "categorized_by": categorized_by,
+             "description": "Crazy Store"}]
+    with patch.object(merchants, "_client", lambda: _profiles_db(rows)):
+        assert merchants.reallocatable(TENANT) == []
+
+
 # ── the learned-rule fix ────────────────────────────────────────────────────────
 
 def test_a_correction_teaches_the_merchant_not_every_word():

@@ -2168,15 +2168,17 @@ async def admin_research_merchants(tenant_id: str, limit: int = 25):
     Merchants whose trade cannot settle the account (supermarkets, pharmacies, fuel) come back
     'ambiguous' and are queued for a single WhatsApp question instead of a guess.
     """
-    from vula.commerce import accounting, bank_review, merchants
+    from vula.commerce import accounting, merchants
     from vula.integrations import metering
+    db = service._client()
     # Background work loses the contextvar the HTTP middleware sets, which would bill this
     # tenant's research to "_unattributed" — see vula/api/server.py's tenant_metering_context.
     metering.set_request_tenant(tenant_id)
 
-    rows = bank_review.pending_txns(tenant_id)
+    rows = merchants.reallocatable(tenant_id)
     todo = merchants.unknown_merchants(tenant_id, rows)[:max(1, min(limit, 100))]
     accounts = accounting.ensure_chart(tenant_id)
+    acc_map = {a["code"]: a for a in accounts}
     researched, ambiguous = 0, 0
     for key, sample, _count in todo:
         prof = await merchants.research_merchant(tenant_id, key, sample, accounts)
@@ -2185,18 +2187,39 @@ async def admin_research_merchants(tenant_id: str, limit: int = 25):
         researched += 1
         if prof.get("confidence") == "ambiguous":
             ambiguous += 1
-    # Re-run allocation so anything newly identified is filed straight away.
-    applied = await admin_bank_recategorize(tenant_id)
-    return {"researched": researched, "ambiguous": ambiguous,
-            "merchants_remaining": max(0, len(merchants.unknown_merchants(tenant_id, rows))),
-            "allocation": applied}
+
+    # Apply every decided verdict to its whole group. Scoped to `reallocatable`, so an
+    # allocation the owner made by hand (or a deterministic receipt/worker match) is never
+    # overwritten by a merchant-level guess.
+    rows = merchants.reallocatable(tenant_id)
+    decided = merchants.apply_profiles(tenant_id, rows)
+    vat_reg = accounting.is_vat_registered(tenant_id)
+    updated = 0
+    for i, alloc in decided.items():
+        r = rows[i]
+        if r.get("account_code") == alloc["account_code"] and r.get("categorized_by") == "merchant":
+            continue                       # already filed there
+        acct = acc_map.get(alloc["account_code"])
+        try:
+            db.table("commerce_bank_transactions").update({
+                "account_code": alloc["account_code"],
+                "vat_cents": accounting.vat_for(acct, int(r.get("amount_cents") or 0), vat_reg),
+                "vat_treatment": (acct or {}).get("vat_treatment"),
+                "categorized_by": "merchant",
+            }).eq("id", r["id"]).execute()
+            updated += 1
+        except Exception as exc:
+            log.warning("merchant allocation failed for %s: %s", r.get("id"), exc)
+
+    return {"researched": researched, "ambiguous": ambiguous, "reallocated": updated,
+            "merchants_remaining": len(merchants.unknown_merchants(tenant_id, rows))}
 
 
 @router.post("/{tenant_id}/admin/bank/ask-merchants")
 async def admin_ask_merchants(tenant_id: str, limit: int = 5):
     """Send the owner the once-per-merchant question for ambiguous merchants nobody has been
     asked about yet. Stamps asked_at so a merchant is asked once ever, not once per statement."""
-    from vula.commerce import bank_review, merchants
+    from vula.commerce import merchants
     from vula.api.whatsapp import ask_merchant_account
     db = service._client()
     try:
@@ -2206,7 +2229,10 @@ async def admin_ask_merchants(tenant_id: str, limit: int = 5):
     except Exception as exc:
         return {"asked": 0, "error": f"{exc} (run migration 154?)"}
 
-    rows = bank_review.pending_txns(tenant_id)
+    # Same broad scope the research pass uses: the owner is being asked about EVERY transaction
+    # from this merchant they haven't allocated by hand, not just the ones Vula gave up on. The
+    # count and total in the question would otherwise understate what their answer settles.
+    rows = merchants.reallocatable(tenant_id)
     asked = 0
     for p in pend:
         key = p.get("merchant_key") or ""
