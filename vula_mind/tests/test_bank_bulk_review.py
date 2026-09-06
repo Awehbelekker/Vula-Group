@@ -55,6 +55,12 @@ def _db(rows=None, updates=None):
             self.lt_ = (col, val)
             return self
 
+        def is_(self, col, val):
+            # PostgREST's null test. Without it the endpoint's try/except swallowed an
+            # AttributeError and reported an empty queue, which looks exactly like success.
+            self.isnull = col
+            return self
+
         def update(self, patch_):
             if updates is not None:
                 updates.append(patch_)
@@ -72,6 +78,9 @@ def _db(rows=None, updates=None):
             if lt_:
                 col, val = lt_
                 out = [r for r in out if col not in r or (r.get(col) or "") < val]
+            isnull = getattr(self, "isnull", None)
+            if isnull:
+                out = [r for r in out if r.get(isnull) is None]
             return MagicMock(data=out)
 
     return MagicMock(table=lambda n: _Q(n))
@@ -193,6 +202,59 @@ async def test_dismiss_by_filter_reports_the_value_leaving_the_queue():
             TENANT, capi.DismissByFilterIn(direction="out"))
     assert out["total_cents"] == 45000 + 52000 + 18000
     assert "R1,150.00" in out["message"]
+
+
+# ── which merchants get asked about ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_merchant_is_queued_on_decided_by_not_on_confidence():
+    """digg-demo had 18 profiles written as confidence='confident' before research was demoted
+    to advisory. Selecting on confidence skipped them here AND apply_profiles refused them
+    (decided_by='research'), so they were never asked about and never used. decided_by is the
+    real state — only an owner's answer settles a merchant."""
+    profiles = [
+        {"merchant_key": "a", "confidence": "confident", "decided_by": "research",
+         "display_name": "A", "what_they_sell": "x", "account_code": "fuel", "asked_at": None},
+        {"merchant_key": "b", "confidence": "ambiguous", "decided_by": "research",
+         "display_name": "B", "what_they_sell": "y", "account_code": None, "asked_at": None},
+        {"merchant_key": "c", "confidence": "confident", "decided_by": "owner",
+         "display_name": "C", "what_they_sell": "z", "account_code": "rent", "asked_at": None},
+    ]
+    asked = []
+
+    async def _ask(tid, key, name, trade, n, total, suggested_code=""):
+        asked.append((key, suggested_code))
+        return True
+
+    with patch.object(capi.service, "_client", lambda: _db(rows=profiles)), \
+         patch("vula.api.whatsapp.ask_merchant_account", _ask), \
+         patch("vula.commerce.merchants.reallocatable", lambda t, limit=5000: []), \
+         patch("vula.commerce.merchants.merchant_key", lambda d: ""), \
+         patch("vula.commerce.merchants.save_profile", lambda *a, **k: None):
+        out = await capi.admin_ask_merchants(TENANT)
+    assert [k for k, _ in asked] == ["a", "b"], "the owner-settled merchant is not re-asked"
+    assert out["asked"] == 2
+
+
+@pytest.mark.asyncio
+async def test_the_researched_account_becomes_the_suggested_button():
+    profiles = [{"merchant_key": "sporty paint", "confidence": "ambiguous",
+                 "decided_by": "research", "display_name": "Sporty Paint",
+                 "what_they_sell": "painting supplies", "account_code": "packaging",
+                 "asked_at": None}]
+    asked = []
+
+    async def _ask(tid, key, name, trade, n, total, suggested_code=""):
+        asked.append(suggested_code)
+        return True
+
+    with patch.object(capi.service, "_client", lambda: _db(rows=profiles)), \
+         patch("vula.api.whatsapp.ask_merchant_account", _ask), \
+         patch("vula.commerce.merchants.reallocatable", lambda t, limit=5000: []), \
+         patch("vula.commerce.merchants.merchant_key", lambda d: ""), \
+         patch("vula.commerce.merchants.save_profile", lambda *a, **k: None):
+        await capi.admin_ask_merchants(TENANT)
+    assert asked == ["packaging"], "research informs the question even though it can't decide"
 
 
 # ── bulk categorize ─────────────────────────────────────────────────────────────

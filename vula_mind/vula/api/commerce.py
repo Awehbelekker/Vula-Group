@@ -2222,10 +2222,17 @@ async def admin_ask_merchants(tenant_id: str, limit: int = 5):
     from vula.commerce import merchants
     from vula.api.whatsapp import ask_merchant_account
     db = service._client()
+    # Keyed on "nobody has settled this merchant and we haven't asked", NOT on confidence.
+    # Confidence is research's own opinion of itself, which measurement showed is worth little
+    # (see merchants.research_merchant), and profiles written before that change still carry
+    # confidence='confident'. Selecting on it left 18 of digg-demo's 33 profiles in limbo:
+    # skipped by this query AND ineligible for apply_profiles, so never asked and never used.
+    # decided_by is the real state — only an owner's answer settles a merchant.
     try:
-        pend = (db.table("commerce_merchant_profiles").select("*")
-                .eq("tenant_id", tenant_id).eq("confidence", "ambiguous")
-                .is_("asked_at", "null").limit(max(1, min(limit, 20))).execute().data or [])
+        pend = [r for r in (db.table("commerce_merchant_profiles").select("*")
+                            .eq("tenant_id", tenant_id).is_("asked_at", "null")
+                            .limit(200).execute().data or [])
+                if (r.get("decided_by") or "") != "owner"][:max(1, min(limit, 20))]
     except Exception as exc:
         return {"asked": 0, "error": f"{exc} (run migration 154?)"}
 
