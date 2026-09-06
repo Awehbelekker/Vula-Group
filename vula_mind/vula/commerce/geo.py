@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional
+import re
+from typing import Any, Optional
 
 import httpx
 
@@ -98,3 +99,75 @@ def coverage(tenant_id: str, lat: float, lng: float) -> Optional[dict]:
     dist = haversine_km(o["lat"], o["lng"], lat, lng)
     return {"covered": dist <= o["radius_km"], "distance_km": round(dist, 1),
             "radius_km": o["radius_km"], "origin_label": o["label"]}
+
+
+# ── named-area coverage ─────────────────────────────────────────────────────────────────────
+# coverage() above needs an origin pin + radius. Most commerce tenants configure a plain LIST of
+# suburb names instead (migration 070) and never set a pin — off-the-hook has 13 named areas and
+# no origin at all. For those, nothing decided anything: the storefront prompt told the model to
+# escalate EVERY out-of-area delivery question via ask_team, an over-correction from the
+# 2026-07-16 "Ja, ons lewer na Timbuktu" hallucination. Measured on real data, that turned each
+# such question into a handoff nobody answered — "Do you deliver to Timbuktu" (2026-07-17) and
+# "Do you deliver to Bloemfontein?" (2026-09-02) both escalated, both expired unanswered, both
+# left the customer with 48h of silence and then an apology. A fish shop in Table View can
+# answer Bloemfontein itself.
+#
+# The tenant's own setting says "we ONLY deliver to these areas", so a name that matches nothing
+# is a NO by their own configuration. The only real hazard is a name VARIANT of a covered area
+# ("Blouberg" for "Bloubergstrand", "Tableview" for "Table View"), which is what containment
+# matching and the shared-word "unsure" band are for. Unsure still escalates — the gap this
+# closes is confident answers being escalated, not judgement being replaced.
+
+def _norm_area(s: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).strip()
+
+
+def _words(s: str) -> set:
+    # 3 letters, not 4: a bare "Bay" shares nothing 4+ with "Big Bay" and would otherwise be a
+    # confident NO for an area that IS covered. The unsure band exists to catch exactly that, so
+    # it should be the generous one — a needless escalation costs a question, a wrong "no
+    # we don't deliver there" costs the sale.
+    return {w for w in s.split() if len(w) >= 3}
+
+
+def area_verdict(tenant_id: str, place: str) -> Optional[dict]:
+    """Is `place` inside this tenant's configured delivery areas?
+
+    Returns {"verdict": "covered"|"not_covered"|"unsure", "areas": [...], "matched": str|None}
+    or None when the tenant has no named areas configured (caller must keep escalating).
+    """
+    try:
+        from vula.commerce.order_workflow import get_order_settings
+        areas = (get_order_settings(tenant_id) or {}).get("delivery_areas") or []
+    except Exception as exc:
+        log.debug("delivery-area read failed for %s: %s", tenant_id, exc)
+        return None
+    areas = [str(a) for a in areas if str(a).strip()]
+    if not areas:
+        return None
+
+    p = _norm_area(place)
+    if not p:
+        return None
+    squashed = p.replace(" ", "")
+    for a in areas:
+        n = _norm_area(a)
+        # Exact, or the same name written without the space ("Tableview" / "Table View").
+        if p == n or squashed == n.replace(" ", ""):
+            return {"verdict": "covered", "areas": areas, "matched": a}
+        # The place is MORE specific than a configured area ("Milnerton Ridge", "Table View
+        # North") — the area name appears in it as whole words.
+        if re.search(rf"\b{re.escape(n)}\b", p):
+            return {"verdict": "covered", "areas": areas, "matched": a}
+        # The place is a shortened form of a configured area — only as a PREFIX
+        # ("Blouberg" → "Bloubergstrand", "Melkbos" → "Melkbosstrand"). Plain substring would
+        # match a bare generic word against its qualifier ("Beach" inside "West Beach"), which
+        # is not a name variant at all; that falls through to the unsure band below.
+        if len(p) >= 4 and n.startswith(p):
+            return {"verdict": "covered", "areas": areas, "matched": a}
+
+    pw = _words(p)
+    for a in areas:
+        if pw & _words(_norm_area(a)):
+            return {"verdict": "unsure", "areas": areas, "matched": a}
+    return {"verdict": "not_covered", "areas": areas, "matched": None}

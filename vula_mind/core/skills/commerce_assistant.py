@@ -403,6 +403,27 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "check_delivery_area",
+            "description": (
+                "Check whether we deliver to a place the customer named (suburb, area or town). "
+                "ALWAYS use this instead of deciding yourself. Returns covered / not_covered / "
+                "unsure. If not_covered, tell them plainly that we don't deliver there and name "
+                "the areas we DO cover — do not escalate, that is a real answer. If unsure, "
+                "call ask_team. Never answer a delivery-coverage question without calling this."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "place": {"type": "string",
+                              "description": "The suburb/area/town the customer asked about."},
+                },
+                "required": ["place"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "suggest_recipe",
             "description": (
                 "Suggest a South African recipe when the customer asks what to cook, "
@@ -903,8 +924,10 @@ class CommerceAssistantSkill(BaseSkill):
             lines = []
             if areas:
                 lines.append("We ONLY deliver to these areas: " + ", ".join(str(a) for a in areas) + ". "
-                             "If a customer asks about delivery ANYWHERE else, do NOT say yes or no — "
-                             "call ask_team with their question.")
+                             "If a customer asks whether we deliver somewhere, call "
+                             "check_delivery_area with the place they named and follow its verdict "
+                             "exactly — it is authoritative. Never guess coverage yourself, and "
+                             "never say yes to a place it did not confirm.")
             else:
                 lines.append("You do NOT know this business's delivery area — if asked whether we "
                              "deliver somewhere, do NOT guess, and do NOT answer yes OR no: call "
@@ -1218,6 +1241,8 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_resend_invoice(tid, phone, args)
         if name == "get_daily_catch":
             return await self._exec_get_daily_catch(tid)
+        if name == "check_delivery_area":
+            return self._exec_check_delivery_area(tid, args)
         if name == "suggest_recipe":
             return await self._exec_suggest_recipe(tid, args)
         if name == "research_product":
@@ -1629,6 +1654,31 @@ class CommerceAssistantSkill(BaseSkill):
             "message": f"{header} {names}.",
         }
 
+    def _exec_check_delivery_area(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Deterministic answer to "do you deliver to X". See vula.commerce.geo.area_verdict for
+        the real escalate-everything failure this replaces."""
+        from vula.commerce import geo
+        place = (args.get("place") or "").strip()
+        if not place:
+            return {"error": "Need the place they asked about."}
+        v = geo.area_verdict(tenant_id, place)
+        if not v:
+            return {"verdict": "unsure", "place": place,
+                    "instruction": "No delivery areas are configured for this business — do NOT "
+                                   "guess. Call ask_team with their question."}
+        if v["verdict"] == "covered":
+            return {"verdict": "covered", "place": place, "matched_area": v["matched"],
+                    "instruction": f"Yes — we deliver to {v['matched']}. Say so warmly and carry "
+                                   f"on helping them order."}
+        if v["verdict"] == "unsure":
+            return {"verdict": "unsure", "place": place, "areas": v["areas"],
+                    "instruction": f"{place!r} is close to '{v['matched']}' but not clearly the "
+                                   f"same place — do NOT answer yes or no. Call ask_team."}
+        return {"verdict": "not_covered", "place": place, "areas": v["areas"],
+                "instruction": (f"We do NOT deliver to {place}. Tell them so directly and kindly, "
+                                f"list the areas we DO deliver to, and offer collection if that "
+                                f"suits. Do NOT call ask_team — this is a real answer.")}
+
     async def _exec_suggest_recipe(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a South African recipe and match ingredients to in-stock products."""
         import litellm
@@ -1638,7 +1688,13 @@ class CommerceAssistantSkill(BaseSkill):
         # 2026-09-01: real incident, off-the-hook — "Do you have a 3 hake recipes" got back
         # exactly one recipe, no acknowledgement it was short of what was actually asked.
         # Capped at 3 to keep the reply a real WhatsApp-length message, not an essay.
-        count = max(1, min(3, int(args.get("count") or 1)))
+        # 2026-09-06: the cap then reintroduced the SAME silence one notch up — a real customer
+        # asked for "4 hake recipes" on 2026-09-02 and got three, with nothing said about the
+        # missing one. Capping is right (four recipes is not a WhatsApp message); doing it
+        # silently is not. Report the shortfall so the reply can own it and offer the rest.
+        asked_for = int(args.get("count") or 1)
+        count = max(1, min(3, asked_for))
+        capped_from = asked_for if asked_for > count else None
 
         # Fetch catalog so we know what's actually available
         try:
@@ -1742,7 +1798,7 @@ class CommerceAssistantSkill(BaseSkill):
             for p in matched[:6]
         ]
 
-        return {
+        result = {
             "recipe": recipe_text,
             "available_to_order": available,
             "tip": (
@@ -1751,6 +1807,15 @@ class CommerceAssistantSkill(BaseSkill):
                 "Let me know what else I can help you with."
             ),
         }
+        if capped_from:
+            result["recipes_returned"] = count
+            result["customer_asked_for"] = capped_from
+            result["must_tell_customer"] = (
+                f"They asked for {capped_from} recipes and this is {count} — say so in your "
+                f"reply and offer to send the other {capped_from - count} if they want them. "
+                f"Do not pretend {count} was what they asked for."
+            )
+        return result
 
     async def _exec_research_product(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Grounded factual research about a product/ingredient/fish type — the business's own
