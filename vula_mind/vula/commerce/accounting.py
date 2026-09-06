@@ -102,12 +102,43 @@ def _signals_from_txn(txn: dict) -> List[tuple]:
     return out[:8]
 
 
+def _learning_signals(txn: dict) -> List[tuple]:
+    """The signals worth REMEMBERING from an owner's correction: the merchant identity, and an
+    exact reference. Deliberately narrower than _signals_from_txn (still used for reading old
+    rules) — see learn_category_rule for the generic-token damage that caused."""
+    from vula.commerce.merchants import merchant_key
+    out = []
+    key = merchant_key(txn.get("description"))
+    if key:
+        out.append(("merchant", key))
+    ref = (txn.get("reference") or "").strip().lower()
+    if len(ref) >= 3:
+        out.append(("reference", ref))
+    return out
+
+
 def learn_category_rule(tenant_id: str, txn: dict, account_code: str) -> None:
-    """Remember that a transaction with these signals → this account (grows with corrections)."""
+    """Remember that a transaction with these signals → this account (grows with corrections).
+
+    2026-09-06: this used to write a rule for EVERY signal — up to 8 single tokens per
+    correction — and lookup_learned_category then picked the highest-`hits` single match. On
+    off-the-hook's live rule table that produced:
+
+        'received'  -> owner_drawings   ("Payment Received: ..." is 404 money-IN rows)
+        'received'  -> bank_cash        (contradicting the above, same token)
+        'milnerton' -> cost_of_sales    (a suburb)
+        'table' / 'bay' / 'city' / 'mall' -> sales
+        'uncategorised' -> cost_of_sales
+
+    One generic word could therefore override every good allocation that shared it. Now a
+    correction teaches the MERCHANT (a two-token identity, shared with the grouping and profile
+    code) plus an exact reference — the two signals that actually identify a counterparty — and
+    nothing else.
+    """
     if not account_code:
         return
     db = _client()
-    for stype, val in _signals_from_txn(txn):
+    for stype, val in _learning_signals(txn):
         try:
             ex = (db.table("commerce_txn_rules").select("id,hits")
                   .eq("tenant_id", tenant_id).eq("signal", val).eq("account_code", account_code)
@@ -125,16 +156,30 @@ def learn_category_rule(tenant_id: str, txn: dict, account_code: str) -> None:
 
 
 def lookup_learned_category(tenant_id: str, txn: dict) -> Optional[str]:
-    sigs = [v for _, v in _signals_from_txn(txn)]
-    if not sigs:
-        return None
-    try:
-        rows = (_client().table("commerce_txn_rules").select("account_code,hits")
-                .eq("tenant_id", tenant_id).in_("signal", sigs)
-                .order("hits", desc=True).limit(1).execute().data or [])
-    except Exception:
-        return None
-    return rows[0]["account_code"] if rows else None
+    """The learned account for this transaction, strongest signal first.
+
+    Ranking by `hits` ALONE let a generic token outrank a real merchant match: off-the-hook's
+    'received' -> owner_drawings rule had the highest hit count of any rule, and 'received'
+    appears on all 404 of its "Payment Received: ..." credits. Merchant and reference signals —
+    the ones that actually identify a counterparty — now win outright, and bare description
+    tokens are consulted only when neither exists (old rules written before 2026-09-06).
+    """
+    strong = [v for _, v in _learning_signals(txn)]
+    weak = [v for _, v in _signals_from_txn(txn) if v not in strong]
+    for sigs, types in ((strong, ("merchant", "reference")), (weak, None)):
+        if not sigs:
+            continue
+        try:
+            q = (_client().table("commerce_txn_rules").select("account_code,hits,signal_type")
+                 .eq("tenant_id", tenant_id).in_("signal", sigs))
+            if types:
+                q = q.in_("signal_type", list(types))
+            rows = q.order("hits", desc=True).limit(1).execute().data or []
+        except Exception:
+            return None
+        if rows:
+            return rows[0]["account_code"]
+    return None
 
 
 # ── AI categorisation + VAT ───────────────────────────────────────────────────
@@ -190,10 +235,32 @@ async def categorize_batch(tenant_id: str, txns: List[dict],
     exp = [a for a in accounts if a.get("type") in ("expense", "equity")]
     results: List[Optional[Dict[str, Any]]] = [None] * len(txns)
 
+    # A decided merchant profile outranks everything: it is the owner's own answer, or research
+    # about what that business sells, and it is the same answer for every line from that
+    # merchant. Deciding per line is what scattered Crazy Store across two accounts and Table
+    # Bay across four — see vula/commerce/merchants.py.
+    try:
+        from vula.commerce.merchants import apply_profiles
+        by_merchant = apply_profiles(tenant_id, txns)
+    except Exception as exc:
+        log.debug("merchant profiles unavailable (run migration 154?): %s", exc)
+        by_merchant = {}
+
+    def _allowed_codes(t: dict) -> set:
+        return {a["code"] for a in (inc if t.get("direction") == "in" else exp)}
+
     pending: List[int] = []
     for i, t in enumerate(txns):
+        prof = by_merchant.get(i)
+        if prof and prof["account_code"] in _allowed_codes(t):
+            results[i] = prof
+            continue
         code = lookup_learned_category(tenant_id, t)
-        if code and any(a["code"] == code for a in accounts):
+        # The learned path accepted any code in the chart, while the AI path below has always
+        # enforced income-for-credits. Nothing had slipped through yet (verified 2026-09-06: 0 of
+        # off-the-hook's 88 'learned' rows were wrong-direction), but a single bad rule — and the
+        # rule table had several — could have filed a customer payment as an expense.
+        if code and code in _allowed_codes(t):
             results[i] = {"account_code": code, "source": "learned"}
         else:
             pending.append(i)

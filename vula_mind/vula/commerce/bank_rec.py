@@ -572,7 +572,11 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         for r in (db.table("commerce_bank_transactions")
                   .select("txn_date,amount_cents,description,account_code,vat_cents,vat_treatment,categorized_by")
                   .eq("tenant_id", tenant_id)
-                  .in_("categorized_by", ["owner", "receipt", "labour", "asked", "skipped"])
+                  # 'merchant' joins these because it reflects a decided merchant profile —
+                  # often the owner's own once-per-merchant answer — and must survive a
+                  # statement being re-uploaded.
+                  .in_("categorized_by",
+                       ["owner", "receipt", "labour", "asked", "skipped", "merchant"])
                   .limit(2000).execute().data or []):
             protected[(str(r.get("txn_date")), int(r.get("amount_cents") or 0),
                        (r.get("description") or ""))] = r

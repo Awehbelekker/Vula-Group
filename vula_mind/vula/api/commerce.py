@@ -15,7 +15,6 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -2157,6 +2156,70 @@ async def admin_bank_recategorize(tenant_id: str):
     return {"reviewed": len(rows), "updated": updated, "still_pending": len(rows) - updated}
 
 
+@router.post("/{tenant_id}/admin/bank/research-merchants")
+async def admin_research_merchants(tenant_id: str, limit: int = 25):
+    """Identify the merchants behind unallocated money-out, then allocate by merchant.
+
+    Runs AFTER a statement import rather than during it: research is a web lookup per NEW
+    merchant, and a statement with 60 unknown merchants would otherwise make the upload crawl.
+    Each merchant is researched once and cached (hits AND misses), so repeat runs are cheap —
+    off-the-hook's 322 money-out rows are only 120 distinct merchants, digg-demo's 62 are 26.
+
+    Merchants whose trade cannot settle the account (supermarkets, pharmacies, fuel) come back
+    'ambiguous' and are queued for a single WhatsApp question instead of a guess.
+    """
+    from vula.commerce import accounting, bank_review, merchants
+    from vula.integrations import metering
+    # Background work loses the contextvar the HTTP middleware sets, which would bill this
+    # tenant's research to "_unattributed" — see vula/api/server.py's tenant_metering_context.
+    metering.set_request_tenant(tenant_id)
+
+    rows = bank_review.pending_txns(tenant_id)
+    todo = merchants.unknown_merchants(tenant_id, rows)[:max(1, min(limit, 100))]
+    accounts = accounting.ensure_chart(tenant_id)
+    researched, ambiguous = 0, 0
+    for key, sample, _count in todo:
+        prof = await merchants.research_merchant(tenant_id, key, sample, accounts)
+        if not prof:
+            continue                       # transient failure — retried on the next run
+        researched += 1
+        if prof.get("confidence") == "ambiguous":
+            ambiguous += 1
+    # Re-run allocation so anything newly identified is filed straight away.
+    applied = await admin_bank_recategorize(tenant_id)
+    return {"researched": researched, "ambiguous": ambiguous,
+            "merchants_remaining": max(0, len(merchants.unknown_merchants(tenant_id, rows))),
+            "allocation": applied}
+
+
+@router.post("/{tenant_id}/admin/bank/ask-merchants")
+async def admin_ask_merchants(tenant_id: str, limit: int = 5):
+    """Send the owner the once-per-merchant question for ambiguous merchants nobody has been
+    asked about yet. Stamps asked_at so a merchant is asked once ever, not once per statement."""
+    from vula.commerce import bank_review, merchants
+    from vula.api.whatsapp import ask_merchant_account
+    db = service._client()
+    try:
+        pend = (db.table("commerce_merchant_profiles").select("*")
+                .eq("tenant_id", tenant_id).eq("confidence", "ambiguous")
+                .is_("asked_at", "null").limit(max(1, min(limit, 20))).execute().data or [])
+    except Exception as exc:
+        return {"asked": 0, "error": f"{exc} (run migration 154?)"}
+
+    rows = bank_review.pending_txns(tenant_id)
+    asked = 0
+    for p in pend:
+        key = p.get("merchant_key") or ""
+        mine = [r for r in rows if merchants.merchant_key(r.get("description")) == key]
+        total = sum(int(r.get("amount_cents") or 0) for r in mine)
+        sent = await ask_merchant_account(tenant_id, key, p.get("display_name") or key,
+                                          p.get("what_they_sell") or "", len(mine), total)
+        if sent:
+            merchants.save_profile(tenant_id, key, asked_at=service._now())
+            asked += 1
+    return {"asked": asked, "pending": len(pend)}
+
+
 @router.post("/{tenant_id}/admin/bank/review/start")
 async def admin_bank_review_start(tenant_id: str):
     """Start the WhatsApp review loop: sends the owner the first unallocated transaction as a
@@ -2363,7 +2426,7 @@ async def admin_bank_transaction_groups(tenant_id: str, direction: Optional[str]
     on a South African statement. Deliberately NOT amount-based: amount is precisely the signal
     that produced 66 wrong supplier-bill matches, see bank_rec._match_by_amount.
     """
-    from vula.commerce.accounting import _STOP
+    from vula.commerce.merchants import merchant_key
     db = service._client()
     try:
         q = (db.table("commerce_bank_transactions").select("*")
@@ -2375,9 +2438,9 @@ async def admin_bank_transaction_groups(tenant_id: str, direction: Optional[str]
         return {"groups": [], "error": f"{exc} (run migration 057?)"}
 
     def _merchant_key(txn: dict) -> str:
-        toks = [t for t in re.findall(r"[a-z][a-z0-9]{2,}", (txn.get("description") or "").lower())
-                if t not in _STOP]
-        return " ".join(toks[:2]) or "(no description)"
+        # One definition, shared with merchant profiles and learned rules, so a group here and
+        # a rule learned from it are keyed identically.
+        return merchant_key(txn.get("description")) or "(no description)"
 
     def _account_key(txn: dict) -> str:
         return f"{txn.get('direction') or '?'} · {txn.get('account_code') or 'uncategorised'}"

@@ -272,6 +272,10 @@ async def receive_message(
                             reply_id.startswith("admin_confirm:") or reply_id.startswith("admin_cancel:")
                         ) and route_tenant:
                             await _handle_admin_confirm_reply(phone, reply_id, route_tenant)
+                        elif phone and reply_id and route_tenant and reply_id.startswith("merchacct:"):
+                            # Owner saying whether a merchant's spend is stock or personal —
+                            # asked once per merchant, see ask_merchant_account.
+                            await _handle_merchant_account_reply(phone, reply_id, route_tenant)
                         elif phone and reply_id and route_tenant and reply_id.startswith("docdir:"):
                             # Owner classifying an ambiguous document (see ask_document_kind) —
                             # supplier bill / our invoice / an expense.
@@ -567,6 +571,115 @@ async def ask_document_kind(tenant_id: str, invoice_id: str, supplier: str,
         ])
         sent_any = sent_any or sent
     return sent_any
+
+
+async def ask_merchant_account(tenant_id: str, merchant_key: str, display_name: str,
+                               what_they_sell: str, txn_count: int, total_cents: int) -> bool:
+    """Ask the owner, ONCE EVER, which account a merchant's spending belongs to.
+
+    2026-09-06: research can establish what a business SELLS but not whose money it was. Staci's
+    Dis-Chem runs are correctly owner_drawings; a caterer's Pick n Pay run is stock. Guessing
+    scattered the same merchant across accounts (Crazy Store x8 -> 4 cost_of_sales / 4
+    owner_drawings). One question settles every past and future transaction for that merchant,
+    so the cost is ~10-20 questions to allocate years of statements.
+
+    The caller stamps asked_at, so this fires once per merchant rather than once per statement.
+    """
+    try:
+        from vula.commerce.approvals import tenant_admin_approvers
+        approvers = await tenant_admin_approvers(tenant_id)
+    except Exception as exc:
+        logger.debug("merchant-account ask skipped (no approvers): %s", exc)
+        return False
+    if not approvers:
+        return False
+
+    name = (display_name or merchant_key or "this merchant").strip()
+    trade = (what_they_sell or "").strip()
+    body = (f"🏦 *{name}* — {txn_count} transaction{'s' if txn_count != 1 else ''}, "
+            f"*R{total_cents / 100:,.2f}*.\n\n"
+            + (f"I found this is {trade}.\n\n" if trade else "")
+            + "For your books, is this usually:")
+    # The button id carries the merchant key, so the answer applies to the whole group. Meta
+    # caps a button title at 20 characters and the id at 256.
+    key = (merchant_key or "")[:180]
+    sent_any = False
+    for a in approvers[:2]:
+        creds = await _get_tenant_wa_creds(tenant_id)
+        if not creds:
+            break
+        sent = await _send_wa_buttons(creds, a["phone"], body, [
+            {"id": f"merchacct:cost_of_sales:{key}", "title": "Stock / supplies"},
+            {"id": f"merchacct:owner_drawings:{key}", "title": "Personal"},
+            {"id": f"merchacct:ask:{key}", "title": "Ask me each time"},
+        ])
+        sent_any = sent_any or sent
+    return sent_any
+
+
+async def _handle_merchant_account_reply(phone: str, reply_id: str, tenant_id: str) -> None:
+    """A tap on the Stock / Personal / Ask-each-time buttons (see ask_merchant_account).
+
+    Writes the verdict to the merchant profile AND back-applies it to that merchant's
+    transactions still sitting in the review queue — the point of asking is to clear the
+    backlog, not just to file the next statement correctly.
+    """
+    from vula.commerce import service as cs
+    from vula.commerce import merchants
+    try:
+        _, choice, key = reply_id.split(":", 2)
+    except ValueError:
+        return
+    if not key:
+        return
+
+    prof = merchants.get_profile(tenant_id, key) or {}
+    name = prof.get("display_name") or key
+
+    if choice == "ask":
+        # Never auto-allocate this merchant, but never ask about it again either.
+        merchants.save_profile(tenant_id, key, confidence="ambiguous", decided_by="owner",
+                               account_code=None, asked_at=cs._now())
+        await _send_reply(phone, f"👍 I'll leave *{name}* for you to allocate each time.",
+                          tenant_id)
+        return
+
+    from vula.commerce import accounting
+    if not any(a["code"] == choice for a in accounting.ensure_chart(tenant_id)):
+        return
+    merchants.save_profile(tenant_id, key, account_code=choice, confidence="confident",
+                           decided_by="owner", asked_at=cs._now())
+
+    # Back-apply to everything from this merchant the owner hasn't already allocated by hand.
+    updated = 0
+    try:
+        rows = (cs._client().table("commerce_bank_transactions").select("*")
+                .eq("tenant_id", tenant_id).eq("direction", "out")
+                .in_("categorized_by", ["ai", "default", "learned", "asked", "merchant"])
+                .limit(2000).execute().data or [])
+        vat_reg = accounting.is_vat_registered(tenant_id)
+        acc = next((a for a in accounting.ensure_chart(tenant_id) if a["code"] == choice), None)
+        for r in rows:
+            if merchants.merchant_key(r.get("description")) != key:
+                continue
+            cs._client().table("commerce_bank_transactions").update({
+                "account_code": choice,
+                "vat_cents": accounting.vat_for(acc, int(r.get("amount_cents") or 0), vat_reg),
+                "vat_treatment": (acc or {}).get("vat_treatment"),
+                "categorized_by": "merchant",
+            }).eq("id", r["id"]).execute()
+            updated += 1
+    except Exception as exc:
+        logger.warning("merchant back-apply failed for %s/%s: %s", tenant_id, key, exc)
+
+    label = "stock/supplies" if choice == "cost_of_sales" else "personal drawings"
+    await _send_reply(
+        phone,
+        f"✅ *{name}* filed as {label}"
+        + (f" — updated {updated} transaction{'s' if updated != 1 else ''}." if updated
+           else ".")
+        + " I'll use that from now on.",
+        tenant_id)
 
 
 async def _handle_document_kind_reply(phone: str, reply_id: str, tenant_id: str) -> None:
