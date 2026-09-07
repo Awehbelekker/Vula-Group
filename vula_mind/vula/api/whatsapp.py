@@ -3872,19 +3872,99 @@ async def _record_outbound_status(wamid: str, status: str, error: Optional[str] 
         if code in (error or ""):
             meaning = text
             break
-    try:
-        from vula.integrations.notify import notify_team
-        preview = (row.get("body_preview") or "").strip()
-        await notify_team(tenant_id, "wa_send_failed", (
-            f"⚠️ A WhatsApp message to {to_phone} did NOT arrive"
+    preview = (row.get("body_preview") or "").strip()
+    body = (f"A WhatsApp message to {to_phone} did NOT arrive"
             + (f" — {meaning}" if meaning else (f" ({error})" if error else "")) + ".\n\n"
-            + (f'It started: "{preview[:120]}"\n\n' if preview else "")
-            + "They haven't seen it. Worth reaching them another way if it was urgent."
-        ))
-        db.table("vula_wa_outbound").update(
-            {"notified_at": "now()"}).eq("id", row["id"]).execute()
+            + (f'It started: "{preview[:200]}"\n\n' if preview else "")
+            + "They haven't seen it. Worth reaching them another way if it was urgent.")
+    if await _alert_off_whatsapp(tenant_id, "WhatsApp message not delivered", body):
+        try:
+            db.table("vula_wa_outbound").update(
+                {"notified_at": "now()"}).eq("id", row["id"]).execute()
+        except Exception as exc:
+            logger.debug("notified_at stamp failed: %s", exc)
+
+
+async def _alert_off_whatsapp(tenant_id: str, subject: str, body: str) -> bool:
+    """Tell the team something WITHOUT using WhatsApp.
+
+    2026-09-07: the send-failure alert went out through notify_team, which is WhatsApp-only —
+    so an alert about a message that failed for being outside the 24-hour window was itself a
+    free-form message outside that window, and failed identically. notified_at was stamped and
+    nobody was told. Confirmed live: 8 of the first 12 tracked sends failed with
+    'Re-engagement message', every alert about them included.
+
+    Email is the right channel precisely because it has no 24-hour rule. Returns False when
+    there is nowhere to send, so the caller does NOT stamp notified_at and the alert is retried
+    on the next callback rather than silently dropped.
+    """
+    try:
+        from vula.email_imap.credentials import get_email_creds
+        from vula.email_imap import service as email_service
+        creds = get_email_creds(tenant_id)
     except Exception as exc:
-        logger.debug("failed-delivery notification skipped: %s", exc)
+        logger.debug("alert creds lookup failed for %s: %s", tenant_id, exc)
+        return False
+    if not creds or not creds.get("smtp_host"):
+        logger.warning("no off-WhatsApp alert channel for %s — team NOT told: %s",
+                       tenant_id, subject)
+        return False
+    # To the tenant's own mailbox: it is the address they already read, and it needs no extra
+    # configuration for a tenant that has email connected at all.
+    to = creds.get("email")
+    if not to:
+        return False
+    try:
+        res = await email_service.send(creds, to, f"⚠️ Vula: {subject}", body)
+        if res.get("error"):
+            logger.warning("alert email failed for %s: %s", tenant_id, res["error"])
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("alert email raised for %s: %s", tenant_id, exc)
+        return False
+
+
+async def _send_notify_template(creds: dict, number: str, tenant_id: str) -> bool:
+    """Last resort when a proactive free-form message is refused for being outside Meta's
+    24-hour window: send an approved TEMPLATE instead, which has no such restriction.
+
+    A template cannot carry the original message — Meta requires pre-approved wording — so this
+    is deliberately just a nudge to come and look. That is still infinitely better than the
+    current outcome, where an order alert simply evaporates.
+
+    Inert until settings.whatsapp_notify_template names a real approved template, so nothing is
+    silently substituted before one exists.
+    """
+    name = (settings.whatsapp_notify_template or "").strip()
+    if not name:
+        return False
+    try:
+        from vula.api.tenants import get_config
+        who = (get_config(tenant_id) or {}).get("display_name") or "your business"
+    except Exception:
+        who = "your business"
+    payload = {
+        "name": name,
+        "language": {"code": settings.whatsapp_notify_template_lang or "en"},
+        "components": [{"type": "body", "parameters": [{"type": "text", "text": who[:60]}]}],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}",
+                         "Content-Type": "application/json"},
+                json={"messaging_product": "whatsapp", "to": number,
+                      "type": "template", "template": payload},
+            )
+            resp.raise_for_status()
+        _record_outbound(resp, tenant_id, number, f"[template {name}]", kind="template")
+        logger.info("fell back to notification template for %s", number)
+        return True
+    except Exception as exc:
+        logger.warning("notification template send failed to %s: %s", number, exc)
+        return False
 
 
 def _record_outbound(resp: Any, tenant_id: str, to_phone: str, body: str,
@@ -4170,6 +4250,12 @@ async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
             pass
         logger.error("WhatsApp reply failed to %s (%s): %s", to, exc, body)
         await _record_send_failure(to, tenant_id, body, str(exc))
+        # 131047 is the 24-hour window, which an approved template is exempt from. The template
+        # can't carry the original wording, but a nudge to come and look beats an order alert
+        # that reaches nobody. Returns False regardless: the message the caller asked to send
+        # did NOT go, and callers that check must not be told otherwise.
+        if "131047" in (body or "") and tenant_id:
+            await _send_notify_template(creds, number, tenant_id)
         return False
     except Exception as exc:
         logger.error("WhatsApp reply failed to %s: %s", to, exc)

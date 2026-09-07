@@ -88,19 +88,38 @@ async def dispatch_order(tenant_id: str, order_id: str, summary: str, customer_n
     cfg = get_order_settings(tenant_id)
     ch = (cfg.get("dispatch_channel") or "whatsapp").lower()
 
+    wa_ok = False
     if ch in ("whatsapp", "both") and cfg.get("fulfillment_whatsapp"):
         try:
             from vula.api.whatsapp import _send_reply
-            await _send_reply(cfg["fulfillment_whatsapp"], f"📦 Order to fulfil:\n\n{summary}", tenant_id=tenant_id)
+            wa_ok = await _send_reply(cfg["fulfillment_whatsapp"],
+                                      f"📦 Order to fulfil:\n\n{summary}", tenant_id=tenant_id)
         except Exception as exc:
             logger.warning("order whatsapp dispatch failed: %s", exc)
 
-    if ch in ("email", "both") and cfg.get("fulfillment_email"):
+    # 2026-09-07: this return value was discarded, so a fulfilment ticket that never arrived
+    # looked exactly like one that did. Confirmed live — off-the-hook's order OTH-00099 was
+    # dispatched TWICE on 2026-09-06 and both sends failed with Meta's 131047 (outside the
+    # 24-hour window, which every proactive send is by definition). Nobody was told there was
+    # an order. A fulfilment ticket is the single most time-critical message the platform
+    # sends, so it must not depend on a channel that is unavailable two-thirds of the time:
+    # if WhatsApp did not deliver, fall through to email even when email was not the chosen
+    # channel.
+    email_ok = False
+    if cfg.get("fulfillment_email") and (ch in ("email", "both") or not wa_ok):
         try:
             from vula.api.email import _send
             safe = summary.replace("<", "&lt;")
             html = f"<pre style='font-family:ui-monospace,monospace;font-size:14px'>{safe}</pre>"
             subject = f"New order to fulfil{(' — ' + customer_name) if customer_name else ''}"
+            if not wa_ok and ch == "whatsapp":
+                subject = "⚠️ " + subject + " (WhatsApp didn't reach you)"
             await _send(cfg["fulfillment_email"], subject, html, summary)
+            email_ok = True
         except Exception as exc:
             logger.warning("order email dispatch failed: %s", exc)
+
+    if not wa_ok and not email_ok:
+        # Loud, because at this point NOBODY has been told there is an order to make.
+        logger.error("ORDER TICKET UNDELIVERED for %s (order %s) — no channel succeeded",
+                     tenant_id, order_id)

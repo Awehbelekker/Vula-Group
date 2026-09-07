@@ -75,6 +75,18 @@ class Settings(BaseSettings):
     whatsapp_token: str = ""
     team_whatsapp: str = "+27820000000"   # Richard/Judy notifications
     whatsapp_verify_token: str = ""       # Meta webhook verification token
+    # Meta only allows FREE-FORM WhatsApp text within 24 hours of the person's last inbound
+    # message. Everything proactive Vula sends — an order alert, a document notification, an
+    # escalation nudge — is by nature outside that window, and fails with 131047
+    # ("Re-engagement message"). Measured 2026-09-07: 8 of the first 12 tracked sends failed
+    # that way, including a real OTH order alert that reached nobody, twice.
+    #
+    # Set this to the name of a Meta-APPROVED utility template with one body variable, e.g.
+    #   "vula_notification"  ->  "You have a new update from {{1}}. Open Vula to see it."
+    # Empty (the default) keeps today's behaviour exactly: the free-form send fails and is
+    # recorded, nothing is silently substituted.
+    whatsapp_notify_template: str = ""
+    whatsapp_notify_template_lang: str = "en"
     vula_base_url: str = "https://app.vula.ai"
     # The dashboard's actual reachable URL — vula_base_url above is a stale placeholder (see
     # vula/api/links.py's own comment), not something to build a real customer-facing link on.
