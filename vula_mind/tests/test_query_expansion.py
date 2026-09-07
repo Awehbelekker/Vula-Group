@@ -24,8 +24,24 @@ from vula.ingestion import pipeline as pl
 # ── salient terms ───────────────────────────────────────────────────────────────
 
 def test_product_names_survive_and_filler_does_not():
-    assert pl._salient_terms("Which importer does the creation range") == ["importer", "creation"]
-    assert pl._salient_terms("How stocks creations") == ["stocks", "creations"]
+    for q in ("Which importer does the creation range", "How stocks creations"):
+        terms = pl._salient_terms(q)
+        assert "creation" in terms, "the product name is the most distinctive term there is"
+        assert not any(t in pl._STOPISH for t in terms)
+
+
+def test_the_literal_pass_searches_the_words_the_DOCUMENT_uses():
+    """"How stocks creations" is answered by DT SOH and Planning 07.09.26.pdf, which contains
+    neither word: it says "SOH m²" and "Creation". Searching only what was typed missed it."""
+    terms = pl._salient_terms("How stocks creations")
+    assert "soh" in terms          # the document's own word for stock
+    assert "creation" in terms     # singular, as the document writes it
+
+
+def test_synonyms_never_crowd_out_a_typed_word():
+    """'stocks' has seven synonyms; filling the budget with them would drop 'creations'."""
+    terms = pl._salient_terms("How stocks creations")
+    assert terms.index("creations") < terms.index("inventory")
 
 
 def test_a_question_of_pure_filler_yields_no_terms():

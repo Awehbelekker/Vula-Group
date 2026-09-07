@@ -632,9 +632,33 @@ def _is_terse(question: str) -> bool:
 
 
 def _salient_terms(question: str) -> List[str]:
-    """The words in a question worth matching literally — product names, companies, codes."""
-    toks = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", question or "")
-    return [t for t in toks if t.lower() not in _STOPISH][:4]
+    """The words in a question worth matching literally — product names, companies, codes,
+    plus the singular stem and the business synonyms of each.
+
+    2026-09-07: searching only what the person typed missed the document anyway. "How stocks
+    creations" yields stocks/creations, and the file that answers it — DT SOH and Planning
+    07.09.26.pdf — contains neither: it says "SOH m²" and "Creation". The literal pass has to
+    look for the words the DOCUMENT uses, which is the whole reason it exists.
+    """
+    toks = [t for t in re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", question or "")
+            if t.lower() not in _STOPISH]
+    # Every word the person actually typed comes FIRST, before any expansion: a product name is
+    # the most distinctive term there is, and filling the budget with synonyms of a common word
+    # would drop it. "How stocks creations" must keep "creations" even though "stocks" has
+    # seven synonyms.
+    out: List[str] = []
+    for t in toks[:4]:
+        low = t.lower()
+        if low not in out:
+            out.append(low)
+        # A plural typed against a singular in the document ("creations" vs "Creation").
+        if low.endswith("s") and len(low) > 4 and low[:-1] not in out:
+            out.append(low[:-1])
+    for t in toks[:4]:
+        for cand in sorted(_synonyms_of(t.lower())):
+            if cand not in out and len(out) < 10:
+                out.append(cand)
+    return out[:10]
 
 
 def _chunk_key(hit: dict) -> str:
@@ -922,7 +946,7 @@ class QdrantStore:
         bounded scroll + substring match when the index cannot be made (a legacy collection, a
         read-only key), so this degrades to slower-but-working rather than failing the reply.
         """
-        terms = [t for t in (terms or []) if len(t) >= 3][:4]
+        terms = [t for t in (terms or []) if len(t) >= 3][:10]
         if not terms:
             return []
         name = self._collection_name(tenant_id)
