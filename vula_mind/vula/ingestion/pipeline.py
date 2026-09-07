@@ -125,6 +125,13 @@ EMBED_MODEL = settings.model_embed
 CHUNK_SIZE = settings.chunk_size
 CHUNK_OVERLAP = settings.chunk_overlap
 MAX_FILE_SIZE_MB = settings.max_file_mb
+# A page this covered in images is treated as one whose real content is IN the images, and is
+# OCR'd even though it already carries readable text. 0.5 was chosen against gerflor's real
+# catalogues: the SFW gym pages run 67-157% while ordinary text pages with a logo sit far below.
+OCR_IMAGE_COVERAGE = getattr(settings, "ocr_image_coverage", 0.5)
+# Ceiling per document, so a 200-page brochure cannot quietly run up 200 vision calls. Pages
+# with NO text still OCR unconditionally — that path is the only way to read them at all.
+OCR_MAX_PAGES_PER_DOC = getattr(settings, "ocr_max_pages_per_doc", 30)
 
 
 # ─── Data Classes ─────────────────────────────────────────────────────────────
@@ -367,19 +374,50 @@ class DocumentParser:
             logger.warning(f"Native PDF parsing failed for {path.name}, falling back to OCR: {exc}")
         return await self._parse_pdf_ocr_fallback(path)
 
+    @staticmethod
+    def _image_coverage(page) -> float:
+        """Fraction of the page taken up by images. Can exceed 1.0 when images overlap, which
+        is fine — it only ever means "this page is a picture"."""
+        try:
+            area = float(page.width) * float(page.height)
+            if area <= 0:
+                return 0.0
+            img_area = sum(abs((im["x1"] - im["x0"]) * (im["bottom"] - im["top"]))
+                           for im in (page.images or []))
+            return img_area / area
+        except Exception:
+            return 0.0
+
     async def _parse_pdf_native(self, path: Path) -> List[tuple[int, str]]:
         import pdfplumber
         pages = []
+        ocr_budget = OCR_MAX_PAGES_PER_DOC
         with pdfplumber.open(path) as pdf:
             for i, page in enumerate(pdf.pages, 1):
                 text = page.extract_text() or ""
-                if len(text.strip()) < 50:
-                    # Likely scanned — extract page as image and OCR
+                bare = len(text.strip()) < 50
+                # 2026-09-07: the only trigger was "almost no text", which asks whether a page
+                # has ANY words rather than whether its CONTENT is readable. Measured on
+                # gerflor's SFW gym catalogue: 9 of 10 pages were skipped while covering
+                # 67-157% of their area in images, because each carried a 300-550 character
+                # marketing paragraph. The prose was captured and every specification, size and
+                # colour range — the part a rep actually needs — stayed locked in the pictures.
+                image_heavy = (not bare and ocr_budget > 0
+                               and self._image_coverage(page) >= OCR_IMAGE_COVERAGE)
+                if bare or image_heavy:
                     img = page.to_image(resolution=200)
                     img_path = Path(tempfile.gettempdir()) / f"vula_page_{uuid.uuid4().hex}.png"
                     img.save(str(img_path))
-                    text = await self.ocr.process_image(img_path)
+                    ocr_text = await self.ocr.process_image(img_path)
                     img_path.unlink(missing_ok=True)
+                    if bare:
+                        text = ocr_text          # scanned page — OCR is all there is
+                    elif ocr_text.strip():
+                        # Keep BOTH: the native text is real and exactly extracted, the OCR
+                        # adds what was only in the picture.
+                        ocr_budget -= 1
+                        text = f"{text}\n\n{ocr_text}"
+                        logger.info("OCR'd image-heavy page %d of %s", i, path.name)
 
                 # Also extract tables
                 tables = page.extract_tables()
@@ -1051,14 +1089,54 @@ class QdrantStore:
             logger.debug("substring fallback failed for %s: %s", name, exc)
         return found
 
-    async def delete_document(self, tenant_id: str, doc_id: str) -> None:
-        """Remove all chunks for a specific document."""
+    async def delete_document(self, tenant_id: str, doc_id: str) -> int:
+        """Remove all chunks for a specific document. Returns how many points went.
+
+        2026-09-07: this had NEVER deleted anything on a real collection. Filtering by doc_id
+        needs a keyword index that was never created, so Qdrant answered 400 "Index required
+        but not found for doc_id" — and the response was neither checked nor logged, so every
+        caller believed the document was gone. Re-uploading a file therefore added a second
+        copy instead of replacing the first: gerflor was holding two of the DT stock sheet, the
+        gym catalogue and the SPM price list, whose duplicate chunks then compete in search.
+
+        Creates the index on first use, verifies the delete, and reports the count so a caller
+        can tell "removed nothing" from "removed 7".
+        """
         name = self._collection_name(tenant_id)
-        async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
-            await client.post(
-                f"{self.base}/collections/{name}/points/delete",
-                json={"filter": {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}},
-            )
+        flt = {"filter": {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}}
+        async with httpx.AsyncClient(timeout=20.0, headers=self._headers()) as client:
+            before = await self._point_count(client, name)
+            for attempt in (1, 2):
+                resp = await client.post(
+                    f"{self.base}/collections/{name}/points/delete",
+                    params={"wait": "true"}, json=flt)
+                if resp.is_success:
+                    break
+                if attempt == 1 and resp.status_code == 400:
+                    try:
+                        await client.put(
+                            f"{self.base}/collections/{name}/index",
+                            params={"wait": "true"},
+                            json={"field_name": "doc_id", "field_schema": "keyword"})
+                        logger.info("created keyword index on %s.doc_id", name)
+                    except Exception as exc:
+                        logger.warning("doc_id index creation failed for %s: %s", name, exc)
+                        return 0
+                else:
+                    logger.warning("delete_document failed for %s/%s: %s %s",
+                                   tenant_id, doc_id, resp.status_code, resp.text[:160])
+                    return 0
+            after = await self._point_count(client, name)
+        removed = max(0, (before or 0) - (after or 0))
+        logger.info("deleted document %s from %s (%d points)", doc_id, name, removed)
+        return removed
+
+    async def _point_count(self, client: httpx.AsyncClient, name: str) -> Optional[int]:
+        try:
+            r = await client.get(f"{self.base}/collections/{name}")
+            return (r.json().get("result") or {}).get("points_count")
+        except Exception:
+            return None
 
 
 # ─── Main Pipeline ────────────────────────────────────────────────────────────
