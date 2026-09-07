@@ -194,8 +194,23 @@ class OCRProcessor:
     def _looks_hallucinated(self, text: str) -> bool:
         return bool(self._HALLUCINATION_MARKERS.search(text or ""))
 
+    # 2026-09-07: re-ingesting gerflor's 10-page gym catalogue, the local model failed on all 7
+    # pages it reached — and each failure cost the full 90-second timeout before escalating to
+    # cloud vision, which then read the page correctly every time. Ten minutes of a document's
+    # ingest spent waiting for a model that never answers is worse than not calling it.
+    #
+    # After this many consecutive local failures the local step is skipped for the rest of the
+    # process and pages go straight to cloud. Consecutive, and reset by any success, so a
+    # healthy box that blips once is not written off for the whole run.
+    _LOCAL_OCR_FAILURE_LIMIT = 3
+    _local_ocr_failures = 0
+
     def __init__(self, ollama_base: str = OLLAMA_BASE):
         self.ollama_base = ollama_base
+
+    @classmethod
+    def _local_ocr_disabled(cls) -> bool:
+        return cls._local_ocr_failures >= cls._LOCAL_OCR_FAILURE_LIMIT
 
     async def process_image(self, image_path: Path) -> str:
         """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
@@ -215,25 +230,33 @@ class OCRProcessor:
         }
 
         local_text = ""
-        try:
-            # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
-            # (same ones llm_router uses) or this call is blocked at the edge with a redirect
-            # that then fails to parse as JSON.
-            from core.llm_router import _ollama_headers
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                resp = await client.post(
-                    f"{self.ollama_base}/api/generate", json=payload,
-                    headers=_ollama_headers() or None,
-                )
-                resp.raise_for_status()
-                local_text = resp.json().get("response", "").strip()
-                if local_text and not self._looks_hallucinated(local_text):
-                    return local_text
-                if local_text:
-                    logger.warning(f"GLM-OCR output looks hallucinated (bracket placeholders) — "
-                                   f"escalating to cloud vision instead of trusting it: {local_text[:200]!r}")
-        except Exception as e:
-            logger.warning(f"GLM-OCR failed, escalating to cloud vision: {e}")
+        if self._local_ocr_disabled():
+            logger.info("local OCR skipped — %d consecutive failures this run",
+                        type(self)._local_ocr_failures)
+        else:
+            try:
+                # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
+                # (same ones llm_router uses) or this call is blocked at the edge with a redirect
+                # that then fails to parse as JSON.
+                from core.llm_router import _ollama_headers
+                async with httpx.AsyncClient(timeout=90.0) as client:
+                    resp = await client.post(
+                        f"{self.ollama_base}/api/generate", json=payload,
+                        headers=_ollama_headers() or None,
+                    )
+                    resp.raise_for_status()
+                    local_text = resp.json().get("response", "").strip()
+                    if local_text and not self._looks_hallucinated(local_text):
+                        type(self)._local_ocr_failures = 0     # healthy again
+                        return local_text
+                    if local_text:
+                        type(self)._local_ocr_failures += 1
+                        logger.warning(f"GLM-OCR output looks hallucinated (bracket placeholders) — "
+                                       f"escalating to cloud vision instead of trusting it: {local_text[:200]!r}")
+            except Exception as e:
+                type(self)._local_ocr_failures += 1
+                logger.warning(f"GLM-OCR failed ({type(self)._local_ocr_failures} in a row), "
+                               f"escalating to cloud vision: {e}")
 
         # 2026-08-17: cloud vision isn't immune either — reproduced live, the SAME image
         # hallucinated on 2 of 3 consecutive cloud vision calls (identical bracket-placeholder

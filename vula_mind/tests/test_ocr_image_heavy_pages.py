@@ -91,3 +91,37 @@ def test_a_page_with_no_text_ignores_the_budget():
     i_heavy = src.index("image_heavy = ")
     assert "ocr_budget > 0" in src[i_heavy:i_heavy + 200]
     assert "ocr_budget" not in src[i_bare:i_bare + 60]
+
+
+# ── a local model that never answers must stop being asked ──────────────────────
+
+def test_local_ocr_is_abandoned_after_repeated_failure():
+    """2026-09-07: re-ingesting the 10-page gym catalogue, local OCR failed on all 7 pages it
+    reached and each failure cost the full 90-second timeout before escalating to cloud vision,
+    which then read the page correctly every time. Ten minutes spent waiting for a model that
+    never answers is worse than not calling it."""
+    from vula.ingestion.pipeline import OCRProcessor
+    OCRProcessor._local_ocr_failures = 0
+    assert OCRProcessor._local_ocr_disabled() is False
+    OCRProcessor._local_ocr_failures = OCRProcessor._LOCAL_OCR_FAILURE_LIMIT
+    assert OCRProcessor._local_ocr_disabled() is True
+    OCRProcessor._local_ocr_failures = 0
+
+
+def test_one_success_forgives_earlier_failures():
+    """Consecutive, not cumulative — a healthy box that blips once is not written off."""
+    import inspect
+    from vula.ingestion.pipeline import OCRProcessor
+    src = inspect.getsource(OCRProcessor.process_image)
+    assert "_local_ocr_failures = 0" in src, "a good read resets the counter"
+    assert "_local_ocr_failures += 1" in src
+
+
+def test_the_cloud_path_is_never_short_circuited():
+    """Only the LOCAL step is skipped. Cloud vision reads these pages correctly and must always
+    be tried, or an image-heavy page would silently yield nothing."""
+    import inspect
+    from vula.ingestion.pipeline import OCRProcessor
+    src = inspect.getsource(OCRProcessor.process_image)
+    i = src.index("_local_ocr_disabled")
+    assert "_cloud_vision_fallback" in src[i:], "cloud still runs when local is skipped"
