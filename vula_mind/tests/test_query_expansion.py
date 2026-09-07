@@ -246,14 +246,39 @@ async def test_keyword_hits_are_not_buried_by_higher_scoring_boilerplate():
     hits always loses — it gets reserved slots instead."""
     p, _ = _pipeline(
         [[{"chunk_id": f"boiler{i}", "score": 0.68} for i in range(4)]],
-        keyword_results=[{"chunk_id": "creation1", "text": "Creation 55", "score": 0.0,
-                          "match": "keyword"}],
+        keyword_results=[{"chunk_id": "creation1", "text": "Creation 55 stock soh", "score": 0.0,
+                          "match": "keyword", "_overlap": 3}],
     )
     with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
         out = await p.query("How stocks creations", top_k=4)
     ids = [h["chunk_id"] for h in out]
-    assert "creation1" in ids, "the literal match must survive"
+    assert "creation1" in ids, "a literal match on several query terms must survive"
     assert len(out) == 4
+
+
+@pytest.mark.asyncio
+async def test_a_weak_literal_match_does_not_displace_a_decent_semantic_one():
+    """The opposite failure, also live: reserved slots handed places to "Access Corners" and a
+    stain-removal page — each containing one common word — while real Creation Collection
+    results at 0.344 and 0.317 were pushed out entirely."""
+    p, _ = _pipeline(
+        [[{"chunk_id": "creation_vec", "score": 0.344},
+          {"chunk_id": "creation_vec2", "score": 0.317}]],
+        keyword_results=[{"chunk_id": "corners", "text": "Access Corners", "score": 0.0,
+                          "match": "keyword", "_overlap": 1}],
+    )
+    with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
+        out = await p.query("Which importer does the creation range", top_k=2)
+    assert [h["chunk_id"] for h in out] == ["creation_vec", "creation_vec2"]
+
+
+@pytest.mark.asyncio
+async def test_a_weak_literal_match_is_still_better_than_nothing():
+    p, _ = _pipeline([[]], keyword_results=[{"chunk_id": "corners", "text": "Access Corners",
+                                             "score": 0.0, "match": "keyword", "_overlap": 1}])
+    with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
+        out = await p.query("Which importer does the creation range", top_k=4)
+    assert [h["chunk_id"] for h in out] == ["corners"]
 
 
 @pytest.mark.asyncio

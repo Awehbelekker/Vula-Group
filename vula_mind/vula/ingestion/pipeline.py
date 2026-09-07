@@ -954,20 +954,28 @@ class QdrantStore:
         # in an OR with "hand", "stock" and "creation" — each matching hundreds of chunks — the
         # stock rows never surfaced at all. Each term is therefore searched on its own and the
         # results are interleaved, so a rare, decisive term always contributes.
-        out: List[dict] = []
-        seen: set = set()
-        per_term = max(1, limit // 2)
-        for term in terms:
-            if len(out) >= limit:
-                break
-            for hit in await self._keyword_one(tenant_id, term, per_term):
-                key = (hit.get("text") or "")[:120]
-                if key not in seen:
-                    seen.add(key)
-                    out.append(hit)
-                    if len(out) >= limit:
-                        break
-        return out
+        # EVERY term is queried, then hits are ranked by how many DISTINCT query terms each
+        # chunk actually contains. Stopping once `limit` hits were collected meant the terms
+        # were consumed in order and the budget filled before reaching the decisive one:
+        # "stocks" returned two chunks and "soh" — the word the stock sheet actually uses —
+        # was never searched at all. Overlap is a real ranking signal and costs nothing: a
+        # chunk holding both "soh" and "inbound" outranks one that merely holds "hand".
+        gathered = await asyncio.gather(
+            *[self._keyword_one(tenant_id, t, 3) for t in terms], return_exceptions=True)
+        lowered = [t.lower() for t in terms]
+        best: dict = {}
+        for res in gathered:
+            if isinstance(res, BaseException):
+                continue
+            for hit in res:
+                text = (hit.get("text") or "")
+                key = text[:120]
+                if key in best:
+                    continue
+                overlap = sum(1 for t in lowered if t in text.lower())
+                hit["_overlap"] = overlap
+                best[key] = hit
+        return sorted(best.values(), key=lambda h: h.get("_overlap", 0), reverse=True)[:limit]
 
     async def _keyword_one(self, tenant_id: str, term: str, limit: int) -> List[dict]:
         """Literal matches for ONE term. See keyword_search for why terms are not OR'd."""
@@ -1305,6 +1313,16 @@ class VulaIngestionPipeline:
         # always lose — which is exactly what happened on the first live run: real "Creation"
         # chunks were displaced by generic boilerplate that merely scored higher. They get
         # reserved slots instead, interleaved ahead of the weakest semantic results.
+        # Reserve slots for literal matches ONLY when they are worth the space: a chunk hitting
+        # several query terms, or nothing at all from the semantic side. An earlier version
+        # reserved slots unconditionally and pushed real Creation Collection results (0.344,
+        # 0.317) out in favour of "Access Corners" and a stain-removal page that merely
+        # contained one common word. A weak literal match is worse than a decent semantic one.
+        strong_keyword = [h for h in keyword_hits if h.get("_overlap", 0) >= 2]
+        if not ranked:
+            strong_keyword = keyword_hits
+        keyword_hits = strong_keyword
+
         out: List[dict] = []
         seen = set()
         reserved = min(len(keyword_hits), max(1, top_k // 2)) if keyword_hits else 0
