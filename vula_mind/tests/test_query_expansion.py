@@ -188,6 +188,45 @@ async def test_a_literal_term_match_rescues_an_empty_search():
 
 
 @pytest.mark.asyncio
+async def test_keyword_hits_are_not_buried_by_higher_scoring_boilerplate():
+    """First live run: rewrites scored 0.63 against generic marketing ("All our flooring is
+    certified by independent bodies...") and displaced real 'Creation' chunks that the keyword
+    pass had found. A keyword hit carries no similarity score, so ranking it alongside vector
+    hits always loses — it gets reserved slots instead."""
+    p, _ = _pipeline(
+        [[{"chunk_id": f"boiler{i}", "score": 0.68} for i in range(4)]],
+        keyword_results=[{"chunk_id": "creation1", "text": "Creation 55", "score": 0.0,
+                          "match": "keyword"}],
+    )
+    with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
+        out = await p.query("How stocks creations", top_k=4)
+    ids = [h["chunk_id"] for h in out]
+    assert "creation1" in ids, "the literal match must survive"
+    assert len(out) == 4
+
+
+@pytest.mark.asyncio
+async def test_a_terse_question_gets_the_keyword_pass_even_when_search_looks_full():
+    """"How stocks creations" returned 2 semantically-plausible but irrelevant chunks. A full
+    result set is not evidence of a good one when the question is telegraphic."""
+    p, _ = _pipeline([[{"chunk_id": f"c{i}", "score": 0.4} for i in range(4)]],
+                     keyword_results=[{"chunk_id": "kw", "score": 0.0}])
+    with patch.object(pl, "expand_query", AsyncMock(return_value=[])):
+        await p.query("How stocks creations", top_k=4)
+    p.store.keyword_search.assert_awaited()
+
+
+def test_the_rewrite_prompt_forbids_adding_the_company_name():
+    """Passing tenant identity as context made every rewrite open with "Gerflor - Western Cape
+    Sales is seeking information regarding..." — which matched company boilerplate, not the
+    document. A retrieval query wants the question, not who is asking."""
+    import inspect
+    src = inspect.getsource(pl.expand_query)
+    assert "NO company names" in src
+    assert "get_config" not in src, "tenant identity must not be fed into the rewrite"
+
+
+@pytest.mark.asyncio
 async def test_expand_false_searches_only_what_it_was_given():
     p, calls = _pipeline([[{"chunk_id": "c1", "score": 0.4}]])
     with patch.object(pl, "expand_query", AsyncMock()) as ex:

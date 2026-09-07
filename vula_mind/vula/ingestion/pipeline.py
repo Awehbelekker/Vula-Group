@@ -612,6 +612,13 @@ _STOPISH = {
 }
 
 
+def _is_terse(question: str) -> bool:
+    """A short, telegraphic query — the kind that embeds badly and needs literal matching.
+    "How stocks creations" and "Which importer does the creation range" are both this."""
+    words = (question or "").split()
+    return 1 < len(words) <= 8
+
+
 def _salient_terms(question: str) -> List[str]:
     """The words in a question worth matching literally — product names, companies, codes."""
     toks = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", question or "")
@@ -641,22 +648,19 @@ async def expand_query(question: str, tenant_id: str = "") -> List[str]:
     if ck in _EXPANSION_CACHE:
         return _EXPANSION_CACHE[ck]
 
-    context = ""
-    try:
-        from vula.api.tenants import get_config
-        cfg = get_config(tenant_id) or {}
-        name, btype = cfg.get("display_name"), cfg.get("business_type")
-        if name:
-            context = f"The business is {name}" + (f", a {btype} business" if btype else "") + ".\n"
-    except Exception:
-        context = ""
-
+    # 2026-09-07, first live run: passing the tenant's identity as context made the model write
+    # the BUSINESS NAME into every rewrite — "Gerflor - Western Cape Sales is seeking
+    # information regarding the importer responsible for the creation range of products". That
+    # scored 0.63 against generic company marketing ("All our flooring is certified by
+    # independent bodies...") and buried the genuinely relevant chunks. The context is dropped:
+    # a retrieval query wants the QUESTION, not who is asking.
     prompt = (
-        "Rewrite this short search query into 2 fuller, well-formed versions that would match "
-        "the wording of business documents. Keep every product name, company name and code "
-        "EXACTLY as written — correct only grammar and add the words a document would use.\n"
-        + context +
-        "Reply with ONLY the 2 rewrites, one per line, no numbering, no commentary.\n\n"
+        "Rewrite this search query as 2 short, well-formed questions for searching business "
+        "documents.\n"
+        "Rules: keep every product name, company name and code EXACTLY as written; fix only "
+        "grammar and word order; stay under 10 words each; add NO company names, NO marketing "
+        "words, NO explanation of who is asking.\n"
+        "Reply with ONLY the 2 questions, one per line.\n\n"
         f"Query: {q}"
     )
     try:
@@ -1147,16 +1151,46 @@ class VulaIngestionPipeline:
                     merged[k] = h
 
         # A literal-term pass for what vector search is worst at: a product name typed in a
-        # hurry. Only when the semantic side came back thin, so the common case costs nothing.
-        if len(merged) < top_k:
+        # hurry. Runs whenever the semantic side is thin OR the question names specific terms,
+        # because those are precisely the questions a pure-vector search answers badly.
+        terms = _salient_terms(question)
+        keyword_hits: List[dict] = []
+        if terms and (len(merged) < top_k or _is_terse(question)):
             try:
-                for h in await self.store.keyword_search(
-                        self.tenant_id, _salient_terms(question), limit=top_k):
-                    merged.setdefault(_chunk_key(h), h)
+                keyword_hits = await self.store.keyword_search(
+                    self.tenant_id, terms, limit=max(2, top_k // 2))
             except Exception as exc:
                 logger.debug("keyword pass failed: %s", exc)
 
-        out = sorted(merged.values(), key=lambda h: h.get("score") or 0, reverse=True)
+        ranked = sorted(merged.values(), key=lambda h: h.get("score") or 0, reverse=True)
+
+        # Keyword hits carry no similarity score, so ranking them alongside vector hits would
+        # always lose — which is exactly what happened on the first live run: real "Creation"
+        # chunks were displaced by generic boilerplate that merely scored higher. They get
+        # reserved slots instead, interleaved ahead of the weakest semantic results.
+        out: List[dict] = []
+        seen = set()
+        reserved = min(len(keyword_hits), max(1, top_k // 2)) if keyword_hits else 0
+        for h in ranked[:top_k - reserved]:
+            k = _chunk_key(h)
+            if k not in seen:
+                seen.add(k)
+                out.append(h)
+        for h in keyword_hits:
+            if len(out) >= top_k:
+                break
+            k = _chunk_key(h)
+            if k not in seen:
+                seen.add(k)
+                out.append(h)
+        # Backfill from whatever semantic results are left if the keyword side under-delivered.
+        for h in ranked:
+            if len(out) >= top_k:
+                break
+            k = _chunk_key(h)
+            if k not in seen:
+                seen.add(k)
+                out.append(h)
         return out[:top_k]
 
     async def answer(
