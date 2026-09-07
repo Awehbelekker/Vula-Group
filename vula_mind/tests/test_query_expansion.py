@@ -38,6 +38,41 @@ def test_the_literal_pass_searches_the_words_the_DOCUMENT_uses():
     assert "creation" in terms     # singular, as the document writes it
 
 
+@pytest.mark.asyncio
+async def test_each_term_is_searched_separately_so_a_rare_one_still_counts():
+    """Measured live: "soh" alone returns the stock sheet immediately, but OR'd with "hand",
+    "stock" and "creation" — each matching hundreds of chunks — the stock rows never surfaced.
+    One OR returns what matched FIRST, not what matched BEST."""
+    asked = []
+
+    class _Store(pl.QdrantStore):
+        def __init__(self):
+            pass
+
+        async def _keyword_one(self, tenant_id, term, limit):
+            asked.append(term)
+            if term == "soh":
+                return [{"text": "NEW ORDER PROPOSAL SOH m2", "match": "keyword", "score": 0.0}]
+            return [{"text": f"junk for {term}", "match": "keyword", "score": 0.0}]
+
+    hits = await _Store().keyword_search("gerflor", ["hand", "stock", "soh"], limit=6)
+    assert "soh" in asked, "the decisive term must get its own query"
+    assert any("SOH m2" in (h.get("text") or "") for h in hits)
+
+
+@pytest.mark.asyncio
+async def test_identical_chunks_from_two_terms_appear_once():
+    class _Store(pl.QdrantStore):
+        def __init__(self):
+            pass
+
+        async def _keyword_one(self, tenant_id, term, limit):
+            return [{"text": "the same chunk", "match": "keyword", "score": 0.0}]
+
+    hits = await _Store().keyword_search("gerflor", ["a1x", "b2y"], limit=6)
+    assert len(hits) == 1
+
+
 def test_synonyms_never_crowd_out_a_typed_word():
     """'stocks' has seven synonyms; filling the budget with them would drop 'creations'."""
     terms = pl._salient_terms("How stocks creations")

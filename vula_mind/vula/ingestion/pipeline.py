@@ -949,8 +949,30 @@ class QdrantStore:
         terms = [t for t in (terms or []) if len(t) >= 3][:10]
         if not terms:
             return []
+        # One OR across every term returns whatever matched FIRST, not what matched BEST.
+        # Measured 2026-09-07: searching "soh" alone returns the stock sheet immediately, but
+        # in an OR with "hand", "stock" and "creation" — each matching hundreds of chunks — the
+        # stock rows never surfaced at all. Each term is therefore searched on its own and the
+        # results are interleaved, so a rare, decisive term always contributes.
+        out: List[dict] = []
+        seen: set = set()
+        per_term = max(1, limit // 2)
+        for term in terms:
+            if len(out) >= limit:
+                break
+            for hit in await self._keyword_one(tenant_id, term, per_term):
+                key = (hit.get("text") or "")[:120]
+                if key not in seen:
+                    seen.add(key)
+                    out.append(hit)
+                    if len(out) >= limit:
+                        break
+        return out
+
+    async def _keyword_one(self, tenant_id: str, term: str, limit: int) -> List[dict]:
+        """Literal matches for ONE term. See keyword_search for why terms are not OR'd."""
         name = self._collection_name(tenant_id)
-        flt = {"should": [{"key": "text", "match": {"text": t}} for t in terms]}
+        flt = {"must": [{"key": "text", "match": {"text": term}}]}
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             for attempt in (1, 2):
                 resp = await client.post(
@@ -979,7 +1001,7 @@ class QdrantStore:
                     except Exception as exc:
                         logger.debug("text index creation failed for %s: %s", name, exc)
                         break
-        return await self._scroll_substring(tenant_id, terms, limit)
+        return await self._scroll_substring(tenant_id, [term], limit)
 
     async def _scroll_substring(self, tenant_id: str, terms: List[str],
                                 limit: int, max_points: int = 3000) -> List[dict]:
