@@ -216,6 +216,44 @@ async def test_a_terse_question_gets_the_keyword_pass_even_when_search_looks_ful
     p.store.keyword_search.assert_awaited()
 
 
+@pytest.mark.parametrize("rewrite,original", [
+    # Both produced live by ollama/llama3.1:8b against the gerflor rep's real questions.
+    ("What are the stock creation processes for SAP ERP?", "How stocks creations"),
+    ("What is the creation date range for the importer?",
+     "Which importer does the creation range"),
+    ("What is the warranty on Taralay Impression?", "How stocks creations"),
+])
+def test_a_rewrite_that_invents_subject_matter_is_rejected(rewrite, original):
+    """SAP ERP has nothing to do with a flooring rep's documents, and 'date range' is not what
+    was asked. The model's own judgement is what failed, so the check is deterministic."""
+    assert pl._grounded_rewrite(rewrite, original) is False
+
+
+@pytest.mark.parametrize("rewrite,original", [
+    ("Who imports the Creation range?", "Which importer does the creation range"),
+    ("Which importer supplies the creation range?", "Which importer does the creation range"),
+    ("How is the Creation range stocked?", "How stocks creations"),
+    ("What are the stock levels for Creation?", "How stocks creations"),
+])
+def test_a_genuine_rewrite_survives(rewrite, original):
+    """Shared prefixes keep the useful morphology: importer->imports, stocks->stocked."""
+    assert pl._grounded_rewrite(rewrite, original) is True
+
+
+@pytest.mark.asyncio
+async def test_an_ungrounded_rewrite_never_reaches_the_search():
+    pl._EXPANSION_CACHE.clear()
+    resp = MagicMock(choices=[MagicMock(message=MagicMock(
+        content="What are the stock creation processes for SAP ERP?\n"
+                "How is the Creation range stocked?"))])
+    with patch("core.llm_router.resolve_generation_route",
+               AsyncMock(return_value=("m", "k", None))), \
+         patch("core.llm_router.escalate_to_cloud", lambda *a, **k: None), \
+         patch("litellm.acompletion", AsyncMock(return_value=resp)):
+        out = await pl.expand_query("How stocks creations", "gerflor")
+    assert out == ["How is the Creation range stocked?"]
+
+
 def test_the_rewrite_prompt_forbids_adding_the_company_name():
     """Passing tenant identity as context made every rewrite open with "Gerflor - Western Cape
     Sales is seeking information regarding..." — which matched company boilerplate, not the

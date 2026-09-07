@@ -612,6 +612,18 @@ _STOPISH = {
 }
 
 
+def _synonym_variant(question: str) -> str:
+    """The question restated with its business synonyms appended, so the wording a person types
+    still reaches a document that uses a different word for the same thing. Returns "" when the
+    question contains nothing worth expanding."""
+    extra: list = []
+    for tok in re.findall(r"[A-Za-z][A-Za-z0-9\-]*", question or ""):
+        for s in sorted(_synonyms_of(tok)):
+            if s != tok.lower() and s not in extra and len(s) > 2:
+                extra.append(s)
+    return f"{question} {' '.join(extra[:6])}".strip() if extra else ""
+
+
 def _is_terse(question: str) -> bool:
     """A short, telegraphic query — the kind that embeds badly and needs literal matching.
     "How stocks creations" and "Which importer does the creation range" are both this."""
@@ -632,6 +644,71 @@ def _chunk_key(hit: dict) -> str:
             return str(hit[k])
     text = (hit.get("text") or "")[:200]
     return f"{hit.get('doc_id') or hit.get('source') or ''}:{hashlib.sha1(text.encode()).hexdigest()[:16]}"
+
+
+# Words a rewrite may legitimately introduce — grammar and question scaffolding only. Anything
+# else must trace back to a word the person actually typed.
+_REWRITE_ALLOWED = {
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "does", "do", "did",
+    "is", "are", "was", "were", "the", "a", "an", "of", "for", "and", "or", "to", "in", "on",
+    "at", "by", "with", "from", "our", "we", "us", "have", "has", "any", "there", "much", "many",
+    "available", "supplied", "supplier", "suppliers", "supply", "supplies", "list", "lists",
+    "levels", "level", "current", "range", "ranges", "product", "products", "stock", "stocks",
+    "item", "items", "price", "prices", "code", "codes", "order", "orders", "details",
+    "information", "name", "quantity", "quantities",
+}
+
+
+# Business synonyms a rewrite may legitimately reach for, and which a purely morphological
+# check would reject alongside the hallucinations. "importer"/"distributor" is exactly the pair
+# the gerflor rep needed, and "stock"/"SOH" is the literal wording in his own stock document
+# (DT SOH and Planning 07.09.26.pdf) — the word he typed and the word the file uses are not the
+# same word, which is a large part of why nothing was found.
+_SYNONYMS = [
+    {"importer", "distributor", "supplier", "agent", "wholesaler", "imports", "distributes"},
+    {"stock", "stocks", "soh", "inventory", "availability", "hand", "stocked", "holding"},
+    {"price", "cost", "rate", "pricing", "rates"},
+    {"lead", "eta", "delivery", "arrival", "inbound"},
+    {"spec", "specification", "datasheet", "technical"},
+]
+
+
+def _synonyms_of(token: str) -> set:
+    low = token.lower()
+    out: set = set()
+    for group in _SYNONYMS:
+        if low in group:
+            out |= group
+    return out
+
+
+def _grounded_rewrite(rewrite: str, original: str) -> bool:
+    """Reject a rewrite that INVENTS subject matter.
+
+    2026-09-07, live: llama3.1:8b turned "How stocks creations" into "What are the stock
+    creation processes for SAP ERP?" and "Which importer does the creation range" into "What is
+    the creation DATE range for the importer?". Both were embedded and searched. SAP ERP has
+    nothing to do with a flooring rep's documents.
+
+    Every content word in a rewrite must either trace back to something the person typed (by
+    shared prefix, so "importer"->"imports" and "stocks"->"stocked" survive) or be ordinary
+    question scaffolding. A deterministic check, because the model's own judgement is exactly
+    what failed here.
+    """
+    src = [t.lower() for t in re.findall(r"[A-Za-z][A-Za-z0-9\-]*", original or "")]
+    allowed_syn: set = set()
+    for s in src:
+        allowed_syn |= _synonyms_of(s)
+    for tok in re.findall(r"[A-Za-z][A-Za-z0-9\-]*", rewrite or ""):
+        low = tok.lower()
+        if len(low) < 3 or low in _REWRITE_ALLOWED or low in allowed_syn:
+            continue
+        stem = low[:max(4, len(low) - 3)]
+        if any(s.startswith(stem) or low.startswith(s[:max(4, len(s) - 3)]) for s in src):
+            continue
+        logger.debug("rejected ungrounded rewrite %r (introduced %r)", rewrite[:60], tok)
+        return False
+    return True
 
 
 async def expand_query(question: str, tenant_id: str = "") -> List[str]:
@@ -665,9 +742,17 @@ async def expand_query(question: str, tenant_id: str = "") -> List[str]:
     )
     try:
         import litellm
-        from core.llm_router import resolve_generation_route
+        from core.llm_router import resolve_generation_route, escalate_to_cloud
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route()
+        # The local 8B model invents domain context here: asked to rewrite "How stocks
+        # creations" for a flooring rep it produced "What are the stock creation processes for
+        # SAP ERP?", and "Which importer does the creation range" became "What is the creation
+        # DATE range". Those inventions were then embedded and searched. Rewriting is a short,
+        # cheap prompt, so it goes to the better model when one is configured.
+        esc = escalate_to_cloud("query_expansion", task_type="query_expansion")
+        if esc:
+            model, api_key, api_base = esc
         resp = await litellm.acompletion(
             model=model, messages=[{"role": "user", "content": prompt}],
             temperature=0, max_tokens=120, api_key=api_key, api_base=api_base)
@@ -680,7 +765,7 @@ async def expand_query(question: str, tenant_id: str = "") -> List[str]:
     out: List[str] = []
     for line in raw.splitlines():
         line = re.sub(r"^\s*[-*\d.)\s]+", "", line).strip().strip('"')
-        if line and line.lower() != q.lower() and len(line) > 3:
+        if line and line.lower() != q.lower() and len(line) > 3 and _grounded_rewrite(line, q):
             out.append(line[:200])
     out = out[:2]
     if len(_EXPANSION_CACHE) >= _EXPANSION_CACHE_MAX:
@@ -1127,6 +1212,12 @@ class VulaIngestionPipeline:
 
         variants = [question]
         if expand:
+            # Deterministic first, and independent of any model being up or any model being
+            # good: the word a rep types and the word his document uses are often different
+            # ("stocks" vs the SOH sheet's own wording). This variant costs one embedding.
+            syn = _synonym_variant(question)
+            if syn:
+                variants.append(syn)
             variants += await expand_query(question, self.tenant_id)
 
         async def _one(q: str) -> List[dict]:
