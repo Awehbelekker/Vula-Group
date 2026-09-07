@@ -586,6 +586,105 @@ class EmbeddingEngine:
 
 # ─── Vector Store ─────────────────────────────────────────────────────────────
 
+# ─── Query expansion ──────────────────────────────────────────────────────────
+#
+# 2026-09-07. Gerflor's rep uploaded a stock-on-hand PDF and, five minutes later, asked two
+# questions about it. Both were answered "I couldn't find any information" — while the answer
+# sat in the knowledge base the whole time. Retrieval was never the problem; phrasing was:
+#
+#     "Which importer does the creation range"  -> 0 chunks   (threshold is 0.30)
+#     "Who imports the Creation range?"         -> top score 0.465
+#
+# The people who most need this tool type the least carefully. So the query is rewritten into
+# well-formed variants before embedding, and the original is always kept as one of them, which
+# makes expansion strictly additive — it can surface more, never less.
+
+_EXPANSION_CACHE: dict = {}
+_EXPANSION_CACHE_MAX = 512
+
+# Words that carry no retrieval signal — everything else in a short query is a candidate
+# product/company term worth matching literally.
+_STOPISH = {
+    "the", "a", "an", "of", "for", "and", "or", "to", "in", "on", "is", "are", "was", "do",
+    "does", "did", "how", "what", "which", "who", "when", "where", "why", "can", "you", "we",
+    "our", "us", "me", "my", "i", "it", "that", "this", "with", "from", "have", "has", "any",
+    "please", "tell", "show", "give", "need", "want", "get", "range", "product", "products",
+}
+
+
+def _salient_terms(question: str) -> List[str]:
+    """The words in a question worth matching literally — product names, companies, codes."""
+    toks = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", question or "")
+    return [t for t in toks if t.lower() not in _STOPISH][:4]
+
+
+def _chunk_key(hit: dict) -> str:
+    """Identity for de-duplicating the same chunk found by several query variants."""
+    for k in ("chunk_id", "id", "point_id"):
+        if hit.get(k):
+            return str(hit[k])
+    text = (hit.get("text") or "")[:200]
+    return f"{hit.get('doc_id') or hit.get('source') or ''}:{hashlib.sha1(text.encode()).hexdigest()[:16]}"
+
+
+async def expand_query(question: str, tenant_id: str = "") -> List[str]:
+    """Well-formed rewrites of a question, for retrieval only (never shown to anyone).
+
+    Returns [] — meaning "just use the original" — for a question that is already well formed,
+    when the model is unavailable, or on any failure. Never raises.
+    """
+    q = (question or "").strip()
+    # A long, well-formed question already embeds well; rewriting it costs latency for nothing.
+    if len(q) < 3 or len(q.split()) > 12:
+        return []
+    ck = (tenant_id, q.lower())
+    if ck in _EXPANSION_CACHE:
+        return _EXPANSION_CACHE[ck]
+
+    context = ""
+    try:
+        from vula.api.tenants import get_config
+        cfg = get_config(tenant_id) or {}
+        name, btype = cfg.get("display_name"), cfg.get("business_type")
+        if name:
+            context = f"The business is {name}" + (f", a {btype} business" if btype else "") + ".\n"
+    except Exception:
+        context = ""
+
+    prompt = (
+        "Rewrite this short search query into 2 fuller, well-formed versions that would match "
+        "the wording of business documents. Keep every product name, company name and code "
+        "EXACTLY as written — correct only grammar and add the words a document would use.\n"
+        + context +
+        "Reply with ONLY the 2 rewrites, one per line, no numbering, no commentary.\n\n"
+        f"Query: {q}"
+    )
+    try:
+        import litellm
+        from core.llm_router import resolve_generation_route
+        litellm.drop_params = True
+        model, api_key, api_base = await resolve_generation_route()
+        resp = await litellm.acompletion(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            temperature=0, max_tokens=120, api_key=api_key, api_base=api_base)
+        raw = resp.choices[0].message.content or ""
+    except Exception as exc:
+        logger.debug("query expansion unavailable for %r: %s", q[:40], exc)
+        return []
+
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    out: List[str] = []
+    for line in raw.splitlines():
+        line = re.sub(r"^\s*[-*\d.)\s]+", "", line).strip().strip('"')
+        if line and line.lower() != q.lower() and len(line) > 3:
+            out.append(line[:200])
+    out = out[:2]
+    if len(_EXPANSION_CACHE) >= _EXPANSION_CACHE_MAX:
+        _EXPANSION_CACHE.clear()
+    _EXPANSION_CACHE[ck] = out
+    return out
+
+
 class QdrantStore:
     """
     Per-tenant Qdrant collections for isolated knowledge bases.
@@ -720,6 +819,94 @@ class QdrantStore:
             for i, hit in enumerate(hits):
                 results[i]["score"] = hit.get("score", 0.0)
             return results
+
+    async def keyword_search(self, tenant_id: str, terms: List[str],
+                             limit: int = 5) -> List[dict]:
+        """Literal term matching, as a companion to the vector search.
+
+        2026-09-07: a rep asked "Which importer does the creation range" and vector search
+        returned NOTHING — the word "creation" is right there in the documents, but a terse,
+        ungrammatical query embeds far from well-written prose. An exact-term pass catches
+        precisely what a pure-vector search is worst at: a product name typed in a hurry.
+
+        Tries Qdrant's full-text filter, creating the index on first use. Falls back to a
+        bounded scroll + substring match when the index cannot be made (a legacy collection, a
+        read-only key), so this degrades to slower-but-working rather than failing the reply.
+        """
+        terms = [t for t in (terms or []) if len(t) >= 3][:4]
+        if not terms:
+            return []
+        name = self._collection_name(tenant_id)
+        flt = {"should": [{"key": "text", "match": {"text": t}} for t in terms]}
+        async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
+            for attempt in (1, 2):
+                resp = await client.post(
+                    f"{self.base}/collections/{name}/points/scroll",
+                    json={"limit": limit, "with_payload": True, "filter": flt},
+                )
+                if resp.status_code == 404:
+                    return []
+                if resp.is_success:
+                    pts = resp.json().get("result", {}).get("points", [])
+                    out = []
+                    for p in pts:
+                        payload = dict(p.get("payload") or {})
+                        payload.setdefault("score", 0.0)
+                        payload["match"] = "keyword"
+                        out.append(payload)
+                    return out
+                if attempt == 1 and resp.status_code == 400:
+                    # "Index required but not found for 'text'" — make it, then retry once.
+                    try:
+                        await client.put(
+                            f"{self.base}/collections/{name}/index",
+                            json={"field_name": "text", "field_schema": "text"},
+                        )
+                        logger.info("created full-text index on %s.text", name)
+                    except Exception as exc:
+                        logger.debug("text index creation failed for %s: %s", name, exc)
+                        break
+        return await self._scroll_substring(tenant_id, terms, limit)
+
+    async def _scroll_substring(self, tenant_id: str, terms: List[str],
+                                limit: int, max_points: int = 3000) -> List[dict]:
+        """Bounded brute-force fallback: page through payloads and substring-match locally.
+        Capped so a large collection costs a slow reply, never an unbounded scan."""
+        name = self._collection_name(tenant_id)
+        lowered = [t.lower() for t in terms]
+        found: List[dict] = []
+        offset = None
+        scanned = 0
+        try:
+            async with httpx.AsyncClient(timeout=20.0, headers=self._headers()) as client:
+                while scanned < max_points and len(found) < limit:
+                    body = {"limit": 256, "with_payload": True}
+                    if offset is not None:
+                        body["offset"] = offset
+                    resp = await client.post(
+                        f"{self.base}/collections/{name}/points/scroll", json=body)
+                    if not resp.is_success:
+                        break
+                    result = resp.json().get("result", {})
+                    pts = result.get("points", [])
+                    if not pts:
+                        break
+                    for p in pts:
+                        scanned += 1
+                        payload = dict(p.get("payload") or {})
+                        text = (payload.get("text") or "").lower()
+                        if any(t in text for t in lowered):
+                            payload.setdefault("score", 0.0)
+                            payload["match"] = "keyword"
+                            found.append(payload)
+                            if len(found) >= limit:
+                                break
+                    offset = result.get("next_page_offset")
+                    if offset is None:
+                        break
+        except Exception as exc:
+            logger.debug("substring fallback failed for %s: %s", name, exc)
+        return found
 
     async def delete_document(self, tenant_id: str, doc_id: str) -> None:
         """Remove all chunks for a specific document."""
@@ -906,7 +1093,8 @@ class VulaIngestionPipeline:
     _NON_AUTHORITATIVE = ["conversation", "learned"]
 
     async def query(self, question: str, top_k: int = 5,
-                    authoritative_only: bool = False, category: str | None = None) -> List[dict]:
+                    authoritative_only: bool = False, category: str | None = None,
+                    expand: bool = True) -> List[dict]:
         """
         Semantic search across this tenant's knowledge base.
         Returns relevant document chunks for RAG.
@@ -916,14 +1104,60 @@ class VulaIngestionPipeline:
 
         category (2026-08-24): narrow to one document-type slice (see QdrantStore.search) —
         None (default) searches everything, unchanged from before this parameter existed.
+
+        expand (2026-09-07): also search well-formed rewrites of a terse question, and match
+        literal product terms. Measured on the gerflor rep's real messages — he had uploaded
+        DT SOH and Planning 07.09.26.pdf five minutes earlier, and:
+
+            "Which importer does the creation range"  -> 0 chunks
+            "Who imports the Creation range?"         -> 3 chunks, top score 0.465
+            "How stocks creations"                    -> 2 chunks, both irrelevant
+            "How is the Creation range stocked?"      -> 3 chunks, the right documents
+
+        The documents were never the problem; the question was. A rep typing between
+        appointments does not write well-formed prose, and the embedding needs it. Set
+        expand=False for a caller that has already composed a careful query.
         """
-        query_embedding = await self.embedder.embed(question)
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
-        return await self.store.search(
-            self.tenant_id, query_embedding, limit=top_k,
-            score_threshold=0.35 if authoritative_only else 0.3,
-            exclude_source_types=exclude, category=category,
-        )
+        threshold = 0.35 if authoritative_only else 0.3
+
+        variants = [question]
+        if expand:
+            variants += await expand_query(question, self.tenant_id)
+
+        async def _one(q: str) -> List[dict]:
+            try:
+                emb = await self.embedder.embed(q)
+                return await self.store.search(
+                    self.tenant_id, emb, limit=top_k,
+                    score_threshold=threshold, exclude_source_types=exclude, category=category)
+            except Exception as exc:
+                logger.debug("query variant failed (%r): %s", q[:40], exc)
+                return []
+
+        runs = await asyncio.gather(*[_one(v) for v in variants])
+
+        # The ORIGINAL question's results are always in the pool, so expansion can only add.
+        merged: dict = {}
+        for hits in runs:
+            for h in hits:
+                k = _chunk_key(h)
+                prev = merged.get(k)
+                if prev is None or (h.get("score") or 0) > (prev.get("score") or 0):
+                    merged[k] = h
+
+        # A literal-term pass for what vector search is worst at: a product name typed in a
+        # hurry. Only when the semantic side came back thin, so the common case costs nothing.
+        if len(merged) < top_k:
+            try:
+                for h in await self.store.keyword_search(
+                        self.tenant_id, _salient_terms(question), limit=top_k):
+                    merged.setdefault(_chunk_key(h), h)
+            except Exception as exc:
+                logger.debug("keyword pass failed: %s", exc)
+
+        out = sorted(merged.values(), key=lambda h: h.get("score") or 0, reverse=True)
+        return out[:top_k]
 
     async def answer(
         self,
