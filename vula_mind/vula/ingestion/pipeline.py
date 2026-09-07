@@ -1154,6 +1154,36 @@ class QdrantStore:
         logger.info("deleted document %s from %s (%d points)", doc_id, name, removed)
         return removed
 
+    async def doc_ids_for_filename(self, tenant_id: str, filename: str) -> List[str]:
+        """Every doc_id already stored under this filename — how a re-ingest finds the version
+        it is replacing. Scrolls rather than filters, so it needs no payload index."""
+        name = self._collection_name(tenant_id)
+        found: List[str] = []
+        offset = None
+        try:
+            async with httpx.AsyncClient(timeout=20.0, headers=self._headers()) as client:
+                while True:
+                    body: dict = {"limit": 256, "with_payload": True}
+                    if offset is not None:
+                        body["offset"] = offset
+                    resp = await client.post(
+                        f"{self.base}/collections/{name}/points/scroll", json=body)
+                    if not resp.is_success:
+                        break
+                    result = resp.json().get("result", {})
+                    for p in result.get("points", []):
+                        pl = p.get("payload") or {}
+                        if pl.get("filename") == filename:
+                            did = str(pl.get("doc_id") or "")
+                            if did and did not in found:
+                                found.append(did)
+                    offset = result.get("next_page_offset")
+                    if offset is None:
+                        break
+        except Exception as exc:
+            logger.debug("doc_ids_for_filename failed for %s: %s", filename, exc)
+        return found
+
     async def _point_count(self, client: httpx.AsyncClient, name: str) -> Optional[int]:
         try:
             r = await client.get(f"{self.base}/collections/{name}")
@@ -1243,7 +1273,11 @@ class VulaIngestionPipeline:
             # 4. Ensure Qdrant collection exists
             await self.store.ensure_collection(self.tenant_id, self.embedder.dimension)
 
-            # 5. Upsert to Qdrant
+            # 5. Replace any earlier version of this same file, THEN upsert. Order matters: an
+            # identical re-upload now shares its doc_id (content-hashed) so nothing is removed
+            # and the write is idempotent, while a genuinely updated file clears its predecessor
+            # instead of sitting beside it.
+            await self._supersede_older_versions(file_path.name, doc_id)
             stored = await self.store.upsert_chunks(self.tenant_id, all_chunks)
 
             elapsed = round(time.time() - started, 2)
@@ -1526,8 +1560,45 @@ class VulaIngestionPipeline:
         return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
     def _doc_id(self, file_path: Path) -> str:
-        content = f"{self.tenant_id}:{file_path.name}:{file_path.stat().st_mtime}"
-        return hashlib.md5(content.encode()).hexdigest()[:16]
+        """Identity of a document = tenant + name + CONTENT.
+
+        2026-09-07: this hashed the file's MTIME, so the very same document ingested twice got
+        two different ids and neither replaced the other. Every re-upload silently duplicated —
+        gerflor was holding two copies each of the DT stock sheet, the gym catalogue and the SPM
+        price list, and re-ingesting the gym catalogue produced a third. Duplicate chunks then
+        compete against each other in search.
+
+        Hashing the bytes makes an identical re-upload idempotent: same id, same chunk ids, same
+        point ids, so the write simply overwrites. A genuinely CHANGED file still gets a new id —
+        that case is handled by _supersede_older_versions, which clears the previous version
+        rather than leaving both.
+        """
+        h = hashlib.md5()
+        h.update(f"{self.tenant_id}:{file_path.name}:".encode())
+        try:
+            with open(file_path, "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+        except Exception as exc:
+            # Never fail an ingest over identity; fall back to the old shape.
+            logger.debug("content hash failed for %s: %s", file_path.name, exc)
+            h.update(str(file_path.stat().st_mtime).encode())
+        return h.hexdigest()[:16]
+
+    async def _supersede_older_versions(self, filename: str, keep_doc_id: str) -> int:
+        """Remove earlier ingests of the SAME filename, so an updated document replaces its
+        predecessor instead of sitting beside it. Returns points removed."""
+        try:
+            existing = await self.store.doc_ids_for_filename(self.tenant_id, filename)
+        except Exception as exc:
+            logger.debug("supersede lookup failed for %s: %s", filename, exc)
+            return 0
+        removed = 0
+        for old in existing:
+            if old and old != keep_doc_id:
+                removed += await self.store.delete_document(self.tenant_id, old)
+                logger.info("superseded older version of %s (doc %s)", filename, old)
+        return removed
 
 
 # ─── Quick Test ───────────────────────────────────────────────────────────────
