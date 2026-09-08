@@ -107,11 +107,20 @@ def test_every_transaction_from_one_merchant_gets_one_account():
 
 
 def test_an_undecided_ambiguous_merchant_allocates_nothing():
-    """Pick n Pay could be stock or groceries — the point is to ask, not to guess."""
+    """Pick n Pay could be stock or groceries — the point is to ask, not to guess.
+
+    2026-09-08: this test never mocked accounting.ensure_chart — apply_profiles falls through
+    to deterministic_account (no owner-decided profile row), which calls ensure_chart
+    unconditionally before ever checking whether any supplier row matches. Passed locally
+    (real Supabase creds in .env let the real client construct) but failed in CI (no creds at
+    all) — a real, pre-existing gap surfaced by actually watching CI on this push."""
     txns = [{"description": "Pick n Pay Table View", "direction": "out", "amount_cents": 5000}]
     db = _profiles_db([{"merchant_key": "pick pay", "account_code": "cost_of_sales",
                         "confidence": "ambiguous", "decided_by": "research"}])
-    with patch.object(merchants, "_client", lambda: db):
+    with (
+        patch.object(merchants, "_client", lambda: db),
+        patch("vula.commerce.accounting.ensure_chart", lambda t: CHART),
+    ):
         assert merchants.apply_profiles(TENANT, txns) == {}
 
 
