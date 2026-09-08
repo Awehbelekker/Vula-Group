@@ -104,6 +104,70 @@ async def test_the_answer_files_it_on_the_right_side(kind, expected_direction):
     assert "R4,520.00" in reply.await_args[0][1]
 
 
+# ── 2026-09-08: a genuine direction flip must re-mint invoice_number ────────────
+# Real bug: flipping a document from inbound to outbound (or vice versa) left its
+# invoice_number untouched — a supplier-bill-sequence ("...-BILL-00007") number kept sitting
+# on what the owner just confirmed IS their own sales invoice, exactly the SARS-sequential-
+# series corruption _next_invoice_number's docstring exists to prevent, introduced the other way.
+
+ROW_INBOUND = {"id": INV, "supplier": "Bloggs Architects", "total_cents": 452000,
+               "direction": "inbound", "doc_type": "invoice"}
+ROW_OUTBOUND = {"id": INV, "supplier": "Bloggs Architects", "total_cents": 452000,
+                "direction": "outbound", "doc_type": "invoice"}
+
+
+@pytest.mark.asyncio
+async def test_a_genuine_flip_from_inbound_to_outbound_remints_the_number():
+    from vula.commerce import service as cs
+    db, updates = _db_with(ROW_INBOUND)
+    with patch.object(cs, "_client", lambda: db), \
+         patch.object(cs, "_next_invoice_number", AsyncMock(return_value="OFF-INV-00042")) as remint, \
+         patch.object(wa, "_send_reply", AsyncMock()):
+        await wa._handle_document_kind_reply("27737815979", f"docdir:client:{INV}", TENANT)
+    remint.assert_awaited_once_with(TENANT, "invoice", direction="outbound")
+    assert updates[0]["invoice_number"] == "OFF-INV-00042"
+    assert updates[0]["direction"] == "outbound"
+
+
+@pytest.mark.asyncio
+async def test_a_genuine_flip_from_outbound_to_inbound_remints_the_number():
+    from vula.commerce import service as cs
+    db, updates = _db_with(ROW_OUTBOUND)
+    with patch.object(cs, "_client", lambda: db), \
+         patch.object(cs, "_next_invoice_number", AsyncMock(return_value="OFF-BILL-00013")) as remint, \
+         patch.object(wa, "_send_reply", AsyncMock()):
+        await wa._handle_document_kind_reply("27737815979", f"docdir:supplier:{INV}", TENANT)
+    remint.assert_awaited_once_with(TENANT, "invoice", direction="inbound")
+    assert updates[0]["invoice_number"] == "OFF-BILL-00013"
+
+
+@pytest.mark.asyncio
+async def test_re_confirming_the_same_direction_does_not_remint():
+    """Tapping the button that matches the direction it's already filed under is a no-op
+    confirmation, not a flip — must not waste a counter value or touch invoice_number."""
+    from vula.commerce import service as cs
+    db, updates = _db_with(ROW_INBOUND)
+    with patch.object(cs, "_client", lambda: db), \
+         patch.object(cs, "_next_invoice_number", AsyncMock()) as remint, \
+         patch.object(wa, "_send_reply", AsyncMock()):
+        await wa._handle_document_kind_reply("27737815979", f"docdir:supplier:{INV}", TENANT)
+    remint.assert_not_awaited()
+    assert "invoice_number" not in updates[0]
+
+
+@pytest.mark.asyncio
+async def test_renumber_failure_does_not_block_the_direction_update():
+    from vula.commerce import service as cs
+    db, updates = _db_with(ROW_INBOUND)
+    with patch.object(cs, "_client", lambda: db), \
+         patch.object(cs, "_next_invoice_number", AsyncMock(side_effect=RuntimeError("db down"))), \
+         patch.object(wa, "_send_reply", AsyncMock()) as reply:
+        await wa._handle_document_kind_reply("27737815979", f"docdir:client:{INV}", TENANT)
+    assert "invoice_number" not in updates[0]
+    assert updates[0]["direction"] == "outbound"
+    assert "R4,520.00" in reply.await_args[0][1]
+
+
 @pytest.mark.asyncio
 async def test_expense_is_flagged_not_silently_moved():
     """Moving money between an invoice and an expense record changes the books — a button tap

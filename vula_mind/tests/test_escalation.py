@@ -168,3 +168,20 @@ def test_mark_customer_notified_stamps_and_expires():
 def test_mark_customer_notified_never_raises_on_error():
     with patch("vula.escalation._client", side_effect=RuntimeError("down")):
         esc.mark_customer_notified("e9")  # must not raise
+
+
+# ── PII redaction reuses voice_profile.py rather than a second copy (2026-09-08) ────────
+
+def test_redact_contacts_strips_email_and_phone():
+    out = esc._redact_contacts("call me on 082 123 4567 or mail me@example.com")
+    assert "082 123 4567" not in out and "[phone]" in out
+    assert "me@example.com" not in out and "[email]" in out
+
+
+def test_redact_contacts_delegates_to_voice_profile():
+    """Guards against the duplication regressing — a fix to the shared pattern must reach both
+    callers by construction, not by remembering to update two copies."""
+    from vula.commerce import voice_profile
+    with patch.object(voice_profile, "_redact", return_value="REDACTED") as mock_redact:
+        assert esc._redact_contacts("anything") == "REDACTED"
+    mock_redact.assert_called_once_with("anything")

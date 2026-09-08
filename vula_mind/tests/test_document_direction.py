@@ -109,3 +109,14 @@ def test_a_real_supplier_is_never_recorded_as_our_own_invoice(issuer):
     """Failing safe: a genuine supplier bill misfiled as our sale would invent revenue."""
     direction, _, _ = classify_direction(issuer, OTH, "off-the-hook")
     assert direction == "inbound"
+
+
+def test_the_weaker_dead_duplicate_helper_is_gone():
+    """2026-09-08: _detect_direction was an earlier, weaker attempt at this exact fix (same
+    business-name matching as classify_direction, but no confidence signal so it can't flag an
+    ambiguous case for review) — superseded by classify_direction and left dead in the same
+    module. A future edit or new call site could reach for "the direction helper" and wire up
+    this weaker one instead, silently reintroducing the exact wrong-direction bug this whole
+    module exists to fix. It has been deleted; guard against it coming back."""
+    import vula.commerce.service as svc
+    assert not hasattr(svc, "_detect_direction")

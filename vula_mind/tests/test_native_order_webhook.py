@@ -117,3 +117,57 @@ async def test_native_order_cart_creation_failure_does_not_raise():
     with patch("vula.commerce.service.get_or_create_cart",
               new=AsyncMock(side_effect=RuntimeError("db down"))):
         await _handle_native_order(PHONE, order, TID)  # must not raise
+
+
+# ── 2026-09-08: a real 0 must never become a silent 1 ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_zero_quantity_line_is_skipped_not_defaulted_to_one():
+    """`item.get('quantity') or 1` used to treat an explicit 0 (a malformed/edited-cart line
+    from Meta) the same as a genuinely missing field, seeding the cart with a unit the payload
+    never actually asked for."""
+    from vula.api.whatsapp import _handle_native_order
+
+    order = {"product_items": [
+        {"product_retailer_id": "hake-fillets", "quantity": 0},
+        {"product_retailer_id": "chicken-thighs", "quantity": 2},
+    ]}
+    add_to_cart_mock = AsyncMock()
+    sent = {}
+    async def fake_send_reply(phone, message, tenant_id=""):
+        sent["message"] = message
+        return True
+
+    with (
+        patch("vula.commerce.service.get_or_create_cart", new=AsyncMock(
+            return_value={"id": "cart1"})),
+        patch("vula.commerce.service.add_to_cart", new=add_to_cart_mock),
+        patch("vula.commerce.service._client", _mock_product_lookup_chain(
+            [{"id": "prod2", "name": "Chicken Thighs"}])),
+        patch("vula.api.whatsapp._send_reply", new=fake_send_reply),
+    ):
+        await _handle_native_order(PHONE, order, TID)
+
+    add_to_cart_mock.assert_awaited_once_with(TID, "cart1", "prod2", 2.0)
+    assert "hake" not in sent["message"].lower()
+    assert "2x Chicken Thighs" in sent["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_quantity_still_defaults_to_one():
+    """A genuinely absent quantity field (unlike an explicit 0) still means one unit."""
+    from vula.api.whatsapp import _handle_native_order
+
+    order = {"product_items": [{"product_retailer_id": "hake-fillets"}]}
+    add_to_cart_mock = AsyncMock()
+    with (
+        patch("vula.commerce.service.get_or_create_cart", new=AsyncMock(
+            return_value={"id": "cart1"})),
+        patch("vula.commerce.service.add_to_cart", new=add_to_cart_mock),
+        patch("vula.commerce.service._client", _mock_product_lookup_chain(
+            [{"id": "prod1", "name": "Hake Fillets"}])),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()),
+    ):
+        await _handle_native_order(PHONE, order, TID)
+
+    add_to_cart_mock.assert_awaited_once_with(TID, "cart1", "prod1", 1.0)

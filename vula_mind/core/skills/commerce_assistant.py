@@ -1709,7 +1709,11 @@ class CommerceAssistantSkill(BaseSkill):
         kb_recipe = ""
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
-            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(f"{dish} recipe", top_k=2)
+            # expand=False: this is a short, machine-constructed phrase, not raw user text — the
+            # question-expansion LLM rewrite (default True) exists for terse/ambiguous user
+            # typing and has nothing to add here, only latency (2026-09-08 audit).
+            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(
+                f"{dish} recipe", top_k=2, expand=False)
             kb_recipe = "\n\n".join((c.get("text") or "")[:600] for c in (chunks or []) if c.get("text"))
         except Exception:
             kb_recipe = ""

@@ -46,7 +46,7 @@ def _cf_access_headers() -> dict:
     return {"CF-Access-Client-Id": cid, "CF-Access-Client-Secret": csec} if cid and csec else {}
 
 
-def _providers() -> list[tuple[str, str, str]]:
+def _providers(*, local_only: bool = False) -> list[tuple[str, str, str]]:
     """Every configured provider, in try-order: local/primary first, then cloud fallbacks.
 
     2026-09-01: this used to return only the FIRST configured provider, so despite the
@@ -56,11 +56,19 @@ def _providers() -> list[tuple[str, str, str]]:
     from whisper.vula-ai.com and the customer was told to type instead. With OTH about to
     take real WhatsApp orders that's a silent order-loss path, so failure now falls through
     to the next provider rather than giving up.
+
+    local_only: skip the cloud fallbacks entirely. vula/voice_retry.py's whole reason to exist
+    is a documented POPIA guarantee — "the customer's audio never leaves Vula's own
+    infrastructure" — but its retry loop called this same function with no way to honour that,
+    so a queued note could still be shipped to Groq/OpenAI the moment either key was configured
+    (2026-09-08, found by audit). Only the local-first path itself should ever set this.
     """
     out: list[tuple[str, str, str]] = []
     if settings.transcribe_base:
         out.append((settings.transcribe_base.rstrip("/"),
                     settings.transcribe_api_key, settings.transcribe_model))
+    if local_only:
+        return out
     if settings.groq_api_key:
         out.append(("https://api.groq.com/openai/v1", settings.groq_api_key, "whisper-large-v3"))
     if settings.openai_api_key:
@@ -74,11 +82,14 @@ async def transcribe_audio(
     mime_type: str = "audio/ogg",
     filename: str = "voice.ogg",
     tenant_id: Optional[str] = None,
+    local_only: bool = False,
 ) -> tuple[Optional[str], Optional[str]]:
     """Transcribe audio bytes → (text, language_code). Both None if no provider is configured
     or the call fails — the caller must handle that gracefully (never guess). The language code
-    is Whisper's own detection (e.g. 'en', 'af', 'zu') and is a reliable per-customer signal."""
-    provs = _providers()
+    is Whisper's own detection (e.g. 'en', 'af', 'zu') and is a reliable per-customer signal.
+
+    local_only=True never falls through to a cloud provider — see _providers()'s docstring."""
+    provs = _providers(local_only=local_only)
     if not provs or not audio:
         if not provs:
             logger.info("voice note received but no transcription provider configured")

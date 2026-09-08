@@ -94,14 +94,14 @@ def _tokens(s: str) -> set:
     return {w for w in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(w) > 2}
 
 
-# Same redaction as vula/commerce/voice_profile.py — a stored answer is replayed to OTHER
-# customers, so it must never carry the contact details of the one who prompted it.
-_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-_PHONE_RE = re.compile(r"(?<!\w)(\+?\d[\d\s\-()]{6,}\d)(?!\w)")
-
-
 def _redact_contacts(text: str) -> str:
-    return _PHONE_RE.sub("[phone]", _EMAIL_RE.sub("[email]", text or ""))
+    """A stored answer is replayed to OTHER customers, so it must never carry the contact
+    details of the one who prompted it. Reuses vula/commerce/voice_profile.py's own redaction
+    (2026-09-08: this used to be a verbatim copy of the same two regexes — a future fix to the
+    pattern applied to one copy alone would leave the other redacting with the stale, possibly
+    still-leaky pattern)."""
+    from vula.commerce.voice_profile import _redact
+    return _redact(text or "")
 
 
 def approve_learned_answer(learned_id: str, approved_by: str = "") -> bool:

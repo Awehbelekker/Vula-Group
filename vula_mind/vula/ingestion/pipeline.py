@@ -202,15 +202,22 @@ class OCRProcessor:
     # After this many consecutive local failures the local step is skipped for the rest of the
     # process and pages go straight to cloud. Consecutive, and reset by any success, so a
     # healthy box that blips once is not written off for the whole run.
+    #
+    # 2026-09-08: this used to be a CLASS attribute mutated via `type(self)._local_ocr_failures`
+    # — shared globally across every OCRProcessor instance in the process, not scoped to "this
+    # run" as the comment above promises. A new OCRProcessor is created per DocumentParser, and
+    # a new DocumentParser per VulaIngestionPipeline.ingest_file() call, so 3 consecutive local
+    # failures on one tenant's document could permanently disable local OCR for every OTHER
+    # tenant's concurrent or subsequent ingest in the same long-lived server process. Now a
+    # plain instance attribute, correctly scoped to one document's processing.
     _LOCAL_OCR_FAILURE_LIMIT = 3
-    _local_ocr_failures = 0
 
     def __init__(self, ollama_base: str = OLLAMA_BASE):
         self.ollama_base = ollama_base
+        self._local_ocr_failures = 0
 
-    @classmethod
-    def _local_ocr_disabled(cls) -> bool:
-        return cls._local_ocr_failures >= cls._LOCAL_OCR_FAILURE_LIMIT
+    def _local_ocr_disabled(self) -> bool:
+        return self._local_ocr_failures >= self._LOCAL_OCR_FAILURE_LIMIT
 
     async def process_image(self, image_path: Path) -> str:
         """Extract text from image/scanned page using GLM-OCR, escalating to cloud vision on
@@ -232,7 +239,7 @@ class OCRProcessor:
         local_text = ""
         if self._local_ocr_disabled():
             logger.info("local OCR skipped — %d consecutive failures this run",
-                        type(self)._local_ocr_failures)
+                        self._local_ocr_failures)
         else:
             try:
                 # The Ollama tunnel is behind Cloudflare Access — send the service-token headers
@@ -247,15 +254,15 @@ class OCRProcessor:
                     resp.raise_for_status()
                     local_text = resp.json().get("response", "").strip()
                     if local_text and not self._looks_hallucinated(local_text):
-                        type(self)._local_ocr_failures = 0     # healthy again
+                        self._local_ocr_failures = 0     # healthy again
                         return local_text
                     if local_text:
-                        type(self)._local_ocr_failures += 1
+                        self._local_ocr_failures += 1
                         logger.warning(f"GLM-OCR output looks hallucinated (bracket placeholders) — "
                                        f"escalating to cloud vision instead of trusting it: {local_text[:200]!r}")
             except Exception as e:
-                type(self)._local_ocr_failures += 1
-                logger.warning(f"GLM-OCR failed ({type(self)._local_ocr_failures} in a row), "
+                self._local_ocr_failures += 1
+                logger.warning(f"GLM-OCR failed ({self._local_ocr_failures} in a row), "
                                f"escalating to cloud vision: {e}")
 
         # 2026-08-17: cloud vision isn't immune either — reproduced live, the SAME image

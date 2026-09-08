@@ -862,25 +862,6 @@ def classify_direction(supplier_name: str, tenant_name: str, tenant_id: str,
     return "inbound", False, "unrecognised party — could be a new supplier or a client"
 
 
-def _detect_direction(supplier_name: str, tenant_name: str, tenant_id: str) -> str:
-    """Did the tenant ISSUE this document, or receive it?
-
-    2026-09-03, confirmed on real off-the-hook data: the scan-commit path hardcoded
-    direction="inbound", so EVERY document scanned from email became a supplier bill — including
-    51 of OTH's own outgoing sales invoices, R32,307.97, where both `supplier` and
-    `customer_name` came out as "Off the Hook". That is ~29% of their reported money OUT, and it
-    is money IN. Any cash-flow or payables report built on it would be wrong in both directions
-    at once, which is precisely the error an owner must never be shown.
-
-    The signal is already in hand at commit time: the issuer of the document. If the issuer IS
-    this tenant, the tenant wrote it, so it is outbound. Anything else stays inbound, which
-    preserves today's behaviour for genuine supplier bills.
-    """
-    if _same_business(supplier_name, tenant_name) or _same_business(supplier_name, tenant_id):
-        return "outbound"
-    return "inbound"
-
-
 def _coerce_line_items(value) -> List[dict]:
     """Always store line_items as a real LIST of dicts.
 
@@ -1444,10 +1425,17 @@ async def _next_invoice_number(tenant_id: str, doc_type: str,
     reference for someone else's document and never consumes a number the tenant could be asked
     to account for. Existing rows keep the numbers they were given — renumbering issued
     documents would be worse than the gaps.
+
+    2026-09-08: every inbound doc_type shares the single "BILL" code above, but until this fix
+    the counter_key was still split per doc_type ("inbound_invoice" vs "inbound_quote" etc.) —
+    two different inbound doc types for the same tenant could both mint e.g. "OTH-BILL-00001",
+    tripping the (tenant_id, invoice_number) unique index (migration 032) or, if unenforced,
+    silently sharing one reference between two unrelated documents. The counter must match the
+    code it's scoped to: one shared "inbound" counter for every inbound doc_type.
     """
     inbound = (direction or "outbound").lower() == "inbound"
     code = "BILL" if inbound else _DOC_TYPE_CODE.get(doc_type, "INV")
-    counter_key = f"inbound_{doc_type}" if inbound else doc_type
+    counter_key = "inbound" if inbound else doc_type
     result = _client().rpc(
         "next_document_number", {"p_tenant_id": tenant_id, "p_counter_key": counter_key}
     ).execute()

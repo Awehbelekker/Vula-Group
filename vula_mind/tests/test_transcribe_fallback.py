@@ -158,3 +158,54 @@ async def test_no_provider_configured_returns_none(monkeypatch, calls):
     monkeypatch.setattr(tr.settings, "groq_api_key", "")
     monkeypatch.setattr(tr.settings, "openai_api_key", "")
     assert await tr.transcribe_audio(b"audio", tenant_id="off-the-hook") == (None, None)
+
+
+# ── local_only (2026-09-08) ──────────────────────────────────────────────────────
+# vula/voice_retry.py's whole reason to exist is a documented POPIA guarantee — "the customer's
+# audio never leaves Vula's own infrastructure" — but its retry loop called transcribe_audio
+# with no way to honour that, so a queued note could still reach Groq/OpenAI the moment either
+# key was configured. local_only=True must never include a cloud provider.
+
+def test_providers_local_only_excludes_cloud_fallbacks(monkeypatch):
+    monkeypatch.setattr(tr.settings, "transcribe_base", "https://whisper.vula-ai.com/v1")
+    monkeypatch.setattr(tr.settings, "transcribe_api_key", "local-key")
+    monkeypatch.setattr(tr.settings, "transcribe_model", "faster-whisper-large-v3")
+    monkeypatch.setattr(tr.settings, "groq_api_key", "groq-key")
+    monkeypatch.setattr(tr.settings, "openai_api_key", "oai-key")
+
+    provs = tr._providers(local_only=True)
+    assert [p[0] for p in provs] == ["https://whisper.vula-ai.com/v1"]
+
+
+def test_providers_local_only_with_no_local_endpoint_is_empty(monkeypatch):
+    monkeypatch.setattr(tr.settings, "transcribe_base", "")
+    monkeypatch.setattr(tr.settings, "groq_api_key", "groq-key")
+    monkeypatch.setattr(tr.settings, "openai_api_key", "oai-key")
+    assert tr._providers(local_only=True) == []
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_local_only_never_calls_cloud_on_failure(monkeypatch, calls):
+    """The exact real risk: the SA tunnel fails, and with local_only unset this would have
+    fallen through to a cloud provider — must return (None, None) instead."""
+    monkeypatch.setattr(tr.settings, "transcribe_base", "https://whisper.vula-ai.com/v1")
+    monkeypatch.setattr(tr.settings, "transcribe_api_key", "local-key")
+    monkeypatch.setattr(tr.settings, "transcribe_model", "faster-whisper-large-v3")
+    monkeypatch.setattr(tr.settings, "groq_api_key", "groq-key")
+    monkeypatch.setattr(tr.settings, "openai_api_key", "oai-key")
+    _wire(monkeypatch, [_Resp({}, status=530)], calls)
+
+    text, lang = await tr.transcribe_audio(b"audio-bytes", tenant_id="off-the-hook", local_only=True)
+
+    assert (text, lang) == (None, None)
+    posts = [c for c in calls if isinstance(c, dict)]
+    assert len(posts) == 1, "must not have tried a cloud fallback"
+    assert posts[0]["url"].startswith("https://whisper.vula-ai.com")
+
+
+def test_voice_retry_loop_calls_transcribe_with_local_only():
+    """Guards the write site — the retry loop's whole purpose is the local-only guarantee."""
+    import inspect
+    from vula.api import server
+    src = inspect.getsource(server._voice_retry_scheduler_loop)
+    assert "local_only=True" in src

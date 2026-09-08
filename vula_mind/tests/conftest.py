@@ -33,6 +33,35 @@ def _isolate_tenant_db(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_real_whatsapp_creds_by_default(monkeypatch):
+    """No test should be able to reach the real Meta Graph API just by exercising the WhatsApp
+    webhook without explicitly mocking credentials.
+
+    2026-09-08: _mark_read_and_typing's call site was changed from `await`ed inline to
+    `asyncio.create_task(...)` (fire-and-forget, to stop it adding latency to every real inbound
+    message). That decoupled it from the request/test lifecycle it used to share — a test that
+    exercises the webhook route without mocking WhatsApp credentials (most of them; they only
+    care about the handler dispatch, not this cosmetic side effect) used to have this call
+    resolve and fail safely INSIDE its own synchronous `await`, within the test's own call
+    stack. Now it can keep running as an orphaned background task after the test function has
+    already returned — attempting a REAL network call to graph.facebook.com with whatever real
+    global WHATSAPP_TOKEN/WHATSAPP_PHONE_ID happen to be set in the dev environment's own .env,
+    landing at some arbitrary point during a LATER, unrelated test. Defaulting both the
+    per-tenant lookup and the global env fallback to "not configured" here closes that off for
+    every test at once; a test that specifically wants to exercise real-looking WhatsApp-send
+    behaviour (e.g. tests/test_typing_indicator.py) already patches these explicitly per-test,
+    which correctly overrides this default for the scope of its own `with patch(...)` block.
+    """
+    import vula.api.whatsapp as wa_mod
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(wa_mod, "_get_tenant_wa_creds", AsyncMock(return_value=None))
+    monkeypatch.setattr(wa_mod.settings, "whatsapp_token", "")
+    monkeypatch.setattr(wa_mod.settings, "whatsapp_phone_id", "")
+    yield
+
+
 @pytest.fixture
 def sample_goal() -> str:
     return "What is the capital of South Africa?"

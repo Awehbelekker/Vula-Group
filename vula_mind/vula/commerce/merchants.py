@@ -100,19 +100,6 @@ def merchant_key(description: Optional[str]) -> str:
     return "" if key in _JUNK_ALONE else key
 
 
-# Retail categories where knowing the trade does NOT settle the account: the same shop is stock
-# for one owner and personal spend for another, or both for the same owner in the same month.
-_AMBIGUOUS_TRADES = (
-    "supermarket", "grocer", "pharmacy", "chemist", "convenience", "general retail",
-    "variety", "department store", "hardware", "fuel", "petrol", "filling station",
-    "restaurant", "takeaway", "cafe", "liquor", "clothing", "online retail", "marketplace",
-    # 2026-09-06 live run: "Fast food" and "Food or beverages" sailed past as CONFIDENT
-    # cost_of_sales for an architecture practice, because neither string contains "restaurant"
-    # or "takeaway". Hospitality is a judgement call in every set of books except a caterer's.
-    "fast food", "food or beverage", "coffee", "bakery", "steakhouse", "sushi", "catering",
-    "hotel", "accommodation", "travel", "entertainment", "unknown",
-)
-
 
 def get_profile(tenant_id: str, key: str) -> Optional[dict]:
     if not key:
@@ -278,9 +265,13 @@ def deterministic_account(tenant_id: str, key: str) -> Optional[str]:
         if merchant_key(r.get("name")) != key:
             continue
         cat = (r.get("category") or "").strip().lower()
-        if cat in codes:
-            return cat
-        return "cost_of_sales" if "cost_of_sales" in codes else None
+        # 2026-09-08: this used to fall back to a GUESSED "cost_of_sales" whenever the supplier's
+        # own category text wasn't an exact chart code — silently auto-filing spend the owner
+        # never actually categorised, exactly the "confident but wrong" auto-misfile this
+        # exact-match design exists to prevent (real incident: hospitality spend filed as
+        # confident cost_of_sales). No exact match means "I don't know" — return None so the
+        # caller (apply_profiles) leaves it for the research/ask flow instead of guessing.
+        return cat if cat in codes else None
     return None
 
 

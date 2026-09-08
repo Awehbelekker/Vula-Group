@@ -365,12 +365,45 @@ def test_the_tenants_own_supplier_record_allocates_without_asking():
 
 
 def test_an_unknown_supplier_category_does_not_invent_an_account():
+    """2026-09-08: this used to fall back to a GUESSED "cost_of_sales" whenever the matched
+    supplier's own category text wasn't an exact chart code — silently auto-filing spend the
+    owner never actually categorised, contradicting this function's own "exact match, no fuzzy
+    mapping" docstring. A matched supplier row with a non-chart-code category must decline
+    (None), same as no match at all, so apply_profiles leaves it for the research/ask flow."""
     rows = [{"name": "Mystery Traders", "category": "not_a_chart_code"}]
     with patch.object(merchants, "_client", lambda: _profiles_db(rows)), \
          patch("vula.commerce.accounting.ensure_chart", lambda t: CHART):
-        # falls back to cost_of_sales only because the name matched a real supplier row
-        assert merchants.deterministic_account(TENANT, "mystery traders") == "cost_of_sales"
+        assert merchants.deterministic_account(TENANT, "mystery traders") is None
         assert merchants.deterministic_account(TENANT, "someone else entirely") is None
+
+
+def test_the_unused_ambiguous_trades_list_is_gone():
+    """2026-09-08: _AMBIGUOUS_TRADES was defined but never referenced anywhere — the actual
+    safety mechanism against a confident-but-wrong trade classification is research_merchant
+    always hardcoding confidence='ambiguous' regardless of what the LLM said (see
+    test_a_hospitality_trade_is_never_trusted_confident_either below), which supersedes what
+    this per-category list would have done. Left in place it read as an enforced backstop that
+    didn't actually run; removed rather than wired up, since the blanket fix already covers it."""
+    import vula.commerce.merchants as m
+    assert not hasattr(m, "_AMBIGUOUS_TRADES")
+
+
+@pytest.mark.asyncio
+async def test_a_hospitality_trade_is_never_trusted_confident_either():
+    """The real live incident (2026-09-06): 'Fast food'/'Food or beverages' came back CONFIDENT
+    cost_of_sales for an architecture practice. research_merchant must never trust "confident"
+    from the model for ANY trade — confidence is always downgraded to 'ambiguous' so nothing
+    auto-applies without the owner's own decision (apply_profiles only honours decided_by=='owner')."""
+    saved = {}
+    with patch.object(merchants, "_search_pages", AsyncMock(return_value="")), \
+         patch.object(merchants, "_classify", AsyncMock(return_value={
+             "display_name": "McDonald's", "what_they_sell": "fast food",
+             "suggested_account_code": "cost_of_sales", "confidence": "confident"})), \
+         patch.object(merchants, "save_profile", lambda t, k, **kw: saved.update(kw)), \
+         patch.object(merchants, "get_profile", lambda t, k: dict(saved)), \
+         patch("vula.commerce.accounting.ensure_chart", lambda t: CHART):
+        out = await merchants.research_merchant(TENANT, "mcdonalds", "MCDONALDS")
+    assert out["confidence"] == "ambiguous"
 
 
 @pytest.mark.asyncio

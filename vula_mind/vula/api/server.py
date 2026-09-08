@@ -687,6 +687,7 @@ async def _voice_retry_scheduler_loop() -> None:
                 text, lang = await transcribe_audio(
                     audio, mime_type=row.get("mime_type") or "audio/ogg",
                     filename=f"voice-retry-{rid}.ogg", tenant_id=tenant_id,
+                    local_only=True,
                 )
                 if not text:
                     voice_retry.mark_failed_attempt(rid, attempts, "transcription still failing")

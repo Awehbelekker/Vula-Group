@@ -49,7 +49,7 @@ async def test_inbound_uses_a_separate_counter_and_code():
     with patch.object(service, "_client", lambda: _Rpc(sink)):
         num = await service._next_invoice_number("digg-demo", "invoice", direction="inbound")
     assert num == "DIG-BILL-00007", "a supplier bill must not look like our own invoice"
-    assert sink[0]["p_counter_key"] == "inbound_invoice", "must not share the outgoing counter"
+    assert sink[0]["p_counter_key"] == "inbound", "must not share the outgoing counter"
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,24 @@ async def test_an_inbound_quote_is_also_a_bill_reference():
     with patch.object(service, "_client", lambda: _Rpc(sink)):
         num = await service._next_invoice_number("digg-demo", "quote", direction="inbound")
     assert num.startswith("DIG-BILL-")
-    assert sink[0]["p_counter_key"] == "inbound_quote"
+    assert sink[0]["p_counter_key"] == "inbound"
+
+
+@pytest.mark.asyncio
+async def test_every_inbound_doc_type_shares_one_counter_no_collision():
+    """2026-09-08 real bug: an inbound invoice and an inbound quote both used code 'BILL' but
+    SEPARATE counters ('inbound_invoice' vs 'inbound_quote'), each independently starting at 1 —
+    so two different inbound doc types for the same tenant could mint the identical
+    invoice_number ('DIG-BILL-00001' twice), tripping the (tenant_id, invoice_number) unique
+    index. The counter must match the code it's scoped to: one shared counter for every inbound
+    doc_type, regardless of doc_type."""
+    sink = []
+    with patch.object(service, "_client", lambda: _Rpc(sink)):
+        await service._next_invoice_number("digg-demo", "invoice", direction="inbound")
+        await service._next_invoice_number("digg-demo", "quote", direction="inbound")
+        await service._next_invoice_number("digg-demo", "delivery_note", direction="inbound")
+    keys = [p["p_counter_key"] for p in sink]
+    assert len(set(keys)) == 1, f"different inbound doc_types must share one counter: {keys}"
 
 
 @pytest.mark.asyncio

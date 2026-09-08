@@ -234,8 +234,16 @@ async def receive_message(
                 # and suspended-tenant guards (so a dropped message never gets false ticks) and
                 # before every handler below — all of which do reply, which is Meta's own
                 # condition for showing the indicator at all.
+                #
+                # 2026-09-08: this was `await`ed inline, so a slow/throttled call to Meta added
+                # real latency to EVERY inbound message ahead of the actual reply logic, on the
+                # platform's single busiest hot path — for something the function's own
+                # docstring already calls "best-effort and deliberately silent on failure".
+                # Fired as a background task instead; it was never allowed to affect the real
+                # reply either way.
                 if msg_id and route_tenant:
-                    await _mark_read_and_typing(msg_id, route_tenant)
+                    import asyncio as _asyncio
+                    _asyncio.create_task(_mark_read_and_typing(msg_id, route_tenant))
 
                 try:
                     if msg_type == "text":
@@ -735,10 +743,21 @@ async def _handle_document_kind_reply(phone: str, reply_id: str, tenant_id: str)
         return
 
     direction = "inbound" if kind == "supplier" else "outbound"
+    update: Dict[str, Any] = {"direction": direction, "needs_review": False}
+    # 2026-09-08: a genuine flip (not just re-confirming the direction it was already filed
+    # under) means the existing invoice_number was minted under the WRONG counter/code — e.g.
+    # a BILL-prefixed supplier-bill reference on what's actually the tenant's own sales invoice,
+    # exactly the SARS-sequential-series corruption _next_invoice_number's docstring exists to
+    # prevent, just introduced from this direction instead. Re-mint under the correct counter.
+    if (inv.get("direction") or "inbound") != direction:
+        try:
+            update["invoice_number"] = await cs._next_invoice_number(
+                tenant_id, inv.get("doc_type") or "invoice", direction=direction)
+        except Exception as exc:
+            logger.warning("invoice renumber on direction flip failed for %s: %s", invoice_id, exc)
     try:
-        cs._client().table("commerce_invoices").update(
-            {"direction": direction, "needs_review": False}
-        ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+        cs._client().table("commerce_invoices").update(update) \
+            .eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
     except Exception as exc:
         logger.warning("document direction update failed for %s: %s", invoice_id, exc)
         await _send_reply(phone, "Couldn't file that just now, sorry.", tenant_id)
@@ -3843,6 +3862,15 @@ _SEND_FAILURE_NOTIFY_COOLDOWN_S = 3600.0
 
 # Meta reports a message's life cycle out of order often enough that a later 'sent' must not
 # overwrite an earlier 'read'. Same never-downgrade rule record_message_status uses.
+#
+# 2026-09-08: 'sent' and 'failed' shared rank 1, so this table's own tie let a stale/duplicate
+# 'sent' webhook silently overwrite an already-recorded 'failed' status (the rank check is
+# `<`, and 1 < 1 is False) — erasing a real delivery failure the team had already been alerted
+# to, with no record left that it ever happened. 'failed' is a terminal outcome that logically
+# only ever follows 'sent' (or precedes it outright), never the other way around, so it must
+# outrank 'sent' — handled as a special case below rather than just bumping its rank number,
+# since 'failed' arriving after 'delivered'/'read' (Meta re-reporting a stale error) should
+# still be blocked by the normal comparison, not treated as a new terminal state.
 _WA_STATUS_RANK = {"accepted": 0, "sent": 1, "failed": 1, "delivered": 2, "read": 3}
 
 
@@ -3859,6 +3887,8 @@ async def _record_outbound_status(wamid: str, status: str, error: Optional[str] 
         return
     row = rows[0]
     cur = row.get("status") or "accepted"
+    if cur == "failed" and status == "sent":
+        return
     if _WA_STATUS_RANK.get(status, 0) < _WA_STATUS_RANK.get(cur, 0):
         return
     db.table("vula_wa_outbound").update(
@@ -5060,11 +5090,16 @@ async def _handle_native_order(phone: str, order: dict, tenant_id: str) -> None:
     added, missing = [], []
     for item in product_items:
         retailer_id = str(item.get("product_retailer_id") or "").strip()
+        # 2026-09-08: `item.get("quantity") or 1` treated an explicit 0 the same as a genuinely
+        # missing field, silently seeding the cart with 1 unit of something the payload said 0
+        # of (a malformed/edited-cart line from Meta). Only a truly missing/unparseable quantity
+        # defaults to 1; an explicit non-positive quantity skips the line entirely.
+        raw_qty = item.get("quantity")
         try:
-            quantity = float(item.get("quantity") or 1)
+            quantity = 1.0 if raw_qty is None else float(raw_qty)
         except (TypeError, ValueError):
             quantity = 1.0
-        if not retailer_id:
+        if not retailer_id or quantity <= 0:
             continue
         try:
             rows = (commerce_service._client().table("commerce_products")

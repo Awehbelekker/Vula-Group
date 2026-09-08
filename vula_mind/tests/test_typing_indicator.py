@@ -89,3 +89,16 @@ async def test_failure_never_propagates_and_cannot_break_an_order():
          patch.object(wa.httpx, "AsyncClient",
                       lambda **k: _Client([], exc=RuntimeError("meta down"))):
         assert await wa._mark_read_and_typing("wamid.ABC", "off-the-hook") is None
+
+
+def test_the_call_site_fires_it_in_the_background_not_inline():
+    """2026-09-08: this used to be `await`ed inline in the webhook handler, so a slow/throttled
+    call to Meta added real latency to EVERY inbound message ahead of the actual reply logic —
+    for something the function's own docstring already calls best-effort and silent-on-failure.
+    Guards the write site: it must be fired via asyncio.create_task, never awaited directly."""
+    import inspect
+    src = inspect.getsource(wa)
+    i = src.index("_mark_read_and_typing(msg_id, route_tenant)")
+    before = src[max(0, i - 60):i]
+    assert "create_task" in before
+    assert "await _mark_read_and_typing" not in src

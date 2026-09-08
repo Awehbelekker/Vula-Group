@@ -161,3 +161,94 @@ async def test_handle_client_answer_yes_without_a_proposal_falls_through_to_norm
         from vula.commerce.bank_review import handle_client_answer
         reply = await handle_client_answer("off-the-hook", "yes")
     assert "couldn't find" in reply.lower()
+
+
+# ── 2026-09-08: a reply must go to whichever question was asked most recently ──────────
+# Real bug: when a supplier proof-of-payment (money OUT) and an unmatched credit (money IN)
+# were BOTH pending 'asked' at once, any reply — even one clearly meant for the money-in
+# question — was unconditionally captured by the money-out branch, since it was checked first
+# with no regard for which was actually asked more recently.
+
+@pytest.mark.asyncio
+async def test_a_reply_goes_to_the_more_recently_asked_money_in_question():
+    out_txn = {"id": "out1", "amount_cents": 45200, "direction": "out",
+               "match_status": "asked", "source_file": "whatsapp_pop",
+               "proposed_match_type": "supplier_bill", "proposed_match_id": "bill-1",
+               "asked_at": "2026-09-08T10:00:00+00:00"}
+    in_txn = {"id": "in1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
+              "direction": "in", "proposed_match_type": "order", "proposed_match_id": "ord1",
+              "asked_at": "2026-09-08T11:00:00+00:00"}  # asked LATER than the money-out one
+    order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
+             "customer_phone": "27821234567", "total_cents": 15000, "status": "pending_payment"}
+    db = _FakeDB({
+        "commerce_bank_transactions": _FakeTable([out_txn, in_txn]),
+        "commerce_orders": _FakeTable([order]),
+    })
+    with (
+        patch("vula.commerce.bank_review._client", return_value=db),
+        patch("vula.commerce.service.update_order_status", new=AsyncMock()) as mock_update,
+        patch("vula.commerce.service.update_invoice_status", new=AsyncMock()) as mock_invoice,
+        patch("vula.api.yoco._notify_order_paid", new=AsyncMock()),
+    ):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("off-the-hook", "yes")
+    assert "OFF-00006" in reply
+    mock_update.assert_awaited_once_with("ord1", "paid")
+    mock_invoice.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_reply_goes_to_the_more_recently_asked_supplier_bill_question():
+    out_txn = {"id": "out1", "amount_cents": 45200, "direction": "out",
+               "match_status": "asked", "source_file": "whatsapp_pop",
+               "proposed_match_type": "supplier_bill", "proposed_match_id": "bill-1",
+               "asked_at": "2026-09-08T11:00:00+00:00"}  # asked LATER than the money-in one
+    in_txn = {"id": "in1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
+              "direction": "in", "proposed_match_type": "order", "proposed_match_id": "ord1",
+              "asked_at": "2026-09-08T10:00:00+00:00"}
+    bill = {"id": "bill-1", "invoice_number": "BILL-0007", "supplier": "Atlantis Seafood",
+            "total_cents": 45200, "status": "sent"}
+    db = _FakeDB({
+        "commerce_bank_transactions": _FakeTable([out_txn, in_txn]),
+        "commerce_invoices": _FakeTable([bill]),
+        "commerce_suppliers": _FakeTable([{"name": "Atlantis Seafood"}]),
+    })
+    with (
+        patch("vula.commerce.bank_review._client", return_value=db),
+        patch("vula.commerce.bank_rec._client", return_value=db),
+        patch("vula.commerce.service.update_order_status", new=AsyncMock()) as mock_order,
+        patch("vula.commerce.service.update_invoice_status", new=AsyncMock()) as mock_update,
+    ):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("off-the-hook", "yes")
+    assert "BILL-0007" in reply
+    mock_update.assert_awaited_once_with("off-the-hook", "bill-1", "paid")
+    mock_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_asked_at_falls_back_to_created_at_for_recency():
+    """Older rows (or before migration 155 has run) have no asked_at at all — created_at must
+    still let the two pending questions be compared instead of defaulting to money-out."""
+    out_txn = {"id": "out1", "amount_cents": 45200, "direction": "out",
+               "match_status": "asked", "source_file": "whatsapp_pop",
+               "proposed_match_type": "supplier_bill", "proposed_match_id": "bill-1",
+               "created_at": "2026-09-08T10:00:00+00:00"}
+    in_txn = {"id": "in1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
+              "direction": "in", "proposed_match_type": "order", "proposed_match_id": "ord1",
+              "created_at": "2026-09-08T11:00:00+00:00"}
+    order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
+             "customer_phone": "27821234567", "total_cents": 15000, "status": "pending_payment"}
+    db = _FakeDB({
+        "commerce_bank_transactions": _FakeTable([out_txn, in_txn]),
+        "commerce_orders": _FakeTable([order]),
+    })
+    with (
+        patch("vula.commerce.bank_review._client", return_value=db),
+        patch("vula.commerce.service.update_order_status", new=AsyncMock()) as mock_update,
+        patch("vula.api.yoco._notify_order_paid", new=AsyncMock()),
+    ):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("off-the-hook", "yes")
+    assert "OFF-00006" in reply
+    mock_update.assert_awaited_once_with("ord1", "paid")

@@ -101,11 +101,26 @@ def test_local_ocr_is_abandoned_after_repeated_failure():
     which then read the page correctly every time. Ten minutes spent waiting for a model that
     never answers is worse than not calling it."""
     from vula.ingestion.pipeline import OCRProcessor
-    OCRProcessor._local_ocr_failures = 0
-    assert OCRProcessor._local_ocr_disabled() is False
-    OCRProcessor._local_ocr_failures = OCRProcessor._LOCAL_OCR_FAILURE_LIMIT
-    assert OCRProcessor._local_ocr_disabled() is True
-    OCRProcessor._local_ocr_failures = 0
+    proc = OCRProcessor()
+    assert proc._local_ocr_disabled() is False
+    proc._local_ocr_failures = OCRProcessor._LOCAL_OCR_FAILURE_LIMIT
+    assert proc._local_ocr_disabled() is True
+
+
+def test_the_failure_counter_is_scoped_per_instance_not_shared_globally():
+    """2026-09-08: this used to be a CLASS attribute mutated via type(self)._local_ocr_failures
+    — shared across every OCRProcessor in the process. A new instance is created per document
+    (VulaIngestionPipeline.ingest_file -> DocumentParser -> OCRProcessor), so 3 failures on one
+    tenant's document must never disable local OCR for a completely separate instance/document,
+    let alone another tenant's concurrent ingest."""
+    from vula.ingestion.pipeline import OCRProcessor
+    poisoned = OCRProcessor()
+    poisoned._local_ocr_failures = OCRProcessor._LOCAL_OCR_FAILURE_LIMIT
+    assert poisoned._local_ocr_disabled() is True
+
+    fresh = OCRProcessor()
+    assert fresh._local_ocr_disabled() is False, \
+        "a fresh instance must not inherit another instance's failure count"
 
 
 def test_one_success_forgives_earlier_failures():

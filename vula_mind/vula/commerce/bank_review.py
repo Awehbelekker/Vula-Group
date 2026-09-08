@@ -54,8 +54,9 @@ def start_review(tenant_id: str) -> Optional[str]:
     # Re-ask an already-'asked' one first (a previous question that never got answered).
     txn = next((t for t in rows if t.get("categorized_by") == "asked"), rows[0])
     try:
+        from vula.commerce import service
         _client().table("commerce_bank_transactions").update(
-            {"categorized_by": "asked"}).eq("id", txn["id"]).execute()
+            {"categorized_by": "asked", "asked_at": service._now()}).eq("id", txn["id"]).execute()
     except Exception:
         pass
     return _question(txn, 1, len(rows))
@@ -164,8 +165,9 @@ def _next_or_done(tenant_id: str, prefix: str) -> str:
         return prefix + "\n\n🎉 That's everything — your books are fully allocated."
     txn = rows[0]
     try:
+        from vula.commerce import service
         _client().table("commerce_bank_transactions").update(
-            {"categorized_by": "asked"}).eq("id", txn["id"]).execute()
+            {"categorized_by": "asked", "asked_at": service._now()}).eq("id", txn["id"]).execute()
     except Exception:
         pass
     return prefix + "\n\n" + _question(txn, 1, len(rows))
@@ -201,8 +203,9 @@ def start_client_review(tenant_id: str) -> Optional[str]:
         return None
     txn = next((t for t in rows if t.get("match_status") == "asked"), rows[0])
     try:
+        from vula.commerce import service
         _client().table("commerce_bank_transactions").update(
-            {"match_status": "asked"}).eq("id", txn["id"]).execute()
+            {"match_status": "asked", "asked_at": service._now()}).eq("id", txn["id"]).execute()
     except Exception:
         pass
     return _client_question(txn, 1, len(rows))
@@ -344,14 +347,27 @@ async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
                      .limit(1).execute().data or [])
     except Exception:
         asked_out = []
-    if asked_out:
-        return await _handle_supplier_pop_answer(tenant_id, text, asked_out[0])
     try:
         asked = (db.table("commerce_bank_transactions").select("*")
                  .eq("tenant_id", tenant_id).eq("direction", "in")
                  .eq("match_status", "asked").limit(1).execute().data or [])
     except Exception:
-        return None
+        asked = []
+    # 2026-09-08: this used to always route to asked_out when it existed, with no regard for
+    # whether a money-in question was ALSO pending — a reply clearly meant for the money-in
+    # question (e.g. an order number) would still be captured by asked_out and misapplied to
+    # the supplier-bill flow. When both are genuinely pending, route to whichever was asked
+    # MOST RECENTLY (asked_at, migration 155 — falls back to created_at for older rows/before
+    # that migration runs) since that's the question actually still on the sender's mind.
+    if asked_out and asked:
+        out_when = asked_out[0].get("asked_at") or asked_out[0].get("created_at") or ""
+        in_when = asked[0].get("asked_at") or asked[0].get("created_at") or ""
+        if in_when > out_when:
+            asked_out = []
+        else:
+            asked = []
+    if asked_out:
+        return await _handle_supplier_pop_answer(tenant_id, text, asked_out[0])
     if not asked:
         return None
     txn = asked[0]
@@ -443,8 +459,9 @@ def _next_client_or_done(tenant_id: str, prefix: str) -> str:
         return prefix + "\n\n🎉 That's everything — all payments allocated."
     txn = rows[0]
     try:
+        from vula.commerce import service
         _client().table("commerce_bank_transactions").update(
-            {"match_status": "asked"}).eq("id", txn["id"]).execute()
+            {"match_status": "asked", "asked_at": service._now()}).eq("id", txn["id"]).execute()
     except Exception:
         pass
     return prefix + "\n\n" + _client_question(txn, 1, len(rows))
