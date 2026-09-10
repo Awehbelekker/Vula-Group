@@ -75,33 +75,28 @@ async def test_db_error_fails_open_but_local_gate_still_applies():
 
 
 @pytest.mark.asyncio
-async def test_burst_window_lets_a_file_through_after_8s():
+async def test_second_doc_in_a_burst_gets_no_ack_but_still_processes(tmp_path):
+    """A batch of files (or a re-sent file) shares ONE "Got it"; every doc still downloads +
+    extracts — only the content fingerprint below decides what's a real duplicate."""
     import time
-    key = (TID, f"burst:payment notification.pdf|application/pdf|{PHONE}")
-    wa._media_claims_local[key] = time.monotonic() - 12   # older than the 8s burst window
-    with patch("vula.commerce.service._client", return_value=_dedup_client()):
-        got = await _claim_media_once(TID, f"burst:payment notification.pdf|application/pdf|{PHONE}",
-                                     "document", PHONE, window_seconds=8)
-    assert got is True
-
-
-@pytest.mark.asyncio
-async def test_retransmit_burst_sends_no_ack_and_does_no_work(tmp_path):
-    """A 2nd copy within the 8s burst window returns before the ack: no "Got it", no download."""
-    import time
-    key = (TID, f"burst:payment notification.pdf|application/pdf|{PHONE}")
-    with patch("vula.commerce.service._client", return_value=_dedup_client()):
-        wa._media_claims_local[key] = time.monotonic()  # first copy just claimed it
-        with (
-            patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
-            patch("vula.api.whatsapp._download_document", new=AsyncMock()) as dl,
-            patch("vula.ingestion.pipeline.VulaIngestionPipeline") as pipe,
-        ):
-            await _handle_document_ingest(PHONE, "media123", "Payment Notification.pdf",
-                                          "application/pdf", route_tenant_id=TID, content_sha=None)
-    reply.assert_not_called()
-    dl.assert_not_called()
-    pipe.assert_not_called()
+    local_file = tmp_path / "Payment Notification.pdf"
+    local_file.write_bytes(b"pdf")
+    wa._media_claims_local[(TID, f"ack:{PHONE}")] = time.monotonic()  # ack already sent this burst
+    client = _dedup_client()
+    (client.table.return_value.select.return_value.eq.return_value.eq.return_value
+     .gte.return_value.limit.return_value.execute.return_value) = MagicMock(data=[])
+    pipe = MagicMock()
+    pipe.ingest_file = AsyncMock(return_value=MagicMock(status="failed", error="reached", filename="x.pdf"))
+    with (
+        patch("vula.commerce.service._client", return_value=client),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+        patch("vula.api.whatsapp._download_document", new=AsyncMock(return_value=local_file)),
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=pipe),
+    ):
+        await _handle_document_ingest(PHONE, "media456", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID, content_sha=None)
+    assert not any("Got it" in c.args[1] for c in reply.call_args_list)  # no 2nd ack
+    pipe.ingest_file.assert_called_once()                                 # but it did process
 
 
 def test_content_fingerprint_same_payment_collapses():

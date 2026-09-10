@@ -1311,32 +1311,28 @@ async def _handle_document_ingest(
 
     kind = "image" if (mime_type or "").startswith("image/") else "document"
 
-    # Duplicate claim BEFORE the ack. Two hard cases, both seen live on DIGG 2026-09-10:
-    #   (a) the SAME payment arrives 8× in 5s, each copy re-encoded by WhatsApp to different
-    #       bytes / sha256 — so a content hash can't dedupe it;
-    #   (b) SEVEN *different* payment notifications, all named "Payment Notification.pdf" by
-    #       FNB, sent in a minute — so filename can't dedupe them either.
-    # Here (pre-ack, no content yet) we only collapse a tight retransmit BURST: same
-    # filename+type+sender within 8 seconds. Anything sent >8s apart still gets its own ack.
-    # The real correctness guarantee is the CONTENT fingerprint check after extraction below
-    # (trace id / amount+payee+ref) — that one can tell (a) from (b).
+    # We CANNOT tell "same file re-sent 7× (WhatsApp re-encodes each copy → different bytes)"
+    # from "7 different payment PDFs, all named 'Payment Notification.pdf', sent as a batch"
+    # before we've read the content — both are a burst, same filename, different bytes, different
+    # media ids. So every document is downloaded + extracted; the CONTENT fingerprint below
+    # (trace id / amount+payee) is what collapses true duplicates before filing + the analysis
+    # reply. Only an EXACT redelivery (identical Meta sha256) is dropped outright here.
     if content_sha and not await _claim_media_once(tenant_id, content_sha, kind, phone,
-                                                   window_seconds=8):
-        return
-    if not await _claim_media_once(tenant_id, f"burst:{(filename or '').lower()}|{mime_type}|{phone}",
-                                   kind, phone, window_seconds=8):
+                                                   window_seconds=600):
         return
 
-    # Send from the TENANT's number (omitting tenant_id falls back to the global line,
-    # which 400s for senders not on its allow-list). Tell them what actually happens next.
-    if kind == "image":
-        ack = ("📸 Got it — reading that now. If it's a receipt or invoice I'll book it "
-               "straight into your books; anything else gets filed. Give me a minute…")
-    else:
-        ack = (f"📄 Got it — processing '{filename or 'your document'}'. Bank statements get "
-               "reconciled, invoices go to your books, and everything is filed so you can ask "
-               "me about it. This takes 1-3 minutes.")
-    await _send_reply(phone, ack, tenant_id)
+    # Tell them what happens next — but ONCE per burst (per phone, 8s), so a batch of 7 docs
+    # or a client re-sending one file 7× both get a single "Got it", then a result per
+    # distinct document.
+    if _local_media_claim(tenant_id, f"ack:{phone}", 8.0):
+        if kind == "image":
+            ack = ("📸 Got it — reading that now. If it's a receipt or invoice I'll book it "
+                   "straight into your books; anything else gets filed. Give me a minute…")
+        else:
+            ack = ("📄 Got it — working through your document(s) now. Bank statements get "
+                   "reconciled, invoices go to your books, and everything is filed so you can "
+                   "ask me about it. This takes 1-3 minutes.")
+        await _send_reply(phone, ack, tenant_id)
 
     try:
         # Download from Meta
@@ -1509,16 +1505,16 @@ async def _handle_document_ingest(
             summary = analysis.get("summary", "")
             fields = analysis.get("fields", {})
 
-            # CONTENT-level dedup — the real guarantee. Same payment sent twice (even re-encoded
-            # to different bytes) has the same trace id / amount+payee+ref; two different
-            # payments that happen to share the filename "Payment Notification.pdf" do not.
-            # Only skips filing + the analysis reply; the ack already went out.
+            # CONTENT-level dedup — the real guarantee. Same payment sent N times (even
+            # re-encoded to different bytes, even re-OCR'd with different wording) has the same
+            # trace id / amount+payee; two different payments that share the filename
+            # "Payment Notification.pdf" do not. The losers return SILENTLY — one shared "Got
+            # it" already went out for the burst, and a wall of "already have this" for a
+            # re-sent file is worse than saying nothing.
             fp = _content_fingerprint(doc_category, fields)
             if fp and not await _claim_media_once(tenant_id, f"content:{fp}", kind, phone,
                                                   window_seconds=900):
-                logger.info("duplicate document content for %s — skipped filing (%s)", tenant_id, fp[:16])
-                await _send_reply(phone, "♻️ Already have this one — I processed the same "
-                                         "document a few minutes ago.", tenant_id)
+                logger.info("duplicate document content for %s — skipped (%s)", tenant_id, fp[:16])
                 return
 
             # A PHOTO of a business card = the OCR-text pass above reliably reads the email
@@ -2927,7 +2923,11 @@ async def _download_document(media_id: str, tenant_id: str, filename: str, mime_
             )
             dl.raise_for_status()
 
-        dest_dir = settings.upload_dir / tenant_id
+        # Per-media subdirectory — a burst of files that share a name (FNB names every payment
+        # notification "Payment Notification.pdf") now downloads + processes in PARALLEL
+        # background tasks, so a single shared path would have them overwrite each other's
+        # bytes mid-read. The subdir keeps each copy isolated; the filename stays clean for display.
+        dest_dir = settings.upload_dir / tenant_id / ("m_" + "".join(c for c in media_id if c.isalnum())[-20:])
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / safe_name
         dest.write_bytes(dl.content)
