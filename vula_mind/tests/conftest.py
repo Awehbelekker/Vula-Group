@@ -59,7 +59,12 @@ def _no_real_whatsapp_creds_by_default(monkeypatch):
     monkeypatch.setattr(wa_mod, "_get_tenant_wa_creds", AsyncMock(return_value=None))
     monkeypatch.setattr(wa_mod.settings, "whatsapp_token", "")
     monkeypatch.setattr(wa_mod.settings, "whatsapp_phone_id", "")
+    # The inbound-file dedup cache (2026-09-10) is a module-level dict — a real process cache,
+    # but between tests it would let one test's filename claim suppress the next test's identical
+    # upload. Clear it per test.
+    wa_mod._media_claims_local.clear()
     yield
+    wa_mod._media_claims_local.clear()
 
 
 @pytest.fixture
