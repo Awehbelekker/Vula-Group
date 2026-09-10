@@ -1374,6 +1374,15 @@ async def _handle_document_ingest(
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
         result = await pipeline.ingest_file(local_path)
 
+        # Extract the document text ONCE and reuse it for every downstream check (bank-statement
+        # sniff, stock-sheet, deep analysis). With PyMuPDF this is ~15ms, but it used to be run
+        # 3-4 separate times per document.
+        try:
+            _pages = await pipeline.parser.parse(local_path)
+            doc_text = "\n".join(t for _, t in (_pages or [])).strip()
+        except Exception:
+            doc_text = ""
+
         if result.status not in ("success", "done"):
             await _send_reply(
                 phone,
@@ -1386,12 +1395,16 @@ async def _handle_document_ingest(
         # Bank statement PDF? → run bank reconciliation, NOT the invoice scanner (a statement
         # has "Tax Invoice" printed on it and would book junk into the books).
         if local_path.suffix.lower() == ".pdf":
-            try:
-                from vula.commerce import bank_rec
-                head = bank_rec.extract_pdf_text(
-                    local_path, bank_rec.get_statement_password(tenant_id))[:4000].lower()
-            except Exception:
-                head = ""
+            from vula.commerce import bank_rec
+            head = doc_text[:4000].lower()
+            if not head:
+                # Encrypted / image-only statement — the reusable text is empty, so fall back
+                # to bank_rec's own extractor (it handles the statement password).
+                try:
+                    head = bank_rec.extract_pdf_text(
+                        local_path, bank_rec.get_statement_password(tenant_id))[:4000].lower()
+                except Exception:
+                    head = ""
             if "statement" in head and any(k in head for k in
                                            ("opening balance", "closing balance", "transaction history")):
                 rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
@@ -1427,8 +1440,8 @@ async def _handle_document_ingest(
         if local_path.suffix.lower() in (".pdf", ".xlsx", ".xls", ".csv"):
             try:
                 from vula.commerce import stock_sheet
-                pages = await pipeline.parser.parse(local_path)
-                sheet_text = "\n".join(t for _, t in (pages or []))
+                sheet_text = doc_text or "\n".join(
+                    t for _, t in (await pipeline.parser.parse(local_path) or []))
                 stored = stock_sheet.persist_if_stock_sheet(
                     tenant_id, result.doc_id, result.filename, sheet_text)
             except Exception as exc:
@@ -1499,7 +1512,9 @@ async def _handle_document_ingest(
                 logger.debug("Auto-scan skipped for %s: %s", filename, scan_exc)
 
         # Deep analysis: classify by CONTENT + pull structured fields → backend.
-        analysis = await _analyze_document(tenant_id, result.filename, local_path)
+        # Reuse the text parsed once above — no 3rd trip through the parser.
+        analysis = await _analyze_document(tenant_id, result.filename, local_path,
+                                           text=doc_text or None)
         if analysis:
             doc_category = analysis["category"]
             summary = analysis.get("summary", "")
@@ -2498,12 +2513,16 @@ def _content_fingerprint(category: str, fields: dict) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-async def _analyze_document(tenant_id: str, filename: str, local_path) -> Optional[dict]:
+async def _analyze_document(tenant_id: str, filename: str, local_path,
+                            text: Optional[str] = None) -> Optional[dict]:
     """Deep-analyze an uploaded document: read its content, classify it, and
     pull out the structured fields worth keeping in the backend.
 
     Returns {"category", "summary", "fields"} or None if analysis fails.
     Best-effort — the document is already in the KB regardless.
+
+    `text`: the caller's already-extracted document text. _handle_document_ingest parses
+    every file once and threads it through here so the parser doesn't run a 3rd/4th time.
     """
     try:
         from vula.integrations.metering import set_request_tenant
@@ -2511,17 +2530,36 @@ async def _analyze_document(tenant_id: str, filename: str, local_path) -> Option
     except Exception:
         pass
 
-    # 1. Extract text using the same parser the ingestion pipeline uses
-    try:
-        from vula.ingestion.pipeline import VulaIngestionPipeline
-        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
-        pages = await pipeline.parser.parse(local_path)
-        text = "\n".join(t for _, t in pages).strip()[:6000]
-    except Exception as exc:
-        logger.debug("Doc analyze: parse failed for %s: %s", filename, exc)
-        return None
+    # 1. Extract text using the same parser the ingestion pipeline uses — unless the caller
+    # already did (the common path from _handle_document_ingest).
+    if not text:
+        try:
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+            pages = await pipeline.parser.parse(local_path)
+            text = "\n".join(t for _, t in pages).strip()
+        except Exception as exc:
+            logger.debug("Doc analyze: parse failed for %s: %s", filename, exc)
+            return None
     if not text:
         return None
+
+    # 1a. Machine-generated bank payment notification (FNB "NOTIFICATION OF PAYMENT" etc.)?
+    # A positional parse of the exact text gives every field verbatim with confidence 1.0 —
+    # no LLM anywhere near the amount. Anything unrecognised returns None and falls straight
+    # through to the LLM path below, unchanged. (vula/ingestion/payment_notice.py, PR #9.)
+    try:
+        from vula.ingestion import payment_notice
+        exact = payment_notice.parse(text)
+        if exact:
+            logger.info("Doc analyze: %s parsed deterministically as %s (%s) — no LLM",
+                        filename, exact.get("category"), exact.get("issuer"))
+            return {"category": exact["category"], "summary": exact.get("summary", ""),
+                    "fields": exact.get("fields", {})}
+    except Exception as exc:
+        logger.debug("Doc analyze: deterministic parse skipped for %s: %s", filename, exc)
+
+    text = text[:6000]
 
     # 2. One LLM call → category + summary + structured fields
     try:
