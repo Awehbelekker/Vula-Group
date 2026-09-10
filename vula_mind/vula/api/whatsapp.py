@@ -363,7 +363,8 @@ async def receive_message(
                         mime_type = doc.get("mime_type", "")
                         if phone and media_id:
                             await _handle_document_ingest(
-                                phone, media_id, filename, mime_type, route_tenant_id=route_tenant
+                                phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
+                                content_sha=doc.get("sha256") or None,
                             )
 
                     elif msg_type in ("image", "video"):
@@ -433,7 +434,8 @@ async def receive_message(
                                     # Tenant line (or an expense photo) → ingest + auto-log expenses.
                                     fname = caption or f"image-{msg_id}.jpg"
                                     await _handle_document_ingest(
-                                        phone, media_id, fname, mime_type, route_tenant_id=route_tenant
+                                        phone, media_id, fname, mime_type, route_tenant_id=route_tenant,
+                                        content_sha=media.get("sha256") or None,
                                     )
                                 else:
                                     await _send_reply(phone, (
@@ -1166,9 +1168,53 @@ async def _maybe_learn_from_exchange(tenant_id: str, question: str, answer: str)
         logger.debug("Auto-learn skipped for %s: %s", tenant_id, exc)
 
 
+_MEDIA_RECLAIM_MINUTES = 10
+
+
+async def _claim_media_once(tenant_id: str, content_sha: str, kind: str, phone: str = "") -> bool:
+    """Atomic "has this exact file already been processed for this tenant recently?" claim
+    (vula_media_dedup, migration 157). Returns True if THIS caller should process the file,
+    False if it's a duplicate delivery / re-send within the reclaim window.
+
+    2026-09-10 (DIGG): one "Payment Notification.pdf" produced 8 "Got it" acks and 8 full
+    analyses — the old redelivery guard was a plain READ, so every near-simultaneous handler
+    passed it before any of them had filed anything. A primary-key claim is the fix: only one
+    insert wins. Fails OPEN (returns True) on any DB error so a file is never silently dropped."""
+    if not (tenant_id and content_sha):
+        return True
+    try:
+        from datetime import datetime, timedelta, timezone
+        from vula.commerce import service as _svc
+        db = _svc._client()
+        try:
+            db.table("vula_media_dedup").insert({
+                "tenant_id": tenant_id, "content_sha": content_sha,
+                "kind": kind, "claimed_by": phone or None,
+            }).execute()
+            return True  # we won the claim
+        except Exception as exc:
+            if "23505" not in str(exc) and "duplicate" not in str(exc).lower():
+                raise
+        rows = (db.table("vula_media_dedup").select("created_at")
+                .eq("tenant_id", tenant_id).eq("content_sha", content_sha).limit(1).execute().data or [])
+        if rows:
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=_MEDIA_RECLAIM_MINUTES)).isoformat()
+            if str(rows[0].get("created_at") or "") > cutoff:
+                logger.info("duplicate inbound %s for %s — skipped (already claimed)", kind, tenant_id)
+                return False
+        # Stale claim → a genuine re-send of an old file. Refresh it and reprocess.
+        db.table("vula_media_dedup").update({
+            "created_at": datetime.now(timezone.utc).isoformat(), "claimed_by": phone or None,
+        }).eq("tenant_id", tenant_id).eq("content_sha", content_sha).execute()
+        return True
+    except Exception as exc:
+        logger.debug("media dedup claim failed open (run migration 157?): %s", exc)
+        return True
+
+
 async def _handle_document_ingest(
     phone: str, media_id: str, filename: str, mime_type: str,
-    route_tenant_id: Optional[str] = None,
+    route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
 ) -> None:
     """Ingest a document/image sent by a tenant into their knowledge base.
 
@@ -1227,9 +1273,17 @@ async def _handle_document_ingest(
         )
         return
 
+    kind = "image" if (mime_type or "").startswith("image/") else "document"
+
+    # Atomic duplicate claim BEFORE the ack, using Meta's own sha256 when the webhook carried
+    # one — so N deliveries / re-sends of the same file produce exactly ONE ack and ONE run.
+    # The losers return silently: the winner acks, processes, and replies once.
+    if content_sha and not await _claim_media_once(tenant_id, content_sha, kind, phone):
+        return
+
     # Send from the TENANT's number (omitting tenant_id falls back to the global line,
     # which 400s for senders not on its allow-list). Tell them what actually happens next.
-    if (mime_type or "").startswith("image/"):
+    if kind == "image":
         ack = ("📸 Got it — reading that now. If it's a receipt or invoice I'll book it "
                "straight into your books; anything else gets filed. Give me a minute…")
     else:
@@ -1245,13 +1299,20 @@ async def _handle_document_ingest(
             await _send_reply(phone, f"Sorry, I couldn't download '{filename}'. Please try again.", tenant_id)
             return
 
-        # Redelivery guard (2026-08-27) — confirmed live: WhatsApp/Meta can redeliver the same
-        # document, and since Vula's own auto-generated filename bakes in a processing-time
-        # timestamp, each redelivery looked like a "new" file to every downstream check, running
-        # the full (expensive) vision-scan + KB-ingestion + a confusing burst of near-identical
-        # replies 3-4 times for one real document. Content hash is the only reliable "is this the
-        # same file" signal; check it BEFORE any real work starts, not just at the filing step
-        # (migration 143 closes that later, narrower gap too, but this stops the wasted work).
+        # No Meta sha256 on the webhook → hash the bytes now and claim before any real work.
+        # (Still after the ack in this path, but it stops the expensive scan/ingest/reply
+        # fan-out, which is the costly and confusing part.)
+        if not content_sha:
+            import hashlib as _hashlib_dedup
+            try:
+                byte_sha = _hashlib_dedup.sha256(local_path.read_bytes()).hexdigest()
+                if not await _claim_media_once(tenant_id, byte_sha, kind, phone):
+                    return
+            except Exception as exc:
+                logger.debug("post-download dedup claim skipped for %s: %s", filename, exc)
+
+        # Secondary net: the filed-document content_hash guard (2026-08-27, migration 143) —
+        # catches a redelivery that slips the claim above (e.g. migration 157 not yet applied).
         try:
             import hashlib as _hashlib_dedup
             from datetime import datetime as _dt, timedelta as _td, timezone as _tz
@@ -1262,7 +1323,6 @@ async def _handle_document_ingest(
                           .eq("tenant_id", tenant_id).eq("content_hash", content_hash)
                           .gte("created_at", cutoff).limit(1).execute().data or [])
             if recent_dup:
-                await _send_reply(phone, "♻️ Already processed this one a moment ago — skipped the duplicate.", tenant_id)
                 return
         except Exception as exc:
             logger.debug("document redelivery guard skipped for %s: %s", filename, exc)

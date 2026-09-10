@@ -18,6 +18,7 @@ logger = logging.getLogger("vula.startup")
 # (migration, table, column-or-None). column=None just checks the table exists. Names verified
 # against migrations/*.sql — keep them accurate or this emits false alarms.
 _SENTINELS: list[tuple[str, str, str | None]] = [
+    ("071", "vula_wa_msg_dedup", None),
     ("112", "vula_team_members", "last_notified_at"),
     ("119", "vula_tenant_config", "persona_prompt_suggested"),
     ("121", "journal_entries", None),
@@ -33,6 +34,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("154", "commerce_merchant_profiles", None),
     ("155", "commerce_bank_transactions", "asked_at"),
     ("156", "vula_stock_sheets", None),
+    ("157", "vula_media_dedup", None),
 ]
 
 
