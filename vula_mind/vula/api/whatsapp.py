@@ -1311,21 +1311,20 @@ async def _handle_document_ingest(
 
     kind = "image" if (mime_type or "").startswith("image/") else "document"
 
-    # Duplicate claim BEFORE the ack — so N deliveries of the same file produce exactly ONE ack
-    # and ONE run; the losers return silently.
-    #
-    # 2026-09-10, measured on DIGG: the SAME "Payment Notification.pdf" arrived 8 times in 5
-    # seconds and every copy had a DIFFERENT byte size (99502 … 102914) and therefore a
-    # different sha256 — WhatsApp/Meta re-encodes the PDF on each (re)send. So a CONTENT hash,
-    # Meta's or ours, can never dedupe this. The only signal stable across the burst is
-    # filename + type + sender, and a 45-second window: a 5-second burst is one file; a
-    # bookkeeper's three genuinely different "Payment Notification.pdf"s are >45s apart and
-    # each still processes. content_sha, when present, adds a wider-window guard for the case
-    # where the same file really is re-sent minutes later with stable bytes.
-    if not await _claim_media_once(tenant_id, f"name:{(filename or '').lower()}|{mime_type}|{phone}",
-                                   kind, phone, window_seconds=45):
+    # Duplicate claim BEFORE the ack. Two hard cases, both seen live on DIGG 2026-09-10:
+    #   (a) the SAME payment arrives 8× in 5s, each copy re-encoded by WhatsApp to different
+    #       bytes / sha256 — so a content hash can't dedupe it;
+    #   (b) SEVEN *different* payment notifications, all named "Payment Notification.pdf" by
+    #       FNB, sent in a minute — so filename can't dedupe them either.
+    # Here (pre-ack, no content yet) we only collapse a tight retransmit BURST: same
+    # filename+type+sender within 8 seconds. Anything sent >8s apart still gets its own ack.
+    # The real correctness guarantee is the CONTENT fingerprint check after extraction below
+    # (trace id / amount+payee+ref) — that one can tell (a) from (b).
+    if content_sha and not await _claim_media_once(tenant_id, content_sha, kind, phone,
+                                                   window_seconds=8):
         return
-    if content_sha and not await _claim_media_once(tenant_id, content_sha, kind, phone):
+    if not await _claim_media_once(tenant_id, f"burst:{(filename or '').lower()}|{mime_type}|{phone}",
+                                   kind, phone, window_seconds=8):
         return
 
     # Send from the TENANT's number (omitting tenant_id falls back to the global line,
@@ -1509,6 +1508,18 @@ async def _handle_document_ingest(
             doc_category = analysis["category"]
             summary = analysis.get("summary", "")
             fields = analysis.get("fields", {})
+
+            # CONTENT-level dedup — the real guarantee. Same payment sent twice (even re-encoded
+            # to different bytes) has the same trace id / amount+payee+ref; two different
+            # payments that happen to share the filename "Payment Notification.pdf" do not.
+            # Only skips filing + the analysis reply; the ack already went out.
+            fp = _content_fingerprint(doc_category, fields)
+            if fp and not await _claim_media_once(tenant_id, f"content:{fp}", kind, phone,
+                                                  window_seconds=900):
+                logger.info("duplicate document content for %s — skipped filing (%s)", tenant_id, fp[:16])
+                await _send_reply(phone, "♻️ Already have this one — I processed the same "
+                                         "document a few minutes ago.", tenant_id)
+                return
 
             # A PHOTO of a business card = the OCR-text pass above reliably reads the email
             # (a distinct @-pattern OCRs cleanly) but consistently misses the phone number
@@ -2441,6 +2452,54 @@ def _sanitize_json_string(raw: str) -> str:
                 in_string = True
             out.append(ch)
     return "".join(out)
+
+
+# High-signal identifying keys — a transaction/reference number pins a document uniquely.
+# Checked in order; the first group that yields any value wins.
+_FINGERPRINT_KEYS = (
+    ("trace_id", "transaction_id", "txn_id", "payment_id"),
+    ("reference", "reference_number", "payment_reference", "invoice_number", "receipt_number"),
+    ("amount", "amount_cents", "total", "total_cents"),
+    ("payee_name", "payee", "beneficiary", "supplier", "customer_name", "vendor"),
+    ("date", "payment_date", "invoice_date", "transaction_date"),
+)
+
+
+def _content_fingerprint(category: str, fields: dict) -> str:
+    """A stable digest of what a document IS, from its extracted fields — so the same payment
+    re-sent (even re-encoded to different bytes, even re-OCR'd with slightly different wording)
+    collapses, while two different payments that share a filename do not. Returns "" when the
+    extraction is too thin to fingerprint safely (better to process a possible duplicate than
+    to suppress a real document on no signal)."""
+    import hashlib
+    import re as _re
+
+    def _txt(v) -> str:
+        return _re.sub(r"[^a-z0-9]", "", str(v).lower())
+
+    def _num(v) -> str:
+        return _re.sub(r"\D", "", str(v)).lstrip("0") or "0"
+
+    # A transaction / reference id is globally unique — if we have one, it alone identifies the
+    # document. amount and payee are just re-normalised (currency symbols, cents, spacing vary).
+    id_groups = _FINGERPRINT_KEYS[:2]      # trace id, then reference
+    for group in id_groups:
+        for k in group:
+            if fields.get(k):
+                return hashlib.sha256(f"{(category or '').lower()}|id:{_txt(fields[k])}".encode()).hexdigest()
+
+    parts: list[str] = []
+    for group in _FINGERPRINT_KEYS[2:]:   # amount, payee, date
+        for k in group:
+            if fields.get(k) not in (None, "", [], {}):
+                val = _num(fields[k]) if ("amount" in k or "total" in k) else _txt(fields[k])
+                if val:
+                    parts.append(val)
+                break
+    if len(parts) < 2:
+        return ""  # not enough distinct identifying signal
+    raw = (category or "").lower() + "|" + "|".join(parts)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 async def _analyze_document(tenant_id: str, filename: str, local_path) -> Optional[dict]:
