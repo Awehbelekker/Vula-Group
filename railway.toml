@@ -1,7 +1,12 @@
+# Railway reads this file at the repo root. It builds the root Dockerfile with the repo root
+# as the build context (that Dockerfile uses vula_mind/-prefixed paths). Do NOT point
+# dockerfilePath back at vula_mind/Dockerfile unless the service's Root Directory is set to
+# vula_mind in the dashboard — otherwise the build context stays at the repo root and
+# `COPY requirements.txt` fails. `buildContext` is not a supported Railway key.
+
 [build]
 builder = "dockerfile"
-dockerfilePath = "vula_mind/Dockerfile"
-buildContext = "vula_mind"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/status"
