@@ -1311,23 +1311,22 @@ async def _handle_document_ingest(
 
     kind = "image" if (mime_type or "").startswith("image/") else "document"
 
-    # Duplicate claim BEFORE the ack — so N deliveries / re-sends of the same file produce
-    # exactly ONE ack and ONE run; the losers return silently. Prefer Meta's own sha256 when
-    # the webhook carried one; otherwise fall back to a coarser filename+type key (a burst of
-    # 7 messages all named "Payment Notification.pdf" from one phone in 5s is unmistakably one
-    # file). The byte-hash claim after download below is the exact backstop.
-    if content_sha:
-        # Meta's real content hash — safe to dedupe over the full window.
-        if not await _claim_media_once(tenant_id, content_sha, kind, phone):
-            return
-    else:
-        # No hash on the webhook — dedupe on filename+type over a SHORT window only. A 5-second
-        # burst of identical messages is one file; a bookkeeper sending three different
-        # "Payment Notification.pdf"s is >45s apart, so those still each process. The
-        # byte-hash claim after download is the exact backstop.
-        if not await _claim_media_once(tenant_id, f"meta:{filename}|{mime_type}|{phone}",
-                                       kind, phone, window_seconds=45):
-            return
+    # Duplicate claim BEFORE the ack — so N deliveries of the same file produce exactly ONE ack
+    # and ONE run; the losers return silently.
+    #
+    # 2026-09-10, measured on DIGG: the SAME "Payment Notification.pdf" arrived 8 times in 5
+    # seconds and every copy had a DIFFERENT byte size (99502 … 102914) and therefore a
+    # different sha256 — WhatsApp/Meta re-encodes the PDF on each (re)send. So a CONTENT hash,
+    # Meta's or ours, can never dedupe this. The only signal stable across the burst is
+    # filename + type + sender, and a 45-second window: a 5-second burst is one file; a
+    # bookkeeper's three genuinely different "Payment Notification.pdf"s are >45s apart and
+    # each still processes. content_sha, when present, adds a wider-window guard for the case
+    # where the same file really is re-sent minutes later with stable bytes.
+    if not await _claim_media_once(tenant_id, f"name:{(filename or '').lower()}|{mime_type}|{phone}",
+                                   kind, phone, window_seconds=45):
+        return
+    if content_sha and not await _claim_media_once(tenant_id, content_sha, kind, phone):
+        return
 
     # Send from the TENANT's number (omitting tenant_id falls back to the global line,
     # which 400s for senders not on its allow-list). Tell them what actually happens next.

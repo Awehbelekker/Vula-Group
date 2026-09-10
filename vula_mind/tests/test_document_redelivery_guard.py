@@ -86,17 +86,21 @@ async def test_short_window_lets_a_different_file_with_the_same_name_through():
 
 
 @pytest.mark.asyncio
-async def test_duplicate_delivery_sends_no_ack_and_does_no_work(tmp_path):
-    """The losing handler must return before the ack — no "Got it", no download, no ingest."""
+async def test_burst_duplicate_sends_no_ack_and_does_no_work(tmp_path):
+    """A 2nd copy of the same file (same name+type+sender, different bytes/sha — Meta re-encodes
+    on each resend) must return before the ack: no "Got it", no download, no ingest."""
+    import time
+    fname_key = ("digg-demo", f"name:payment notification.pdf|application/pdf|{PHONE}")
     with patch("vula.commerce.service._client", return_value=_dedup_client()):
-        wa._media_claims_local[(TID, "sha-dup")] = __import__("time").monotonic()  # already claimed
+        wa._media_claims_local[fname_key] = time.monotonic()  # first copy already claimed it
         with (
             patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
             patch("vula.api.whatsapp._download_document", new=AsyncMock()) as dl,
             patch("vula.ingestion.pipeline.VulaIngestionPipeline") as pipe,
         ):
+            # note: a DIFFERENT sha from the first copy — content hash can't save us here
             await _handle_document_ingest(PHONE, "media123", "Payment Notification.pdf",
-                                          "application/pdf", route_tenant_id=TID, content_sha="sha-dup")
+                                          "application/pdf", route_tenant_id=TID, content_sha="sha-copy-2")
     reply.assert_not_called()
     dl.assert_not_called()
     pipe.assert_not_called()
