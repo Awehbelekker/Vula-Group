@@ -105,8 +105,23 @@ async def dispatch_order(tenant_id: str, order_id: str, summary: str, customer_n
     # sends, so it must not depend on a channel that is unavailable two-thirds of the time:
     # if WhatsApp did not deliver, fall through to email even when email was not the chosen
     # channel.
+    # Email target: the configured fulfilment address, or — when WhatsApp didn't deliver and
+    # nothing else is configured — the tenant owner's own email as a last resort. An order
+    # ticket is the most time-critical message the platform sends; it must not be lost just
+    # because a tenant never filled in the fulfilment-email field.
+    email_to = cfg.get("fulfillment_email")
+    if not email_to and not wa_ok:
+        try:
+            from vula.commerce import service as _svc
+            rows = (_svc._client().table("vula_team_members").select("email,role")
+                    .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+            by_role = {r.get("role"): r.get("email") for r in rows if r.get("email")}
+            email_to = by_role.get("owner") or by_role.get("manager") or next(iter(by_role.values()), None)
+        except Exception as exc:
+            logger.debug("owner-email lookup for order fallback failed: %s", exc)
+
     email_ok = False
-    if cfg.get("fulfillment_email") and (ch in ("email", "both") or not wa_ok):
+    if email_to and (ch in ("email", "both") or not wa_ok):
         try:
             from vula.api.email import _send
             safe = summary.replace("<", "&lt;")
@@ -114,7 +129,7 @@ async def dispatch_order(tenant_id: str, order_id: str, summary: str, customer_n
             subject = f"New order to fulfil{(' — ' + customer_name) if customer_name else ''}"
             if not wa_ok and ch == "whatsapp":
                 subject = "⚠️ " + subject + " (WhatsApp didn't reach you)"
-            await _send(cfg["fulfillment_email"], subject, html, summary)
+            await _send(email_to, subject, html, summary)
             email_ok = True
         except Exception as exc:
             logger.warning("order email dispatch failed: %s", exc)

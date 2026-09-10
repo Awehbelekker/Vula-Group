@@ -152,14 +152,42 @@ async def test_a_delivered_whatsapp_ticket_does_not_also_email():
 
 
 @pytest.mark.asyncio
-async def test_no_channel_at_all_is_logged_loudly(caplog):
-    """off-the-hook's real configuration: WhatsApp-only, fulfillment_email None. When the send
-    fails the ticket has nowhere to go, and that must be visible rather than silent."""
+async def test_failed_whatsapp_falls_back_to_the_owner_email_when_no_fulfilment_email(caplog):
+    """WhatsApp-only config, fulfillment_email None — the ticket must still reach the owner's
+    own email (vula_team_members) rather than being lost."""
     from vula.commerce import order_workflow as ow
     cfg = {"dispatch_channel": "whatsapp", "fulfillment_whatsapp": "27821112222",
            "fulfillment_email": None}
+
+    class _Tbl:
+        def select(self, *a): return self
+        def eq(self, *a): return self
+        def execute(self): return type("R", (), {"data": [{"email": "owner@oth.co.za", "role": "owner"}]})()
+
     with patch.object(ow, "get_order_settings", lambda t: cfg), \
          patch("vula.api.whatsapp._send_reply", AsyncMock(return_value=False)), \
+         patch("vula.commerce.service._client", lambda: type("C", (), {"table": lambda s, n: _Tbl()})()), \
+         patch("vula.api.email._send", AsyncMock(return_value=None)) as email:
+        await ow.dispatch_order("off-the-hook", "OTH-00099", "2 x Hake")
+    email.assert_awaited_once()
+    assert email.await_args[0][0] == "owner@oth.co.za"
+
+
+@pytest.mark.asyncio
+async def test_no_channel_and_no_email_is_logged_loudly(caplog):
+    """Truly nowhere to go — no fulfilment email, no team-member email — must be loud, not silent."""
+    from vula.commerce import order_workflow as ow
+    cfg = {"dispatch_channel": "whatsapp", "fulfillment_whatsapp": "27821112222",
+           "fulfillment_email": None}
+
+    class _Tbl:
+        def select(self, *a): return self
+        def eq(self, *a): return self
+        def execute(self): return type("R", (), {"data": []})()
+
+    with patch.object(ow, "get_order_settings", lambda t: cfg), \
+         patch("vula.api.whatsapp._send_reply", AsyncMock(return_value=False)), \
+         patch("vula.commerce.service._client", lambda: type("C", (), {"table": lambda s, n: _Tbl()})()), \
          caplog.at_level("ERROR"):
         await ow.dispatch_order("off-the-hook", "OTH-00099", "2 x Hake")
     assert "ORDER TICKET UNDELIVERED" in caplog.text
