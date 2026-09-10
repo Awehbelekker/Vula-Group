@@ -348,6 +348,7 @@ function HealthPanel({ onError, onViewDetail }) {
   if (!h) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const router = h.llm_router_24h || {}
   const localPct = router.total ? Math.round((router.local / router.total) * 100) : null
+  const routing = h.skill_routing_24h || {}
   const vrl = h.vrl_health || {}
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -395,6 +396,17 @@ function HealthPanel({ onError, onViewDetail }) {
             {router.total || 0} requests · {localPct != null ? `${localPct}% local` : '—'} · {router.cloud || 0} cloud
             {Object.entries(router.escalation_reasons || {}).map(([r, n]) => (
               <div key={r} style={{ color: C.muted }}>↳ escalated {n}× — {r}</div>
+            ))}
+          </div>
+        </div>
+        <div style={{ ...card, flex: 1, minWidth: 220 }}>
+          <h4 style={h4}>🧭 Skill routing (24h)</h4>
+          <div style={{ fontSize: 12.5 }}>
+            {routing.total || 0} routed
+            {routing.total ? <> · <b style={{ color: (routing.fallthrough_to_reasoning_pct || 0) > 15 ? C.amber : C.green }}>
+              {routing.fallthrough_to_reasoning_pct}% fell through to reasoning</b></> : ' · —'}
+            {Object.entries(routing.by_match || {}).map(([r, n]) => (
+              <div key={r} style={{ color: C.muted }}>↳ {r}: {n}</div>
             ))}
           </div>
         </div>
