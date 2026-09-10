@@ -53,6 +53,18 @@ jobs:
       - name: Check RLS coverage
         run: python tools/check_migrations_rls.py
 
+  # ── Docker image — the actual Railway build ───────────────────────────────────
+  # Every deploy 2026-09-02 → 2026-09-10 failed silently at build (`COPY
+  # requirements.txt` — wrong context) while GitHub CI stayed green, so prod ran
+  # week-old code. This builds the exact image Railway builds, from the repo root.
+  docker:
+    name: Docker build (Railway image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the production image
+        run: docker build -f Dockerfile -t vula-mind:ci .
+
   # ── React dashboard — build must pass ─────────────────────────────────────────
   dashboard:
     name: Dashboard (React)
