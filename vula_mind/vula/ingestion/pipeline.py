@@ -237,9 +237,21 @@ class OCRProcessor:
         }
 
         local_text = ""
+        # Skip the local model entirely when the shared health probe already knows the tunnel
+        # is unreachable (its result is cached ~30s, so this is nearly free and shared across
+        # every pipeline stage / document). 2026-09-10: with the SA GPU box 503-ing, every
+        # OCR call was still trying local first, failing, and escalating — one payment PDF hit
+        # that path ~6 times across its ingest/bank-check/scanner stages.
+        try:
+            from core.llm_router import ollama_available as _oa
+            _local_up = await _oa()
+        except Exception:
+            _local_up = True
         if self._local_ocr_disabled():
             logger.info("local OCR skipped — %d consecutive failures this run",
                         self._local_ocr_failures)
+        elif not _local_up:
+            logger.info("local OCR skipped — Ollama tunnel unreachable (health probe)")
         else:
             try:
                 # The Ollama tunnel is behind Cloudflare Access — send the service-token headers

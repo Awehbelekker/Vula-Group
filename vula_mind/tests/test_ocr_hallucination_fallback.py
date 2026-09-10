@@ -20,6 +20,16 @@ _REAL = ("NOTIFICATION OF PAYMENT\n\nFirst National Bank hereby confirms that th
          "payment instruction has been received: ZAR 18198.00 to Solucent (Pty) Ltd.")
 
 
+@pytest.fixture(autouse=True)
+def _local_ocr_reachable():
+    """These tests exercise what happens AFTER the local OCR call — success, hallucination,
+    error, 503. pipeline.process_image now skips local entirely when the shared health probe
+    says the tunnel is down; default it to "reachable" so each test's own mock of the local
+    call is what's exercised."""
+    with patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)):
+        yield
+
+
 @pytest.fixture
 def ocr():
     return OCRProcessor()
