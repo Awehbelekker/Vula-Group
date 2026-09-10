@@ -75,35 +75,59 @@ async def test_db_error_fails_open_but_local_gate_still_applies():
 
 
 @pytest.mark.asyncio
-async def test_short_window_lets_a_different_file_with_the_same_name_through():
-    # filename-key claims use a 45s window; simulate the first being older than that
+async def test_burst_window_lets_a_file_through_after_8s():
     import time
-    wa._media_claims_local[(TID, "meta:Payment Notification.pdf|application/pdf|" + PHONE)] = time.monotonic() - 60
+    key = (TID, f"burst:payment notification.pdf|application/pdf|{PHONE}")
+    wa._media_claims_local[key] = time.monotonic() - 12   # older than the 8s burst window
     with patch("vula.commerce.service._client", return_value=_dedup_client()):
-        got = await _claim_media_once(TID, "meta:Payment Notification.pdf|application/pdf|" + PHONE,
-                                     "document", PHONE, window_seconds=45)
+        got = await _claim_media_once(TID, f"burst:payment notification.pdf|application/pdf|{PHONE}",
+                                     "document", PHONE, window_seconds=8)
     assert got is True
 
 
 @pytest.mark.asyncio
-async def test_burst_duplicate_sends_no_ack_and_does_no_work(tmp_path):
-    """A 2nd copy of the same file (same name+type+sender, different bytes/sha — Meta re-encodes
-    on each resend) must return before the ack: no "Got it", no download, no ingest."""
+async def test_retransmit_burst_sends_no_ack_and_does_no_work(tmp_path):
+    """A 2nd copy within the 8s burst window returns before the ack: no "Got it", no download."""
     import time
-    fname_key = ("digg-demo", f"name:payment notification.pdf|application/pdf|{PHONE}")
+    key = (TID, f"burst:payment notification.pdf|application/pdf|{PHONE}")
     with patch("vula.commerce.service._client", return_value=_dedup_client()):
-        wa._media_claims_local[fname_key] = time.monotonic()  # first copy already claimed it
+        wa._media_claims_local[key] = time.monotonic()  # first copy just claimed it
         with (
             patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
             patch("vula.api.whatsapp._download_document", new=AsyncMock()) as dl,
             patch("vula.ingestion.pipeline.VulaIngestionPipeline") as pipe,
         ):
-            # note: a DIFFERENT sha from the first copy — content hash can't save us here
             await _handle_document_ingest(PHONE, "media123", "Payment Notification.pdf",
-                                          "application/pdf", route_tenant_id=TID, content_sha="sha-copy-2")
+                                          "application/pdf", route_tenant_id=TID, content_sha=None)
     reply.assert_not_called()
     dl.assert_not_called()
     pipe.assert_not_called()
+
+
+def test_content_fingerprint_same_payment_collapses():
+    from vula.api.whatsapp import _content_fingerprint as fp
+    a = fp("Proof of Payment", {"trace_id": "W1KYP3WQ", "amount": "6579.00", "payee_name": "Sagacity"})
+    b = fp("Proof of Payment", {"trace_id": "W1KYP3WQ", "amount": "R6,579.00",
+                                "payee_name": "Sagacity Group", "date": "2026/09/10"})
+    assert a and a == b
+
+
+def test_content_fingerprint_different_payments_do_not_collapse():
+    from vula.api.whatsapp import _content_fingerprint as fp
+    a = fp("Proof of Payment", {"trace_id": "W1KYP3WQ", "amount": "6579.00"})
+    c = fp("Proof of Payment", {"trace_id": "EBRSGYC1JXQB", "amount": "2094.40"})
+    # different FNB "Payment Notification.pdf"s, different transactions
+    assert a != c
+    # amount/payee fallback still separates two refs
+    d = fp("Proof of Payment", {"amount": "44000.00", "payee_name": "ACME", "reference": "37of2002"})
+    e = fp("Proof of Payment", {"amount": "50000.00", "payee_name": "ACME", "reference": "01726"})
+    assert d and d != e
+
+
+def test_content_fingerprint_returns_empty_on_thin_extraction():
+    from vula.api.whatsapp import _content_fingerprint as fp
+    assert fp("Document", {"amount": "100"}) == ""      # one field only — not enough signal
+    assert fp("Document", {}) == ""
 
 
 @pytest.mark.asyncio
