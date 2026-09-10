@@ -413,15 +413,24 @@ class DocumentParser:
             return []
 
     async def _parse_pdf(self, path: Path) -> List[tuple[int, str]]:
-        """Parse PDF — native text extraction first, OCR if scanned or if pdfminer can't parse
-        the document at all. Some real-world PDF producers (confirmed 2026-08-17 against a real
-        DIGG "Notification of Payment" PDF from FNB) emit non-compliant ASCII85 streams that
-        pdfminer's strict decoder rejects outright, raising mid-document. pdfplumber's own
-        .to_image() can't help there — it's still built on the same pdfminer object model that
-        just failed — so on ANY native-parsing failure this falls back to the whole document via
-        pdf2image/poppler (a genuinely independent rendering engine, same pattern already proven
-        in vula/takeoff/plan_reader.py's _full_ocr_fallback) rather than failing the document
-        outright."""
+        """Parse PDF. Order: PyMuPDF (fitz) → pdfplumber → poppler+OCR.
+
+        Most documents Vula sees (payment notifications, digital invoices, bank-statement PDFs)
+        have a real text layer and should never touch OCR. pdfplumber's pdfminer, however,
+        REJECTS non-compliant ASCII85 streams outright (confirmed 2026-08-17 on a real FNB
+        "Notification of Payment") and raised mid-document — sending those straight to a slow
+        vision-OCR path. fitz repairs a broken PDF on open, is ~10x faster, and pulls that text
+        directly, so it goes first (2026-09-10). pdfplumber is kept as the second pass (its
+        table extraction is better) and poppler+OCR as the last resort for a genuine scan or a
+        PDF fitz itself can't open."""
+        try:
+            pages = await self._parse_pdf_fitz(path)
+            if pages:
+                return pages
+        except ImportError:
+            logger.info("pymupdf not installed — skipping fast path (pip install pymupdf)")
+        except Exception as exc:
+            logger.info(f"fitz parse inconclusive for {path.name}, trying pdfplumber: {exc}")
         try:
             pages = await self._parse_pdf_native(path)
             if pages:
@@ -431,6 +440,42 @@ class DocumentParser:
         except Exception as exc:
             logger.warning(f"Native PDF parsing failed for {path.name}, falling back to OCR: {exc}")
         return await self._parse_pdf_ocr_fallback(path)
+
+    async def _parse_pdf_fitz(self, path: Path) -> List[tuple[int, str]]:
+        """Fast, tolerant text + table extraction via PyMuPDF. A page with a real text layer
+        never touches OCR; a genuinely bare (image-only) page is rendered and OCR'd, same
+        policy as _parse_pdf_native."""
+        import pymupdf  # aka fitz
+
+        pages: List[tuple[int, str]] = []
+        with pymupdf.open(path) as doc:
+            for i in range(doc.page_count):
+                page = doc.load_page(i)
+                text = (page.get_text("text") or "").strip()
+
+                if len(text) < 50:
+                    # No usable text layer — is there ink to OCR? (a truly blank page: skip)
+                    if page.get_images() or page.get_drawings():
+                        pix = page.get_pixmap(dpi=200)
+                        img_path = Path(tempfile.gettempdir()) / f"vula_fitz_{uuid.uuid4().hex}.png"
+                        pix.save(str(img_path))
+                        text = (await self.ocr.process_image(img_path) or "").strip()
+                        img_path.unlink(missing_ok=True)
+                        if text:
+                            logger.info("OCR'd bare page %d of %s (fitz)", i + 1, path.name)
+                else:
+                    # Tables (pymupdf >= 1.23) — appended, best-effort.
+                    try:
+                        for tbl in page.find_tables().tables:
+                            rows = ["  ".join(str(c) for c in row if c) for row in tbl.extract() if any(row)]
+                            if rows:
+                                text += "\n\n" + "\n".join(rows)
+                    except Exception:
+                        pass
+
+                if text:
+                    pages.append((i + 1, text))
+        return pages
 
     @staticmethod
     def _image_coverage(page) -> float:
