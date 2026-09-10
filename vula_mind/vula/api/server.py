@@ -965,6 +965,18 @@ async def lifespan(app: FastAPI):
         install_metering()
     except Exception as exc:
         log.warning("metering install skipped: %s", exc)
+
+    async def _schema_check() -> None:
+        # Migrations are applied by hand (no runner) — surface an unapplied one at boot as one
+        # loud line instead of a silent runtime exception in a request later.
+        try:
+            import asyncio as __a
+            from vula.startup_checks import check_schema
+            await __a.to_thread(check_schema)
+        except Exception as exc:
+            log.debug("schema check task failed: %s", exc)
+
+    _asyncio.create_task(_schema_check())
     _asyncio.create_task(_scheduler_leadership_loop())
     yield
 

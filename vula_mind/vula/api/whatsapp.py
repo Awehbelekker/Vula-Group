@@ -126,7 +126,11 @@ async def verify_webhook(
     Meta expects the challenge echoed back verbatim as plain text — it is an
     opaque string, not always numeric, so don't cast it to int.
     """
-    if hub_mode == "subscribe" and hub_verify_token == settings.whatsapp_verify_token:
+    if (
+        hub_mode == "subscribe"
+        and settings.whatsapp_verify_token
+        and hmac.compare_digest(hub_verify_token, settings.whatsapp_verify_token)
+    ):
         logger.info("WhatsApp webhook verified")
         return PlainTextResponse(hub_challenge)
     raise HTTPException(status_code=403, detail="Webhook verification failed")
@@ -140,9 +144,17 @@ async def receive_message(
     x_hub_signature_256: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
 ) -> dict:
     """Receive inbound WhatsApp messages from Meta."""
-    # 1. Verify signature if app secret is configured
+    # 1. Verify the Meta payload signature. The app secret MUST be configured in any real
+    # deployment — without it this endpoint is unauthenticated and anyone who knows the URL can
+    # inject fake inbound messages (fake orders, escalations, outbound sends). Only a local
+    # dev run (DEBUG=true) is allowed to skip it.
     raw_body = await request.body()
-    if settings.vula_fb_app_secret:
+    if not settings.vula_fb_app_secret:
+        if not settings.debug:
+            logger.error("Rejecting WhatsApp POST: VULA_FB_APP_SECRET not configured in production")
+            raise HTTPException(status_code=403, detail="Webhook signature verification not configured")
+        logger.warning("WhatsApp webhook signature check SKIPPED — DEBUG mode, no app secret set")
+    else:
         if not x_hub_signature_256:
             logger.warning("Rejecting WhatsApp POST: missing X-Hub-Signature-256")
             raise HTTPException(status_code=403, detail="Missing signature")
@@ -1303,6 +1315,32 @@ async def _handle_document_ingest(
                     else:
                         msg += "\nEverything allocated — see the 🏦 Bank tab."
                     await _send_reply(phone, msg, tenant_id)
+                return
+
+        # Distributor stock sheet (SOH / "stock on hand")? → store it as ROWS so "do we have X"
+        # — and, crucially, "we don't stock X, here's what we do" — is answered deterministically
+        # (migration 156). NOT an invoice: a stock sheet lists quantities, not amounts owed, and
+        # would book junk into the books if it hit the scanner. gerflor incident, 2026-09-07.
+        if local_path.suffix.lower() in (".pdf", ".xlsx", ".xls", ".csv"):
+            try:
+                from vula.commerce import stock_sheet
+                pages = await pipeline.parser.parse(local_path)
+                sheet_text = "\n".join(t for _, t in (pages or []))
+                stored = stock_sheet.persist_if_stock_sheet(
+                    tenant_id, result.doc_id, result.filename, sheet_text)
+            except Exception as exc:
+                logger.debug("stock sheet check skipped for %s: %s", result.filename, exc)
+                stored = None
+            if stored:
+                ranges = ", ".join(stored.get("product_ranges") or [])
+                asat = f" (as at {stored['as_at']})" if stored.get("as_at") else ""
+                await _send_reply(
+                    phone,
+                    f"📊 Read your stock sheet{asat} — {stored['line_count']} lines across "
+                    f"{ranges}.\nAsk me things like \"do we have Virtuo in stock\" or "
+                    f"\"how much Mac Tiles is left\".",
+                    tenant_id,
+                )
                 return
 
         # PDFs that look like supplier invoices → auto-scan → commit to books (photos are

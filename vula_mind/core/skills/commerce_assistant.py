@@ -21,7 +21,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import settings
 from core.llm_router import resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source
+from core.skills.base import (
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, wrong_arithmetic,
+)
 from vula.commerce import service
 
 logger = logging.getLogger(__name__)
@@ -795,10 +797,24 @@ class CommerceAssistantSkill(BaseSkill):
             if not answer:
                 raise RuntimeError("empty answer from agent loop")
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
+            # Deterministic arithmetic backstop — same as commerce_admin. A customer-facing
+            # quote with a wrong total (e.g. "11.8 × 18.2 = 215.56", correct 214.76) costs real
+            # money; prompt rules alone don't stop the model doing the sum in its head.
+            confidence = 0.8 if kb_context else 0.7
+            bad_maths = wrong_arithmetic(answer)
+            if bad_maths:
+                logger.warning("commerce_assistant WRONG ARITHMETIC, tenant=%s: %s",
+                               inp.tenant_id, bad_maths)
+                fixes = "\n".join(
+                    f"• {b['claim']} — that should be {b['actual']:,.2f}, not {b['stated']:,.2f}"
+                    for b in bad_maths)
+                answer += ("\n\n⚠️ One moment — let me correct my own maths before you rely on "
+                           f"this:\n{fixes}\n\nI'll redo those figures properly.")
+                confidence = 0.3
             return SkillOutput(
                 answer=answer,
                 skill_name=self.name,
-                confidence=0.8 if kb_context else 0.7,
+                confidence=confidence,
                 sources=sources,
                 media_url=ctx.get("media_url"),
             )

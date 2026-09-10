@@ -2964,6 +2964,19 @@ class CommerceAdminSkill(BaseSkill):
         query = (args.get("query") or "").strip()
         if not query:
             return {"error": "Need something to look up."}
+        # Deterministic stock-sheet answer first (migration 156). A distributor stock sheet is
+        # structured data — similarity search can rank what it contains but can never report
+        # what it OMITS, which is exactly the gerflor "how's Creation stock" failure (Creation
+        # was not on the sheet at all). answer_stock_query() returns None when the tenant has no
+        # stock sheet on file, so this is a no-op for every other tenant.
+        try:
+            from vula.commerce import stock_sheet
+            stock = stock_sheet.answer_stock_query(tid, query)
+            if stock is not None:
+                return {"found": True, "source_kb": "stock_sheet",
+                        "authoritative": True, "stock": stock}
+        except Exception as exc:
+            logger.debug("stock sheet lookup skipped: %s", exc)
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             chunks = await VulaIngestionPipeline(tenant_id=tid).query(query, top_k=4)

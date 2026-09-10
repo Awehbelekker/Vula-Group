@@ -22,16 +22,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
 
       # Catch real bugs only (undefined names, unused imports) in app code.
-      # Excludes throwaway scripts/ and test fixtures. Style nits are ignored.
+      # Rule selection + excludes live in pyproject.toml [tool.ruff]; style nits are not linted.
       - name: Lint app code
-        run: ruff check vula/ core/ --select=F --exclude scripts,tests
-
-      - name: Install test dependencies
-        run: pip install pytest pytest-asyncio
+        run: ruff check vula/ core/
 
       # Confirm the app imports cleanly (catches syntax/import errors that
       # would crash the server) without needing live Ollama/Qdrant.
@@ -41,9 +38,7 @@ jobs:
           QDRANT_BASE: http://localhost:6333
           API_KEY: "ci-test"
           DEBUG: "true"
-        run: |
-          pip install -r requirements.txt
-          python -c "import vula.api.server; print('Server imports OK')"
+        run: python -c "import vula.api.server; print('Server imports OK')"
 
       - name: Run tests
         env:
