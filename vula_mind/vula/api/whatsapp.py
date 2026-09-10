@@ -138,6 +138,29 @@ async def verify_webhook(
 
 # ─── Inbound message handler ─────────────────────────────────────────────────
 
+_bg_tasks: set = set()
+
+
+def _run_bg(coro, *, label: str) -> None:
+    """Fire a slow handler as a background task and return control to the webhook immediately.
+
+    2026-09-10: a document upload was processed INLINE (26–56s: download + a 503-ing local
+    vision model + cloud escalation + KB ingest + reply). Meta's webhook times out at ~15–20s
+    and re-sends — turning one file into a burst of distinct messages, each a full run. Returning
+    200 fast is Meta's own requirement. Exceptions are logged (a bare create_task swallows them)."""
+    import asyncio as _a
+
+    async def _wrapped():
+        try:
+            await coro
+        except Exception as exc:  # noqa: BLE001
+            logger.error("background handler %s failed: %s: %s", label, type(exc).__name__, exc)
+
+    t = _a.create_task(_wrapped())
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
+
 @router.post("/webhook")
 async def receive_message(
     request: Request,
@@ -323,9 +346,9 @@ async def receive_message(
                         media_id = audio.get("id", "")
                         mime_type = audio.get("mime_type", "audio/ogg")
                         if phone and media_id:
-                            await _handle_voice_note(
+                            _run_bg(_handle_voice_note(
                                 phone, media_id, mime_type, msg_id, route_mode, route_tenant
-                            )
+                            ), label="voice_note")
 
                     elif msg_type == "location":
                         # Shared pin (e.g. delivery address step) → a Maps link, routed through the
@@ -362,10 +385,12 @@ async def receive_message(
                         filename = doc.get("filename", "")
                         mime_type = doc.get("mime_type", "")
                         if phone and media_id:
-                            await _handle_document_ingest(
+                            # Background — document processing takes far longer than Meta's
+                            # webhook timeout; blocking here is what causes the retry storm.
+                            _run_bg(_handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
                                 content_sha=doc.get("sha256") or None,
-                            )
+                            ), label="document_ingest")
 
                     elif msg_type in ("image", "video"):
                         media = msg.get(msg_type) or {}
@@ -373,75 +398,10 @@ async def receive_message(
                         caption = media.get("caption", "")
                         mime_type = media.get("mime_type", "image/jpeg")
                         if phone and media_id:
-                            # A sales_rep captioning a photo with an instruction (e.g. "log as
-                            # meeting", "add this contact") means the CAPTION, not the photo
-                            # itself — route it through the same rep-scoped agent a text message
-                            # would reach (_sender_is_sales_rep / _run_commerce_admin above).
-                            # Confirmed real gap (2026-08-26): without this, a captioned photo
-                            # always fell through to generic document filing regardless of what
-                            # the caption asked for — log_meeting was never reachable from an
-                            # image message at all.
-                            # 2026-08-26, same day: a rep asked "could you see the architect
-                            # details in the picture?" and Vula asked them to re-share it — the
-                            # caption alone reached the agent, never the photo's actual content.
-                            # Now also runs one vision-description pass (best-effort, real photo
-                            # content — a business card's printed text, a sign, a document —
-                            # never invented) and gives the agent both, so "research this"/
-                            # "who is this" work the same way "log as meeting" already does.
-                            if msg_type == "image" and caption.strip() and route_tenant and await _sender_is_sales_rep(phone, route_tenant):
-                                description = await _describe_photo_for_rep(media_id)
-                                effective_text = caption
-                                if description:
-                                    effective_text = f"{caption}\n\n[What's in the photo: {description}]"
-                                if await _run_commerce_admin(phone, effective_text, route_tenant):
-                                    continue
-                            # An explicit receipt/expense caption routes to the books even for a
-                            # contractor (site crews buy materials + claim) — otherwise a registered
-                            # contractor's photo is treated as task evidence first.
-                            cap_l = (caption or "").lower()
-                            expense_intent = any(k in cap_l for k in _EXPENSE_WORDS)
-                            handled = False
-                            if not expense_intent:
-                                handled = await _handle_media(phone, media_id, caption, msg_id)
-                            # An UNCAPTIONED photo from a rep that wasn't a receipt used to be
-                            # filed silently as a document — so a screenshot of a company's
-                            # details, or a business card snapped between meetings, vanished
-                            # into storage with no acknowledgement and nothing logged. Reps are
-                            # busy and often send a photo with no caption at all (Ian,
-                            # 2026-09-02). Read it and ASK, rather than guessing or filing mute.
-                            #
-                            # Deliberately placed AFTER _handle_media: an uncaptioned receipt
-                            # must still reach the books through the existing scanner, which is
-                            # a real working flow and must not be diverted to the agent.
-                            if (not handled and msg_type == "image" and not caption.strip()
-                                    and route_tenant
-                                    and await _sender_is_sales_rep(phone, route_tenant)):
-                                description = await _describe_photo_for_rep(media_id)
-                                if description:
-                                    prompt = (
-                                        f"[The rep sent this photo with no caption. "
-                                        f"What's in the photo: {description}]\n\n"
-                                        f"Tell them briefly what you can see, then ask what "
-                                        f"they'd like done with it — save it as a contact, log "
-                                        f"a meeting, file it against a project — unless one is "
-                                        f"obviously right, in which case do that and say so. "
-                                        f"Never invent details that aren't visible in the photo."
-                                    )
-                                    if await _run_commerce_admin(phone, prompt, route_tenant):
-                                        continue
-                            if not handled:
-                                if route_mode == "knowledge" or route_tenant or expense_intent:
-                                    # Tenant line (or an expense photo) → ingest + auto-log expenses.
-                                    fname = caption or f"image-{msg_id}.jpg"
-                                    await _handle_document_ingest(
-                                        phone, media_id, fname, mime_type, route_tenant_id=route_tenant,
-                                        content_sha=media.get("sha256") or None,
-                                    )
-                                else:
-                                    await _send_reply(phone, (
-                                        "Thanks for the photo! Ask your site manager to register "
-                                        "you in Vula so it can be linked to your task."
-                                    ))
+                            _run_bg(_handle_image_or_video(
+                                phone, msg_type, media_id, caption, mime_type, msg_id,
+                                route_mode, route_tenant, media.get("sha256") or None,
+                            ), label="image_video")
                 except Exception as _dispatch_exc:
                     logger.error("WA message dispatch failed (type=%s phone=%s): %s", msg_type, phone, _dispatch_exc)
                     try:
@@ -1168,48 +1128,124 @@ async def _maybe_learn_from_exchange(tenant_id: str, question: str, answer: str)
         logger.debug("Auto-learn skipped for %s: %s", tenant_id, exc)
 
 
-_MEDIA_RECLAIM_MINUTES = 10
+_MEDIA_RECLAIM_SECONDS = 600
+# Process-local fast gate: (tenant_id, key) -> monotonic claim time. Catches a burst of
+# same-content messages hitting the SAME worker instantly, with no DB round trip — the DB claim
+# below is only needed for the cross-worker case. Bounded; entries expire with the reclaim window.
+_media_claims_local: dict[tuple[str, str], float] = {}
 
 
-async def _claim_media_once(tenant_id: str, content_sha: str, kind: str, phone: str = "") -> bool:
-    """Atomic "has this exact file already been processed for this tenant recently?" claim
-    (vula_media_dedup, migration 157). Returns True if THIS caller should process the file,
-    False if it's a duplicate delivery / re-send within the reclaim window.
+def _local_media_claim(tenant_id: str, content_sha: str, window: float) -> bool:
+    """True if THIS process just won the local claim; False if this process already has it
+    within `window` seconds."""
+    import time as _t
+    key = (tenant_id, content_sha)
+    now = _t.monotonic()
+    prev = _media_claims_local.get(key)
+    if prev is not None and (now - prev) < window:
+        return False
+    _media_claims_local[key] = now
+    if len(_media_claims_local) > 500:
+        for k, ts in list(_media_claims_local.items()):
+            if now - ts > _MEDIA_RECLAIM_SECONDS:
+                _media_claims_local.pop(k, None)
+    return True
 
-    2026-09-10 (DIGG): one "Payment Notification.pdf" produced 8 "Got it" acks and 8 full
-    analyses — the old redelivery guard was a plain READ, so every near-simultaneous handler
-    passed it before any of them had filed anything. A primary-key claim is the fix: only one
-    insert wins. Fails OPEN (returns True) on any DB error so a file is never silently dropped."""
+
+async def _claim_media_once(tenant_id: str, content_sha: str, kind: str, phone: str = "",
+                            window_seconds: int = _MEDIA_RECLAIM_SECONDS) -> bool:
+    """"Has this exact file already been processed for this tenant in the last few minutes?"
+    Returns True if THIS caller should process it, False if it's a duplicate delivery / re-send.
+
+    2026-09-10 (DIGG): a single "Payment Notification.pdf" arrived as SEVEN distinct WhatsApp
+    messages (7 different wamids) in a 5-second burst — the sender's client / Meta fanning one
+    file out. Every one got a full ack + vision-scan + analysis. msg_id dedup can't help (7
+    real ids); only a CONTENT claim can. Two layers: a process-local set (instant, same-worker
+    burst) then an atomic DB upsert (vula_media_dedup, migration 157) for the cross-worker case.
+    Fails OPEN on a DB error so a file is never silently dropped."""
     if not (tenant_id and content_sha):
         return True
+    # 1. Fast local gate — no DB. A same-worker burst never gets past this.
+    if not _local_media_claim(tenant_id, content_sha, window_seconds):
+        logger.info("duplicate inbound %s for %s — skipped (local claim)", kind, tenant_id)
+        return False
+    # 2. Cross-worker DB claim. upsert(ignore_duplicates) is atomic and returns the row(s) it
+    #    actually inserted — empty list means someone else already holds the claim. No reliance
+    #    on parsing a unique-violation exception string.
     try:
         from datetime import datetime, timedelta, timezone
         from vula.commerce import service as _svc
         db = _svc._client()
-        try:
-            db.table("vula_media_dedup").insert({
-                "tenant_id": tenant_id, "content_sha": content_sha,
-                "kind": kind, "claimed_by": phone or None,
-            }).execute()
-            return True  # we won the claim
-        except Exception as exc:
-            if "23505" not in str(exc) and "duplicate" not in str(exc).lower():
-                raise
+        now = datetime.now(timezone.utc)
+        res = (db.table("vula_media_dedup")
+               .upsert({"tenant_id": tenant_id, "content_sha": content_sha,
+                        "kind": kind, "claimed_by": phone or None,
+                        "created_at": now.isoformat()},
+                       on_conflict="tenant_id,content_sha", ignore_duplicates=True)
+               .execute())
+        if res.data:
+            return True  # our insert landed — we won
+        # Conflict: a row already exists. Recent → real duplicate; stale → reclaim + reprocess.
         rows = (db.table("vula_media_dedup").select("created_at")
                 .eq("tenant_id", tenant_id).eq("content_sha", content_sha).limit(1).execute().data or [])
-        if rows:
-            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=_MEDIA_RECLAIM_MINUTES)).isoformat()
-            if str(rows[0].get("created_at") or "") > cutoff:
-                logger.info("duplicate inbound %s for %s — skipped (already claimed)", kind, tenant_id)
-                return False
-        # Stale claim → a genuine re-send of an old file. Refresh it and reprocess.
-        db.table("vula_media_dedup").update({
-            "created_at": datetime.now(timezone.utc).isoformat(), "claimed_by": phone or None,
-        }).eq("tenant_id", tenant_id).eq("content_sha", content_sha).execute()
+        cutoff = (now - timedelta(seconds=window_seconds)).isoformat()
+        if rows and str(rows[0].get("created_at") or "") > cutoff:
+            logger.info("duplicate inbound %s for %s — skipped (db claim)", kind, tenant_id)
+            return False
+        db.table("vula_media_dedup").update({"created_at": now.isoformat(), "claimed_by": phone or None}) \
+            .eq("tenant_id", tenant_id).eq("content_sha", content_sha).execute()
         return True
     except Exception as exc:
-        logger.debug("media dedup claim failed open (run migration 157?): %s", exc)
+        logger.warning("media dedup DB claim failed open (%s: %s) — local gate still applied",
+                       type(exc).__name__, exc)
         return True
+
+
+async def _handle_image_or_video(
+    phone: str, msg_type: str, media_id: str, caption: str, mime_type: str, msg_id: str,
+    route_mode: Optional[str], route_tenant: Optional[str], content_sha: Optional[str],
+) -> None:
+    """Image/video dispatch, extracted from the webhook loop so it runs in the background
+    (vision passes + agent turns are far slower than Meta's webhook timeout). `continue` in the
+    old inline version becomes `return` here — same control flow, one message."""
+    # sales_rep captioning a photo with an instruction → the CAPTION is the request; give the
+    # agent both the caption and a vision description of the photo.
+    if msg_type == "image" and caption.strip() and route_tenant and await _sender_is_sales_rep(phone, route_tenant):
+        description = await _describe_photo_for_rep(media_id)
+        effective_text = f"{caption}\n\n[What's in the photo: {description}]" if description else caption
+        if await _run_commerce_admin(phone, effective_text, route_tenant):
+            return
+    # An explicit receipt/expense caption routes to the books even for a contractor.
+    cap_l = (caption or "").lower()
+    expense_intent = any(k in cap_l for k in _EXPENSE_WORDS)
+    handled = False
+    if not expense_intent:
+        handled = await _handle_media(phone, media_id, caption, msg_id)
+    # An UNCAPTIONED photo from a rep that wasn't a receipt: read it and ASK, don't file mute.
+    if (not handled and msg_type == "image" and not caption.strip()
+            and route_tenant and await _sender_is_sales_rep(phone, route_tenant)):
+        description = await _describe_photo_for_rep(media_id)
+        if description:
+            prompt = (
+                f"[The rep sent this photo with no caption. "
+                f"What's in the photo: {description}]\n\n"
+                f"Tell them briefly what you can see, then ask what they'd like done with it — "
+                f"save it as a contact, log a meeting, file it against a project — unless one is "
+                f"obviously right, in which case do that and say so. "
+                f"Never invent details that aren't visible in the photo."
+            )
+            if await _run_commerce_admin(phone, prompt, route_tenant):
+                return
+    if not handled:
+        if route_mode == "knowledge" or route_tenant or expense_intent:
+            fname = caption or f"image-{msg_id}.jpg"
+            await _handle_document_ingest(phone, media_id, fname, mime_type,
+                                         route_tenant_id=route_tenant, content_sha=content_sha)
+        else:
+            await _send_reply(phone, (
+                "Thanks for the photo! Ask your site manager to register you in Vula so it "
+                "can be linked to your task."
+            ))
 
 
 async def _handle_document_ingest(
@@ -1275,11 +1311,23 @@ async def _handle_document_ingest(
 
     kind = "image" if (mime_type or "").startswith("image/") else "document"
 
-    # Atomic duplicate claim BEFORE the ack, using Meta's own sha256 when the webhook carried
-    # one — so N deliveries / re-sends of the same file produce exactly ONE ack and ONE run.
-    # The losers return silently: the winner acks, processes, and replies once.
-    if content_sha and not await _claim_media_once(tenant_id, content_sha, kind, phone):
-        return
+    # Duplicate claim BEFORE the ack — so N deliveries / re-sends of the same file produce
+    # exactly ONE ack and ONE run; the losers return silently. Prefer Meta's own sha256 when
+    # the webhook carried one; otherwise fall back to a coarser filename+type key (a burst of
+    # 7 messages all named "Payment Notification.pdf" from one phone in 5s is unmistakably one
+    # file). The byte-hash claim after download below is the exact backstop.
+    if content_sha:
+        # Meta's real content hash — safe to dedupe over the full window.
+        if not await _claim_media_once(tenant_id, content_sha, kind, phone):
+            return
+    else:
+        # No hash on the webhook — dedupe on filename+type over a SHORT window only. A 5-second
+        # burst of identical messages is one file; a bookkeeper sending three different
+        # "Payment Notification.pdf"s is >45s apart, so those still each process. The
+        # byte-hash claim after download is the exact backstop.
+        if not await _claim_media_once(tenant_id, f"meta:{filename}|{mime_type}|{phone}",
+                                       kind, phone, window_seconds=45):
+            return
 
     # Send from the TENANT's number (omitting tenant_id falls back to the global line,
     # which 400s for senders not on its allow-list). Tell them what actually happens next.
