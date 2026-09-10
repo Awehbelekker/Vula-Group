@@ -1,0 +1,26 @@
+# Vula Mind — tooling config. There is no build system here (deps are in requirements.txt);
+# this file exists to pin test + lint behaviour so it is the same on every machine and in CI.
+
+[tool.pytest.ini_options]
+# auto: every `async def test_*` runs on the event loop without needing a per-test
+# @pytest.mark.asyncio marker. Before this, an async test added without the marker was
+# silently collected-but-not-run under pytest-asyncio's strict default.
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:supabase.*",
+    "ignore::DeprecationWarning:httpx.*",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["scripts", "_archive"]
+
+[tool.ruff.lint]
+# Mirrors CI (.github/workflows/ci.yml): real errors only — syntax, undefined names, unused
+# imports, f-strings with no placeholders, redefinitions. Style is deliberately not linted.
+# `ruff check vula/ core/` locally is then exactly what CI gates on.
+select = ["E9", "F"]
+# B006 is a genuine bug class (mutable default arg) and currently clean — keep it that way.
+extend-select = ["B006"]

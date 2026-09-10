@@ -1,0 +1,18 @@
+# Keep the build context small — only vula_mind/ is COPYed into the image (see Dockerfile).
+.git
+node_modules
+vula_dashboard
+vula_mobile
+vula_storefront
+off_the_hook
+kelp
+n8n_workflows
+infrastructure
+_archive
+docs
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.pyc
+vula_mind/tests
+Vula-Group

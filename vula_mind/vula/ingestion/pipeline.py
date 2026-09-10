@@ -366,19 +366,35 @@ class DocumentParser:
         elif suffix in (".txt", ".md"):
             text = file_path.read_text(errors="replace")
             return [(1, text)]
-        elif suffix in (".dwg", ".dxf"):
-            # No free/native Python reader for Autodesk's binary DWG format (DXF is
-            # ASCII/parseable via ezdxf, but not worth a new dependency for one format
-            # until it's actually needed). Rather than silently returning nothing —
-            # which left every CAD drawing stuck unanalysed with zero information — hand
-            # back an honest placeholder so downstream analysis can at least classify it
-            # as a drawing from the filename and record that it received one, instead of
-            # failing outright. A real content-reading fix needs a DWG→DXF/PDF converter
-            # (e.g. the ODA File Converter or a paid conversion API) — not implemented.
-            kind = "DWG" if suffix == ".dwg" else "DXF"
-            note = (f"[{kind} CAD drawing file — Vula cannot read native {kind} content yet "
+        elif suffix == ".dxf":
+            # DXF is ASCII and ezdxf is already a dependency (takeoff) — pull the drawing's
+            # own text (titles, annotations, schedules, room names) so it's at least
+            # searchable. Falls back to the honest placeholder if ezdxf can't read it.
+            try:
+                import ezdxf
+                doc = ezdxf.readfile(str(file_path))
+                bits: list[str] = []
+                for e in doc.modelspace().query("TEXT MTEXT"):
+                    try:
+                        t = e.plain_text() if hasattr(e, "plain_text") else str(e.dxf.text)
+                    except Exception:
+                        t = ""
+                    if t and t.strip():
+                        bits.append(t.strip())
+                if bits:
+                    logger.info(f"DXF text extracted: {file_path.name} ({len(bits)} strings)")
+                    return [(1, f"[DXF drawing: {file_path.name}]\n" + "\n".join(bits))]
+            except Exception as exc:
+                logger.info(f"DXF text extraction failed for {file_path.name}: {exc}")
+            return [(1, f"[DXF CAD drawing — no readable text. Filename: {file_path.name}]")]
+        elif suffix == ".dwg":
+            # No free/native Python reader for Autodesk's binary DWG format. Hand back an
+            # honest placeholder so downstream analysis can at least classify it as a drawing
+            # and record that one was received, instead of failing outright. A real fix needs
+            # a DWG→DXF/PDF converter (ODA File Converter or a paid API) — not implemented.
+            note = (f"[DWG CAD drawing file — Vula cannot read native DWG content yet "
                     f"(no converter configured). Filename: {file_path.name}]")
-            logger.info(f"{kind} file received, no content reader available: {file_path.name}")
+            logger.info(f"DWG file received, no content reader available: {file_path.name}")
             return [(1, note)]
         else:
             logger.warning(f"Unsupported file type: {suffix}")

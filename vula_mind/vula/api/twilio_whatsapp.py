@@ -66,7 +66,7 @@ async def twilio_inbound(
     phone = From.replace("whatsapp:", "").lstrip("+").strip()
     text = (Body or "").strip()
 
-    logger.info("Twilio inbound from %s: %s", phone, text[:80])
+    logger.info("Twilio inbound from %s (%d chars)", phone, len(text))  # POPIA: no content in logs
 
     if not phone or not text:
         return PlainTextResponse("", status_code=200)

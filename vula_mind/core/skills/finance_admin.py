@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, wrong_arithmetic,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +169,17 @@ class FinanceAdminSkill(BaseSkill):
             confidence = 0.45
             answer += ("\n\n⚠️ Please confirm these figures — some of the numbers above "
                        "couldn't be matched to what the ledger actually returned.")
+        # Deterministic arithmetic backstop — the anchor check above catches a misreported
+        # single figure; this catches a stated computation that doesn't add up ("R50,000 -
+        # R30,000 = R25,000").
+        bad_maths = wrong_arithmetic(answer)
+        if bad_maths:
+            logger.warning("finance_admin WRONG ARITHMETIC, tenant=%s: %s", inp.tenant_id, bad_maths)
+            fixes = "\n".join(
+                f"• {b['claim']} — that should be {b['actual']:,.2f}, not {b['stated']:,.2f}"
+                for b in bad_maths)
+            answer += f"\n\n⚠️ Correcting my own maths:\n{fixes}"
+            confidence = min(confidence, 0.35)
         return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence,
                            sources=self._sources)
 

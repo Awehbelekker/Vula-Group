@@ -190,11 +190,18 @@ class HRMOrchestrator:
         except Exception:
             return self._keyword_complexity(prompt)
 
-    def _match_skill(self, prompt: str) -> str:
+    def _keyword_skill(self, prompt: str) -> str | None:
+        """The keyword-table match only — None if nothing matched."""
         lower = prompt.lower()
         for skill_name, keywords in SKILL_KEYWORDS.items():
             if any(kw in lower for kw in keywords):
                 return skill_name
+        return None
+
+    def _match_skill(self, prompt: str) -> str:
+        kw = self._keyword_skill(prompt)
+        if kw:
+            return kw
         # No keyword matched — before silently defaulting to the least-specialized skill,
         # try one cheap local-model classification pass (2026-07-27: this exact fallthrough
         # is what routed a real supplier-quotation question to generic reasoning instead of
@@ -204,6 +211,16 @@ class HRMOrchestrator:
             if classified:
                 return classified
         return "reasoning"
+
+    def _route_with_reason(self, prompt: str) -> tuple[str, str]:
+        """(skill, matched_by) where matched_by is 'keyword' | 'llm_fallback' | 'default' —
+        the reason is emitted as routing telemetry so misroutes, and how often routing falls
+        through to the generic 'reasoning' skill, are measurable."""
+        kw = self._keyword_skill(prompt)
+        if kw:
+            return kw, "keyword"
+        skill = self._match_skill(prompt)
+        return skill, ("llm_fallback" if skill != "reasoning" else "default")
 
     def _llm_classify_skill(self, prompt: str) -> str | None:
         """One cheap local-model pass, keyword-miss path only. Returns a skill name from
@@ -261,10 +278,24 @@ class HRMOrchestrator:
         )
         graph.complexity = complexity
 
-        skill_name = self._match_skill(prompt)
+        skill_name, matched_by = self._route_with_reason(prompt)
         model_tier = self._select_model(complexity, graph.routing_hints)
         merge = self._select_merge(complexity, skill_name)
         graph.merge_strategy = merge
+
+        # Routing telemetry — POPIA-safe (prompt hash, never raw text). Lets us measure how
+        # often keyword routing misses and falls through to the LLM classifier or bare
+        # 'reasoning', which is the single biggest source of "Vula gave a wrong answer".
+        try:
+            import hashlib as _h
+            from core.reasoning_telemetry import emit as _emit_route
+            _emit_route(system="vula-skill-routing",
+                        task="hash:" + _h.sha256(prompt.encode("utf-8")).hexdigest()[:12],
+                        outcome=skill_name, reason=matched_by,
+                        escalated=(matched_by == "default"),
+                        extra={"complexity": complexity})
+        except Exception:
+            pass
 
         branch_count = {1: 1, 2: 2, 3: 3}[complexity]
 

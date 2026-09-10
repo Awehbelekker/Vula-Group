@@ -292,6 +292,22 @@ async def master_health():
                 reasons[r.get("reason") or "?"] = reasons.get(r.get("reason") or "?", 0) + 1
         out["llm_router_24h"] = {"total": len(router_rows), "local": local, "cloud": cloud,
                                  "escalation_reasons": reasons}
+
+        # Skill-routing 24h (emitted by core/hrm/orchestrator.py::plan). "default" = keyword
+        # table missed AND the LLM classifier didn't rescue it → the generic 'reasoning' skill,
+        # the single biggest source of a wrong answer. Watch this ratio.
+        route_rows = [r for r in rows if r.get("system") == "vula-skill-routing"]
+        by_reason: dict[str, int] = {}
+        by_skill: dict[str, int] = {}
+        for r in route_rows:
+            by_reason[r.get("reason") or "?"] = by_reason.get(r.get("reason") or "?", 0) + 1
+            by_skill[r.get("outcome") or "?"] = by_skill.get(r.get("outcome") or "?", 0) + 1
+        out["skill_routing_24h"] = {
+            "total": len(route_rows), "by_match": by_reason,
+            "fallthrough_to_reasoning_pct": round(
+                100 * by_reason.get("default", 0) / max(1, len(route_rows)), 1),
+            "top_skills": dict(sorted(by_skill.items(), key=lambda kv: -kv[1])[:8]),
+        }
     except Exception as exc:
         out["llm_router_24h"] = {"error": str(exc)}
 
@@ -305,11 +321,11 @@ async def master_health():
 
     try:
         # VRL coverage/recalibration signal (2026-07-27) — the verified-reasoning layer's proven
-        # 52%→88% number came from a one-time offline test harness (17 labeled cases, then 481),
-        # not from live traffic, and nothing previously surfaced whether real verify events are
-        # even accumulating. 30-day window (not 24h like the router stats above) because verify
-        # events are sparse — no skill has verification_policy="adversarial" enabled by default
-        # today, only calculations.py's deterministic self-check. A low count here IS the finding.
+        # 52%→88% number came from a one-time offline test harness, not live traffic. 30-day
+        # window (not 24h like the router stats above) because verify events are still sparse.
+        # reasoning / architecture_planning / commerce_admin / commerce_assistant / finance_admin
+        # now carry verification_policy="adversarial" by class default, so this should be
+        # accumulating — a low count or a high checker_error rate here IS the finding.
         since30 = (now - timedelta(days=30)).isoformat()
         vrows = (db.table("vula_reasoning_telemetry")
                  .select("verifier,outcome,escalated,created_at")

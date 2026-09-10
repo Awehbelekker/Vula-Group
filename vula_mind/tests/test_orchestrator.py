@@ -68,6 +68,27 @@ def test_no_keyword_match_falls_back_to_reasoning_when_llm_fallback_disabled(hrm
     assert hrm._match_skill("Just tell me something") == "reasoning"
 
 
+# ── Routing telemetry: matched_by reason ──────────────────────────────────────
+
+def test_route_with_reason_reports_keyword_match(hrm):
+    assert hrm._route_with_reason("check my email") == ("email_admin", "keyword")
+
+
+def test_route_with_reason_reports_default_fallthrough(hrm):
+    # llm fallback disabled by the fixture → bare 'reasoning' default
+    assert hrm._route_with_reason("Just tell me something") == ("reasoning", "default")
+
+
+def test_route_with_reason_reports_llm_fallback(hrm, monkeypatch):
+    from config import settings
+    import httpx as httpx_module
+    monkeypatch.setattr(settings, "skill_llm_fallback_enabled", True)
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"response": "finance_admin"}
+    monkeypatch.setattr(httpx_module, "post", lambda *a, **kw: mock_resp)
+    assert hrm._route_with_reason("Just tell me something") == ("finance_admin", "llm_fallback")
+
+
 # ── LLM classification fallback (keyword-miss path only) ───────────────────────
 
 def test_llm_fallback_used_when_no_keyword_matches(hrm, monkeypatch):
