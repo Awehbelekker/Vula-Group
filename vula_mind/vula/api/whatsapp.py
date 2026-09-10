@@ -908,7 +908,8 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
       1. Field-ops intents (DONE / APPROVE / REJECT).
       2. KB / RAG.
     """
-    logger.info("WhatsApp inbound from %s: %s", phone, text[:80])
+    # POPIA: don't write customer message content to the retained logs — length only.
+    logger.info("WhatsApp inbound from %s (%d chars)", phone, len(text or ""))
 
     # ── Escalation answer: if this phone is a helper with an open escalation, their
     # message IS the answer — relay it to the customer and learn it for next time.
@@ -2686,7 +2687,8 @@ async def _handle_voice_note(
     # Process the transcript exactly like a typed message — the assistant replies naturally
     # (in the customer's language). No "I heard…" echo; the reply itself confirms understanding.
     # `lang` is Whisper's detected language — a reliable signal to remember the customer's language.
-    logger.info("voice note transcript (%s, lang=%s): %r", phone, lang, text[:120])
+    # POPIA: transcript content stays out of the retained logs — length + language only.
+    logger.info("voice note transcribed (%s, lang=%s, %d chars)", phone, lang, len(text or ""))
     if route_mode == "commerce":
         await _handle_commerce_message(phone, text, msg_id, route_tenant, detected_lang=lang)
     elif route_mode == "knowledge":

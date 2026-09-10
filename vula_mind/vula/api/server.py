@@ -118,6 +118,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+# POPIA: mask customer phone numbers in the (retained, Railway-captured) logs. No-op under DEBUG.
+try:
+    from core.log_redaction import install as _install_log_redaction
+    _install_log_redaction(debug=settings.debug)
+except Exception:  # pragma: no cover
+    pass
 log = logging.getLogger("vula.api")
 
 # ─── Rate limiter ─────────────────────────────────────────────────────────────
