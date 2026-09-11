@@ -1134,6 +1134,13 @@ _MEDIA_RECLAIM_SECONDS = 600
 # below is only needed for the cross-worker case. Bounded; entries expire with the reclaim window.
 _media_claims_local: dict[tuple[str, str], float] = {}
 
+# How often _send_duplicate_notice will actually speak, per phone — see its docstring. Short
+# relative to the underlying 600s/900s claim windows so a genuinely new re-send a few minutes
+# later still gets its own notice, but long enough to swallow every retry in a redelivery burst
+# (confirmed ~5s apart for the byte-level claims; the content-fingerprint claim can fire minutes
+# apart across a staggered burst since it runs after the full download+analysis pipeline).
+_DUP_NOTICE_WINDOW = 120.0
+
 
 def _local_media_claim(tenant_id: str, content_sha: str, window: float) -> bool:
     """True if THIS process just won the local claim; False if this process already has it
@@ -1199,6 +1206,112 @@ async def _claim_media_once(tenant_id: str, content_sha: str, kind: str, phone: 
         logger.warning("media dedup DB claim failed open (%s: %s) — local gate still applied",
                        type(exc).__name__, exc)
         return True
+
+
+async def _dup_claim_row(tenant_id: str, content_sha: str) -> Optional[dict]:
+    """Read-only lookup of the existing vula_media_dedup claim row, for building a human
+    notice after _claim_media_once returns False. Same select _claim_media_once itself runs
+    internally — reuses the identical row, no new query shape. Never raises: a lookup failure
+    here must not block the caller's drop-path, just degrade the notice."""
+    try:
+        from vula.commerce import service as _svc
+        rows = (_svc._client().table("vula_media_dedup").select("created_at,claimed_by")
+                .eq("tenant_id", tenant_id).eq("content_sha", content_sha)
+                .limit(1).execute().data or [])
+        return rows[0] if rows else None
+    except Exception as exc:
+        logger.debug("duplicate-notice claim lookup failed open (%s: %s)", type(exc).__name__, exc)
+        return None
+
+
+def _fmt_claim_when(iso_ts: Optional[str]) -> str:
+    """'today at 14:32' / 'yesterday at 09:15' / 'Wed 10 Sep at 14:32'. "" on anything
+    unparsable — the caller omits the clause rather than showing garbage."""
+    if not iso_ts:
+        return ""
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if ts.date() == now.date():
+            return f"today at {ts.strftime('%H:%M')}"
+        if (now.date() - ts.date()).days == 1:
+            return f"yesterday at {ts.strftime('%H:%M')}"
+        return ts.strftime("%a %d %b at %H:%M")
+    except Exception:
+        return ""
+
+
+def _dup_claimant_label(tenant_id: str, claimed_by: Optional[str], sender_phone: str) -> str:
+    """'you' / a team member's name / a masked phone / "" (unknown). Never raises — degrades
+    to "" so the notice still sends, just without a "by" clause."""
+    if not claimed_by:
+        return ""
+    if "@" in claimed_by:
+        return claimed_by  # legacy vula_filed_documents.filed_by can be an admin email
+    try:
+        from vula.integrations.notify import team_member_for_phone, _digits
+        if _digits(claimed_by) and _digits(claimed_by) == _digits(sender_phone):
+            return "you"
+        member = team_member_for_phone(tenant_id, claimed_by)
+        if member and member.get("name"):
+            return member["name"]
+    except Exception as exc:
+        logger.debug("duplicate-notice claimant lookup failed open (%s: %s)", type(exc).__name__, exc)
+    d = "".join(c for c in claimed_by if c.isdigit())
+    return f"...{d[-4:]}" if len(d) >= 4 else ""
+
+
+async def _send_duplicate_notice(
+    tenant_id: str, phone: str, kind: str, *,
+    when_iso: Optional[str], claimed_by: Optional[str],
+    filename: str = "", category: str = "", fields: Optional[dict] = None,
+) -> None:
+    """Tell the sender this is a re-send of something already on file — at most once per
+    _DUP_NOTICE_WINDOW per phone (a redelivery burst must not become a wall of messages, the
+    same reason _claim_media_once's own docstring describes — 2026-09-10 incident). Fails
+    open: any error here is logged and swallowed. The caller has ALREADY decided to drop the
+    file; this only adds context and must never affect that decision."""
+    if not _local_media_claim(tenant_id, f"dupnotice:{phone}", _DUP_NOTICE_WINDOW):
+        return
+    try:
+        when = _fmt_claim_when(when_iso)
+        who = _dup_claimant_label(tenant_id, claimed_by, phone)
+        noun = "photo" if kind == "image" else "document"
+        subject = f"*{filename}*" if filename else f"this {noun}"
+
+        if fields:
+            payee = next((fields[k] for k in _FINGERPRINT_KEYS[3] if fields.get(k)), None)
+            amount = None
+            for k in _FINGERPRINT_KEYS[2]:
+                v = fields.get(k)
+                if v in (None, ""):
+                    continue
+                try:
+                    # Real _analyze_document output always uses the *_cents keys; a plain
+                    # "amount"/"total" (seen in _content_fingerprint's own test fixtures) is
+                    # already Rands, not cents.
+                    rand = float(v) / 100 if k.endswith("_cents") else float(str(v).replace(",", ""))
+                    amount = f"R{rand:,.2f}"
+                except (TypeError, ValueError):
+                    pass
+                break
+            bits = [b for b in (payee, amount) if b]
+            if bits:
+                subject = f"this {(category or noun).lower()} ({', '.join(bits)})"
+
+        clauses = []
+        if when:
+            clauses.append(f"filed {when}")
+        if who:
+            clauses.append(f"by {who}")
+        tail = " — " + " ".join(clauses) if clauses else ""
+
+        msg = (f"👀 Already got {subject}{tail}. No need to resend — "
+               f"just ask me about it if you need something from it.")
+        await _send_reply(phone, msg, tenant_id)
+    except Exception as exc:
+        logger.warning("duplicate notice failed to build/send (%s: %s)", type(exc).__name__, exc)
 
 
 async def _handle_image_or_video(
@@ -1319,6 +1432,11 @@ async def _handle_document_ingest(
     # reply. Only an EXACT redelivery (identical Meta sha256) is dropped outright here.
     if content_sha and not await _claim_media_once(tenant_id, content_sha, kind, phone,
                                                    window_seconds=600):
+        row = await _dup_claim_row(tenant_id, content_sha)
+        await _send_duplicate_notice(tenant_id, phone, kind,
+                                     when_iso=(row or {}).get("created_at"),
+                                     claimed_by=(row or {}).get("claimed_by"),
+                                     filename=filename)
         return
 
     # Tell them what happens next — but ONCE per burst (per phone, 8s), so a batch of 7 docs
@@ -1349,6 +1467,11 @@ async def _handle_document_ingest(
             try:
                 byte_sha = _hashlib_dedup.sha256(local_path.read_bytes()).hexdigest()
                 if not await _claim_media_once(tenant_id, byte_sha, kind, phone):
+                    row = await _dup_claim_row(tenant_id, byte_sha)
+                    await _send_duplicate_notice(tenant_id, phone, kind,
+                                                 when_iso=(row or {}).get("created_at"),
+                                                 claimed_by=(row or {}).get("claimed_by"),
+                                                 filename=filename)
                     return
             except Exception as exc:
                 logger.debug("post-download dedup claim skipped for %s: %s", filename, exc)
@@ -1361,10 +1484,15 @@ async def _handle_document_ingest(
             content_hash = _hashlib_dedup.sha256(local_path.read_bytes()).hexdigest()
             from vula.commerce import service as _svc_dedup
             cutoff = (_dt.now(_tz.utc) - _td(minutes=10)).isoformat()
-            recent_dup = (_svc_dedup._client().table("vula_filed_documents").select("id")
+            recent_dup = (_svc_dedup._client().table("vula_filed_documents")
+                          .select("id,created_at,filed_by")
                           .eq("tenant_id", tenant_id).eq("content_hash", content_hash)
                           .gte("created_at", cutoff).limit(1).execute().data or [])
             if recent_dup:
+                await _send_duplicate_notice(tenant_id, phone, kind,
+                                             when_iso=recent_dup[0].get("created_at"),
+                                             claimed_by=recent_dup[0].get("filed_by"),
+                                             filename=filename)
                 return
         except Exception as exc:
             logger.debug("document redelivery guard skipped for %s: %s", filename, exc)
@@ -1523,13 +1651,19 @@ async def _handle_document_ingest(
             # CONTENT-level dedup — the real guarantee. Same payment sent N times (even
             # re-encoded to different bytes, even re-OCR'd with different wording) has the same
             # trace id / amount+payee; two different payments that share the filename
-            # "Payment Notification.pdf" do not. The losers return SILENTLY — one shared "Got
-            # it" already went out for the burst, and a wall of "already have this" for a
-            # re-sent file is worse than saying nothing.
+            # "Payment Notification.pdf" do not. A wall of "already have this" for one burst of
+            # redeliveries is still worse than nothing — but silence for a GENUINE later re-send
+            # just confuses the sender (2026-09-11), so _send_duplicate_notice sends exactly one
+            # notice per _DUP_NOTICE_WINDOW instead of staying fully silent.
             fp = _content_fingerprint(doc_category, fields)
             if fp and not await _claim_media_once(tenant_id, f"content:{fp}", kind, phone,
                                                   window_seconds=900):
                 logger.info("duplicate document content for %s — skipped (%s)", tenant_id, fp[:16])
+                row = await _dup_claim_row(tenant_id, f"content:{fp}")
+                await _send_duplicate_notice(tenant_id, phone, kind,
+                                             when_iso=(row or {}).get("created_at"),
+                                             claimed_by=(row or {}).get("claimed_by"),
+                                             category=doc_category, fields=fields)
                 return
 
             # A PHOTO of a business card = the OCR-text pass above reliably reads the email

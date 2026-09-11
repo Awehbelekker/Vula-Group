@@ -18,13 +18,14 @@ TID = "digg-demo"
 PHONE = "27645755210"
 
 
-def _dedup_client(upsert_returns_data=True, existing_created_at=None):
+def _dedup_client(upsert_returns_data=True, existing_created_at=None, existing_claimed_by=None):
     """A Supabase-client double for vula_media_dedup: upsert returns the row(s) it inserted
     (empty on conflict), select returns any existing claim row."""
     c = MagicMock()
     tbl = c.table.return_value
     tbl.upsert.return_value.execute.return_value = MagicMock(data=[{}] if upsert_returns_data else [])
-    row = [{"created_at": existing_created_at}] if existing_created_at else []
+    row = ([{"created_at": existing_created_at, "claimed_by": existing_claimed_by}]
+           if existing_created_at else [])
     tbl.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=row)
     # the filed-documents secondary net: .select().eq().eq().gte().limit().execute() → no dup
     tbl.select.return_value.eq.return_value.eq.return_value.gte.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
@@ -142,3 +143,166 @@ async def test_first_delivery_acks_and_proceeds(tmp_path):
                                       "application/pdf", route_tenant_id=TID, content_sha="sha-first")
     assert any("Got it" in c.args[1] for c in reply.call_args_list)
     pipe.ingest_file.assert_called_once()
+
+
+# --- Duplicate notice: tell the sender who/when, instead of pure silence (2026-09-11) --------
+#
+# The 2026-09-10 fix above stopped a redelivery burst from becoming a wall of full analyses —
+# but it went all the way to silence, and a GENUINE later re-send (a stale claim from an
+# earlier, unrelated send) now looks identical to "nothing happened" from the sender's side.
+# These tests cover the notice _send_duplicate_notice adds back on top of the existing silent
+# drop, without reintroducing the wall-of-messages problem.
+
+@pytest.mark.asyncio
+async def test_duplicate_content_sha_notifies_sender_as_self():
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    client = _dedup_client(upsert_returns_data=False, existing_created_at=now_iso,
+                           existing_claimed_by=PHONE)
+    with (
+        patch("vula.commerce.service._client", return_value=client),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+    ):
+        await _handle_document_ingest(PHONE, "media789", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID, content_sha="sha-dup1")
+    msgs = [c.args[1] for c in reply.call_args_list]
+    assert any("👀" in m and "by you" in m for m in msgs)
+    assert not any("Got it" in m for m in msgs)   # the ack line was never reached
+
+
+@pytest.mark.asyncio
+async def test_duplicate_by_team_member_uses_their_name():
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    other_phone = "27831234567"
+    client = _dedup_client(upsert_returns_data=False, existing_created_at=now_iso,
+                           existing_claimed_by=other_phone)
+    with (
+        patch("vula.commerce.service._client", return_value=client),
+        patch("vula.integrations.notify.team_member_for_phone", return_value={"name": "Thabo"}),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+    ):
+        await _handle_document_ingest(PHONE, "media790", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID, content_sha="sha-dup2")
+    msgs = [c.args[1] for c in reply.call_args_list]
+    assert any("Thabo" in m for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_by_unknown_phone_falls_back_to_masked_number():
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    other_phone = "27831234567"
+    client = _dedup_client(upsert_returns_data=False, existing_created_at=now_iso,
+                           existing_claimed_by=other_phone)
+    with (
+        patch("vula.commerce.service._client", return_value=client),
+        patch("vula.integrations.notify.team_member_for_phone", return_value=None),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+    ):
+        await _handle_document_ingest(PHONE, "media791", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID, content_sha="sha-dup3")
+    msgs = [c.args[1] for c in reply.call_args_list]
+    assert any("...4567" in m for m in msgs)
+    assert not any(other_phone in m for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_content_fingerprint_notice_includes_payee_and_amount(tmp_path):
+    """The richest duplicate path (post-analysis content fingerprint) has real extracted
+    fields on hand — the notice should use them, not just the filename."""
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    local_file = tmp_path / "Payment Notification.pdf"
+    local_file.write_bytes(b"pdf bytes")
+    analysis = {"category": "Proof of Payment",
+               "fields": {"payee_name": "Sagacity", "amount_cents": 657900}}
+
+    async def fake_claim(tenant_id, content_sha, kind, phone="", window_seconds=600):
+        return not content_sha.startswith("content:")   # only the fingerprint claim fails
+
+    with (
+        patch("vula.commerce.service._client", return_value=_dedup_client()),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+        patch("vula.api.whatsapp._download_document", new=AsyncMock(return_value=local_file)),
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline_cls,
+        patch("vula.api.whatsapp._claim_media_once", new=AsyncMock(side_effect=fake_claim)),
+        patch("vula.api.whatsapp._dup_claim_row",
+              new=AsyncMock(return_value={"created_at": now_iso, "claimed_by": PHONE})),
+        patch("vula.api.whatsapp._analyze_document", new=AsyncMock(return_value=analysis)),
+    ):
+        mock_pipeline_cls.return_value.ingest_file = AsyncMock(
+            return_value=MagicMock(status="success", filename="Payment Notification.pdf", doc_id="d1"))
+        await _handle_document_ingest(PHONE, "media792", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID, content_sha=None)
+
+    msgs = [c.args[1] for c in reply.call_args_list]
+    assert any("Sagacity" in m and "R6,579.00" in m for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_notice_burst_gate_suppresses_repeat_notices():
+    """Two rapid duplicate hits on the same phone (a redelivery burst) must produce exactly
+    ONE notice — the whole point of _DUP_NOTICE_WINDOW."""
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    client = _dedup_client(upsert_returns_data=False, existing_created_at=now_iso,
+                           existing_claimed_by=PHONE)
+    with (
+        patch("vula.commerce.service._client", return_value=client),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+    ):
+        await _handle_document_ingest(PHONE, "media793", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID,
+                                      content_sha="sha-burst-notice")
+        await _handle_document_ingest(PHONE, "media794", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID,
+                                      content_sha="sha-burst-notice")
+    notice_count = sum(1 for c in reply.call_args_list if "👀" in c.args[1])
+    assert notice_count == 1
+
+
+@pytest.mark.asyncio
+async def test_dup_claim_row_lookup_db_error_still_sends_generic_notice():
+    """A local-only claim (no DB round trip needed to know it's a dup) whose follow-up
+    who/when lookup then hits a dead DB must still notify — with the degenerate wording,
+    not silence and not a crash."""
+    import time
+    wa._media_claims_local[(TID, "sha-local-only")] = time.monotonic()
+
+    class _BoomClient:
+        def table(self, *a, **kw):
+            raise RuntimeError("db down")
+
+    with (
+        patch("vula.commerce.service._client", return_value=_BoomClient()),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+    ):
+        await _handle_document_ingest(PHONE, "media795", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID,
+                                      content_sha="sha-local-only")
+    msgs = [c.args[1] for c in reply.call_args_list]
+    assert any("👀" in m for m in msgs)
+    assert not any(("filed " in m) or (" by " in m) for m in msgs)   # no when/who clause
+
+
+def test_dup_claimant_label_resolver_error_falls_back_to_masked_phone():
+    with patch("vula.integrations.notify.team_member_for_phone", side_effect=RuntimeError("boom")):
+        label = wa._dup_claimant_label(TID, "27831234567", PHONE)
+    assert label == "...4567"
+
+
+@pytest.mark.asyncio
+async def test_dup_notice_send_reply_failure_does_not_crash():
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    client = _dedup_client(upsert_returns_data=False, existing_created_at=now_iso,
+                           existing_claimed_by=PHONE)
+    with (
+        patch("vula.commerce.service._client", return_value=client),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(side_effect=RuntimeError("boom"))),
+    ):
+        await _handle_document_ingest(PHONE, "media796", "Payment Notification.pdf",
+                                      "application/pdf", route_tenant_id=TID,
+                                      content_sha="sha-replyfail")
+    # No assertion beyond "didn't raise" — pytest fails the test on an uncaught exception.
