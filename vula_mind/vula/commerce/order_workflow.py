@@ -27,13 +27,17 @@ _DEFAULTS = {
     # of living only on the storefront's own disk.
     "hero_tagline": None, "hero_subtitle": None, "announcements": None,
     "cutoff_time": None, "express_delivery_extra_cents": None, "featured_product_ids": None,
+    # Opening hours (migration 158). None = unconfigured: same convention as delivery_areas —
+    # the assistant is told it does NOT know and must check with the team, never guess.
+    "business_hours": None, "business_hours_note": None, "after_hours_message": None,
 }
 _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp",
            "payment_methods", "eft_details",
            "delivery_areas", "delivery_fee_cents", "free_delivery_over_cents", "min_order_cents",
            "origin_lat", "origin_lng", "origin_label", "delivery_radius_km",
            "hero_tagline", "hero_subtitle", "announcements", "cutoff_time",
-           "express_delivery_extra_cents", "featured_product_ids")
+           "express_delivery_extra_cents", "featured_product_ids",
+           "business_hours", "business_hours_note", "after_hours_message")
 
 # Customer-facing labels for the payment methods.
 PAYMENT_LABELS = {"online": "Card / online payment", "cod": "Pay on delivery", "eft": "EFT / bank transfer"}
