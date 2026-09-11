@@ -1540,7 +1540,17 @@ async def health_check():
             checks["ollama"] = {"status": "ok", "models": ["openrouter/cloud"], "note": "via OpenRouter"}
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
-    return {"status": overall, "service": "vula-api", "version": "1.0.0", "checks": checks}
+    return {
+        "status": overall, "service": "vula-api", "version": "1.0.0", "checks": checks,
+        # Deliberately outside `checks` — these being off doesn't make the service degraded,
+        # it's a confirmed go-live decision (2026-09-11), and "live"/"disabled by design" here
+        # matches the wording config.warn_missing() logs at boot, not an alarm-sounding
+        # "not configured" that reads like a forgotten setting in an incident review.
+        "integrations": {
+            "payments_payfast": "live" if settings.payfast_merchant_id else "disabled by design",
+            "email_resend": "live" if settings.resend_api_key else "disabled by design",
+        },
+    }
 
 
 @app.get("/metrics", dependencies=[Depends(require_auth)])
