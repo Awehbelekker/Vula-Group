@@ -5693,10 +5693,14 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
         cfg = _get_settings(tenant_id)
         v = _hours.hours_verdict(cfg.get("business_hours"))
         if v is not None and not v["open"] and _local_media_claim(tenant_id, f"afterhours:{phone}", 14400.0):
-            nxt = v.get("next_open")
-            when = f"{nxt['day']} at {nxt['time']}" if nxt else "soon"
-            reply = (f"📴 _We're closed right now — back {when}. I can still help in the "
-                    f"meantime!_\n\n" + reply)
+            custom = (cfg.get("after_hours_message") or "").strip()
+            if custom:
+                banner = custom
+            else:
+                nxt = v.get("next_open")
+                when = f"{nxt['day']} at {nxt['time']}" if nxt else "soon"
+                banner = f"📴 _We're closed right now — back {when}. I can still help in the meantime!_"
+            reply = banner + "\n\n" + reply
     except Exception as exc:
         logger.debug("after-hours banner skipped: %s", exc)
 

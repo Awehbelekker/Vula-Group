@@ -98,6 +98,17 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
         <DeliverySettings tenantId={tenantId} />
       </section>
 
+      {/* Opening hours (migration 158) — grounds the WhatsApp assistant's "are you open?"
+          answers, so it never escalates a question that should be configured once. */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🕐 Opening hours</h4>
+        <p style={s.sectionHint}>
+          The WhatsApp assistant answers "are you open?" from this — leave a day unticked to
+          mark it closed. Left as no hours at all, it checks with your team instead of guessing.
+        </p>
+        <BusinessHoursSettings tenantId={tenantId} />
+      </section>
+
       <p style={s.footer}>Powered by Vula</p>
     </div>
   )
@@ -417,6 +428,119 @@ function DeliverySettings({ tenantId }) {
         <button onClick={save} disabled={busy}
           style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent, #2C5545)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' }}>
           {busy ? 'Saving…' : 'Save delivery settings'}
+        </button>
+        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+      </div>
+    </div>
+  )
+}
+
+const DAYS = [
+  { key: 'mon', label: 'Mon' }, { key: 'tue', label: 'Tue' }, { key: 'wed', label: 'Wed' },
+  { key: 'thu', label: 'Thu' }, { key: 'fri', label: 'Fri' }, { key: 'sat', label: 'Sat' },
+  { key: 'sun', label: 'Sun' },
+]
+
+function BusinessHoursSettings({ tenantId }) {
+  const API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+  // One row per day: { closed, open, close }. Defaults to a common SA trading week until the
+  // owner's own settings load — never sent unless they hit Save.
+  const [days, setDays] = useState(() => Object.fromEntries(DAYS.map(d => [d.key,
+    { closed: d.key === 'sun', open: '08:00', close: d.key === 'sat' ? '13:00' : '17:00' }])))
+  const [note, setNote] = useState('')
+  const [afterHours, setAfterHours] = useState('')
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    fetch(`${API}/v1/commerce/${tenantId}/admin/order-settings`)
+      .then(r => r.json())
+      .then(d => {
+        const st = d.settings || {}
+        if (st.business_hours) {
+          setDays(prev => {
+            const next = { ...prev }
+            for (const day of DAYS) {
+              const cfg = st.business_hours[day.key]
+              next[day.key] = cfg && cfg.open && cfg.close
+                ? { closed: false, open: cfg.open, close: cfg.close }
+                : { ...prev[day.key], closed: true }
+            }
+            return next
+          })
+        }
+        if (st.business_hours_note) setNote(st.business_hours_note)
+        if (st.after_hours_message) setAfterHours(st.after_hours_message)
+      }).catch(() => {})
+  }, [tenantId])  // eslint-disable-line
+
+  function setDay(key, patch) {
+    setDays(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }))
+  }
+
+  async function save() {
+    setBusy(true)
+    try {
+      const business_hours = Object.fromEntries(DAYS.map(d => {
+        const day = days[d.key]
+        return [d.key, day.closed ? null : { open: day.open, close: day.close }]
+      }))
+      const body = {
+        business_hours,
+        business_hours_note: note.trim() || null,
+        after_hours_message: afterHours.trim() || null,
+      }
+      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/order-settings`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      const d = await r.json()
+      setMsg(d.error ? String(d.error) : 'Saved — the assistant uses this immediately.')
+    } catch (e) { setMsg('Could not save — try again.') } finally {
+      setBusy(false); setTimeout(() => setMsg(''), 6000)
+    }
+  }
+
+  const inp = { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  return (
+    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {DAYS.map(d => {
+          const day = days[d.key]
+          return (
+            <div key={d.key} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <label style={{ fontSize: 12.5, fontFamily: 'system-ui', width: 40, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" checked={!day.closed}
+                  onChange={e => setDay(d.key, { closed: !e.target.checked })} />
+                {d.label}
+              </label>
+              {day.closed ? (
+                <span style={{ fontSize: 12.5, color: '#B5B0A8', fontFamily: 'system-ui' }}>Closed</span>
+              ) : (
+                <>
+                  <input type="time" value={day.open} onChange={e => setDay(d.key, { open: e.target.value })} style={inp} />
+                  <span style={{ fontSize: 12.5, color: '#8A8680' }}>–</span>
+                  <input type="time" value={day.close} onChange={e => setDay(d.key, { close: e.target.value })} style={inp} />
+                </>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+        Note shown alongside your hours (optional — e.g. "Closed on public holidays")
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Closed on public holidays"
+          style={{ ...inp, width: '100%', marginTop: 4 }} />
+      </label>
+      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+        Custom after-hours message (optional — replaces the default "we're closed, back at X")
+        <input value={afterHours} onChange={e => setAfterHours(e.target.value)}
+          placeholder="We're offline for the weekend — WhatsApp us Monday from 8am!"
+          style={{ ...inp, width: '100%', marginTop: 4 }} />
+      </label>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <button onClick={save} disabled={busy}
+          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent, #2C5545)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          {busy ? 'Saving…' : 'Save opening hours'}
         </button>
         {msg && <span style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
       </div>

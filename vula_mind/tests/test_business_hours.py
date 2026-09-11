@@ -147,3 +147,31 @@ async def test_after_hours_banner_prepended_once_then_not_repeated():
 
     sent = [c.args[1] for c in reply.call_args_list]
     assert sum("closed right now" in m for m in sent) == 1, "must not repeat every message"
+
+
+@pytest.mark.asyncio
+async def test_after_hours_banner_uses_the_configured_custom_message():
+    import vula.api.whatsapp as wa
+    wa._media_claims_local.clear()
+
+    skill_output = MagicMock(success=True, answer="Sure, here's the menu.", media_url=None)
+    with (
+        patch("core.skills.loader.get_skill", return_value=AsyncMock(return_value=skill_output)),
+        patch("vula.commerce.order_workflow.get_order_settings",
+              return_value={"business_hours": OTH_HOURS,
+                           "after_hours_message": "We're offline till Monday — WhatsApp us then!"}),
+        patch("vula.commerce.hours.datetime") as mock_dt,
+        patch("vula.api.whatsapp._maybe_escalate_and_learn",
+              new=AsyncMock(side_effect=lambda tid, ph, txt, ans: ans)),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as reply,
+        patch("vula.commerce.service.get_or_create_session",
+              new=AsyncMock(return_value={"id": "s1"})),
+        patch("vula.commerce.service.format_history", return_value=""),
+        patch("vula.commerce.service.get_recent_messages", new=AsyncMock(return_value=[])),
+    ):
+        mock_dt.now.return_value = _sast(2026, 9, 15, 18, 0)
+        await wa._run_commerce_assistant("27821234568", "hi", "off-the-hook")
+
+    sent = [c.args[1] for c in reply.call_args_list]
+    assert any("We're offline till Monday" in m for m in sent)
+    assert not any("closed right now" in m for m in sent), "custom message replaces the default"
