@@ -151,6 +151,13 @@ class HRMOrchestrator:
         self._load_registry()
 
     def _load_registry(self) -> None:
+        """NOT consulted for live routing — SKILL_KEYWORDS + the keyword-miss LLM fallback
+        below are the real routing logic; registry.json's own top-level "description" field
+        says the same. This load exists so tests/test_orchestrator.py's
+        test_skill_registry_matches_real_implemented_skills can catch registry.json drifting
+        stale against core/skills/loader.py's actually-implemented skill list — that's the
+        one real consumer of self._skill_registry. Don't delete this thinking it's dead code;
+        delete registry.json's regression guard too if you do, on purpose."""
         try:
             with open(SKILL_REGISTRY_PATH) as f:
                 data = json.load(f)
