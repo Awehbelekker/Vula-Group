@@ -91,6 +91,10 @@ class UpdateResult:
     sources_scraped: List[str]
     duration_s: float
     summary: str
+    # 2026-09-11: a source that 404s or can't be parsed used to just vanish from the count —
+    # the weekly log line ("27 new, 0 updated") gave zero indication two of six configured
+    # sources produced nothing that week. {"source": name, "reason": error-or-status}.
+    sources_failed: List[Dict[str, str]] = field(default_factory=list)
 
 
 # ─── Web fetcher ─────────────────────────────────────────────────────────────
@@ -133,6 +137,25 @@ class RateFetcher:
             text = re.sub(r"<[^>]+>", " ", text)
             text = re.sub(r"\s+", " ", text)
             return text[:15000]  # Cap for LLM
+
+
+def _parse_json_array(raw: str) -> Optional[list]:
+    r"""Tolerant JSON-array extraction from LLM output. 2026-09-11: `json.loads(match.group())`
+    on a greedy `re.search(r"\[.*\]", ...)` match broke with "Extra data: line 15 column 1"
+    whenever the model added so much as a trailing word after the array — json.loads demands
+    the WHOLE string parse as one value. json.JSONDecoder().raw_decode() instead parses just
+    the first valid JSON value starting at `[` and ignores whatever text follows it, which is
+    exactly the shape of a real (if slightly chatty) LLM response. Returns None — not [] — when
+    nothing parseable is found, so the caller can still tell "no array at all" apart from a
+    genuinely empty one."""
+    start = raw.find("[")
+    if start < 0:
+        return None
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(raw[start:])
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, list) else None
 
 
 # ─── LLM extractor ───────────────────────────────────────────────────────────
@@ -179,12 +202,15 @@ class RateExtractor:
             # Strip think tags
             raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-            # Extract JSON array
-            match = re.search(r"\[.*\]", raw, re.DOTALL)
-            if not match:
-                return ScrapedCatalogue(source_name=source_name, source_url=url, status="no_data")
+            # Extract JSON array — see _parse_json_array for why this isn't a plain json.loads.
+            items = _parse_json_array(raw)
+            if items is None:
+                if "[" not in raw:
+                    return ScrapedCatalogue(source_name=source_name, source_url=url, status="no_data")
+                return ScrapedCatalogue(source_name=source_name, source_url=url,
+                                        status="parse_failed",
+                                        error=f"unparseable JSON in response: {raw[:200]!r}")
 
-            items = json.loads(match.group())
             rates = []
             for item in items:
                 if not item.get("label") or not item.get("low"):
@@ -242,6 +268,15 @@ class RatesDatabase:
                 scraped_at TEXT
             )
         """)
+        # 2026-09-11: ScrapedCatalogue.error was captured in the dataclass but never actually
+        # persisted — a failed source's REASON was gone the moment the process moved on, so
+        # even reading scrape_log by hand couldn't answer "why did this one fail". ADD COLUMN
+        # on an existing DB (CREATE TABLE IF NOT EXISTS above is a no-op for anyone who already
+        # has this file); duplicate-column is the only expected failure, swallowed.
+        try:
+            conn.execute("ALTER TABLE scrape_log ADD COLUMN error TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         conn.close()
 
@@ -295,11 +330,30 @@ class RatesDatabase:
     def log_scrape(self, catalogue: ScrapedCatalogue):
         conn = sqlite3.connect(self.db_path)
         conn.execute(
-            "INSERT INTO scrape_log (source, url, status, rates_extracted, scraped_at) VALUES (?,?,?,?,?)",
-            (catalogue.source_name, catalogue.source_url, catalogue.status, len(catalogue.rates), catalogue.scraped_at)
+            "INSERT INTO scrape_log (source, url, status, rates_extracted, scraped_at, error) "
+            "VALUES (?,?,?,?,?,?)",
+            (catalogue.source_name, catalogue.source_url, catalogue.status, len(catalogue.rates),
+             catalogue.scraped_at, catalogue.error)
         )
         conn.commit()
         conn.close()
+
+    def get_source_status(self) -> List[Dict]:
+        """The most recent scrape_log entry per source — admin visibility into which sources
+        are actually producing data right now vs silently failing (2026-09-11). Used by
+        GET /takeoff/rates so "0 rates from a source" is visible without reading raw logs."""
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute("""
+            SELECT source, url, status, rates_extracted, scraped_at, error
+            FROM scrape_log s1
+            WHERE scraped_at = (
+                SELECT MAX(scraped_at) FROM scrape_log s2 WHERE s2.source = s1.source
+            )
+            ORDER BY source
+        """).fetchall()
+        cols = ["source", "url", "status", "rates_extracted", "scraped_at", "error"]
+        conn.close()
+        return [dict(zip(cols, row)) for row in rows]
 
 
 # ─── Main scraper ─────────────────────────────────────────────────────────────
@@ -329,10 +383,18 @@ class ConstructionRatesScraper:
             "url": "https://www.builders.co.za/Tiles-&-Flooring/Tiles/c/Tiles",
             "prompt": "Extract tile and flooring prices in ZAR per m² from Builders Warehouse. Include product name, size, price per unit or per m².",
         },
+        # The old /shop/c/building-materials URL 404s — Cashbuild restructured to numbered
+        # per-category pages (confirmed live 2026-09-11). Split into the two categories that
+        # cover this source's original intent ("cement bags, bricks, sand, stone").
         {
-            "name": "Cashbuild",
-            "url": "https://www.cashbuild.co.za/shop/c/building-materials",
-            "prompt": "Extract building material prices in ZAR from Cashbuild. Include cement bags, bricks, sand, stone per unit prices.",
+            "name": "Cashbuild Cement & Sand",
+            "url": "https://www.cashbuild.co.za/539-cement",
+            "prompt": "Extract cement and sand prices in ZAR from Cashbuild. Include bag size/weight and price per unit.",
+        },
+        {
+            "name": "Cashbuild Brickwork",
+            "url": "https://www.cashbuild.co.za/529-brickwork",
+            "prompt": "Extract brick and block prices in ZAR from Cashbuild. Include brick/block type, size, and price per unit.",
         },
         {
             "name": "Italtile",
@@ -370,17 +432,32 @@ class ConstructionRatesScraper:
 
         catalogues = await asyncio.gather(*[scrape_one(s) for s in self.SOURCES], return_exceptions=True)
 
-        # Process results
+        # Process results. 2026-09-11: a source whose fetch 404'd or whose LLM response didn't
+        # parse used to still land in sources_scraped (it WAS attempted, just produced nothing)
+        # — "27 new, 0 updated" gave no hint two of six configured sources were silently dead.
+        # sources_scraped is now genuinely-succeeded only; sources_failed carries the reason.
         counts = {"new": 0, "updated": 0, "unchanged": 0}
-        for cat in catalogues:
+        sources_failed: List[Dict[str, str]] = []
+        for i, cat in enumerate(catalogues):
             if isinstance(cat, Exception):
+                name = self.SOURCES[i]["name"] if i < len(self.SOURCES) else "?"
                 logger.error(f"Scraper error: {cat}")
+                sources_failed.append({"source": name, "reason": str(cat)})
+                continue
+            if cat.status != "ok":
+                sources_failed.append({"source": cat.source_name,
+                                       "reason": cat.error or cat.status})
                 continue
             sources_scraped.append(cat.source_name)
             for rate in cat.rates:
                 status = self.db.upsert(rate)
                 counts[status] += 1
                 all_rates.append(rate)
+
+        if sources_failed:
+            logger.warning("Weekly rates update: %d of %d sources produced nothing — %s",
+                          len(sources_failed), len(self.SOURCES),
+                          "; ".join(f"{f['source']} ({f['reason']})" for f in sources_failed))
 
         # Build summary
         changes = self.db.get_changes(threshold_pct=5.0)
@@ -394,10 +471,13 @@ class ConstructionRatesScraper:
         summary = (
             f"Vula Scout — Construction Rates Update\n"
             f"{'─' * 40}\n"
-            f"Scraped: {len(sources_scraped)} sources\n"
+            f"Scraped: {len(sources_scraped)}/{len(self.SOURCES)} sources\n"
             f"Rates: {len(all_rates)} total · {counts['new']} new · {counts['updated']} updated\n"
             f"Duration: {time.time()-started:.1f}s\n"
         )
+        if sources_failed:
+            summary += (f"\n⚠️ {len(sources_failed)} source(s) produced nothing:\n"
+                       + "\n".join(f"  {f['source']}: {f['reason']}" for f in sources_failed) + "\n")
         if change_text:
             summary += f"\nSignificant changes (>5%):\n{change_text}\n"
 
@@ -409,6 +489,7 @@ class ConstructionRatesScraper:
             sources_scraped=sources_scraped,
             duration_s=round(time.time() - started, 1),
             summary=summary,
+            sources_failed=sources_failed,
         )
 
     async def get_live_rate(self, material_description: str) -> Optional[Dict]:
@@ -458,6 +539,13 @@ class ConstructionRatesScraper:
                 msg += f"{emoji} {r['label']}: {r['change_pct']:+.1f}%\n"
         else:
             msg += "✅ No significant rate changes this week\n"
+
+        # 2026-09-11: a source silently producing 0 rates for weeks was invisible here too —
+        # this reads the same source_status the admin-facing endpoint uses, so Judy sees it.
+        failed = [s for s in self.db.get_source_status() if s["status"] != "ok"]
+        if failed:
+            msg += (f"\n⚠️ {len(failed)} source(s) not returning data — worth a look: "
+                   + ", ".join(s["source"] for s in failed) + "\n")
 
         msg += f"\n📦 *{len(all_rates)} rates tracked* across AECOM, Builders Warehouse, Cashbuild & Italtile\n"
         msg += "\nOpen Vula QS Pro for the full breakdown → vula.co.za/qs"
