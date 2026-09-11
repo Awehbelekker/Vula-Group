@@ -2558,17 +2558,27 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         return None
 
     # 1a. Machine-generated bank payment notification (FNB "NOTIFICATION OF PAYMENT" etc.)?
-    # A positional parse of the exact text gives every field verbatim with confidence 1.0 —
-    # no LLM anywhere near the amount. Anything unrecognised returns None and falls straight
-    # through to the LLM path below, unchanged. (vula/ingestion/payment_notice.py, PR #9.)
+    # A positional parse of the exact text gives every field verbatim with confidence 1.0 — no
+    # LLM anywhere near the amount, but ONLY for a matcher verified against a real sample of
+    # that bank's PDF (payment_notice.py's FNB parser). A matcher for a bank nobody has
+    # verified against a real sample is never trusted as a fast path — it's passed to the LLM
+    # below as a hint the model must re-derive and that still has to pass the same
+    # ungrounded_figures check as everything else (see _det_hint below and _needs_escalation's
+    # "Proof of Payment" branch). Anything unrecognised returns None and the LLM path runs
+    # completely unchanged. (vula/ingestion/payment_notice.py, PR #9 + PR #14.)
+    _det_hint = None
     try:
         from vula.ingestion import payment_notice
         exact = payment_notice.parse(text)
-        if exact:
+        if exact and exact.get("verified"):
             logger.info("Doc analyze: %s parsed deterministically as %s (%s) — no LLM",
                         filename, exact.get("category"), exact.get("issuer"))
             return {"category": exact["category"], "summary": exact.get("summary", ""),
                     "fields": exact.get("fields", {})}
+        if exact:
+            logger.info("Doc analyze: %s matched an UNVERIFIED %s parser — passing to the LLM "
+                       "as a hint, not a fast path", filename, exact.get("issuer"))
+            _det_hint = exact
     except Exception as exc:
         logger.debug("Doc analyze: deterministic parse skipped for %s: %s", filename, exc)
 
@@ -2614,7 +2624,13 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     "proposal, contract, drawing, specification, etc.), use whatever key "
                     "structured data best fits — e.g. fee proposal: client, stages, total; "
                     "contract: parties, value, dates. Use null when unknown."},
-                {"role": "user", "content": f"Filename: {filename}\n\nDocument:\n{text}\n\nJSON:"},
+                {"role": "user", "content": (
+                    f"Filename: {filename}\n\nDocument:\n{text}\n\nJSON:"
+                    + (f"\n\n(A rule-based pre-scan — UNVERIFIED for this bank's exact layout, "
+                       f"do not just copy it — guessed these fields; re-derive every value from "
+                       f"the document text above and correct anything wrong: "
+                       f"{_json.dumps(_det_hint.get('fields', {}))})" if _det_hint else "")
+                )},
         ]
 
         def _parse(_resp):
@@ -2650,15 +2666,21 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             trust a self-reported confidence alone — cross-check (a) the extracted line-item
             arithmetic against the stated total, and (b) that every money figure actually
             appears in the source text. A misread/invented total is often internally
-            consistent but simply isn't on the page — that's the one that must not be booked."""
+            consistent but simply isn't on the page — that's the one that must not be booked.
+            Proof of Payment has no line items to reconcile, but the same grounding check
+            applies — it's the backstop for an UNVERIFIED bank-matcher hint (_det_hint above)
+            the model might otherwise just copy instead of re-deriving from the text."""
             if not (result and (result.get("summary") or result.get("fields"))):
                 return True
-            if result.get("category") in _FINANCIAL_DOC_CATEGORIES:
-                flds = result.get("fields") or {}
+            cat = result.get("category")
+            flds = result.get("fields") or {}
+            if cat in _FINANCIAL_DOC_CATEGORIES:
                 if not scan_quality_ok(flds):
                     return True
                 if ungrounded_figures(flds, text):
                     return True
+            elif cat == "Proof of Payment" and ungrounded_figures(flds, text):
+                return True
             return False
 
         # Cheap pass first (free local via tunnel / gemini-flash).
@@ -2720,7 +2742,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         # Even after escalation a money figure may still not be traceable to the text. Don't
         # drop the read — flag it, so filing routes it to owner review instead of booking it
         # silently (the caller checks fields["_unverified_figures"]).
-        if result and result.get("category") in _FINANCIAL_DOC_CATEGORIES:
+        if result and result.get("category") in (_FINANCIAL_DOC_CATEGORIES | {"Proof of Payment"}):
             missing = ungrounded_figures(result.get("fields") or {}, text)
             if missing:
                 logger.warning("Doc analyze: %s has %d figure(s) not found in its text: %s",

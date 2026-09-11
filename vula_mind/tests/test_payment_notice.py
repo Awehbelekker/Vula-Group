@@ -66,3 +66,48 @@ def test_not_a_payment_notice_returns_none():
 def test_missing_amount_falls_through_to_the_llm():
     broken = FNB.replace("Cur/Amount\nZAR44000.00", "Cur/Amount")
     assert parse(broken) is None
+
+
+def test_fnb_match_is_flagged_verified():
+    # FNB is the one matcher actually checked against real samples — the caller (_analyze_
+    # document) fast-paths ONLY when this is True.
+    assert parse(FNB)["verified"] is True
+
+
+# --- Unverified generic matcher (no real sample of any of these banks yet) ------------------
+
+ABSA_LIKE = """PROOF OF PAYMENT
+ABSA Bank Limited confirms the following EFT has been processed.
+Beneficiary Name: Edison Maunganidze
+Beneficiary Reference: HPC GEYSER
+Amount: R 44 000.00
+Payment Date: 20 July 2026
+Thank you for banking with ABSA.
+"""
+
+
+def test_unverified_generic_matcher_extracts_the_amount_and_is_flagged_unverified():
+    r = parse(ABSA_LIKE)
+    assert r["verified"] is False
+    assert r["category"] == "Proof of Payment"
+    assert r["fields"]["amount_cents"] == 4_400_000
+    assert r["fields"]["payee_name"] == "Edison Maunganidze"
+    assert "ABSA" in r["issuer"]
+    assert "UNVERIFIED" in r["summary"]
+
+
+def test_unverified_matcher_does_not_fire_on_an_ordinary_invoice():
+    invoice = "Tax Invoice\nSupplier: ACME\nTotal Due: R1,200.00\nBeneficiary details below."
+    assert parse(invoice) is None
+
+
+def test_unverified_matcher_needs_an_amount():
+    no_amount = "PROOF OF PAYMENT\nStandard Bank\nBeneficiary Name: Jane Doe\nReference: ABC123\n"
+    assert parse(no_amount) is None
+
+
+def test_fnb_text_never_reaches_the_unverified_matcher():
+    # _MATCHERS tries _parse_fnb first — a real FNB notice must always come back verified=True,
+    # never fall through to the generic matcher's verified=False.
+    assert parse(FNB)["issuer"] == "FNB"
+    assert parse(FNB)["verified"] is True
