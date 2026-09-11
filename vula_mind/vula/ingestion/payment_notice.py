@@ -24,9 +24,19 @@ FNB "NOTIFICATION OF PAYMENT" is the common one for DIGG. The structure is:
     Reference
     : HPC GEYSER
 
-Other SA banks (ABSA, Standard Bank, Nedbank, Capitec) issue similarly rigid notices — add a
-matcher per bank as their samples come in. Returns None for anything unrecognised so the LLM
-path in _analyze_document takes over unchanged.
+Other SA banks (ABSA, Standard Bank, Nedbank, Capitec) issue similarly rigid notices, but
+without a real sample of each one's actual PDF, a "positional" parser for them would just be a
+guess dressed up as certainty. So every matcher here carries a `verified` flag: True only for
+_parse_fnb, which was checked field-by-field against 7 real FNB PDFs. `_parse_generic_sa_eft`
+below is a best-effort, unverified fallback for the other banks — looser keyword-proximity
+matching instead of FNB's strict line-by-line positions, `verified=False`, and
+_analyze_document treats its output as a HINT it hands to the LLM (which still has to re-derive
+every figure from the actual text and pass the same grounding check), never as a fast path that
+skips the LLM the way a verified match does. Replace it with a real _parse_<bank>() the moment
+a genuine sample confirms that bank's layout.
+
+Returns None for anything unrecognised so the LLM path in _analyze_document takes over
+unchanged.
 """
 from __future__ import annotations
 
@@ -102,24 +112,95 @@ def _parse_fnb(text: str) -> Optional[Dict[str, Any]]:
                f"{fields['payer'] or 'the account holder'} to {fields['payee_name']}"
                + (f", reference '{fields['reference']}'" if fields["reference"] else "") + ".")
     return {"category": "Proof of Payment", "summary": summary, "fields": fields,
-            "extraction": "deterministic", "issuer": "FNB"}
+            "extraction": "deterministic", "issuer": "FNB", "verified": True}
 
 
-_MATCHERS = (_parse_fnb,)
+def _labelled_flexible(text: str, *labels: str) -> Optional[str]:
+    """Looser cousin of _labelled: a label doesn't have to sit alone on its own line — matches
+    `label` followed (same line, optionally after a ':') by the rest of that line. Used only by
+    the UNVERIFIED matcher below, where the real line-by-line layout is unknown and a strict
+    positional match like FNB's would just silently match nothing."""
+    for label in labels:
+        m = re.search(rf"{re.escape(label)}\s*:?\s*([^\n]+)", text, re.IGNORECASE)
+        if m:
+            v = m.group(1).strip().strip("*").strip()
+            if v and v.lower() not in (lab.lower() for lab in labels):
+                return v
+    return None
+
+
+def _amount_near(text: str, *labels: str) -> Optional[str]:
+    """The R/ZAR amount within ~80 chars after one of `labels`, else the one standalone Rand
+    figure on the page if there's exactly one — a payment notice usually has just the one
+    amount that matters, wherever on the page it sits."""
+    money = r"(R\s?[\d][\d ,]*\.\d{2}|ZAR\s?[\d][\d ,]*\.\d{2})"
+    for label in labels:
+        m = re.search(rf"{re.escape(label)}.{{0,80}}?{money}", text, re.IGNORECASE | re.DOTALL)
+        if m:
+            return m.group(1)
+    amounts = re.findall(money, text, re.IGNORECASE)
+    return amounts[0] if len(amounts) == 1 else None
+
+
+def _parse_generic_sa_eft(text: str) -> Optional[Dict[str, Any]]:
+    """UNVERIFIED heuristic matcher for a non-FNB South African bank's payment/EFT
+    confirmation (ABSA, Standard Bank, Nedbank, Capitec, or an unidentified one). Built from
+    general SA-banking terminology, not a confirmed real sample the way FNB's parser is —
+    verified=False always, and _analyze_document treats the result as an LLM hint, never a
+    fast path. See the module docstring."""
+    low = text.lower()
+    if not any(sig in low for sig in (
+        "proof of payment", "eft confirmation", "payment confirmation",
+        "notification of payment", "eft notification",
+    )):
+        return None
+    issuer = "Unknown bank"
+    for name in ("absa", "standard bank", "nedbank", "capitec", "fnb", "first national bank"):
+        if name in low:
+            issuer = name.upper() if len(name) <= 5 else name.title()
+            break
+
+    amount_raw = _amount_near(text, "amount", "total") or ""
+    fields = {
+        "payer": None,
+        "payee_name": _labelled_flexible(text, "beneficiary name", "beneficiary", "recipient", "payee"),
+        "payee_bank": None,
+        "payee_branch_code": None,
+        "payee_account_number": None,
+        "amount_cents": _cents(re.sub(r"[A-Za-z]", "", amount_raw)) if amount_raw else None,
+        "reference": _labelled_flexible(text, "beneficiary reference", "your reference", "reference"),
+        "trace_id": None,
+        "date": _iso_date(_labelled_flexible(text, "payment date", "date actioned",
+                                             "transaction date", "date") or ""),
+    }
+    if not fields["amount_cents"]:
+        return None
+    rand = fields["amount_cents"] / 100
+    summary = (f"Payment confirmation ({issuer}, UNVERIFIED layout — confirm against the "
+               f"document): ZAR {rand:,.2f}"
+               + (f" to {fields['payee_name']}" if fields["payee_name"] else "")
+               + (f", reference '{fields['reference']}'" if fields["reference"] else "") + ".")
+    return {"category": "Proof of Payment", "summary": summary, "fields": fields,
+            "extraction": "heuristic", "issuer": issuer, "verified": False}
+
+
+_MATCHERS = (_parse_fnb, _parse_generic_sa_eft)
 
 
 def parse(text: str) -> Optional[Dict[str, Any]]:
-    """Deterministically parse a bank payment notification from its extracted text.
-    Returns the same {category, summary, fields} shape _analyze_document produces (plus
-    extraction="deterministic"), or None if the text isn't a recognised payment notice."""
+    """Parse a bank payment notification from its extracted text. Returns the same
+    {category, summary, fields} shape _analyze_document produces, plus `verified` (True only
+    for a matcher checked against a real sample of that bank's PDF — the caller must NOT use
+    an unverified match as a fast path, only as a hint for the LLM to re-derive and verify), or
+    None if the text isn't a recognised payment notice at all."""
     if not text or len(text) < 40:
         return None
     for matcher in _MATCHERS:
         try:
             got = matcher(text)
             if got:
-                log.info("payment notice parsed deterministically (%s): %s cents",
-                         got.get("issuer"), got["fields"].get("amount_cents"))
+                log.info("payment notice matched (%s, verified=%s): %s cents",
+                         got.get("issuer"), got.get("verified"), got["fields"].get("amount_cents"))
                 return got
         except Exception as exc:  # noqa: BLE001 — never let this break the LLM fallback
             log.debug("payment-notice matcher %s failed: %s", getattr(matcher, "__name__", "?"), exc)

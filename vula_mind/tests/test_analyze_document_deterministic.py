@@ -110,6 +110,64 @@ async def test_docling_retry_recovers_a_total_fitz_text_scrambled():
     assert "_unverified_figures" not in r["fields"]
 
 
+ABSA_LIKE = """PROOF OF PAYMENT
+ABSA Bank Limited confirms the following EFT has been processed.
+Beneficiary Name: Edison Maunganidze
+Beneficiary Reference: HPC GEYSER
+Amount: R 44 000.00
+Payment Date: 20 July 2026
+"""
+
+
+@pytest.mark.asyncio
+async def test_unverified_bank_match_is_a_hint_not_a_fast_path():
+    """A non-FNB bank match (payment_notice.py's UNVERIFIED generic matcher) must reach the
+    LLM — as a hint in the prompt — never return directly the way FNB does."""
+    good_json = ('{"category": "Proof of Payment", "summary": "Payment to Edison.", '
+                '"fields": {"payee_name": "Edison Maunganidze", "amount_cents": 4400000, '
+                '"reference": "HPC GEYSER"}}')
+    seen_messages = {}
+
+    async def fake_acompletion(**kwargs):
+        seen_messages["msgs"] = kwargs["messages"]
+        return _fake_llm_response(good_json)
+
+    with (
+        patch("core.llm_router.resolve_cheap_route",
+              new=AsyncMock(return_value=("gpt-x", "k", "http://b"))),
+        patch("core.llm_router.resolve_cloud_route", return_value=None),
+        patch("litellm.acompletion", new=AsyncMock(side_effect=fake_acompletion)),
+    ):
+        r = await _analyze_document("digg-demo", "eft.pdf", "/tmp/x.pdf", text=ABSA_LIKE)
+
+    # The LLM was actually called (not skipped the way a VERIFIED FNB match skips it) ...
+    user_msg = seen_messages["msgs"][-1]["content"]
+    assert "UNVERIFIED" in user_msg and "Edison Maunganidze" in user_msg   # ... with the hint
+    assert r["fields"]["amount_cents"] == 4_400_000
+    assert "_unverified_figures" not in r["fields"]     # the LLM's own figure IS grounded
+
+
+@pytest.mark.asyncio
+async def test_unverified_bank_hint_ignored_by_llm_still_gets_flagged():
+    """If the LLM produces a figure that isn't actually on the page (whether or not it copied
+    the hint), the usual grounding backstop still catches it — the hint changes nothing about
+    that guarantee."""
+    invented_json = ('{"category": "Proof of Payment", "summary": "Payment.", '
+                     '"fields": {"payee_name": "Someone Else", "amount_cents": 999999}}')
+
+    with (
+        patch("core.llm_router.resolve_cheap_route",
+              new=AsyncMock(return_value=("gpt-x", "k", "http://b"))),
+        patch("core.llm_router.resolve_cloud_route",
+              return_value=("gpt-cloud", "k2", "http://c")),
+        patch("litellm.acompletion", new=AsyncMock(return_value=_fake_llm_response(invented_json))),
+        patch("vula.ingestion.docling_extract.extract_markdown", new=AsyncMock(return_value=None)),
+    ):
+        r = await _analyze_document("digg-demo", "eft.pdf", "/tmp/x.pdf", text=ABSA_LIKE)
+
+    assert r["fields"]["_unverified_figures"][0]["cents"] == 999999
+
+
 @pytest.mark.asyncio
 async def test_docling_unavailable_still_flags_unverified_instead_of_crashing():
     """Docling not installed/failing (extract_markdown -> None) must fall straight back to the
