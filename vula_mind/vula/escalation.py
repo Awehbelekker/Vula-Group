@@ -20,9 +20,19 @@ log = logging.getLogger(__name__)
 # Phrases that mean "the agent couldn't really answer" (escalate even if confidence looks ok).
 # Covers Afrikaans too — the assistant replies in the customer's language, so an Afrikaans
 # "ek weet nie" previously sailed past this English-only check and never escalated.
+# 2026-09-11: added isiZulu/isiXhosa/Sesotho for the same reason — the persona prompt promises
+# these languages (commerce_assistant.py's conversation rules), but this gate was silently
+# English/Afrikaans-only, so a confidently-wrong reply to an isiZulu/isiXhosa/Sesotho speaker
+# never escalated. Deliberately a SHORT, high-confidence starter list (not exhaustive) — these
+# are basic, unambiguous first-person phrases, not idiomatic translations, chosen to minimise
+# the risk of a wrong/awkward phrase either misfiring or missing real cases; worth a native-
+# speaker review to extend, same as the brief that raised this recommends.
 _NO_ANSWER = re.compile(
     r"(i (don'?t|do not) (know|have)|not sure|couldn'?t find|can'?t help|no (info|information|record)|unable to|i'?m not able"
-    r"|ek (weet|het) nie|nie seker nie|kan nie help nie|ek sal (met die span|eers) (kyk|vra)|laat ek uitvind)",
+    r"|ek (weet|het) nie|nie seker nie|kan nie help nie|ek sal (met die span|eers) (kyk|vra)|laat ek uitvind"
+    r"|angazi|angikwazi ukusiza|ngizobuza (ithimba|abantu)"                    # isiZulu
+    r"|andazi|andikwazi ukunceda|ndiza kubuza (iqela|abantu)"                 # isiXhosa
+    r"|ha ke tsebe|nka se o thuse|ke tla botsa (sehlopha|batho))",             # Sesotho
     re.IGNORECASE,
 )
 
@@ -55,11 +65,17 @@ def reply_is_instruction_to_vula(text: str) -> bool:
     return bool(_INSTRUCTION_TO_VULA.search((text or "").strip()))
 
 
+# isiZulu/isiXhosa/Sesotho additions, 2026-09-11 — same starter-list caveat as _NO_ANSWER
+# above: a short, high-confidence list (anger/complaint being the common thread), not a full
+# idiomatic translation of the English/Afrikaans list. Extend with a native speaker's review.
 _FRUSTRATION_WORDS = re.compile(
     r"(ridiculous|terrible|useless|pathetic|waste of (my )?(time|money)|not happy|"
     r"unacceptable|disgusted|disgusting|(this is |so )?annoying|angry|furious|fed up|"
     r"sick of|worst (service|experience)|scam|rip.?off|shocking service|"
-    r"belaglik|omgekrap|woedend|totale mors|swak diens|verskriklike diens)",
+    r"belaglik|omgekrap|woedend|totale mors|swak diens|verskriklike diens|"
+    r"ngicasukile|ngikhathele yi|umsebenzi ombi|"                             # isiZulu
+    r"ndicaphukile|ndidiniwe|inkonzo embi|"                                   # isiXhosa
+    r"ke halefile|ke tenegile|tshebeletso e mpe)",                            # Sesotho
     re.IGNORECASE,
 )
 

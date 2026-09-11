@@ -19,6 +19,14 @@ def test_detects_explicit_complaint_words():
     assert esc.customer_seems_frustrated("Dis totale mors, ek is woedend")
 
 
+def test_detects_complaint_words_in_isizulu_isixhosa_sesotho():
+    # 2026-09-11: the persona prompt promises these languages — frustration detection was
+    # silently English/Afrikaans-only until now.
+    assert esc.customer_seems_frustrated("Ngicasukile, umsebenzi ombi lo")            # isiZulu
+    assert esc.customer_seems_frustrated("Ndicaphukile, inkonzo embi kakhulu")        # isiXhosa
+    assert esc.customer_seems_frustrated("Ke halefile, tshebeletso e mpe haholo")     # Sesotho
+
+
 def test_detects_shouting():
     assert esc.customer_seems_frustrated("WHY HAS NOBODY ANSWERED ME YET")
     assert esc.customer_seems_frustrated("THIS IS NOT OK I NEED HELP NOW")
@@ -73,6 +81,17 @@ def test_no_answer_phrase_still_escalates_regardless_of_customer_text():
     assert esc.should_escalate(
         "I don't know that one.", confidence=0.9, customer_text="what's the price of hake?",
     ) is True
+
+
+def test_no_answer_phrase_in_isizulu_isixhosa_sesotho_still_escalates():
+    # 2026-09-11: a confidently-worded isiZulu/isiXhosa/Sesotho "I don't know" reply previously
+    # sailed past this check exactly the way the Afrikaans one did before that fix.
+    assert esc.should_escalate("Angazi, uxolo.", confidence=0.9,
+                              customer_text="ingakanani?") is True                   # isiZulu
+    assert esc.should_escalate("Andazi, uxolo.", confidence=0.9,
+                              customer_text="yimalini?") is True                    # isiXhosa
+    assert esc.should_escalate("Ha ke tsebe, ntshwarele.", confidence=0.9,
+                              customer_text="ke bokae?") is True                     # Sesotho
 
 
 # ── find_stale_open_escalations / mark_stale_notified ───────────────────────────
