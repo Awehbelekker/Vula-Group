@@ -4831,6 +4831,30 @@ async def _send_invoice_document(
         return False
 
 
+async def _run_with_holding_message(phone: str, tenant_id: str, coro, *, delay: float = 10.0):
+    """Await `coro`, but if it hasn't finished within `delay` seconds, send a quick "still
+    with you" holding message once and keep waiting for the real reply — never replaces it,
+    just closes the silent gap while a slow local-LLM turn (commerce_assistant's tool-calling
+    loop can run up to MAX_TOOL_ITERATIONS rounds) is still in flight. WhatsApp's own typing
+    indicator only lasts ~25s (Meta's limit, see _mark_read_and_typing) and there's otherwise
+    no signal at all in between — a customer with nothing for 15-20s can plausibly wonder if
+    their message even arrived (2026-09-11, pre-go-live brief item #6).
+
+    asyncio.shield keeps `coro` running even though the outer wait_for times out — this awaits
+    the SAME task twice, never starts a second one, so the real work is never duplicated or
+    cancelled by a slow-but-legitimate turn."""
+    import asyncio as _asyncio
+    task = _asyncio.ensure_future(coro)
+    try:
+        return await _asyncio.wait_for(_asyncio.shield(task), timeout=delay)
+    except _asyncio.TimeoutError:
+        try:
+            await _send_reply(phone, "Just checking that for you…", tenant_id)
+        except Exception as exc:
+            logger.debug("holding message send skipped: %s", exc)
+        return await task
+
+
 # ─── Commerce ordering flow ───────────────────────────────────────────────────
 
 async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id: str,
@@ -5634,14 +5658,17 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
         logger.debug("language preference update skipped: %s", exc)
 
     skill = get_skill("commerce_assistant")
-    output = await skill(
-        SkillInput(
-            question=text,
-            tenant_id=tenant_id,
-            conversation_history=history,
-            metadata={"session_id": phone, "customer_phone": phone,
-                      "preferred_language": preferred_language},
-        )
+    output = await _run_with_holding_message(
+        phone, tenant_id,
+        skill(
+            SkillInput(
+                question=text,
+                tenant_id=tenant_id,
+                conversation_history=history,
+                metadata={"session_id": phone, "customer_phone": phone,
+                          "preferred_language": preferred_language},
+            )
+        ),
     )
 
     if not output.success:
