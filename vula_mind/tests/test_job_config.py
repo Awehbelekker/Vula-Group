@@ -60,6 +60,33 @@ def test_get_configs_includes_pending_project_nudge(monkeypatch):
     assert "pending_project_nudge" in cfgs
 
 
+# ── stale_handoff_resume (2026-09-11, pre-go-live brief item #5) ───────────────────────
+
+def test_stale_handoff_resume_registered():
+    assert "stale_handoff_resume" in job_config.JOB_TYPES
+    assert job_config.JOB_TYPES["stale_handoff_resume"]["kind"] == "interval"
+
+
+def test_stale_handoff_resume_effective_config_defaults():
+    cfg = job_config.effective_config("t1", "stale_handoff_resume", row=None)
+    assert cfg["enabled"] is True
+    assert cfg["kind"] == "interval"
+    assert cfg["interval_minutes"] == 60
+
+
+def test_stale_handoff_resume_respects_tenant_override():
+    cfg = job_config.effective_config(
+        "t1", "stale_handoff_resume", row={"enabled": False, "interval_minutes": 30})
+    assert cfg["enabled"] is False
+    assert cfg["interval_minutes"] == 30
+
+
+def test_get_configs_includes_stale_handoff_resume(monkeypatch):
+    monkeypatch.setattr(job_config, "_client", lambda: _EmptyDB())
+    cfgs = job_config.get_configs("t1")
+    assert "stale_handoff_resume" in cfgs
+
+
 class _EmptyDB:
     def table(self, name):
         return self

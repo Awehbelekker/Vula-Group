@@ -788,6 +788,70 @@ async def _stale_escalation_scheduler_loop() -> None:
         await _asyncio.sleep(600)  # poll every 10 minutes; per-tenant interval is job_config-driven
 
 
+async def _stale_handoff_scheduler_loop() -> None:
+    """Human handoff (an owner taking over a WhatsApp thread — vula/api/whatsapp.py's
+    "paused" check, set via the admin handoff/reply endpoints in commerce.py) has no expiry:
+    if the owner gets distracted, the bot stays muted on that thread forever and the customer
+    can be left permanently ghosted with no signal to anyone (2026-09-11, pre-go-live brief
+    item #5).
+
+    Every tenant, every `interval_minutes` (job_config-driven, same reuse of the
+    _stale_escalation_scheduler_loop machinery immediately above): find sessions paused 2+
+    hours with zero activity since (service.find_stale_paused_sessions), best-effort ping
+    whoever owns "help_request" for that tenant (escalation._pick_helper — the exact same
+    selection escalation.py already uses, not a second one), then UNCONDITIONALLY resume the
+    bot regardless of whether the ping itself delivered. That ordering matters: the ping can
+    silently fail (the owner outside WhatsApp's 24h free-form window — see the
+    [[proactive-message-window]] audit, still blocked on a Meta template as of this writing),
+    so it must never be the thing standing between a customer and getting answered again —
+    auto-resume doesn't depend on any outbound send succeeding, so it's the actual guarantee
+    here, the ping is the insurance on top."""
+    import asyncio as _asyncio
+    from vula.commerce import job_config, service as commerce_service
+    from vula.escalation import _pick_helper
+    from vula.api.whatsapp import _send_reply
+    from vula.api import tenants as _t
+
+    await _asyncio.sleep(200)  # settle on boot
+    while True:
+        try:
+            rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+            for r in rows:
+                tenant_id = r.get("tenant_id")
+                if not tenant_id:
+                    continue
+                cfg = job_config.get_configs(tenant_id).get("stale_handoff_resume")
+                if not cfg or not cfg.get("enabled", True):
+                    continue
+                if not job_config.claim_run(tenant_id, "stale_handoff_resume", cfg):
+                    continue
+                try:
+                    for session in await commerce_service.find_stale_paused_sessions(tenant_id):
+                        who = (session.get("customer_name") or session.get("customer_phone")
+                              or "a customer")
+                        helper = _pick_helper(tenant_id)
+                        if helper and helper.get("whatsapp"):
+                            msg = (f"⏰ Heads up — you paused Vula's replies to {who} a while "
+                                  f"ago and nothing's happened since. I've resumed answering "
+                                  f"them so they're not left waiting; jump back in any time by "
+                                  f"replying in the inbox.")
+                            if not await _send_reply(helper["whatsapp"], msg, tenant_id=tenant_id):
+                                log.warning("stale-handoff ping undelivered for %s session %s "
+                                          "(helper outside their 24h WhatsApp window?)",
+                                          tenant_id, session["id"])
+                        else:
+                            log.warning("stale-handoff: no helper configured to notify for "
+                                      "%s session %s", tenant_id, session["id"])
+                        await commerce_service.set_session_paused(tenant_id, session["id"], False)
+                        log.info("auto-resumed stale-paused session %s for %s (idle since %s)",
+                                session["id"], tenant_id, session.get("last_at"))
+                except Exception as exc:
+                    log.warning("stale handoff resume failed for %s: %s", tenant_id, exc)
+        except Exception as exc:
+            log.warning("stale handoff scheduler tick failed: %s", exc)
+        await _asyncio.sleep(600)  # poll every 10 minutes; per-tenant interval is job_config-driven
+
+
 async def _subscriptions_loop() -> None:
     """Create due recurring orders every hour (acts only when a subscription's next_run arrives)."""
     import asyncio as _asyncio
@@ -941,6 +1005,8 @@ def _start_scheduled_job_tasks() -> None:
     _asyncio.create_task(_commerce_jobs_scheduler_loop())
     # Runs for EVERY tenant (not just ones with the "orders" module) — see its own docstring.
     _asyncio.create_task(_stale_escalation_scheduler_loop())
+    # A human-paused thread nobody comes back to would otherwise stay muted forever.
+    _asyncio.create_task(_stale_handoff_scheduler_loop())
     # Retries voice notes parked when transcription was unreachable (migration 148).
     _asyncio.create_task(_voice_retry_scheduler_loop())
 

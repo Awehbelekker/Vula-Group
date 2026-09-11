@@ -1229,6 +1229,27 @@ async def set_session_paused(tenant_id: str, session_id: str, paused: bool) -> d
     return result.data[0] if result.data else {}
 
 
+async def find_stale_paused_sessions(tenant_id: str, hours: float = 2.0) -> list[dict]:
+    """Sessions paused for human handoff that have gone completely silent — no customer or
+    staff activity (last_at, the same snapshot append_message() stamps on every message) —
+    for `hours`. Human handoff has no expiry today: if the owner who took over a thread gets
+    distracted, the bot stays muted on it forever and the customer can be left permanently
+    ghosted (2026-09-11). A conversation staff is actively working stays untouched; only one
+    nobody has looked at in that long is a candidate for the stale-handoff scheduler
+    (server.py) to notify + auto-resume."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    try:
+        rows = (_client().table("commerce_conversation_sessions").select("*")
+                .eq("tenant_id", tenant_id).eq("paused", True)
+                .lt("last_at", cutoff)
+                .limit(50).execute().data or [])
+    except Exception as exc:
+        logger.debug("stale paused session lookup skipped: %s", exc)
+        return []
+    return rows
+
+
 async def list_conversations(tenant_id: str, limit: int = 50) -> List[dict]:
     """Return recent conversation sessions for the shared inbox list view."""
     base = "id,session_key,customer_phone,customer_name,paused,last_message,last_role,last_at,created_at,updated_at"
