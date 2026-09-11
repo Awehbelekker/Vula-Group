@@ -426,6 +426,19 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "check_business_hours",
+            "description": (
+                "Check whether we're open right now, or when we'll next open. ALWAYS use this "
+                "for 'are you open', 'what time do you close', 'when do you open' — never guess "
+                "or compute it yourself. If closed, tell them when we reopen — that is a real "
+                "answer, do not escalate. Only escalate (ask_team) if this returns unknown."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "suggest_recipe",
             "description": (
                 "Suggest a South African recipe when the customer asks what to cook, "
@@ -963,6 +976,20 @@ class CommerceAssistantSkill(BaseSkill):
             delivery_block = "\n\nDELIVERY FACTS (authoritative — never contradict or invent beyond these):\n- " + "\n- ".join(lines)
         except Exception:
             pass
+
+        # Opening hours as a HARD FACT (migration 158) — before this, "are you open?" always
+        # escalated to ask_team, a fact that should be configured once, not asked every time.
+        hours_block = ""
+        try:
+            if cfg.get("business_hours"):
+                hours_block = ("\n\nWhen asked if we're open, when we open/close, or anything "
+                               "about hours — ALWAYS call check_business_hours and follow its "
+                               "verdict exactly; never compute or guess it yourself.")
+            else:
+                hours_block = ("\n\nYou do NOT know this business's opening hours — if asked, "
+                               "do NOT guess: call ask_team with their question.")
+        except Exception:
+            pass
         booking_block = ""
         if _tenant_has_bookings(tenant_id):
             booking_block = (
@@ -1021,6 +1048,7 @@ class CommerceAssistantSkill(BaseSkill):
             "an unrelated follow-up ('reply in English', 'ok', a new question) does NOT mean repeat "
             "your last action — respond in plain text, or ask what they'd like, instead."
             + delivery_block
+            + hours_block
             + lang_block
             + booking_block
             + persona_block
@@ -1259,6 +1287,8 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_get_daily_catch(tid)
         if name == "check_delivery_area":
             return self._exec_check_delivery_area(tid, args)
+        if name == "check_business_hours":
+            return self._exec_check_business_hours(tid)
         if name == "suggest_recipe":
             return await self._exec_suggest_recipe(tid, args)
         if name == "research_product":
@@ -1694,6 +1724,31 @@ class CommerceAssistantSkill(BaseSkill):
                 "instruction": (f"We do NOT deliver to {place}. Tell them so directly and kindly, "
                                 f"list the areas we DO deliver to, and offer collection if that "
                                 f"suits. Do NOT call ask_team — this is a real answer.")}
+
+    def _exec_check_business_hours(self, tenant_id: str) -> Dict[str, Any]:
+        """Deterministic "are we open" answer. See vula.commerce.hours.hours_verdict — same
+        never-guess convention as _exec_check_delivery_area above."""
+        from vula.commerce import hours
+        from vula.commerce.order_workflow import get_order_settings
+        cfg = get_order_settings(tenant_id)
+        v = hours.hours_verdict(cfg.get("business_hours"))
+        note = (cfg.get("business_hours_note") or "").strip()
+        if v is None:
+            return {"verdict": "unknown",
+                    "instruction": "No opening hours are configured for this business — do NOT "
+                                   "guess. Call ask_team with their question."}
+        if v["open"]:
+            close = (v.get("today") or {}).get("close")
+            return {"verdict": "open", "today": v.get("today"),
+                    "instruction": ("Yes, we're open right now"
+                                    + (f" until {close}" if close else "") + ". Say so warmly."
+                                    + (f" Mention: {note}." if note else ""))}
+        nxt = v.get("next_open")
+        when = f"{nxt['day']} at {nxt['time']}" if nxt else "our next opening time"
+        return {"verdict": "closed", "next_open": nxt,
+                "instruction": (f"We're closed right now — tell them plainly and say we reopen "
+                                f"{when}. Do NOT call ask_team, this is a real answer."
+                                + (f" Mention: {note}." if note else ""))}
 
     async def _exec_suggest_recipe(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a South African recipe and match ingredients to in-stock products."""

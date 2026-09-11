@@ -5681,6 +5681,25 @@ async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
     # with a friendly note, instead of guessing. Same loop as the knowledge path.
     reply = await _maybe_escalate_and_learn(tenant_id, phone, text, output.answer)
 
+    # After-hours banner (migration 158, pre-go-live brief "polish" item) — once per phone per
+    # _local_media_claim window (4h: long enough not to repeat every message in one
+    # conversation, short enough a customer messaging again the next business day still gets a
+    # fresh one if still closed then), NOT every message — the assistant already answers a
+    # direct "are you open?" correctly via check_business_hours above; this is for the
+    # customer who DIDN'T ask and might not realise nobody's there to action their order yet.
+    try:
+        from vula.commerce import hours as _hours
+        from vula.commerce.order_workflow import get_order_settings as _get_settings
+        cfg = _get_settings(tenant_id)
+        v = _hours.hours_verdict(cfg.get("business_hours"))
+        if v is not None and not v["open"] and _local_media_claim(tenant_id, f"afterhours:{phone}", 14400.0):
+            nxt = v.get("next_open")
+            when = f"{nxt['day']} at {nxt['time']}" if nxt else "soon"
+            reply = (f"📴 _We're closed right now — back {when}. I can still help in the "
+                    f"meantime!_\n\n" + reply)
+    except Exception as exc:
+        logger.debug("after-hours banner skipped: %s", exc)
+
     # 2026-08-14: show the real product photo (when add_to_cart resolved one, see
     # commerce_assistant.py's SkillOutput.media_url) before the text confirmation — reuses the
     # image-send path already proven for the greeting menu header (_send_wa_image). Best-effort:
