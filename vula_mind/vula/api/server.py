@@ -60,6 +60,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -117,6 +118,13 @@ logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
+    # 2026-09-11: no stream= meant Python's default (stderr) for EVERY log call, and Railway
+    # tags a deploy's entire stderr stream as "error" regardless of actual level — an
+    # @level:error filter in the Railway dashboard returned hundreds of routine INFO lines and
+    # zero real signal. One stdout stream for everything; the `[%(levelname)s]` token already
+    # in the format string above is how you tell warnings/errors apart in a search now (e.g.
+    # search the raw logs for "[ERROR]"), instead of relying on Railway's stream-based severity.
+    stream=sys.stdout,
 )
 # POPIA: mask customer phone numbers in the (retained, Railway-captured) logs. No-op under DEBUG.
 try:
