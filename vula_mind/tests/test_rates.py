@@ -13,6 +13,7 @@ from vula.takeoff.construction_rates_scraper import (
     RatesDatabase,
     ScrapedCatalogue,
     UpdateResult,
+    _parse_json_array,
 )
 
 client = TestClient(app)
@@ -115,6 +116,79 @@ def test_db_log_scrape(db):
     assert rows[0][1] == "Test Source"
 
 
+def test_db_log_scrape_persists_error(db):
+    cat = ScrapedCatalogue(source_name="Broken Source", source_url="https://example.com/404",
+                           status="fetch_failed", error="404 Not Found")
+    db.log_scrape(cat)
+    conn = sqlite3.connect(db.db_path)
+    row = conn.execute("SELECT source, status, error FROM scrape_log").fetchone()
+    conn.close()
+    assert row == ("Broken Source", "fetch_failed", "404 Not Found")
+
+
+def test_get_source_status_returns_latest_per_source(db):
+    db.log_scrape(ScrapedCatalogue(source_name="A", source_url="https://a", status="ok",
+                                   rates=[MaterialRate(key="k", label="K", unit="m²", low=1, high=2)]))
+    db.log_scrape(ScrapedCatalogue(source_name="B", source_url="https://b",
+                                   status="fetch_failed", error="404 Not Found"))
+    status = {s["source"]: s for s in db.get_source_status()}
+    assert status["A"]["status"] == "ok"
+    assert status["B"]["status"] == "fetch_failed"
+    assert status["B"]["error"] == "404 Not Found"
+
+
+# ── _parse_json_array (2026-09-11: json.loads("Extra data" fix) ────────────────
+
+def test_parse_json_array_handles_clean_array():
+    assert _parse_json_array('[{"label": "Cement", "low": 100}]') == [{"label": "Cement", "low": 100}]
+
+
+def test_parse_json_array_tolerates_trailing_commentary():
+    # This is the exact failure mode reported: json.loads on the whole string raises
+    # "Extra data: line 15 column 1" the moment the model adds so much as a trailing word.
+    raw = '[{"label": "Tile", "low": 300, "high": 500}]\n\nLet me know if you need more items.'
+    assert _parse_json_array(raw) == [{"label": "Tile", "low": 300, "high": 500}]
+
+
+def test_parse_json_array_no_brackets_returns_none():
+    assert _parse_json_array("Sorry, I couldn't find any prices on this page.") is None
+
+
+def test_parse_json_array_malformed_returns_none():
+    assert _parse_json_array("[{\"label\": unquoted_value}]") is None
+
+
+def test_parse_json_array_rejects_non_list_json():
+    assert _parse_json_array('{"label": "not a list"}') is None
+
+
+# ── run_full_update: failed sources are tracked, not silently absorbed ─────────
+
+@pytest.mark.asyncio
+async def test_run_full_update_tracks_failed_sources(tmp_path):
+    from vula.takeoff.construction_rates_scraper import ConstructionRatesScraper
+
+    scraper = ConstructionRatesScraper()
+    scraper.db = RatesDatabase(db_path=tmp_path / "rates.db")
+
+    async def fake_extract(url, source_name, prompt):
+        if source_name == scraper.SOURCES[0]["name"]:
+            return ScrapedCatalogue(
+                source_name=source_name, source_url=url,
+                rates=[MaterialRate(key="ok_item", label="OK Item", unit="m²", low=100, high=200)],
+            )
+        return ScrapedCatalogue(source_name=source_name, source_url=url,
+                                status="fetch_failed", error="404 Not Found")
+
+    with patch.object(scraper.extractor, "extract_rates", new=AsyncMock(side_effect=fake_extract)):
+        result = await scraper.run_full_update()
+
+    assert result.sources_scraped == [scraper.SOURCES[0]["name"]]
+    assert len(result.sources_failed) == len(scraper.SOURCES) - 1
+    assert all(f["reason"] == "404 Not Found" for f in result.sources_failed)
+    assert "produced nothing" in result.summary
+
+
 # ── ScrapedCatalogue ──────────────────────────────────────────────────────────
 
 def test_scraped_catalogue_defaults():
@@ -183,6 +257,8 @@ def test_rates_endpoint_returns_list():
     assert "rates" in data
     assert "count" in data
     assert isinstance(data["rates"], list)
+    assert "failed_sources" in data
+    assert isinstance(data["failed_sources"], list)
 
 
 def test_rates_update_endpoint_queues_job():

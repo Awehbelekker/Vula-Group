@@ -132,7 +132,10 @@ async def get_rates(changed_only: bool = False, threshold_pct: float = 5.0):
         rates = db.get_changes(threshold_pct=threshold_pct)
     else:
         rates = db.get_all()
-    return {"count": len(rates), "rates": rates}
+    # 2026-09-11: a source silently producing 0 rates for weeks was only visible by reading
+    # Railway logs by hand — surface it here so an admin can see it without that.
+    failed_sources = [s for s in db.get_source_status() if s["status"] != "ok"]
+    return {"count": len(rates), "rates": rates, "failed_sources": failed_sources}
 
 
 @router.post("/rates/update")
