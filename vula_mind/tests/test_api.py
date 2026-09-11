@@ -24,6 +24,30 @@ def test_status_endpoint_returns_json():
         assert data["service"] == "vula-api"
 
 
+def test_status_reports_disabled_by_design_integrations():
+    """PayFast/Resend being unset is a confirmed go-live decision (2026-09-11), not a health
+    failure — it must read as "disabled by design" in /status, and must NOT flip the overall
+    status to "degraded" the way a real check failure does. Patches the settings singleton
+    directly so this doesn't depend on the ambient .env actually having these unset."""
+    from vula.api import server as server_mod
+    with (
+        patch("httpx.AsyncClient") as mock_client,
+        patch.object(server_mod.settings, "payfast_merchant_id", ""),
+        patch.object(server_mod.settings, "resend_api_key", ""),
+    ):
+        mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_client.return_value)
+        mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_client.return_value.get = AsyncMock(side_effect=Exception("not running"))
+
+        resp = client.get("/status")
+        data = resp.json()
+        assert data["integrations"]["payments_payfast"] == "disabled by design"
+        assert data["integrations"]["email_resend"] == "disabled by design"
+        # "integrations" lives outside `checks` on purpose — checks feeds the ok/degraded
+        # computation, and a deliberately-off integration must never contribute to that.
+        assert "integrations" not in data["checks"]
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 def test_query_without_auth_when_no_key_configured():

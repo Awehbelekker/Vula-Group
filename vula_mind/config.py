@@ -240,7 +240,10 @@ class Settings(BaseSettings):
         self.reflection_db.parent.mkdir(parents=True, exist_ok=True)
 
     def warn_missing(self) -> list[str]:
-        """Return list of warnings about missing production config."""
+        """Return list of warnings about missing production config — genuine gaps only.
+        PayFast/Resend are logged separately below: unset there is a confirmed go-live
+        decision (Yoco covers payments, email notifications deferred — 2026-09-11), not a
+        forgotten setting, so it must not read like one in an incident review."""
         import logging
         log = logging.getLogger("vula.config")
         warnings = []
@@ -252,12 +255,12 @@ class Settings(BaseSettings):
             warnings.append("SUPABASE_SERVICE_KEY not configured — tenant provisioning disabled")
         if not self.whatsapp_token or "your-permanent" in self.whatsapp_token:
             warnings.append("WHATSAPP_TOKEN not configured — signup notifications disabled")
-        if not self.payfast_merchant_id:
-            warnings.append("PAYFAST_MERCHANT_ID not configured — payment links disabled")
-        if not self.resend_api_key:
-            warnings.append("RESEND_API_KEY not configured — email notifications disabled")
         for w in warnings:
             log.warning("Config: %s", w)
+        if not self.payfast_merchant_id:
+            log.info("Config: PayFast disabled by design (payment links off) — Yoco covers payments")
+        if not self.resend_api_key:
+            log.info("Config: Resend disabled by design (email notifications off) — deferred for launch")
         return warnings
 
 
