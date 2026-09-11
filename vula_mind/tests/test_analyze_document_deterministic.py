@@ -61,3 +61,73 @@ async def test_non_notice_text_still_falls_through_to_the_llm():
     mock_llm.assert_awaited()          # the LLM path ran for a real invoice
     assert r["category"] == "Invoice"
     assert r["fields"]["total_cents"] == 120000
+
+
+def _fake_llm_response(content: str):
+    return type("R", (), {"choices": [type("C", (), {"message": type("M", (), {
+        "content": content})()})()]})()
+
+
+@pytest.mark.asyncio
+async def test_docling_retry_recovers_a_total_fitz_text_scrambled():
+    """A real invoice whose fitz-joined text is garbled (interleaved columns) — the cheap AND
+    cloud passes both only ever see that same bad text, so both produce the same wrong-but-
+    internally-consistent total (scan_quality_ok passes, but the figure isn't grounded). A
+    third attempt on Docling's clean, reading-order-correct Markdown is what recovers it."""
+    scrambled_text = "ACME CO invoice garbled column interleave xyz 12 34 56 nonsense"
+    clean_markdown = ("ACME BUILDING SUPPLIES\nTax Invoice INV-4471\n\n"
+                      "| Item | Total |\n|---|---|\n| Cement | R 1 250.00 |\n"
+                      "| Rebar | R 480.00 |\n\nTotal Due R 1 989.50\n")
+    # Internally consistent (798950 == 500000 + 298950) but not on the (scrambled) page.
+    bad_json = ('{"category": "Invoice", "summary": "ACME invoice.", '
+               '"fields": {"supplier": "ACME", "total_cents": 798950, '
+               '"line_items": [{"total_cents": 500000}, {"total_cents": 298950}]}}')
+    good_json = ('{"category": "Invoice", "summary": "ACME invoice.", '
+                '"fields": {"supplier": "ACME", "total_cents": 198950, '
+                '"line_items": [{"total_cents": 125000}, {"total_cents": 48000}]}}')
+
+    calls = {"n": 0}
+
+    async def fake_acompletion(**kwargs):
+        calls["n"] += 1
+        # Calls 1 (cheap) and 2 (cloud escalation) both only ever see the scrambled fitz text;
+        # call 3 sees the Docling markdown and gets the real total.
+        return _fake_llm_response(bad_json if calls["n"] <= 2 else good_json)
+
+    with (
+        patch("core.llm_router.resolve_cheap_route",
+              new=AsyncMock(return_value=("gpt-x", "k", "http://b"))),
+        patch("core.llm_router.resolve_cloud_route",
+              return_value=("gpt-cloud", "k2", "http://c")),
+        patch("litellm.acompletion", new=AsyncMock(side_effect=fake_acompletion)),
+        patch("vula.ingestion.docling_extract.extract_markdown",
+              new=AsyncMock(return_value=clean_markdown)),
+    ):
+        r = await _analyze_document("digg-demo", "invoice.pdf", "/tmp/x.pdf", text=scrambled_text)
+
+    assert calls["n"] == 3          # cheap, cloud, docling-retry — no more, no fewer
+    assert r["fields"]["total_cents"] == 198950
+    assert "_unverified_figures" not in r["fields"]
+
+
+@pytest.mark.asyncio
+async def test_docling_unavailable_still_flags_unverified_instead_of_crashing():
+    """Docling not installed/failing (extract_markdown -> None) must fall straight back to the
+    existing behaviour: flag the ungrounded figure, don't book it, don't raise."""
+    scrambled_text = "ACME CO invoice garbled column interleave xyz 12 34 56 nonsense"
+    bad_json = ('{"category": "Invoice", "summary": "ACME invoice.", '
+               '"fields": {"supplier": "ACME", "total_cents": 798950, '
+               '"line_items": [{"total_cents": 500000}, {"total_cents": 298950}]}}')
+
+    with (
+        patch("core.llm_router.resolve_cheap_route",
+              new=AsyncMock(return_value=("gpt-x", "k", "http://b"))),
+        patch("core.llm_router.resolve_cloud_route",
+              return_value=("gpt-cloud", "k2", "http://c")),
+        patch("litellm.acompletion", new=AsyncMock(return_value=_fake_llm_response(bad_json))),
+        patch("vula.ingestion.docling_extract.extract_markdown", new=AsyncMock(return_value=None)),
+    ):
+        r = await _analyze_document("digg-demo", "invoice.pdf", "/tmp/x.pdf", text=scrambled_text)
+
+    assert r["fields"]["total_cents"] == 798950
+    assert r["fields"]["_unverified_figures"][0]["cents"] == 798950

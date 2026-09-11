@@ -28,6 +28,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY vula_mind/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Docling — self-hosted long-tail document extractor (vula/ingestion/docling_extract.py).
+# Separate requirements file: its torch dependency resolves against PyTorch's own CPU wheel
+# index and shouldn't influence the main requirements.txt resolution.
+COPY vula_mind/requirements-docling.txt .
+RUN pip install --no-cache-dir -r requirements-docling.txt
+
+# Bake its layout + table-structure models into the image at BUILD time — not on the first
+# real WhatsApp document, and not a runtime dependency on Hugging Face being reachable from
+# Railway. Only the two models the pipeline actually uses (do_ocr=False, no code/formula/
+# picture enrichment) — skips several hundred MB of OCR/vision-language models Docling
+# downloads by default.
+RUN python -c "from docling.utils.model_downloader import download_models; \
+download_models(with_layout=True, with_tableformer=True, with_code_formula=False, \
+with_picture_classifier=False, with_rapidocr=False)"
+ENV DOCLING_ARTIFACTS_PATH=/root/.cache/docling/models
+
 COPY vula_mind/ .
 
 # Persistent data directory — mount a Railway volume at /data
