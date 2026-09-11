@@ -11,7 +11,55 @@ Smart Scanner already had, instead of a weaker one-shot read with no correctness
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import re
+from typing import Any, Dict, List
+
+
+def _money_candidates(cents: int) -> set[str]:
+    """Digit-strings a `cents` amount could show up as in document text — with and without the
+    decimal part, since a source may print "R44 000" or "R44 000.00"."""
+    cents = abs(int(cents))
+    whole, frac = divmod(cents, 100)
+    return {f"{whole}{frac:02d}", f"{whole}"}
+
+
+def _iter_money_cents(ex: Dict[str, Any]):
+    """(field-label, cents) for every money figure in an extraction — the top-level *_cents
+    keys plus each line item's unit price and total."""
+    for k, v in (ex or {}).items():
+        if k.endswith("_cents") and isinstance(v, (int, float)) and v:
+            yield k, int(v)
+    for i, it in enumerate(ex.get("line_items") or []):
+        if not isinstance(it, dict):
+            continue
+        for k in ("unit_price_cents", "total_cents"):
+            v = it.get(k)
+            if isinstance(v, (int, float)) and v:
+                yield f"line_items[{i}].{k}", int(v)
+
+
+def ungrounded_figures(ex: Dict[str, Any], source_text: str,
+                       min_cents: int = 1000) -> List[Dict[str, Any]]:
+    """Every money figure in `ex` (>= R10 by default) whose digits do NOT appear anywhere in
+    `source_text`. An LLM that misreads or invents a figure usually produces one that is
+    internally consistent (the line items it also invented sum to it), so scan_quality_ok's
+    arithmetic check passes — but the number is still not on the page. This is the verbatim
+    backstop: the total that gets booked must be legible in the document it came from.
+
+    Returns [] when there's no source text to check against (deterministic parses, images with
+    no text layer) — nothing to verify, nothing to falsely flag. Same fail-open stance as
+    core.skills.base.unverified_prices.
+    """
+    digits = re.sub(r"\D", "", source_text or "")
+    if len(digits) < 3:
+        return []
+    bad: List[Dict[str, Any]] = []
+    for label, cents in _iter_money_cents(ex):
+        if abs(cents) < min_cents:
+            continue
+        if not any(c in digits for c in _money_candidates(cents)):
+            bad.append({"field": label, "cents": cents, "rand": round(cents / 100, 2)})
+    return bad
 
 
 def scan_quality_ok(ex: Dict[str, Any]) -> bool:

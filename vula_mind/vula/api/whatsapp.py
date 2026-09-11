@@ -2286,6 +2286,7 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 note = (f"📂 Which project is this for?{hint_txt} "
                         f"Reply with the project name and I'll file it (or 'skip').")
 
+        unverified = (fields or {}).get("_unverified_figures")
         if not already_committed and category in _FINANCIAL_DOC_CATEGORIES:
             try:
                 from vula.commerce import service as commerce_service
@@ -2294,15 +2295,27 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 # to "receipt", which would silently misfile every real invoice/quote as an
                 # expense. Map the deep-analysis category across explicitly.
                 commit_fields = dict(fields or {})
+                commit_fields.pop("_unverified_figures", None)
                 commit_fields.setdefault("doc_type", _CATEGORY_TO_DOC_TYPE.get(category, "invoice"))
+                # A figure that survived escalation and STILL isn't anywhere in the document's
+                # text doesn't get booked automatically — stage it (auto_commit=False just
+                # returns the preview) and flag the filed row for owner review instead.
                 await commerce_service.commit_inbound_document(
-                    tenant_id, commit_fields, auto_commit=True, source=source,
+                    tenant_id, commit_fields, auto_commit=not unverified, source=source,
                     filed_document_id=row.get("id") if row else None,
                     project=match["project"] if confident else None,
                     is_boq=(category == "Bill of Quantities (BOQ)"),
                 )
+                if unverified and row and row.get("id"):
+                    commerce_service._client().table("vula_filed_documents").update(
+                        {"needs_review": True}).eq("id", row["id"]).execute()
             except Exception as exc:
                 logger.warning("commit_inbound_document failed for %s: %s", result.filename, exc)
+        if unverified:
+            rands = ", ".join(f"R{m['rand']:,.2f}" for m in unverified)
+            note = (note + "\n" if note else "") + (
+                f"⚠️ I couldn't find {rands} anywhere in the document text, so I've *not* "
+                f"booked it — please check the figure and confirm in your Invoices tab.")
 
         if category in _CONTACT_DOC_CATEGORIES:
             try:
@@ -2566,7 +2579,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         import json as _json
         import litellm
         from core.llm_router import resolve_cheap_route, resolve_cloud_route
-        from vula.commerce.extraction_quality import scan_quality_ok
+        from vula.commerce.extraction_quality import scan_quality_ok, ungrounded_figures
         litellm.drop_params = True
         model, api_key, api_base = await resolve_cheap_route()
 
@@ -2633,14 +2646,18 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     "fields": data.get("fields") or {}}
 
         def _needs_escalation(result: Optional[dict]) -> bool:
-            """Empty/failed read → escalate (unchanged). NEW: for a financial category, also
-            never trust a self-reported confidence alone — cross-check the extracted line-item
-            arithmetic against the stated total (same heuristic the Smart Scanner already
-            uses), and escalate on a mismatch too."""
+            """Empty/failed read → escalate (unchanged). For a financial category, also never
+            trust a self-reported confidence alone — cross-check (a) the extracted line-item
+            arithmetic against the stated total, and (b) that every money figure actually
+            appears in the source text. A misread/invented total is often internally
+            consistent but simply isn't on the page — that's the one that must not be booked."""
             if not (result and (result.get("summary") or result.get("fields"))):
                 return True
             if result.get("category") in _FINANCIAL_DOC_CATEGORIES:
-                if not scan_quality_ok(result.get("fields") or {}):
+                flds = result.get("fields") or {}
+                if not scan_quality_ok(flds):
+                    return True
+                if ungrounded_figures(flds, text):
                     return True
             return False
 
@@ -2670,6 +2687,16 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                         result = cloud_result
                 except Exception as exc2:
                     logger.warning("Doc analyze escalation failed for %s: %s", filename, exc2)
+
+        # Even after escalation a money figure may still not be traceable to the text. Don't
+        # drop the read — flag it, so filing routes it to owner review instead of booking it
+        # silently (the caller checks fields["_unverified_figures"]).
+        if result and result.get("category") in _FINANCIAL_DOC_CATEGORIES:
+            missing = ungrounded_figures(result.get("fields") or {}, text)
+            if missing:
+                logger.warning("Doc analyze: %s has %d figure(s) not found in its text: %s",
+                               filename, len(missing), [m["rand"] for m in missing])
+                result.setdefault("fields", {})["_unverified_figures"] = missing
         return result
     except Exception as exc:
         logger.warning("Doc analyze setup failed for %s: %s", filename, exc)
