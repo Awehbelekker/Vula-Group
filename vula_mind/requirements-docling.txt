@@ -1,0 +1,10 @@
+# Docling (github.com/docling-project/docling, MIT) — self-hosted layout + table-structure
+# extractor for vula/ingestion/docling_extract.py. Deliberately kept out of requirements.txt:
+# its torch dependency must resolve against PyTorch's own CPU wheel index (the default PyPI
+# wheel bundles CUDA and is ~5x larger), and nothing else in the app needs that index.
+#
+# Baked into the Docker image at build time along with its models — see Dockerfile. Optional at
+# runtime: vula/ingestion/docling_extract.py degrades to a no-op if this isn't installed (e.g.
+# local dev outside Docker), so it's safe to omit here without breaking anything else.
+--extra-index-url https://download.pytorch.org/whl/cpu
+docling-slim[standard]==2.126.0

@@ -2688,6 +2688,35 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 except Exception as exc2:
                     logger.warning("Doc analyze escalation failed for %s: %s", filename, exc2)
 
+                # The 70B still couldn't produce a clean reconciled/grounded read. The likely
+                # culprit for a real invoice/BOQ is a multi-column or merged-cell table that
+                # fitz's raw text-join scrambled — re-run once more on Docling's reading-order-
+                # correct Markdown instead (self-hosted, no cloud OCR bill). Deliberately gated
+                # behind this first failure, not the default path: it costs real CPU seconds and
+                # should only run for the minority of documents that actually need it.
+                if str(local_path).lower().endswith(".pdf") and _needs_escalation(result):
+                    try:
+                        from vula.ingestion.docling_extract import extract_markdown
+                        md_text = await extract_markdown(local_path)
+                        if md_text and md_text.strip() != text.strip():
+                            logger.info("Doc analyze: retrying %s on Docling-structured text", filename)
+                            # Swap in the cleaner text right away — it's a strictly more
+                            # faithful rendition of the same document, so every grounding check
+                            # from here on (including the caller's final one) should read
+                            # against it, whether or not this particular retry pans out.
+                            text = md_text
+                            docling_msgs = _msgs[:-1] + [{
+                                "role": "user",
+                                "content": f"Filename: {filename}\n\nDocument:\n{md_text[:6000]}\n\nJSON:",
+                            }]
+                            resp = await litellm.acompletion(model=_cm, messages=docling_msgs,
+                                temperature=0.1, max_tokens=900, api_key=_ck, api_base=_cb)
+                            docling_result = _parse(resp)
+                            if docling_result and not _needs_escalation(docling_result):
+                                result = docling_result
+                    except Exception as exc3:
+                        logger.debug("Docling retry skipped for %s: %s", filename, exc3)
+
         # Even after escalation a money figure may still not be traceable to the text. Don't
         # drop the read — flag it, so filing routes it to owner review instead of booking it
         # silently (the caller checks fields["_unverified_figures"]).
