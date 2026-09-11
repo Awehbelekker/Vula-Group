@@ -976,39 +976,80 @@ async def _try_acquire_or_renew_scheduler_lock() -> bool:
         res = (client.table("vula_scheduler_lock")
                .update({"holder": holder, "expires_at": expires})
                .eq("lock_name", _SCHEDULER_LOCK_NAME).eq("holder", row["holder"]).execute())
-        return bool(res.data)
+        won = bool(res.data)
+        if not won and is_mine:
+            # We were renewing OUR OWN still-valid lease (not losing a takeover race) and the
+            # update matched zero rows anyway — confirmed live 2026-09-11 this happens on
+            # nearly every first renewal attempt, causing leadership to flap every ~60s for
+            # hours. Root cause not yet nailed down; log enough here to catch it next time
+            # instead of guessing again.
+            log.warning("scheduler lock self-renew returned no rows (holder=%s, "
+                        "prev_expires_at=%s, requested_expires_at=%s) — treating as lost",
+                        holder, row.get("expires_at"), expires)
+        return won
     except Exception as exc:
         log.warning("scheduler lock renew failed: %s", exc)
         return False
 
 
+_scheduled_job_tasks: list = []  # see _start_scheduled_job_tasks / _stop_scheduled_job_tasks
+
+
 def _start_scheduled_job_tasks() -> None:
     """All periodic background jobs — started exactly once, only by the worker holding the
-    scheduler lock (see _scheduler_leadership_loop). Never call this directly."""
+    scheduler lock (see _scheduler_leadership_loop). Never call this directly.
+
+    Idempotent, and tracks every task it starts. Confirmed live 2026-09-11: the scheduler
+    lock can flap leadership between the two uvicorn workers (WEB_CONCURRENCY=2) dozens of
+    times an hour with no redeploy in between (the lease renewal in
+    _try_acquire_or_renew_scheduler_lock doesn't reliably survive its own round trip — still
+    being root-caused). Losing leadership used to only flip a local bool; the tasks a prior
+    "acquired" call had already started via asyncio.create_task were never cancelled — their
+    handles weren't even kept — so every flap back to "acquired" left one more permanently
+    running, never-deduplicated copy of every loop below, including the one that sends
+    delivery briefings and end-of-day summaries. That's what actually produced OTH's real
+    tripled WhatsApp sends that day (three, not two — from three-plus surviving copies
+    accumulated over the afternoon, not just the two static workers this mechanism already
+    guards against). The guard clause below plus _stop_scheduled_job_tasks caps this at one
+    live copy per loop no matter how often the lock keeps flapping."""
+    if any(not t.done() for t in _scheduled_job_tasks):
+        log.warning("_start_scheduled_job_tasks called with a live batch already running — "
+                    "skipping to avoid stacking a duplicate set of loops")
+        return
+    _scheduled_job_tasks.clear()
     import asyncio as _asyncio
-    _asyncio.create_task(_seed_training_on_boot())
-    _asyncio.create_task(_infra_snapshot_loop())
-    _asyncio.create_task(_recurring_invoices_loop())
-    _asyncio.create_task(_scheduled_campaigns_loop())
-    _asyncio.create_task(_automations_loop())
-    _asyncio.create_task(_subscriptions_loop())
-    _asyncio.create_task(_recurring_bills_loop())
-    _asyncio.create_task(_daily_commerce_jobs_loop())
-    _asyncio.create_task(_email_sync_loop())
-    _asyncio.create_task(_weekly_rates_loop())
-    _asyncio.create_task(_call_sheet_loop())
-    _asyncio.create_task(_expense_sheet_loop())
-    _asyncio.create_task(_daily_trial_expiry_loop())
+    _scheduled_job_tasks.append(_asyncio.create_task(_seed_training_on_boot()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_infra_snapshot_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_recurring_invoices_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_scheduled_campaigns_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_automations_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_subscriptions_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_call_sheet_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_expense_sheet_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_daily_trial_expiry_loop()))
     # One config-driven poller replaces the five fixed wall-clock loops (delivery briefing,
     # sales summary, unpaid chase, low stock, Friday reminder) — see migration 069 + the
     # ⏰ Scheduling tab. Needs the commerce_scheduled_job_config table to fire anything.
-    _asyncio.create_task(_commerce_jobs_scheduler_loop())
+    _scheduled_job_tasks.append(_asyncio.create_task(_commerce_jobs_scheduler_loop()))
     # Runs for EVERY tenant (not just ones with the "orders" module) — see its own docstring.
-    _asyncio.create_task(_stale_escalation_scheduler_loop())
+    _scheduled_job_tasks.append(_asyncio.create_task(_stale_escalation_scheduler_loop()))
     # A human-paused thread nobody comes back to would otherwise stay muted forever.
-    _asyncio.create_task(_stale_handoff_scheduler_loop())
+    _scheduled_job_tasks.append(_asyncio.create_task(_stale_handoff_scheduler_loop()))
     # Retries voice notes parked when transcription was unreachable (migration 148).
-    _asyncio.create_task(_voice_retry_scheduler_loop())
+    _scheduled_job_tasks.append(_asyncio.create_task(_voice_retry_scheduler_loop()))
+
+
+def _stop_scheduled_job_tasks() -> None:
+    """Cancel every task _start_scheduled_job_tasks started, on losing the scheduler lock —
+    see that docstring for why this must never be a no-op."""
+    for t in _scheduled_job_tasks:
+        if not t.done():
+            t.cancel()
+    _scheduled_job_tasks.clear()
 
 
 async def _scheduler_leadership_loop() -> None:
@@ -1032,6 +1073,7 @@ async def _scheduler_leadership_loop() -> None:
             _start_scheduled_job_tasks()
         elif not got_lock and is_leader:
             log.warning("Scheduler leadership lost unexpectedly (%s)", _scheduler_holder_id())
+            _stop_scheduled_job_tasks()
             is_leader = False
         await _asyncio.sleep(_SCHEDULER_RENEW_SECONDS)
 
