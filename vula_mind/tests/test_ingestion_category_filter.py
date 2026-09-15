@@ -158,3 +158,66 @@ async def test_query_passes_category_through_to_store_search():
     await pipeline.query("what's on the menu", category="Menu / Price List")
 
     assert captured["category"] == "Menu / Price List"
+
+
+# ── source_type include-filter (2026-09-15, semantic escalate-and-learn) ────────────────
+
+@pytest.mark.asyncio
+async def test_search_adds_source_type_filter_when_given():
+    """The include-filter mirror of exclude_source_types — used by vula/escalation.py to
+    search exclusively within approved learned-answer points."""
+    store = QdrantStore()
+    captured = {}
+
+    class _FakeResp:
+        status_code = 200
+        def json(self):
+            return {"result": []}
+        def raise_for_status(self):
+            pass
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json):
+            captured["body"] = json
+            return _FakeResp()
+
+    with patch("httpx.AsyncClient", return_value=_FakeClient()):
+        await store.search("test-tenant", [0.1, 0.2], source_type="learned_answer_approved")
+
+    assert captured["body"]["filter"]["must"] == [
+        {"key": "source_type", "match": {"value": "learned_answer_approved"}}]
+
+
+@pytest.mark.asyncio
+async def test_search_combines_source_type_and_category_in_must():
+    store = QdrantStore()
+    captured = {}
+
+    class _FakeResp:
+        status_code = 200
+        def json(self):
+            return {"result": []}
+        def raise_for_status(self):
+            pass
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json):
+            captured["body"] = json
+            return _FakeResp()
+
+    with patch("httpx.AsyncClient", return_value=_FakeClient()):
+        await store.search("test-tenant", [0.1, 0.2], category="Menu",
+                           source_type="learned_answer_approved")
+
+    assert captured["body"]["filter"]["must"] == [
+        {"key": "category", "match": {"value": "Menu"}},
+        {"key": "source_type", "match": {"value": "learned_answer_approved"}},
+    ]

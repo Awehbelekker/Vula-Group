@@ -196,14 +196,79 @@ def _distinguishing_tokens(a: set, b: set) -> set:
     return {t for t in (a ^ b) if t not in _COMMON_WORDS and (len(t) > 3 or t.isdigit())}
 
 
-def find_learned_answer(tenant_id: str, question: str) -> Optional[str]:
-    """Best stored answer for a similar past question.
+# 2026-09-15 (Tenant Mind Phase 2): the Qdrant doc_id prefix used to index an approved
+# answer's question for semantic search — see embed_learned_answer / _find_learned_answer_semantic.
+_QDRANT_DOC_PREFIX = "learned_answer_"
+_SEMANTIC_SCORE_THRESHOLD = 0.55  # not load-bearing on its own — see the docstring below
 
-    Only APPROVED answers are ever returned (migration 150): both learned answers that existed
-    in production on 2026-09-01 were wrong — one was the helper replying about something else
-    entirely, the other was the helper instructing Vula rather than answering the customer — so
-    an unreviewed answer must never reach a customer.
-    """
+
+async def embed_learned_answer(tenant_id: str, learned_id: str, question: str) -> None:
+    """Index an approved answer's QUESTION (not the answer text — matching on question
+    similarity, not letting a similarly-worded answer distort the match) for semantic
+    retrieval. Call once, right after approve_learned_answer() succeeds. Best-effort and fully
+    decoupled from the approval itself: the approval already landed in Postgres (the source of
+    truth) by the time this runs, an indexing failure here must never undo it, and
+    find_learned_answer() always falls back to the plain keyword search below regardless."""
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        doc_id = _QDRANT_DOC_PREFIX + learned_id
+        await pipeline.ingest_text(
+            content=question, filename=f"{doc_id}.txt", doc_id=doc_id,
+            source_type="learned_answer_approved",
+        )
+    except Exception as exc:
+        log.debug("learned-answer embed skipped for %s: %s", learned_id, exc)
+
+
+async def _find_learned_answer_semantic(tenant_id: str, question: str, qt: set) -> Optional[str]:
+    """Semantic candidates via Qdrant — finds real paraphrases the plain word-overlap match
+    below completely misses (e.g. "what's your policy on late deliveries" vs "if my order
+    arrives late what happens"). Every candidate still goes through the EXACT SAME
+    _distinguishing_tokens guard as the keyword path before it can ever be returned: semantic
+    closeness is not a safety property by itself — the guard is what actually prevented the
+    2026-09-01 "Milnerton answered with a Timbuktu answer" incident, and a smarter retrieval
+    method doesn't make that check any less necessary. The similarity threshold below is
+    deliberately not fine-tuned for the same reason: getting it roughly right is enough,
+    because the guard — not the score — is the real backstop.
+
+    Returns None (never an empty-result marker vs. a failure marker — same value either way) on
+    any infrastructure failure so the caller falls back to keyword search rather than concluding
+    there's genuinely no learned answer."""
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        query_embedding = await pipeline.embedder.embed(question)
+        hits = await pipeline.store.search(
+            tenant_id, query_embedding, limit=5, score_threshold=_SEMANTIC_SCORE_THRESHOLD,
+            source_type="learned_answer_approved",
+        )
+    except Exception as exc:
+        log.debug("semantic learned-answer search skipped for %s: %s", tenant_id, exc)
+        return None
+
+    for hit in hits:
+        doc_id = hit.get("doc_id") or ""
+        if not doc_id.startswith(_QDRANT_DOC_PREFIX):
+            continue
+        learned_id = doc_id[len(_QDRANT_DOC_PREFIX):]
+        # Always re-read the real row from Postgres — never trust Qdrant's cached payload for
+        # status or answer text. Same "source of truth" discipline as everywhere else on this
+        # platform: Qdrant is an index into Postgres, never a second copy of the fact itself.
+        row = get_learned_answer(learned_id)
+        if not row or row.get("tenant_id") != tenant_id or row.get("status") != "approved":
+            continue
+        lt = _tokens(row.get("question", ""))
+        if not lt or _distinguishing_tokens(qt, lt):
+            continue  # different place/product/quantity — not the same question
+        return row.get("answer")
+    return None
+
+
+def _find_learned_answer_keyword(tenant_id: str, question: str, qt: set) -> Optional[str]:
+    """The original plain word-overlap match — kept as-is as the fallback for a tenant with no
+    embedded answers yet, or when Qdrant/embedding is unavailable, so the mechanism degrades
+    gracefully instead of going fully dark."""
     try:
         q = (_client().table("vula_learned_answers").select("question,answer,status")
              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(200))
@@ -217,9 +282,6 @@ def find_learned_answer(tenant_id: str, question: str) -> Optional[str]:
     except Exception as exc:
         log.debug("learned-answer lookup skipped (run migration 042?): %s", exc)
         return None
-    qt = _tokens(question)
-    if not qt:
-        return None
     best, best_score = None, 0.0
     for r in rows:
         lt = _tokens(r.get("question", ""))
@@ -231,6 +293,28 @@ def find_learned_answer(tenant_id: str, question: str) -> Optional[str]:
         if score > best_score:
             best, best_score = r.get("answer"), score
     return best if best_score >= MATCH_THRESHOLD else None
+
+
+async def find_learned_answer(tenant_id: str, question: str) -> Optional[str]:
+    """Best stored answer for a similar past question.
+
+    Only APPROVED answers are ever returned (migration 150): both learned answers that existed
+    in production on 2026-09-01 were wrong — one was the helper replying about something else
+    entirely, the other was the helper instructing Vula rather than answering the customer — so
+    an unreviewed answer must never reach a customer.
+
+    2026-09-15 (Tenant Mind Phase 2): tries semantic search first (finds real paraphrases the
+    old plain word-overlap match missed entirely), falling back to the original keyword match
+    if semantic search finds nothing or isn't available. See _find_learned_answer_semantic's
+    docstring for why the distinguishing-token safety guard applies identically either way.
+    """
+    qt = _tokens(question)
+    if not qt:
+        return None
+    semantic = await _find_learned_answer_semantic(tenant_id, question, qt)
+    if semantic is not None:
+        return semantic
+    return _find_learned_answer_keyword(tenant_id, question, qt)
 
 
 def _pick_helper(tenant_id: str) -> Optional[dict]:

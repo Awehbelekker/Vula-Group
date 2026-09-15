@@ -1028,6 +1028,7 @@ class QdrantStore:
         score_threshold: float = 0.3,
         exclude_source_types: Optional[List[str]] = None,
         category: Optional[str] = None,
+        source_type: Optional[str] = None,
     ) -> List[dict]:
         """Semantic search across tenant's knowledge base.
 
@@ -1040,6 +1041,12 @@ class QdrantStore:
         question that clearly implies "invoice" or "menu" can search just that slice
         instead of ranking across the whole collection. None (default) searches
         everything, unchanged from before this parameter existed.
+
+        `source_type` (2026-09-15, semantic escalate-and-learn — vula/escalation.py): the
+        include-filter mirror of `exclude_source_types` — narrows results to ONLY that one
+        source_type instead of excluding some. Used to search exclusively within approved
+        learned-answer points without ever mixing them into a normal document-KB query (and
+        vice versa). None (default) behaves exactly as before this parameter existed.
         """
         name = self._collection_name(tenant_id)
         body: dict = {
@@ -1050,6 +1057,8 @@ class QdrantStore:
         }
         must_not = [{"key": "source_type", "match": {"value": t}} for t in (exclude_source_types or [])]
         must = [{"key": "category", "match": {"value": category}}] if category else []
+        if source_type:
+            must.append({"key": "source_type", "match": {"value": source_type}})
         if must_not or must:
             body["filter"] = {k: v for k, v in (("must_not", must_not), ("must", must)) if v}
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
