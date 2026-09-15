@@ -126,4 +126,12 @@ class ReflectionLog:
     total_latency_ms: float
     what_worked: str
     what_to_try_next: str
+    # 2026-09-15: the reflection store this becomes a row in had NO tenant_id at all — one
+    # shared SQLite file, every tenant's routing hints pooled together. Confirmed live: a
+    # tenant's get_routing_hints() query could return another tenant's stored goal text and
+    # winning model tier, which core/hrm/orchestrator.py::_select_model then used to pick THIS
+    # tenant's model, and core/skills/memory_recall.py echoed the other tenant's goal_preview
+    # text straight into a customer-facing answer. See TaskGraph.tenant_id — this just carries
+    # the same value through to the row that gets written.
+    tenant_id: str = "default"
     timestamp: float = field(default_factory=time.time)

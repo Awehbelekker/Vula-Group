@@ -44,7 +44,7 @@ class MemoryRecallSkill(BaseSkill):
         try:
             from core.memory.reflection import ReflectionAgent
             agent = ReflectionAgent()
-            hints = agent.get_routing_hints(inp.question)
+            hints = agent.get_routing_hints(inp.tenant_id, inp.question)
             if hints:
                 reflection_context = "\n".join(
                     f"- Previously: {h.get('skill','?')} worked well ({h.get('score',0):.0%}) "
