@@ -41,7 +41,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("109", "vula_filed_documents", "customer_phone"),
     ("110", "commerce_contacts", "created_by"),
     ("111", "vula_escalations", "stale_notified_at"),
-    ("112", "vula_team_members", "last_notified_at"),
+    # (112 used to be here — renumbered to 161 after a collision, see below.)
     ("116", "vula_tenant_config", "persona_prompt"),
     ("117", "vula_reminders", None),
     ("118", "commerce_flows", None),
@@ -87,6 +87,12 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # of nobody noticing the platform just never learns anything.
     ("159", "vula_reflections", None),
     ("160", "vula_health_events", None),
+    # Was cited as "112" above until the 2026-09-15 migration audit found it collided with
+    # 112_rls_credential_tables.sql (part of the documented 112-115 security-remediation block —
+    # see [[security-remediation-pass]], so that one keeps its number). The underlying file was
+    # renamed to 161 — a bookkeeping rename only, already applied to prod under its earlier
+    # filenames (108, then 112) — see the file's own header comment.
+    ("161", "vula_team_members", "last_notified_at"),
 ]
 
 
