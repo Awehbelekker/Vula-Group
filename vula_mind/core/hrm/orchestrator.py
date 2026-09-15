@@ -256,7 +256,8 @@ class HRMOrchestrator:
             log.debug("LLM skill classification failed, falling back to reasoning: %s", exc)
         return None
 
-    def _select_model(self, complexity: int, routing_hints: dict) -> ModelTier:
+    def _select_model(self, complexity: int, routing_hints: dict,
+                      tenant_id: str = "", skill_name: str = "") -> ModelTier:
         # Was "preferred_tier" — a key ReflectionAgent.get_routing_hints() never produces (it
         # returns "winning_tier"), so this always read None and the reflection loop silently
         # never influenced routing despite being fully computed, stored, and fetched back.
@@ -266,6 +267,23 @@ class HRMOrchestrator:
                 return ModelTier(hint)
             except ValueError:
                 pass
+
+        # Mass Mind cold-start fallback (2026-09-15): routing_hints is empty whenever this
+        # tenant's own history has nothing similar to say for the current request — either a
+        # genuinely new tenant (empty for every request), or an established one hitting a
+        # question unlike anything in its own past. Either way, "what generally works well for
+        # a business shaped like this one, running this skill" is strictly better than guessing
+        # off complexity alone, and never overrides real tenant-specific signal (that branch
+        # already returned above). Never blocks routing — any failure falls through silently.
+        if tenant_id and skill_name:
+            try:
+                from core.mass_mind import patterns as mm_patterns
+                suggested = mm_patterns.suggest_tier(tenant_id, skill_name)
+                if suggested:
+                    return ModelTier(suggested)
+            except Exception:
+                pass
+
         return {1: ModelTier.WORKER, 2: ModelTier.WORKER, 3: ModelTier.REASONER}[complexity]
 
     def _select_merge(self, complexity: int, skill_name: str) -> MergeStrategy:
@@ -286,7 +304,8 @@ class HRMOrchestrator:
         graph.complexity = complexity
 
         skill_name, matched_by = self._route_with_reason(prompt)
-        model_tier = self._select_model(complexity, graph.routing_hints)
+        model_tier = self._select_model(complexity, graph.routing_hints,
+                                        tenant_id=graph.tenant_id, skill_name=skill_name)
         merge = self._select_merge(complexity, skill_name)
         graph.merge_strategy = merge
 

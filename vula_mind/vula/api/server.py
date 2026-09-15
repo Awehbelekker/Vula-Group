@@ -887,6 +887,28 @@ async def _mass_mind_health_watch_loop() -> None:
         await _asyncio.sleep(3600)
 
 
+async def _mass_mind_pattern_rollup_loop() -> None:
+    """Mass Mind Phase 1 (2026-09-15) — the other half, alongside the health watch above.
+    Periodically turns fenced, per-tenant reflections (migration 159) into an anonymized
+    (business_type, skill, model_tier) pattern library (migration 162) with no tenant
+    identifier at all — see core/mass_mind/patterns.py. core/hrm/orchestrator.py::_select_model
+    consults it as a cold-start fallback, never a tenant's own signal. Every 6h: cheap (a
+    bounded read + a handful of upserts), and tenant count is low enough right now that faster
+    convergence matters more than matching the design doc's original "nightly" framing."""
+    import asyncio as _asyncio
+    from core.mass_mind import patterns as mm_patterns
+
+    await _asyncio.sleep(400)  # settle on boot, after the health watch above
+    while True:
+        try:
+            n = mm_patterns.rollup()
+            if n:
+                log.info("mass-mind pattern rollup: %d (business_type, skill, tier) rows updated", n)
+        except Exception as exc:
+            log.warning("mass-mind pattern rollup tick failed: %s", exc)
+        await _asyncio.sleep(6 * 3600)
+
+
 async def _subscriptions_loop() -> None:
     """Create due recurring orders every hour (acts only when a subscription's next_run arrives)."""
     import asyncio as _asyncio
@@ -1078,6 +1100,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_voice_retry_scheduler_loop()))
     # Mass Mind Phase 1 — cross-tenant rollup of the two recovery loops above (migration 160).
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
+    # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
+    _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_pattern_rollup_loop()))
 
 
 def _stop_scheduled_job_tasks() -> None:
