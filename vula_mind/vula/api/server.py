@@ -781,6 +781,9 @@ async def _stale_escalation_scheduler_loop() -> None:
                         if await _send_reply(row["customer_phone"], apology, tenant_id=tenant_id):
                             esc.mark_customer_notified(row["id"])
                             log.info("apologised to customer for unanswered escalation %s", row["id"])
+                            from core.mass_mind import health as _mm_health
+                            _mm_health.record_event(tenant_id, "stale_escalation_abandoned",
+                                                     {"escalation_id": row["id"]})
                 except Exception as exc:
                     log.warning("stale escalation nudge failed for %s: %s", tenant_id, exc)
         except Exception as exc:
@@ -845,11 +848,43 @@ async def _stale_handoff_scheduler_loop() -> None:
                         await commerce_service.set_session_paused(tenant_id, session["id"], False)
                         log.info("auto-resumed stale-paused session %s for %s (idle since %s)",
                                 session["id"], tenant_id, session.get("last_at"))
+                        from core.mass_mind import health as _mm_health
+                        _mm_health.record_event(tenant_id, "stale_handoff_auto_resumed",
+                                                 {"session_id": session["id"]})
                 except Exception as exc:
                     log.warning("stale handoff resume failed for %s: %s", tenant_id, exc)
         except Exception as exc:
             log.warning("stale handoff scheduler tick failed: %s", exc)
         await _asyncio.sleep(600)  # poll every 10 minutes; per-tenant interval is job_config-driven
+
+
+async def _mass_mind_health_watch_loop() -> None:
+    """Mass Mind Phase 1 (2026-09-15) — the two loops immediately above each recover ONE
+    tenant's stuck conversation independently, with no visibility into whether the SAME thing
+    is happening across many tenants at once. Some background rate of stale escalations/
+    handoffs is completely normal; several DIFFERENT tenants all hitting the same one, in the
+    same window, usually means something is actually broken platform-wide (a skill, a tool, an
+    outbound send path) rather than any one tenant having a quiet day. Checked hourly — this is
+    a slow-moving signal, not one that needs the 10-minute cadence of the operational loops
+    themselves. See core/mass_mind/health.py for the rollup and alert-cooldown logic."""
+    import asyncio as _asyncio
+    from core.mass_mind import health as mm_health
+    from vula.api.onboarding import _send_whatsapp
+
+    await _asyncio.sleep(300)  # settle on boot, well after the operational loops above
+    while True:
+        try:
+            for incident in mm_health.systemic_incidents():
+                if not mm_health.should_alert(incident["kind"]):
+                    continue
+                sent = await _send_whatsapp(settings.team_whatsapp, mm_health.describe(incident))
+                if not sent:
+                    log.info("mass-mind health alert undelivered (kind=%s) — logged, not lost; "
+                             "next tick's rollup will still show it via /master or a direct "
+                             "vula_health_events query", incident["kind"])
+        except Exception as exc:
+            log.warning("mass-mind health watch tick failed: %s", exc)
+        await _asyncio.sleep(3600)
 
 
 async def _subscriptions_loop() -> None:
@@ -1041,6 +1076,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_stale_handoff_scheduler_loop()))
     # Retries voice notes parked when transcription was unreachable (migration 148).
     _scheduled_job_tasks.append(_asyncio.create_task(_voice_retry_scheduler_loop()))
+    # Mass Mind Phase 1 — cross-tenant rollup of the two recovery loops above (migration 160).
+    _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
 
 
 def _stop_scheduled_job_tasks() -> None:

@@ -27,7 +27,7 @@ _LOOP_NAMES = (
     "_weekly_rates_loop", "_call_sheet_loop", "_expense_sheet_loop",
     "_daily_trial_expiry_loop", "_commerce_jobs_scheduler_loop",
     "_stale_escalation_scheduler_loop", "_stale_handoff_scheduler_loop",
-    "_voice_retry_scheduler_loop",
+    "_voice_retry_scheduler_loop", "_mass_mind_health_watch_loop",
 )
 
 
