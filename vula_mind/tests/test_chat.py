@@ -127,6 +127,37 @@ def test_get_respects_limit(chat_db):
     assert len(msgs) == 5
 
 
+# 2026-09-15: list_threads() — the master-dashboard thread picker (Master Build Brief section
+# 6a item 2). Groups client-side over the most recent rows, newest-first, one entry per phone.
+
+def test_list_threads_one_row_per_phone_newest_first(chat_db):
+    chat_db.save("t1", "p1", "user", "first from p1")
+    chat_db.save("t1", "p2", "user", "first from p2")
+    chat_db.save("t1", "p1", "assistant", "latest from p1")   # p1 is now the most recent thread
+    threads = chat_db.list_threads("t1")
+    assert [t["phone"] for t in threads] == ["p1", "p2"]
+    assert threads[0]["last_message"] == "latest from p1"
+    assert threads[0]["last_role"] == "assistant"
+
+
+def test_list_threads_respects_limit(chat_db):
+    for i in range(5):
+        chat_db.save("t1", f"p{i}", "user", "hi")
+    threads = chat_db.list_threads("t1", limit=2)
+    assert len(threads) == 2
+
+
+def test_list_threads_scoped_to_tenant(chat_db):
+    chat_db.save("t1", "p1", "user", "a")
+    chat_db.save("t2", "p1", "user", "b")
+    threads = chat_db.list_threads("t1")
+    assert len(threads) == 1
+
+
+def test_list_threads_empty_tenant_returns_empty_list(chat_db):
+    assert chat_db.list_threads("nobody") == []
+
+
 def test_clear_returns_count(chat_db):
     chat_db.save("t1", "p1", "user", "a")
     chat_db.save("t1", "p1", "user", "b")

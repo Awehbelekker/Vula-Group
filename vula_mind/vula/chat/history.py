@@ -63,6 +63,36 @@ class ChatHistoryDB:
         return [ChatMessage(role=r["role"], text=r["text"], created_at=r.get("created_at", ""),
                             phone=r.get("phone", ""), tenant_id=r.get("tenant_id", "")) for r in rows]
 
+    def list_threads(self, tenant_id: str, limit: int = 30) -> List[dict]:
+        """Recent conversation threads for a tenant — one row per distinct phone, most-recently-
+        active first, with a preview of the last message. Added 2026-09-15 (Master Build Brief
+        section 6a item 2 — master admin's per-tenant conversation-history drill-down): every
+        other method here works within a single known phone thread, but the dashboard needs a
+        picker to find one first. PostgREST has no cheap "distinct on phone, latest per group"
+        query via this client, so this fetches the most recent messages across the whole tenant
+        and groups client-side — bounded by `scan_limit`, same trade-off the health/usage
+        aggregations in vula/api/master.py already make elsewhere in this codebase."""
+        try:
+            rows = (_client().table(_TABLE)
+                    .select("phone,role,text,created_at")
+                    .eq("tenant_id", tenant_id)
+                    .order("created_at", desc=True).limit(2000).execute().data or [])
+        except Exception as exc:
+            logger.debug("chat list_threads skipped: %s", exc)
+            return []
+        threads: dict[str, dict] = {}
+        for r in rows:
+            phone = r.get("phone") or ""
+            if phone in threads:
+                continue  # rows arrive newest-first, so the first hit per phone IS the latest
+            threads[phone] = {
+                "phone": phone, "last_message": (r.get("text") or "")[:200],
+                "last_role": r.get("role"), "last_at": r.get("created_at"),
+            }
+            if len(threads) >= limit:
+                break
+        return list(threads.values())
+
     def clear(self, tenant_id: str, phone: str = "") -> int:
         try:
             res = (_client().table(_TABLE).delete()

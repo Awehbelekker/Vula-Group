@@ -265,6 +265,66 @@ async def master_tenant_setup(tenant_id: str):
             "progress_pct": round(100 * done / len(steps))}
 
 
+@router.get("/tenants/{tenant_id}/conversations")
+async def master_tenant_conversations(tenant_id: str, limit: int = 30) -> dict:
+    """Recent conversation threads for a tenant (Master Build Brief section 6a item 2) — support
+    staff/master admin can now read a tenant's real conversation history without direct Railway/
+    Supabase access. WhatsApp and portal chat already share one durable store
+    (vula/chat/history.py's vula_chat_messages) — this is the thread picker; see the sibling
+    /conversations/{phone} endpoint below for one thread's actual messages."""
+    from vula.chat.history import get_db
+    threads = get_db().list_threads(tenant_id, limit=min(limit, 100))
+    return {"tenant_id": tenant_id, "threads": threads}
+
+
+@router.get("/tenants/{tenant_id}/conversations/{phone}")
+async def master_tenant_conversation_messages(tenant_id: str, phone: str, limit: int = 100) -> dict:
+    """One thread's actual messages, oldest-first (matches the dashboard's own /v1/chat/{tenant}/
+    history endpoint's ordering) — max_age_hours=None because a support reproduction often needs
+    a conversation from days ago, unlike the AI's own prompt-context read which only wants
+    recent turns."""
+    from vula.chat.history import get_db
+    msgs = get_db().get(tenant_id, phone=phone, limit=min(limit, 200), max_age_hours=None)
+    return {"tenant_id": tenant_id, "phone": phone,
+            "messages": [{"role": m.role, "text": m.text, "created_at": m.created_at}
+                         for m in msgs]}
+
+
+@router.get("/tenants/{tenant_id}/errors")
+async def master_tenant_errors(tenant_id: str, hours: int = 168) -> dict:
+    """Per-tenant error-event drill-down (Master Build Brief section 6a item 2) — the companion
+    to /health above, which only ever reports platform-wide aggregates. Two real, unambiguous
+    error sources, not routing telemetry noise: webhook processing failures (vula_webhook_
+    failures, migration 099) and adversarial-verification defects/checker failures
+    (vula_reasoning_telemetry where system="verified-reasoning" — see core/verification.py's
+    register_outcome). Deliberately excludes vula-llm-router escalation events: "cloud because
+    genuinely complex" is normal, healthy routing, not an error, and mixing it in here would
+    make a real problem harder to spot, not easier. Default window is 7 days, not 24h like
+    /health, since a support reproduction is rarely about "right now"."""
+    db = _client()
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    out: dict[str, Any] = {"tenant_id": tenant_id, "window_hours": hours}
+    try:
+        out["webhook_failures"] = (
+            db.table("vula_webhook_failures").select("*")
+            .eq("tenant_id", tenant_id).gte("created_at", since)
+            .order("created_at", desc=True).limit(100).execute().data or [])
+    except Exception as exc:
+        out["webhook_failures"] = {"error": str(exc)}
+    try:
+        rows = (db.table("vula_reasoning_telemetry")
+                .select("task,outcome,escalated,reason,extra,created_at")
+                .eq("tenant_id", tenant_id).eq("system", "verified-reasoning")
+                .gte("created_at", since).order("created_at", desc=True)
+                .limit(200).execute().data or [])
+        out["verification_flags"] = [
+            r for r in rows if r.get("outcome") in
+            ("defect_found", "checker_error", "checker_unparseable")][:100]
+    except Exception as exc:
+        out["verification_flags"] = {"error": str(exc)}
+    return out
+
+
 # ── Platform health ───────────────────────────────────────────────────────────
 
 @router.get("/health")
