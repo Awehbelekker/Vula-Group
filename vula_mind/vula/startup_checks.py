@@ -79,6 +79,13 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("155", "commerce_bank_transactions", "asked_at"),
     ("156", "vula_stock_sheets", None),
     ("157", "vula_media_dedup", None),
+    ("158", "commerce_order_settings", "business_hours"),
+    # Reflection/routing-hint store, moved off ephemeral local SQLite (which reset on every
+    # redeploy) onto Supabase — see the Mass Mind design doc. Code already fails open if this
+    # migration hasn't run yet (never a runtime exception), but silently — this sentinel is the
+    # only thing that would surface "reflections aren't actually being recorded" at boot instead
+    # of nobody noticing the platform just never learns anything.
+    ("159", "vula_reflections", None),
 ]
 
 
