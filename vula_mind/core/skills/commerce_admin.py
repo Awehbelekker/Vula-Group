@@ -3031,12 +3031,24 @@ class CommerceAdminSkill(BaseSkill):
             from vula.google import service as google_service
             from vula.google.service import GoogleNotConnected
             await google_service.gmail_create_draft(tid, to, subject, body)
+            return {"drafted": True, "to": to, "subject": subject,
+                    "note": "Saved as a Gmail DRAFT — review and send it yourself, nothing was sent automatically."}
         except GoogleNotConnected:
-            return {"error": "Google isn't connected for this account yet — connect it from the dashboard first."}
+            pass  # not every tenant uses Gmail — try whichever mailbox they DO have connected
         except Exception as exc:
             return {"error": f"Couldn't create the Gmail draft: {exc}"}
+
+        # 2026-09-15: this used to dead-end here with "connect Google" even for a tenant with a
+        # perfectly working IMAP/Microsoft mailbox already connected — the more common case, see
+        # mail_router.py's own docstring. Same fallback order sending already uses.
+        from vula.commerce.mail_router import create_tenant_draft
+        result = await create_tenant_draft(tid, to, subject, body)
+        if not result:
+            return {"error": "No connected mailbox found for this account — connect one "
+                             "(Google, or your own mailbox) from the dashboard first."}
+        where = "your Drafts folder" if result["via"] == "imap" else "your Outlook drafts"
         return {"drafted": True, "to": to, "subject": subject,
-                "note": "Saved as a Gmail DRAFT — review and send it yourself, nothing was sent automatically."}
+                "note": f"Saved to {where} — review and send it yourself, nothing was sent automatically."}
 
     async def _create_reminder(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         text = (args.get("text") or "").strip()
