@@ -216,13 +216,23 @@ def client():
     return TestClient(app, raise_server_exceptions=False)
 
 
+# 2026-09-15: these three now explicitly blank settings.api_key — before the require_auth fix
+# below they relied on conftest.py's API_KEY="" default, but CI's workflow sets a real
+# API_KEY=ci-test in its env (before conftest.py's os.environ.setdefault can touch it), so
+# these silently depended on running somewhere that hadn't configured a key. Explicit beats
+# ambient, and matches every other require_auth-gated route's test convention (test_api.py).
+
 @pytest.mark.asyncio
 async def test_chat_message_endpoint():
     from vula.api.chat import router
+    from vula.api.master_auth import settings
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    with patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value="I can help with that.")):
+    with (
+        patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value="I can help with that.")),
+        patch.object(settings, "api_key", ""),
+    ):
         app = FastAPI()
         app.include_router(router, prefix="/v1")
         c = TestClient(app)
@@ -237,35 +247,39 @@ async def test_chat_message_endpoint():
 @pytest.mark.asyncio
 async def test_chat_history_endpoint():
     from vula.api.chat import router
+    from vula.api.master_auth import settings
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    app = FastAPI()
-    app.include_router(router, prefix="/v1")
-    c = TestClient(app)
+    with patch.object(settings, "api_key", ""):
+        app = FastAPI()
+        app.include_router(router, prefix="/v1")
+        c = TestClient(app)
 
-    resp = c.get("/v1/chat/mytenant/history")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "messages" in data
-    assert "tenant_id" in data
+        resp = c.get("/v1/chat/mytenant/history")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "messages" in data
+        assert "tenant_id" in data
 
 
 @pytest.mark.asyncio
 async def test_chat_clear_endpoint():
     from vula.api.chat import router
+    from vula.api.master_auth import settings
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    app = FastAPI()
-    app.include_router(router, prefix="/v1")
-    c = TestClient(app)
+    with patch.object(settings, "api_key", ""):
+        app = FastAPI()
+        app.include_router(router, prefix="/v1")
+        c = TestClient(app)
 
-    resp = c.delete("/v1/chat/mytenant/history")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("status") == "cleared"
-    assert "deleted" in data
+        resp = c.delete("/v1/chat/mytenant/history")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("status") == "cleared"
+        assert "deleted" in data
 
 
 # ─── Auth (2026-09-15) ─────────────────────────────────────────────────────────
