@@ -909,6 +909,38 @@ async def _mass_mind_pattern_rollup_loop() -> None:
         await _asyncio.sleep(6 * 3600)
 
 
+async def _voice_recheck_scheduler_loop() -> None:
+    """Tenant Mind Phase 2 (2026-09-15) — vula/commerce/voice_profile.py's analyze_voice()
+    already does everything right (real owner-authored text, propose-confirm, never
+    auto-applied), it just only ever ran when someone manually triggered it. Every tenant,
+    every 12h: if enough genuinely new samples have accumulated since the last analysis (and
+    nothing unreviewed is already sitting there — see due_for_recheck), quietly re-analyse.
+    Still never auto-applies anything; this only keeps the SUGGESTION current."""
+    import asyncio as _asyncio
+    from vula.commerce import voice_profile
+    from vula.api import tenants as _t
+
+    await _asyncio.sleep(500)  # settle on boot, after the other Mass Mind/recovery loops
+    while True:
+        try:
+            rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+            for r in rows:
+                tenant_id = r.get("tenant_id")
+                if not tenant_id:
+                    continue
+                try:
+                    if await voice_profile.due_for_recheck(tenant_id):
+                        result = await voice_profile.analyze_voice(tenant_id)
+                        if "suggested" in result:
+                            log.info("voice recheck: new suggestion for %s (%d samples)",
+                                     tenant_id, result.get("sample_count", 0))
+                except Exception as exc:
+                    log.warning("voice recheck failed for %s: %s", tenant_id, exc)
+        except Exception as exc:
+            log.warning("voice recheck scheduler tick failed: %s", exc)
+        await _asyncio.sleep(12 * 3600)
+
+
 async def _subscriptions_loop() -> None:
     """Create due recurring orders every hour (acts only when a subscription's next_run arrives)."""
     import asyncio as _asyncio
@@ -1102,6 +1134,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_pattern_rollup_loop()))
+    # Tenant Mind Phase 2 — quietly re-check voice suggestions as new samples accumulate (163).
+    _scheduled_job_tasks.append(_asyncio.create_task(_voice_recheck_scheduler_loop()))
 
 
 def _stop_scheduled_job_tasks() -> None:
