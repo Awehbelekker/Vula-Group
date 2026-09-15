@@ -266,3 +266,59 @@ async def test_chat_clear_endpoint():
     data = resp.json()
     assert data.get("status") == "cleared"
     assert "deleted" in data
+
+
+# ─── Auth (2026-09-15) ─────────────────────────────────────────────────────────
+# All three routes above had NO auth dependency at all, and weren't matched by server.py's
+# tenant_admin_guard middleware either — any caller who knew a tenant_id could read, inject
+# into, or wipe that tenant's entire conversation history with zero auth. The three tests above
+# still pass unchanged because conftest.py sets API_KEY="" (require_auth no-ops when unset — dev
+# mode), matching every other require_auth-gated route's test behaviour. These confirm the
+# dependency is actually wired once a real key IS configured, since the three tests above alone
+# would stay green even if `dependencies=[Depends(require_auth)]` were silently removed.
+
+@pytest.fixture()
+def app_with_key(monkeypatch):
+    """A real X-API-Key configured — the three tests above intentionally don't set this."""
+    from vula.api.chat import router
+    from vula.api import master_auth
+    from fastapi import FastAPI
+    monkeypatch.setattr(master_auth.settings, "api_key", "test-secret-key")
+    app = FastAPI()
+    app.include_router(router, prefix="/v1")
+    return TestClient(app)
+
+
+def test_message_endpoint_401s_without_a_key(app_with_key):
+    resp = app_with_key.post("/v1/chat/mytenant/message", json={"message": "hi"})
+    assert resp.status_code == 401
+
+
+def test_history_endpoint_401s_without_a_key(app_with_key):
+    resp = app_with_key.get("/v1/chat/mytenant/history")
+    assert resp.status_code == 401
+
+
+def test_clear_endpoint_401s_without_a_key(app_with_key):
+    resp = app_with_key.delete("/v1/chat/mytenant/history")
+    assert resp.status_code == 401
+
+
+def test_history_endpoint_401s_with_a_wrong_key(app_with_key):
+    resp = app_with_key.get("/v1/chat/mytenant/history", headers={"X-API-Key": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_history_endpoint_works_with_the_right_key(app_with_key):
+    resp = app_with_key.get("/v1/chat/mytenant/history", headers={"X-API-Key": "test-secret-key"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_history_endpoint_works_with_a_verified_master_jwt(app_with_key, monkeypatch):
+    from vula.api import master_auth
+    monkeypatch.setattr(master_auth, "require_master",
+                        AsyncMock(return_value={"user_id": "m1", "role": "master"}))
+    resp = app_with_key.get("/v1/chat/mytenant/history",
+                            headers={"Authorization": "Bearer whatever"})
+    assert resp.status_code == 200
