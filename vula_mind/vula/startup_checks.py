@@ -88,6 +88,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("159", "vula_reflections", None),
     ("160", "vula_health_events", None),
     ("162", "vula_mass_mind_patterns", None),
+    ("163", "vula_tenant_config", "voice_last_checked_sample_count"),
     # Was cited as "112" above until the 2026-09-15 migration audit found it collided with
     # 112_rls_credential_tables.sql (part of the documented 112-115 security-remediation block —
     # see [[security-remediation-pass]], so that one keeps its number). The underlying file was

@@ -281,3 +281,65 @@ async def test_redacts_email_and_phone_from_samples(fake_client, monkeypatch):
     assert "client@example.com" not in captured["prompt"]
     assert "[phone]" in captured["prompt"]
     assert "[email]" in captured["prompt"]
+
+
+# ── Incremental recheck (migration 163, Tenant Mind Phase 2) ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_analyze_voice_records_the_sample_count_it_checked_at(fake_client, monkeypatch):
+    _seed_messages(fake_client, 20)
+    _seed_tenant_config(fake_client)
+    _mock_llm(monkeypatch)
+
+    await vp.analyze_voice(TID)
+    row = fake_client.store["vula_tenant_config"][0]
+    assert row["voice_last_checked_sample_count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_due_for_recheck_false_below_min_sample(fake_client):
+    _seed_messages(fake_client, 5)
+    _seed_tenant_config(fake_client)
+    assert await vp.due_for_recheck(TID) is False
+
+
+@pytest.mark.asyncio
+async def test_due_for_recheck_true_on_first_ever_check_once_enough_samples(fake_client):
+    _seed_messages(fake_client, 20)
+    _seed_tenant_config(fake_client)  # voice_last_checked_sample_count unset
+    assert await vp.due_for_recheck(TID) is True
+
+
+@pytest.mark.asyncio
+async def test_due_for_recheck_false_when_growth_is_too_small(fake_client):
+    _seed_messages(fake_client, 20)
+    fake_client.store["vula_tenant_config"] = [
+        {"tenant_id": TID, "voice_last_checked_sample_count": 18}  # only +2 new
+    ]
+    assert await vp.due_for_recheck(TID) is False
+
+
+@pytest.mark.asyncio
+async def test_due_for_recheck_true_once_growth_clears_the_bar(fake_client):
+    _seed_messages(fake_client, 30)
+    fake_client.store["vula_tenant_config"] = [
+        {"tenant_id": TID, "voice_last_checked_sample_count": 15}  # +15 new, well over the bar
+    ]
+    assert await vp.due_for_recheck(TID) is True
+
+
+@pytest.mark.asyncio
+async def test_due_for_recheck_false_when_a_suggestion_is_already_pending(fake_client):
+    """A fresh suggestion must never silently replace one the owner hasn't reviewed yet."""
+    _seed_messages(fake_client, 50)
+    fake_client.store["vula_tenant_config"] = [
+        {"tenant_id": TID, "voice_last_checked_sample_count": 10,
+         "persona_prompt_suggested": "Some earlier suggestion, still unread."}
+    ]
+    assert await vp.due_for_recheck(TID) is False
+
+
+@pytest.mark.asyncio
+async def test_due_for_recheck_fails_open_on_error(monkeypatch):
+    monkeypatch.setattr(vp, "_client", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
+    assert await vp.due_for_recheck(TID) is False

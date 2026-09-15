@@ -30,6 +30,10 @@ MIN_SAMPLE = 15
 SAMPLE_LIMIT = 60
 _PER_SOURCE_LIMIT = 40
 
+# Tenant Mind Phase 2 (2026-09-15): how many NEW real samples must accumulate since the last
+# analysis before a scheduled re-check is worth an LLM call — see due_for_recheck().
+MIN_GROWTH_FOR_RECHECK = 10
+
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _PHONE_RE = re.compile(r"(?<!\w)(\+?\d[\d\s\-()]{6,}\d)(?!\w)")
 
@@ -127,6 +131,31 @@ async def sample_count(tenant_id: str) -> int:
     return len(await _gather_samples(tenant_id))
 
 
+async def due_for_recheck(tenant_id: str, min_growth: int = MIN_GROWTH_FOR_RECHECK) -> bool:
+    """Should the scheduled loop re-analyse this tenant's voice right now?
+
+    True only when: there's at least MIN_SAMPLE data (same bar analyze_voice() itself uses),
+    genuinely new growth since the last analysis (not just re-running on the same data for no
+    reason), and no suggestion is already sitting there unreviewed — a fresh suggestion must
+    never silently replace one the owner hasn't looked at yet. Fails open to False: an error
+    here should skip a tenant this tick, never crash the loop that calls it for everyone."""
+    try:
+        rows = (_client().table("vula_tenant_config")
+                .select("persona_prompt_suggested,voice_last_checked_sample_count")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        cfg = rows[0] if rows else {}
+        if (cfg.get("persona_prompt_suggested") or "").strip():
+            return False  # an unreviewed suggestion is already pending — don't pile on
+        current = await sample_count(tenant_id)
+        if current < MIN_SAMPLE:
+            return False
+        last_checked = cfg.get("voice_last_checked_sample_count") or 0
+        return (current - last_checked) >= min_growth
+    except Exception as exc:
+        log.debug("voice_profile: due_for_recheck skipped for %s: %s", tenant_id, exc)
+        return False
+
+
 async def analyze_voice(tenant_id: str) -> Dict[str, Any]:
     """Analyse the tenant's own authored text (WhatsApp, meeting notes, sent email) and store
     a suggested persona_prompt.
@@ -178,6 +207,11 @@ async def analyze_voice(tenant_id: str) -> Dict[str, Any]:
         _client().table("vula_tenant_config").update({
             "persona_prompt_suggested": suggested,
             "persona_prompt_suggested_at": _now(),
+            # Marks "we analysed at this much data" so due_for_recheck() (migration 163) can
+            # tell real new growth from noise — set on every successful analysis, whichever
+            # path triggered it (dashboard button, WhatsApp admin tool, or the scheduled
+            # recheck loop), so none of them fights the others into re-suggesting too often.
+            "voice_last_checked_sample_count": len(texts),
         }).eq("tenant_id", tenant_id).execute()
     except Exception as exc:
         return {"error": f"{exc} (run migration 119?)"}
