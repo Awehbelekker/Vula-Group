@@ -30,6 +30,20 @@ from core.thinkmesh.merger import ThinKMeshMerger
 
 logger = logging.getLogger(__name__)
 
+# 2026-09-15, Master Build Brief section 5b: HRM already plans up to 3 branches +
+# VOTE/SYNTHESIZE merge at complexity==3 (core/hrm/orchestrator.py), but MAX_AGENT_BRANCHES
+# defaults to 1 in prod — confirmed set explicitly to 1 in Railway — so that planning has been
+# dead code at runtime. Both WhatsApp paths (vula/api/whatsapp.py's commerce and _rag_reply
+# calls) and the dashboard's main chat (vula/api/chat.py, which reuses _rag_reply) already pass
+# an EXPLICIT max_branches=1 as a deliberate, commented cost cap — this constant and the
+# selective-raise below never touch those; only the env-default fallback path (currently just
+# /v1/agent/run, vula_dashboard's VulaAgent.jsx) is affected. Rather than raising the cap
+# globally (cost/latency risk across all traffic), only the genuinely hard, high-stakes skills
+# get the extra branch: architecture_planning cites standards, standards_lookup IS cited SA
+# construction standards, reasoning is the catch-all fallback for whatever didn't match a more
+# specific skill.
+_MULTI_BRANCH_SKILLS = frozenset({"architecture_planning", "reasoning", "standards_lookup"})
+
 
 @dataclass
 class AgentResult:
@@ -83,6 +97,13 @@ class AgentRunner:
         # can't silently fan out to 2–3× the LLM cost.
         import os
         cap = max_branches or int(os.environ.get("MAX_AGENT_BRANCHES", "1") or 1)
+        # Selective multi-branch reasoning (see _MULTI_BRANCH_SKILLS docstring above): only
+        # raises the DEFAULT ceiling for the hardest, highest-stakes questions — an explicit
+        # caller cap (max_branches truthy, e.g. WhatsApp's cost-bounded 1) always wins and is
+        # never overridden here.
+        if (not max_branches and graph.complexity == 3
+                and graph.primary_skill in _MULTI_BRANCH_SKILLS):
+            cap = max(cap, 2)
         if cap and len(graph.branches) > cap:
             graph.branches = graph.branches[:cap]
 
