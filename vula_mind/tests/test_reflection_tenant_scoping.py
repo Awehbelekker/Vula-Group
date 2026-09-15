@@ -201,6 +201,29 @@ async def test_memory_recall_passes_the_request_tenant_id(monkeypatch):
     assert captured["tenant_id"] == "digg"
 
 
+def test_init_db_ddl_runs_once_per_process_not_once_per_request(tmp_path, monkeypatch):
+    """ReflectionAgent() is constructed fresh on every single agent turn (twice, in
+    core/agent_runner.py) — _init_db's DDL, including the tenant_id ALTER TABLE probe, must
+    not re-run (and re-throw-and-catch) on every one of those."""
+    db_path = tmp_path / "reflection.db"
+    ReflectionAgent._initialized_paths.discard(str(db_path))  # isolate from other tests
+
+    calls = []
+    real_init = ReflectionAgent._init_db
+
+    def _counting_init(self):
+        calls.append(1)
+        return real_init(self)
+
+    monkeypatch.setattr(ReflectionAgent, "_init_db", _counting_init)
+
+    ReflectionAgent(db_path=db_path)
+    ReflectionAgent(db_path=db_path)
+    ReflectionAgent(db_path=db_path)
+
+    assert len(calls) == 1
+
+
 def test_reflection_log_defaults_to_default_tenant_when_unset():
     """Direct dataclass default — anything constructing a ReflectionLog without a tenant_id
     (e.g. an older caller) degrades to 'default' rather than crashing or leaving it None."""

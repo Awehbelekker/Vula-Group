@@ -43,6 +43,18 @@ class ReflectionAgent:
     which model tiers, skills, and strategies work best for each task type.
     """
 
+    # ReflectionAgent() is constructed fresh on every single agent turn (core/agent_runner.py
+    # does it twice — once for the routing-hint fetch, once for the background reflect() call),
+    # not held as a singleton. __init__ used to re-run the full DDL (CREATE TABLE/INDEX) on
+    # every one of those. 2026-09-15: adding the tenant_id ALTER TABLE made this materially
+    # worse — after the very first successful migration, EVERY subsequent request would throw
+    # and catch a real sqlite3.OperationalError just to discover the column already exists.
+    # Track which db_path has already been migrated this process so the DDL work — including
+    # that exception-driven probe — runs once per process, not once per request. A harmless
+    # double-init under concurrent first-requests (both see "not yet done") is fine; _init_db
+    # is fully idempotent either way.
+    _initialized_paths: set = set()
+
     def __init__(
         self,
         ollama_base: str = OLLAMA_BASE,
@@ -52,7 +64,10 @@ class ReflectionAgent:
         self.ollama_base = ollama_base
         self.reflection_model = reflection_model
         self.db_path = db_path
-        self._init_db()
+        key = str(db_path)
+        if key not in ReflectionAgent._initialized_paths:
+            self._init_db()
+            ReflectionAgent._initialized_paths.add(key)
 
     # -------------------------------------------------------------------------
     # Public API
