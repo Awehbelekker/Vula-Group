@@ -109,6 +109,17 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
         <BusinessHoursSettings tenantId={tenantId} />
       </section>
 
+      {/* Tenant Mind Phase 2 (2026-09-15) — one surface for voice/tone, learned answers, and
+          merchant categorisation, three mechanisms that previously had no shared view. */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🧠 What Vula has learned</h4>
+        <p style={s.sectionHint}>
+          Everything Vula has picked up about how your business runs — your voice, answers
+          learned from your team, and how it's learned to categorise your suppliers.
+        </p>
+        <LearnedSummary tenantId={tenantId} />
+      </section>
+
       <p style={s.footer}>Powered by Vula</p>
     </div>
   )
@@ -543,6 +554,101 @@ function BusinessHoursSettings({ tenantId }) {
           {busy ? 'Saving…' : 'Save opening hours'}
         </button>
         {msg && <span style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+      </div>
+    </div>
+  )
+}
+
+function LearnedSummary({ tenantId }) {
+  const API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  function load() {
+    fetch(`${API}/v1/commerce/${tenantId}/admin/learned-summary`)
+      .then(r => r.json()).then(setData).catch(() => {})
+  }
+  useEffect(load, [tenantId])  // eslint-disable-line
+
+  async function respondToVoiceSuggestion(accept) {
+    if (!data) return
+    setBusy(true)
+    try {
+      const persona_prompt = accept ? data.voice.suggested : data.voice.current
+      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/persona`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ persona_prompt }),
+      })
+      const d = await r.json()
+      setMsg(d.error ? String(d.error) : (accept ? 'Voice updated.' : 'Dismissed.'))
+      load()
+    } catch (e) { setMsg('Could not save — try again.') } finally {
+      setBusy(false); setTimeout(() => setMsg(''), 5000)
+    }
+  }
+
+  if (!data) return <p style={{ ...s.sectionHint, margin: 0 }}>Loading…</p>
+
+  const card = { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 12 }
+  const label = { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 6px' }
+  const hint = { fontFamily: 'system-ui', fontSize: 12.5, color: '#8A8680', margin: 0, lineHeight: 1.5 }
+  const btn = (primary) => ({
+    padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+    fontFamily: 'system-ui', border: primary ? 'none' : '1px solid #DDD8CE',
+    background: primary ? 'var(--accent, #2C5545)' : '#fff', color: primary ? '#fff' : 'var(--ink, #1E1E1E)',
+  })
+
+  return (
+    <div>
+      {/* Voice / tone — the only section with an action, reusing the existing accept/dismiss
+          PATCH endpoint built for exactly this (see admin_set_persona's own docstring). */}
+      <div style={card}>
+        <p style={label}>🗣️ Voice &amp; tone</p>
+        {data.voice.current
+          ? <p style={{ ...hint, marginBottom: 8 }}>Current: "{data.voice.current}"</p>
+          : <p style={{ ...hint, marginBottom: 8 }}>No voice set yet — Vula uses its default tone.</p>}
+        {data.voice.suggested ? (
+          <div style={{ background: '#F7F5EF', borderRadius: 8, padding: 10, marginTop: 4 }}>
+            <p style={{ ...hint, color: 'var(--ink, #1E1E1E)', marginBottom: 8 }}>
+              Suggested, from your own real messages: "{data.voice.suggested}"
+            </p>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button style={btn(true)} disabled={busy} onClick={() => respondToVoiceSuggestion(true)}>Accept</button>
+              <button style={btn(false)} disabled={busy} onClick={() => respondToVoiceSuggestion(false)}>Dismiss</button>
+              {msg && <span style={{ fontSize: 12, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+            </div>
+          </div>
+        ) : (
+          <p style={hint}>No suggestion pending — Vula quietly re-checks as you send more real messages.</p>
+        )}
+      </div>
+
+      {/* Learned answers — reviewed on WhatsApp (Keep/Bin), shown here for visibility. */}
+      <div style={card}>
+        <p style={label}>💬 Answers learned from your team</p>
+        <p style={hint}>
+          {data.learned_answers.approved_count} approved and in use
+          {data.learned_answers.pending_count > 0
+            ? `, ${data.learned_answers.pending_count} waiting for your Keep/Bin reply on WhatsApp.`
+            : '.'}
+        </p>
+        {data.learned_answers.recent_approved.length > 0 && (
+          <ul style={{ margin: '8px 0 0', padding: '0 0 0 18px', ...hint }}>
+            {data.learned_answers.recent_approved.slice(0, 5).map(r => (
+              <li key={r.id} style={{ marginBottom: 4 }}>"{r.question}"</li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Merchant categorisation — decided automatically from bank statements + research. */}
+      <div style={card}>
+        <p style={label}>🏪 Supplier categorisation</p>
+        <p style={hint}>
+          {data.merchant_profiles.decided_count} of {data.merchant_profiles.total_count} suppliers
+          categorised{data.merchant_profiles.total_count === 0 ? ' yet — this fills in as bank statements come through.' : '.'}
+        </p>
       </div>
     </div>
   )

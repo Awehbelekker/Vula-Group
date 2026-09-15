@@ -1759,6 +1759,56 @@ async def admin_analyze_persona(tenant_id: str):
     return {"ok": True, **result}
 
 
+@router.get("/{tenant_id}/admin/learned-summary")
+async def admin_learned_summary(tenant_id: str):
+    """Tenant Mind Phase 2 (2026-09-15) — one surface for everything Vula has picked up about
+    this business, pulled from three genuinely independent, separately-reviewed mechanisms:
+    voice/tone (vula/commerce/voice_profile.py), answers learned from staff during escalations
+    (vula/escalation.py), and supplier categorisation rules (vula/commerce/merchants.py). This
+    endpoint changes nothing about how any of them work — it's read-only, and every "accept the
+    suggestion" action still happens through each mechanism's own existing endpoint. Before this,
+    an owner had to know these three things existed separately to ever find any of them."""
+    db = service._client()
+
+    from vula.api import tenants as _tenants
+    cfg = _tenants.get_config(tenant_id, fresh=True)
+    voice = {
+        "current": cfg.get("persona_prompt") or "",
+        "suggested": cfg.get("persona_prompt_suggested") or "",
+        "suggested_at": cfg.get("persona_prompt_suggested_at"),
+    }
+
+    try:
+        la_rows = (db.table("vula_learned_answers")
+                   .select("id,question,answer,status,created_at,approved_at")
+                   .eq("tenant_id", tenant_id).order("created_at", desc=True)
+                   .limit(200).execute().data or [])
+    except Exception as exc:
+        log.debug("learned-summary: learned_answers read skipped (run migration 150?): %s", exc)
+        la_rows = []
+    pending = [r for r in la_rows if r.get("status") == "pending"]
+    approved = [r for r in la_rows if r.get("status") == "approved"]
+    learned_answers = {
+        "pending": pending, "pending_count": len(pending),
+        "approved_count": len(approved), "recent_approved": approved[:20],
+    }
+
+    try:
+        mp_rows = (db.table("commerce_merchant_profiles")
+                   .select("merchant_key,display_name,account_code,confidence,decided_by,updated_at")
+                   .eq("tenant_id", tenant_id).order("updated_at", desc=True)
+                   .limit(200).execute().data or [])
+    except Exception as exc:
+        log.debug("learned-summary: merchant_profiles read skipped (run migration 154?): %s", exc)
+        mp_rows = []
+    decided = [r for r in mp_rows if r.get("account_code")]
+    merchant_profiles = {
+        "decided_count": len(decided), "total_count": len(mp_rows), "recent": mp_rows[:20],
+    }
+
+    return {"voice": voice, "learned_answers": learned_answers, "merchant_profiles": merchant_profiles}
+
+
 class PageAiDraftRequest(BaseModel):
     content: list = []
     description: str = ""
