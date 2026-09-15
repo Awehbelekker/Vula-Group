@@ -23,7 +23,7 @@ import VulaQuickLauncher from "./components/VulaQuickLauncher";
 import VulaReports from "./components/VulaReports";
 import VulaPayments from "./components/VulaPayments";
 import VulaMasterPanel from "./components/VulaMasterPanel";
-import { VULA_API } from "./lib/authFetch";
+import { VULA_API, authFetch } from "./lib/authFetch";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -94,6 +94,7 @@ export default function App() {
   const [route, setRoute] = useState(window.location.hash);
   const [masterTenant, setMasterTenant] = useState("digg-demo");
   const [masterTenants, setMasterTenants] = useState(MASTER_TENANTS_FALLBACK);
+  const [impersonateReason, setImpersonateReason] = useState(""); // shown in the "viewing as tenant" banner
   const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
@@ -260,6 +261,18 @@ export default function App() {
     const mGroups = withInboxBadge(filterGroups(MERCHANT_GROUPS, () => true), openEscalations); // master sees every module
     return (
       <div style={{ ...themeVars(mTheme) }}>
+        {/* Prominent, impossible-to-miss impersonation banner — the small brand "sub" label
+            below is easy to miss once scrolled past the header; this stays pinned above
+            everything for the whole visit. Shows the reason logged with master_impersonate_tenant
+            (vula/api/master.py) when one was given. */}
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          padding: "6px 12px", background: COLORS.amber, color: "#1A1200",
+          fontSize: 12, fontFamily: "system-ui", fontWeight: 600, textAlign: "center",
+        }}>
+          <span>👁 Master mode — viewing {mName}'s real workspace</span>
+          {impersonateReason && <span style={{ fontWeight: 400, opacity: 0.85 }}>— {impersonateReason}</span>}
+        </div>
         <VulaShell
           brand={{ logoUrl: brandLogoUrl || mTheme.logoUrl, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
           groups={mGroups}
@@ -273,7 +286,7 @@ export default function App() {
             // Returns to Master (not "dashboard") — masterSubTab was never touched while
             // visiting the tenant, so this naturally restores whichever Master sub-tab
             // (Tenants/Health/Usage/...) the operator was on before "Open as tenant".
-            <button onClick={() => setActiveTab("master")}
+            <button onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}
               style={{ padding: "6px 12px", border: `1px solid ${COLORS.border}`, borderRadius: 6,
                        background: COLORS.surface, color: "var(--text, #2A2A2A)", fontSize: 12,
                        cursor: "pointer", fontFamily: "system-ui", fontWeight: 600 }}>
@@ -321,7 +334,23 @@ export default function App() {
       >
         <div style={{ padding: "4px 0 24px" }}>
           <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
-            onOpenTenant={(tid) => { setMasterTenant(tid); setActiveTab("merchant"); }}
+            onOpenTenant={(tid) => {
+              // Optional, non-blocking — a support/reproduction reason for the audit trail
+              // (vula_admin_audit + the tenant's own vula_merchant_audit). Cancelling the
+              // prompt still opens the tenant; this records WHY, it never gates the view
+              // itself (that's already granted via is_tenant_member for any master).
+              const reason = (window.prompt(
+                "Optional — why are you opening this tenant's workspace? (e.g. \"support ticket #123\")",
+                "") || "").trim();
+              setImpersonateReason(reason);
+              authFetch(`/v1/master/tenants/${tid}/impersonate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason }),
+              }).catch(() => {}); // best-effort audit write — never blocks opening the tenant
+              setMasterTenant(tid);
+              setActiveTab("merchant");
+            }}
             {...(activeTab === "master" ? { activeTab: masterSubTab, onTabChange: setMasterSubTab } : {})} />
         </div>
       </VulaShell>

@@ -123,6 +123,27 @@ async def master_mark_paid(tenant_id: str, identity: dict = Depends(require_mast
     return res.data[0]
 
 
+@router.post("/tenants/{tenant_id}/impersonate")
+async def master_impersonate_tenant(tenant_id: str, body: dict,
+                                    identity: dict = Depends(require_master)) -> dict:
+    """Logged the moment master opens a tenant's own workspace ("Open as tenant" in the
+    dashboard). 2026-09-15 audit: the VIEW itself already worked (is_tenant_member already
+    lets a master JWT through tenant_admin_guard for any tenant — see vula/api/tenant_auth.py
+    — and any write already gets attributed to master's real identity via
+    require_tenant_actor + merchant_audit). What was actually missing was a clean, dedicated
+    record of WHO looked at WHICH tenant's real data, WHEN, and WHY — support reproduction
+    needs that distinct from the per-write attribution that already happens for free once
+    inside. Dual-written like every other tenant-affecting master action: vula_admin_audit
+    (master's own cross-tenant view) and vula_merchant_audit (so the tenant's own audit trail
+    shows it too — a tenant should be able to see when master looked at their account, not
+    just take it on faith)."""
+    reason = ((body or {}).get("reason") or "").strip()
+    audit(identity, "master_impersonate_tenant", tenant_id, reason=reason or None)
+    from vula.api import merchant_audit
+    merchant_audit.audit(tenant_id, identity, "master_viewed_as_tenant", reason=reason or None)
+    return {"ok": True}
+
+
 @router.post("/tenants/{tenant_id}/extend-trial")
 async def master_extend_trial(tenant_id: str, body: dict,
                               identity: dict = Depends(require_master)) -> dict:
