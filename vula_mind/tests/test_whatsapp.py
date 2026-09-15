@@ -494,7 +494,7 @@ async def test_escalation_flags_frustrated_customer_to_helper():
     from vula.api.whatsapp import _maybe_escalate_and_learn
 
     with (
-        patch("vula.escalation.find_learned_answer", return_value=None),
+        patch("vula.escalation.find_learned_answer", new=AsyncMock(return_value=None)),
         patch("vula.escalation.create_escalation",
               return_value={"id": "e1", "helper_phone": "27821112222", "helper_name": "Staci"}),
         patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,
@@ -514,7 +514,7 @@ async def test_escalation_no_frustration_flag_for_normal_question():
     from vula.api.whatsapp import _maybe_escalate_and_learn
 
     with (
-        patch("vula.escalation.find_learned_answer", return_value=None),
+        patch("vula.escalation.find_learned_answer", new=AsyncMock(return_value=None)),
         patch("vula.escalation.create_escalation",
               return_value={"id": "e1", "helper_phone": "27821112222", "helper_name": "Staci"}),
         patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_send,

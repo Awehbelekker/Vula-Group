@@ -2158,7 +2158,7 @@ class CommerceAssistantSkill(BaseSkill):
             return {"error": "Pass the customer's actual question to ask_team."}
         try:
             from vula import escalation as esc
-            learned = esc.find_learned_answer(tenant_id, question)
+            learned = await esc.find_learned_answer(tenant_id, question)
             if learned:
                 return {"answer_from_team": learned,
                         "instruction_to_assistant": "The team has answered this exact question "

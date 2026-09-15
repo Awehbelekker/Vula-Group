@@ -763,6 +763,12 @@ async def _handle_learn_review_reply(phone: str, reply_id: str, tenant_id: str) 
         return
     if action == "learn_keep":
         ok = esc.approve_learned_answer(learned_id, approved_by=phone)
+        if ok:
+            # Best-effort semantic index (Tenant Mind Phase 2) — never blocks the reply below;
+            # a failure here just means this one answer falls back to keyword matching until
+            # a later re-embed, not that the approval itself is in any doubt (Postgres already
+            # has it).
+            await esc.embed_learned_answer(tenant_id, learned_id, row.get("question", ""))
         await _send_reply(phone, (
             "👍 Saved — I'll answer that one myself next time."
             if ok else "Couldn't save that just now, sorry."
@@ -834,7 +840,7 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
         from vula import escalation as esc
         if not esc.should_escalate(reply, confidence, customer_text=text):
             return reply
-        learned = esc.find_learned_answer(tenant_id, text)
+        learned = await esc.find_learned_answer(tenant_id, text)
         if learned:
             return learned
         row = esc.create_escalation(tenant_id, phone, text)
