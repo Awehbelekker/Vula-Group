@@ -86,6 +86,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # only thing that would surface "reflections aren't actually being recorded" at boot instead
     # of nobody noticing the platform just never learns anything.
     ("159", "vula_reflections", None),
+    ("160", "vula_health_events", None),
 ]
 
 
