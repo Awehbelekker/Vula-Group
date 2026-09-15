@@ -51,9 +51,16 @@ def test_status_reports_disabled_by_design_integrations():
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 def test_query_without_auth_when_no_key_configured():
-    """When API_KEY is empty, requests should pass through."""
-    with patch("vula.api.server.settings") as mock_settings:
-        mock_settings.api_key = ""  # no auth required
+    """When API_KEY is empty, requests should pass through.
+
+    2026-09-15: was `patch("vula.api.server.settings")` — a module-name swap that only covered
+    require_auth while it lived in server.py. It has since moved to vula/api/master_auth.py (so
+    vula/api/chat.py can depend on it too without a circular import), which holds its own
+    `settings` binding to the same config.py singleton — patch.object on the real singleton's
+    attribute (the pattern test_status_reports_disabled_by_design_integrations above already
+    uses) covers require_auth no matter which module it lives in, unlike a name-swap patch."""
+    from vula.api.server import settings
+    with patch.object(settings, "api_key", ""):
         # just check the endpoint exists and validates input
         resp = client.post("/query", json={"tenant_id": "", "question": "test"})
         # 422 because tenant_id is empty — that's correct validation behaviour
@@ -63,22 +70,22 @@ def test_query_without_auth_when_no_key_configured():
 # ── Input validation ──────────────────────────────────────────────────────────
 
 def test_query_rejects_empty_question():
-    with patch("vula.api.server.settings") as mock_settings:
-        mock_settings.api_key = ""  # isolate validation from the auth check (own test above)
+    from vula.api.server import settings
+    with patch.object(settings, "api_key", ""):  # isolate validation from the auth check above
         resp = client.post("/query", json={"tenant_id": "test", "question": "   "})
         assert resp.status_code == 422
 
 
 def test_query_rejects_invalid_tenant_id():
-    with patch("vula.api.server.settings") as mock_settings:
-        mock_settings.api_key = ""
+    from vula.api.server import settings
+    with patch.object(settings, "api_key", ""):
         resp = client.post("/query", json={"tenant_id": "../../etc/passwd", "question": "test"})
         assert resp.status_code == 422
 
 
 def test_query_rejects_tenant_with_special_chars():
-    with patch("vula.api.server.settings") as mock_settings:
-        mock_settings.api_key = ""
+    from vula.api.server import settings
+    with patch.object(settings, "api_key", ""):
         resp = client.post("/query", json={"tenant_id": "tenant<script>", "question": "test"})
         assert resp.status_code == 422
 

@@ -14,11 +14,13 @@ merchant endpoints is a separate follow-up initiative.
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 from typing import Optional
 
 import httpx
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request, Security, status
+from fastapi.security.api_key import APIKeyHeader
 
 from config import settings
 
@@ -86,3 +88,41 @@ async def require_master(authorization: str = Header(default="")) -> dict:
         _CACHE.clear()
     _CACHE[token] = (now + _CACHE_TTL, identity)
     return identity
+
+
+# Moved here from vula/api/server.py (2026-09-15) so a second router module (vula/api/chat.py)
+# can depend on it without a server.py <-> chat.py circular import — server.py imports
+# chat_router at module load time, so chat.py can't import back from server.py. This module
+# already has zero dependency on server.py, so it's the natural shared home.
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def require_auth(api_key: str | None = Security(_api_key_header),
+                       request: Request = None) -> None:
+    """Require X-API-Key when API_KEY is set — OR a verified master login (2026-07-17: the
+    dashboard authenticates with Supabase, so the master's JWT works without exposing the
+    shared API key to the browser).
+
+    2026-09-15: the ONLY real fix that matters here is closing a live hole — vula/api/chat.py's
+    three routes (tenant conversation history: read, send-as, and DELETE) had NO dependency at
+    all, matched by nothing in server.py's tenant_admin_guard middleware either (that regex list
+    only covers /v1/commerce/{id}/admin, /v1/team/{id}, /v1/users/{id}). Confirmed via
+    vula_mobile/src/api/vula.js that the one real caller of those routes already sends this same
+    X-API-Key on every call — so wiring this in is a straight parity fix with every sibling
+    legacy endpoint (/query, /ingest, /scrape/*), not a new auth model, and needs no frontend
+    change."""
+    if not settings.api_key:
+        return  # no key configured — open (dev mode only)
+    if api_key and secrets.compare_digest(api_key, settings.api_key):
+        return
+    auth_header = request.headers.get("authorization", "") if request is not None else ""
+    if auth_header:
+        try:
+            await require_master(auth_header)
+            return
+        except HTTPException:
+            pass
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or missing API key. Set X-API-Key header or sign in as master.",
+    )

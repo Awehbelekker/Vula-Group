@@ -59,16 +59,14 @@ from __future__ import annotations
 
 import logging
 import re
-import secrets
 import sys
 import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request, Security, UploadFile, File, Form, BackgroundTasks, status
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -109,6 +107,7 @@ from vula.api.agent import router as agent_router
 from vula.api.twilio_whatsapp import router as twilio_router
 from vula.api.links import router as links_router
 from vula.api.master import router as master_router
+from vula.api.master_auth import require_auth
 from vula.api.menu_page import router as menu_page_router
 from vula.api.email_public import router as email_public_router
 
@@ -1356,30 +1355,9 @@ UPLOAD_DIR = settings.upload_dir
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
 
-_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-
-async def require_auth(api_key: str | None = Security(_api_key_header),
-                       request: Request = None) -> None:
-    """Require X-API-Key when API_KEY is set — OR a verified master login (2026-07-17: the
-    dashboard authenticates with Supabase, so the master's JWT works without exposing the
-    shared API key to the browser)."""
-    if not settings.api_key:
-        return  # no key configured — open (dev mode only)
-    if api_key and secrets.compare_digest(api_key, settings.api_key):
-        return
-    auth_header = request.headers.get("authorization", "") if request is not None else ""
-    if auth_header:
-        try:
-            from vula.api.master_auth import require_master
-            await require_master(auth_header)
-            return
-        except HTTPException:
-            pass
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or missing API key. Set X-API-Key header or sign in as master.",
-    )
+# require_auth: moved to vula/api/master_auth.py (2026-09-15, imported above) so
+# vula/api/chat.py can depend on it too without a circular import (server.py imports
+# chat_router at module load time) — see that module's docstring on require_auth for why.
 
 
 # ─── Tenant validation ────────────────────────────────────────────────────────

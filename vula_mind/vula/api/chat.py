@@ -1,7 +1,8 @@
 """
 vula/api/chat.py
 
-Conversational chat API for the client portal.
+Conversational chat API for the client portal (vula_mobile's thin-client staff app — the
+dashboard has no caller for this today).
 Uses the same RAG pipeline as WhatsApp but adds persistent message history
 so the AI remembers context across a session.
 
@@ -9,14 +10,25 @@ Endpoints:
     POST /v1/chat/{tenant_id}/message  — send a message, get a reply
     GET  /v1/chat/{tenant_id}/history  — retrieve recent conversation
     DELETE /v1/chat/{tenant_id}/history — clear conversation
+
+2026-09-15: all three had NO auth dependency at all, and weren't matched by server.py's
+tenant_admin_guard middleware either (that regex only covers /v1/commerce/{id}/admin,
+/v1/team/{id}, /v1/users/{id}) — any caller who knew a tenant_id (a readable slug like
+"off-the-hook", not a random one) could read, inject into, or wipe that tenant's entire
+conversation history with zero auth. vula_mobile/src/api/vula.js — the one real caller —
+already sends X-API-Key on every one of these calls, so require_auth (moved to
+vula/api/master_auth.py to avoid a circular import with server.py) closes this with no
+frontend change: parity with every sibling legacy endpoint (/query, /ingest, /scrape/*),
+not a new auth model.
 """
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from vula.api.master_auth import require_auth
 from vula.chat.history import get_db
 
 logger = logging.getLogger(__name__)
@@ -35,7 +47,8 @@ class ChatMessageResponse(BaseModel):
     message_saved: bool
 
 
-@router.post("/chat/{tenant_id}/message", response_model=ChatMessageResponse)
+@router.post("/chat/{tenant_id}/message", response_model=ChatMessageResponse,
+             dependencies=[Depends(require_auth)])
 async def send_message(tenant_id: str, body: ChatMessageRequest) -> ChatMessageResponse:
     """Send a chat message and receive an AI reply with conversation memory."""
     if not body.message.strip():
@@ -73,7 +86,7 @@ async def send_message(tenant_id: str, body: ChatMessageRequest) -> ChatMessageR
     return ChatMessageResponse(reply=reply, tenant_id=tenant_id, message_saved=True)
 
 
-@router.get("/chat/{tenant_id}/history")
+@router.get("/chat/{tenant_id}/history", dependencies=[Depends(require_auth)])
 async def get_history(tenant_id: str, phone: str = "", limit: int = 30) -> dict:
     """Return recent conversation history for a tenant."""
     db = get_db()
@@ -89,7 +102,7 @@ async def get_history(tenant_id: str, phone: str = "", limit: int = 30) -> dict:
     }
 
 
-@router.delete("/chat/{tenant_id}/history")
+@router.delete("/chat/{tenant_id}/history", dependencies=[Depends(require_auth)])
 async def clear_history(tenant_id: str, phone: str = "") -> dict:
     """Clear conversation history for a tenant (or a specific phone thread)."""
     db = get_db()
