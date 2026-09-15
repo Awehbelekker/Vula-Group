@@ -11,26 +11,28 @@ After every completed TaskGraph, the reflection agent:
 
 This is NOT model retraining. It's outcome-driven routing improvement:
 the system remembers what worked for similar tasks and routes accordingly.
+
+Storage: Supabase (migration 159), not local SQLite. 2026-09-15: confirmed via Railway's own
+service config that Vula-Group has no persistent volume mounted — a local SQLite file here would
+reset to empty on every redeploy, which happens several times a day. Every other "learned"
+mechanism on the platform (voice profiles, learned answers, merchant profiles) already lives in
+Supabase for exactly this reason; this was the one exception. tenant_id fencing (get_routing_hints
+requires it) shipped the same day this moved off SQLite — see the Mass Mind design doc.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import sqlite3
-from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-import httpx
-
-from config import settings
-from core.thinkmesh.graph import TaskGraph, ReflectionLog
+from core.thinkmesh.graph import ReflectionLog, TaskGraph
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_BASE = settings.ollama_base
-REFLECTION_MODEL = settings.reflection_model
-DB_PATH = settings.reflection_db
+
+def _client():
+    from vula.commerce import service
+    return service._client()
 
 
 class ReflectionAgent:
@@ -43,32 +45,6 @@ class ReflectionAgent:
     which model tiers, skills, and strategies work best for each task type.
     """
 
-    # ReflectionAgent() is constructed fresh on every single agent turn (core/agent_runner.py
-    # does it twice — once for the routing-hint fetch, once for the background reflect() call),
-    # not held as a singleton. __init__ used to re-run the full DDL (CREATE TABLE/INDEX) on
-    # every one of those. 2026-09-15: adding the tenant_id ALTER TABLE made this materially
-    # worse — after the very first successful migration, EVERY subsequent request would throw
-    # and catch a real sqlite3.OperationalError just to discover the column already exists.
-    # Track which db_path has already been migrated this process so the DDL work — including
-    # that exception-driven probe — runs once per process, not once per request. A harmless
-    # double-init under concurrent first-requests (both see "not yet done") is fine; _init_db
-    # is fully idempotent either way.
-    _initialized_paths: set = set()
-
-    def __init__(
-        self,
-        ollama_base: str = OLLAMA_BASE,
-        reflection_model: str = REFLECTION_MODEL,
-        db_path: Path = DB_PATH,
-    ):
-        self.ollama_base = ollama_base
-        self.reflection_model = reflection_model
-        self.db_path = db_path
-        key = str(db_path)
-        if key not in ReflectionAgent._initialized_paths:
-            self._init_db()
-            ReflectionAgent._initialized_paths.add(key)
-
     # -------------------------------------------------------------------------
     # Public API
     # -------------------------------------------------------------------------
@@ -76,7 +52,7 @@ class ReflectionAgent:
     def reflect(self, graph: TaskGraph, user_feedback: Optional[float] = None) -> ReflectionLog:
         """
         Run reflection on a completed TaskGraph.
-        
+
         user_feedback: optional 0.0–1.0 rating from user (thumbs up/down etc.)
         """
         # Auto-score the outcome
@@ -108,7 +84,9 @@ class ReflectionAgent:
             tenant_id=getattr(graph, "tenant_id", None) or "default",
         )
 
-        # Persist to SQLite
+        # Persist to Supabase (fails open — this must never break the caller's request; the
+        # caller in core/agent_runner.py already runs this in a background thread for exactly
+        # this reason, since it's now a real network write, not a local disk write).
         self._write_log(log)
 
         # Attach to graph
@@ -134,73 +112,84 @@ class ReflectionAgent:
         did for its entire life until 2026-09-15. Platform-wide cross-tenant pattern learning
         is a deliberate, separate aggregation (the Mass Mind rollup) that never round-trips
         through this per-tenant method.
+
+        Keyword matching happens in Python over a bounded, already-tenant-scoped candidate set
+        — same convention as vula/escalation.py::find_learned_answer — rather than a
+        server-side LIKE-per-keyword scan, which doesn't map cleanly onto the Supabase query
+        builder for an arbitrary number of OR'd keywords.
         """
-        conn = sqlite3.connect(self.db_path)
+        keywords = [w for w in goal.lower().split() if len(w) > 4]
+        if not keywords:
+            return []
         try:
-            # Simple keyword match — replace with Qdrant semantic search in v2
-            keywords = [w for w in goal.lower().split() if len(w) > 4]
-            if not keywords:
-                return []
+            rows = (_client().table("vula_reflections")
+                    .select("goal,primary_skill,winning_tier,outcome_score,merge_strategy,"
+                            "total_latency_ms,what_worked")
+                    .eq("tenant_id", tenant_id).gt("outcome_score", 0.6)
+                    .order("outcome_score", desc=True).order("created_at", desc=True)
+                    .limit(200).execute().data or [])
+        except Exception as exc:
+            logger.debug("routing-hint lookup skipped (run migration 159?): %s", exc)
+            return []
 
-            placeholders = " OR ".join(["goal LIKE ?" for _ in keywords])
-            params = [tenant_id] + [f"%{kw}%" for kw in keywords] + [limit]
+        matched = [r for r in rows
+                   if any(kw in (r.get("goal") or "").lower() for kw in keywords)]
 
-            rows = conn.execute(
-                f"""
-                SELECT goal, primary_skill, winning_tier, outcome_score,
-                       merge_strategy, total_latency_ms, what_worked
-                FROM reflections
-                WHERE tenant_id = ? AND ({placeholders}) AND outcome_score > 0.6
-                ORDER BY outcome_score DESC, timestamp DESC
-                LIMIT ?
-                """,
-                params,
-            ).fetchall()
+        return [
+            {
+                "goal_preview": (r.get("goal") or "")[:80],
+                "skill": r.get("primary_skill"),
+                "winning_tier": r.get("winning_tier"),
+                "score": r.get("outcome_score"),
+                "merge_strategy": r.get("merge_strategy"),
+                "latency_ms": r.get("total_latency_ms"),
+                "what_worked": r.get("what_worked"),
+            }
+            for r in matched[:limit]
+        ]
 
-            return [
-                {
-                    "goal_preview": row[0][:80],
-                    "skill": row[1],
-                    "winning_tier": row[2],
-                    "score": row[3],
-                    "merge_strategy": row[4],
-                    "latency_ms": row[5],
-                    "what_worked": row[6],
-                }
-                for row in rows
-            ]
-        finally:
-            conn.close()
-
-    def get_stats(self, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    def get_stats(self, tenant_id: Optional[str] = None, limit: int = 5000) -> Dict[str, Any]:
         """Summary statistics across reflections.
 
         tenant_id=None (the default) is deliberate here, unlike get_routing_hints: this backs
         operator-facing views only (/metrics, /agent/stats — both require the master API key,
         neither is scoped to a tenant request), so a platform-wide total is the correct default.
-        Pass tenant_id to drill into one tenant's own learning stats instead."""
-        where = "WHERE tenant_id = ?" if tenant_id else ""
-        params = (tenant_id,) if tenant_id else ()
-        conn = sqlite3.connect(self.db_path)
-        try:
-            total = conn.execute(f"SELECT COUNT(*) FROM reflections {where}", params).fetchone()[0]
-            avg_score = conn.execute(
-                f"SELECT AVG(outcome_score) FROM reflections {where}", params).fetchone()[0]
-            avg_latency = conn.execute(
-                f"SELECT AVG(total_latency_ms) FROM reflections {where}", params).fetchone()[0]
-            top_skill = conn.execute(
-                f"SELECT primary_skill, COUNT(*) as c FROM reflections {where} "
-                f"GROUP BY primary_skill ORDER BY c DESC LIMIT 1", params
-            ).fetchone()
+        Pass tenant_id to drill into one tenant's own learning stats instead.
 
-            return {
-                "total_reflections": total,
-                "avg_outcome_score": round(avg_score or 0, 2),
-                "avg_latency_ms": int(avg_latency or 0),
-                "most_used_skill": top_skill[0] if top_skill else None,
-            }
-        finally:
-            conn.close()
+        total_reflections is a real COUNT(*) (Postgres, via count="exact") — cheap and exact.
+        avg_outcome_score / avg_latency_ms / most_used_skill are computed in Python over the
+        most recent `limit` rows rather than a true all-time aggregate: Supabase's REST query
+        builder doesn't cleanly express AVG()/GROUP BY, and this is an operator convenience
+        view, not a figure shown to a tenant or used in any money/verification path.
+        """
+        try:
+            q = _client().table("vula_reflections").select(
+                "primary_skill,outcome_score,total_latency_ms", count="exact")
+            if tenant_id:
+                q = q.eq("tenant_id", tenant_id)
+            res = q.order("created_at", desc=True).limit(limit).execute()
+            rows = res.data or []
+            total = res.count if res.count is not None else len(rows)
+        except Exception as exc:
+            logger.debug("reflection stats lookup skipped (run migration 159?): %s", exc)
+            return {"total_reflections": 0, "avg_outcome_score": 0, "avg_latency_ms": 0,
+                    "most_used_skill": None}
+
+        scores = [r["outcome_score"] for r in rows if r.get("outcome_score") is not None]
+        latencies = [r["total_latency_ms"] for r in rows if r.get("total_latency_ms") is not None]
+        skill_counts: Dict[str, int] = {}
+        for r in rows:
+            sk = r.get("primary_skill")
+            if sk:
+                skill_counts[sk] = skill_counts.get(sk, 0) + 1
+        top_skill = max(skill_counts, key=skill_counts.get) if skill_counts else None
+
+        return {
+            "total_reflections": total,
+            "avg_outcome_score": round(sum(scores) / len(scores), 2) if scores else 0,
+            "avg_latency_ms": int(sum(latencies) / len(latencies)) if latencies else 0,
+            "most_used_skill": top_skill,
+        }
 
     # -------------------------------------------------------------------------
     # Scoring
@@ -209,7 +198,7 @@ class ReflectionAgent:
     def _auto_score(self, graph: TaskGraph) -> float:
         """
         Automatically score task outcome without user feedback.
-        
+
         Factors:
         - Branch success rate
         - Average confidence of completed branches
@@ -284,84 +273,24 @@ class ReflectionAgent:
     # Persistence
     # -------------------------------------------------------------------------
 
-    def _init_db(self) -> None:
-        """Initialise SQLite reflection store."""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS reflections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                graph_id TEXT NOT NULL,
-                goal TEXT NOT NULL,
-                primary_skill TEXT,
-                winning_tier TEXT,
-                outcome_score REAL,
-                merge_strategy TEXT,
-                total_latency_ms INTEGER,
-                what_worked TEXT,
-                what_to_try_next TEXT,
-                skills_used TEXT,
-                tiers_used TEXT,
-                tenant_id TEXT NOT NULL DEFAULT 'default',
-                timestamp REAL
-            )
-        """)
-        # A store that predates 2026-09-15 has this table without tenant_id — ALTER TABLE ADD
-        # COLUMN onto it (SQLite has no "IF NOT EXISTS" for ADD COLUMN, so probe by error
-        # instead). Existing rows backfill to 'default' rather than NULL, so a pre-fence row
-        # is at least self-consistently scoped rather than invisible to every tenant query.
-        try:
-            conn.execute("ALTER TABLE reflections ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column" not in str(exc).lower():
-                raise
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_goal ON reflections(goal)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_score ON reflections(outcome_score)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tenant ON reflections(tenant_id)")
-        conn.commit()
-        conn.close()
-
     def _write_log(self, log: ReflectionLog) -> None:
-        """Persist a ReflectionLog to SQLite."""
-        conn = sqlite3.connect(self.db_path)
+        """Persist a ReflectionLog to Supabase. Fails open — logged at debug, never raised —
+        same convention as every other best-effort learned-data writer on the platform (e.g.
+        vula/commerce/order_workflow.get_order_settings)."""
         try:
-            conn.execute(
-                """
-                INSERT INTO reflections
-                    (graph_id, goal, primary_skill, winning_tier, outcome_score,
-                     merge_strategy, total_latency_ms, what_worked, what_to_try_next,
-                     skills_used, tiers_used, tenant_id, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    log.graph_id,
-                    log.goal[:500],
-                    log.skills_used[0] if log.skills_used else None,
-                    log.model_tiers_used[0] if log.model_tiers_used else None,
-                    log.outcome_score,
-                    log.merge_strategy_used.value,
-                    log.total_latency_ms,
-                    log.what_worked,
-                    log.what_to_try_next,
-                    json.dumps(log.skills_used),
-                    json.dumps(log.model_tiers_used),
-                    log.tenant_id,
-                    log.timestamp,
-                ),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-    def _ollama_generate(self, prompt: str, max_tokens: int = 500) -> str:
-        """Lightweight sync Ollama call for reflection."""
-        payload = {
-            "model": self.reflection_model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"num_predict": max_tokens, "temperature": 0.2},
-        }
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(f"{self.ollama_base}/api/generate", json=payload)
-            resp.raise_for_status()
-            return resp.json().get("response", "")
+            _client().table("vula_reflections").insert({
+                "tenant_id": log.tenant_id,
+                "graph_id": log.graph_id,
+                "goal": log.goal[:500],
+                "primary_skill": log.skills_used[0] if log.skills_used else None,
+                "winning_tier": log.model_tiers_used[0] if log.model_tiers_used else None,
+                "outcome_score": log.outcome_score,
+                "merge_strategy": log.merge_strategy_used.value,
+                "total_latency_ms": log.total_latency_ms,
+                "what_worked": log.what_worked,
+                "what_to_try_next": log.what_to_try_next,
+                "skills_used": log.skills_used,
+                "model_tiers_used": log.model_tiers_used,
+            }).execute()
+        except Exception as exc:
+            logger.debug("reflection write skipped (run migration 159?): %s", exc)
