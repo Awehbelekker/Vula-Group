@@ -33,6 +33,12 @@ SHARED = [
      "Hi {{1}}, a few updates for {{2}} are waiting in Vula. Reply here to keep the chat open, "
      "or open the dashboard when you have a moment.",
      "UTILITY", None),
+    # vula/commerce/call_sheet.py's weekly sales-rep call sheet  ·  0 params
+    # 2026-09-15: confirmed live this was referenced by real code but never actually submitted —
+    # every WhatsApp-channel call sheet had been silently falling back to email-or-nothing.
+    ("call_sheet_ready",
+     "Your weekly call sheet is ready in Vula — check your dashboard or email for the details.",
+     "UTILITY", None),
 ]
 
 OTH_COMMERCE = [
@@ -60,8 +66,10 @@ OTH_COMMERCE = [
      "Reply here and we'll send you the payment link again.",
      "UTILITY", None),
     # server.py::_send_pending_project_nudge  ·  1 param: count
+    # 2026-09-15: Meta rejects a body that starts (or ends) with a variable — "Leading or
+    # Trailing Params Not Allowed" (error_subcode 2388299), confirmed live submitting this one.
     ("oth_pending_project_nudge",
-     "{{1}} filed document(s) are waiting to be assigned to a project in Vula.",
+     "You have {{1}} filed document(s) waiting to be assigned to a project in Vula.",
      "UTILITY", None),
 ]
 
