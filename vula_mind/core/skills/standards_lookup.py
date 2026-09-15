@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 class StandardsLookupSkill(BaseSkill):
     name = "standards_lookup"
     description = "Look up a SANS/SACAP/JBCC standard or code from the practice's master code library, with citations."
+    # 2026-09-15, Master Build Brief section 5a: cited SA construction-standards output is
+    # higher-consequence than general chat, and was getting zero of the scrutiny
+    # commerce_assistant/finance_admin/commerce_admin/reasoning already have. Safe to add
+    # directly (unlike draft_admin, see that skill's own note) — sources below are already
+    # tagged {"type": "kb", ...}, which is exactly what core/verification.py's adversarial
+    # checker uses to build its grounding context, so this isn't a blind check.
+    verification_policy = "adversarial"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         chunks = []
