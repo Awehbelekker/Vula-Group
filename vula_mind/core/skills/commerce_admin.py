@@ -602,14 +602,21 @@ MEETING_TOOLS = [
     {"type": "function", "function": {
         "name": "draft_followup_email",
         "description": (
-            "Draft a thank-you / follow-up email from a logged meeting (attendees, what was "
-            "discussed, next steps). Saved as a Gmail DRAFT for you to review and send yourself "
-            "— it is never sent automatically."
+            "Draft a thank-you / follow-up email from a logged meeting — two steps. Step 1: "
+            "call with to_email + meeting_notes (+ optional subject hint). Returns THREE short "
+            "tone options (formal, warm, brief) to show the rep — nothing is saved yet. Step 2: "
+            "once the rep picks one (or asks for a tweak and you produce the final wording), "
+            "call again with to_email + chosen_subject + chosen_body set to the EXACT text to "
+            "save — this actually creates the draft (Gmail, or whichever mailbox is connected). "
+            "Never sent automatically either way."
         ),
         "parameters": {"type": "object", "properties": {
-            "to_email": {"type": "string"}, "meeting_notes": {"type": "string"},
-            "subject": {"type": "string"}},
-            "required": ["to_email", "meeting_notes"]}}},
+            "to_email": {"type": "string"},
+            "meeting_notes": {"type": "string", "description": "Step 1 only: what the follow-up should be about."},
+            "subject": {"type": "string", "description": "Step 1 only: optional subject hint for the generated options."},
+            "chosen_subject": {"type": "string", "description": "Step 2 only: the exact subject to save."},
+            "chosen_body": {"type": "string", "description": "Step 2 only: the exact body text to save — its presence is what tells this tool to finalize instead of propose."}},
+            "required": ["to_email"]}}},
     {"type": "function", "function": {
         "name": "configure_call_sheet",
         "description": (
@@ -3005,28 +3012,10 @@ class CommerceAdminSkill(BaseSkill):
             for c in shared_chunks
         ]}
 
-    async def _draft_followup_email(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
-        to = (args.get("to_email") or "").strip()
-        if not to:
-            return {"error": "Need the recipient's email."}
-        notes = (args.get("meeting_notes") or "").strip()
-        subject = (args.get("subject") or "Great meeting you").strip()
-        body = notes
-        try:
-            import litellm
-            litellm.drop_params = True
-            model, api_key, api_base = await resolve_generation_route()
-            resp = await litellm.acompletion(
-                model=model, temperature=0.3, max_tokens=350, api_key=api_key, api_base=api_base,
-                messages=[
-                    {"role": "system", "content": "Write a short, warm, professional thank-you/"
-                     "follow-up email body from these meeting notes. Plain text, no markdown, no "
-                     "subject line, no placeholder brackets."},
-                    {"role": "user", "content": notes[:2000]},
-                ])
-            body = (resp.choices[0].message.content or notes).strip() or notes
-        except Exception as exc:
-            logger.debug("followup email generation failed, using raw notes: %s", exc)
+    async def _save_followup_draft(self, tid: str, to: str, subject: str, body: str) -> Dict[str, Any]:
+        """Actually create the draft — Gmail first, then whichever of IMAP/Microsoft is
+        connected (mail_router.create_tenant_draft). Saves EXACTLY the subject/body given,
+        no generation here — see _draft_followup_email's docstring for why that matters."""
         try:
             from vula.google import service as google_service
             from vula.google.service import GoogleNotConnected
@@ -3049,6 +3038,78 @@ class CommerceAdminSkill(BaseSkill):
         where = "your Drafts folder" if result["via"] == "imap" else "your Outlook drafts"
         return {"drafted": True, "to": to, "subject": subject,
                 "note": f"Saved to {where} — review and send it yourself, nothing was sent automatically."}
+
+    async def _draft_followup_email(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """Two calls, not one (2026-09-15): the first proposes three tone options (formal/warm/
+        brief) and saves nothing; the second — once the rep has actually picked one, or asked
+        for a tweak — saves EXACTLY the confirmed text. The finalize step never regenerates: an
+        LLM re-asked for "the warm one" a second time can drift from what was actually shown and
+        agreed to, which would make the saved draft a quiet bait-and-switch on whatever the rep
+        thought they approved. Passing the literal chosen text back is simpler and exact."""
+        to = (args.get("to_email") or "").strip()
+        if not to:
+            return {"error": "Need the recipient's email."}
+
+        chosen_body = (args.get("chosen_body") or "").strip()
+        if chosen_body:
+            subject = (args.get("chosen_subject") or "Great meeting you").strip()
+            return await self._save_followup_draft(tid, to, subject, chosen_body)
+
+        notes = (args.get("meeting_notes") or "").strip()
+        if not notes:
+            return {"error": "Need the meeting notes to draft from, or chosen_subject/"
+                             "chosen_body if the rep already picked a version to save."}
+        subject_hint = (args.get("subject") or "").strip()
+
+        options: Dict[str, Dict[str, str]] = {}
+        try:
+            import json
+            import litellm
+            litellm.drop_params = True
+            model, api_key, api_base = await resolve_generation_route()
+            resp = await litellm.acompletion(
+                model=model, temperature=0.4, max_tokens=900, api_key=api_key, api_base=api_base,
+                messages=[
+                    {"role": "system", "content": (
+                        "Write THREE short thank-you/follow-up email drafts from these meeting "
+                        "notes, in three different tones: formal (professional, no contractions), "
+                        "warm (friendly but professional — the usual voice), and brief (2-3 "
+                        "sentences, straight to the point). Return STRICT JSON only: "
+                        '{"formal": {"subject": "...", "body": "..."}, '
+                        '"warm": {"subject": "...", "body": "..."}, '
+                        '"brief": {"subject": "...", "body": "..."}}. '
+                        "Plain text bodies, no markdown, no placeholder brackets."
+                        + (f' Subject should reflect: "{subject_hint}".' if subject_hint else ""))},
+                    {"role": "user", "content": notes[:2000]},
+                ])
+            raw = (resp.choices[0].message.content or "").strip().replace("```json", "").replace("```", "").strip()
+            i, j = raw.find("{"), raw.rfind("}")
+            if i >= 0 and j > i:
+                data = json.loads(raw[i:j + 1])
+                for tone in ("formal", "warm", "brief"):
+                    v = data.get(tone)
+                    if isinstance(v, dict) and (v.get("body") or "").strip():
+                        options[tone] = {
+                            "subject": (v.get("subject") or subject_hint or "Great meeting you").strip(),
+                            "body": v["body"].strip(),
+                        }
+        except Exception as exc:
+            logger.debug("followup tone-options generation failed for %s: %s", tid, exc)
+
+        if not options:
+            return {"error": "Couldn't draft the follow-up right now — please try again."}
+
+        return {
+            "tone_options": options, "to": to,
+            "instruction_to_assistant": (
+                "Show the rep these tone options (label each by name — formal/warm/brief, "
+                "whichever came back) with their subject and body, and ask which one to save as "
+                "a draft, or whether they'd like changes. Once they choose (or you produce their "
+                "requested edit), call draft_followup_email again with the same to_email and "
+                "chosen_subject/chosen_body set to the EXACT final text — that call actually "
+                "creates the draft. Never save anything before they've confirmed."
+            ),
+        }
 
     async def _create_reminder(self, tid: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         text = (args.get("text") or "").strip()

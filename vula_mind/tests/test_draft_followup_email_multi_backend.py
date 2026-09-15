@@ -1,13 +1,23 @@
 """core/skills/commerce_admin.py::draft_followup_email + vula/commerce/mail_router.py's new
 create_tenant_draft (2026-09-15).
 
-draft_followup_email (a meeting follow-up to a real customer -- exactly the kind of message
-that should always be reviewed before sending, never auto-sent) was hardcoded to Gmail only. A
-tenant with a working IMAP or Microsoft mailbox connected instead -- confirmed the more common
-case, see mail_router.py's own docstring -- got a dead-end "connect Google" error despite
-already having mail connected. Both draft.py-style backend capabilities already existed
-independently (email_imap.service.save_draft, microsoft.service.mail_create_draft); this wires
-them into the same tenant-agnostic fallback order sending already uses.
+Two independent changes, both in this tool:
+
+1. It was hardcoded to Gmail only. A tenant with a working IMAP or Microsoft mailbox connected
+   instead (confirmed the more common case, see mail_router.py's own docstring) got a dead-end
+   "connect Google" error despite already having mail connected. Both backend capabilities
+   already existed independently and were already proven in production by their own skills
+   (email_imap.service.save_draft, used by email_admin.py; microsoft.service.mail_create_draft,
+   used by microsoft_admin.py) — neither had ever been reached from a tenant-agnostic "whichever
+   mailbox they actually have" caller, the role mail_router.send_tenant_email already plays for
+   sending. create_tenant_draft is that draft-side twin.
+
+2. It's now two calls, not one: the first proposes three tone options (formal/warm/brief) and
+   saves nothing; the second — once the rep has picked one or asked for a tweak — saves EXACTLY
+   the confirmed text. The finalize step deliberately never regenerates (see
+   _draft_followup_email's own docstring for why that matters), so _save_followup_draft (the
+   actual backend-fallback logic) is tested directly against fixed subject/body, independent of
+   the tone-options generation step.
 """
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -99,62 +109,126 @@ async def test_none_when_both_backends_fail():
         assert await create_tenant_draft(TID, "x@y.com", "s", "body") is None
 
 
-# ── draft_followup_email tool (commerce_admin.py) ────────────────────────────────────────
+# ── draft_followup_email — step 1: propose tone options ─────────────────────────────────
 
 @pytest.fixture
 def skill():
     return CommerceAdminSkill()
 
 
-def _llm_body_response(text="Great meeting you today, thanks for your time."):
+def _tone_json_response():
+    import json
+    payload = {
+        "formal": {"subject": "Following up on our meeting", "body": "Dear Client, ..."},
+        "warm": {"subject": "Great chatting today!", "body": "Hi there, thanks so much..."},
+        "brief": {"subject": "Next steps", "body": "Thanks for today. Next: ..."},
+    }
     resp = MagicMock()
-    resp.choices = [SimpleNamespace(message=SimpleNamespace(content=text))]
+    resp.choices = [SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))]
     return resp
 
 
 @pytest.mark.asyncio
-async def test_missing_recipient_errors_before_any_backend_is_tried(skill):
+async def test_missing_recipient_errors_before_generating_anything(skill):
     result = await skill._draft_followup_email(TID, {"meeting_notes": "notes"}, CTX)
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_uses_gmail_when_connected_unchanged_behavior(skill):
-    """Existing, already-working Gmail-connected tenants must see no change at all."""
+async def test_missing_notes_and_no_chosen_text_errors(skill):
+    result = await skill._draft_followup_email(TID, {"to_email": "client@example.com"}, CTX)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_step1_returns_three_tone_options_and_saves_nothing(skill):
+    save_mock = AsyncMock()
     with (
         patch.object(ca, "resolve_generation_route", new=AsyncMock(return_value=("m", "k", "b"))),
-        patch("litellm.acompletion", new=AsyncMock(return_value=_llm_body_response())),
-        patch("vula.google.service.gmail_create_draft", new=AsyncMock(return_value={"id": "g1"})),
+        patch("litellm.acompletion", new=AsyncMock(return_value=_tone_json_response())),
+        patch.object(skill, "_save_followup_draft", save_mock),
+    ):
+        result = await skill._draft_followup_email(
+            TID, {"to_email": "client@example.com", "meeting_notes": "Discussed the new order."}, CTX)
+
+    assert "drafted" not in result
+    assert set(result["tone_options"]) == {"formal", "warm", "brief"}
+    assert result["tone_options"]["warm"]["subject"] == "Great chatting today!"
+    assert "instruction_to_assistant" in result
+    save_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_step1_uses_subject_hint_when_the_model_omits_one(skill):
+    import json
+    payload = {"formal": {"subject": "", "body": "Dear Client, ..."}}
+    resp = MagicMock()
+    resp.choices = [SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))]
+    with (
+        patch.object(ca, "resolve_generation_route", new=AsyncMock(return_value=("m", "k", "b"))),
+        patch("litellm.acompletion", new=AsyncMock(return_value=resp)),
+    ):
+        result = await skill._draft_followup_email(
+            TID, {"to_email": "client@example.com", "meeting_notes": "notes",
+                 "subject": "Re: pricing"}, CTX)
+    assert result["tone_options"]["formal"]["subject"] == "Re: pricing"
+
+
+@pytest.mark.asyncio
+async def test_step1_fails_open_with_a_clear_error_when_generation_breaks(skill):
+    with (
+        patch.object(ca, "resolve_generation_route", new=AsyncMock(side_effect=RuntimeError("router down"))),
     ):
         result = await skill._draft_followup_email(
             TID, {"to_email": "client@example.com", "meeting_notes": "notes"}, CTX)
+    assert "error" in result
+
+
+# ── draft_followup_email — step 2: finalize exactly what was confirmed ──────────────────
+
+@pytest.mark.asyncio
+async def test_step2_saves_the_exact_chosen_text_via_gmail(skill):
+    with patch("vula.google.service.gmail_create_draft", new=AsyncMock(return_value={"id": "g1"})):
+        result = await skill._draft_followup_email(
+            TID, {"to_email": "client@example.com", "chosen_subject": "Great chatting today!",
+                 "chosen_body": "Hi there, thanks so much..."}, CTX)
     assert result["drafted"] is True
     assert "Gmail" in result["note"]
 
 
 @pytest.mark.asyncio
-async def test_falls_back_to_imap_when_google_not_connected(skill):
+async def test_step2_never_calls_the_llm(skill):
+    """The whole point of splitting propose/finalize — no regeneration, ever, on step 2."""
+    with (
+        patch("vula.google.service.gmail_create_draft", new=AsyncMock(return_value={"id": "g1"})),
+        patch("litellm.acompletion", new=AsyncMock(side_effect=AssertionError("must not be called"))),
+    ):
+        result = await skill._draft_followup_email(
+            TID, {"to_email": "client@example.com", "chosen_subject": "s",
+                 "chosen_body": "exact confirmed text"}, CTX)
+    assert result["drafted"] is True
+
+
+@pytest.mark.asyncio
+async def test_step2_falls_back_to_imap_when_google_not_connected(skill):
     from vula.google.service import GoogleNotConnected
     with (
-        patch.object(ca, "resolve_generation_route", new=AsyncMock(return_value=("m", "k", "b"))),
-        patch("litellm.acompletion", new=AsyncMock(return_value=_llm_body_response())),
         patch("vula.google.service.gmail_create_draft", new=AsyncMock(side_effect=GoogleNotConnected())),
         patch("vula.email_imap.credentials.get_email_creds", return_value={"email": "a@b.com"}),
         patch("vula.email_imap.service.save_draft",
               new=AsyncMock(return_value={"saved_to": "Drafts", "to": "client@example.com"})),
     ):
         result = await skill._draft_followup_email(
-            TID, {"to_email": "client@example.com", "meeting_notes": "notes"}, CTX)
+            TID, {"to_email": "client@example.com", "chosen_subject": "s",
+                 "chosen_body": "confirmed text"}, CTX)
     assert result["drafted"] is True
     assert "Drafts folder" in result["note"]
 
 
 @pytest.mark.asyncio
-async def test_falls_back_to_microsoft_when_google_not_connected(skill):
+async def test_step2_falls_back_to_microsoft_when_google_not_connected(skill):
     from vula.google.service import GoogleNotConnected
     with (
-        patch.object(ca, "resolve_generation_route", new=AsyncMock(return_value=("m", "k", "b"))),
-        patch("litellm.acompletion", new=AsyncMock(return_value=_llm_body_response())),
         patch("vula.google.service.gmail_create_draft", new=AsyncMock(side_effect=GoogleNotConnected())),
         patch("vula.email_imap.credentials.get_email_creds", return_value=None),
         patch("vula.microsoft.credentials.get_access_token", new=AsyncMock(return_value="tok")),
@@ -162,39 +236,44 @@ async def test_falls_back_to_microsoft_when_google_not_connected(skill):
               new=AsyncMock(return_value={"draft_id": "d1", "to": "client@example.com"})),
     ):
         result = await skill._draft_followup_email(
-            TID, {"to_email": "client@example.com", "meeting_notes": "notes"}, CTX)
+            TID, {"to_email": "client@example.com", "chosen_subject": "s",
+                 "chosen_body": "confirmed text"}, CTX)
     assert result["drafted"] is True
     assert "Outlook" in result["note"]
 
 
 @pytest.mark.asyncio
-async def test_clear_error_when_nothing_is_connected_at_all(skill):
+async def test_step2_clear_error_when_nothing_is_connected_at_all(skill):
     from vula.google.service import GoogleNotConnected
     with (
-        patch.object(ca, "resolve_generation_route", new=AsyncMock(return_value=("m", "k", "b"))),
-        patch("litellm.acompletion", new=AsyncMock(return_value=_llm_body_response())),
         patch("vula.google.service.gmail_create_draft", new=AsyncMock(side_effect=GoogleNotConnected())),
         patch("vula.email_imap.credentials.get_email_creds", return_value=None),
         patch("vula.microsoft.credentials.get_access_token", new=AsyncMock(return_value=None)),
     ):
         result = await skill._draft_followup_email(
-            TID, {"to_email": "client@example.com", "meeting_notes": "notes"}, CTX)
+            TID, {"to_email": "client@example.com", "chosen_subject": "s",
+                 "chosen_body": "confirmed text"}, CTX)
     assert "error" in result
     assert "connect" in result["error"].lower()
 
 
 @pytest.mark.asyncio
-async def test_a_real_gmail_error_other_than_not_connected_still_surfaces(skill):
+async def test_step2_a_real_gmail_error_other_than_not_connected_still_surfaces(skill):
     """A GoogleNotConnected must fall through to the other backends, but a DIFFERENT Gmail
     failure (e.g. an API error while actually connected) must still be reported, not silently
     swallowed into a fallback attempt."""
-    with (
-        patch.object(ca, "resolve_generation_route", new=AsyncMock(return_value=("m", "k", "b"))),
-        patch("litellm.acompletion", new=AsyncMock(return_value=_llm_body_response())),
-        patch("vula.google.service.gmail_create_draft",
-              new=AsyncMock(side_effect=RuntimeError("Gmail API quota exceeded"))),
-    ):
+    with patch("vula.google.service.gmail_create_draft",
+              new=AsyncMock(side_effect=RuntimeError("Gmail API quota exceeded"))):
         result = await skill._draft_followup_email(
-            TID, {"to_email": "client@example.com", "meeting_notes": "notes"}, CTX)
+            TID, {"to_email": "client@example.com", "chosen_subject": "s",
+                 "chosen_body": "confirmed text"}, CTX)
     assert "error" in result
     assert "quota" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_step2_defaults_subject_when_none_given(skill):
+    with patch("vula.google.service.gmail_create_draft", new=AsyncMock(return_value={"id": "g1"})) as m:
+        await skill._draft_followup_email(
+            TID, {"to_email": "client@example.com", "chosen_body": "confirmed text"}, CTX)
+    assert m.call_args[0][2]  # a non-empty subject was passed through
