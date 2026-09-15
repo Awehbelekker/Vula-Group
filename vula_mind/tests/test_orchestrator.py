@@ -303,49 +303,49 @@ def test_skill_registry_matches_real_implemented_skills(hrm):
         assert target in real, f"registry.json: {alias_name} aliases {target!r}, which isn't a real skill"
 
 
-def test_plan_simple_task(hrm):
-    g = hrm.plan(make_graph("What is 2 + 2?"))
-    assert g.status == GraphStatus.PLANNING
-    assert g.complexity == 1
-    assert len(g.branches) == 1
-    assert g.merge_strategy == MergeStrategy.FASTEST
+# (2026-09-15: the tests above through test_skill_registry_uses_name_key used to be duplicated
+# verbatim a second time here — Python silently shadowed the earlier copies, so half of it never
+# actually ran under pytest. Removed the dead duplicate while adding the tests below.)
 
 
-def test_plan_complex_task(hrm):
-    g = hrm.plan(make_graph("Analyse and design a system architecture for a mesh AI network"))
-    assert g.complexity == 3
-    assert len(g.branches) == 3
-    assert g.merge_strategy == MergeStrategy.SYNTHESIZE
+# ── Mass Mind cold-start fallback (2026-09-15) ──────────────────────────────────
+
+def test_cold_start_consults_the_pattern_library_when_the_tenant_has_no_hint(hrm, monkeypatch):
+    """No tenant-specific routing_hints (a brand-new tenant, or an established one asking
+    something unlike its own past) — the pattern library's suggestion should win over the
+    static complexity-based default."""
+    monkeypatch.setattr("core.mass_mind.patterns.suggest_tier",
+                        lambda tenant_id, skill: "14b")
+    g = TaskGraph(original_prompt="Who is the president of South Africa?", tenant_id="new-tenant")
+    g = hrm.plan(g)
+    assert g.branches[0].model_tier == ModelTier.REASONER  # not the static WORKER default
 
 
-def test_plan_assigns_correct_model_tier(hrm):
-    simple = hrm.plan(make_graph("Who is the president of South Africa?"))
-    assert simple.branches[0].model_tier == ModelTier.WORKER
-
-    complex_ = hrm.plan(make_graph("Evaluate and critique the architecture of our AI system"))
-    assert complex_.branches[0].model_tier == ModelTier.REASONER
-
-
-def test_plan_all_branches_have_prompts(hrm):
-    g = hrm.plan(make_graph("Explain and summarise how Qdrant vector search works"))
-    for branch in g.branches:
-        assert branch.prompt
-        assert branch.skill_id
-
-
-def test_plan_routing_hint_overrides_tier(hrm):
-    g = TaskGraph(original_prompt="Simple task", routing_hints={"winning_tier": "14b"})
+def test_a_tenants_own_hint_still_wins_over_the_pattern_library(hrm, monkeypatch):
+    """The pattern library is a fallback, never an override — confirm it isn't even consulted
+    once the tenant's own signal already answered the question."""
+    called = []
+    monkeypatch.setattr("core.mass_mind.patterns.suggest_tier",
+                        lambda tenant_id, skill: called.append(1) or "1.5b")
+    g = TaskGraph(original_prompt="Simple task", tenant_id="off-the-hook",
+                 routing_hints={"winning_tier": "14b"})
     g = hrm.plan(g)
     assert g.branches[0].model_tier == ModelTier.REASONER
+    assert called == [], "pattern library must not be consulted when the tenant has its own hint"
 
 
-# ── Registry loading ──────────────────────────────────────────────────────────
+def test_cold_start_falls_through_to_the_static_default_when_the_library_has_nothing(hrm, monkeypatch):
+    monkeypatch.setattr("core.mass_mind.patterns.suggest_tier",
+                        lambda tenant_id, skill: None)
+    g = TaskGraph(original_prompt="Who is the president of South Africa?", tenant_id="new-tenant")
+    g = hrm.plan(g)
+    assert g.branches[0].model_tier == ModelTier.WORKER  # the ordinary complexity-1 default
 
-def test_skill_registry_loads(hrm):
-    assert len(hrm._skill_registry) > 0
-    assert "reasoning" in hrm._skill_registry
 
-
-def test_skill_registry_uses_name_key(hrm):
-    for key, skill in hrm._skill_registry.items():
-        assert key == skill["name"], f"Key mismatch: {key} != {skill['name']}"
+def test_cold_start_fails_open_when_the_pattern_library_lookup_raises(hrm, monkeypatch):
+    def _raise(tenant_id, skill):
+        raise RuntimeError("pattern table not migrated yet")
+    monkeypatch.setattr("core.mass_mind.patterns.suggest_tier", _raise)
+    g = TaskGraph(original_prompt="Who is the president of South Africa?", tenant_id="new-tenant")
+    g = hrm.plan(g)  # must not raise
+    assert g.branches[0].model_tier == ModelTier.WORKER

@@ -28,6 +28,7 @@ _LOOP_NAMES = (
     "_daily_trial_expiry_loop", "_commerce_jobs_scheduler_loop",
     "_stale_escalation_scheduler_loop", "_stale_handoff_scheduler_loop",
     "_voice_retry_scheduler_loop", "_mass_mind_health_watch_loop",
+    "_mass_mind_pattern_rollup_loop",
 )
 
 
