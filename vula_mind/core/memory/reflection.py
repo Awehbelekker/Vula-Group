@@ -90,6 +90,7 @@ class ReflectionAgent:
             total_latency_ms=graph.total_latency_ms,
             what_worked=what_worked,
             what_to_try_next=what_to_try_next,
+            tenant_id=getattr(graph, "tenant_id", None) or "default",
         )
 
         # Persist to SQLite
@@ -106,10 +107,18 @@ class ReflectionAgent:
 
         return log
 
-    def get_routing_hints(self, goal: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_routing_hints(self, tenant_id: str, goal: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Query stored reflection logs for similar past tasks.
-        Returns routing hints HRM can use to improve branch assignments.
+        Query stored reflection logs for similar past tasks — scoped to ONE tenant.
+
+        tenant_id is required, not optional: this store used to have no tenant column at all,
+        so a tenant's routing hint could surface another tenant's stored goal text (and this
+        result directly sets the model tier via HRMOrchestrator._select_model, and gets echoed
+        into a customer-facing answer by core/skills/memory_recall.py). A required parameter
+        makes it impossible for a future call site to silently omit the fence the way this one
+        did for its entire life until 2026-09-15. Platform-wide cross-tenant pattern learning
+        is a deliberate, separate aggregation (the Mass Mind rollup) that never round-trips
+        through this per-tenant method.
         """
         conn = sqlite3.connect(self.db_path)
         try:
@@ -119,14 +128,14 @@ class ReflectionAgent:
                 return []
 
             placeholders = " OR ".join(["goal LIKE ?" for _ in keywords])
-            params = [f"%{kw}%" for kw in keywords] + [limit]
+            params = [tenant_id] + [f"%{kw}%" for kw in keywords] + [limit]
 
             rows = conn.execute(
                 f"""
                 SELECT goal, primary_skill, winning_tier, outcome_score,
                        merge_strategy, total_latency_ms, what_worked
                 FROM reflections
-                WHERE ({placeholders}) AND outcome_score > 0.6
+                WHERE tenant_id = ? AND ({placeholders}) AND outcome_score > 0.6
                 ORDER BY outcome_score DESC, timestamp DESC
                 LIMIT ?
                 """,
@@ -148,15 +157,25 @@ class ReflectionAgent:
         finally:
             conn.close()
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Summary statistics across all reflections."""
+    def get_stats(self, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+        """Summary statistics across reflections.
+
+        tenant_id=None (the default) is deliberate here, unlike get_routing_hints: this backs
+        operator-facing views only (/metrics, /agent/stats — both require the master API key,
+        neither is scoped to a tenant request), so a platform-wide total is the correct default.
+        Pass tenant_id to drill into one tenant's own learning stats instead."""
+        where = "WHERE tenant_id = ?" if tenant_id else ""
+        params = (tenant_id,) if tenant_id else ()
         conn = sqlite3.connect(self.db_path)
         try:
-            total = conn.execute("SELECT COUNT(*) FROM reflections").fetchone()[0]
-            avg_score = conn.execute("SELECT AVG(outcome_score) FROM reflections").fetchone()[0]
-            avg_latency = conn.execute("SELECT AVG(total_latency_ms) FROM reflections").fetchone()[0]
+            total = conn.execute(f"SELECT COUNT(*) FROM reflections {where}", params).fetchone()[0]
+            avg_score = conn.execute(
+                f"SELECT AVG(outcome_score) FROM reflections {where}", params).fetchone()[0]
+            avg_latency = conn.execute(
+                f"SELECT AVG(total_latency_ms) FROM reflections {where}", params).fetchone()[0]
             top_skill = conn.execute(
-                "SELECT primary_skill, COUNT(*) as c FROM reflections GROUP BY primary_skill ORDER BY c DESC LIMIT 1"
+                f"SELECT primary_skill, COUNT(*) as c FROM reflections {where} "
+                f"GROUP BY primary_skill ORDER BY c DESC LIMIT 1", params
             ).fetchone()
 
             return {
@@ -268,11 +287,22 @@ class ReflectionAgent:
                 what_to_try_next TEXT,
                 skills_used TEXT,
                 tiers_used TEXT,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
                 timestamp REAL
             )
         """)
+        # A store that predates 2026-09-15 has this table without tenant_id — ALTER TABLE ADD
+        # COLUMN onto it (SQLite has no "IF NOT EXISTS" for ADD COLUMN, so probe by error
+        # instead). Existing rows backfill to 'default' rather than NULL, so a pre-fence row
+        # is at least self-consistently scoped rather than invisible to every tenant query.
+        try:
+            conn.execute("ALTER TABLE reflections ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
         conn.execute("CREATE INDEX IF NOT EXISTS idx_goal ON reflections(goal)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_score ON reflections(outcome_score)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tenant ON reflections(tenant_id)")
         conn.commit()
         conn.close()
 
@@ -285,8 +315,8 @@ class ReflectionAgent:
                 INSERT INTO reflections
                     (graph_id, goal, primary_skill, winning_tier, outcome_score,
                      merge_strategy, total_latency_ms, what_worked, what_to_try_next,
-                     skills_used, tiers_used, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     skills_used, tiers_used, tenant_id, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     log.graph_id,
@@ -300,6 +330,7 @@ class ReflectionAgent:
                     log.what_to_try_next,
                     json.dumps(log.skills_used),
                     json.dumps(log.model_tiers_used),
+                    log.tenant_id,
                     log.timestamp,
                 ),
             )

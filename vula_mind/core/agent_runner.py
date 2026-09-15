@@ -70,7 +70,7 @@ class AgentRunner:
         try:
             from core.memory.reflection import ReflectionAgent
             agent = ReflectionAgent()
-            hints = agent.get_routing_hints(question)
+            hints = agent.get_routing_hints(tenant_id, question)
             if hints:
                 graph.routing_hints = hints[0] if isinstance(hints, list) else hints
         except Exception:
