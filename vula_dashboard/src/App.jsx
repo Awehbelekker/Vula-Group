@@ -96,6 +96,7 @@ export default function App() {
   const [masterTenants, setMasterTenants] = useState(MASTER_TENANTS_FALLBACK);
   const [impersonateReason, setImpersonateReason] = useState(""); // shown in the "viewing as tenant" banner
   const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
+  const [masterSubTab, setMasterSubTab] = useState("health");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brandLogoUrl, setBrandLogoUrl] = useState(null); // live logo_url from Settings, overrides tenantThemes' static fallback
