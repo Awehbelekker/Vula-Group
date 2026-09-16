@@ -284,15 +284,22 @@ async def receive_message(
                     if msg_type == "text":
                         text = msg.get("text", {}).get("body", "").strip()
                         if phone and text:
+                            # Backgrounded like the media handlers below (_run_bg): this is the
+                            # commerce_assistant / HRM reasoning pipeline, which routinely takes
+                            # longer than Meta's ~15-20s webhook timeout (observed 20s+ on the
+                            # equivalent dashboard assistant call) — awaiting it inline here was
+                            # producing the same retry-storm 499s that document/image/video/audio
+                            # were already fixed for. Both handlers send their own reply via
+                            # _send_reply, so backgrounding them changes nothing about delivery.
                             if route_mode == "commerce":
                                 # Number is a shop line → ordering flow
-                                await _handle_commerce_message(phone, text, msg_id, route_tenant)
+                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message")
                             elif route_mode == "knowledge":
                                 # Number is a tenant's assistant line → that tenant's model
-                                await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
+                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message")
                             else:
                                 # Unmapped number → fall back to sender-based lookup
-                                await _handle_message(phone, text, msg_id)
+                                _run_bg(_handle_message(phone, text, msg_id), label="text_message")
 
                     elif msg_type == "interactive":
                         interactive = msg.get("interactive", {})
@@ -373,11 +380,11 @@ async def receive_message(
                             except Exception as _exc:
                                 logger.debug("pin coverage check skipped: %s", _exc)
                             if route_mode == "commerce":
-                                await _handle_commerce_message(phone, text, msg_id, route_tenant)
+                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message")
                             elif route_mode == "knowledge":
-                                await _handle_message(phone, text, msg_id, route_tenant_id=route_tenant)
+                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message")
                             else:
-                                await _handle_message(phone, text, msg_id)
+                                _run_bg(_handle_message(phone, text, msg_id), label="text_message")
 
                     elif msg_type == "document":
                         doc = msg.get("document") or {}
