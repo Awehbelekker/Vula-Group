@@ -30,7 +30,7 @@ export default function VulaShell({
   const renderedGroups = zones ? (activeZone?.groups || []) : groups;
 
   return (
-    <div className="vshell">
+    <div className={"vshell" + (zones ? ` vshell--zone-${activeZone?.id}` : "")}>
       <button className="vshell-burger" aria-label="Menu" onClick={() => setOpen(o => !o)}>☰</button>
       {open && <div className="vshell-scrim" onClick={() => setOpen(false)} />}
 

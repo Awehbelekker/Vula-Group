@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { installAuthFetch } from "./lib/authFetch";
 
 // Attach the signed-in user's JWT to every guarded Vula API call (tenant-scoped auth).
@@ -17,7 +18,9 @@ window.addEventListener("vite:preloadError", (e) => {
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 );
 
