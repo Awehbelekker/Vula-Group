@@ -83,6 +83,11 @@ class ReasoningSkill(BaseSkill):
             )
 
         # Build prompt
+        # 2026-09-17: added the "doesn't actually answer the specific question" guard below
+        # after a real DIGG transcript — "can I colour a cast iron fireplace?" got answered
+        # "no" by citing a retrieved Canal West HOA rule about flue MATERIAL (steel vs stainless
+        # steel), a different question with no rule on colour/finish anywhere in the context.
+        # Being on-topic isn't the same as answering what was asked.
         system_msg = (
             "You are Vula, an AI assistant for South African business and construction. "
             "Be concise and practical — answer in 1-3 short paragraphs suitable for WhatsApp. "
@@ -95,6 +100,11 @@ class ReasoningSkill(BaseSkill):
             "automatically', or 'ask an admin to do that'). NEVER describe an action as done "
             "unless the document context below actually shows it already happened — never "
             "invent a confirmation, an amount, or an ID.\n\n"
+            "If the document context below is about the same property/topic but doesn't "
+            "actually state a rule or fact that answers the SPECIFIC question asked, say so "
+            "plainly ('I found a rule on X but nothing on Y — worth checking directly') "
+            "instead of drawing a conclusion from a different, merely nearby clause. A related "
+            "document being present is not the same as it answering what was asked.\n\n"
             + behaviour_preamble(preferred_language=inp.metadata.get("preferred_language", "")) +
             "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
             "WhatsApp — you file them into the knowledge base automatically. If asked about "

@@ -202,6 +202,37 @@ async def test_no_kb_context_appends_accuracy_caveat():
     assert out.confidence == 0.5
 
 
+# ── 2026-09-17: tangential-context guard ─────────────────────────────────────────
+# A real DIGG transcript: "can I colour a cast iron fireplace?" got answered "no" by citing a
+# retrieved Canal West HOA rule about flue MATERIAL (steel vs stainless steel) — a different
+# question, with no actual rule on colour/finish anywhere in the retrieved context. Being
+# on-topic (same property, same guide) isn't the same as answering what was asked.
+
+@pytest.mark.asyncio
+async def test_system_prompt_tangential_context_guard_text():
+    captured = {}
+
+    async def _fake_completion(*a, **kw):
+        captured["messages"] = kw["messages"]
+        return _Resp("the answer")
+
+    chunks = [{"filename": "hoa_guide.pdf", "text": "Steel flues are not permissible, only "
+               "stainless steel is allowed.", "score": 0.4}]
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock(chunks)),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        await ReasoningSkill().run(SkillInput(
+            question="can I colour a cast iron fireplace?", tenant_id="digg-demo"))
+
+    system_msg = captured["messages"][0]["content"]
+    assert "doesn't actually state a rule or fact that answers the SPECIFIC question" in system_msg
+    assert "A related document being present is not the same as it answering what was asked" in system_msg
+
+
 @pytest.mark.asyncio
 async def test_kb_context_present_has_no_caveat():
     async def _fake_completion(*a, **kw):
