@@ -88,14 +88,20 @@ const MASTER_TENANTS_FALLBACK = [
   { id: "off-the-hook", label: "Off the Hook" },
 ];
 
+// A #/master/tenant/{id} deep link (VulaMasterPanel's bookmarkable tenant drill-in) needs the
+// Master shell mounted before it can read that hash back — seed the initial tab from it so a
+// shared support-ticket link lands on the right screen instead of the regular dashboard.
+const initialTab = () => window.location.hash.startsWith("#/master/tenant/") ? "master" : "dashboard";
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [merchTab, setMerchTab] = useState("overview");
   const [route, setRoute] = useState(window.location.hash);
   const [masterTenant, setMasterTenant] = useState("digg-demo");
   const [masterTenants, setMasterTenants] = useState(MASTER_TENANTS_FALLBACK);
   const [impersonateReason, setImpersonateReason] = useState(""); // shown in the "viewing as tenant" banner
   const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
+  const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brandLogoUrl, setBrandLogoUrl] = useState(null); // live logo_url from Settings, overrides tenantThemes' static fallback

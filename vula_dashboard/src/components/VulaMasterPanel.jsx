@@ -5,7 +5,7 @@
  * Every call goes through authFetch → /v1/master/* — server-verified master JWT required
  * (vula/api/master.py + master_auth.py), the first real auth boundary in the platform.
  */
-import { useEffect, useState, Fragment } from 'react'
+import { useEffect, useState, Fragment, useCallback } from 'react'
 import { authFetch } from '../lib/authFetch'
 import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
@@ -22,33 +22,63 @@ const SUBTABS = [
   { id: 'audit', label: 'Audit', icon: '📜' },
 ]
 
+// #/master/tenant/{id} — bookmarkable/shareable deep link into the tenant drill-in (2026-09-16).
+// App.jsx seeds activeTab from this same pattern on first load so the Master shell is even
+// mounted; this just reads back which tenant once it is.
+function readDetailTenantFromHash() {
+  const m = window.location.hash.match(/^#\/master\/tenant\/([^/?]+)/)
+  return m ? decodeURIComponent(m[1]) : null
+}
+
 // activeTab/onTabChange: optional external control (App.jsx lifts this in Phase 5 so returning
 // from a tenant visit restores the sub-tab the operator was on) — uncontrolled by default.
 export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }) {
   const { tabs, active: tab, setActive: setTab } = useSectionTabs(SUBTABS, {
-    defaultTabId: 'health',   // Health is the real operator landing (P1.4)
+    defaultTabId: 'tenants',   // Tenants is the real operator landing — who's signed up, paid,
+                                // trial, active/suspended. Health (routing %, scheduler leases,
+                                // VRL pass-rates) is engineering telemetry, better reached
+                                // deliberately than dumped as the first thing you see (2026-09-16).
     active: activeTab, onChange: onTabChange,
   })
   const [err, setErr] = useState('')
   const [prefill, setPrefill] = useState(null)   // signup → pre-filled "+ New tenant" form (P1.4)
   // Lightweight per-tenant drill-in (IA overhaul 2026-07-22) — replaces the whole panel body
-  // while active, same convention VulaMerchantAdmin uses for its own showCreate/showSettings.
-  const [detailTenant, setDetailTenant] = useState(null)
+  // while active. URL-addressable (2026-09-16): #/master/tenant/{id} so a support-ticket link
+  // can point straight at a tenant's detail view, and the browser back button steps out of it
+  // instead of doing nothing (neither worked when this was local-only state).
+  const [detailTenant, setDetailTenant] = useState(() => readDetailTenantFromHash())
+
+  useEffect(() => {
+    const onHash = () => setDetailTenant(readDetailTenantFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  const openDetail = useCallback((tenantId) => {
+    window.location.hash = `#/master/tenant/${tenantId}`
+    setDetailTenant(tenantId)
+  }, [])
+  const closeDetail = useCallback(() => {
+    // Assign rather than history.back(): a direct #/master/tenant/x link may have no local
+    // "list" entry to go back to (fresh tab, shared link) — this is always predictable instead.
+    if (window.location.hash.startsWith('#/master/tenant/')) window.location.hash = '#/master'
+    else setDetailTenant(null)
+  }, [])
 
   if (detailTenant) {
-    return <VulaMasterTenantDetail tenantId={detailTenant} onOpenTenant={onOpenTenant} onBack={() => setDetailTenant(null)} />
+    return <VulaMasterTenantDetail tenantId={detailTenant} onOpenTenant={onOpenTenant} onBack={closeDetail} />
   }
 
   return (
     <div style={{ fontFamily: 'system-ui', color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
       <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
-      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={setDetailTenant} prefill={prefill} onConsumePrefill={() => setPrefill(null)} />}
+      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)} />}
       {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }} />}
-      {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={setDetailTenant} />}
-      {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={setDetailTenant} />}
+      {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={openDetail} />}
+      {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'users' && <UsersPanel onError={setErr} />}
-      {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={setDetailTenant} />}
+      {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
     </div>
   )
 }

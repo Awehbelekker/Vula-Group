@@ -189,6 +189,55 @@ def test_mark_customer_notified_never_raises_on_error():
         esc.mark_customer_notified("e9")  # must not raise
 
 
+# ── _pick_helper / create_escalation self-escalation guard (2026-09-17) ─────────
+# Real production incident: DIGG's owner Judy is also its only team member with an
+# owner/manager role. An admin question from her own WhatsApp number picked *her* as
+# the helper, replied to her "let me check with the team", then pinged her own number
+# asking her to answer her own question — a dead-end escalation nobody could resolve.
+
+def _mock_team_members(rows):
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = \
+        MagicMock(data=rows)
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    return mock_db
+
+
+def test_pick_helper_excludes_the_asker_own_number():
+    rows = [{"name": "Judy Downing", "whatsapp": "27827077080", "role": "owner",
+             "notify": [], "active": True}]
+    mock_db = _mock_team_members(rows)
+    with patch("vula.escalation._client", return_value=mock_db):
+        assert esc._pick_helper("digg-demo", exclude_phone="27827077080") is None
+
+
+def test_pick_helper_still_returns_a_different_helper():
+    rows = [{"name": "Judy Downing", "whatsapp": "27827077080", "role": "owner",
+             "notify": [], "active": True},
+            {"name": "Staff Member", "whatsapp": "27821234567", "role": "manager",
+             "notify": [], "active": True}]
+    mock_db = _mock_team_members(rows)
+    with patch("vula.escalation._client", return_value=mock_db):
+        helper = esc._pick_helper("digg-demo", exclude_phone="27827077080")
+    assert helper["whatsapp"] == "27821234567"
+
+
+def test_create_escalation_returns_none_when_only_helper_is_the_asker():
+    mock_table = MagicMock()
+    # dedup check: select("id").eq(tenant_id).eq(customer_phone).eq(status).limit(1).execute()
+    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value \
+        .limit.return_value.execute.return_value = MagicMock(data=[])  # no existing open escalation
+    # _pick_helper: select(cols).eq(tenant_id).eq(active).execute()
+    mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = \
+        MagicMock(data=[{"name": "Judy Downing", "whatsapp": "27827077080", "role": "owner",
+                          "notify": [], "active": True}])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    with patch("vula.escalation._client", return_value=mock_db):
+        assert esc.create_escalation("digg-demo", "27827077080", "group my invoices") is None
+
+
 # ── PII redaction reuses voice_profile.py rather than a second copy (2026-09-08) ────────
 
 def test_redact_contacts_strips_email_and_phone():
