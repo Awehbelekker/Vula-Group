@@ -815,3 +815,183 @@ async def test_knowledge_mode_rag_turn_survives_bridge_failure():
                               route_tenant_id="digg-demo")
 
     mock_send.assert_called_once_with("27645755210", "Here's the answer.", tenant_id="digg-demo")
+
+
+# ── _maybe_capture_owner_correction (2026-09-17) ─────────────────────────────────
+# Real DIGG incident: "can I colour a cast iron fireplace?" got a confidently wrong answer, and
+# the owner's own follow-up correction (real SA paint brands she'd researched herself) was
+# relayed once and then forgotten — nothing captured it for reuse.
+
+_UNCERTAIN_REPLY = ("You can't colour a cast iron fireplace.\n\n⚠️ I couldn't find a specific "
+                    "document on this — worth double-checking anything critical.")
+_CONFIDENT_REPLY = "Retention is 5% per the filed contract."
+
+
+def _history_pair(prior_assistant_text, count=2):
+    from vula.chat.history import ChatMessage
+    mock_db = MagicMock()
+    if count == 2:
+        mock_db.get = MagicMock(return_value=[
+            ChatMessage(role="user", text="can I colour a cast iron fireplace?", created_at=""),
+            ChatMessage(role="assistant", text=prior_assistant_text, created_at=""),
+        ])
+    else:
+        mock_db.get = MagicMock(return_value=[])
+    return mock_db
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_captured_when_prior_reply_uncertain_and_message_substantive():
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_UNCERTAIN_REPLY)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction", return_value="learned-1") as mock_capture,
+        patch("vula.api.whatsapp._get_tenant_wa_creds", new=AsyncMock(return_value={"token": "x"})),
+        patch("vula.api.whatsapp._send_wa_buttons", new=AsyncMock(return_value=True)) as mock_buttons,
+    ):
+        await _maybe_capture_owner_correction(
+            "digg-demo", "27827077080", "27827077080",
+            "Fired Earth High Heat is sold at Builders and Makro.")
+
+    mock_capture.assert_called_once_with(
+        "digg-demo", "can I colour a cast iron fireplace?",
+        "Fired Earth High Heat is sold at Builders and Makro.")
+    assert mock_buttons.call_count == 1
+    buttons = mock_buttons.call_args[0][3]
+    assert buttons[0]["id"] == "learn_keep:learned-1"
+    assert buttons[1]["id"] == "learn_bin:learned-1"
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_not_captured_when_prior_reply_was_confident():
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_CONFIDENT_REPLY)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction") as mock_capture,
+    ):
+        await _maybe_capture_owner_correction(
+            "digg-demo", "27827077080", "27827077080", "Some substantive follow-up message.")
+
+    mock_capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_not_captured_when_message_too_short():
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_UNCERTAIN_REPLY)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction") as mock_capture,
+    ):
+        await _maybe_capture_owner_correction("digg-demo", "27827077080", "27827077080", "ok thanks")
+
+    mock_capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_not_captured_for_a_greeting():
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_UNCERTAIN_REPLY)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction") as mock_capture,
+    ):
+        await _maybe_capture_owner_correction(
+            "digg-demo", "27827077080", "27827077080", "Good morning!")
+
+    mock_capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_not_captured_for_a_new_question():
+    """A follow-up '?' question — even a substantive one — is the owner asking again, not
+    correcting. Same heuristic _maybe_helper_escalation_answer already uses."""
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_UNCERTAIN_REPLY)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction") as mock_capture,
+    ):
+        await _maybe_capture_owner_correction(
+            "digg-demo", "27827077080", "27827077080",
+            "What about a wood-burning stove instead?")
+
+    mock_capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_not_captured_with_insufficient_history():
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_UNCERTAIN_REPLY, count=1)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction") as mock_capture,
+    ):
+        await _maybe_capture_owner_correction(
+            "digg-demo", "27827077080", "27827077080", "Some substantive follow-up message.")
+
+    mock_capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_no_buttons_sent_when_capture_returns_none():
+    """capture_owner_correction returning None (instruction-guard fired, or deduped) means
+    nothing was stored — no Keep/Bin nudge should go out for a row that doesn't exist."""
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_UNCERTAIN_REPLY)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction", return_value=None),
+        patch("vula.api.whatsapp._get_tenant_wa_creds", new=AsyncMock(return_value={"token": "x"})),
+        patch("vula.api.whatsapp._send_wa_buttons", new=AsyncMock(return_value=True)) as mock_buttons,
+    ):
+        await _maybe_capture_owner_correction(
+            "digg-demo", "27827077080", "27827077080",
+            "Fired Earth High Heat is sold at Builders and Makro.")
+
+    mock_buttons.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_admin_rag_path_calls_owner_correction_capture_for_admin_role():
+    """Wiring test: the admin/staff RAG block in _handle_message calls
+    _maybe_capture_owner_correction only for role == 'admin', mirroring
+    AUTO_LEARN_FROM_CHATS's existing admin-only gate."""
+    from vula.api.whatsapp import _handle_message
+
+    mock_history_db = MagicMock()
+    mock_history_db.save = MagicMock()
+    mock_history_db.format_for_prompt = MagicMock(return_value="")
+    bridge_service = _commerce_service_mock()
+
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_bank_review_answer", new=AsyncMock(return_value=None)),
+        patch("vula.integrations.notify.handle_preference_command", return_value=None),
+        patch("vula.integrations.doc_filing.resolve_pending_document", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value="Here's the answer.")),
+        patch("vula.api.whatsapp._maybe_escalate_and_learn",
+              new=AsyncMock(side_effect=lambda tid, ph, txt, reply, conf: reply)),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)),
+        patch("vula.commerce.service", bridge_service),
+        patch("vula.api.whatsapp._maybe_capture_owner_correction",
+              new=AsyncMock(return_value=None)) as mock_correction,
+    ):
+        await _handle_message("27645755210", "what standards apply here?", "wamid.5",
+                              route_tenant_id="digg-demo")
+
+    mock_correction.assert_called_once()
+    assert mock_correction.call_args[0][0] == "digg-demo"
+    assert mock_correction.call_args[0][3] == "what standards apply here?"

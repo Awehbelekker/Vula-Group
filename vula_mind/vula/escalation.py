@@ -519,3 +519,50 @@ def answer_escalation(escalation: dict, answer: str) -> Optional[dict]:
         "question": escalation["question"],
         "learned_id": learned_id,
     }
+
+
+def capture_owner_correction(tenant_id: str, question: str, correction: str) -> Optional[str]:
+    """An admin corrected or supplied the real answer to something Vula got wrong or wasn't
+    sure about (see core.verification.is_uncertain_reply — vula/api/whatsapp.py's
+    _maybe_capture_owner_correction is the caller/detector). Stores a new PENDING
+    vula_learned_answers row keyed to the ORIGINAL question, source='owner_correction' — same
+    review gate as an escalation answer (Keep/Bin on WhatsApp via _handle_learn_review_reply,
+    which needs zero changes since it keys purely on learned_id regardless of source).
+
+    Unlike answer_escalation(), this never touches vula_escalations — no escalation ticket
+    exists for this case; the owner corrected Vula unprompted, not in reply to a helper ping.
+
+    2026-09-17: real DIGG incident — "can I colour a cast iron fireplace?" got a confidently
+    wrong answer, and the owner's follow-up correction (real SA paint brands she'd researched
+    herself) was relayed back once and then forgotten. Nothing captured it, so the same wrong
+    answer would ship again to the next person who asks something similar.
+
+    Returns the new learned_id, or None if skipped: the correction reads as an instruction
+    rather than a factual answer (same guard answer_escalation() uses), a pending row for the
+    same question already exists (two rapid corrections / a webhook retry), or the insert
+    failed."""
+    if reply_is_instruction_to_vula(correction):
+        log.info("not capturing owner correction for %s — reply reads as an instruction, not "
+                 "an answer", tenant_id)
+        return None
+    db = _client()
+    try:
+        existing = (db.table("vula_learned_answers").select("id")
+                    .eq("tenant_id", tenant_id).eq("question", question)
+                    .eq("status", "pending").limit(1).execute().data or [])
+        if existing:
+            return None
+    except Exception:
+        pass  # dedup is best-effort; fall through to insert rather than lose a real correction
+    try:
+        import uuid
+        learned_id = str(uuid.uuid4())
+        db.table("vula_learned_answers").insert({
+            "id": learned_id, "tenant_id": tenant_id, "question": question,
+            "answer": _redact_contacts(correction),
+            "source": "owner_correction", "status": "pending", "created_at": _now(),
+        }).execute()
+        return learned_id
+    except Exception as exc:
+        log.debug("owner-correction learned-answer store skipped: %s", exc)
+        return None
