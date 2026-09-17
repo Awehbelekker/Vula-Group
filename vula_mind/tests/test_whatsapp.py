@@ -995,3 +995,183 @@ async def test_admin_rag_path_calls_owner_correction_capture_for_admin_role():
     mock_correction.assert_called_once()
     assert mock_correction.call_args[0][0] == "digg-demo"
     assert mock_correction.call_args[0][3] == "what standards apply here?"
+
+
+# ── research write-up offer (depth pass, 2026-09-17) ──────────────────────────────
+# Product owner ask: "will Vula also ask if tenant wants a dedicated write-up of the research."
+# After a web-researched admin reply, offer it as a PDF via the same Keep/Bin-style button
+# pattern already proven for owner-correction/escalation review.
+
+_WEB_RESEARCHED_REPLY = ("Try Fired Earth High Heat or Plascon stove enamel.\n\n🌐 Based on a "
+                          "live web search, not one of your own documents — worth confirming "
+                          "anything critical.")
+
+
+@pytest.mark.asyncio
+async def test_offer_research_writeup_sends_buttons():
+    from vula.api.whatsapp import _maybe_offer_research_writeup
+
+    with (
+        patch("vula.api.whatsapp._get_tenant_wa_creds", new=AsyncMock(return_value={"token": "x"})),
+        patch("vula.api.whatsapp._send_wa_buttons", new=AsyncMock(return_value=True)) as mock_buttons,
+    ):
+        await _maybe_offer_research_writeup("digg-demo", "27827077080")
+
+    mock_buttons.assert_called_once()
+    body = mock_buttons.call_args[0][2]
+    buttons = mock_buttons.call_args[0][3]
+    assert "document" in body.lower()
+    assert {b["id"] for b in buttons} == {"research_pdf_yes", "research_pdf_no"}
+
+
+@pytest.mark.asyncio
+async def test_offer_research_writeup_skipped_without_wa_creds():
+    from vula.api.whatsapp import _maybe_offer_research_writeup
+
+    with (
+        patch("vula.api.whatsapp._get_tenant_wa_creds", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._send_wa_buttons", new=AsyncMock(return_value=True)) as mock_buttons,
+    ):
+        await _maybe_offer_research_writeup("digg-demo", "27827077080")
+
+    mock_buttons.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_admin_rag_path_offers_research_writeup_when_reply_is_web_sourced():
+    """Wiring test: the admin/staff RAG block offers a PDF only when the actual reply that
+    went out carries the web-fallback marker, gated to role == 'admin' like the owner-
+    correction capture just above."""
+    from vula.api.whatsapp import _handle_message
+
+    mock_history_db = MagicMock()
+    mock_history_db.save = MagicMock()
+    mock_history_db.format_for_prompt = MagicMock(return_value="")
+    bridge_service = _commerce_service_mock()
+
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_bank_review_answer", new=AsyncMock(return_value=None)),
+        patch("vula.integrations.notify.handle_preference_command", return_value=None),
+        patch("vula.integrations.doc_filing.resolve_pending_document", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value=_WEB_RESEARCHED_REPLY)),
+        patch("vula.api.whatsapp._maybe_escalate_and_learn",
+              new=AsyncMock(side_effect=lambda tid, ph, txt, reply, conf: reply)),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)),
+        patch("vula.commerce.service", bridge_service),
+        patch("vula.api.whatsapp._maybe_capture_owner_correction", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_offer_research_writeup",
+              new=AsyncMock(return_value=None)) as mock_offer,
+    ):
+        await _handle_message("27645755210", "can I colour a cast iron fireplace?", "wamid.6",
+                              route_tenant_id="digg-demo")
+
+    mock_offer.assert_called_once_with("digg-demo", "27645755210")
+
+
+@pytest.mark.asyncio
+async def test_admin_rag_path_does_not_offer_writeup_for_a_plain_reply():
+    from vula.api.whatsapp import _handle_message
+
+    mock_history_db = MagicMock()
+    mock_history_db.save = MagicMock()
+    mock_history_db.format_for_prompt = MagicMock(return_value="")
+    bridge_service = _commerce_service_mock()
+
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_bank_review_answer", new=AsyncMock(return_value=None)),
+        patch("vula.integrations.notify.handle_preference_command", return_value=None),
+        patch("vula.integrations.doc_filing.resolve_pending_document", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value="Here's the answer.")),
+        patch("vula.api.whatsapp._maybe_escalate_and_learn",
+              new=AsyncMock(side_effect=lambda tid, ph, txt, reply, conf: reply)),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)),
+        patch("vula.commerce.service", bridge_service),
+        patch("vula.api.whatsapp._maybe_capture_owner_correction", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_offer_research_writeup",
+              new=AsyncMock(return_value=None)) as mock_offer,
+    ):
+        await _handle_message("27645755210", "what standards apply here?", "wamid.7",
+                              route_tenant_id="digg-demo")
+
+    mock_offer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_research_pdf_no_just_acknowledges():
+    from vula.api.whatsapp import _handle_research_pdf_reply
+
+    with (
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_reply,
+        patch("vula.chat.history.get_db") as mock_get_db,
+    ):
+        await _handle_research_pdf_reply("27827077080", "research_pdf_no", "digg-demo")
+
+    mock_reply.assert_called_once()
+    mock_get_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_research_pdf_yes_renders_sends_and_files_document():
+    from vula.api.whatsapp import _handle_research_pdf_reply
+    from vula.chat.history import ChatMessage
+
+    mock_history_db = MagicMock()
+    mock_history_db.get = MagicMock(return_value=[
+        ChatMessage(role="user", text="can I colour a cast iron fireplace?", created_at=""),
+        ChatMessage(role="assistant", text=_WEB_RESEARCHED_REPLY, created_at=""),
+    ])
+
+    with (
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.commerce.pdf.render_letter_pdf", return_value=b"%PDF-fake") as mock_render,
+        patch("vula.api.whatsapp._send_invoice_document",
+              new=AsyncMock(return_value=True)) as mock_send_doc,
+        patch("vula.integrations.doc_filing.file_document",
+              new=AsyncMock(return_value={"id": "doc-1"})) as mock_file,
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_reply,
+    ):
+        await _handle_research_pdf_reply("27827077080", "research_pdf_yes", "digg-demo")
+
+    mock_render.assert_called_once()
+    assert mock_render.call_args.kwargs["tenant_id"] == "digg-demo"
+    # strip_caveat() only strips the internal adversarial-checker caveat — the web-sourcing
+    # disclosure ("based on a live web search...") is honest, useful content and stays in the
+    # document rather than being silently swallowed.
+    assert "Fired Earth High Heat" in mock_render.call_args.kwargs["body_markdown"]
+    assert "Based on a live web search" in mock_render.call_args.kwargs["body_markdown"]
+
+    mock_send_doc.assert_called_once()
+    assert mock_send_doc.call_args[0][0] == "27827077080"
+    assert mock_send_doc.call_args[0][1] == b"%PDF-fake"
+
+    mock_file.assert_called_once()
+    assert mock_file.call_args.kwargs["source"] == "vula_generated"
+    mock_reply.assert_not_called()  # the PDF send itself is the reply — no extra text needed
+
+
+@pytest.mark.asyncio
+async def test_research_pdf_yes_with_no_history_sends_fallback_message():
+    from vula.api.whatsapp import _handle_research_pdf_reply
+
+    mock_history_db = MagicMock()
+    mock_history_db.get = MagicMock(return_value=[])
+
+    with (
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.commerce.pdf.render_letter_pdf") as mock_render,
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)) as mock_reply,
+    ):
+        await _handle_research_pdf_reply("27827077080", "research_pdf_yes", "digg-demo")
+
+    mock_render.assert_not_called()
+    mock_reply.assert_called_once()

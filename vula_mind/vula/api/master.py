@@ -70,7 +70,8 @@ async def master_tenants():
         out.append({
             **{k: c.get(k) for k in ("tenant_id", "display_name", "business_type", "modules",
                                      "theme", "active", "plan", "store_url",
-                                     "default_payment_provider") if k in c},
+                                     "default_payment_provider",
+                                     "share_knowledge_with_network") if k in c},
             "paid": s.get("paid"), "signup_status": s.get("status"),
             "trial_ends": s.get("trial_ends"), "signup_email": s.get("email"),
             "logins": user_counts.get(c["tenant_id"], 0),
@@ -83,7 +84,7 @@ async def master_update_tenant(tenant_id: str, body: dict,
                                identity: dict = Depends(require_master)):
     """Update a tenant's config (modules, display_name, theme, active). Audited."""
     allowed = {"display_name", "business_type", "modules", "theme", "active", "plan",
-               "store_url", "default_payment_provider"}
+               "store_url", "default_payment_provider", "share_knowledge_with_network"}
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
@@ -560,6 +561,118 @@ async def master_remove_user(tenant_id: str, user_id: str, identity: dict = Depe
     result = await remove_access(tenant_id, user_id, identity=identity)
     audit(identity, "master_remove_user_access", tenant_id, user_id=user_id)
     return result
+
+
+# ── Shared-knowledge promotion queue ────────────────────────────────────────────
+# Depth pass (product owner, 2026-09-17): grow Vula's own shared knowledge base (vula_training /
+# business_basics) from its own web research, and let a tenant that opts in share its reviewed
+# knowledge with OTHER tenants (vula_network — see vula/training/network.py). Both land in the
+# SAME vula_learned_answers table/review queue, just visibly labelled by `source` so a curator
+# knows which kind of row they're looking at:
+#   - source='web_research': Vula's own web-search synthesis, already passed core/verification.py's
+#     two-signal accuracy gate (adversarial verdict == 'pass' + web confidence >= 0.7) before it
+#     was even queued — this is the one place `master.py` intentionally reads across ALL tenants,
+#     same as /tenants and /audit already do.
+#   - source in ('owner_correction', 'escalation'), status='approved': a tenant already reviewed
+#     this via Keep/Bin on WhatsApp — promoting to 'network' additionally requires that tenant's
+#     own opt-in (vula_tenant_config.share_knowledge_with_network, migration 164).
+# Neither path auto-promotes: this queue is always the last human tap before content becomes
+# shared knowledge, mirroring migration 150's real leaked-answer incident that proved a review
+# gate is necessary even for content a tenant already approved for its own use.
+
+_PROMOTE_TARGETS = ("construction", "business", "network")
+
+
+def _resolve_promote_target(target: str) -> str:
+    if target == "construction":
+        from vula.training.content import TRAINING_TENANT_ID
+        return TRAINING_TENANT_ID
+    if target == "business":
+        from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+        return BUSINESS_TRAINING_TENANT_ID
+    if target == "network":
+        from vula.training.network import NETWORK_TENANT_ID
+        return NETWORK_TENANT_ID
+    raise HTTPException(status_code=400,
+                        detail=f"unknown target '{target}' (expected one of {sorted(_PROMOTE_TARGETS)})")
+
+
+@router.get("/learned-answers")
+async def master_learned_answers(limit: int = 100):
+    """Cross-tenant promotion queue: this tenant's own already-reviewed answers (status=
+    'approved') plus Vula's own accuracy-gated research candidates (status='pending' AND
+    source='web_research'), not yet promoted into any shared collection. Joined with tenant
+    display names so a curator isn't reading raw tenant_ids."""
+    db = _client()
+    try:
+        approved = (db.table("vula_learned_answers").select("*")
+                    .eq("status", "approved").is_("promoted_to_shared_kb_at", "null")
+                    .order("created_at").limit(limit).execute().data or [])
+        research = (db.table("vula_learned_answers").select("*")
+                    .eq("status", "pending").eq("source", "web_research")
+                    .is_("promoted_to_shared_kb_at", "null")
+                    .order("created_at").limit(limit).execute().data or [])
+    except Exception as exc:
+        return {"candidates": [], "error": f"{exc} (run migration 164?)"}
+    rows = (approved + research)[:limit]
+    names = {c["tenant_id"]: c.get("display_name") for c in
+             (db.table("vula_tenant_config").select("tenant_id,display_name").execute().data or [])}
+    for r in rows:
+        r["tenant_display_name"] = names.get(r.get("tenant_id"), r.get("tenant_id"))
+    return {"candidates": rows}
+
+
+@router.post("/learned-answers/{learned_id}/promote")
+async def master_promote_learned_answer(learned_id: str, body: dict,
+                                        identity: dict = Depends(require_master)) -> dict:
+    """Ingest one reviewed learned-answer row into a shared KB collection — the human tap that
+    turns a candidate into permanent, cross-tenant-servable knowledge. Idempotent: a row that's
+    already promoted is a no-op, not a double-ingest."""
+    target = (body or {}).get("target", "")
+    target_id = _resolve_promote_target(target)
+
+    from vula import escalation as esc
+    row = esc.get_learned_answer(learned_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"learned answer '{learned_id}' not found")
+    if row.get("promoted_to_shared_kb_at"):
+        return {"already_promoted": True, "learned_id": learned_id,
+                "promoted_to_shared_kb_at": row["promoted_to_shared_kb_at"]}
+
+    if target == "network":
+        # The one place a tenant's own reviewed content can reach ANOTHER tenant — never
+        # without that tenant having explicitly opted in (migration 164).
+        cfg = (_client().table("vula_tenant_config").select("share_knowledge_with_network")
+               .eq("tenant_id", row["tenant_id"]).limit(1).execute().data or [])
+        if not (cfg and cfg[0].get("share_knowledge_with_network")):
+            raise HTTPException(
+                status_code=403,
+                detail=f"tenant '{row['tenant_id']}' has not opted in to network sharing")
+
+    from vula.ingestion.pipeline import VulaIngestionPipeline
+    pipeline = VulaIngestionPipeline(tenant_id=target_id)
+    result = await pipeline.ingest_text(
+        content=f"Q: {row['question']}\nA: {row['answer']}",
+        filename=f"promoted_{learned_id}.txt", doc_id=f"promoted_{learned_id}",
+        # deliberately NOT source_type="learned" (VulaIngestionPipeline._NON_AUTHORITATIVE
+        # excludes that tag from authoritative_only=True retrieval — correct for RAW, unreviewed
+        # auto-learned chat, but wrong here: this row already passed master review or the
+        # automated accuracy gate, so it should actually be retrievable).
+        source_type="promoted",
+    )
+    if result.status != "success":
+        raise HTTPException(status_code=502, detail=f"promotion ingest failed: {result.error}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    share_scope = "network" if target == "network" else "internal"
+    (_client().table("vula_learned_answers").update({
+        "promoted_to_shared_kb_at": now, "promoted_by": identity.get("email"),
+        "share_scope": share_scope,
+    }).eq("id", learned_id).execute())
+    audit(identity, "learned_answer_promoted", row.get("tenant_id"),
+          learned_id=learned_id, target=target)
+    return {"promoted": True, "learned_id": learned_id, "target": target,
+            "promoted_to_shared_kb_at": now}
 
 
 # ── Audit log ─────────────────────────────────────────────────────────────────

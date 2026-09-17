@@ -345,6 +345,12 @@ async def receive_message(
                             # Owner reviewing an answer Vula just learned from a handoff
                             # (migration 150) — like the admin confirm buttons, no LLM involved.
                             await _handle_learn_review_reply(phone, reply_id, route_tenant)
+                        elif phone and reply_id and route_tenant and (
+                            reply_id in ("research_pdf_yes", "research_pdf_no")
+                        ):
+                            # Owner tapping the "want this as a document too?" offer after a
+                            # web-researched reply — see _maybe_offer_research_writeup.
+                            await _handle_research_pdf_reply(phone, reply_id, route_tenant)
                         elif phone and reply_id and commerce_tenant:
                             # Handle list/button replies from WhatsApp catalog menu
                             await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
@@ -575,6 +581,70 @@ async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key
             )
     except Exception as exc:
         logger.debug("owner-correction capture skipped: %s", exc)
+
+
+async def _maybe_offer_research_writeup(tenant_id: str, phone: str) -> None:
+    """After a web-researched admin reply, offer it as a PDF too — product owner ask: "will
+    Vula also ask if tenant wants a dedicated write-up of the research." No pending state is
+    stored; research_pdf_yes re-derives the (question, answer) pair from chat history at
+    tap-time, the same lookup pattern _maybe_capture_owner_correction already uses.
+    """
+    try:
+        creds = await _get_tenant_wa_creds(tenant_id)
+        if not creds:
+            return
+        await _send_wa_buttons(
+            creds, phone, "Want this as a document too?",
+            [{"id": "research_pdf_yes", "title": "Yes, send PDF"},
+             {"id": "research_pdf_no", "title": "No thanks"}],
+        )
+    except Exception as exc:
+        logger.debug("research write-up offer skipped: %s", exc)
+
+
+async def _handle_research_pdf_reply(phone: str, reply_id: str, tenant_id: str) -> None:
+    """Tap handler for the research-writeup offer above. Static button ids (no learned_id-style
+    suffix) since there's nothing to look up by id — the (question, answer) pair is re-derived
+    from chat history, same as at offer-time."""
+    if reply_id == "research_pdf_no":
+        await _send_reply(phone, "👍 No problem.", tenant_id=tenant_id)
+        return
+    try:
+        from vula.chat.history import get_db
+        from core.verification import strip_caveat
+        project_id = _active_project_for_phone(phone)
+        thread_key = f"{phone}:{project_id}" if project_id else phone
+        msgs = get_db().get(tenant_id, thread_key, limit=2)
+        if len(msgs) < 2 or msgs[0].role != "user" or msgs[1].role != "assistant":
+            await _send_reply(
+                phone, "Couldn't find that answer to turn into a document — ask again and "
+                "I'll offer it fresh.", tenant_id=tenant_id)
+            return
+        question, answer = msgs[0].text, strip_caveat(msgs[1].text)
+
+        from vula.commerce.pdf import render_letter_pdf
+        pdf_bytes = render_letter_pdf(
+            tenant_id=tenant_id, body_markdown=answer, doc_label="Research Note",
+            subject=question[:200],
+        )
+        filename = "research_note.pdf"
+        sent = await _send_invoice_document(
+            phone, pdf_bytes, filename,
+            caption="Here's that research as a document.", tenant_id=tenant_id)
+        if not sent:
+            await _send_reply(phone, "Couldn't send the PDF just now, sorry.", tenant_id=tenant_id)
+            return
+        try:
+            from vula.integrations.doc_filing import file_document
+            await file_document(
+                tenant_id, filename=filename, data=pdf_bytes, content_type="application/pdf",
+                category="research", summary=question[:300], source="vula_generated",
+                filed_by=phone)
+        except Exception as exc:
+            logger.debug("research write-up filing skipped: %s", exc)
+    except Exception as exc:
+        logger.warning("research write-up PDF failed: %s", exc)
+        await _send_reply(phone, "Couldn't put that together just now, sorry.", tenant_id=tenant_id)
 
 
 async def ask_document_kind(tenant_id: str, invoice_id: str, supplier: str,
@@ -1166,6 +1236,14 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # Pass tenant_id so the reply is sent FROM the tenant's own number
     # (per-tenant creds in vula_whatsapp_accounts), not the shared test line.
     await _send_reply(phone, reply, tenant_id=tenant_id)
+
+    if role == "admin":
+        try:
+            from core.verification import _WEB_FALLBACK_MARKER
+            if _WEB_FALLBACK_MARKER in reply:
+                await _maybe_offer_research_writeup(tenant_id, phone)
+        except Exception as exc:
+            logger.debug("research write-up offer check skipped: %s", exc)
 
     # Auto-learn: feed substantive Q&A back into the KB so Vula gets smarter.
     # Gated behind AUTO_LEARN_FROM_CHATS (default off) — each learned exchange
