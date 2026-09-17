@@ -269,6 +269,25 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
             "extra": extra,
         }
         register_outcome(skill.name, inp.tenant_id, result.verification)
+
+        # 2026-09-17 (product-owner ask: grow Vula's own shared knowledge from research it
+        # already had to do, without trusting a single guess): two independent signals, not
+        # one, before a research answer is even queued for human review — the adversarial
+        # checker judged this specific answer defect-free (the real verdict, not just "no
+        # caveat in the reply text," which a checker_error/timeout could also produce with no
+        # verdict at all) AND the underlying web_search.py result cleared its own "real
+        # synthesis" confidence tier (~0.7), not just the ~0.5 bar that's merely enough to use
+        # for a single reply. Lives here (not reasoning.py) because this is the one place that
+        # already computes the real verdict and already sees result.sources — generic to any
+        # skill with a web source, not reasoning-specific. Still only a reviewable candidate,
+        # never an automatic write to the shared KB — see vula.escalation.queue_research_candidate
+        # and vula/api/master.py's promotion queue.
+        if verdict == "pass":
+            web_src = next((s for s in (result.sources or [])
+                            if s.get("type") == "web" and s.get("confidence", 0) >= 0.7), None)
+            if web_src:
+                from vula.escalation import queue_research_candidate
+                queue_research_candidate(inp.tenant_id, inp.question, result.answer)
     except Exception as exc:
         # Failing open is correct — verification must never break a real reply — but it must
         # not fail INVISIBLY. See the 2026-09-01 note in adversarial_check.

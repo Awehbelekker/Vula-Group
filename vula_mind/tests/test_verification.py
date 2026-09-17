@@ -399,6 +399,119 @@ async def test_apply_builds_context_from_web_sources(monkeypatch):
     assert "Fired Earth High Heat" in captured["context"]
 
 
+# ── 2026-09-17: two-signal research-promotion gate (depth pass) ─────────────────
+# Grow Vula's own shared knowledge base from research it already had to do, but only once TWO
+# independent signals both hold: the adversarial checker's real verdict == "pass" (not just "no
+# caveat in the reply text," which a checker_error/timeout could also produce), AND the
+# underlying web_search.py result cleared its own "real synthesis" confidence tier (>= 0.7).
+
+class _WebSourcedSkill(BaseSkill):
+    name = "web_sourced"
+    description = "test"
+    verification_policy = "adversarial"
+
+    def __init__(self, web_confidence=0.0):
+        self._web_confidence = web_confidence
+
+    async def run(self, inp: SkillInput) -> SkillOutput:
+        return SkillOutput(
+            answer="Fired Earth High Heat is sold at Builders.", skill_name=self.name,
+            confidence=0.6,
+            sources=[{"type": "web", "text": "Fired Earth High Heat is sold at Builders",
+                     "confidence": self._web_confidence}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_queues_research_candidate_on_pass_and_high_web_confidence(monkeypatch):
+    async def _pass(question, answer, context=""):
+        return {"verdict": "pass", "defects": [], "checker_ms": 1}
+    monkeypatch.setattr(verification, "adversarial_check", _pass)
+
+    queued = {}
+
+    def _fake_queue(tenant_id, question, answer):
+        queued.update(tenant_id=tenant_id, question=question, answer=answer)
+        return "new-learned-id"
+    monkeypatch.setattr("vula.escalation.queue_research_candidate", _fake_queue)
+
+    await _WebSourcedSkill(web_confidence=0.83)(_inp())
+    assert queued["tenant_id"] == "test-tenant"
+    assert queued["question"] == "what is 6 * 7?"
+    assert queued["answer"] == "Fired Earth High Heat is sold at Builders."
+
+
+@pytest.mark.asyncio
+async def test_apply_does_not_queue_when_web_confidence_below_threshold(monkeypatch):
+    """0.7 is web_search.py's 'real synthesis' tier — 0.5-0.69 is enough to USE in a reply
+    (reasoning.py's own bar) but not enough to promote into permanent shared knowledge."""
+    async def _pass(question, answer, context=""):
+        return {"verdict": "pass", "defects": [], "checker_ms": 1}
+    monkeypatch.setattr(verification, "adversarial_check", _pass)
+
+    called = {"n": 0}
+    monkeypatch.setattr("vula.escalation.queue_research_candidate",
+                        lambda *a, **kw: called.__setitem__("n", called["n"] + 1))
+
+    await _WebSourcedSkill(web_confidence=0.5)(_inp())
+    assert called["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_does_not_queue_when_verdict_is_fail_regardless_of_confidence(monkeypatch):
+    """The case a text-marker check on the reply couldn't distinguish from a real pass — this
+    is exactly why the gate reads verdict, not reply text."""
+    async def _fail(question, answer, context=""):
+        return {"verdict": "fail", "defects": ["unsupported claim"], "checker_ms": 1}
+    monkeypatch.setattr(verification, "adversarial_check", _fail)
+
+    called = {"n": 0}
+    monkeypatch.setattr("vula.escalation.queue_research_candidate",
+                        lambda *a, **kw: called.__setitem__("n", called["n"] + 1))
+
+    await _WebSourcedSkill(web_confidence=0.95)(_inp())
+    assert called["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_does_not_queue_when_checker_errors(monkeypatch):
+    """checker_error carries no real verdict at all — must not be treated as a pass."""
+    async def _boom(question, answer, context=""):
+        raise RuntimeError("checker timed out")
+    monkeypatch.setattr(verification, "adversarial_check", _boom)
+
+    called = {"n": 0}
+    monkeypatch.setattr("vula.escalation.queue_research_candidate",
+                        lambda *a, **kw: called.__setitem__("n", called["n"] + 1))
+
+    await _WebSourcedSkill(web_confidence=0.95)(_inp())
+    assert called["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_does_not_queue_without_a_web_source(monkeypatch):
+    """A pure kb-grounded pass has nothing to do with web research — must not queue."""
+    async def _pass(question, answer, context=""):
+        return {"verdict": "pass", "defects": [], "checker_ms": 1}
+    monkeypatch.setattr(verification, "adversarial_check", _pass)
+
+    called = {"n": 0}
+    monkeypatch.setattr("vula.escalation.queue_research_candidate",
+                        lambda *a, **kw: called.__setitem__("n", called["n"] + 1))
+
+    class KbSourcedSkill(BaseSkill):
+        name = "kb_sourced"
+        description = "test"
+        verification_policy = "adversarial"
+
+        async def run(self, inp: SkillInput) -> SkillOutput:
+            return SkillOutput(answer="answer", skill_name=self.name, confidence=0.75,
+                               sources=[{"type": "kb", "text": "some doc text"}])
+
+    await KbSourcedSkill()(_inp())
+    assert called["n"] == 0
+
+
 # ── is_uncertain_reply (owner-correction capture's detector) ─────────────────────
 
 def test_is_uncertain_reply_detects_all_three_markers():

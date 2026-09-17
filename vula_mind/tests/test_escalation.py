@@ -317,3 +317,59 @@ def test_capture_owner_correction_returns_none_on_insert_failure():
     mock_table.insert.side_effect = RuntimeError("db down")
     with patch("vula.escalation._client", return_value=mock_db):
         assert esc.capture_owner_correction("digg-demo", "q", "a") is None
+
+
+# ── queue_research_candidate (depth pass, 2026-09-17) ────────────────────────────
+# Vula's own web-research synthesis, queued only after core/verification.py's two-signal
+# accuracy gate already cleared it (see tests/test_verification.py). Same table/shape as
+# capture_owner_correction, but source='web_research' and no reply_is_instruction_to_vula
+# guard — there's no human "reply" here to misread as an instruction.
+
+def test_queue_research_candidate_inserts_with_correct_shape():
+    mock_db, mock_table = _mock_no_pending_row()
+    with patch("vula.escalation._client", return_value=mock_db):
+        learned_id = esc.queue_research_candidate(
+            "digg-demo", "can I colour a cast iron fireplace?",
+            "Fired Earth High Heat is sold at Builders and Makro.")
+
+    assert learned_id is not None
+    inserted = mock_table.insert.call_args[0][0]
+    assert inserted["tenant_id"] == "digg-demo"
+    assert inserted["question"] == "can I colour a cast iron fireplace?"
+    assert inserted["answer"] == "Fired Earth High Heat is sold at Builders and Makro."
+    assert inserted["source"] == "web_research"
+    assert inserted["status"] == "pending"
+    assert inserted["id"] == learned_id
+
+
+def test_queue_research_candidate_dedups_when_pending_row_exists():
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value \
+        .limit.return_value.execute.return_value = MagicMock(data=[{"id": "existing-row"}])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    with patch("vula.escalation._client", return_value=mock_db):
+        learned_id = esc.queue_research_candidate("digg-demo", "some question", "an answer")
+
+    assert learned_id is None
+    mock_table.insert.assert_not_called()
+
+
+def test_queue_research_candidate_returns_none_on_insert_failure():
+    mock_db, mock_table = _mock_no_pending_row()
+    mock_table.insert.side_effect = RuntimeError("db down")
+    with patch("vula.escalation._client", return_value=mock_db):
+        assert esc.queue_research_candidate("digg-demo", "q", "a") is None
+
+
+def test_queue_research_candidate_does_not_gate_on_instruction_wording():
+    """Unlike capture_owner_correction, a research answer that happens to read like an
+    instruction-shaped sentence must still be queued — it's Vula's own synthesis, not a human
+    reply that could be misread as directing Vula."""
+    mock_db, mock_table = _mock_no_pending_row()
+    with patch("vula.escalation._client", return_value=mock_db):
+        learned_id = esc.queue_research_candidate(
+            "digg-demo", "some question", "Tell your supplier to confirm stock before ordering.")
+
+    assert learned_id is not None
+    mock_table.insert.assert_called_once()

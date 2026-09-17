@@ -19,6 +19,7 @@ const SUBTABS = [
   { id: 'health', label: 'Health', icon: '💓' },
   { id: 'usage', label: 'Usage', icon: '💰' },
   { id: 'users', label: 'Users', icon: '👤' },
+  { id: 'knowledge', label: 'Knowledge', icon: '🧠' },
   { id: 'audit', label: 'Audit', icon: '📜' },
 ]
 
@@ -78,6 +79,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
       {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'users' && <UsersPanel onError={setErr} />}
+      {tab === 'knowledge' && <KnowledgePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
     </div>
   )
@@ -330,6 +332,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
   const [plan, setPlan] = useState(tenant.plan || 'starter')
   const [storeUrl, setStoreUrl] = useState(tenant.store_url || '')
   const [gateway, setGateway] = useState(tenant.default_payment_provider || '')
+  const [shareNetwork, setShareNetwork] = useState(!!tenant.share_knowledge_with_network)
   const allModules = registry.modules || []
 
   const toggle = (id) => setModules(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id])
@@ -365,8 +368,15 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
           ))}
         </div>
       </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
+        <input type="checkbox" checked={shareNetwork} onChange={e => setShareNetwork(e.target.checked)} />
+        Share this tenant's reviewed answers with other Vula businesses (opt-in — see Knowledge tab)
+      </label>
       <button style={{ ...btn, ...btnOn, alignSelf: 'flex-start' }}
-        onClick={() => onSave({ modules, plan, store_url: storeUrl, default_payment_provider: gateway })}>Save changes</button>
+        onClick={() => onSave({
+          modules, plan, store_url: storeUrl, default_payment_provider: gateway,
+          share_knowledge_with_network: shareNetwork,
+        })}>Save changes</button>
     </div>
   )
 }
@@ -624,6 +634,87 @@ function UsersPanel({ onError }) {
               </tr>
             ))}
             {!users.length && <tr><td style={td} colSpan={5}>No login accounts yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+/* ── Knowledge promotion queue (depth pass, 2026-09-17) ──────────────────────────
+   Candidates for Vula's shared knowledge base: Vula's own accuracy-gated web-research answers
+   (source='web_research', already cleared core/verification.py's two-signal gate) and tenant-
+   reviewed answers a curator may promote into a shared collection — 'network' additionally
+   requires that tenant have opted in (Tenants tab → Manage → the share checkbox above). */
+function KnowledgePanel({ onError, onViewDetail }) {
+  const [rows, setRows] = useState(null)
+  const [busy, setBusy] = useState(null)
+  const [targets, setTargets] = useState({})
+
+  const load = () => {
+    authFetch('/v1/master/learned-answers?limit=100')
+      .then(d => setRows(d.candidates || []))
+      .catch(e => onError(e.message))
+  }
+  useEffect(() => { load() }, [])  // eslint-disable-line
+
+  const promote = async (row) => {
+    const target = targets[row.id] || 'business'
+    setBusy(row.id)
+    try {
+      const r = await authFetch(`/v1/master/learned-answers/${row.id}/promote`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      })
+      if (r.error) onError(r.error)
+      else load()
+    } catch (e) { onError(e.message) } finally { setBusy(null) }
+  }
+
+  if (!rows) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
+  return (
+    <div>
+      <p style={{ fontSize: 12.5, color: C.muted, margin: '0 0 10px' }}>
+        Reviewable candidates for Vula's shared knowledge — Vula's own web research that already
+        passed the automated accuracy check, plus tenant-approved answers. Promoting moves it
+        into a shared collection every tenant's assistant can draw on; "Shared network" requires
+        that tenant to have opted in first.
+      </p>
+      <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+        <table style={table}>
+          <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
+            {['Tenant', 'Source', 'Question', 'Answer', 'Promote to', ''].map(x => <th key={x} style={th}>{x}</th>)}
+          </tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                <td style={{ ...td, fontSize: 11.5 }}>
+                  {onViewDetail
+                    ? <button onClick={() => onViewDetail(r.tenant_id)} style={miniBtn}>{r.tenant_display_name || r.tenant_id}</button>
+                    : (r.tenant_display_name || r.tenant_id)}
+                </td>
+                <td style={{ ...td, fontSize: 11.5 }}>
+                  <span style={{ fontWeight: 600, color: r.source === 'web_research' ? C.green : C.text }}>
+                    {r.source === 'web_research' ? 'Vula research' : (r.source || '—')}
+                  </span>
+                </td>
+                <td style={{ ...td, maxWidth: 260, whiteSpace: 'normal', fontSize: 12 }}>{r.question}</td>
+                <td style={{ ...td, maxWidth: 320, whiteSpace: 'normal', fontSize: 12, color: C.muted }}>{(r.answer || '').slice(0, 260)}</td>
+                <td style={td}>
+                  <select value={targets[r.id] || 'business'} onChange={e => setTargets(t => ({ ...t, [r.id]: e.target.value }))} style={input}>
+                    <option value="business">General business KB</option>
+                    <option value="construction">Construction KB</option>
+                    <option value="network">Shared network (opt-in)</option>
+                  </select>
+                </td>
+                <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                  <button style={{ ...miniBtn, color: C.green, fontWeight: 600 }} disabled={busy === r.id} onClick={() => promote(r)}>
+                    {busy === r.id ? 'Promoting…' : 'Promote'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td style={td} colSpan={6}>Nothing waiting for review right now.</td></tr>}
           </tbody>
         </table>
       </div>

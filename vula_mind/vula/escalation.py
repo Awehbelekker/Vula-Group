@@ -566,3 +566,39 @@ def capture_owner_correction(tenant_id: str, question: str, correction: str) -> 
     except Exception as exc:
         log.debug("owner-correction learned-answer store skipped: %s", exc)
         return None
+
+
+def queue_research_candidate(tenant_id: str, question: str, answer: str) -> Optional[str]:
+    """Vula's own web-research synthesis (core/skills/reasoning.py's web-search fallback),
+    NOT tenant-originated, queued as a PENDING vula_learned_answers row with
+    source='web_research' — same table/review gate as owner corrections and escalation
+    answers, but reached only after core.verification.apply()'s two-signal accuracy gate
+    (adversarial verdict == 'pass' AND the web result's own confidence >= 0.7) already cleared
+    it. Kept as a distinct source label so the master-admin promotion queue
+    (vula/api/master.py) shows a curator which kind of row they're looking at — this one is
+    Vula's own content and carries no tenant-specific risk, unlike an owner correction.
+
+    Unlike answer_escalation()/capture_owner_correction(), there's no human "reply" here to
+    misread as an instruction to Vula, so no reply_is_instruction_to_vula guard is needed.
+    """
+    db = _client()
+    try:
+        existing = (db.table("vula_learned_answers").select("id")
+                    .eq("tenant_id", tenant_id).eq("question", question)
+                    .eq("status", "pending").limit(1).execute().data or [])
+        if existing:
+            return None
+    except Exception:
+        pass  # dedup is best-effort; fall through to insert rather than lose a real candidate
+    try:
+        import uuid
+        learned_id = str(uuid.uuid4())
+        db.table("vula_learned_answers").insert({
+            "id": learned_id, "tenant_id": tenant_id, "question": question,
+            "answer": _redact_contacts(answer),
+            "source": "web_research", "status": "pending", "created_at": _now(),
+        }).execute()
+        return learned_id
+    except Exception as exc:
+        log.debug("research-candidate learned-answer store skipped: %s", exc)
+        return None

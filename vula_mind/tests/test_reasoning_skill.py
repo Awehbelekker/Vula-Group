@@ -345,6 +345,113 @@ async def test_web_fallback_prompt_asks_for_concrete_options_and_specific_hedgin
     assert "say THAT plainly instead of a generic disclaimer" in user_msg
 
 
+# ── 2026-09-17: shared-KB-first check (depth pass) ────────────────────────────────
+# Two curated shared knowledge bases already exist (vula_training / business_basics) and are
+# already consulted by architecture_planning.py — reasoning.py, the default fallback skill that
+# actually handled the fireplace question, consulted neither. These pin that it now checks both
+# (plus the opt-in cross-tenant vula_network collection) BEFORE ever spending a web search.
+
+def _multi_pipeline_mock(by_tenant: dict, default_chunks=None):
+    """VulaIngestionPipeline side_effect: different chunks per synthetic tenant_id, so the
+    tenant's own KB and each shared KB can be independently empty/non-empty in one test."""
+    def _make(tenant_id=None, **kw):
+        return _pipeline_mock(by_tenant.get(tenant_id, default_chunks or []))
+    return _make
+
+
+@pytest.mark.asyncio
+async def test_shared_construction_kb_hit_skips_web_search():
+    from vula.training.content import TRAINING_TENANT_ID
+
+    async def _fake_completion(*a, **kw):
+        return _Resp("SANS 10400 Part R covers stormwater drainage requirements.")
+
+    chunks = [{"filename": "sans_10400.md", "text": "SANS 10400 Part R covers stormwater "
+               "drainage design for a dwelling.", "score": 0.8}]
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline",
+              side_effect=_multi_pipeline_mock({TRAINING_TENANT_ID: chunks})),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        patch("core.skills.loader.get_skill") as mock_get_skill,
+    ):
+        out = await ReasoningSkill().run(SkillInput(
+            question="what SANS standard covers stormwater drainage design",
+            tenant_id="some-tenant"))
+
+    mock_get_skill.assert_not_called()  # shared-KB hit must short-circuit the web fallback
+    assert any(s.get("type") == "training_kb" for s in out.sources)
+    assert out.confidence == 0.75
+    assert "⚠️" not in out.answer
+
+
+@pytest.mark.asyncio
+async def test_shared_business_kb_hit_skips_web_search():
+    from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+
+    async def _fake_completion(*a, **kw):
+        return _Resp("VAT registration is compulsory above R1 million turnover.")
+
+    chunks = [{"filename": "vat_basics.md", "text": "VAT compulsory above R1m turnover.", "score": 0.8}]
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline",
+              side_effect=_multi_pipeline_mock({BUSINESS_TRAINING_TENANT_ID: chunks})),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        patch("core.skills.loader.get_skill") as mock_get_skill,
+    ):
+        out = await ReasoningSkill().run(SkillInput(
+            question="do I need to register for VAT", tenant_id="some-tenant"))
+
+    mock_get_skill.assert_not_called()
+    assert any(s.get("type") == "training_kb" for s in out.sources)
+
+
+@pytest.mark.asyncio
+async def test_shared_kb_miss_falls_through_to_web_search():
+    async def _fake_completion(*a, **kw):
+        return _Resp("Try Fired Earth High Heat or Plascon stove enamel.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(answer="Fired Earth High Heat is a real product.", confidence=0.7),
+    ):
+        out = await ReasoningSkill().run(SkillInput(
+            question="can I colour a cast iron fireplace?", tenant_id="digg-demo"))
+
+    assert "Based on a live web search" in out.answer
+
+
+@pytest.mark.asyncio
+async def test_web_sources_carry_raw_confidence_not_flattened_reply_confidence():
+    """core/verification.py's research-promotion gate (Part E) reads the web source's own
+    confidence, not the flattened 0.6 reply-confidence reasoning.py assigns any web-sourced
+    reply — this pins that the raw value actually reaches result.sources."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("Try Fired Earth High Heat or Plascon stove enamel.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(answer="Fired Earth High Heat is a real product.", confidence=0.83),
+    ):
+        out = await ReasoningSkill().run(SkillInput(
+            question="can I colour a cast iron fireplace?", tenant_id="digg-demo"))
+
+    web_src = next(s for s in out.sources if s.get("type") == "web")
+    assert web_src["confidence"] == 0.83
+    assert out.confidence == 0.6  # the flattened reply-confidence stays as before
+
+
 # ── 2026-09-17: tangential-context guard ─────────────────────────────────────────
 # A real DIGG transcript: "can I colour a cast iron fireplace?" got answered "no" by citing a
 # retrieved Canal West HOA rule about flue MATERIAL (steel vs stainless steel) — a different

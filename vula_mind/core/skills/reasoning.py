@@ -100,11 +100,49 @@ class ReasoningSkill(BaseSkill):
                 sources=sources,
             )
 
-        # 2026-09-17: no KB match, and not asking about the tenant's own records — a genuine
-        # general-knowledge question the model would otherwise just guess at from training
-        # data. Try web search first; a real citation beats a guess. Fails open (empty
-        # web_context) on any error/timeout/low-confidence result, falling through to the
-        # existing plain-caveat behaviour below.
+        # 2026-09-17: before ever guessing OR spending a web search, check Vula's own curated
+        # shared knowledge — general SA construction (vula_training) and general SA small-
+        # business (business_basics) content, already proven safe and already consulted by
+        # architecture_planning.py, just never wired into this skill despite it being the
+        # default fallback for DIGG's whole general chat. Free (no LLM call), ~0.5s, zero
+        # privacy risk (developer-authored, not tenant content) — tried before web search so a
+        # hit here skips the web call entirely.
+        if not kb_context:
+            try:
+                from vula.ingestion.pipeline import VulaIngestionPipeline as _Pipeline
+                from vula.training.content import TRAINING_TENANT_ID
+                from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+                from vula.training.network import NETWORK_TENANT_ID
+                for shared_id, label in (
+                    (TRAINING_TENANT_ID, "SA construction standards & rates"),
+                    (BUSINESS_TRAINING_TENANT_ID, "General SA small-business knowledge"),
+                    # Consumption is open to every tenant — only CONTRIBUTING into this
+                    # collection is gated on the source tenant's own opt-in (see
+                    # vula/training/network.py's docstring and vula/api/master.py's promote
+                    # endpoint). A tenant reading this never needs to have opted in itself.
+                    (NETWORK_TENANT_ID, "Shared knowledge from other Vula businesses (opted in)"),
+                ):
+                    shared_pipeline = _Pipeline(tenant_id=shared_id)
+                    shared_chunks = await shared_pipeline.query(
+                        inp.question, top_k=inp.top_k, authoritative_only=True)
+                    if shared_chunks:
+                        kb_context = f"## {label}\n" + "\n\n".join(
+                            f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"
+                            for c in shared_chunks)
+                        sources = [
+                            {"type": "training_kb", "filename": c.get("filename", "?"),
+                             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
+                            for c in shared_chunks
+                        ]
+                        break
+            except Exception as exc:
+                logger.debug("Reasoning shared-KB check skipped: %s", exc)
+
+        # 2026-09-17: no KB match (tenant OR shared), and not asking about the tenant's own
+        # records — a genuine general-knowledge question the model would otherwise just guess
+        # at from training data. Try web search first; a real citation beats a guess. Fails
+        # open (empty web_context) on any error/timeout/low-confidence result, falling through
+        # to the existing plain-caveat behaviour below.
         web_context = ""
         web_sources: list = []
         if not kb_context:
@@ -119,7 +157,10 @@ class ReasoningSkill(BaseSkill):
                         timeout=_WEB_FALLBACK_TIMEOUT_S)
                     if web_result.success and web_result.confidence >= _WEB_FALLBACK_MIN_CONFIDENCE:
                         web_context = web_result.answer
-                        web_sources = [{"type": "web", "text": web_context[:900]}]
+                        # raw confidence (not the flattened 0.6 reply-confidence below) is what
+                        # Part E's automated research-promotion gate reads in verification.py
+                        web_sources = [{"type": "web", "text": web_context[:900],
+                                        "confidence": web_result.confidence}]
                 except Exception as exc:
                     logger.debug("Reasoning web fallback skipped: %s", exc)
 
