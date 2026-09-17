@@ -202,7 +202,14 @@ class Settings(BaseSettings):
     # skill's class attribute. Flip per skill via env, no redeploy: e.g. '{"reasoning": "adversarial"}'
     verification_policy_overrides: str = "{}"
     verification_adversarial_action: str = "caveat"   # caveat | escalate (escalate reserved)
-    verification_checker_timeout_s: float = 8.0       # hard cap on the adversarial pass
+    # 2026-09-17: every adversarial checker call sampled over 7 days routed to cloud (task_type
+    # "verification" always escalates to a stronger judge model, by design) — an 8s cap left the
+    # check failing open (fail-open, so the answer ships unverified with no caveat) on ~13% of
+    # calls platform-wide, and several more finished at 6-7s with almost no margin. This path
+    # already runs backgrounded off the WhatsApp webhook ACK (see _run_bg in vula/api/whatsapp.py)
+    # so the only cost of more headroom is a few extra seconds before the reply, not a webhook
+    # timeout/retry risk.
+    verification_checker_timeout_s: float = 15.0       # hard cap on the adversarial pass
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
 

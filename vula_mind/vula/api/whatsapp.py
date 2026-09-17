@@ -52,6 +52,15 @@ _REJECT_RE = re.compile(
     re.IGNORECASE,
 )
 _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
+# 2026-09-17: extracted from _maybe_helper_escalation_answer's original inline regexes (same
+# "is this actually an answer, or a greeting / a new question" heuristic reused by
+# _maybe_capture_owner_correction below — pulled out rather than a third inline copy).
+_GREETING_RE = re.compile(
+    r"^\s*(hi|hello|hallo|hey|howzit|good\s*morning|goeie\s*dag|ok(ay)?|thanks|dankie)\s*"
+    r"[!.👋🙂]*\s*$", re.IGNORECASE)
+_NEW_QUESTION_RE = re.compile(
+    r"^\s*(what|how|why|where|when|who|which|can you|could you|do you|does|is there|"
+    r"are there)\b", re.IGNORECASE)
 
 # ── Number → tenant router ────────────────────────────────────────────────────
 # Maps a Meta phone_number_id (the number a person messaged) to the tenant that
@@ -467,8 +476,7 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     # A bare greeting is never the answer to a customer's question — confirmed live 2026-07-16:
     # a helper's unrelated "Hi" got relayed to a customer as "About your question — Hi" and
     # stored as a learned answer. Let greetings fall through to normal routing instead.
-    if re.match(r"^\s*(hi|hello|hallo|hey|howzit|good\s*morning|goeie\s*dag|ok(ay)?|thanks|dankie)\s*[!.👋🙂]*\s*$",
-                text, re.IGNORECASE):
+    if _GREETING_RE.match(text):
         return False
     # A helper's own NEW question is not an answer either — confirmed live 2026-07-29: a helper
     # sitting on a stale (but not yet 48h-expired) escalation from an unrelated earlier message
@@ -476,10 +484,7 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     # WRONG person (the original asker of the unrelated old question), while the helper's real
     # question was never actually answered. A trailing '?', or a common question-starter with no
     # closing punctuation, means they're asking — let it fall through to normal routing instead.
-    if text.strip().endswith("?") or re.match(
-        r"^\s*(what|how|why|where|when|who|which|can you|could you|do you|does|is there|are there)\b",
-        text, re.IGNORECASE,
-    ):
+    if text.strip().endswith("?") or _NEW_QUESTION_RE.match(text):
         return False
     info = esc.answer_escalation(open_esc, text.strip())
     if not info:
@@ -517,6 +522,59 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     else:
         await _send_reply(phone, "✅ Sent to the customer.", tenant_id=tid)
     return True
+
+
+async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key: str,
+                                          text: str) -> None:
+    """If Vula's LAST reply on this thread carried an uncertainty caveat (see
+    core.verification.is_uncertain_reply), and this new message reads like a substantive
+    factual correction — not a greeting, not a new question, not an instruction to Vula —
+    capture it as a pending learned answer keyed to the ORIGINAL question, and offer a Keep/Bin
+    nudge exactly like the existing escalation-answer flow (_maybe_helper_escalation_answer
+    above). Best-effort: never blocks or alters the real reply this turn generates.
+
+    Must be called BEFORE this turn's own message is saved to history, so
+    get_db().get(..., limit=2) cleanly returns [prior_question, prior_answer] with no
+    ambiguity about whether the just-arrived message is in the result set.
+
+    2026-09-17: real DIGG incident — an owner's correction to a wrong general-knowledge answer
+    (real SA paint brands she'd researched herself, after Vula wrongly said a cast iron
+    fireplace couldn't be coloured) was relayed back once and then forgotten. Every row this
+    creates lands 'pending' — find_learned_answer() only ever returns 'approved' rows — so even
+    a loose trigger here is safe by construction: worst case is one dismissible WhatsApp nudge,
+    never a wrong answer served to anyone.
+    """
+    try:
+        from vula.chat.history import get_db
+        from vula import escalation as esc
+        from core.verification import is_uncertain_reply
+        msgs = get_db().get(tenant_id, thread_key, limit=2)
+        if len(msgs) < 2:
+            return
+        prior_q, prior_a = msgs[0], msgs[1]
+        if prior_q.role != "user" or prior_a.role != "assistant":
+            return
+        if not is_uncertain_reply(prior_a.text):
+            return
+        stripped = text.strip()
+        if len(stripped) < 12:
+            return
+        if _GREETING_RE.match(stripped) or stripped.endswith("?") or _NEW_QUESTION_RE.match(stripped):
+            return  # a greeting/ack or the owner's own new question, not a correction
+        learned_id = esc.capture_owner_correction(tenant_id, prior_q.text, stripped)
+        if not learned_id:
+            return
+        creds = await _get_tenant_wa_creds(tenant_id)
+        if creds:
+            await _send_wa_buttons(
+                creds, phone,
+                (f"Got it — want me to remember that next time someone asks "
+                 f"\"{prior_q.text.strip()[:120]}\"?"),
+                [{"id": f"learn_keep:{learned_id}", "title": "Yes, save it"},
+                 {"id": f"learn_bin:{learned_id}", "title": "No, skip"}],
+            )
+    except Exception as exc:
+        logger.debug("owner-correction capture skipped: %s", exc)
 
 
 async def ask_document_kind(tenant_id: str, invoice_id: str, supplier: str,
@@ -1044,6 +1102,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     project_id = _active_project_for_phone(phone)
     thread_key = f"{phone}:{project_id}" if project_id else phone
 
+    if role == "admin":
+        await _maybe_capture_owner_correction(tenant_id, phone, thread_key, text)
+
     from vula.chat.history import get_db
     db = get_db()
     db.save(tenant_id, thread_key, "user", text)
@@ -1088,6 +1149,12 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # else ask a human helper on WhatsApp and hold the customer with a friendly note.
     reply = await _maybe_escalate_and_learn(tenant_id, phone, text, reply, _LAST_CONF.get())
 
+    # NOTE: deliberately NOT strip_caveat()'d here (unlike the other three db.save("assistant",
+    # ...) sites in this file) — _maybe_capture_owner_correction's is_uncertain_reply() detection
+    # depends on the caveat marker text actually being present in this stored history. If this
+    # gap is ever closed to match the other sites, that detection needs an equivalent fix in the
+    # same change, or it silently stops firing. See core.verification.is_uncertain_reply's
+    # docstring for the other half of this cross-reference.
     db.save(tenant_id, thread_key, "assistant", reply)
     if commerce_session_id:
         try:

@@ -169,6 +169,16 @@ _DEFECT_CONFIDENCE = 0.45
 # about nothing. Strip it before anything is stored or fed back.
 _CAVEAT_MARKER = "⚠️ Worth double-checking"
 
+# 2026-09-17: reasoning.py's two no-KB caveats, centralized here (were inline string literals
+# in reasoning.py) so both that skill and vula/api/whatsapp.py's owner-correction detection
+# (is_uncertain_reply below) share one source of truth instead of two copies drifting apart.
+NO_GROUNDING_CAVEAT = ("\n\n⚠️ I couldn't find a specific document on this — worth "
+                       "double-checking anything critical.")
+WEB_FALLBACK_CAVEAT = ("\n\n🌐 Based on a live web search, not one of your own documents — "
+                       "worth confirming anything critical.")
+_NO_GROUNDING_MARKER = "couldn't find a specific document on this"
+_WEB_FALLBACK_MARKER = "Based on a live web search"
+
 
 def strip_caveat(text: str) -> str:
     """Remove the verification caveat from a reply before persisting it to conversation
@@ -180,6 +190,19 @@ def strip_caveat(text: str) -> str:
         if idx != -1:
             return text[:idx].rstrip()
     return text
+
+
+def is_uncertain_reply(text: str) -> bool:
+    """True if `text` carries any of Vula's own "I wasn't fully sure" caveats — the adversarial
+    verifier's defect-found caveat, or reasoning.py's no-grounding/web-fallback caveats.
+
+    NOTE: vula/api/whatsapp.py's admin-RAG chat-history save (unlike three other save sites in
+    that file) does NOT call strip_caveat() before persisting, which is why this text-marker
+    detection actually finds these caveats in stored history today. If that gap is ever closed,
+    the owner-correction capture that depends on this function (_maybe_capture_owner_correction)
+    needs an equivalent fix in the same change — see the comment at that save site."""
+    t = text or ""
+    return any(m in t for m in (_CAVEAT_MARKER, _NO_GROUNDING_MARKER, _WEB_FALLBACK_MARKER))
 
 
 async def apply(skill: Any, inp: Any, result: Any) -> None:
@@ -217,7 +240,8 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
         # checker could only judge (question, answer) with nothing to ground-check against.
         context = "\n\n".join(
             s.get("text", "") for s in (result.sources or [])
-            if ("kb" in (s.get("type") or "") or s.get("type") == "tool") and s.get("text")
+            if ("kb" in (s.get("type") or "") or s.get("type") in ("tool", "web"))
+            and s.get("text")
         )
         check = await adversarial_check(inp.question, result.answer, context=context)
         verdict = check["verdict"]

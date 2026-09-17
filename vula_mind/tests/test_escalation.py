@@ -253,3 +253,67 @@ def test_redact_contacts_delegates_to_voice_profile():
     with patch.object(voice_profile, "_redact", return_value="REDACTED") as mock_redact:
         assert esc._redact_contacts("anything") == "REDACTED"
     mock_redact.assert_called_once_with("anything")
+
+
+# ── capture_owner_correction (2026-09-17) ────────────────────────────────────────
+# Real DIGG incident: "can I colour a cast iron fireplace?" got a confidently wrong answer, and
+# the owner's own follow-up correction (real SA paint brands she'd researched herself) was
+# relayed once and then forgotten — nothing captured it. Mirrors answer_escalation()'s insert
+# shape but never touches vula_escalations — no escalation ticket exists for this case.
+
+def _mock_no_pending_row():
+    """Dedup check: select("id").eq(tenant_id).eq(question).eq(status).limit(1).execute() ->
+    no existing pending row, so the insert path is reached."""
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value \
+        .limit.return_value.execute.return_value = MagicMock(data=[])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    return mock_db, mock_table
+
+
+def test_capture_owner_correction_inserts_with_correct_shape():
+    mock_db, mock_table = _mock_no_pending_row()
+    with patch("vula.escalation._client", return_value=mock_db):
+        learned_id = esc.capture_owner_correction(
+            "digg-demo", "can I colour a cast iron fireplace?",
+            "Fired Earth High Heat is sold at Builders and Makro.")
+
+    assert learned_id is not None
+    inserted = mock_table.insert.call_args[0][0]
+    assert inserted["tenant_id"] == "digg-demo"
+    assert inserted["question"] == "can I colour a cast iron fireplace?"
+    assert inserted["answer"] == "Fired Earth High Heat is sold at Builders and Makro."
+    assert inserted["source"] == "owner_correction"
+    assert inserted["status"] == "pending"
+    assert inserted["id"] == learned_id
+
+
+def test_capture_owner_correction_skips_when_reply_is_an_instruction():
+    mock_db, mock_table = _mock_no_pending_row()
+    with patch("vula.escalation._client", return_value=mock_db):
+        learned_id = esc.capture_owner_correction(
+            "digg-demo", "some question", "Tell them the price is R150")
+
+    assert learned_id is None
+    mock_table.insert.assert_not_called()
+
+
+def test_capture_owner_correction_dedups_when_pending_row_exists():
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value \
+        .limit.return_value.execute.return_value = MagicMock(data=[{"id": "existing-row"}])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    with patch("vula.escalation._client", return_value=mock_db):
+        learned_id = esc.capture_owner_correction("digg-demo", "some question", "the real answer")
+
+    assert learned_id is None
+    mock_table.insert.assert_not_called()
+
+
+def test_capture_owner_correction_returns_none_on_insert_failure():
+    mock_db, mock_table = _mock_no_pending_row()
+    mock_table.insert.side_effect = RuntimeError("db down")
+    with patch("vula.escalation._client", return_value=mock_db):
+        assert esc.capture_owner_correction("digg-demo", "q", "a") is None

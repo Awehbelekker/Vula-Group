@@ -28,6 +28,19 @@ def _pipeline_mock(chunks):
     return mock_pipeline
 
 
+def _web_search_mock(answer="", confidence=0.0):
+    """Patches core.skills.loader.get_skill so reasoning.py's lazy `get_skill("web_search")
+    (SkillInput(...))` call resolves to a SkillOutput with this answer/confidence, without a
+    real network call. Default (empty answer, confidence 0.0) simulates "web search found
+    nothing useful" — success is False (SkillOutput.success requires a non-empty answer), so
+    reasoning.py falls through to the plain no-grounding-context path exactly as it did before
+    the web-fallback feature existed."""
+    from core.skills.base import SkillOutput
+    result = SkillOutput(answer=answer, skill_name="web_search", confidence=confidence)
+    return patch("core.skills.loader.get_skill",
+                return_value=AsyncMock(return_value=result))
+
+
 @pytest.mark.asyncio
 async def test_context_block_precedes_history_block_and_is_labelled_authoritative():
     captured = {}
@@ -85,6 +98,7 @@ async def test_no_context_omits_context_block_but_keeps_history():
         patch("litellm.acompletion", new=_fake_completion),
         patch("core.skills.reasoning.resolve_generation_route",
               new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(),
     ):
         inp = SkillInput(question="q", tenant_id="digg-demo", conversation_history="Vula AI: hi")
         await ReasoningSkill().run(inp)
@@ -165,6 +179,7 @@ async def test_low_logprob_confidence_triggers_cloud_escalation():
         patch("core.skills.reasoning.resolve_generation_route",
               new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
         patch("core.llm_router.escalate_to_cloud", side_effect=_fake_escalate),
+        _web_search_mock(),
     ):
         out = await ReasoningSkill().run(SkillInput(question="hake price", tenant_id="off-the-hook"))
 
@@ -194,12 +209,171 @@ async def test_no_kb_context_appends_accuracy_caveat():
         patch("litellm.acompletion", new=_fake_completion),
         patch("core.skills.reasoning.resolve_generation_route",
               new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(),  # simulates web search finding nothing useful — falls through here
     ):
         out = await ReasoningSkill().run(SkillInput(question="capital of SA?", tenant_id="digg-demo"))
 
     assert "⚠️" in out.answer
     assert "couldn't find a specific document" in out.answer
     assert out.confidence == 0.5
+
+
+# ── 2026-09-17: web-search fallback ───────────────────────────────────────────────
+# Same real DIGG transcript as the tangential-context guard above: no KB match, so the skill
+# guessed from training data and answered confidently wrong. web_search.py already exists
+# (free, DuckDuckGo-backed) — these pin that reasoning.py now tries it before settling for a
+# bare "couldn't find a document" caveat.
+
+@pytest.mark.asyncio
+async def test_web_fallback_used_when_confidence_clears_bar():
+    captured = {}
+
+    async def _fake_completion(*a, **kw):
+        captured["messages"] = kw["messages"]
+        return _Resp("Try Fired Earth High Heat or Plascon stove enamel.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(answer="Fired Earth High Heat and Plascon stove enamel are sold at "
+                                 "Builders and Makro.", confidence=0.7),
+    ):
+        out = await ReasoningSkill().run(SkillInput(
+            question="can I colour a cast iron fireplace?", tenant_id="digg-demo"))
+
+    user_msg = captured["messages"][1]["content"]
+    assert ">>> BEGIN WEB_CONTEXT" in user_msg and "Fired Earth High Heat" in user_msg
+    assert "🌐" in out.answer
+    assert "Based on a live web search" in out.answer
+    assert out.confidence == 0.6
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_skipped_when_confidence_below_bar():
+    """web_search.py's 0.4 tier is DDG hits with no page text fetched — just a bulleted link
+    list, useless as prose to reason over. Must not be treated as usable grounding."""
+    async def _fake_completion(*a, **kw):
+        return _Resp("Cape Town is the legislative capital of South Africa.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(answer="- some-site.com\n- other-site.com", confidence=0.4),
+    ):
+        out = await ReasoningSkill().run(SkillInput(question="capital of SA?", tenant_id="digg-demo"))
+
+    assert "🌐" not in out.answer
+    assert "couldn't find a specific document" in out.answer
+    assert out.confidence == 0.5
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_timeout_falls_through_cleanly():
+    async def _fake_completion(*a, **kw):
+        return _Resp("Cape Town is the legislative capital of South Africa.")
+
+    async def _hangs_forever(*a, **kw):
+        import asyncio as _asyncio
+        await _asyncio.sleep(3600)
+
+    mock_web_skill = AsyncMock(side_effect=_hangs_forever)
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        patch("core.skills.loader.get_skill", return_value=mock_web_skill),
+        patch("core.skills.reasoning._WEB_FALLBACK_TIMEOUT_S", 0.01),
+    ):
+        out = await ReasoningSkill().run(SkillInput(question="capital of SA?", tenant_id="digg-demo"))
+
+    assert "couldn't find a specific document" in out.answer
+    assert out.confidence == 0.5
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_disabled_by_env_kill_switch():
+    mock_web_skill = AsyncMock(return_value=None)  # must never be called
+
+    async def _fake_completion(*a, **kw):
+        return _Resp("Cape Town is the legislative capital of South Africa.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        patch("core.skills.loader.get_skill", return_value=mock_web_skill),
+        patch.dict("os.environ", {"REASONING_WEB_FALLBACK_DISABLED": "true"}),
+    ):
+        out = await ReasoningSkill().run(SkillInput(question="capital of SA?", tenant_id="digg-demo"))
+
+    mock_web_skill.assert_not_called()
+    assert "couldn't find a specific document" in out.answer
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_prompt_asks_for_concrete_options_and_specific_hedging():
+    """2026-09-17: this wording is load-bearing, not boilerplate. Judy (DIGG's owner) got a
+    flat wrong "no" from Vula, then pasted back a real self-researched answer: several concrete
+    brand/product options, and a hedge on the ONE specific thing actually uncertain (stock/
+    pricing) rather than a blanket disclaimer. Pins that quality bar into the prompt itself so
+    it can't quietly regress back to a vague "here's some web results" instruction."""
+    captured = {}
+
+    async def _fake_completion(*a, **kw):
+        captured["messages"] = kw["messages"]
+        return _Resp("the answer")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(answer="Some grounded web answer.", confidence=0.7),
+    ):
+        await ReasoningSkill().run(SkillInput(
+            question="can I colour a cast iron fireplace?", tenant_id="digg-demo"))
+
+    user_msg = captured["messages"][1]["content"]
+    assert "concrete options" in user_msg and "not one flat verdict" in user_msg
+    assert "say THAT plainly instead of a generic disclaimer" in user_msg
+
+
+# ── 2026-09-17: tangential-context guard ─────────────────────────────────────────
+# A real DIGG transcript: "can I colour a cast iron fireplace?" got answered "no" by citing a
+# retrieved Canal West HOA rule about flue MATERIAL (steel vs stainless steel) — a different
+# question, with no actual rule on colour/finish anywhere in the retrieved context. Being
+# on-topic (same property, same guide) isn't the same as answering what was asked.
+
+@pytest.mark.asyncio
+async def test_system_prompt_tangential_context_guard_text():
+    captured = {}
+
+    async def _fake_completion(*a, **kw):
+        captured["messages"] = kw["messages"]
+        return _Resp("the answer")
+
+    chunks = [{"filename": "hoa_guide.pdf", "text": "Steel flues are not permissible, only "
+               "stainless steel is allowed.", "score": 0.4}]
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock(chunks)),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.reasoning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        await ReasoningSkill().run(SkillInput(
+            question="can I colour a cast iron fireplace?", tenant_id="digg-demo"))
+
+    system_msg = captured["messages"][0]["content"]
+    assert "doesn't actually state a rule or fact that answers the SPECIFIC question" in system_msg
+    assert "A related document being present is not the same as it answering what was asked" in system_msg
 
 
 @pytest.mark.asyncio
@@ -269,6 +443,7 @@ async def test_genuine_general_question_still_answers_normally():
         patch("litellm.acompletion", new=_fake_completion),
         patch("core.skills.reasoning.resolve_generation_route",
               new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+        _web_search_mock(),
     ):
         out = await ReasoningSkill().run(SkillInput(
             question="What is the maximum distance of escape for a hotel corridor",
@@ -281,6 +456,7 @@ async def test_genuine_general_question_still_answers_normally():
 @pytest.mark.asyncio
 async def test_local_timeout_escalates_to_cloud():
     import asyncio as _asyncio
+    import os as _os
 
     call_count = {"n": 0}
 
@@ -296,6 +472,12 @@ async def test_local_timeout_escalates_to_cloud():
               new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
         patch("core.llm_router.escalate_to_cloud",
               return_value=("cloud/model", "key", "https://cloud")),
+        # This test patches asyncio.wait_for GLOBALLY to simulate one local-completion
+        # timeout — the web-fallback call added 2026-09-17 also goes through asyncio.wait_for,
+        # which would otherwise steal call_count's first slot from the completion it's meant
+        # to simulate. Disable the feature here rather than mock it, to keep this test's
+        # call-count semantics exactly what they were before web-fallback existed.
+        patch.dict(_os.environ, {"REASONING_WEB_FALLBACK_DISABLED": "true"}),
         patch("asyncio.wait_for", side_effect=_slow_then_fast),
     ):
         out = await ReasoningSkill().run(SkillInput(
@@ -316,6 +498,7 @@ async def test_reasoning_emits_latency_telemetry():
         patch("core.skills.reasoning.resolve_generation_route",
               new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
         patch("core.reasoning_telemetry.emit") as mock_emit,
+        _web_search_mock(),
     ):
         await ReasoningSkill().run(SkillInput(
             question="What is the maximum distance of escape", tenant_id="digg-demo"))
