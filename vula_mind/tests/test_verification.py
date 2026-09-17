@@ -371,6 +371,54 @@ async def test_apply_context_empty_when_no_kb_sources(monkeypatch):
     assert captured["context"] == ""
 
 
+@pytest.mark.asyncio
+async def test_apply_builds_context_from_web_sources(monkeypatch):
+    """2026-09-17: reasoning.py's web-search fallback tags sources type='web' — apply() must
+    pick these up too, or the checker runs blind against a web-grounded answer exactly the way
+    it did against the real DIGG "cast iron fireplace" incident's ungrounded guess."""
+    captured = {}
+
+    async def _check(question, answer, context=""):
+        captured["context"] = context
+        return {"verdict": "pass", "defects": [], "checker_ms": 1}
+
+    monkeypatch.setattr(verification, "adversarial_check", _check)
+
+    class WebSourcedSkill(BaseSkill):
+        name = "web_sourced"
+        description = "test"
+        verification_policy = "adversarial"
+
+        async def run(self, inp: SkillInput) -> SkillOutput:
+            return SkillOutput(
+                answer="answer", skill_name=self.name, confidence=0.6,
+                sources=[{"type": "web", "text": "Fired Earth High Heat is sold at Builders"}],
+            )
+
+    await WebSourcedSkill()(_inp())
+    assert "Fired Earth High Heat" in captured["context"]
+
+
+# ── is_uncertain_reply (owner-correction capture's detector) ─────────────────────
+
+def test_is_uncertain_reply_detects_all_three_markers():
+    assert verification.is_uncertain_reply(
+        "the answer" + verification._CAVEAT) is True
+    assert verification.is_uncertain_reply(
+        "the answer" + verification.NO_GROUNDING_CAVEAT) is True
+    assert verification.is_uncertain_reply(
+        "the answer" + verification.WEB_FALLBACK_CAVEAT) is True
+
+
+def test_is_uncertain_reply_false_for_a_plain_confident_answer():
+    assert verification.is_uncertain_reply("Retention is 5% per the filed contract.") is False
+
+
+def test_is_uncertain_reply_handles_empty_and_none():
+    assert verification.is_uncertain_reply("") is False
+    assert verification.is_uncertain_reply(None) is False
+
+
 # ── verdict parsing (local 8B models return messy JSON) ───────────────────────
 
 def test_parse_verdict_lenient():

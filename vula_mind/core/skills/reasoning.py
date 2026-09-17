@@ -16,6 +16,7 @@ from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_tenant_data_question,
 )
+from core.verification import NO_GROUNDING_CAVEAT, WEB_FALLBACK_CAVEAT
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,23 @@ logger = logging.getLogger(__name__)
 # but couldn't reuse a reasoning.py-local function) — see looks_like_tenant_data_question there.
 _LOCAL_TIMEOUT_S = 20.0
 _CLOUD_TIMEOUT_S = 30.0
+
+# 2026-09-17: real DIGG transcript — "can I colour a cast iron fireplace?" had no KB match, so
+# this skill guessed from training data and answered confidently wrong. web_search.py already
+# exists (free, DuckDuckGo-backed) and is already used as a fallback-when-empty pattern in
+# commerce_assistant.py's _exec_research_product — this borrows the same pattern here. Bounded
+# independently of web_search.py's own internal timeouts (it does up to 3 sequential 12s page
+# fetches + its own LLM call) so a slow web search fails open into today's plain-caveat path
+# rather than blocking the reply. This whole reply path already runs backgrounded off the
+# WhatsApp webhook ACK (_run_bg in vula/api/whatsapp.py), so the cost is WhatsApp reply
+# latency, not a webhook retry risk.
+_WEB_FALLBACK_TIMEOUT_S = 25.0
+# web_search.py's confidence scale: ~0.7 = real synthesis over fetched page text (useful
+# grounding), 0.4 = DDG hits but no page text fetched (the "answer" is just a bulleted list of
+# link titles/URLs — useless as prose to reason over). 0.5 admits only the real synthesized
+# case; deliberately stricter than commerce_assistant.py's >= 0.3 bar, which returns the raw
+# web result as ITS final answer rather than feeding it into a second generation pass.
+_WEB_FALLBACK_MIN_CONFIDENCE = 0.5
 
 
 class ReasoningSkill(BaseSkill):
@@ -81,6 +99,29 @@ class ReasoningSkill(BaseSkill):
                 confidence=0.3,
                 sources=sources,
             )
+
+        # 2026-09-17: no KB match, and not asking about the tenant's own records — a genuine
+        # general-knowledge question the model would otherwise just guess at from training
+        # data. Try web search first; a real citation beats a guess. Fails open (empty
+        # web_context) on any error/timeout/low-confidence result, falling through to the
+        # existing plain-caveat behaviour below.
+        web_context = ""
+        web_sources: list = []
+        if not kb_context:
+            import os as _os
+            if _os.environ.get("REASONING_WEB_FALLBACK_DISABLED", "false").lower() != "true":
+                try:
+                    import asyncio as _asyncio
+                    from core.skills.loader import get_skill  # lazy: loader imports this module
+                    web_result = await _asyncio.wait_for(
+                        get_skill("web_search")(
+                            SkillInput(question=inp.question, tenant_id=inp.tenant_id)),
+                        timeout=_WEB_FALLBACK_TIMEOUT_S)
+                    if web_result.success and web_result.confidence >= _WEB_FALLBACK_MIN_CONFIDENCE:
+                        web_context = web_result.answer
+                        web_sources = [{"type": "web", "text": web_context[:900]}]
+                except Exception as exc:
+                    logger.debug("Reasoning web fallback skipped: %s", exc)
 
         # Build prompt
         # 2026-09-17: added the "doesn't actually answer the specific question" guard below
@@ -135,7 +176,21 @@ class ReasoningSkill(BaseSkill):
             f"{fence('DOCUMENT_CONTEXT', kb_context)}"
             if kb_context else ""
         )
-        user_msg = f"{context_block}{history}\nQuestion: {inp.question}\n\nAnswer:"
+        # 2026-09-17: this wording is load-bearing, not boilerplate — shaped against a real
+        # comparison. Judy (DIGG's owner) got a wrong flat "no" from Vula, then pasted back a
+        # detailed answer she'd researched herself: several concrete brand/product options, and
+        # a hedge on the ONE specific thing that was actually uncertain (stock/pricing), not a
+        # blanket disclaimer. That's the bar this instructs the model toward.
+        web_block = (
+            f"\nLive web search results (NOT one of this business's own documents — say so if "
+            f"you rely on it, and only cite a source URL raw, never as a markdown link). Give "
+            f"concrete options from what was actually found (brands/products/suppliers), not "
+            f"one flat verdict — and if something specific in the results is uncertain (stock, "
+            f"current price, availability), say THAT plainly instead of a generic disclaimer:"
+            f"{fence('WEB_CONTEXT', web_context)}"
+            if web_context else ""
+        )
+        user_msg = f"{context_block}{web_block}{history}\nQuestion: {inp.question}\n\nAnswer:"
 
         started = time.monotonic()
         try:
@@ -206,10 +261,16 @@ class ReasoningSkill(BaseSkill):
             # reasonably speak to from training data. Confidence is still marked down from the
             # KB-grounded case so it's visibly less certain, without being pushed low enough to
             # noisily human-escalate every ordinary general-knowledge question.
-            confidence = 0.75 if kb_context else 0.5
-            if not kb_context:
-                answer += ("\n\n⚠️ I couldn't find a specific document on this — worth "
-                           "double-checking anything critical.")
+            # 2026-09-17: web_context (a real citation, third-party not tenant-authoritative)
+            # sits between those two — 0.6, above escalation.py's should_escalate floor (0.4),
+            # same as the plain no-grounding case already was.
+            confidence = 0.75 if kb_context else (0.6 if web_context else 0.5)
+            if not kb_context and not web_context:
+                answer += NO_GROUNDING_CAVEAT
+            elif web_context:
+                answer += WEB_FALLBACK_CAVEAT
+            if web_sources:
+                sources = sources or web_sources
 
             latency_ms = int((time.monotonic() - started) * 1000)
             try:
@@ -217,7 +278,7 @@ class ReasoningSkill(BaseSkill):
                 _emit(system="vula-reasoning", task="reasoning_reply", tenant_id=inp.tenant_id,
                      outcome="ok", escalated=escalated,
                      extra={"latency_ms": latency_ms, "confidence": confidence,
-                            "had_kb": bool(kb_context)})
+                            "had_kb": bool(kb_context), "had_web": bool(web_context)})
             except Exception:
                 pass
 
