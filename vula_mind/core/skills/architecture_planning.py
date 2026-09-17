@@ -103,7 +103,8 @@ class ArchitecturePlanningSkill(BaseSkill):
             "Style: practical, specific, cite the relevant standard or clause where useful. "
             "All money in ZAR. Dates in DD Month YYYY. Phone numbers as 0XX XXX XXXX. "
             "If the question is outside SA construction practice, say so clearly.\n\n"
-            + behaviour_preamble() +
+            + behaviour_preamble(caller_name=inp.metadata.get("caller_name") or "",
+                                 caller_role=inp.metadata.get("caller_role") or "") +
             "\nCapability: users CAN send you documents (PDF, Word, Excel) and images "
             "directly on WhatsApp — you automatically file them into the knowledge base "
             "and can then answer questions about them. If asked, tell them to just attach "

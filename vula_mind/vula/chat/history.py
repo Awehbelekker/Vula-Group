@@ -102,11 +102,23 @@ class ChatHistoryDB:
             return 0
 
     def format_for_prompt(self, tenant_id: str, phone: str = "", limit: int = 6,
-                          max_age_hours: Optional[float] = 24) -> str:
+                          max_age_hours: Optional[float] = 24,
+                          user_label: str = "Client") -> str:
         """Last N exchanges as a formatted conversation string for prompt injection. Each line
         is tagged with its actual age (2026-08-27) — same fix as commerce/service.py's
         format_history, same real incident (a stale message resurfacing hours later with no
-        way for the model to tell it wasn't fresh)."""
+        way for the model to tell it wasn't fresh).
+
+        `user_label` (2026-09-17) — who the person on the other end actually is. This used to be
+        hardcoded "Client" for EVERY thread, including a tenant owner's own admin chat, so the
+        model read its own history back as "Client: <the owner's message>" and behaved
+        accordingly. Confirmed live on DIGG: Judy (the practice owner) asked to group her
+        supplier invoices and got "Let me check with the team and get right back to you 🙏" —
+        customer-hold language aimed at the person who IS the team; a general question of hers
+        got answered out of a *client's* HOA guide; and her own researched correction was
+        parroted back at her as though she'd asked it. Callers on the admin/staff path pass the
+        real identity (e.g. "Judy Downing (owner)"); the customer-facing paths keep the default,
+        so nothing changes for a genuine client conversation."""
         msgs = self.get(tenant_id, phone, limit=limit * 2, max_age_hours=max_age_hours)
         if not msgs:
             return ""
@@ -115,7 +127,7 @@ class ChatHistoryDB:
         for m in msgs:
             age = relative_age_label(m.created_at) if m.created_at else ""
             age_tag = f" ({age})" if age else ""
-            lines.append(f"{'Client' if m.role == 'user' else 'Vula AI'}{age_tag}: {m.text}")
+            lines.append(f"{user_label if m.role == 'user' else 'Vula AI'}{age_tag}: {m.text}")
         return "\n".join(lines)
 
 
