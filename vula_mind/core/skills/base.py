@@ -141,11 +141,49 @@ AGENTIC_RULES = (
 )
 
 
-def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_language: str = "") -> str:
+def caller_block(caller_name: str = "", caller_role: str = "") -> str:
+    """One line telling the model who it is actually speaking to, when that person is the
+    tenant's own owner/manager/staff rather than a customer. Returns "" for an unknown caller
+    or a plain customer, so every customer-facing path is unchanged.
+
+    2026-09-17, confirmed live on DIGG: nothing on the knowledge/RAG path ever told the model
+    who the sender was (its metadata literally called her `customer_phone`), and the chat
+    history it read back labelled every one of her turns "Client:". So Judy — the practice
+    owner — was handled as an outside client: her request to group her own supplier invoices
+    got "Let me check with the team and get right back to you 🙏", her general fireplace
+    question was answered out of a *client's* HOA guide, and the correction she took the
+    trouble to research was recited back to her as if she'd asked it.
+
+    The commerce-admin path already resolved caller_name/caller_role from vula_team_members and
+    put it in its own system prompt; this centralizes the wording here (same precedent as
+    `preferred_language` above) so every skill gets it by passing through what the caller
+    already looked up, rather than each re-inventing it.
+    """
+    name, role = (caller_name or "").strip(), (caller_role or "").strip()
+    if not name and not role:
+        return ""
+    who = f"{name} ({role})" if name and role else (name or role)
+    return (
+        f"You are talking to {who} — part of this business, NOT a customer or client of it. "
+        f"Speak to them as the insider they are: their own records, projects, suppliers and "
+        f"staff are 'ours', not 'the client's'. Never fob them off with customer-service "
+        f"holding lines ('let me check with the team and come back to you') — on this side of "
+        f"the business, checking is your job, so either answer, do the work, or say plainly "
+        f"what you need from them.\n"
+    )
+
+
+def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_language: str = "",
+                       caller_name: str = "", caller_role: str = "") -> str:
     """Assemble the shared behaviour policy. `persona` (optional, per-tenant) sets the
     voice/style; the rest enforces integrity, honesty, reasoning, conversation, and
     untrusted-content rules. `agentic=True` also appends AGENTIC_RULES — pass this for any
     skill with its own tool-calling loop (TOOL_SPECS + tool_choice='auto').
+
+    `caller_name`/`caller_role` (optional) — who is on the other end, when they're the tenant's
+    own owner/manager/staff. See caller_block above for the real incident this exists for. Both
+    empty (the default) means an unknown caller or an ordinary customer: no block is added and
+    behaviour is exactly as it was before this existed.
 
     `preferred_language` (optional, e.g. "af") — 2026-08-17: CONVERSATION_RULES' generic
     "mirror their language" instruction wasn't reliable enough on its own (confirmed live: a
@@ -172,6 +210,9 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
     parts = [ETHICS_RULES, HONESTY_RULES, REASONING_RULES, UNTRUSTED_CONTENT_RULE, CONVERSATION_RULES]
     if lang_block:
         parts.append(lang_block)
+    who_block = caller_block(caller_name, caller_role)
+    if who_block:
+        parts.append(who_block)
     if agentic:
         parts.append(AGENTIC_RULES)
     return head + "\n".join(parts)
