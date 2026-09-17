@@ -317,12 +317,24 @@ async def find_learned_answer(tenant_id: str, question: str) -> Optional[str]:
     return _find_learned_answer_keyword(tenant_id, question, qt)
 
 
-def _pick_helper(tenant_id: str) -> Optional[dict]:
+def _pick_helper(tenant_id: str, exclude_phone: str = "") -> Optional[dict]:
+    """Pick a human helper to relay the question to.
+
+    Excludes `exclude_phone` (the asker) from the candidate pool — confirmed live
+    2026-09-17: DIGG's owner Judy is also its only registered team member with an
+    owner/manager role, so an admin question from her own number picked *her* as the
+    helper, sent her "let me check with the team", then pinged her own WhatsApp asking
+    her to answer her own question. A tenant with no OTHER helper simply gets no
+    escalation (falls back to the agent's own reply) rather than this self-loop.
+    """
     try:
         rows = (_client().table("vula_team_members").select("name,whatsapp,role,notify,active")
                 .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
     except Exception:
         rows = []
+    exclude_digits = re.sub(r"\D", "", exclude_phone or "")
+    if exclude_digits:
+        rows = [r for r in rows if re.sub(r"\D", "", r.get("whatsapp") or "") != exclude_digits]
     helpers = [r for r in rows if (r.get("whatsapp") or "").strip()
                and "help_request" in (r.get("notify") or [])]
     if not helpers:
@@ -380,7 +392,7 @@ def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Opt
             return None
     except Exception:
         pass
-    helper = _pick_helper(tenant_id)
+    helper = _pick_helper(tenant_id, exclude_phone=customer_phone)
     if not helper:
         return None
     import uuid
