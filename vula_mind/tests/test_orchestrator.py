@@ -38,11 +38,40 @@ def test_keyword_complexity(hrm, prompt, expected):
     ("Write a Python script to parse a CSV", "code_execution"),
     ("What did we discuss last time?", "memory_recall"),
     ("Read this PDF document", "file_parse"),
-    # "fitout" is in architecture_planning keywords, so this correctly routes there.
-    ("What is the cost per square metre for fitout?", "architecture_planning"),
 ])
 def test_skill_matching(hrm, prompt, expected_skill):
     assert hrm._match_skill(prompt) == expected_skill
+
+
+# ── 2026-09-18: architecture_planning's weak (generic) keywords are business_type-gated ──
+# "fitout"/"design"/"fee"/"plan"/etc used to match unconditionally for every tenant, so an
+# unrelated tenant's ordinary question could get misrouted into architecture_planning. Now
+# gated on the tenant's business_type being "services"/"trades" — see _architecture_weak_ok.
+
+def test_weak_architecture_keyword_matches_for_a_services_tenant(hrm, monkeypatch):
+    from vula.api import tenants as tenants_module
+    monkeypatch.setattr(tenants_module, "get_config", lambda tid, **kw: {"business_type": "services"})
+    assert hrm._match_skill("What is the cost per square metre for fitout?",
+                            tenant_id="digg-demo") == "architecture_planning"
+
+
+@pytest.mark.parametrize("business_type", ["food", "retail", None])
+def test_weak_architecture_keyword_does_not_match_for_other_verticals(hrm, monkeypatch, business_type):
+    from vula.api import tenants as tenants_module
+    monkeypatch.setattr(tenants_module, "get_config", lambda tid, **kw: {"business_type": business_type})
+    assert hrm._match_skill("What is the cost per square metre for fitout?",
+                            tenant_id="some-tenant") != "architecture_planning"
+
+
+def test_weak_architecture_keyword_does_not_match_without_a_tenant_id(hrm):
+    """No tenant context at all fails toward NOT matching — the safe direction for a keyword
+    class that exists specifically to stop over-matching."""
+    assert hrm._match_skill("What is the cost per square metre for fitout?") != "architecture_planning"
+
+
+def test_strong_architecture_keyword_still_matches_unconditionally(hrm):
+    """Unambiguous AEC jargon (never split into the weak tier) still needs no tenant context."""
+    assert hrm._match_skill("What does SACAP require for Stage 3 sign-off?") == "architecture_planning"
 
 
 # ── 2026-08-24 chat-accuracy audit: routing-priority collisions ──────────────────

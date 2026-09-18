@@ -929,6 +929,33 @@ def _resolve_due_at(due_phrase: Optional[str]) -> Optional[str]:
         return None
 
 
+def _product_tools_for(tenant_id: str) -> List[Dict[str, Any]]:
+    """PRODUCT_TOOLS, with update_product's is_daily_catch field only for a food-vertical
+    tenant. 2026-09-18: this seafood-specific schema field used to be exposed to every tenant
+    with the products module on, regardless of vertical — a construction or professional-
+    services tenant's update_product call would never have a legitimate use for it. Known
+    imprecision accepted: business_type=="food" also covers a bakery/restaurant with no daily
+    catch of its own, but it's the only vertical signal that persists past onboarding today
+    (the free-text industry string is discarded after being mapped to this coarse bucket —
+    see vula/api/onboarding.py's _map_business_type) — not worth a new column for one boolean."""
+    try:
+        from vula.api.tenants import get_config
+        business_type = (get_config(tenant_id) or {}).get("business_type")
+    except Exception:
+        business_type = None
+    if business_type == "food":
+        return PRODUCT_TOOLS
+    trimmed = []
+    for t in PRODUCT_TOOLS:
+        if t["function"]["name"] != "update_product":
+            trimmed.append(t)
+            continue
+        t2 = json.loads(json.dumps(t))  # deep copy — never mutate the shared PRODUCT_TOOLS list
+        t2["function"]["parameters"]["properties"].pop("is_daily_catch", None)
+        trimmed.append(t2)
+    return trimmed
+
+
 def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") -> List[Dict[str, Any]]:
     """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
     role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
@@ -952,7 +979,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         if not (show_all or mod in mods):
             continue
         if matched is None or mod in matched:
-            tools += group
+            tools += _product_tools_for(tenant_id) if mod == "products" else group
     return tools
 
 

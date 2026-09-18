@@ -351,6 +351,10 @@ async def receive_message(
                             # Owner tapping the "want this as a document too?" offer after a
                             # web-researched reply — see _maybe_offer_research_writeup.
                             await _handle_research_pdf_reply(phone, reply_id, route_tenant)
+                        elif phone and reply_id and route_tenant and reply_id.startswith("admin_example:"):
+                            # Owner tapping an example from their first-contact capability menu
+                            # (_send_staff_capability_menu) — see _handle_admin_example_reply.
+                            await _handle_admin_example_reply(phone, reply_id, route_tenant)
                         elif phone and reply_id and commerce_tenant:
                             # Handle list/button replies from WhatsApp catalog menu
                             await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
@@ -5254,6 +5258,11 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # Owner/staff → admin agent (run the shop); customers → shopping agent.
     if _is_tenant_owner(tenant_id, phone):
         await _maybe_welcome_new_owner(tenant_id, phone)
+        if text.strip().lower() == "menu":
+            # Re-show the capability menu (_send_staff_capability_menu's own footer tells
+            # staff they can do this any time) rather than sending "menu" to the LLM agent.
+            if await _send_staff_capability_menu(phone, tenant_id):
+                return
         if await _run_commerce_admin(phone, text, tenant_id, detected_lang=detected_lang):
             return
         # Admin agent failed → fall through to the customer assistant.
@@ -5417,16 +5426,92 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
                      f"you were given." if dash_url else
                      "\n\nAsk your Vula contact for your dashboard login if you don't have it yet.")
 
-        msg = (f"Hey {first_name}! 🎣 Welcome to Vula — you're all set up as the owner/team "
+        # 2026-09-18: this used to close with a seafood in-joke ("No fish were harmed...") sent
+        # to every tenant's owner regardless of vertical — an architecture firm or a clinic got
+        # the same fish joke Off The Hook did. Generic sign-off instead.
+        msg = (f"Hey {first_name}! 👋 Welcome to Vula — you're all set up as the owner/team "
                f"member for *{shop_name}* here on WhatsApp. This is where your delivery "
                f"briefings, low-stock nudges, order chases and day-to-day questions land from "
-               f"now on.{dash_line} No fish were harmed in the sending of this message. 🐟🎉")
+               f"now on.{dash_line}")
         await _send_reply(phone, msg, tenant_id)
         logger.info("Sent owner welcome to %s (%s)", phone, tenant_id)
+        await _send_staff_capability_menu(phone, tenant_id)
         return True
     except Exception as exc:
         logger.debug("owner welcome skipped: %s", exc)
         return False
+
+
+# 2026-09-18: customers already get a tappable interactive menu on first contact
+# (_send_commerce_welcome, via _send_wa_list) — staff/owners only ever got the welcome text
+# above, no menu of what Vula can actually do. A first-time owner had to already know what to
+# type. Always-on examples first (every tenant has these regardless of enabled modules), then
+# up to 6 more drawn from the tenant's actually-enabled modules — same _GATED_GROUPS keys
+# core/skills/commerce_admin.py's _tools_for already gates tools by, so a module a tenant
+# doesn't have never shows an example for a tool they can't use.
+_STAFF_MENU_ALWAYS_ON = [
+    ("sales", "Check today's sales", "what were today's sales?"),
+    ("expense", "Log an expense", "log R450 packaging from Boxshop"),
+]
+_STAFF_MENU_BY_MODULE = {
+    "invoices": ("invoices", "Invoice a customer", "invoice Jane for R500"),
+    "products": ("products", "Add a product", "add a product called X at R99"),
+    "bookings": ("bookings", "Check bookings", "show tomorrow's bookings"),
+    "orders": ("orders", "Set up a standing order", "set up a weekly order for Jane"),
+    "crm": ("crm", "Look up a customer", "look up customer John's history"),
+    "broadcasts": ("broadcasts", "Send a broadcast", "send this week's specials to customers"),
+    "pages": ("pages", "Edit my site", "update my homepage banner"),
+    "purchase_orders": ("po", "Order from a supplier", "create a purchase order from Acme"),
+    "discounts": ("discounts", "Make a discount code", "create a 10% discount code"),
+    "automations": ("automations", "Set up a reminder", "remind me every Monday to check stock"),
+}
+
+
+async def _send_staff_capability_menu(phone: str, tenant_id: str) -> bool:
+    """A tappable menu of example commands for a first-time owner/staff member — mirrors
+    _send_commerce_welcome's proven interactive-list pattern for customers. Tapping a row
+    forwards that example's exact command text to the admin agent (see the
+    "admin_example:" branch in the interactive-message webhook dispatch), so it's a real
+    shortcut, not just a static hint."""
+    try:
+        creds = await _resolve_wa(tenant_id)
+        if not creds:
+            return False
+        try:
+            from vula.api.tenants import enabled_modules
+            mods = set(enabled_modules(tenant_id) or [])
+        except Exception:
+            mods = set()
+        rows = [{"id": f"admin_example:{key}", "title": title[:24], "description": f"e.g. \"{cmd}\""[:72]}
+                for key, title, cmd in _STAFF_MENU_ALWAYS_ON]
+        for mod, (key, title, cmd) in _STAFF_MENU_BY_MODULE.items():
+            if len(rows) >= 8:
+                break
+            if mod in mods:
+                rows.append({"id": f"admin_example:{key}", "title": title[:24],
+                             "description": f"e.g. \"{cmd}\""[:72]})
+        if not rows:
+            return False
+        return await _send_wa_list(
+            creds, _wa_number(phone), "What can I help with?",
+            "Here's a few things you can ask me — tap one to try it, or just type your own "
+            "question any time.",
+            "Reply *menu* any time to see this again.", "See examples",
+            [{"title": "Try an example", "rows": rows}])
+    except Exception as exc:
+        logger.debug("staff capability menu skipped: %s", exc)
+        return False
+
+
+async def _handle_admin_example_reply(phone: str, reply_id: str, tenant_id: str) -> None:
+    """A tap on _send_staff_capability_menu's list — runs that example's exact command text
+    through the admin agent, same as if the owner had typed it themselves."""
+    key = reply_id.split(":", 1)[1] if ":" in reply_id else ""
+    example = next((cmd for k, _title, cmd in _STAFF_MENU_ALWAYS_ON if k == key), None)
+    if example is None:
+        example = next((cmd for k, _title, cmd in _STAFF_MENU_BY_MODULE.values() if k == key), None)
+    if example:
+        await _run_commerce_admin(phone, example, tenant_id)
 
 
 # Nudge fires once a member's window has been quiet this long since our last message to them —
@@ -6099,7 +6184,8 @@ async def _send_category_products(phone: str, tenant_id: str, category: str) -> 
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
-    """Send the Off the Hook welcome message with interactive category list."""
+    """Send a customer's first-contact welcome with an interactive category list, driven by
+    the tenant's own name/catalog — not hardcoded to any one tenant."""
     # Use the tenant's LIVE WhatsApp creds (phone_id + token) — same source as _send_reply —
     # not a hardcoded (retired) number. Falls back to env. Failures fall back to a text menu.
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
@@ -6112,6 +6198,18 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     number = phone.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
         number = "27" + number[1:]
+
+    # 2026-09-18: this whole message used to be hardcoded to Off The Hook/seafood (header,
+    # body copy, footer, and — worst — the fallback text menu shown to EVERY tenant with no
+    # products yet) regardless of the actual tenant. One settings fetch (previously only used
+    # for the header image below) now also drives the shop name everywhere in this function.
+    try:
+        from vula.commerce import service as _cs
+        inv_settings = await _cs.get_invoice_settings(tenant_id)
+    except Exception:
+        inv_settings = None
+    shop_name = ((inv_settings or {}).get("trading_as") or (inv_settings or {}).get("company_name")
+                 or tenant_id.replace("-", " ").title())
 
     # Build the menu from the tenant's LIVE in-stock catalog.
     try:
@@ -6145,13 +6243,12 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     menu_url = f"{settings.public_base_url.rstrip('/')}/menu/{tenant_id}" if settings.public_base_url else ""
 
     _text_lines = "\n".join(f"• {r['title']}" for r in (cat_rows or spec_rows)) or \
-        "Fresh Fish, Frozen Seafood, Fresh Chicken, Frozen Chicken"
+        "Just tell me what you're looking for and I'll help you find it."
     _text_menu = (
-        "Welcome to Off the Hook! 🐟\n\n"
-        "Cape Town's freshest daily catch, door to door.\n\n"
+        f"Welcome to {shop_name}! 👋\n\n"
         f"What are you looking for?\n{_text_lines}\n\n"
-        "Reply with a product name, or visit offthehook.co.za"
-        + (f"\n\n📸 See photos of the catch: {menu_url}" if menu_url else "")
+        "Reply with a product name, or just ask."
+        + (f"\n\n📸 See photos: {menu_url}" if menu_url else "")
     )
 
     if not sections:
@@ -6160,21 +6257,16 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
 
     # Optional hero image, sent as its own message right before the list — WhatsApp's list
     # type has no image-header slot, so this is the closest thing to a "rich menu" it allows.
-    try:
-        from vula.commerce import service as _cs
-        inv_settings = await _cs.get_invoice_settings(tenant_id)
-        header_image_url = (inv_settings or {}).get("menu_header_image_url") or ""
-    except Exception:
-        header_image_url = ""
+    header_image_url = (inv_settings or {}).get("menu_header_image_url") or ""
     if header_image_url:
         await _send_wa_image(creds, number, header_image_url)
 
-    body_text = "Cape Town's freshest catch, door to door.\n\nTap a special or category, or just tell me what you want."
+    body_text = "Tap a special or category, or just tell me what you want."
     if menu_url:
-        body_text += f"\n\n📸 See photos of the catch: {menu_url}"
+        body_text += f"\n\n📸 See photos: {menu_url}"
     ok = await _send_wa_list(
-        creds, number, "Off the Hook 🐟", body_text,
-        "Free delivery on orders over R500", "View menu", sections,
+        creds, number, shop_name[:60], body_text,
+        "Reply any time with what you're after", "View menu", sections,
     )
     if ok:
         logger.info("Commerce welcome sent to %s (%d specials, %d cats)", phone, len(spec_rows), len(cat_rows))
