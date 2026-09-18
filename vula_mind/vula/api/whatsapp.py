@@ -2348,18 +2348,65 @@ _purpose_prompted_at: dict = {}
 _PURPOSE_PROMPT_WINDOW_S = 900.0     # 15 minutes
 
 
-def _note_purpose_prompt(phone: str) -> None:
+# 2026-09-18: Railway already runs WEB_CONCURRENCY=2 (two uvicorn workers per replica) TODAY —
+# the in-memory dicts above/below are per-worker, so a prompt landing on one worker and its
+# reply on the other silently loses the "we just asked" context, same root cause already fixed
+# once for inbound-message dedup (migration 071/vula_wa_msg_dedup). vula_wa_prompt_state
+# (migration 167) makes both durable: in-memory stays the fast path (checked first, no DB round
+# trip on the common case), the DB is the fallback so a cross-worker miss doesn't re-trap the
+# user. Fails toward letting messages through on any DB error, same as the dedup fix.
+def _note_wa_prompt(phone: str, kind: str, in_memory: dict) -> None:
     import time as _t
-    _purpose_prompted_at[phone] = _t.monotonic()
+    in_memory[phone] = _t.monotonic()
+    try:
+        from vula.commerce import service as _wps_cs
+        _wps_cs._client().table("vula_wa_prompt_state").upsert(
+            {"phone": phone, "kind": kind, "prompted_at": "now()"},
+            on_conflict="phone,kind").execute()
+    except Exception as exc:
+        logger.debug("wa prompt state durable write skipped (run migration 167?): %s", exc)
+
+
+def _recently_asked_wa(phone: str, kind: str, in_memory: dict, window_s: float) -> bool:
+    import time as _t
+    last = in_memory.get(phone)
+    if last and (_t.monotonic() - last) < window_s:
+        return True
+    # In-memory miss — could genuinely be "never asked", or could be a different worker /
+    # this worker restarted since the prompt. Durable fallback before concluding "no".
+    try:
+        from datetime import datetime, timedelta, timezone
+        from vula.commerce import service as _wps_cs
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_s)).isoformat()
+        resp_data = (_wps_cs._client().table("vula_wa_prompt_state").select("prompted_at")
+                     .eq("phone", phone).eq("kind", kind).gte("prompted_at", cutoff)
+                     .limit(1).execute().data)
+        rows = resp_data if isinstance(resp_data, list) else []
+        return bool(rows)
+    except Exception as exc:
+        logger.debug("wa prompt state durable read skipped (run migration 167?): %s", exc)
+        return False
+
+
+def _clear_wa_prompt(phone: str, kind: str, in_memory: dict) -> None:
+    in_memory.pop(phone, None)
+    try:
+        from vula.commerce import service as _wps_cs
+        _wps_cs._client().table("vula_wa_prompt_state").delete().eq(
+            "phone", phone).eq("kind", kind).execute()
+    except Exception as exc:
+        logger.debug("wa prompt state durable clear skipped (run migration 167?): %s", exc)
+
+
+def _note_purpose_prompt(phone: str) -> None:
+    _note_wa_prompt(phone, "purpose", _purpose_prompted_at)
 
 
 def _recently_asked_about_purpose(phone: str) -> bool:
-    import time as _t
-    last = _purpose_prompted_at.get(phone)
-    return bool(last and (_t.monotonic() - last) < _PURPOSE_PROMPT_WINDOW_S)
+    return _recently_asked_wa(phone, "purpose", _purpose_prompted_at, _PURPOSE_PROMPT_WINDOW_S)
 
 
-# 2026-09-18: signature capture (migration 165) — same in-memory, time-windowed,
+# 2026-09-18: signature capture (migration 165) — same time-windowed,
 # fails-toward-letting-messages-through pattern as _purpose_prompted_at above. A staff member
 # sends a trigger phrase ("set my signature"), Vula asks for a photo, and ONLY the next photo
 # from that phone within the window is captured as the signature instead of going through the
@@ -2373,14 +2420,11 @@ _SIGNATURE_TRIGGER_RE = re.compile(
 
 
 def _note_signature_prompt(phone: str) -> None:
-    import time as _t
-    _signature_prompted_at[phone] = _t.monotonic()
+    _note_wa_prompt(phone, "signature", _signature_prompted_at)
 
 
 def _recently_asked_about_signature(phone: str) -> bool:
-    import time as _t
-    last = _signature_prompted_at.get(phone)
-    return bool(last and (_t.monotonic() - last) < _SIGNATURE_PROMPT_WINDOW_S)
+    return _recently_asked_wa(phone, "signature", _signature_prompted_at, _SIGNATURE_PROMPT_WINDOW_S)
 
 
 async def _maybe_start_signature_capture(tenant_id: str, phone: str, text: str) -> Optional[str]:
@@ -2410,7 +2454,7 @@ async def _handle_signature_capture(phone: str, media_id: str, tenant_id: str) -
             return True
         from vula.commerce import service as commerce_service
         await commerce_service.upsert_invoice_settings(tenant_id, {"signature_url": url})
-        _signature_prompted_at.pop(phone, None)
+        _clear_wa_prompt(phone, "signature", _signature_prompted_at)
         await _send_reply(phone, "✅ Signature saved — it'll appear on every letter/document "
                                  "from now on.", tenant_id)
         return True
