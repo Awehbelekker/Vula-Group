@@ -37,6 +37,26 @@ _STOP_RE = re.compile(r"^\s*(stop|unsubscribe|opt\s*out|cancel)\b", re.IGNORECAS
 _SKIP_RE = re.compile(r"^\s*(skip|no|none|n/?a)\s*$", re.IGNORECASE)
 ACTIVE_STATES = ("awaiting_reply", "confirming_optin", "collecting_name", "collecting_address", "collecting_email")
 
+# Same bug class as vula/api/whatsapp.py's _looks_like_purpose_attempt and
+# vula/commerce/bank_review.py's _is_request_shaped: with onboarding mid-flow, ANY reply used to
+# get silently captured as the pending field, so a genuine question asked while onboarding was
+# active (e.g. "what time do you close?" during collecting_address) got stored as the customer's
+# delivery address instead of ever being answered. A message that reads as a request/question is
+# never onboarding data — let it fall through to normal routing; the contact's onboarding state
+# is untouched, so their next plain reply picks the flow back up exactly where it left off.
+_REQUEST_SHAPED = re.compile(
+    r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
+    r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
+    r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
+    r"forward|schedule|arrange)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_a_request(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t.endswith("?") or _REQUEST_SHAPED.match(t))
+
 
 def _client():
     from vula.commerce import service as cs
@@ -103,6 +123,9 @@ async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]
         except Exception:
             pass
         return "No problem — you won't get marketing messages from us. You can still order anytime. 🐟"
+
+    if _looks_like_a_request(body):
+        return None
 
     if state == "awaiting_reply":
         # First reply — DOUBLE OPT-IN: this only advances the conversation, it does NOT set

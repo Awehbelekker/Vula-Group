@@ -539,6 +539,12 @@ _OPEN_ESC = {"id": "e1", "customer_phone": "27645755210", "tenant_id": "digg-dem
     "What time does the site open tomorrow?",
     "How many bags of cement do we need for this",  # no trailing '?'
     "Can you check the BOQ for me?",
+    # 2026-09-18: _NEW_QUESTION_RE only covered question-word openers — an imperative request
+    # started with neither a question word nor '?' and still got swallowed as "the answer".
+    "Give me the price list",
+    "Send the quote to Danielle",
+    "Tell me about the Mipolam range",
+    "Look up all invoice for jackhammer",
 ])
 async def test_helper_own_new_question_not_swallowed_as_answer(question):
     """2026-07-29: Judy, sitting as helper on a 2-day-old stale escalation from an unrelated
@@ -922,6 +928,24 @@ async def test_owner_correction_not_captured_for_a_new_question():
         await _maybe_capture_owner_correction(
             "digg-demo", "27827077080", "27827077080",
             "What about a wood-burning stove instead?")
+
+    mock_capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_owner_correction_not_captured_for_an_imperative_request():
+    """2026-09-18: same gap as the escalation-answer heuristic — a request with no question
+    word and no '?' ("Give me...", "Send...") still isn't a correction."""
+    from vula.api.whatsapp import _maybe_capture_owner_correction
+    mock_db = _history_pair(_UNCERTAIN_REPLY)
+
+    with (
+        patch("vula.chat.history.get_db", return_value=mock_db),
+        patch("vula.escalation.capture_owner_correction") as mock_capture,
+    ):
+        await _maybe_capture_owner_correction(
+            "digg-demo", "27827077080", "27827077080",
+            "Send me the list of SA paint brands that actually work")
 
     mock_capture.assert_not_called()
 

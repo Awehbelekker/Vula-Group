@@ -490,7 +490,10 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     # WRONG person (the original asker of the unrelated old question), while the helper's real
     # question was never actually answered. A trailing '?', or a common question-starter with no
     # closing punctuation, means they're asking — let it fall through to normal routing instead.
-    if text.strip().endswith("?") or _NEW_QUESTION_RE.match(text):
+    # 2026-09-18: _NEW_QUESTION_RE only covers question-word openers ("what/how/can you"...) —
+    # an imperative request ("Give me the price list", "Send the quote") started with neither and
+    # would still be swallowed. _REQUEST_SHAPED (see below) covers those too.
+    if text.strip().endswith("?") or _NEW_QUESTION_RE.match(text) or _REQUEST_SHAPED.match(text):
         return False
     info = esc.answer_escalation(open_esc, text.strip())
     if not info:
@@ -565,8 +568,9 @@ async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key
         stripped = text.strip()
         if len(stripped) < 12:
             return
-        if _GREETING_RE.match(stripped) or stripped.endswith("?") or _NEW_QUESTION_RE.match(stripped):
-            return  # a greeting/ack or the owner's own new question, not a correction
+        if (_GREETING_RE.match(stripped) or stripped.endswith("?")
+                or _NEW_QUESTION_RE.match(stripped) or _REQUEST_SHAPED.match(stripped)):
+            return  # a greeting/ack or the owner's own new question/request, not a correction
         learned_id = esc.capture_owner_correction(tenant_id, prior_q.text, stripped)
         if not learned_id:
             return
@@ -2459,6 +2463,11 @@ async def _maybe_allocate_pending_odometer(tenant_id: str, phone: str, text: str
 
         # 2+ pending — an indexed reply ("1 45280, 2 46100") is the only unambiguous shape;
         # a bare number can't say which fill-up it belongs to.
+        # 2026-09-18: a real request that happens to contain two numbers ("get me 2 quotes for
+        # site 45") can match the digit-pair pattern below as a partial index/km guess — request
+        # shape is checked first so that never displaces the sender's actual message.
+        if text.endswith("?") or _REQUEST_SHAPED.match(text) or _ADDRESSES_ASSISTANT.search(text):
+            return None
         pairs = re.findall(r"(\d+)\D+(\d+)", text)
         n = len(rows)
         parsed: Dict[int, int] = {}

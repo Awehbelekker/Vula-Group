@@ -144,6 +144,24 @@ async def test_multi_pending_unrelated_text_unresolved():
     assert reply is None
 
 
+@pytest.mark.asyncio
+async def test_multi_pending_a_real_request_with_two_numbers_is_never_swallowed():
+    """2026-09-18: the indexed-reply parser (`(\\d+)\\D+(\\d+)`) can match two numbers inside an
+    ordinary request too ("get me 2 quotes for site 45" -> idx=2, km=45), which used to fall
+    through to the odometer listing prompt instead of ever reaching the agent."""
+    rows = [
+        {"id": "c1", "amount_cents": 74580, "supplier": "Engen", "date": "2026-08-19"},
+        {"id": "c2", "amount_cents": 65000, "supplier": "Shell", "date": "2026-08-25"},
+    ]
+    with (
+        patch("vula.commerce.service._client", return_value=_fake_service_client(rows)),
+        patch("vula.commerce.expenses.set_odometer") as mock_set,
+    ):
+        reply = await _maybe_allocate_pending_odometer(TID, PHONE, "get me 2 quotes for site 45")
+    assert reply is None
+    mock_set.assert_not_called()
+
+
 # ── _maybe_allocate_pending_purpose: a bare number is never swallowed as a purpose ─
 
 def _fake_purpose_client(rows):
