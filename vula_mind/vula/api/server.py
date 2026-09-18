@@ -1008,6 +1008,30 @@ async def _clickup_sync_loop() -> None:
         await _asyncio.sleep(60 * 60)   # hourly — matches email's cadence
 
 
+async def _onedrive_sync_loop() -> None:
+    """Auto-sync each connected tenant's recently-modified OneDrive files into their knowledge
+    base every hour — mirrors _email_sync_loop/_clickup_sync_loop's shape exactly.
+
+    2026-09-18: drive_search/drive_download (vula/microsoft/service.py) were on-demand only — a
+    file reached the KB only after the user explicitly asked Vula to pull that specific one
+    in-conversation. No equivalent loop exists for Google Drive: drive.file is a deliberately
+    restrictive OAuth scope (Vula only sees files it created or the user explicitly picked, see
+    vula/google/service.py's own SCOPES comment) that would make an equivalent sweep return
+    nothing useful for a tenant's pre-existing documents — broadening it needs a Google CASA
+    security assessment, a real scope-change decision outside this loop's reach."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(55)  # settle on boot
+    while True:
+        try:
+            from vula.microsoft.service import process_all_onedrive_sync
+            n = await process_all_onedrive_sync()
+            if n:
+                log.info("OneDrive KB sync processed %d file(s)", n)
+        except Exception as exc:
+            log.warning("OneDrive sync loop error: %s", exc)
+        await _asyncio.sleep(60 * 60)   # hourly — matches email/ClickUp's cadence
+
+
 async def _recurring_invoices_loop() -> None:
     """Generate due recurring invoices once a day."""
     import asyncio as _asyncio
@@ -1139,6 +1163,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_call_sheet_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_expense_sheet_loop()))
