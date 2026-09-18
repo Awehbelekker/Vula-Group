@@ -284,41 +284,17 @@ class EmailAdminSkill(BaseSkill):
         return {"error": f"unknown tool {name}"}
 
     async def _find_document(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Search vula_filed_documents — mirrors commerce_admin.py's _find_document exactly
-        (same table, same filter shape) so both skills answer 'find that invoice' consistently
-        regardless of which one a tenant's messages route through."""
+        """Search filed documents — delegates to service.find_filed_document, shared with
+        commerce_admin.py's identical tool so both skills answer 'find that invoice'
+        consistently regardless of which one a tenant's messages route through (same SQL match,
+        same semantic-KB fallback when the query names something only found inside a
+        document's content rather than its filename/summary)."""
         from vula.commerce import service as cs
-        query = (args.get("query") or "").strip()
-        if not query:
-            return {"error": "Give a few words about the document — supplier/customer name, "
-                              "invoice number, amount, or what it was for."}
-        category = (args.get("category") or "").strip()
-        # Commas/parens are PostgREST or_() filter syntax — strip them so free text (which may
-        # come straight from a WhatsApp message) can't alter the query's filter structure.
-        safe_query = re.sub(r"[,()]", " ", query).strip()[:100]
-        try:
-            q = (cs._client().table("vula_filed_documents")
-                 .select("id,filename,category,summary,fields,status,created_at,customer_phone")
-                 .eq("tenant_id", tenant_id).order("created_at", desc=True))
-            if category:
-                q = q.eq("category", category)
-            if safe_query:
-                q = q.or_(f"filename.ilike.%{safe_query}%,summary.ilike.%{safe_query}%")
-            rows = q.limit(10).execute().data or []
-        except Exception as exc:
-            logger.warning("find_document query failed: %s", exc)
-            return {"error": "Couldn't search filed documents right now."}
-        if not rows:
-            return {"message": f"No filed document matches '{query}'. Try email_search on the "
-                                "raw mailbox, or ask the owner for the invoice/document number."}
-        results = []
-        for r in rows:
-            fields = r.get("fields") or {}
-            results.append({
-                "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
-                "summary": (r.get("summary") or "")[:200],
-                "amount": fields.get("amount") or fields.get("total") or fields.get("amount_rands"),
-                "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
-                "filed_at": r.get("created_at"),
-            })
-        return {"matches": results, "count": len(results)}
+        result = await cs.find_filed_document(
+            tenant_id, args.get("query") or "",
+            category=(args.get("category") or "").strip() or None)
+        if "matches" in result:
+            result.setdefault("count", len(result["matches"]))
+        elif "message" in result:
+            result["message"] += " Or try email_search on the raw mailbox."
+        return result

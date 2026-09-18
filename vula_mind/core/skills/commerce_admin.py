@@ -2259,46 +2259,16 @@ class CommerceAdminSkill(BaseSkill):
              "next_run": s.get("next_run")} for s in rows[:15]]}
 
     async def _find_document(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Search vula_filed_documents (invoices/quotes/proof-of-payment/BOQs/receipts) by free
-        text. 2026-08-21: added after a real transcript showed the admin loop guessing among
-        unrelated tools (bookings, log_meeting, finance_insights) three times in a row rather
-        than looking up the specific document the owner referenced — this gives the model
-        something correct to reach for instead. Mirrors vula/api/documents.py's list_filed
-        filter shape (filename/summary ilike) rather than inventing a new search path."""
-        query = (args.get("query") or "").strip()
-        if not query:
-            return {"error": "Give a few words about the document — supplier/customer name, "
-                              "invoice number, amount, or what it was for."}
-        category = (args.get("category") or "").strip()
-        # Commas/parens are PostgREST or_() filter syntax — strip them so free text (which may
-        # come straight from a WhatsApp message) can't alter the query's filter structure.
-        safe_query = re.sub(r"[,()]", " ", query).strip()[:100]
-        try:
-            q = (service._client().table("vula_filed_documents")
-                 .select("id,filename,category,summary,fields,status,created_at,customer_phone")
-                 .eq("tenant_id", tid).order("created_at", desc=True))
-            if category:
-                q = q.eq("category", category)
-            if safe_query:
-                q = q.or_(f"filename.ilike.%{safe_query}%,summary.ilike.%{safe_query}%")
-            rows = q.limit(5).execute().data or []
-        except Exception as exc:
-            logger.warning("find_document query failed: %s", exc)
-            return {"error": "Couldn't search documents right now."}
-        if not rows:
-            return {"message": f"No filed document matches '{query}'. Ask the owner for the "
-                                "invoice/document number, or to resend it — don't guess."}
-        results = []
-        for r in rows:
-            fields = r.get("fields") or {}
-            results.append({
-                "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
-                "summary": (r.get("summary") or "")[:200],
-                "amount": fields.get("amount") or fields.get("total") or fields.get("amount_rands"),
-                "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
-                "filed_at": r.get("created_at"),
-            })
-        return {"matches": results}
+        """Search filed documents (invoices/quotes/proof-of-payment/BOQs/receipts) by free text.
+        2026-08-21: added after a real transcript showed the admin loop guessing among unrelated
+        tools (bookings, log_meeting, finance_insights) three times in a row rather than looking
+        up the specific document the owner referenced — this gives the model something correct
+        to reach for instead. Delegates to service.find_filed_document — a SQL filename/summary
+        match with a semantic-KB fallback for a query that only names something INSIDE a
+        document (see that function's docstring for the 2026-09-18 incident behind the
+        fallback), shared with email_admin.py's identical tool so both answer consistently."""
+        return await service.find_filed_document(
+            tid, args.get("query") or "", category=(args.get("category") or "").strip() or None)
 
     async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
         from vula.api.commerce import _aggregate_customers, _norm_phone

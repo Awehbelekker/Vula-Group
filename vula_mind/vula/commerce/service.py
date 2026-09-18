@@ -2744,3 +2744,73 @@ async def create_credit_note(tenant_id: str, invoice_id: str, line_items: Option
     except Exception:
         pass
     return cn
+
+
+# ── Document lookup (shared by commerce_admin.py and email_admin.py's find_document tools) ─────
+
+async def find_filed_document(tenant_id: str, query: str, category: Optional[str] = None,
+                              limit: int = 5) -> Dict[str, Any]:
+    """Search filed documents (invoices/quotes/proof-of-payment/BOQs/receipts) for `query`.
+
+    SQL match against vula_filed_documents (filename/summary ilike) first — cheap and precise
+    for an invoice number or an exact customer/supplier name. 2026-09-18 incident: a query
+    naming something that only appears INSIDE a document's content (an item description, e.g.
+    "jackhammer") never matches a filename or summary, even though the document was ingested
+    correctly and its content is sitting in the tenant's knowledge base — so a SQL miss now
+    falls back to semantic search over that KB (populated from both emailed and WhatsApp-sent
+    documents — see vula/email_imap/sync.py and vula/api/whatsapp.py's document ingest) instead
+    of reporting "not found" while the answer is one KB query away.
+
+    Single implementation so both find_document tools answer identically — see the routing
+    incident this was extracted alongside: the same fix landing in one copy and not its sibling
+    is exactly how these gaps have recurred before.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"error": "Give a few words about the document — supplier/customer name, "
+                          "invoice number, amount, or what it was for."}
+    # Commas/parens are PostgREST or_() filter syntax — strip them so free text (which may come
+    # straight from a WhatsApp message) can't alter the query's filter structure.
+    safe_query = re.sub(r"[,()]", " ", query).strip()[:100]
+    try:
+        q = (_client().table("vula_filed_documents")
+             .select("id,filename,category,summary,fields,status,created_at,customer_phone")
+             .eq("tenant_id", tenant_id).order("created_at", desc=True))
+        if category:
+            q = q.eq("category", category)
+        if safe_query:
+            q = q.or_(f"filename.ilike.%{safe_query}%,summary.ilike.%{safe_query}%")
+        rows = q.limit(limit).execute().data or []
+    except Exception as exc:
+        logger.warning("find_filed_document SQL query failed: %s", exc)
+        return {"error": "Couldn't search documents right now."}
+
+    if rows:
+        results = []
+        for r in rows:
+            fields = r.get("fields") or {}
+            results.append({
+                "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
+                "summary": (r.get("summary") or "")[:200],
+                "amount": fields.get("amount") or fields.get("total") or fields.get("amount_rands"),
+                "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
+                "filed_at": r.get("created_at"),
+            })
+        return {"matches": results, "match_type": "filed_document"}
+
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(query, top_k=limit)
+    except Exception as exc:
+        logger.debug("find_filed_document semantic fallback skipped: %s", exc)
+        chunks = []
+    if not chunks:
+        return {"message": f"No filed document matches '{query}'. Ask the owner for the "
+                            "invoice/document number, or to resend it — don't guess."}
+    results = [{"filename": c.get("filename") or "document",
+                "excerpt": (c.get("text") or "")[:300], "score": c.get("score")}
+               for c in chunks]
+    return {"matches": results, "match_type": "knowledge_base",
+            "note": "Found in the knowledge base, not as a structured filed document — read "
+                    "the excerpt for context, but confirm any figures with the owner before "
+                    "acting on them."}
