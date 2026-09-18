@@ -333,6 +333,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
   const [storeUrl, setStoreUrl] = useState(tenant.store_url || '')
   const [gateway, setGateway] = useState(tenant.default_payment_provider || '')
   const [shareNetwork, setShareNetwork] = useState(!!tenant.share_knowledge_with_network)
+  const [spendCap, setSpendCap] = useState(tenant.spend_cap_usd != null ? String(tenant.spend_cap_usd) : '')
   const allModules = registry.modules || []
 
   const toggle = (id) => setModules(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id])
@@ -356,6 +357,13 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
           <b style={{ fontSize: 12.5 }}>Default gateway</b>
           <input value={gateway} onChange={e => setGateway(e.target.value)} placeholder="yoco / payfast / …" style={{ ...input, flex: 1 }} />
         </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <b style={{ fontSize: 12.5 }}>Daily LLM spend cap (USD)</b>
+          <input value={spendCap} onChange={e => setSpendCap(e.target.value)} placeholder="uncapped" type="number" min="0" step="0.01" style={{ ...input, flex: 1 }} />
+        </div>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.muted }}>
+        Empty = uncapped. On breach, generation soft-degrades to local-only for the rest of the day (never blocked) and the team gets a WhatsApp alert. See the Usage tab for today's spend vs. cap per tenant.
       </div>
       <div>
         <b style={{ fontSize: 12.5, display: 'block', marginBottom: 6 }}>Modules</b>
@@ -376,6 +384,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
         onClick={() => onSave({
           modules, plan, store_url: storeUrl, default_payment_provider: gateway,
           share_knowledge_with_network: shareNetwork,
+          spend_cap_usd: spendCap === '' ? null : Number(spendCap),
         })}>Save changes</button>
     </div>
   )
@@ -511,7 +520,7 @@ function UsagePanel({ onError, onViewDetail }) {
     <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
       <table style={table}>
         <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
-          {['Tenant', 'AI calls (14d)', 'AI cost', 'Infra cost/day', 'Vectors', 'Storage'].map(x => <th key={x} style={th}>{x}</th>)}
+          {['Tenant', 'AI calls (14d)', 'AI cost', 'Infra cost/day', 'Vectors', 'Storage', 'Spend cap'].map(x => <th key={x} style={th}>{x}</th>)}
         </tr></thead>
         <tbody>
           {tenants.map(([tid, t]) => (
@@ -524,9 +533,12 @@ function UsagePanel({ onError, onViewDetail }) {
               <td style={td}>${(t.infra_cost_usd || 0).toFixed(2)}</td>
               <td style={td}>{t.vectors ?? '—'}</td>
               <td style={td}>{t.storage_mb != null ? `${Number(t.storage_mb).toFixed(0)} MB` : '—'}</td>
+              <td style={{ ...td, color: t.capped_today ? C.red : C.muted, fontWeight: t.capped_today ? 600 : 400 }}>
+                {t.spend_cap_usd != null ? `$${Number(t.spend_cap_usd).toFixed(2)}/day${t.capped_today ? ' · CAPPED TODAY' : ''}` : 'uncapped'}
+              </td>
             </tr>
           ))}
-          {!tenants.length && <tr><td style={td} colSpan={6}>No usage recorded in the last 14 days.</td></tr>}
+          {!tenants.length && <tr><td style={td} colSpan={7}>No usage recorded in the last 14 days.</td></tr>}
         </tbody>
       </table>
     </div>

@@ -71,7 +71,7 @@ async def master_tenants():
             **{k: c.get(k) for k in ("tenant_id", "display_name", "business_type", "modules",
                                      "theme", "active", "plan", "store_url",
                                      "default_payment_provider",
-                                     "share_knowledge_with_network") if k in c},
+                                     "share_knowledge_with_network", "spend_cap_usd") if k in c},
             "paid": s.get("paid"), "signup_status": s.get("status"),
             "trial_ends": s.get("trial_ends"), "signup_email": s.get("email"),
             "logins": user_counts.get(c["tenant_id"], 0),
@@ -84,7 +84,8 @@ async def master_update_tenant(tenant_id: str, body: dict,
                                identity: dict = Depends(require_master)):
     """Update a tenant's config (modules, display_name, theme, active). Audited."""
     allowed = {"display_name", "business_type", "modules", "theme", "active", "plan",
-               "store_url", "default_payment_provider", "share_knowledge_with_network"}
+               "store_url", "default_payment_provider", "share_knowledge_with_network",
+               "spend_cap_usd"}
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
@@ -502,6 +503,22 @@ async def master_usage(days: int = 14):
         t["infra_cost_usd"] = float(r.get("est_cost_usd") or 0)
         t["vectors"] = r.get("vectors")
         t["storage_mb"] = r.get("storage_mb")
+
+    # Spend cap (migration 166) — opt-in per tenant, surfaced here so /master's existing cost
+    # view shows who's capped/near-capped without a separate screen.
+    today = datetime.now(timezone.utc).date().isoformat()
+    today_spend: dict[str, float] = {}
+    for r in ai:
+        if r.get("day") == today:
+            today_spend[r["tenant_id"]] = today_spend.get(r["tenant_id"], 0.0) + float(r.get("est_cost_usd") or 0)
+    caps = {r["tenant_id"]: r.get("spend_cap_usd") for r in
+            (db.table("vula_tenant_config").select("tenant_id,spend_cap_usd").execute().data or [])
+            if r.get("spend_cap_usd") is not None}
+    for tid, cap in caps.items():
+        t = per_tenant.setdefault(tid, {"ai_cost_usd": 0.0, "calls": 0, "infra_cost_usd": 0.0})
+        t["spend_cap_usd"] = float(cap)
+        t["capped_today"] = today_spend.get(tid, 0.0) >= float(cap)
+
     return {"since": since, "per_tenant": per_tenant, "ai_daily": ai}
 
 
