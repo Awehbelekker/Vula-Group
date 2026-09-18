@@ -498,6 +498,92 @@ async def assign_task(tenant_id: str, task_id: str, assignee_name: str) -> dict:
     return {"task_id": task_id, "assigned_to": member.get("username"), "assignee_id": member["id"]}
 
 
+# ── ClickUp Docs (v3 API — a structurally separate surface from everything above) ──
+# 2026-09-18: everything above talks to ClickUp's v2 REST API (tasks/comments/lists/webhooks).
+# Docs live under a different, v3 base URL entirely — tasks and Docs are not the same feature
+# in ClickUp's own API design. `authorize_url` (vula/api/clickup.py) requests no explicit OAuth
+# `scope` param, so the existing token already carries whatever access level the ClickUp app
+# itself was approved for (ClickUp's OAuth model is coarse-grained, not per-scope like Google/
+# Microsoft) — in practice this means an already-connected tenant should not need to re-consent
+# for Docs access, but every call below still fails closed (empty list / None, never raises past
+# this module) so a tenant whose token genuinely lacks Docs access degrades gracefully rather
+# than breaking the sync loop for their tasks, which are unrelated.
+_BASE_V3 = "https://api.clickup.com/api/v3"
+
+
+async def list_docs(tenant_id: str) -> list[dict]:
+    """List every Doc in the tenant's ClickUp workspace. Returns [] on any failure (not
+    connected, no team_id, the token can't see Docs, a transient API error) — never raises,
+    since this feeds the best-effort KB sync loop, not a user-facing tool reply."""
+    try:
+        creds = _creds_or_raise(tenant_id)
+    except Exception:
+        return []
+    team_id = creds.get("team_id")
+    if not team_id:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(f"{_BASE_V3}/workspaces/{team_id}/docs",
+                                 headers=_headers(creds["token"]))
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        logger.debug("ClickUp list_docs failed for %s: %s", tenant_id, exc)
+        return []
+    docs = data if isinstance(data, list) else data.get("docs", [])
+    return [{"id": d.get("id"), "name": d.get("name") or "Untitled"} for d in docs if d.get("id")]
+
+
+async def list_pages(tenant_id: str, doc_id: str) -> list[dict]:
+    """List a Doc's pages, WITH content (content_format=text/md pulls it in the same call —
+    avoids an extra round trip per page). Returns [] on any failure, same fail-closed shape as
+    list_docs."""
+    try:
+        creds = _creds_or_raise(tenant_id)
+    except Exception:
+        return []
+    team_id = creds.get("team_id")
+    if not team_id:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(
+                f"{_BASE_V3}/workspaces/{team_id}/docs/{doc_id}/pages",
+                headers=_headers(creds["token"]), params={"content_format": "text/md"})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        logger.debug("ClickUp list_pages failed for %s/%s: %s", tenant_id, doc_id, exc)
+        return []
+    pages = data if isinstance(data, list) else data.get("pages", [])
+    return [{"id": p.get("id"), "name": p.get("name") or "Untitled page",
+            "content": p.get("content") or ""} for p in pages if p.get("id")]
+
+
+async def get_page_content(tenant_id: str, doc_id: str, page_id: str) -> Optional[str]:
+    """One page's content directly — for a caller that already has a specific page id (e.g. a
+    tool responding to 'what does the X doc say') rather than sweeping every page via
+    list_pages. Returns None on any failure."""
+    try:
+        creds = _creds_or_raise(tenant_id)
+    except Exception:
+        return None
+    team_id = creds.get("team_id")
+    if not team_id:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(
+                f"{_BASE_V3}/workspaces/{team_id}/docs/{doc_id}/pages/{page_id}",
+                headers=_headers(creds["token"]), params={"content_format": "text/md"})
+            r.raise_for_status()
+            return r.json().get("content") or ""
+    except Exception as exc:
+        logger.debug("ClickUp get_page_content failed for %s/%s/%s: %s", tenant_id, doc_id, page_id, exc)
+        return None
+
+
 async def process_all_clickup_sync() -> int:
     """Sync every connected tenant's ClickUp lists into their knowledge base (called by the
     scheduled background loop, _clickup_sync_loop in vula/api/server.py — mirrors
