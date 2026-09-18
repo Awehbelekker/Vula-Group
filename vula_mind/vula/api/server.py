@@ -1163,6 +1163,8 @@ async def _try_acquire_or_renew_scheduler_lock() -> bool:
             log.warning("scheduler lock self-renew returned no rows (holder=%s, "
                         "prev_expires_at=%s, requested_expires_at=%s) — treating as lost",
                         holder, row.get("expires_at"), expires)
+            from core.sentry_utils import note_scheduler_lock_flap
+            note_scheduler_lock_flap(holder, row.get("expires_at") or "", expires)
         return won
     except Exception as exc:
         log.warning("scheduler lock renew failed: %s", exc)
