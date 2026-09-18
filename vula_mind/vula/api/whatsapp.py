@@ -2197,15 +2197,23 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
         low = text.lower()
 
         # Answering "company card or your own money?" on the latest unresolved claim.
-        if any(k in low for k in ("company", "own", "personal", "my card", "my money", "cash")):
+        # 2026-09-18: real incident — "Can you give me a breakdown on all jackhammer" was read as
+        # an "own money" answer because "own" is a substring of "breakdown", silently mutated an
+        # unrelated claim's paid_with, and the sender's actual request never reached the agent.
+        # Word-boundary match, and skip entirely when the message is request-shaped (a question
+        # or addressed at Vula) — same guard _looks_like_purpose_attempt already applies below.
+        _paid_with_kw = re.search(r"\b(company|own|personal|my card|my money|cash)\b", low)
+        if _paid_with_kw and not (text.endswith("?") or _REQUEST_SHAPED.match(text)
+                                   or _ADDRESSES_ASSISTANT.search(text)):
             rows = (service._client().table("commerce_expenses").select("*")
                     .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
                     .eq("status", "submitted").is_("paid_with", "null")
                     .order("updated_at", desc=True).limit(1).execute().data or [])
             if rows:
                 claim = rows[0]
-                is_company = "company" in low
-                paid_with = "company_card" if is_company else ("cash" if "cash" in low else "personal")
+                is_company = bool(re.search(r"\bcompany\b", low))
+                paid_with = ("company_card" if is_company
+                             else ("cash" if re.search(r"\bcash\b", low) else "personal"))
                 service._client().table("commerce_expenses").update(
                     {"paid_with": paid_with, "reimbursable": not is_company,
                      "updated_at": service._now()}).eq("id", claim["id"]).execute()

@@ -14,11 +14,35 @@ and the two loops never collide on the same row.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
 PENDING = ("default", "asked")
+
+
+# Guards against the same bug class as vula/api/whatsapp.py's _looks_like_purpose_attempt: a real
+# request/question from the sender must never be swallowed as the answer to an outstanding review
+# question. 2026-09-18: with a bank-review question outstanding, "Can you look up all invoice for
+# jackhammer" and "Through the emails..." were both eaten by the name/order-number search below
+# instead of reaching commerce_admin's find_document tool, where the actual answer lives.
+_REQUEST_SHAPED = re.compile(
+    r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
+    r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
+    r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
+    r"forward|schedule|arrange|"
+    r"kry|stuur|wys|maak|soek|skryf)\b",
+    re.IGNORECASE,
+)
+_ADDRESSES_ASSISTANT = re.compile(r"\b(me|us|you|your|yours)\b", re.IGNORECASE)
+
+
+def _is_request_shaped(text: str) -> bool:
+    """True when `text` reads as a request/question aimed at Vula rather than a short direct
+    answer (a category, order number, customer name, yes/no) to an outstanding review prompt."""
+    t = (text or "").strip()
+    return bool(t.endswith("?") or _REQUEST_SHAPED.match(t) or _ADDRESSES_ASSISTANT.search(t))
 
 
 def _client():
@@ -97,7 +121,7 @@ async def handle_answer(tenant_id: str, text: str) -> Optional[str]:
     """If a review question is outstanding, treat `text` as its answer: allocate, learn,
     and return the reply (confirmation + next question). None = not a review answer."""
     text = (text or "").strip()
-    if not text or len(text) > 60:
+    if not text or len(text) > 60 or _is_request_shaped(text):
         return None
     db = _client()
     try:
@@ -334,7 +358,7 @@ async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
     customer name it's for. Returns the reply (confirmation + next question), or None if this
     wasn't a client-matching answer."""
     text = (text or "").strip()
-    if not text or len(text) > 60:
+    if not text or len(text) > 60 or _is_request_shaped(text):
         return None
     db = _client()
     # A supplier proof of payment (money OUT) is asked about the same way but settles a bill,
