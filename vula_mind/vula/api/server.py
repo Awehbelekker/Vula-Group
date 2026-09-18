@@ -985,6 +985,29 @@ async def _email_sync_loop() -> None:
         await _asyncio.sleep(60 * 60)   # hourly — email isn't time-critical; saves AI cost
 
 
+async def _clickup_sync_loop() -> None:
+    """Auto-sync connected ClickUp workspaces into each tenant's knowledge base every hour.
+
+    2026-09-18: sync_tenant_clickup_kb (vula/api/clickup.py) already did the right thing but
+    was only ever reachable via its own HTTP route, which nothing called — ClickUp content
+    never actually reached the KB in practice, so a question answerable from a ClickUp task
+    only worked if the model happened to route to clickup_admin's live-API tools instead.
+    Mirrors _email_sync_loop's shape exactly; incremental freshness for comments/new tasks
+    is also wired directly into the webhook handler (_handle_non_status_event) for anyone
+    asking sooner than the next hourly sweep."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(50)  # settle on boot
+    while True:
+        try:
+            from vula.clickup.service import process_all_clickup_sync
+            n = await process_all_clickup_sync()
+            if n:
+                log.info("ClickUp KB sync processed %d list(s)", n)
+        except Exception as exc:
+            log.warning("ClickUp sync loop error: %s", exc)
+        await _asyncio.sleep(60 * 60)   # hourly — matches email's cadence
+
+
 async def _recurring_invoices_loop() -> None:
     """Generate due recurring invoices once a day."""
     import asyncio as _asyncio
@@ -1115,6 +1138,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_call_sheet_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_expense_sheet_loop()))

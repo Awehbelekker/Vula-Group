@@ -244,11 +244,16 @@ async def connect(body: ConnectIn) -> dict:
 
 # ── Sync ClickUp projects into the tenant's knowledge base ────────────────────
 
-@router.post("/sync-kb/{tenant_id}")
-async def sync_kb(tenant_id: str) -> dict:
+async def sync_tenant_clickup_kb(tenant_id: str) -> dict:
     """Pull the tenant's ClickUp lists + their tasks into the RAG knowledge base
     so the AI can answer questions about live projects (e.g. 'what's happening on
     HPC Bokaap?'). Re-runnable — re-ingests each list under a stable doc id.
+
+    2026-09-18: this used to be reachable only via the /sync-kb HTTP route below, which had no
+    caller anywhere (no cron job, no onboarding hook, no UI trigger) — ClickUp content never
+    actually reached the KB in practice. Extracted into a plain function so
+    vula.clickup.service.process_all_clickup_sync (the new scheduled loop, see
+    _clickup_sync_loop in vula/api/server.py) can call the same logic the route does.
     """
     creds = get_tenant_clickup_creds(tenant_id)
     if not creds:
@@ -286,6 +291,12 @@ async def sync_kb(tenant_id: str) -> dict:
         except Exception as exc:
             log.warning("KB sync ingest failed for list %s: %s", lid, exc)
     return {"tenant_id": tenant_id, "synced_lists": synced, "chunks_added": chunks}
+
+
+@router.post("/sync-kb/{tenant_id}")
+async def sync_kb(tenant_id: str) -> dict:
+    """HTTP entry point — thin wrapper, see sync_tenant_clickup_kb for the actual logic."""
+    return await sync_tenant_clickup_kb(tenant_id)
 
 
 # ── Inbound webhook (ClickUp → Vula) ──────────────────────────────────────────
@@ -464,6 +475,28 @@ async def _handle_non_status_event(tenant_id: str, event: str, task_id: str,
     except Exception as exc:
         log.warning("ClickUp notify failed for %s: %s", tenant_id, exc)
         return {"status": "error", "event": event}
+
+    # 2026-09-18: near-real-time KB freshness for the two events most likely to change what
+    # a question about this task should find — a new task existing at all, or a new comment
+    # adding detail. The scheduled sweep (process_all_clickup_sync, hourly) is the backstop;
+    # this closes the gap for anyone asking sooner than that. Best-effort — a KB miss here
+    # never affects the WhatsApp notification already sent above.
+    if event in ("taskCommentPosted", "taskCreated") and task:
+        try:
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            lines = [f"ClickUp task: {title}", f"Status: {task.get('status') or 'open'}"]
+            if task.get("assignees"):
+                lines.append(f"Assigned to: {', '.join(task['assignees'])}")
+            if task.get("description"):
+                lines.append(f"Description: {task['description']}")
+            if event == "taskCommentPosted" and msg:
+                lines.append(msg.split("\n\n", 1)[-1].strip('"'))
+            await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
+                content="\n".join(lines), filename=f"{title}.txt".replace("/", "-"),
+                doc_id=f"clickup_task_{task_id}")
+        except Exception as exc:
+            log.debug("ClickUp incremental KB ingest skipped for %s: %s", task_id, exc)
+
     return {"status": "ok", "event": event, "notified": True}
 
 

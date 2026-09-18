@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import httpx
 
-from vula.clickup.credentials import get_tenant_clickup_creds, default_list_id
+from vula.clickup.credentials import get_tenant_clickup_creds, default_list_id, _client
 
 logger = logging.getLogger(__name__)
 
@@ -496,3 +496,28 @@ async def assign_task(tenant_id: str, task_id: str, assignee_name: str) -> dict:
         )
         r.raise_for_status()
     return {"task_id": task_id, "assigned_to": member.get("username"), "assignee_id": member["id"]}
+
+
+async def process_all_clickup_sync() -> int:
+    """Sync every connected tenant's ClickUp lists into their knowledge base (called by the
+    scheduled background loop, _clickup_sync_loop in vula/api/server.py — mirrors
+    vula.email_imap.sync.process_all_email_sync's shape).
+
+    2026-09-18: sync_tenant_clickup_kb (vula/api/clickup.py) already did the right thing but
+    was only ever reachable via its own HTTP route, which nothing called — ClickUp content
+    never actually reached the KB in practice. This is what makes it happen on its own."""
+    from vula.api.clickup import sync_tenant_clickup_kb
+    try:
+        rows = (_client().table("vula_clickup_accounts").select("tenant_id")
+                .eq("status", "connected").execute().data or [])
+    except Exception:
+        return 0
+    total = 0
+    for r in rows:
+        tenant_id = r["tenant_id"]
+        try:
+            res = await sync_tenant_clickup_kb(tenant_id)
+            total += res.get("synced_lists", 0) or 0
+        except Exception as exc:
+            logger.warning("ClickUp KB sync failed for %s: %s", tenant_id, exc)
+    return total
