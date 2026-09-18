@@ -43,6 +43,12 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   })
   const [err, setErr] = useState('')
   const [prefill, setPrefill] = useState(null)   // signup → pre-filled "+ New tenant" form (P1.4)
+  // Go-live readiness pass (Phase 3.4): create_tenant only sets core config — WhatsApp
+  // connection, KB seeding, and branding remain separate manual steps a master admin has to
+  // remember to do afterward. The existing Onboard tab's 9-step checklist already covers all
+  // of that; this just gets a master admin straight there for the tenant they JUST created,
+  // instead of leaving them on the Tenants tab with nothing pointing at what's still missing.
+  const [onboardSelect, setOnboardSelect] = useState(null)
   // Lightweight per-tenant drill-in (IA overhaul 2026-07-22) — replaces the whole panel body
   // while active. URL-addressable (2026-09-16): #/master/tenant/{id} so a support-ticket link
   // can point straight at a tenant's detail view, and the browser back button steps out of it
@@ -74,8 +80,10 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
     <div style={{ fontFamily: 'system-ui', color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
       <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
-      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)} />}
-      {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }} />}
+      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
+        onCreated={(tenantId) => { setOnboardSelect(tenantId); setTab('onboard') }} />}
+      {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
+        selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} />}
       {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'users' && <UsersPanel onError={setErr} />}
@@ -86,7 +94,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
 }
 
 /* ── Onboarding cockpit — guided go-live checklist per tenant (UI overhaul P3) ── */
-function OnboardPanel({ onError, onOpenTenant, onProvision }) {
+function OnboardPanel({ onError, onOpenTenant, onProvision, selectTenantId, onConsumeSelect }) {
   const [tenants, setTenants] = useState([])
   const [selected, setSelected] = useState('')
   const [setup, setSetup] = useState(null)
@@ -100,6 +108,12 @@ function OnboardPanel({ onError, onOpenTenant, onProvision }) {
     }).catch(e => onError(e.message))
     authFetch('/v1/admin/signups?limit=50').then(d => setSignups(d.signups || [])).catch(() => {})
   }, [])  // eslint-disable-line
+
+  useEffect(() => {
+    if (!selectTenantId) return
+    setSelected(selectTenantId)
+    onConsumeSelect && onConsumeSelect()
+  }, [selectTenantId])  // eslint-disable-line
 
   useEffect(() => {
     if (!selected) return
@@ -178,7 +192,7 @@ function OnboardPanel({ onError, onOpenTenant, onProvision }) {
 }
 
 /* ── Tenants & provisioning ─────────────────────────────────────────────────── */
-function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumePrefill }) {
+function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumePrefill, onCreated }) {
   const [rows, setRows] = useState([])
   const [registry, setRegistry] = useState({ business_types: [], modules: [] })
   const [creating, setCreating] = useState(false)
@@ -213,7 +227,11 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
         body: JSON.stringify(form),
       })
       if (r.error) onError(r.error)
-      else { setCreating(false); setForm({ tenant_id: '', display_name: '', business_type: 'retail' }); load() }
+      else {
+        const newTenantId = form.tenant_id
+        setCreating(false); setForm({ tenant_id: '', display_name: '', business_type: 'retail' }); load()
+        onCreated && onCreated(newTenantId)
+      }
     } catch (e) { onError(e.message) } finally { setBusy(false) }
   }
 
