@@ -138,6 +138,22 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["query"]},
     }},
     {"type": "function", "function": {
+        "name": "email_thread_summary",
+        "description": "Summarize the actual CONTENT of every email matching a supplier/sender "
+                       "name, company, or topic — reads the real email bodies (HTML included, "
+                       "not just plain text), never just attachments — and returns who it's "
+                       "with, the current status, and outstanding action items. Use this for "
+                       "'summarize all mail from X', 'what's going on with X', 'what still "
+                       "needs to be done for X' — a request about the CORRESPONDENCE itself, "
+                       "not documents already filed (use find_document for 'what invoices do "
+                       "we have from X'). Needs a connected email account — if none is "
+                       "connected, say so plainly rather than guessing from find_document.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Supplier/sender name, company, or "
+                      "topic — e.g. 'Gardens Handiman Centre', 'jackhammer', 'the Regan order'."}},
+            "required": ["query"]},
+    }},
+    {"type": "function", "function": {
         "name": "add_expense",
         "description": "Record a business expense in Rands.",
         "parameters": {"type": "object", "properties": {
@@ -1380,6 +1396,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
             if name == "find_document":      return await self._find_document(tid, args)
+            if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
@@ -2269,6 +2286,21 @@ class CommerceAdminSkill(BaseSkill):
         fallback), shared with email_admin.py's identical tool so both answer consistently."""
         return await service.find_filed_document(
             tid, args.get("query") or "", category=(args.get("category") or "").strip() or None)
+
+    async def _email_thread_summary(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Summarize the actual correspondence (not just filed attachments) with a supplier/
+        sender — delegates to vula.email_imap.service.summarize_correspondence, shared with
+        email_admin.py's identical tool. Commerce-mode owner/staff messages reach commerce_admin
+        directly (never the HRM keyword router email_admin normally answers through — see
+        _find_document above for the identical reason it's duplicated here), so without this a
+        commerce tenant's owner could never reach the capability at all."""
+        from vula.email_imap.credentials import get_email_creds
+        creds = get_email_creds(tid)
+        if not creds:
+            return {"error": "No email account is connected yet. Connect a mailbox (Gmail, "
+                             "Outlook, or IMAP like GoDaddy) in Settings first."}
+        from vula.email_imap import service as email_service
+        return await email_service.summarize_correspondence(creds, args.get("query") or "")
 
     async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
         from vula.api.commerce import _aggregate_customers, _norm_phone

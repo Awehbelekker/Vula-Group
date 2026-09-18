@@ -99,4 +99,4 @@ async def test_find_document_query_failure_returns_error_not_raise(skill):
 def test_system_prompt_tells_model_to_try_find_document_before_email_search():
     skill = EmailAdminSkill()
     prompt = skill._system("draft")
-    assert "call find_document first, not email_search" in prompt
+    assert "call find_document, not email_thread_summary or email_search" in prompt
