@@ -76,6 +76,12 @@ def _map_tenant_user(user_id: str, tenant: str, role: str) -> None:
     if existing:
         db.table("vula_tenant_users").update({"role": login_role}).eq("user_id", user_id).eq("tenant_id", tenant).execute()
     else:
+        # Plan limit (go-live readiness pass, Phase 4.2) — only a genuinely NEW seat is gated;
+        # re-inviting or changing an existing member's role (the `existing` branch above) never
+        # consumes an additional one. Raises PlanLimitError on breach — create_user (the only
+        # caller) catches it and reports the limit instead of creating the tenant_users row.
+        from vula.commerce.plan_limits import check_seat_quota
+        check_seat_quota(tenant)
         db.table("vula_tenant_users").insert({"user_id": user_id, "tenant_id": tenant, "role": login_role}).execute()
 
 
@@ -91,6 +97,7 @@ class CreateUserIn(BaseModel):
 async def create_user(tenant: str, body: CreateUserIn,
                       identity: dict = Depends(require_tenant_actor)) -> dict:
     """Create (or attach) a login for this tenant and return a one-time temp password."""
+    from vula.commerce.plan_limits import PlanLimitError
     temp = secrets.token_urlsafe(9)
     r = await _auth_admin("POST", "/users", {
         "email": body.email, "password": temp, "email_confirm": True,
@@ -108,6 +115,8 @@ async def create_user(tenant: str, body: CreateUserIn,
 
     try:
         _map_tenant_user(user_id, tenant, body.role)
+    except PlanLimitError as exc:
+        return {"error": str(exc)}
     except Exception as exc:
         log.warning("tenant_users map failed: %s", exc)
 
