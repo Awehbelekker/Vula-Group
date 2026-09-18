@@ -136,3 +136,44 @@ async def test_assign_project_posts_to_finances_and_learns():
     mock_post.assert_called_once_with(
         "digg-demo", "Bokaap Reno", {"amount": 1000}, "kb1", "invoice.pdf", "s", "Invoice")
     assert result["learned_signals"] == 2
+
+
+# ── plan limit gating (go-live readiness pass, Phase 4.1) ──────────────────────
+
+@pytest.mark.asyncio
+async def test_file_document_blocked_by_plan_limit_returns_no_id():
+    from vula.commerce.plan_limits import PlanLimitError
+
+    with (
+        patch("vula.commerce.plan_limits.check_document_quota",
+              side_effect=PlanLimitError("You've reached the 25-document limit on Starter — "
+                                          "upgrade to Growth for unlimited document intelligence.")),
+    ):
+        row = await file_document(
+            "digg-demo", filename="invoice.pdf", data=None, content_type="application/pdf",
+            category="Invoice", source="email", status="pending_project",
+        )
+
+    assert "id" not in row
+    assert row["plan_limit_reached"] is True
+    assert "upgrade to Growth" in row["error"]
+
+
+@pytest.mark.asyncio
+async def test_file_document_proceeds_normally_when_quota_check_passes():
+    mock_table = MagicMock()
+    mock_table.upsert.return_value.execute.return_value = MagicMock(data=[{"id": "row1"}])
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    with (
+        patch("vula.commerce.plan_limits.check_document_quota"),  # no-op, doesn't raise
+        patch("vula.integrations.doc_filing._client", return_value=mock_db),
+    ):
+        row = await file_document(
+            "digg-demo", filename="invoice.pdf", data=None, content_type="application/pdf",
+            category="Invoice", source="email", status="pending_project",
+        )
+
+    assert row["id"] == "row1"
+    assert "plan_limit_reached" not in row

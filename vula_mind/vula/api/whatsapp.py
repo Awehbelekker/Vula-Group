@@ -2769,6 +2769,12 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 note = (f"📂 Which project is this for?{hint_txt} "
                         f"Reply with the project name and I'll file it (or 'skip').")
 
+        # Plan limit (go-live readiness, Phase 4.1) — file_document() returns no "id" and a
+        # displayable error rather than raising; override whatever `note` was built above so a
+        # Starter tenant at the cap sees the real reason instead of a false "Filed under X".
+        if row.get("plan_limit_reached"):
+            note = f"📂 {row.get('error')}"
+
         unverified = (fields or {}).get("_unverified_figures")
         if not already_committed and category in _FINANCIAL_DOC_CATEGORIES:
             try:
