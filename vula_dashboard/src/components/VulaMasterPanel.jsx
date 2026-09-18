@@ -538,10 +538,13 @@ function UsagePanel({ onError, onViewDetail }) {
     <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
       <table style={table}>
         <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
-          {['Tenant', 'AI calls (14d)', 'AI cost', 'Infra cost/day', 'Vectors', 'Storage', 'Spend cap'].map(x => <th key={x} style={th}>{x}</th>)}
+          {['Tenant', 'AI calls (14d)', 'AI cost', 'Infra cost/day', 'Vectors', 'Storage', 'Spend cap', 'Documents', 'Seats'].map(x => <th key={x} style={th}>{x}</th>)}
         </tr></thead>
         <tbody>
-          {tenants.map(([tid, t]) => (
+          {tenants.map(([tid, t]) => {
+            const docOver = t.doc_cap != null && (t.doc_count || 0) >= t.doc_cap
+            const seatOver = t.seat_cap != null && (t.seat_count || 0) >= t.seat_cap
+            return (
             <tr key={tid} style={{ borderTop: `1px solid ${C.border}` }}>
               <td style={{ ...td, fontWeight: 600 }}>
                 {onViewDetail ? <button onClick={() => onViewDetail(tid)} style={miniBtn}>{tid}</button> : tid}
@@ -554,9 +557,15 @@ function UsagePanel({ onError, onViewDetail }) {
               <td style={{ ...td, color: t.capped_today ? C.red : C.muted, fontWeight: t.capped_today ? 600 : 400 }}>
                 {t.spend_cap_usd != null ? `$${Number(t.spend_cap_usd).toFixed(2)}/day${t.capped_today ? ' · CAPPED TODAY' : ''}` : 'uncapped'}
               </td>
+              <td style={{ ...td, color: docOver ? C.red : C.text, fontWeight: docOver ? 600 : 400 }}>
+                {t.doc_count ?? 0}{t.doc_cap != null ? ` / ${t.doc_cap}` : ' / ∞'}
+              </td>
+              <td style={{ ...td, color: seatOver ? C.red : C.text, fontWeight: seatOver ? 600 : 400 }}>
+                {t.seat_count ?? 0}{t.seat_cap != null ? ` / ${t.seat_cap}` : ' / ∞'}
+              </td>
             </tr>
-          ))}
-          {!tenants.length && <tr><td style={td} colSpan={7}>No usage recorded in the last 14 days.</td></tr>}
+          )})}
+          {!tenants.length && <tr><td style={td} colSpan={9}>No usage recorded in the last 14 days.</td></tr>}
         </tbody>
       </table>
     </div>

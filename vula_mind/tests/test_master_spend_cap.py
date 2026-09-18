@@ -51,8 +51,12 @@ async def test_master_usage_surfaces_cap_and_capped_today():
             m.select.return_value.gte.return_value.execute.return_value = MagicMock(data=[])
         elif name == "vula_tenant_config":
             m.select.return_value.execute.return_value = MagicMock(
-                data=[{"tenant_id": "digg-demo", "spend_cap_usd": 2.0}]
+                data=[{"tenant_id": "digg-demo", "spend_cap_usd": 2.0, "plan": "starter"}]
             )
+        elif name == "vula_filed_documents":
+            m.select.return_value.execute.return_value = MagicMock(data=[])
+        elif name == "vula_tenant_users":
+            m.select.return_value.in_.return_value.execute.return_value = MagicMock(data=[])
         return m
 
     mock_db.table.side_effect = table
@@ -74,6 +78,10 @@ async def test_master_usage_omits_cap_fields_when_unset():
             m.select.return_value.gte.return_value.execute.return_value = MagicMock(data=[])
         elif name == "vula_tenant_config":
             m.select.return_value.execute.return_value = MagicMock(data=[])
+        elif name == "vula_filed_documents":
+            m.select.return_value.execute.return_value = MagicMock(data=[])
+        elif name == "vula_tenant_users":
+            m.select.return_value.in_.return_value.execute.return_value = MagicMock(data=[])
         return m
 
     mock_db.table.side_effect = table
@@ -81,3 +89,44 @@ async def test_master_usage_omits_cap_fields_when_unset():
         result = await master.master_usage()
 
     assert result["per_tenant"] == {}
+
+
+@pytest.mark.asyncio
+async def test_master_usage_surfaces_document_and_seat_plan_usage():
+    """Go-live readiness pass Phase 4.3: /master's cost view must also show who's near/over
+    their advertised plan limits (doc_count/doc_cap, seat_count/seat_cap), not just spend."""
+    mock_db = MagicMock()
+
+    def table(name):
+        m = MagicMock()
+        if name in ("vula_ai_usage", "vula_infra_snapshot"):
+            m.select.return_value.gte.return_value.execute.return_value = MagicMock(data=[])
+        elif name == "vula_tenant_config":
+            m.select.return_value.execute.return_value = MagicMock(
+                data=[{"tenant_id": "digg-demo", "plan": "starter"},
+                      {"tenant_id": "off-the-hook", "plan": "growth"}]
+            )
+        elif name == "vula_filed_documents":
+            m.select.return_value.execute.return_value = MagicMock(
+                data=[{"tenant_id": "digg-demo"}] * 26
+            )
+        elif name == "vula_tenant_users":
+            m.select.return_value.in_.return_value.execute.return_value = MagicMock(
+                data=[{"tenant_id": "digg-demo", "role": "owner"}]
+            )
+        return m
+
+    mock_db.table.side_effect = table
+    with patch("vula.api.master._client", return_value=mock_db):
+        result = await master.master_usage()
+
+    digg = result["per_tenant"]["digg-demo"]
+    assert digg["doc_count"] == 26
+    assert digg["doc_cap"] == 25
+    assert digg["seat_count"] == 1
+    assert digg["seat_cap"] == 2
+
+    oth = result["per_tenant"]["off-the-hook"]
+    assert oth["doc_count"] == 0
+    assert oth["doc_cap"] is None  # unlimited on Growth
+    assert oth["seat_cap"] == 5

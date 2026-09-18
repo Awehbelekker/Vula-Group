@@ -519,6 +519,26 @@ async def master_usage(days: int = 14):
         t["spend_cap_usd"] = float(cap)
         t["capped_today"] = today_spend.get(tid, 0.0) >= float(cap)
 
+    # Document/seat plan-limit usage (Phase 4.3) — reuses plan_limits' cap constants so this
+    # existing cost view also shows who's near/over their ADVERTISED plan limits (VulaOnboarding
+    # .jsx), not just spend. All-time totals, not day-windowed like the AI/infra data above.
+    from vula.commerce.plan_limits import SEAT_LIMITS, STARTER_DOCUMENT_LIMIT
+    plans = {r["tenant_id"]: (r.get("plan") or "starter").lower() for r in
+             (db.table("vula_tenant_config").select("tenant_id,plan").execute().data or [])}
+    doc_counts: dict[str, int] = {}
+    for r in (db.table("vula_filed_documents").select("tenant_id").execute().data or []):
+        doc_counts[r["tenant_id"]] = doc_counts.get(r["tenant_id"], 0) + 1
+    seat_counts: dict[str, int] = {}
+    for r in (db.table("vula_tenant_users").select("tenant_id,role")
+              .in_("role", ["owner", "staff"]).execute().data or []):
+        seat_counts[r["tenant_id"]] = seat_counts.get(r["tenant_id"], 0) + 1
+    for tid, plan in plans.items():
+        t = per_tenant.setdefault(tid, {"ai_cost_usd": 0.0, "calls": 0, "infra_cost_usd": 0.0})
+        t["doc_count"] = doc_counts.get(tid, 0)
+        t["doc_cap"] = STARTER_DOCUMENT_LIMIT if plan == "starter" else None
+        t["seat_count"] = seat_counts.get(tid, 0)
+        t["seat_cap"] = SEAT_LIMITS.get(plan, 2)
+
     return {"since": since, "per_tenant": per_tenant, "ai_daily": ai}
 
 
