@@ -551,8 +551,8 @@ DRAFT_TOOLS = [
         "name": "draft_letter",
         "description": (
             "Draft a professional business letter/proposal, put it on the business's branded "
-            "letterhead as a PDF, and send it back as a WhatsApp document. Optionally also save "
-            "it to the user's connected Google Drive."
+            "letterhead as a PDF (or a Word .docx — see output_format), and send it back as a "
+            "WhatsApp document. Optionally also save it to the user's connected Google Drive."
         ),
         "parameters": {"type": "object", "properties": {
             "document_type": {"type": "string", "enum": [
@@ -566,6 +566,10 @@ DRAFT_TOOLS = [
             "client_name": {"type": "string"},
             "recipient": {"type": "string", "description": "Who it's addressed to (name/address block)."},
             "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
+            "output_format": {"type": "string", "enum": ["pdf", "docx"],
+                "description": "'pdf' (default) or 'docx' (editable Word document). Only use "
+                               "'docx' when the request explicitly says Word/.docx/editable — "
+                               "never guess; a PDF is the right default for a finished document."},
         }, "required": ["document_type", "brief"]}}},
     {"type": "function", "function": {
         "name": "competitor_check",

@@ -32,8 +32,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "name": "draft_letter",
         "description": (
             "Draft a professional business letter/proposal, put it on the business's branded "
-            "letterhead as a PDF, and send it back as a WhatsApp document. Optionally also save "
-            "it to the user's connected Google Drive."
+            "letterhead as a PDF (or a Word .docx — see output_format), and send it back as a "
+            "WhatsApp document. Optionally also save it to the user's connected Google Drive."
         ),
         "parameters": {"type": "object", "properties": {
             "document_type": {"type": "string", "enum": [
@@ -47,6 +47,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "client_name": {"type": "string"},
             "recipient": {"type": "string", "description": "Who it's addressed to (name/address block)."},
             "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
+            "output_format": {"type": "string", "enum": ["pdf", "docx"],
+                "description": "'pdf' (default) or 'docx' (editable Word document). Only use "
+                               "'docx' when the request explicitly says Word/.docx/editable — "
+                               "never guess; a PDF is the right default for a finished document."},
             "project_value_zar": {"type": "number",
                 "description": "fee_proposal only: project/construction value in ZAR, if known."},
             "floor_area_m2": {"type": "number",
@@ -177,7 +181,7 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
     if extra_markdown:
         content = content + "\n\n" + extra_markdown
 
-    from vula.commerce.pdf import render_letter_pdf, merge_branding
+    from vula.commerce.pdf import render_letter_pdf, render_letter_docx, merge_branding
     from vula.commerce import service as commerce_service
     settings_row = await commerce_service.get_invoice_settings(tenant_id)
     branding = merge_branding(tenant_id, settings_row)
@@ -186,28 +190,42 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
     # kind, typed or otherwise. Best-effort real sender name (falls back to just the business
     # name); signature_url/signature_name (a captured signature image, migration 165) already
     # flow through tenant_profile=branding via merge_branding, no extra param needed here.
-    pdf_bytes = render_letter_pdf(
+    sign_off = await _resolve_sign_off(tenant_id, phone, branding)
+    render_kwargs = dict(
         tenant_id=tenant_id, body_markdown=content, doc_label=doc_config["label"],
         recipient=args.get("recipient"), subject=args.get("project_name"),
-        tenant_profile=branding, sign_off=await _resolve_sign_off(tenant_id, phone, branding),
+        tenant_profile=branding, sign_off=sign_off,
     )
+    # 'docx' is opt-in only — the model is told not to guess it, so any value other than the
+    # literal string "docx" (missing, None, a typo) safely defaults to pdf.
+    is_docx = args.get("output_format") == "docx"
+    if is_docx:
+        doc_bytes = render_letter_docx(**render_kwargs)
+        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ext = "docx"
+    else:
+        doc_bytes = render_letter_pdf(**render_kwargs)
+        content_type = "application/pdf"
+        ext = "pdf"
 
-    filename = f"{doc_config['label'].replace(' ', '_')}.pdf"
+    filename = f"{doc_config['label'].replace(' ', '_')}.{ext}"
     result: Dict[str, Any] = {"draft_id": draft_id, "document_type": doc_type,
-                              "word_count": word_count, "has_placeholders": has_placeholders}
+                              "word_count": word_count, "has_placeholders": has_placeholders,
+                              "output_format": ext}
 
     sent = False
     if phone:
         from vula.api.whatsapp import _send_invoice_document
         sent = await _send_invoice_document(
-            phone, pdf_bytes, filename, caption=doc_config["label"], tenant_id=tenant_id,
+            phone, doc_bytes, filename, caption=doc_config["label"], tenant_id=tenant_id,
+            content_type=content_type,
         )
     result["sent_via_whatsapp"] = sent
 
     if args.get("save_to_drive"):
         try:
             from vula.google import service as google_service
-            uploaded = await google_service.drive_upload(tenant_id, filename, "application/pdf", pdf_bytes)
+            uploaded = await google_service.drive_upload(tenant_id, filename, content_type, doc_bytes)
             result["drive"] = {"saved": True, "link": uploaded.get("webViewLink")}
         except Exception as exc:
             result["drive"] = {"saved": False, "reason": "Google not connected" if

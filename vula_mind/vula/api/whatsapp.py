@@ -5049,10 +5049,14 @@ async def _send_invoice_document(
     filename: str,
     caption: str = "",
     tenant_id: str = "",
+    content_type: str = "application/pdf",
 ) -> bool:
-    """Send a PDF as a WhatsApp document via the Meta Graph API.
+    """Send a document (PDF by default, or any other content_type — e.g. .docx) as a WhatsApp
+    document via the Meta Graph API. Despite the name/param ("pdf_bytes"), this sends whatever
+    bytes+content_type it's given; kept as `pdf_bytes` rather than renamed everywhere since PDF
+    is still the overwhelming majority caller.
 
-    The PDF is first uploaded to Meta's media endpoint, then delivered as a
+    The file is first uploaded to Meta's media endpoint, then delivered as a
     ``document`` message referencing the returned media id — this avoids needing
     a publicly reachable URL. Credentials are resolved per-tenant from Supabase,
     falling back to env vars, exactly like ``_send_reply``.
@@ -5076,8 +5080,8 @@ async def _send_invoice_document(
             upload = await client.post(
                 f"{base}/media",
                 headers={"Authorization": f"Bearer {creds['token']}"},
-                data={"messaging_product": "whatsapp", "type": "application/pdf"},
-                files={"file": (filename, pdf_bytes, "application/pdf")},
+                data={"messaging_product": "whatsapp", "type": content_type},
+                files={"file": (filename, pdf_bytes, content_type)},
             )
             upload.raise_for_status()
             media_id = upload.json().get("id")
