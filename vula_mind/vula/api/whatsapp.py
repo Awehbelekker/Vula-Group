@@ -52,6 +52,11 @@ _REJECT_RE = re.compile(
     re.IGNORECASE,
 )
 _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
+# POPIA right-to-access (2026-09-18) — deliberately narrow, same exact-phrase shape as
+# _DELETE_RE above, not a broad keyword match: a request this consequential (assembles and
+# emails a real data export) shouldn't fire on an unrelated message that happens to mention
+# "my data" in passing.
+_EXPORT_RE = re.compile(r"^\s*(export|(send|get)\s+my\s+data|my\s+data\s+export)\s*$", re.IGNORECASE)
 # 2026-09-17: extracted from _maybe_helper_escalation_answer's original inline regexes (same
 # "is this actually an answer, or a greeting / a new question" heuristic reused by
 # _maybe_capture_owner_correction below — pulled out rather than a third inline copy).
@@ -1072,6 +1077,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
+        return
+    if _EXPORT_RE.match(text):
+        await _handle_data_export(phone, tenant_id)
         return
 
     # Deterministic, IN-FLIGHT conversational state — checked BEFORE the sales_rep agent below.
@@ -3657,6 +3665,49 @@ async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
     )
 
 
+_EXPORT_FAILURE_REPLY = (
+    "Sorry, I couldn't put your data export together right now. "
+    "Email hello@vula.co.za and we'll send it to you directly."
+)
+
+
+async def _handle_data_export(phone: str, tenant_id: Optional[str]) -> None:
+    """POPIA right-to-access — assembles and emails the requester's own chat history + orders/
+    invoices for this tenant (vula/api/data_export.py). Fails closed: any failure gets the same
+    "email hello@vula.co.za" fallback _handle_data_deletion above already uses, never a partial
+    or silently-wrong export."""
+    if not tenant_id:
+        await _send_reply(phone, _EXPORT_FAILURE_REPLY, tenant_id)
+        return
+    logger.info("Data export request from %s (tenant=%s)", phone, tenant_id)
+    try:
+        from vula.api.data_export import send_data_export
+        result = await send_data_export(tenant_id, phone)
+    except Exception as exc:
+        logger.warning("data export failed for %s/%s: %s", tenant_id, phone, exc)
+        result = {"error": "unexpected"}
+
+    if result.get("sent"):
+        email = result.get("email", "")
+        masked = (email[:2] + "…" + email.split("@")[-1]) if "@" in email else email
+        await _send_reply(
+            phone,
+            f"✅ Your data export has been emailed to {masked}. "
+            "It includes your conversation history and your own orders/invoices only.",
+            tenant_id,
+        )
+        return
+    if result.get("error") == "no_email_on_file":
+        await _send_reply(
+            phone,
+            "I don't have an email address on file to send your data export to. "
+            "Email hello@vula.co.za and we'll send it to you directly.",
+            tenant_id,
+        )
+        return
+    await _send_reply(phone, _EXPORT_FAILURE_REPLY, tenant_id)
+
+
 async def _handle_task_complete(phone: str, tenant_id: str) -> None:
     """Mark the contractor's current in-progress task as awaiting sign-off."""
     from vula.models.field_ops import get_field_ops_db
@@ -5265,6 +5316,9 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # from a customer who receives broadcasts actually suppresses them.
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
+        return
+    if _EXPORT_RE.match(text):
+        await _handle_data_export(phone, tenant_id)
         return
 
     # Record implied marketing consent on first inbound (POPIA). Best-effort.

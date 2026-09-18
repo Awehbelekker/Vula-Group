@@ -456,3 +456,35 @@ async def send_invoice_email(
         "content": base64.b64encode(pdf_bytes).decode("ascii"),
     }]
     return await _send(to, subject, html, text, attachments=attachments)
+
+
+async def send_data_export_email(to: str, tenant_name: str, pdf_bytes: bytes) -> bool:
+    """POPIA "send me my data" export (vula/api/data_export.py) — a PDF summary of the
+    requester's own chat history and orders/invoices for one tenant, emailed as an attachment.
+    Email (not WhatsApp) chosen deliberately: cleaner for a larger payload, and "we've emailed it
+    to the address on file" doubles as identity confirmation."""
+    subject = f"{tenant_name} — your data export"
+    html = (
+        _HEADER
+        + '<tr><td style="padding:0 0 16px">'
+        + '<p style="margin:0;font-size:20px;font-weight:700;color:#2A2A2A;">Your data export</p>'
+        + '<p style="margin:8px 0 0;font-size:14px;color:#5A5A5A;line-height:1.6;">'
+        + f"Attached is a copy of the data {tenant_name} holds on your account: your "
+          "conversation history and your own orders/invoices. This does not include any other "
+          "customer's data."
+        + "</p></td></tr>"
+        + '<tr><td><p style="font-size:13px;color:#5A5A5A;line-height:1.6;">'
+          "Questions about this export, or want it deleted? Reply to this email."
+          "</p></td></tr>"
+        + _FOOTER
+    )
+    text = (
+        f"Attached is a copy of the data {tenant_name} holds on your account: your "
+        "conversation history and your own orders/invoices. This does not include any other "
+        "customer's data.\n\nQuestions about this export, or want it deleted? Reply to this email."
+    )
+    attachments = [{
+        "filename": "your-data-export.pdf",
+        "content": base64.b64encode(pdf_bytes).decode("ascii"),
+    }]
+    return await _send(to, subject, html, text, attachments=attachments)
