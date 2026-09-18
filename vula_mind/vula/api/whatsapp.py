@@ -411,7 +411,7 @@ async def receive_message(
                             # webhook timeout; blocking here is what causes the retry storm.
                             _run_bg(_handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
-                                content_sha=doc.get("sha256") or None,
+                                content_sha=doc.get("sha256") or None, route_mode=route_mode,
                             ), label="document_ingest")
 
                     elif msg_type in ("image", "video"):
@@ -1512,10 +1512,33 @@ async def _handle_image_or_video(
             if await _run_commerce_admin(phone, prompt, route_tenant):
                 return
     if not handled:
+        if route_mode == "commerce" and route_tenant:
+            # 2026-09-18: everyone who wasn't a sales rep used to fall straight into
+            # _handle_document_ingest, which (before its own fix) treated ANY sender on the
+            # tenant's line as admin — a real customer's photo got filed into the tenant KB
+            # under a fabricated admin identity. Check who's actually staff here too, so a
+            # genuine customer's photo gets a real destination (vision description → the
+            # customer-facing agent) instead of either outcome.
+            is_staff = (_is_tenant_owner(route_tenant, phone)
+                        or await _sender_is_sales_rep(phone, route_tenant))
+            if not is_staff:
+                if msg_type == "image":
+                    description = await _describe_photo_for_rep(media_id)
+                    effective_text = (f"{caption}\n\n[What's in the photo: {description}]"
+                                      if description else caption) or "[Sent a photo with no caption]"
+                    if await _run_commerce_assistant(phone, effective_text, route_tenant):
+                        return
+                await _send_reply(phone, (
+                    "Thanks for that! I'm not able to file documents on this line — if "
+                    "you're asking about an order or a product, just tell me what you're "
+                    "after 🙂"
+                ), route_tenant)
+                return
         if route_mode == "knowledge" or route_tenant or expense_intent:
             fname = caption or f"image-{msg_id}.jpg"
             await _handle_document_ingest(phone, media_id, fname, mime_type,
-                                         route_tenant_id=route_tenant, content_sha=content_sha)
+                                         route_tenant_id=route_tenant, content_sha=content_sha,
+                                         route_mode=route_mode)
         else:
             await _send_reply(phone, (
                 "Thanks for the photo! Ask your site manager to register you in Vula so it "
@@ -1526,17 +1549,36 @@ async def _handle_image_or_video(
 async def _handle_document_ingest(
     phone: str, media_id: str, filename: str, mime_type: str,
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
+    route_mode: Optional[str] = None,
 ) -> None:
     """Ingest a document/image sent by a tenant into their knowledge base.
 
-    On a tenant's dedicated line (route_tenant_id set) anyone may upload — the
-    number identifies the tenant. Otherwise the sender must be a registered
-    admin. PDFs, Word, Excel, plain text, and images are accepted.
+    On a knowledge-mode tenant's dedicated line (route_tenant_id set, route_mode
+    "knowledge") anyone may upload — there's no customer concept on that line, the number
+    identifies the tenant. On a COMMERCE-mode line, real customers share the number with
+    staff, so the sender's actual role is checked instead. Otherwise (no route_tenant_id)
+    the sender must be a registered admin. PDFs, Word, Excel, plain text, and images are
+    accepted.
     """
     logger.info("WhatsApp document from %s: %s (%s)", phone, filename, mime_type)
 
     if route_tenant_id:
-        # Dedicated tenant line — the number is the tenant; treat as admin.
+        if route_mode == "commerce":
+            # 2026-09-18: this used to treat ANY sender on a commerce tenant's line as admin
+            # — a real customer's photo/document got filed into the tenant KB under a
+            # fabricated admin identity, and the customer got an admin-flavoured reply
+            # ("I'll book it into your books"). Knowledge-mode lines keep the old
+            # "anyone may upload" behaviour below since there's no customer concept there.
+            is_staff = (_is_tenant_owner(route_tenant_id, phone)
+                        or await _sender_is_sales_rep(phone, route_tenant_id))
+            if not is_staff:
+                await _send_reply(phone, (
+                    "Thanks for that! I'm not able to file documents on this line — if "
+                    "you're asking about an order or a product, just tell me what you're "
+                    "after 🙂"
+                ), route_tenant_id)
+                return
+        # Dedicated tenant line, sender confirmed staff (or a knowledge-mode line): admin.
         tenant_id = route_tenant_id
         role = "admin"
     else:
