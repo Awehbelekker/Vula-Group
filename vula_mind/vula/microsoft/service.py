@@ -227,6 +227,8 @@ async def process_all_onedrive_sync() -> int:
                 .eq("status", "connected").execute().data or [])
     except Exception:
         return 0
+    from vula.integrations.sync_status import record_sync_result
+
     total = 0
     for r in rows:
         tenant_id = r["tenant_id"]
@@ -234,8 +236,10 @@ async def process_all_onedrive_sync() -> int:
             files = await list_recent_files(tenant_id)
         except Exception as exc:
             logger.warning("OneDrive recent-files listing failed for %s: %s", tenant_id, exc)
+            record_sync_result("vula_microsoft_accounts", tenant_id, ok=False, error=str(exc))
             continue
         if not files:
+            record_sync_result("vula_microsoft_accounts", tenant_id, ok=True)
             continue
         from vula.ingestion.pipeline import VulaIngestionPipeline
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
@@ -252,4 +256,8 @@ async def process_all_onedrive_sync() -> int:
                 total += 1
             except Exception as exc:
                 logger.warning("OneDrive sync ingest failed for %s/%s: %s", tenant_id, f.get("id"), exc)
+        # Tenant-level status reflects "did the sweep run", not "did every file succeed" — a
+        # per-file failure above is already individually logged; recording ok here matches the
+        # granularity the connect-status UI needs (is this tenant's sync alive at all).
+        record_sync_result("vula_microsoft_accounts", tenant_id, ok=True)
     return total

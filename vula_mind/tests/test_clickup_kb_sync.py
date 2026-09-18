@@ -112,6 +112,35 @@ async def test_process_all_clickup_sync_db_failure_returns_zero_not_raise():
     assert total == 0
 
 
+@pytest.mark.asyncio
+async def test_process_all_clickup_sync_records_status_per_tenant():
+    """Go-live readiness pass Phase 3.2: each tenant's sync outcome must be persisted (migration
+    169), not just logged — the dashboard's connect-status UI reads this to stop showing
+    "Connected" for a sync that's actually been failing."""
+    from vula.clickup.service import process_all_clickup_sync
+
+    mock_client = MagicMock()
+    mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = \
+        MagicMock(data=[{"tenant_id": "broken"}, {"tenant_id": "fine"}])
+
+    async def _fake_sync(tid):
+        if tid == "broken":
+            raise RuntimeError("clickup API down")
+        return {"tenant_id": tid, "synced_lists": 1, "chunks_added": 1}
+
+    with (
+        patch("vula.clickup.service._client", return_value=mock_client),
+        patch("vula.api.clickup.sync_tenant_clickup_kb", new=AsyncMock(side_effect=_fake_sync)),
+        patch("vula.integrations.sync_status.record_sync_result") as mock_record,
+    ):
+        await process_all_clickup_sync()
+
+    calls = {c.args[1]: c.kwargs for c in mock_record.call_args_list}
+    assert calls["broken"]["ok"] is False
+    assert "clickup API down" in calls["broken"]["error"]
+    assert calls["fine"]["ok"] is True
+
+
 # ── incremental webhook ingest (taskCreated / taskCommentPosted) ─────────────────
 
 @pytest.mark.asyncio

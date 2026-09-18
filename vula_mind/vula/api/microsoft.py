@@ -73,7 +73,8 @@ async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
 async def status(tenant_id: str) -> dict:
     try:
         rows = (_client().table("vula_microsoft_accounts")
-                .select("tenant_id,email,status,connected_at")
+                .select("tenant_id,email,status,connected_at,"
+                        "last_synced_at,last_sync_status,last_sync_error")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
     except Exception:
         rows = []

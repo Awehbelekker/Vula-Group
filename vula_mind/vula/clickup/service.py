@@ -598,12 +598,16 @@ async def process_all_clickup_sync() -> int:
                 .eq("status", "connected").execute().data or [])
     except Exception:
         return 0
+    from vula.integrations.sync_status import record_sync_result
+
     total = 0
     for r in rows:
         tenant_id = r["tenant_id"]
         try:
             res = await sync_tenant_clickup_kb(tenant_id)
             total += res.get("synced_lists", 0) or 0
+            record_sync_result("vula_clickup_accounts", tenant_id, ok=True)
         except Exception as exc:
             logger.warning("ClickUp KB sync failed for %s: %s", tenant_id, exc)
+            record_sync_result("vula_clickup_accounts", tenant_id, ok=False, error=str(exc))
     return total

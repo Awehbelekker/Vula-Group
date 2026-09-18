@@ -182,7 +182,8 @@ async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
 async def status(tenant_id: str) -> dict:
     try:
         res = (_client().table("vula_clickup_accounts")
-               .select("tenant_id,team_id,list_ids,status,connected_at")
+               .select("tenant_id,team_id,list_ids,status,connected_at,"
+                       "last_synced_at,last_sync_status,last_sync_error")
                .eq("tenant_id", tenant_id).limit(1).execute())
         rows = res.data or []
     except Exception:

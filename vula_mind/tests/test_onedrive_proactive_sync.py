@@ -202,3 +202,34 @@ async def test_sync_one_file_download_failure_does_not_stop_the_rest(tmp_path, m
 
     assert total == 1
     mock_pipeline.ingest_file.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sync_records_status_per_tenant(tmp_path, monkeypatch):
+    """Go-live readiness pass Phase 3.2: a tenant whose recent-files listing fails must be
+    recorded as an error (migration 169), and a tenant whose sweep completes (even with no
+    files to ingest) as ok — the dashboard's connect-status UI reads this."""
+    from vula.microsoft.service import process_all_onedrive_sync
+    from config import settings
+    monkeypatch.setattr(settings, "upload_dir", tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = \
+        MagicMock(data=[{"tenant_id": "broken"}, {"tenant_id": "quiet"}])
+
+    async def _fake_list(tenant_id):
+        if tenant_id == "broken":
+            raise RuntimeError("graph api down")
+        return []  # nothing new for "quiet" — still a successful sweep
+
+    with (
+        patch("vula.microsoft.credentials._client", return_value=mock_client),
+        patch("vula.microsoft.service.list_recent_files", side_effect=_fake_list),
+        patch("vula.integrations.sync_status.record_sync_result") as mock_record,
+    ):
+        await process_all_onedrive_sync()
+
+    calls = {c.args[1]: c.kwargs for c in mock_record.call_args_list}
+    assert calls["broken"]["ok"] is False
+    assert "graph api down" in calls["broken"]["error"]
+    assert calls["quiet"]["ok"] is True
