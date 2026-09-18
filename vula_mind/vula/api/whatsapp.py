@@ -5651,6 +5651,23 @@ _STAFF_MENU_BY_MODULE = {
 }
 
 
+def _tenant_menu_overrides(tenant_id: str) -> dict:
+    """{menu_key: {"title": ..., "command": ...}} for this tenant (migration 170). Fail-open to
+    {} on any error or DB miss — a broken/missing override table must never break the menu
+    entirely, only fall back to the hardcoded defaults it's overriding."""
+    try:
+        from vula.commerce import service as _menu_cs
+        rows = (_menu_cs._client().table("vula_tenant_menu_overrides")
+                .select("menu_key,title,command").eq("tenant_id", tenant_id).execute().data or [])
+        if not isinstance(rows, list):
+            return {}
+        return {r["menu_key"]: {"title": r.get("title"), "command": r.get("command")}
+                for r in rows if r.get("menu_key")}
+    except Exception as exc:
+        logger.debug("tenant menu overrides skipped (run migration 170?): %s", exc)
+        return {}
+
+
 async def _send_staff_capability_menu(phone: str, tenant_id: str) -> bool:
     """A tappable menu of example commands for a first-time owner/staff member — mirrors
     _send_commerce_welcome's proven interactive-list pattern for customers. Tapping a row
@@ -5666,14 +5683,20 @@ async def _send_staff_capability_menu(phone: str, tenant_id: str) -> bool:
             mods = set(enabled_modules(tenant_id) or [])
         except Exception:
             mods = set()
-        rows = [{"id": f"admin_example:{key}", "title": title[:24], "description": f"e.g. \"{cmd}\""[:72]}
-                for key, title, cmd in _STAFF_MENU_ALWAYS_ON]
+        overrides = _tenant_menu_overrides(tenant_id)
+
+        def _row(key: str, title: str, cmd: str) -> dict:
+            ov = overrides.get(key) or {}
+            title = (ov.get("title") or title)[:24]
+            cmd = ov.get("command") or cmd
+            return {"id": f"admin_example:{key}", "title": title, "description": f"e.g. \"{cmd}\""[:72]}
+
+        rows = [_row(key, title, cmd) for key, title, cmd in _STAFF_MENU_ALWAYS_ON]
         for mod, (key, title, cmd) in _STAFF_MENU_BY_MODULE.items():
             if len(rows) >= 8:
                 break
             if mod in mods:
-                rows.append({"id": f"admin_example:{key}", "title": title[:24],
-                             "description": f"e.g. \"{cmd}\""[:72]})
+                rows.append(_row(key, title, cmd))
         if not rows:
             return False
         return await _send_wa_list(
@@ -5689,11 +5712,15 @@ async def _send_staff_capability_menu(phone: str, tenant_id: str) -> bool:
 
 async def _handle_admin_example_reply(phone: str, reply_id: str, tenant_id: str) -> None:
     """A tap on _send_staff_capability_menu's list — runs that example's exact command text
-    through the admin agent, same as if the owner had typed it themselves."""
+    through the admin agent, same as if the owner had typed it themselves. Respects a per-
+    tenant command override (migration 170) the same way the menu that offered this row did,
+    so the tapped row and what actually runs never disagree."""
     key = reply_id.split(":", 1)[1] if ":" in reply_id else ""
     example = next((cmd for k, _title, cmd in _STAFF_MENU_ALWAYS_ON if k == key), None)
     if example is None:
         example = next((cmd for k, _title, cmd in _STAFF_MENU_BY_MODULE.values() if k == key), None)
+    override = _tenant_menu_overrides(tenant_id).get(key) or {}
+    example = override.get("command") or example
     if example:
         await _run_commerce_admin(phone, example, tenant_id)
 
