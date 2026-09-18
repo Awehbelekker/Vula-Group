@@ -1811,6 +1811,22 @@ async def health_check():
         if checks.get("ollama", {}).get("status") == "error" and settings.openrouter_api_key:
             checks["ollama"] = {"status": "ok", "models": ["openrouter/cloud"], "note": "via OpenRouter"}
 
+    # Supabase/Postgres reachability — previously unchecked here entirely, so a DB outage never
+    # showed as "degraded" even though every tenant request depends on it more than Ollama/Qdrant
+    # do. Same sync-client-in-a-thread pattern vula/startup_checks.py already uses for its schema
+    # probe; a tiny, always-present table kept the query cheap.
+    try:
+        import asyncio as _asyncio
+        from vula.commerce import service as _commerce_service
+
+        def _db_ping() -> None:
+            _commerce_service._client().table("vula_tenants").select("tenant_id").limit(1).execute()
+
+        await _asyncio.wait_for(_asyncio.to_thread(_db_ping), timeout=3.0)
+        checks["supabase"] = {"status": "ok"}
+    except Exception as exc:
+        checks["supabase"] = {"status": "error", "detail": str(exc)}
+
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {
         "status": overall, "service": "vula-api", "version": "1.0.0", "checks": checks,

@@ -24,6 +24,32 @@ def test_status_endpoint_returns_json():
         assert data["service"] == "vula-api"
 
 
+def test_status_checks_supabase_reachability():
+    """/status previously never checked the DB at all — only Ollama/Qdrant — so a Supabase
+    outage wouldn't show as degraded even though every tenant request depends on it. A success
+    must report ok; a failure must report error and (already) flip overall to degraded, same
+    contract as the existing ollama/qdrant checks."""
+    from unittest.mock import MagicMock
+
+    with patch("httpx.AsyncClient") as mock_client:
+        mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_client.return_value)
+        mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_client.return_value.get = AsyncMock(side_effect=Exception("not running"))
+
+        mock_db = MagicMock()
+        with patch("vula.commerce.service._client", return_value=mock_db):
+            resp = client.get("/status")
+            data = resp.json()
+            assert data["checks"]["supabase"] == {"status": "ok"}
+            mock_db.table.assert_called_with("vula_tenants")
+
+        with patch("vula.commerce.service._client", side_effect=RuntimeError("no key configured")):
+            resp = client.get("/status")
+            data = resp.json()
+            assert data["checks"]["supabase"]["status"] == "error"
+            assert data["status"] == "degraded"
+
+
 def test_status_reports_disabled_by_design_integrations():
     """PayFast/Resend being unset is a confirmed go-live decision (2026-09-11), not a health
     failure — it must read as "disabled by design" in /status, and must NOT flip the overall
