@@ -133,6 +133,48 @@ except Exception:  # pragma: no cover
     pass
 log = logging.getLogger("vula.api")
 
+# ─── Error monitoring (Sentry) ─────────────────────────────────────────────────
+# Before this, an exception only reached Railway's log stream — swallowed by the broad
+# `except Exception` blocks in the scheduler loops, with no human paged on a one-off failure.
+# No-op unless SENTRY_DSN is set (config.py). PII: CLAUDE.md's non-negotiable is that telemetry
+# carries type labels only, never raw prompt or customer content — same rule core/log_redaction.py
+# enforces for the stdout logs above, so this must not become the leak that rule was closing.
+# send_default_pii=False + include_local_variables=False (a WhatsApp handler's stack frame can
+# hold message text in a local var) + stripping request bodies/query strings in before_send.
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+
+        def _sentry_scrub_before_send(event, hint):
+            req = event.get("request")
+            if req:
+                req.pop("data", None)
+                req.pop("query_string", None)
+            for bc in (event.get("breadcrumbs") or {}).get("values", []) or []:
+                (bc.get("data") or {}).pop("body", None)
+            return event
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment="development" if settings.debug else "production",
+            integrations=[
+                StarletteIntegration(transaction_style="endpoint"),
+                FastApiIntegration(transaction_style="endpoint"),
+            ],
+            send_default_pii=False,
+            include_local_variables=False,
+            max_request_body_size="never",
+            traces_sample_rate=0.0,  # error tracking only — keep data volume/PII surface minimal
+            before_send=_sentry_scrub_before_send,
+        )
+        log.info("Sentry error monitoring enabled")
+    except Exception:  # pragma: no cover — never let monitoring setup break boot
+        log.exception("Sentry init failed — continuing without error monitoring")
+else:
+    log.info("Sentry disabled (SENTRY_DSN not set)")
+
 # ─── Rate limiter ─────────────────────────────────────────────────────────────
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])

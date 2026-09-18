@@ -1066,6 +1066,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
                 logger.info("Dropping inbound WA message for suspended tenant %s", tenant_id)
                 return
 
+    from core.sentry_utils import tag_tenant
+    tag_tenant(tenant_id)
+
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
