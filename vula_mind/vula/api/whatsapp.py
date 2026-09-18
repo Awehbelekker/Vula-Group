@@ -1094,6 +1094,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         if _pref:
             await _send_reply(phone, _pref, tenant_id)
             return
+        # A staff member asking to set/update their signature (migration 165).
+        _sig = await _maybe_start_signature_capture(tenant_id, phone, text)
+        if _sig:
+            await _send_reply(phone, _sig, tenant_id)
+            return
 
     # ── sales_rep team member → the rep-scoped commerce admin agent, not the generic
     # construction knowledge-base assistant below. This function (_handle_message) is the
@@ -1487,6 +1492,13 @@ async def _handle_image_or_video(
     """Image/video dispatch, extracted from the webhook loop so it runs in the background
     (vision passes + agent turns are far slower than Meta's webhook timeout). `continue` in the
     old inline version becomes `return` here — same control flow, one message."""
+    # A staff member's signature photo, in reply to _maybe_start_signature_capture's prompt —
+    # checked before every other photo branch below so it's never misread as a receipt/site
+    # photo/document upload.
+    if (msg_type == "image" and route_tenant and _recently_asked_about_signature(phone)
+            and (_is_tenant_owner(route_tenant, phone) or await _sender_is_sales_rep(phone, route_tenant))):
+        await _handle_signature_capture(phone, media_id, route_tenant)
+        return
     # sales_rep captioning a photo with an instruction → the CAPTION is the request; give the
     # agent both the caption and a vision description of the photo.
     if msg_type == "image" and caption.strip() and route_tenant and await _sender_is_sales_rep(phone, route_tenant):
@@ -2342,6 +2354,67 @@ def _recently_asked_about_purpose(phone: str) -> bool:
     import time as _t
     last = _purpose_prompted_at.get(phone)
     return bool(last and (_t.monotonic() - last) < _PURPOSE_PROMPT_WINDOW_S)
+
+
+# 2026-09-18: signature capture (migration 165) — same in-memory, time-windowed,
+# fails-toward-letting-messages-through pattern as _purpose_prompted_at above. A staff member
+# sends a trigger phrase ("set my signature"), Vula asks for a photo, and ONLY the next photo
+# from that phone within the window is captured as the signature instead of going through the
+# normal photo-vision/document-ingest path.
+_signature_prompted_at: dict = {}
+_SIGNATURE_PROMPT_WINDOW_S = 600.0   # 10 minutes
+
+_SIGNATURE_TRIGGER_RE = re.compile(
+    r"\b(set|update|change|add)\b.{0,20}\bsignature\b|\bsignature\b.{0,20}\b(set|update|change|add)\b",
+    re.IGNORECASE)
+
+
+def _note_signature_prompt(phone: str) -> None:
+    import time as _t
+    _signature_prompted_at[phone] = _t.monotonic()
+
+
+def _recently_asked_about_signature(phone: str) -> bool:
+    import time as _t
+    last = _signature_prompted_at.get(phone)
+    return bool(last and (_t.monotonic() - last) < _SIGNATURE_PROMPT_WINDOW_S)
+
+
+async def _maybe_start_signature_capture(tenant_id: str, phone: str, text: str) -> Optional[str]:
+    """A staff member asking to set/update their signature — only staff (never a customer, and
+    never on a line where role can't be confirmed) can trigger this. Returns the 'send me a
+    photo' reply if this was a trigger, else None so the caller routes the message normally."""
+    if not tenant_id or not _SIGNATURE_TRIGGER_RE.search(text or ""):
+        return None
+    if not _is_tenant_owner(tenant_id, phone) and not await _sender_is_sales_rep(phone, tenant_id):
+        return None
+    _note_signature_prompt(phone)
+    return ("✍️ Send a photo of your signature (signed on plain paper is fine) and I'll use it "
+            "on every letter/document from now on.")
+
+
+async def _handle_signature_capture(phone: str, media_id: str, tenant_id: str) -> bool:
+    """The photo reply to _maybe_start_signature_capture's prompt. Returns True if the photo
+    was consumed as a signature capture (caller must not process it any further way)."""
+    try:
+        data = await _download_media_bytes(media_id)
+        if not data:
+            await _send_reply(phone, "Couldn't download that photo — try sending it again.", tenant_id)
+            return True
+        url = _upload_to_storage("signatures", f"{tenant_id}/signature.png", data, "image/jpeg")
+        if not url:
+            await _send_reply(phone, "Couldn't save that signature right now — try again shortly.", tenant_id)
+            return True
+        from vula.commerce import service as commerce_service
+        await commerce_service.upsert_invoice_settings(tenant_id, {"signature_url": url})
+        _signature_prompted_at.pop(phone, None)
+        await _send_reply(phone, "✅ Signature saved — it'll appear on every letter/document "
+                                 "from now on.", tenant_id)
+        return True
+    except Exception as exc:
+        logger.warning("signature capture failed for %s/%s: %s", tenant_id, phone, exc)
+        await _send_reply(phone, "Something went wrong saving that signature — try again shortly.", tenant_id)
+        return True
 
 
 # Second-person / object pronouns mean the message is aimed AT Vula, not describing a purchase.
@@ -5117,6 +5190,12 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     _pref = handle_preference_command(tenant_id, phone, text)
     if _pref:
         await _send_reply(phone, _pref, tenant_id)
+        return
+
+    # A staff member asking to set/update their signature (migration 165).
+    _sig = await _maybe_start_signature_capture(tenant_id, phone, text)
+    if _sig:
+        await _send_reply(phone, _sig, tenant_id)
         return
 
     # Onboarding capture: if this contact is mid opt-in/intro flow, their message is part of

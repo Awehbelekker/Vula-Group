@@ -461,6 +461,10 @@ def merge_branding(tenant_id: str, settings: Optional[dict]) -> dict:
     # reached the PDF renderer before this — body text stayed hardcoded per-theme regardless
     # of what a tenant picked. "" (unset) keeps each theme's existing hardcoded fallback.
     branding["ink_color"] = settings.get("ink_color") or ""
+    # 2026-09-18: a tenant's captured signature (WhatsApp photo capture, migration 165) —
+    # rendered under a letter's sign_off when set; "" (unset) means no image, same as before.
+    branding["signature_url"] = settings.get("signature_url") or ""
+    branding["signature_name"] = settings.get("signature_name") or ""
     return branding
 
 
@@ -657,6 +661,8 @@ __TEMPLATE_CSS__
 .letter-body table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
 .letter-body th, .letter-body td { padding: 6px 8px; font-size: 10pt; border-bottom: 1px solid #eee; text-align: left; }
 .letter-sign { margin-top: 40px; font-size: 10pt; line-height: 1.7; }
+.letter-signature-img { max-height: 56px; margin-bottom: 6px; display: block; }
+.letter-signature-name { font-weight: 700; }
 </style>
 </head>
 <body>
@@ -694,8 +700,12 @@ __TEMPLATE_CSS__
 
 <div class="letter-body">{% if body_html %}{{ body_html | safe }}{% else %}{% for para in body_paragraphs %}<p>{{ para }}</p>{% endfor %}{% endif %}</div>
 
-{% if sign_off %}
-<div class="letter-sign">{{ sign_off | replace("\\n", "<br>") | safe }}</div>
+{% if sign_off or signature_url %}
+<div class="letter-sign">
+  {% if signature_url %}<img src="{{ signature_url }}" class="letter-signature-img" alt="Signature">{% endif %}
+  {% if signature_name %}<div class="letter-signature-name">{{ signature_name }}</div>{% endif %}
+  {% if sign_off %}{{ sign_off | replace("\\n", "<br>") | safe }}{% endif %}
+</div>
 {% endif %}
 
 <div class="footer">
@@ -722,6 +732,8 @@ def render_letter_pdf(
     sign_off: Optional[str] = None,
     issue_date: Optional[str] = None,
     tenant_profile: Optional[dict] = None,
+    signature_url: Optional[str] = None,
+    signature_name: Optional[str] = None,
 ) -> bytes:
     """Render letter content onto the tenant's branded letterhead.
 
@@ -735,6 +747,10 @@ def render_letter_pdf(
         sign_off: closing block, e.g. "Kind regards,\\nJudy Downing\\nDIGG Architects".
         tenant_profile: branding override — falls back to _TENANT_DEFAULTS keyed by tenant_id,
             same as render_invoice_pdf (use merge_branding() to source from saved invoice settings).
+        signature_url: an explicit signature image URL, overriding tenant_profile/branding's
+            own signature_url (merge_branding already carries it from saved settings — this
+            param exists for a caller with a signature not yet persisted to settings).
+        signature_name: likewise, overrides branding's signature_name.
     """
     try:
         from datetime import datetime, timezone
@@ -771,6 +787,8 @@ def render_letter_pdf(
         "body_paragraphs": paragraphs,
         "sign_off": sign_off or "",
         "ink_color": branding.get("ink_color") or "",
+        "signature_url": signature_url or branding.get("signature_url") or "",
+        "signature_name": signature_name or branding.get("signature_name") or "",
         **_font_ctx(branding),
     }
 

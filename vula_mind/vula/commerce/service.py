@@ -2514,6 +2514,7 @@ _INVOICE_SETTINGS_FIELDS = (
     "ink_color", "font_pairing",
     "footer_text", "show_vat_breakdown", "show_company_reg", "logo_size", "logo_align",
     "header_sticky", "header_nav_position", "header_cta_text", "header_cta_link",
+    "signature_url", "signature_name",
 )
 _TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded", "digg")
 
@@ -2538,8 +2539,10 @@ _INVOICE_SETTINGS_103_FIELDS = (  # only exist once migration 103 runs
 _INVOICE_SETTINGS_128_FIELDS = (  # only exist once migration 128 runs
     "header_sticky", "header_nav_position", "header_cta_text", "header_cta_link",
 )
+_INVOICE_SETTINGS_165_FIELDS = ("signature_url", "signature_name")  # only exist once migration 165 runs
 _INVOICE_SETTINGS_OPTIONAL_FIELDS = (
     _INVOICE_SETTINGS_078_FIELDS + _INVOICE_SETTINGS_103_FIELDS + _INVOICE_SETTINGS_128_FIELDS
+    + _INVOICE_SETTINGS_165_FIELDS
 )
 
 

@@ -89,6 +89,28 @@ def _fee_proposal_gaps(args: Dict[str, Any]) -> List[str]:
     return gaps
 
 
+async def _resolve_sign_off(tenant_id: str, phone: str, branding: dict) -> str:
+    """Best-effort 'Kind regards, <sender>, <business>' closing block — the real sender's name
+    if this phone resolves to a known team member, else just the business name. Never invents a
+    name: an unresolved sender gets the business-only fallback rather than a guess."""
+    shop_name = (branding.get("trading_as") or branding.get("name")
+                or tenant_id.replace("-", " ").title())
+    sender_name = ""
+    try:
+        from vula.commerce import service as commerce_service
+        digits = "".join(c for c in (phone or "") if c.isdigit())
+        digits = "27" + digits[1:] if digits.startswith("0") else digits
+        rows = (commerce_service._client().table("vula_team_members").select("name")
+                .eq("tenant_id", tenant_id).eq("whatsapp", digits).eq("active", True)
+                .limit(1).execute().data or [])
+        sender_name = (rows[0].get("name") or "").strip() if rows else ""
+    except Exception as exc:
+        logger.debug("sign-off sender lookup skipped: %s", exc)
+    if sender_name:
+        return f"Kind regards,\n{sender_name}\n{shop_name}"
+    return f"Kind regards,\n{shop_name}"
+
+
 async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
                        extra_markdown: str | None = None) -> dict:
     """Generate a letter (grounded in the tenant's KB + shared standards), render it onto the
@@ -159,10 +181,15 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
     from vula.commerce import service as commerce_service
     settings_row = await commerce_service.get_invoice_settings(tenant_id)
     branding = merge_branding(tenant_id, settings_row)
+    # 2026-09-18: render_letter_pdf has always accepted a sign_off closing block, but this call
+    # never passed one — every letter generated via WhatsApp went out with no signature of any
+    # kind, typed or otherwise. Best-effort real sender name (falls back to just the business
+    # name); signature_url/signature_name (a captured signature image, migration 165) already
+    # flow through tenant_profile=branding via merge_branding, no extra param needed here.
     pdf_bytes = render_letter_pdf(
         tenant_id=tenant_id, body_markdown=content, doc_label=doc_config["label"],
         recipient=args.get("recipient"), subject=args.get("project_name"),
-        tenant_profile=branding,
+        tenant_profile=branding, sign_off=await _resolve_sign_off(tenant_id, phone, branding),
     )
 
     filename = f"{doc_config['label'].replace(' ', '_')}.pdf"
