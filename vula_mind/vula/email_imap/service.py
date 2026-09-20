@@ -392,9 +392,24 @@ def _send(creds: dict, to: str, subject: str, body: str,
     return {"sent": True, "to": to, "subject": subject}
 
 
+_SEND_WALL_CLOCK_TIMEOUT_S = 25.0
+
+
 async def send(creds: dict, to: str, subject: str, body: str,
                 attachments: Optional[list[dict]] = None) -> dict:
-    return await asyncio.to_thread(_send, creds, to, subject, body, attachments)
+    """Confirmed live 2026-09-20: smtplib's own timeout= (below, in _send) only bounds each
+    individual socket op, not the whole call — a hung login() that times out can still cost a
+    SECOND full timeout when the `with` block's implicit quit() cleanup hits the same dead
+    connection in __exit__, nearly doubling the worst case (a digg-demo alert send blocked its
+    caller, a WhatsApp webhook handler, for ~41s instead of failing in ~20s). A hard wall-clock
+    ceiling here bounds the true worst case regardless of what smtplib does internally.
+    Raises asyncio.TimeoutError on breach — same "let the caller's try/except handle it" contract
+    every other _send failure already relies on (this function only ever returns an explicit
+    {"error": ...} for the missing-SMTP-host case)."""
+    return await asyncio.wait_for(
+        asyncio.to_thread(_send, creds, to, subject, body, attachments),
+        timeout=_SEND_WALL_CLOCK_TIMEOUT_S,
+    )
 
 
 def _send_batch(creds: dict, messages: list[dict]) -> list[dict]:

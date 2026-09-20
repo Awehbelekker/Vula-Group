@@ -461,10 +461,14 @@ async def receive_message(
                     # record_message_status only knows about BROADCAST recipients — it returns
                     # silently for anything else, which is every ordinary reply. Track those
                     # here so a message that failed after acceptance is not invisible.
-                    try:
-                        await _record_outbound_status(wamid, st, err)
-                    except Exception as exc:
-                        logger.debug("outbound status update skipped: %s", exc)
+                    #
+                    # 2026-09-20: this used to be awaited inline — on a 'failed' status it can
+                    # send an off-WhatsApp alert email (_alert_off_whatsapp), and a hung SMTP
+                    # login was confirmed live blocking this exact webhook handler for ~41s
+                    # (digg-demo). Backgrounded via _run_bg for the same reason document ingest
+                    # already is above: Meta's webhook times out at ~15-20s and re-sends, turning
+                    # one status callback into a burst of duplicate-processed ones.
+                    _run_bg(_record_outbound_status(wamid, st, err), label="record_outbound_status")
 
     return {"status": "ok"}
 
