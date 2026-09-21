@@ -14,7 +14,8 @@ import time
 from core.llm_router import resolve_generation_route
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_tenant_data_question,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, format_kb_chunks,
+    looks_like_tenant_data_question,
 )
 from core.verification import NO_GROUNDING_CAVEAT, WEB_FALLBACK_CAVEAT
 
@@ -70,10 +71,7 @@ class ReasoningSkill(BaseSkill):
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
             chunks = await pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
             if chunks:
-                kb_context = "\n\n".join(
-                    f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"
-                    for c in chunks
-                )
+                kb_context = await format_kb_chunks(inp.tenant_id, chunks)
                 sources = [
                     {"type": "kb", "filename": c.get("filename", "?"),
                      "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}

@@ -17,7 +17,8 @@ from config import settings
 from core.llm_router import resolve_generation_route
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_tenant_data_question,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, format_kb_chunks,
+    looks_like_tenant_data_question,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,10 +64,8 @@ class ArchitecturePlanningSkill(BaseSkill):
                     skill_name=self.name, confidence=0.3, sources=all_sources)
 
             if tenant_chunks:
-                contexts.append("## Your practice's knowledge\n" + "\n\n".join(
-                    f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"
-                    for c in tenant_chunks
-                ))
+                contexts.append("## Your practice's knowledge\n"
+                                 + await format_kb_chunks(inp.tenant_id, tenant_chunks))
                 all_sources.extend([
                     {"type": "tenant_kb", "filename": c.get("filename", "?"),
                      "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}

@@ -365,6 +365,38 @@ def looks_like_tenant_data_question(text: str, require_possessive: bool = False)
     return True
 
 
+async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
+    """Join RAG chunks into a "[filename]: text" grounding block, the same shape reasoning.py/
+    architecture_planning.py already built inline in three near-identical places — but now with
+    each chunk's source document cross-referenced against vula_filed_documents (via
+    vula.commerce.service.filed_amounts_by_filename) so a chunk whose document was ALSO filed
+    normally with a real extracted amount carries that verified figure in the tag, e.g.
+    "[invoice.pdf (filed: R92.00 — Gardens Handiman Centre)]: ...", instead of leaving the model
+    to read a number off fuzzy chunk text. 2026-09-21: this is the generalisation of the same
+    fix applied to commerce_admin's find_document tool — the R70,400 "logged" fabrication
+    incident (see looks_like_tenant_data_question) is exactly the failure mode a verified figure
+    in the context is meant to prevent. Centralised here rather than duplicated per skill, same
+    precedent as caller_block()/behaviour_preamble()."""
+    if not chunks:
+        return ""
+    try:
+        from vula.commerce.service import filed_amounts_by_filename
+        filed = await filed_amounts_by_filename(
+            tenant_id, [c.get("filename") for c in chunks if c.get("filename")])
+    except Exception:
+        filed = {}
+    lines = []
+    for c in chunks:
+        fname = c.get("filename") or "doc"
+        extra = filed.get(fname)
+        tag = fname
+        if extra and extra.get("amount") is not None:
+            party = f" — {extra['party']}" if extra.get("party") else ""
+            tag = f"{fname} (filed: R{extra['amount']:.2f}{party})"
+        lines.append(f"[{tag}]: {c.get('text','')[:900]}")
+    return "\n\n".join(lines)
+
+
 def need_info_message(result: Any) -> Optional[str]:
     """If a tool result is the shared {"status": "need_info", "message": ...} shape (used by
     commerce_admin's create_invoice, draft_admin's draft_letter, email_admin's send), return the

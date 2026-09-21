@@ -2872,3 +2872,36 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
                     "extracted figure from the filed document (safe to sum/quote) — a match "
                     "with no 'amount' is excerpt-only, so read it for context but confirm any "
                     "figure with the owner before acting on it."}
+
+
+async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Cross-reference KB-chunk filenames against vula_filed_documents, returning
+    {filename: {"amount": ..., "party": ...}} for every one that was also filed normally with a
+    real extracted amount. Same lookup find_filed_document's semantic fallback runs (2026-09-21
+    fix) — factored out here so RAG-grounded skills (reasoning.py, architecture_planning.py) can
+    carry a verified figure in their prompt context instead of leaving the model to read one off
+    raw chunk text, which is exactly the failure mode reasoning.py's tenant-data-question guard
+    exists to catch after the real R70,400 "logged" fabrication incident. Fail-open: any lookup
+    error returns {} rather than raising, same as every other best-effort helper in this module.
+    """
+    names = list({f for f in filenames if f})
+    if not names:
+        return {}
+    try:
+        rows = (_client().table("vula_filed_documents")
+                .select("filename,category,fields")
+                .eq("tenant_id", tenant_id).in_("filename", names).execute().data or [])
+    except Exception as exc:
+        logger.debug("filed_amounts_by_filename lookup skipped: %s", exc)
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        f = r.get("fields") or {}
+        amount = _document_amount(f)
+        if amount is None:
+            continue
+        out[r["filename"]] = {
+            "amount": amount,
+            "party": f.get("supplier") or f.get("payee_name") or f.get("customer"),
+        }
+    return out

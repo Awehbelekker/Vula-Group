@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vula.commerce.service import _document_amount, find_filed_document
+from vula.commerce.service import _document_amount, filed_amounts_by_filename, find_filed_document
 
 TID = "test-tenant"
 
@@ -238,3 +238,48 @@ async def test_crossref_lookup_failure_still_returns_semantic_matches():
 
     assert res["match_type"] == "knowledge_base"
     assert res["matches"][0]["filename"] == "gardens_handiman_invoice.pdf"
+
+
+# ── filed_amounts_by_filename (2026-09-21, generalised for reasoning.py/architecture_planning.py) ──
+#
+# Factored out of find_filed_document's semantic-fallback cross-reference so RAG-grounded skills
+# can carry a verified figure in their own prompt context too (core.skills.base.format_kb_chunks
+# is the consumer — see tests/test_format_kb_chunks.py).
+
+@pytest.mark.asyncio
+async def test_filed_amounts_by_filename_empty_input_short_circuits():
+    assert await filed_amounts_by_filename(TID, []) == {}
+
+
+@pytest.mark.asyncio
+async def test_filed_amounts_by_filename_returns_amount_and_party():
+    rows = [{"filename": "POS Account Sale 22-191407.pdf", "category": "Invoice",
+             "fields": {"supplier": "Gardens Handiman Centre", "total_cents": 9200}}]
+    mock_client = MagicMock()
+    (mock_client.table.return_value.select.return_value.eq.return_value.in_
+     .return_value.execute.return_value) = MagicMock(data=rows)
+    with patch("vula.commerce.service._client", return_value=mock_client):
+        out = await filed_amounts_by_filename(TID, ["POS Account Sale 22-191407.pdf"])
+
+    assert out == {"POS Account Sale 22-191407.pdf":
+                    {"amount": 92.0, "party": "Gardens Handiman Centre"}}
+
+
+@pytest.mark.asyncio
+async def test_filed_amounts_by_filename_skips_rows_with_no_extractable_amount():
+    rows = [{"filename": "account_application.pdf", "category": "General Document",
+             "fields": {"company_name": "Handiman Centre"}}]
+    mock_client = MagicMock()
+    (mock_client.table.return_value.select.return_value.eq.return_value.in_
+     .return_value.execute.return_value) = MagicMock(data=rows)
+    with patch("vula.commerce.service._client", return_value=mock_client):
+        out = await filed_amounts_by_filename(TID, ["account_application.pdf"])
+
+    assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_filed_amounts_by_filename_fails_open():
+    with patch("vula.commerce.service._client", side_effect=RuntimeError("db down")):
+        out = await filed_amounts_by_filename(TID, ["anything.pdf"])
+    assert out == {}
