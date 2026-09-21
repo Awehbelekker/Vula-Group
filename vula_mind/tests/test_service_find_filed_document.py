@@ -168,7 +168,16 @@ def test_document_amount_checks_every_real_schema():
     assert _document_amount({"total": 50}) == 50
     assert _document_amount({"amount_rands": 25}) == 25
     assert _document_amount({"total_cents": 9200}) == 92.0   # the exact real jackhammer invoice
+    # Proof of Payment's own key (deterministic FNB parser + LLM extraction schema both use
+    # this, never total_cents) — confirmed against real production data same-day follow-up.
+    assert _document_amount({"amount_cents": 46350}) == 463.5   # real off-the-hook POP
     assert _document_amount({}) is None
+
+
+def test_document_amount_prefers_total_cents_over_amount_cents_when_both_present():
+    """Invoice/Quote/BOQ's key; shouldn't realistically co-occur with Proof of Payment's, but
+    total_cents is the more common real case so it wins if somehow both are set."""
+    assert _document_amount({"total_cents": 9200, "amount_cents": 100}) == 92.0
 
 
 @pytest.mark.asyncio
