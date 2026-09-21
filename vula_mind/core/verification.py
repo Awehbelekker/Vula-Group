@@ -12,7 +12,18 @@ Three policies, resolved per skill (env override beats the skill's class attribu
                     only registers the outcome — one emit path for every verifier.
   • adversarial   — one extra checker-framed LLM pass ("find defects, don't answer"), routed
                     local-first like everything else. A found defect drops confidence and
-                    appends a caveat; it never blocks the answer.
+                    appends a caveat; it never blocks the answer. When
+                    settings.verification_adversarial_action == "escalate" (default: "caveat",
+                    unchanged behaviour), a defect also fires one backgrounded corrective retry
+                    on the cloud route — see "Defect retry" below.
+
+Defect retry (2026-09-21, opt-in via verification_adversarial_action):
+  A confirmed defect is corrected, not just flagged, without adding latency to the reply
+  already in flight: the caveated answer ships immediately and unchanged; a detached background
+  task then retries on the cloud route with the specific defects + grounding context, re-checks
+  the correction, and only if THAT clears verification sends a WhatsApp follow-up. A retry that
+  doesn't clear it either sends nothing further — one unhelpful caveat is enough, a second
+  message that's still wrong would just be noise.
 
 Design constraints (same as reasoning_telemetry):
   • Fail-open: a checker error/timeout must pass the answer through unchanged.
@@ -135,6 +146,116 @@ def _parse_verdict(text: str) -> tuple[str, list]:
     return "unparseable", []
 
 
+# ── Defect retry (2026-09-21) ────────────────────────────────────────────────────
+#
+# "escalate" (forced cloud re-run) was reserved above until the router grew a force-cloud hook —
+# core/llm_router.py::escalate_to_cloud() already exists for a different signal (looks_unreliable,
+# checked during generation) and is reused here for the same purpose after a CONFIRMED defect.
+# Gated on settings.verification_adversarial_action == "escalate" (default remains "caveat" —
+# every adversarial skill's behaviour is unchanged until this is explicitly flipped on).
+#
+# Backgrounded, not inline: the first reply (caveated, as before) goes out immediately and
+# unchanged. This runs as a detached task afterward and, only if the retry actually clears
+# verification, sends a WhatsApp follow-up with the corrected answer. If the retry doesn't
+# clear it either, nothing further is sent — the original caveat already told the user to
+# double-check, and a second unhelpful message would just be noise.
+
+_bg_tasks: set = set()
+
+
+def _run_bg(coro, *, label: str) -> None:
+    """Fire a detached background task, keeping a reference so it isn't garbage-collected
+    mid-flight, and logging (never silently swallowing) any exception. Same pattern as
+    vula/api/whatsapp.py's _run_bg — duplicated rather than imported, since core/ must not
+    depend on vula/api/."""
+    async def _wrapped():
+        try:
+            await coro
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verification background task %s failed: %s: %s",
+                           label, type(exc).__name__, exc)
+
+    t = asyncio.create_task(_wrapped())
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
+
+_RETRY_SYSTEM = (
+    "You are Vula, correcting your own previous answer after a verifier found concrete defects "
+    "in it. Produce a corrected answer to the original task that fixes exactly those defects. "
+    "Answer directly, as if for the first time — do not mention the verifier, the defects, or "
+    "that this is a correction."
+)
+
+
+async def _retry_with_cloud(question: str, flawed_answer: str, defects: list,
+                            context: str, run_id: str) -> str | None:
+    """One bounded corrective pass on the cloud route after a confirmed defect. Fail-open —
+    returns None on any failure (no cloud key configured, timeout, empty response), and the
+    caller then leaves the original caveated answer as the only reply, exactly as before this
+    feature existed."""
+    from core.llm_router import escalate_to_cloud
+    esc = escalate_to_cloud("verification_defect_retry", run_id=run_id, task_type="verification")
+    if not esc:
+        return None
+    model, api_key, api_base = esc
+    defect_text = "\n".join(f"- {d}" for d in defects[:10]) or "(no specific defects listed)"
+    context_block = f"\n\nGrounding context:\n{context[:_CHECKER_INPUT_CAP]}" if context else ""
+    try:
+        import litellm
+        litellm.drop_params = True
+        resp = await asyncio.wait_for(
+            litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _RETRY_SYSTEM},
+                    {"role": "user", "content":
+                        f"Original task:\n{question[:_CHECKER_INPUT_CAP]}\n\n"
+                        f"Flawed answer:\n{flawed_answer[:_CHECKER_INPUT_CAP]}\n\n"
+                        f"Defects found:\n{defect_text}{context_block}"},
+                ],
+                temperature=0.2, max_tokens=settings.verification_checker_max_tokens * 2,
+                api_key=api_key, api_base=api_base),
+            timeout=settings.verification_checker_timeout_s)
+        text = (resp.choices[0].message.content or "").strip()
+        return text or None
+    except Exception as exc:
+        logger.warning("verification retry generation failed open after defect: %s: %s",
+                       type(exc).__name__, exc)
+        return None
+
+
+async def _background_defect_retry(skill_name: str, tenant_id: str, phone: str, question: str,
+                                    flawed_answer: str, defects: list, context: str,
+                                    run_id: str) -> None:
+    corrected = await _retry_with_cloud(question, flawed_answer, defects, context, run_id)
+    if not corrected:
+        register_outcome(skill_name, tenant_id, {
+            "verifier": f"adversarial.{skill_name}", "outcome": "defect_retry_failed",
+            "escalated": True, "extra": {"stage": "retry_generation"}})
+        return
+
+    recheck = await adversarial_check(question, corrected, context=context)
+    if recheck["verdict"] != "pass":
+        register_outcome(skill_name, tenant_id, {
+            "verifier": f"adversarial.{skill_name}", "outcome": "defect_retry_failed",
+            "escalated": True,
+            "extra": {"stage": "retry_recheck", "verdict": recheck["verdict"]}})
+        return
+
+    register_outcome(skill_name, tenant_id, {
+        "verifier": f"adversarial.{skill_name}", "outcome": "corrected_on_retry",
+        "escalated": True, "extra": {}})
+    if not phone:
+        return
+    try:
+        from vula.api.whatsapp import _send_reply
+        await _send_reply(phone, f"Correction on my last answer:\n\n{corrected}", tenant_id)
+    except Exception as exc:
+        logger.warning("verification retry follow-up send failed: %s: %s",
+                       type(exc).__name__, exc)
+
+
 def register_outcome(skill_name: str, tenant_id: str, verification: Dict[str, Any]) -> None:
     """Single emit path for every verifier — deterministic or adversarial — so report.py sees
     one envelope shape. POPIA: only the whitelisted verification fields go to the sink; any
@@ -248,10 +369,14 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
         outcome = {"pass": "accepted", "fail": "defect_found",
                    "unparseable": "checker_unparseable"}.get(verdict, "checker_error")
         if verdict == "fail":
-            # "escalate" (forced cloud re-run) is reserved until the router grows a force-cloud
-            # hook — until then every defect takes the caveat path, matching digg.calc.
+            flawed_answer = result.answer
             result.confidence = min(result.confidence, _DEFECT_CONFIDENCE)
             result.answer += _CAVEAT
+            if settings.verification_adversarial_action == "escalate":
+                _run_bg(_background_defect_retry(
+                    skill.name, inp.tenant_id, (inp.metadata or {}).get("customer_phone", ""),
+                    inp.question, flawed_answer, check.get("defects", []), context,
+                    uuid.uuid4().hex[:8]), label=f"verification_retry.{skill.name}")
         extra = {"verdict": verdict, "defect_count": len(check.get("defects", [])),
                  "checker_ms": check.get("checker_ms", 0)}
         if check.get("reason"):
