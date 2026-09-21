@@ -2755,16 +2755,30 @@ def _document_amount(fields: Dict[str, Any]) -> Optional[float]:
     """Best-effort extracted amount in Rands from a filed document's `fields`, checking every
     schema real extraction paths actually write. 2026-09-21 incident: the money-document
     pipeline (vula/api/whatsapp.py's three-tier extraction, see CLAUDE.md) writes `total_cents`
-    (integer cents, per the "money is always integer cents" non-negotiable) — the single most
-    common real case (every POS/tax-invoice extraction) — but this only ever checked `amount`/
+    for Invoice/Quote/BOQ (the single most common real case) — this only ever checked `amount`/
     `total`/`amount_rands`, the Smart Scanner's plain-Rand schema, so a real invoice's amount
-    always came back None here even though it was sitting right in `fields`."""
+    always came back None even though it was sitting right in `fields`.
+
+    Same-day follow-up, found while building the consistency check below: Proof of Payment
+    documents (both the deterministic FNB parser in vula/ingestion/payment_notice.py AND the
+    LLM extraction's own declared schema for that category) write `amount_cents`, a THIRD money
+    key — confirmed against real production data across multiple tenants, every single Proof of
+    Payment row uses it, none use total_cents/amount/total. Checked here too, same conversion.
+
+    tests/test_document_field_schema_consistency.py regex-scans the actual extraction sources
+    for every money-shaped field name they declare and asserts this function checks all of them
+    — so a future prompt/schema change that introduces a new one fails CI immediately instead of
+    silently returning None in production until someone notices via a live transcript, twice."""
     amount = fields.get("amount") or fields.get("total") or fields.get("amount_rands")
-    if amount is None and fields.get("total_cents") is not None:
-        try:
-            amount = round(fields["total_cents"] / 100, 2)
-        except (TypeError, ValueError):
-            amount = None
+    if amount is None:
+        cents = fields.get("total_cents")
+        if cents is None:
+            cents = fields.get("amount_cents")
+        if cents is not None:
+            try:
+                amount = round(cents / 100, 2)
+            except (TypeError, ValueError):
+                amount = None
     return amount
 
 
