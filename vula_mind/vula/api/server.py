@@ -1102,6 +1102,23 @@ async def _infra_snapshot_loop() -> None:
         await _asyncio.sleep(24 * 3600)
 
 
+async def _qdrant_backup_loop() -> None:
+    """Daily per-tenant Qdrant collection snapshot → private Supabase Storage bucket, see
+    docs/dr.md. Qdrant previously had zero backup mechanism — the highest-severity finding in
+    the go-live readiness DR review."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(150)  # settle on boot, after the other startup loops
+    while True:
+        try:
+            from vula.integrations.qdrant_backup import backup_all_tenants
+            n = await backup_all_tenants()
+            if n:
+                log.info("Qdrant backup: %d tenant collection(s) snapshotted", n)
+        except Exception as exc:
+            log.warning("Qdrant backup loop error: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
 _SCHEDULER_LOCK_NAME = "main"
 _SCHEDULER_LEASE_SECONDS = 180
 _SCHEDULER_RENEW_SECONDS = 60
@@ -1199,6 +1216,7 @@ def _start_scheduled_job_tasks() -> None:
     import asyncio as _asyncio
     _scheduled_job_tasks.append(_asyncio.create_task(_seed_training_on_boot()))
     _scheduled_job_tasks.append(_asyncio.create_task(_infra_snapshot_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_qdrant_backup_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_invoices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_scheduled_campaigns_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_automations_loop()))

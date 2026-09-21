@@ -35,35 +35,50 @@ for cost-metering purposes — it does not back up any actual vector data.
 Per CLAUDE.md, Qdrant is **self-hosted** on the SA GPU box, reached via a Cloudflare-Access-
 secured tunnel — not a managed service with its own backup story the way Supabase is.
 
-**This is the single highest-severity finding in this review.** A tenant's entire RAG knowledge
-base — everything ingested from WhatsApp documents/photos, email, ClickUp, OneDrive — lives only
-in that one Qdrant instance, with **zero backup**. Unlike Supabase's structured records, most of
-this content is **not trivially re-derivable**: a WhatsApp-photo-ingested receipt or a since-
-deleted ClickUp task's content is gone for good if the Qdrant volume is lost, corrupted, or the
-GPU box fails.
+**This was the single highest-severity finding in this review** — a tenant's entire RAG knowledge
+base (everything ingested from WhatsApp documents/photos, email, ClickUp, OneDrive) lived only in
+that one Qdrant instance, with zero backup. Unlike Supabase's structured records, most of this
+content is **not trivially re-derivable**: a WhatsApp-photo-ingested receipt or a since-deleted
+ClickUp task's content is gone for good if the Qdrant volume is lost, corrupted, or the GPU box
+fails. Now covered by the daily snapshot job below.
 
-**Not fixed in this pass** — this session doesn't have direct access to the GPU box to build and
-verify a real snapshot job against it, and speculatively writing an untestable backup script
-would be worse than flagging the gap honestly. Recommended follow-up, sequenced as its own small
-project once someone has box access:
+**Fixed 2026-09-21.** This didn't actually need direct access to the GPU box — the backup job
+runs *inside the already-deployed Railway backend*, which already has `QDRANT_BASE`/
+`QDRANT_API_KEY` and reachability (the same process `vula/ingestion/pipeline.py`'s `QdrantStore`
+uses for every RAG read/write today). Built as:
 
-1. A periodic job calling Qdrant's own [snapshot API](https://qdrant.tech/documentation/concepts/snapshots/)
-   per collection (`POST /collections/{name}/snapshots`), uploading the resulting snapshot file
-   to Supabase Storage (already the pattern this codebase uses for other generated artifacts —
-   see `_upload_to_storage` in `vula/api/whatsapp.py`) or another S3-compatible bucket.
-2. Wire it into the existing scheduled-loop pattern (`vula/api/server.py`'s
-   `_start_scheduled_job_tasks()`), e.g. daily, leader-only (reuse the scheduler-lock mechanism
-   already guarding the other periodic jobs).
-3. Retention: a handful of recent daily snapshots is enough — this is a "recover from
-   catastrophic loss" backstop, not a point-in-time audit trail (that's what Supabase's
-   `reasoning_telemetry`/audit tables are for).
-4. Document the restore procedure once built (which collection maps to which tenant —
-   `vula_{tenant_id}` — and the exact Qdrant restore-from-snapshot steps) here, replacing this
-   section.
+1. `vula/integrations/qdrant_backup.py`'s `backup_all_tenants()` — for every `vula_{tenant_id}`
+   collection, calls Qdrant's own [snapshot API](https://qdrant.tech/documentation/concepts/snapshots/)
+   (`POST /collections/{name}/snapshots` to create, `GET .../snapshots/{name}` to download,
+   `DELETE .../snapshots/{name}` to remove Qdrant's own on-disk copy once uploaded), then uploads
+   the snapshot bytes to a **private** Supabase Storage bucket, `qdrant-backups`, at
+   `{tenant_id}/{utc-timestamp}.snapshot` (migration 171). Fail-open per tenant: one tenant's
+   snapshot failing never stops the rest, mirroring `metering.py`'s `snapshot_infra()`.
+2. Scheduled via `vula/api/server.py`'s `_qdrant_backup_loop`, registered in
+   `_start_scheduled_job_tasks()` — daily, leader-only, same scheduler-lock mechanism guarding
+   every other periodic job.
+3. **Retention**: newest 7 snapshots kept per tenant (`_KEEP_PER_TENANT` in `qdrant_backup.py`) —
+   a "recover from catastrophic loss" backstop, not a point-in-time audit trail (that's what
+   Supabase's `reasoning_telemetry`/audit tables are for).
+4. **Status visibility**: `vula_qdrant_backup_status` (migration 171) holds one row per tenant —
+   `last_backup_at`, `last_backup_status` (`ok`/`error`), `last_backup_error`,
+   `last_snapshot_path` — upserted after every run.
+
+**Restore procedure** (manual, not yet drilled end-to-end — see the RPO/RTO caveat below):
+1. Download the tenant's latest object from `qdrant-backups/{tenant_id}/` in Supabase Storage
+   (service-role access only — the bucket is private) via the dashboard or
+   `sb.storage.from_("qdrant-backups").download(path)`.
+2. Upload it back into Qdrant with `POST /collections/{name}/snapshots/upload` (multipart file
+   upload), where `name` is `vula_{tenant_id}` — this restores directly into that collection,
+   overwriting its current contents. To restore into a fresh collection instead first (safer,
+   lets you verify before cutting over), upload under a temporary name and use Qdrant's
+   `PUT /collections/{name}/snapshots/recover` pointing at it, then rename/swap once verified.
+3. Confirm point counts via `GET /collections/vula_{tenant_id}` before considering the tenant
+   restored.
 
 ## RPO/RTO summary (current state)
 
 | Store | RPO | RTO | Status |
 |---|---|---|---|
 | Supabase (Postgres, Storage) | ≤24h (daily backup) or seconds (if PITR add-on is enabled — unconfirmed) | Unverified, likely tens of minutes–hours | Needs one manual dashboard check |
-| Qdrant (per-tenant RAG KB) | **No backup — unbounded data loss on failure** | N/A | **Real gap, follow-up project needed** |
+| Qdrant (per-tenant RAG KB) | ≤24h (daily snapshot) | Manual, unverified — no restore drill run yet | Backup job live; restore drill still recommended |
