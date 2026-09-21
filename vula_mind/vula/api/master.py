@@ -724,3 +724,30 @@ async def master_audit(tenant_id: Optional[str] = None, limit: int = 100):
         return {"events": q.execute().data or []}
     except Exception as exc:
         return {"events": [], "error": f"{exc} (run migration 072?)"}
+
+
+# ── Qdrant backup (DR) ──────────────────────────────────────────────────────────
+
+@router.get("/qdrant-backup")
+async def master_qdrant_backup_status() -> dict:
+    """Per-tenant status from the last daily Qdrant snapshot run (migration 171, see
+    docs/dr.md). Surfaced separately from /health since it's the one DR signal an operator
+    needs at a glance after touching anything backup-related (bucket limits, Qdrant
+    reachability), not just general platform health."""
+    rows = (_client().table("vula_qdrant_backup_status").select("*")
+            .order("tenant_id").execute().data or [])
+    return {"statuses": rows}
+
+
+@router.post("/qdrant-backup/run")
+async def master_run_qdrant_backup(identity: dict = Depends(require_master)) -> dict:
+    """Fire the Qdrant snapshot job (vula/integrations/qdrant_backup.py) on demand instead of
+    waiting up to 24h for the next scheduled run or restarting the service to force an early
+    one — e.g. to confirm a fix (bucket size limit, Qdrant connectivity) actually resolved a
+    prior per-tenant failure without waiting a day to find out."""
+    from vula.integrations.qdrant_backup import backup_all_tenants
+    ok_count = await backup_all_tenants()
+    audit(identity, "qdrant_backup.run", ok_count=ok_count)
+    rows = (_client().table("vula_qdrant_backup_status").select("*")
+            .order("tenant_id").execute().data or [])
+    return {"ok_count": ok_count, "statuses": rows}
