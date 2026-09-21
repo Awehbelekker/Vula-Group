@@ -2751,6 +2751,23 @@ async def create_credit_note(tenant_id: str, invoice_id: str, line_items: Option
 
 # ── Document lookup (shared by commerce_admin.py and email_admin.py's find_document tools) ─────
 
+def _document_amount(fields: Dict[str, Any]) -> Optional[float]:
+    """Best-effort extracted amount in Rands from a filed document's `fields`, checking every
+    schema real extraction paths actually write. 2026-09-21 incident: the money-document
+    pipeline (vula/api/whatsapp.py's three-tier extraction, see CLAUDE.md) writes `total_cents`
+    (integer cents, per the "money is always integer cents" non-negotiable) — the single most
+    common real case (every POS/tax-invoice extraction) — but this only ever checked `amount`/
+    `total`/`amount_rands`, the Smart Scanner's plain-Rand schema, so a real invoice's amount
+    always came back None here even though it was sitting right in `fields`."""
+    amount = fields.get("amount") or fields.get("total") or fields.get("amount_rands")
+    if amount is None and fields.get("total_cents") is not None:
+        try:
+            amount = round(fields["total_cents"] / 100, 2)
+        except (TypeError, ValueError):
+            amount = None
+    return amount
+
+
 async def find_filed_document(tenant_id: str, query: str, category: Optional[str] = None,
                               limit: int = 5) -> Dict[str, Any]:
     """Search filed documents (invoices/quotes/proof-of-payment/BOQs/receipts) for `query`.
@@ -2763,6 +2780,18 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     falls back to semantic search over that KB (populated from both emailed and WhatsApp-sent
     documents — see vula/email_imap/sync.py and vula/api/whatsapp.py's document ingest) instead
     of reporting "not found" while the answer is one KB query away.
+
+    2026-09-21 follow-up, real DIGG transcript: "jackhammer" turned out to be the account name
+    on a Handiman Centre COD account ("Jack Hammer's COD account.pdf"), not a filename/summary
+    match, so this correctly fell to the semantic path — but that path only ever returned raw
+    chunk text, never the matched document's real extracted amount, even when the exact same
+    document also exists as a normal vula_filed_documents row with `total_cents` filled in (as
+    every one of the real POS Account Sale invoices behind this account did). "I don't have the
+    specific details... provide me with the invoice amounts" was an honest answer given what the
+    tool handed back, not a model failure — the data just never made the return trip. Semantic
+    matches now get cross-referenced back to vula_filed_documents by filename so a structured
+    amount rides along whenever the same document was also filed normally, which is the common
+    case (semantic search and normal filing both run on every ingested document).
 
     Single implementation so both find_document tools answer identically — see the routing
     incident this was extracted alongside: the same fix landing in one copy and not its sibling
@@ -2795,7 +2824,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
             results.append({
                 "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
                 "summary": (r.get("summary") or "")[:200],
-                "amount": fields.get("amount") or fields.get("total") or fields.get("amount_rands"),
+                "amount": _document_amount(fields),
                 "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
                 "filed_at": r.get("created_at"),
             })
@@ -2810,10 +2839,36 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     if not chunks:
         return {"message": f"No filed document matches '{query}'. Ask the owner for the "
                             "invoice/document number, or to resend it — don't guess."}
-    results = [{"filename": c.get("filename") or "document",
-                "excerpt": (c.get("text") or "")[:300], "score": c.get("score")}
-               for c in chunks]
+
+    # Cross-reference by filename: the same document that surfaced via vector search is very
+    # often also a normal vula_filed_documents row with real extracted fields (both happen on
+    # every ingest) — pulling that in gives the model a trustworthy amount instead of only a
+    # fuzzy text excerpt.
+    filenames = list({c.get("filename") for c in chunks if c.get("filename")})
+    filed_by_name: Dict[str, Dict[str, Any]] = {}
+    if filenames:
+        try:
+            frows = (_client().table("vula_filed_documents")
+                     .select("filename,category,fields")
+                     .eq("tenant_id", tenant_id).in_("filename", filenames).execute().data or [])
+            filed_by_name = {fr["filename"]: fr for fr in frows}
+        except Exception as exc:
+            logger.debug("find_filed_document filename cross-reference skipped: %s", exc)
+
+    results = []
+    for c in chunks:
+        fname = c.get("filename") or "document"
+        entry: Dict[str, Any] = {"filename": fname, "excerpt": (c.get("text") or "")[:300],
+                                  "score": c.get("score")}
+        filed = filed_by_name.get(fname)
+        if filed:
+            f = filed.get("fields") or {}
+            entry["amount"] = _document_amount(f)
+            entry["party"] = f.get("supplier") or f.get("payee_name") or f.get("customer")
+            entry["category"] = filed.get("category")
+        results.append(entry)
     return {"matches": results, "match_type": "knowledge_base",
-            "note": "Found in the knowledge base, not as a structured filed document — read "
-                    "the excerpt for context, but confirm any figures with the owner before "
-                    "acting on them."}
+            "note": "Found in the knowledge base. A match with a non-null 'amount' is a real "
+                    "extracted figure from the filed document (safe to sum/quote) — a match "
+                    "with no 'amount' is excerpt-only, so read it for context but confirm any "
+                    "figure with the owner before acting on it."}
