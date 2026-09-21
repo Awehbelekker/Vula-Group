@@ -27,11 +27,17 @@ PENDING = ("default", "asked")
 # question. 2026-09-18: with a bank-review question outstanding, "Can you look up all invoice for
 # jackhammer" and "Through the emails..." were both eaten by the name/order-number search below
 # instead of reaching commerce_admin's find_document tool, where the actual answer lives.
+# 2026-09-21: real DIGG transcript, same bug class again — "I want a breakdown on what has been
+# spend at jackhammer" started with none of the trigger words below, had no "?", and didn't
+# address the assistant ("you"/"your"), so it fell through to the order/customer-name search
+# and got "I couldn't find an order or invoice matching that" instead of reaching reasoning/
+# finance_admin. "I want"/"I need"/"I'd like" (+ "we" forms) are common real-world request
+# openers that plain command verbs don't cover.
 _REQUEST_SHAPED = re.compile(
     r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
     r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
     r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
-    r"forward|schedule|arrange|"
+    r"forward|schedule|arrange|i want|i need|i'd like|we want|we need|we'd like|"
     r"kry|stuur|wys|maak|soek|skryf)\b",
     re.IGNORECASE,
 )

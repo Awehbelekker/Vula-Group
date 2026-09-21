@@ -19,6 +19,14 @@ from email, for "jackhammer").
 2. bank_review.handle_answer/handle_client_answer had no request-shape guard at all, so the
    second and third messages were swallowed by an outstanding bank-review question and answered
    with a generic "couldn't find an order or invoice" instead of reaching the agent.
+
+2026-09-21 follow-up, same tenant, same bug class again: with an unrelated bank-review question
+outstanding, "I want a breakdown on what has been spend at jackhammer" got the identical
+"couldn't find an order or invoice matching that" reply. _REQUEST_SHAPED's fix for bug 2 above
+only covered command-verb openers ("can you", "give", "look"...) — "I want"/"I need"/"I'd like"
+(+ "we" forms) are common real request openers it never covered, in either copy of the regex
+(vula/api/whatsapp.py and vula/commerce/bank_review.py — the comment on each references the
+other, but the fix from 2026-09-18 only touched one incident's exact phrasing).
 """
 import re
 
@@ -71,6 +79,10 @@ def test_genuine_paid_with_answers_still_match(text):
     "look up the invoice for the jackhammer",
     "what's the price of the jackhammer?",
     "Please send the quote",
+    "I want a breakdown on what has been spend at jackhammer",  # 2026-09-21 follow-up transcript
+    "I need the invoice for jackhammer",
+    "I'd like to know what we spent on jackhammer",
+    "We want a summary of jackhammer spend",
 ])
 def test_a_real_request_is_never_taken_as_a_bank_review_answer(text):
     assert _is_request_shaped(text) is True
