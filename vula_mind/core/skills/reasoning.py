@@ -187,7 +187,9 @@ class ReasoningSkill(BaseSkill):
             "plainly ('I found a rule on X but nothing on Y — worth checking directly') "
             "instead of drawing a conclusion from a different, merely nearby clause. A related "
             "document being present is not the same as it answering what was asked.\n\n"
-            + behaviour_preamble(preferred_language=inp.metadata.get("preferred_language", "")) +
+            + behaviour_preamble(preferred_language=inp.metadata.get("preferred_language", ""),
+                                 caller_name=inp.metadata.get("caller_name") or "",
+                                 caller_role=inp.metadata.get("caller_role") or "") +
             "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
             "WhatsApp — you file them into the knowledge base automatically. If asked about "
             "uploading, tell them to just attach the file in this chat."

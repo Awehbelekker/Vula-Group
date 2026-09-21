@@ -600,6 +600,50 @@ async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key
         logger.debug("owner-correction capture skipped: %s", exc)
 
 
+def _caller_identity(tenant_id: str, phone: str) -> tuple[Optional[str], Optional[str]]:
+    """Look this sender up in the tenant's own team (vula_team_members) → (name, role).
+
+    2026-09-17: this used to live inline in the commerce-admin path only, so the knowledge/RAG
+    path — the one a knowledge-mode tenant like DIGG actually uses — never knew who it was
+    talking to. Its metadata called the sender `customer_phone` and the chat history it read
+    back labelled every one of their turns "Client:", so the practice OWNER was handled as an
+    outside client (see core/skills/base.py::caller_block for the confirmed transcript).
+    Extracted here so both paths resolve identity the same way instead of one having it and
+    the other silently not.
+
+    Best-effort by design: an unmatched or failed lookup returns (None, None), which every
+    caller treats as "ordinary customer" — exactly the behaviour before this existed.
+    """
+    try:
+        from vula.commerce import service as commerce_service
+        target = _digits_za(phone)
+        rows = (commerce_service._client().table("vula_team_members")
+                .select("name,whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
+                .execute().data or [])
+        match = next((r for r in rows if _digits_za(r.get("whatsapp") or "") == target), None)
+        if match:
+            return match.get("name"), match.get("role")
+    except Exception as exc:
+        logger.debug("caller identity lookup skipped: %s", exc)
+    return None, None
+
+
+def _digits_za(p: str) -> str:
+    """Normalise an SA number to bare MSISDN digits (0XX… → 27XX…) for comparison."""
+    n = "".join(ch for ch in (p or "") if ch.isdigit())
+    return "27" + n[1:] if n.startswith("0") else n
+
+
+# Roles that make the sender part of the business rather than a customer of it — used to keep
+# customer-facing framing (the "Client:" history label, the "let me check with the team" hold
+# message, the "A customer asked:" helper ping) away from the people who ARE the team.
+_INSIDER_ROLES = {"owner", "manager", "admin", "staff", "sales_rep"}
+
+
+def _is_insider(caller_role: Optional[str]) -> bool:
+    return (caller_role or "").strip().lower() in _INSIDER_ROLES
+
+
 async def _maybe_offer_research_writeup(tenant_id: str, phone: str) -> None:
     """After a web-researched admin reply, offer it as a PDF too — product owner ask: "will
     Vula also ask if tenant wants a dedicated write-up of the research." No pending state is
@@ -980,13 +1024,23 @@ async def _voice_the_relay(tenant_id: str, question: str, answer: str) -> str:
 
 
 async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
-                                    reply: str, confidence: Optional[float] = None) -> str:
+                                    reply: str, confidence: Optional[float] = None,
+                                    caller_role: Optional[str] = None) -> str:
     """If `reply` shows the agent couldn't answer, reuse a learned answer, else ask a
     human helper on WhatsApp and hold the customer with a friendly note.
 
     Returns the reply to actually send. Shared by the knowledge and commerce paths so
     escalate-and-learn works for every tenant. Commerce has no confidence signal, so it
     escalates purely on the "I don't know / can't help" text patterns in should_escalate.
+
+    `caller_role` (2026-09-17) — when the person asking IS the business (owner/manager/staff),
+    none of this applies to them: relaying their question to "a helper" as "A customer asked:"
+    and holding them with "let me check with the team and get right back to you 🙏" is
+    nonsense aimed at the people who ARE the team. Confirmed live on DIGG — Judy, the practice
+    owner, asked Vula to group her own supplier invoices and got exactly that holding line
+    back. A learned answer is still reused for them (that's just a better answer); only the
+    escalate-and-hold half is skipped, so they get Vula's real reply, caveats and all, and can
+    act on it themselves.
     """
     try:
         from vula import escalation as esc
@@ -995,6 +1049,10 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
         learned = await esc.find_learned_answer(tenant_id, text)
         if learned:
             return learned
+        if _is_insider(caller_role):
+            logger.info("skipping customer-style escalation for %s caller on %s",
+                        caller_role, tenant_id)
+            return reply
         row = esc.create_escalation(tenant_id, phone, text)
         if row:
             # Flag it to the helper when the customer's OWN message reads frustrated — a
@@ -1203,10 +1261,20 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     if role == "admin":
         await _maybe_capture_owner_correction(tenant_id, phone, thread_key, text)
 
+    # Who is actually messaging — resolved BEFORE the history is formatted, because the answer
+    # decides how that history labels them. Everyone reaching this branch is staff/admin on
+    # this tenant's own line, so an unmatched lookup still isn't a customer; it just means we
+    # can't name them, and the generic label stays.
+    caller_name, caller_role = _caller_identity(tenant_id, phone)
+    user_label = "Client"
+    if _is_insider(caller_role):
+        who = f"{caller_name} ({caller_role})" if caller_name else str(caller_role)
+        user_label = who
+
     from vula.chat.history import get_db
     db = get_db()
     db.save(tenant_id, thread_key, "user", text)
-    history = db.format_for_prompt(tenant_id, thread_key, limit=12)
+    history = db.format_for_prompt(tenant_id, thread_key, limit=12, user_label=user_label)
 
     # Orchestration memory bridge: knowledge-mode (HRM) and commerce-mode routing stay
     # separate (a WhatsApp number is one or the other, never both), but everyone reaching
@@ -1241,11 +1309,13 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         set_request_tenant(tenant_id)
     except Exception:
         pass
-    reply = await _rag_reply(tenant_id, text, conversation_history=history, phone=phone)
+    reply = await _rag_reply(tenant_id, text, conversation_history=history, phone=phone,
+                             caller_name=caller_name, caller_role=caller_role)
 
     # ── Escalate-and-learn: if the agent isn't confident, reuse a learned answer,
     # else ask a human helper on WhatsApp and hold the customer with a friendly note.
-    reply = await _maybe_escalate_and_learn(tenant_id, phone, text, reply, _LAST_CONF.get())
+    reply = await _maybe_escalate_and_learn(tenant_id, phone, text, reply, _LAST_CONF.get(),
+                                            caller_role=caller_role)
 
     # NOTE: deliberately NOT strip_caveat()'d here (unlike the other three db.save("assistant",
     # ...) sites in this file) — _maybe_capture_owner_correction's is_uncertain_reply() detection
@@ -4357,7 +4427,8 @@ async def _tenant_for_phone(phone: str) -> Optional[str]:
 
 # ─── RAG reply ────────────────────────────────────────────────────────────────
 
-async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "", phone: str = "") -> str:
+async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
+                     caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — routes through the multi-agent runner.
 
     The agent uses HRM to pick the right skill(s): KB recall, web research
@@ -4381,6 +4452,13 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         # to attach a booking to: book_appointment recorded no customer_phone, and
         # cancel_appointment couldn't look the caller up at all (2026-07-27 bookings-via-chat gap).
         metadata = {"customer_phone": phone, "session_id": phone} if phone else {}
+        # 2026-09-17: caller identity never reached the skills on this path — only the commerce
+        # -admin path resolved it — so `reasoning`/`architecture_planning` had nothing telling
+        # them the sender was the tenant's own owner rather than a customer (the metadata key
+        # above literally says `customer_phone`). See core/skills/base.py::caller_block.
+        if caller_name or caller_role:
+            metadata["caller_name"] = caller_name
+            metadata["caller_role"] = caller_role
         # 2026-08-17: this (knowledge-mode tenant) path never detected a language at all — the
         # only skill with explicit language handling (commerce_assistant.py) is reached via a
         # DIFFERENT dispatch route that knowledge-mode tenants never use, so whichever skill HRM
@@ -5916,20 +5994,7 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     # sales reps sharing the tenant's WhatsApp number) can be scoped per-caller rather than
     # every recognized admin getting the identical, full owner-level view. Best-effort — an
     # unmatched/failed lookup just leaves the caller unscoped (today's behaviour).
-    caller_name, caller_role = None, None
-    try:
-        def _digits(p: str) -> str:
-            n = "".join(ch for ch in (p or "") if ch.isdigit())
-            return "27" + n[1:] if n.startswith("0") else n
-        target = _digits(phone)
-        rows = (commerce_service._client().table("vula_team_members")
-                .select("name,whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
-                .execute().data or [])
-        match = next((r for r in rows if _digits(r.get("whatsapp") or "") == target), None)
-        if match:
-            caller_name, caller_role = match.get("name"), match.get("role")
-    except Exception as exc:
-        logger.debug("caller identity lookup skipped: %s", exc)
+    caller_name, caller_role = _caller_identity(tenant_id, phone)
 
     skill = get_skill("commerce_admin")
     output = await skill(

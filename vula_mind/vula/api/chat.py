@@ -60,8 +60,18 @@ async def send_message(tenant_id: str, body: ChatMessageRequest) -> ChatMessageR
     # Save user message
     db.save(tenant_id, phone, "user", body.message)
 
+    # Who is this? This endpoint serves vula_mobile's STAFF app, so a caller we can put a name
+    # to is a member of the business, not a client of it — without this the history below
+    # labelled every one of their turns "Client:" and the skills were told nothing (see
+    # core/skills/base.py::caller_block for the DIGG incident). Needs the optional `phone` to
+    # match them against vula_team_members; with none supplied we stay on the old generic label.
+    from vula.api.whatsapp import _caller_identity, _is_insider
+    caller_name, caller_role = _caller_identity(tenant_id, phone) if phone else (None, None)
+    user_label = (f"{caller_name} ({caller_role})" if caller_name else str(caller_role)) \
+        if _is_insider(caller_role) else "Client"
+
     # Build conversation history for prompt context
-    history = db.format_for_prompt(tenant_id, phone, limit=12)
+    history = db.format_for_prompt(tenant_id, phone, limit=12, user_label=user_label)
 
     # Project-aware: inject the referenced project's context (codes, team, client).
     try:
@@ -75,7 +85,8 @@ async def send_message(tenant_id: str, body: ChatMessageRequest) -> ChatMessageR
     # Get RAG reply (same logic as WhatsApp, reused here)
     try:
         from vula.api.whatsapp import _rag_reply
-        reply = await _rag_reply(tenant_id, body.message, conversation_history=history)
+        reply = await _rag_reply(tenant_id, body.message, conversation_history=history,
+                                 caller_name=caller_name, caller_role=caller_role)
     except Exception as exc:
         logger.error("Chat RAG error for tenant %s: %s", tenant_id, exc)
         reply = "I'm having trouble right now. Please try again in a moment."
