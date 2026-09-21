@@ -411,7 +411,18 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
 /* ── Platform health ───────────────────────────────────────────────────────── */
 function HealthPanel({ onError, onViewDetail }) {
   const [h, setH] = useState(null)
+  const [qb, setQb] = useState(null)
+  const [qbBusy, setQbBusy] = useState(false)
   useEffect(() => { authFetch('/v1/master/health').then(setH).catch(e => onError(e.message)) }, [])
+  useEffect(() => { authFetch('/v1/master/qdrant-backup').then(r => setQb(r.statuses || [])).catch(e => onError(e.message)) }, [])
+  const runQdrantBackup = async () => {
+    setQbBusy(true)
+    try {
+      const r = await authFetch('/v1/master/qdrant-backup/run', { method: 'POST' })
+      if (r.error) onError(r.error)
+      else setQb(r.statuses || [])
+    } catch (e) { onError(e.message) } finally { setQbBusy(false) }
+  }
   if (!h) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const router = h.llm_router_24h || {}
   const localPct = router.total ? Math.round((router.local / router.total) * 100) : null
@@ -453,6 +464,31 @@ function HealthPanel({ onError, onViewDetail }) {
                 <td style={{ ...tdSm, color: C.muted }}>{(j.last_fired_at || '—').slice(0, 16).replace('T', ' ')}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h4 style={{ ...h4, margin: 0 }}>🗄️ Qdrant backups (DR)</h4>
+          <button style={{ ...miniBtn, marginLeft: 'auto', color: C.green, fontWeight: 600 }}
+                  disabled={qbBusy} onClick={runQdrantBackup}>
+            {qbBusy ? 'Running…' : 'Run backup now'}
+          </button>
+        </div>
+        <table style={{ ...table, marginTop: 8 }}>
+          <thead><tr style={{ textAlign: 'left', color: C.muted }}>{['Tenant', 'Status', 'Last run', 'Error'].map(x => <th key={x} style={{ ...th, padding: '4px 8px' }}>{x}</th>)}</tr></thead>
+          <tbody>
+            {(qb || []).map(r => (
+              <tr key={r.tenant_id} style={{ borderTop: `1px solid ${C.border}` }}>
+                <td style={tdSm}>{r.tenant_id}</td>
+                <td style={{ ...tdSm, color: r.last_backup_status === 'ok' ? C.green : C.red, fontWeight: 600 }}>
+                  {r.last_backup_status || '—'}
+                </td>
+                <td style={{ ...tdSm, color: C.muted }}>{(r.last_backup_at || '—').slice(0, 16).replace('T', ' ')}</td>
+                <td style={{ ...tdSm, color: C.red, fontSize: 11 }}>{r.last_backup_error ? String(r.last_backup_error).slice(0, 80) : ''}</td>
+              </tr>
+            ))}
+            {!(qb || []).length && <tr><td style={tdSm} colSpan={4}>No backups recorded yet.</td></tr>}
           </tbody>
         </table>
       </div>
