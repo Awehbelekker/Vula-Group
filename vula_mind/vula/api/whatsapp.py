@@ -2407,11 +2407,14 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
 # times — their actual request never reached the agent at all. The pending-purpose handler
 # swallowed every unparseable message and re-prompted, so the only way out of the conversation
 # was to answer about the receipts. That is the "stuck in a loop" Ian reported.
+# 2026-09-21: same bug class hit the bank-review sibling guard (vula/commerce/bank_review.py) —
+# "I want"/"I need"/"I'd like" (+ "we" forms) are common real-world request openers that none
+# of the command verbs below catch; kept in sync between the two copies of this regex.
 _REQUEST_SHAPED = re.compile(
     r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
     r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
     r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
-    r"forward|schedule|arrange|"
+    r"forward|schedule|arrange|i want|i need|i'd like|we want|we need|we'd like|"
     r"kry|stuur|wys|maak|soek|skryf)\b",
     re.IGNORECASE,
 )
