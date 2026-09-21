@@ -177,3 +177,87 @@ async def send_mail(tenant_id: str, to: str, subject: str, body: str,
     if r.status_code == 202:
         return {"sent": True, "to": to, "subject": subject}
     return {"error": f"Graph sendMail failed ({r.status_code}): {r.text[:300]}"}
+
+
+# ── Proactive KB sync (2026-09-18, E3) ─────────────────────────────────────────
+# drive_search/drive_download above are on-demand only — a file reaches the KB only after the
+# user explicitly asks Vula to pull that specific one in-conversation. This makes it proactive,
+# mirroring email/ClickUp's scheduled sync loops. Feasible for OneDrive specifically because
+# Files.Read (SCOPES above) is a genuinely broad read scope — unlike Google Drive's deliberately
+# restrictive drive.file (see vula/google/service.py's own SCOPES comment: "Vula only sees files
+# it created itself, never a tenant's whole Drive"), which makes an equivalent Drive sweep return
+# nothing useful for a tenant's pre-existing documents without a scope change Vula doesn't have
+# today — not implemented here for that reason, not an oversight.
+
+async def list_recent_files(tenant_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """Files recently modified/viewed in this tenant's OneDrive, via Graph's own /me/drive/recent
+    — no delta-token/cursor state to persist, Graph already ranks by recency. Returns [] on any
+    failure (not connected, a transient API error) — never raises, feeds a best-effort sync loop."""
+    try:
+        token = await _token(tenant_id)
+    except MicrosoftNotConnected:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(f"{_GRAPH}/me/drive/recent", headers=_hdr(token),
+                                 params={"$top": max(1, min(limit, 50)),
+                                         "$select": "id,name,file,webUrl,lastModifiedDateTime"})
+            r.raise_for_status()
+            items = r.json().get("value", [])
+    except Exception as exc:
+        logger.debug("OneDrive list_recent_files failed for %s: %s", tenant_id, exc)
+        return []
+    return [{"id": i.get("id"), "name": i.get("name"),
+            "mimeType": (i.get("file") or {}).get("mimeType", ""),
+            "modifiedTime": i.get("lastModifiedDateTime")}
+            for i in items if i.get("file") and i.get("id")]
+
+
+async def process_all_onedrive_sync() -> int:
+    """Ingest every connected tenant's recently-modified OneDrive files into their knowledge
+    base (called by the scheduled background loop, _onedrive_sync_loop in vula/api/server.py —
+    mirrors process_all_email_sync/process_all_clickup_sync's shape). Re-ingesting the same
+    file every sweep is safe: VulaIngestionPipeline.ingest_file derives its doc_id from a
+    content hash (not just the filename), so an unchanged file re-embeds to the identical id
+    (a no-op overwrite) and a genuinely changed one supersedes its prior version automatically
+    — no doc_id bookkeeping needed here."""
+    from vula.microsoft.credentials import _client
+    try:
+        rows = (_client().table("vula_microsoft_accounts").select("tenant_id")
+                .eq("status", "connected").execute().data or [])
+    except Exception:
+        return 0
+    from vula.integrations.sync_status import record_sync_result
+
+    total = 0
+    for r in rows:
+        tenant_id = r["tenant_id"]
+        try:
+            files = await list_recent_files(tenant_id)
+        except Exception as exc:
+            logger.warning("OneDrive recent-files listing failed for %s: %s", tenant_id, exc)
+            record_sync_result("vula_microsoft_accounts", tenant_id, ok=False, error=str(exc))
+            continue
+        if not files:
+            record_sync_result("vula_microsoft_accounts", tenant_id, ok=True)
+            continue
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        for f in files:
+            try:
+                downloaded = await drive_download(tenant_id, f["id"])
+                from config import settings
+                from pathlib import Path
+                d = Path(settings.upload_dir) / tenant_id / "onedrive_sync"
+                d.mkdir(parents=True, exist_ok=True)
+                p = d / (downloaded.get("name") or f["name"])
+                p.write_bytes(downloaded["data"])
+                await pipeline.ingest_file(p, source_type="document")
+                total += 1
+            except Exception as exc:
+                logger.warning("OneDrive sync ingest failed for %s/%s: %s", tenant_id, f.get("id"), exc)
+        # Tenant-level status reflects "did the sweep run", not "did every file succeed" — a
+        # per-file failure above is already individually logged; recording ok here matches the
+        # granularity the connect-status UI needs (is this tenant's sync alive at all).
+        record_sync_result("vula_microsoft_accounts", tenant_id, ok=True)
+    return total

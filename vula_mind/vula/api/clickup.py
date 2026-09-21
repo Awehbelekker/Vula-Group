@@ -182,7 +182,8 @@ async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
 async def status(tenant_id: str) -> dict:
     try:
         res = (_client().table("vula_clickup_accounts")
-               .select("tenant_id,team_id,list_ids,status,connected_at")
+               .select("tenant_id,team_id,list_ids,status,connected_at,"
+                       "last_synced_at,last_sync_status,last_sync_error")
                .eq("tenant_id", tenant_id).limit(1).execute())
         rows = res.data or []
     except Exception:
@@ -244,11 +245,23 @@ async def connect(body: ConnectIn) -> dict:
 
 # ── Sync ClickUp projects into the tenant's knowledge base ────────────────────
 
-@router.post("/sync-kb/{tenant_id}")
-async def sync_kb(tenant_id: str) -> dict:
-    """Pull the tenant's ClickUp lists + their tasks into the RAG knowledge base
+async def sync_tenant_clickup_kb(tenant_id: str) -> dict:
+    """Pull the tenant's ClickUp lists (tasks) + Docs (pages) into the RAG knowledge base
     so the AI can answer questions about live projects (e.g. 'what's happening on
-    HPC Bokaap?'). Re-runnable — re-ingests each list under a stable doc id.
+    HPC Bokaap?') or workspace documentation. Re-runnable — re-ingests each list/page under a
+    stable doc id.
+
+    2026-09-18: this used to be reachable only via the /sync-kb HTTP route below, which had no
+    caller anywhere (no cron job, no onboarding hook, no UI trigger) — ClickUp content never
+    actually reached the KB in practice. Extracted into a plain function so
+    vula.clickup.service.process_all_clickup_sync (the new scheduled loop, see
+    _clickup_sync_loop in vula/api/server.py) can call the same logic the route does.
+
+    2026-09-18 (E2): also syncs Docs, not just tasks — a structurally separate ClickUp API
+    surface (v3, see vula.clickup.service's _BASE_V3 section) that the original task-only sync
+    never touched. Doc sync is entirely best-effort and additive: list_docs/list_pages already
+    fail closed to [] on any error (not connected, token can't see Docs, transient API failure),
+    so a tenant whose Docs sync fails still gets their task sync as before.
     """
     creds = get_tenant_clickup_creds(tenant_id)
     if not creds:
@@ -285,7 +298,58 @@ async def sync_kb(tenant_id: str) -> dict:
             chunks += getattr(res, "chunks_stored", 0) or 0
         except Exception as exc:
             log.warning("KB sync ingest failed for list %s: %s", lid, exc)
-    return {"tenant_id": tenant_id, "synced_lists": synced, "chunks_added": chunks}
+
+    synced_docs, doc_chunks = await _sync_tenant_clickup_docs(tenant_id, pipeline)
+
+    return {"tenant_id": tenant_id, "synced_lists": synced, "chunks_added": chunks,
+            "synced_doc_pages": synced_docs, "doc_chunks_added": doc_chunks}
+
+
+async def _sync_tenant_clickup_docs(tenant_id: str, pipeline) -> tuple[int, int]:
+    """The Docs half of sync_tenant_clickup_kb, split out for readability — sweeps every Doc's
+    every page and ingests its content under a stable per-page doc_id. Best-effort throughout:
+    one doc/page failing never stops the sweep, and an empty list_docs (no Docs, or the token
+    can't see them) just means nothing to sync, not an error."""
+    try:
+        docs = await service.list_docs(tenant_id)
+    except Exception as exc:
+        # list_docs is designed to fail closed to [] itself — this is defense-in-depth so a
+        # Docs API outage can never take the task sync down with it, even if that contract
+        # is ever violated (e.g. by a future change) or bypassed by a caller/test.
+        log.debug("ClickUp list_docs failed for %s: %s", tenant_id, exc)
+        docs = []
+    synced, chunks = 0, 0
+    for d in docs:
+        doc_id = d.get("id")
+        if not doc_id:
+            continue
+        try:
+            pages = await service.list_pages(tenant_id, doc_id)
+        except Exception as exc:
+            log.debug("ClickUp doc page listing failed for %s/%s: %s", tenant_id, doc_id, exc)
+            continue
+        for p in pages:
+            page_id, content = p.get("id"), (p.get("content") or "").strip()
+            if not page_id or not content:
+                continue
+            page_name = p.get("name") or "Untitled page"
+            try:
+                res = await pipeline.ingest_text(
+                    content=f"ClickUp Doc: {d.get('name') or 'Untitled'} — {page_name}\n\n{content}",
+                    filename=f"{page_name}.md".replace("/", "-"),
+                    doc_id=f"clickup_doc_{doc_id}_{page_id}",
+                )
+                synced += 1
+                chunks += getattr(res, "chunks_stored", 0) or 0
+            except Exception as exc:
+                log.warning("KB sync ingest failed for doc page %s/%s: %s", doc_id, page_id, exc)
+    return synced, chunks
+
+
+@router.post("/sync-kb/{tenant_id}")
+async def sync_kb(tenant_id: str) -> dict:
+    """HTTP entry point — thin wrapper, see sync_tenant_clickup_kb for the actual logic."""
+    return await sync_tenant_clickup_kb(tenant_id)
 
 
 # ── Inbound webhook (ClickUp → Vula) ──────────────────────────────────────────
@@ -464,6 +528,28 @@ async def _handle_non_status_event(tenant_id: str, event: str, task_id: str,
     except Exception as exc:
         log.warning("ClickUp notify failed for %s: %s", tenant_id, exc)
         return {"status": "error", "event": event}
+
+    # 2026-09-18: near-real-time KB freshness for the two events most likely to change what
+    # a question about this task should find — a new task existing at all, or a new comment
+    # adding detail. The scheduled sweep (process_all_clickup_sync, hourly) is the backstop;
+    # this closes the gap for anyone asking sooner than that. Best-effort — a KB miss here
+    # never affects the WhatsApp notification already sent above.
+    if event in ("taskCommentPosted", "taskCreated") and task:
+        try:
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            lines = [f"ClickUp task: {title}", f"Status: {task.get('status') or 'open'}"]
+            if task.get("assignees"):
+                lines.append(f"Assigned to: {', '.join(task['assignees'])}")
+            if task.get("description"):
+                lines.append(f"Description: {task['description']}")
+            if event == "taskCommentPosted" and msg:
+                lines.append(msg.split("\n\n", 1)[-1].strip('"'))
+            await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
+                content="\n".join(lines), filename=f"{title}.txt".replace("/", "-"),
+                doc_id=f"clickup_task_{task_id}")
+        except Exception as exc:
+            log.debug("ClickUp incremental KB ingest skipped for %s: %s", task_id, exc)
+
     return {"status": "ok", "event": event, "notified": True}
 
 

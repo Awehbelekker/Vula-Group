@@ -365,9 +365,19 @@ async def resolve_generation_route(
                       backend=f"openrouter/{settings.model_worker_cheap}", reason="dev_mode")
         return f"openrouter/{settings.model_worker_cheap}", settings.openrouter_api_key, OPENROUTER_BASE
 
+    # Per-tenant opt-in daily spend cap (migration 166) — only gates DISCRETIONARY cloud use
+    # below (operator override, complexity escalation); the local-unreachable fallback further
+    # down stays unaffected, since blocking that on top of an outage would mean total service
+    # loss for the tenant instead of the intended soft degrade. Never blocks local — it's free.
+    from vula.integrations.metering import get_request_tenant
+    tenant_id = get_request_tenant()
+    capped = _spend_capped(tenant_id)
+    if capped:
+        _alert_spend_cap_breach(tenant_id)
+
     # Explicit operator override — accuracy-first, but no longer the default and always logged so
     # even this path is auditable for "why did data leave SA".
-    if settings.prefer_cloud_llm and settings.openrouter_api_key:
+    if settings.prefer_cloud_llm and settings.openrouter_api_key and not capped:
         _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
                       backend=f"openrouter/{cloud_model}", reason="operator_prefer_cloud")
         return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
@@ -376,13 +386,14 @@ async def resolve_generation_route(
     if await ollama_available(model=local_model):
         # (c) complexity — only a genuine frontier task is allowed to leave local.
         complex_reason = assess_complexity(messages=messages, task_type=task_type)
-        if complex_reason and settings.openrouter_api_key:
+        if complex_reason and settings.openrouter_api_key and not capped:
             logger.info("Cloud for complexity (%s) — run=%s task=%s", complex_reason, run_id, task)
             _log_decision(run_id=run_id, task=task, outcome="cloud", escalated=True,
                           backend=f"openrouter/{cloud_model}", reason=complex_reason)
             return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
+        reason = "spend_cap_soft_degrade" if (complex_reason and capped) else "local_first"
         _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
-                      backend=f"ollama/{local_model}", reason="local_first")
+                      backend=f"ollama/{local_model}", reason=reason)
         return f"ollama/{local_model}", None, settings.ollama_base
 
     # (a) local unreachable → cloud, logged with the reason a regulator would ask about.
@@ -396,6 +407,45 @@ async def resolve_generation_route(
     _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
                   backend=f"ollama/{local_model}", reason="local_unreachable_no_cloud_key")
     return f"ollama/{local_model}", None, settings.ollama_base
+
+
+def _spend_capped(tenant_id: Optional[str]) -> bool:
+    """True if this tenant has an opt-in daily spend cap (migration 166) and has reached it.
+    Fail-open on any error — never let a metering read block generation."""
+    if not tenant_id:
+        return False
+    try:
+        from vula.integrations.metering import is_over_spend_cap
+        return is_over_spend_cap(tenant_id)
+    except Exception:
+        return False
+
+
+def _alert_spend_cap_breach(tenant_id: str) -> None:
+    """Fire-and-forget WhatsApp alert to the team, at most once per 12h per tenant (reuses Mass
+    Mind's generic alert-cooldown dict — see core/mass_mind/health.py's should_alert). Never
+    awaited inline — a metering/notification hiccup must not add latency to a real reply."""
+    try:
+        from core.mass_mind.health import should_alert
+        if not should_alert(f"spend_cap:{tenant_id}"):
+            return
+        import asyncio as _asyncio
+        from vula.api.onboarding import _send_whatsapp
+
+        async def _send() -> None:
+            try:
+                await _send_whatsapp(
+                    settings.team_whatsapp,
+                    f"💰 Tenant {tenant_id} hit its daily LLM spend cap — generation has "
+                    f"soft-degraded to local-only for the rest of today (never blocked, just "
+                    f"cheaper/slower). Adjust the cap in /master if this is expected.",
+                )
+            except Exception:
+                pass
+
+        _asyncio.get_running_loop().create_task(_send())
+    except Exception:
+        pass
 
 
 def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,

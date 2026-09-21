@@ -308,6 +308,108 @@ async def test_local_first_decision_is_logged():
     assert logged["reason"] == "local_first"
 
 
+# ── per-tenant spend cap (migration 166) ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_spend_cap_suppresses_complexity_escalation_to_cloud():
+    """A capped tenant's genuinely complex task must stay local — soft-degrade, never a hard
+    block — instead of escalating to cloud the way an uncapped tenant's would."""
+    logged = {}
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
+        patch("core.llm_router._log_decision", side_effect=lambda **k: logged.update(k)),
+        patch("core.llm_router.settings") as s,
+        patch("vula.integrations.metering.get_request_tenant", return_value="digg-demo"),
+        patch("core.llm_router._spend_capped", return_value=True),
+        patch("core.llm_router._alert_spend_cap_breach") as mock_alert,
+    ):
+        s.prefer_cloud_llm = False
+        s.model_worker = "llama3.2:3b"
+        s.model_worker_cloud = "meta-llama/llama-3.3-70b-instruct"
+        s.ollama_base = "http://x:11434"
+        s.openrouter_api_key = "sk-or-test"
+        model, key, _ = await resolve_generation_route(task_type="architecture_planning")
+
+    assert model == "ollama/llama3.2:3b" and key is None
+    assert logged["outcome"] == "local" and logged["escalated"] is False
+    assert logged["reason"] == "spend_cap_soft_degrade"
+    mock_alert.assert_called_once_with("digg-demo")
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_suppresses_operator_prefer_cloud_override():
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
+        patch("core.llm_router.settings") as s,
+        patch("vula.integrations.metering.get_request_tenant", return_value="digg-demo"),
+        patch("core.llm_router._spend_capped", return_value=True),
+        patch("core.llm_router._alert_spend_cap_breach"),
+    ):
+        s.prefer_cloud_llm = True
+        s.model_worker = "qwen2.5"
+        s.model_worker_cloud = "meta-llama/llama-3.3-70b-instruct"
+        s.ollama_base = "http://localhost:11434"
+        s.openrouter_api_key = "sk-or-test"
+        model, api_key, api_base = await resolve_generation_route()
+
+    assert model == "ollama/qwen2.5"
+    assert api_key is None
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_never_blocks_local_unreachable_fallback():
+    """Capped AND local down must still reach cloud — soft-degrade must never mean total outage
+    for the tenant on top of an infra failure."""
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=False)),
+        patch("core.llm_router.settings") as s,
+        patch("vula.integrations.metering.get_request_tenant", return_value="digg-demo"),
+        patch("core.llm_router._spend_capped", return_value=True),
+        patch("core.llm_router._alert_spend_cap_breach"),
+    ):
+        s.prefer_cloud_llm = False
+        s.model_worker = "qwen2.5"
+        s.model_worker_cloud = "meta-llama/llama-3.3-70b-instruct"
+        s.ollama_base = "http://localhost:11434"
+        s.openrouter_api_key = "sk-or-test"
+        model, api_key, api_base = await resolve_generation_route()
+
+    assert model == "openrouter/meta-llama/llama-3.3-70b-instruct"
+    assert api_key == "sk-or-test"
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_not_breached_does_not_alert_or_degrade():
+    with (
+        patch("core.llm_router.ollama_available", new=AsyncMock(return_value=True)),
+        patch("core.llm_router.settings") as s,
+        patch("vula.integrations.metering.get_request_tenant", return_value="digg-demo"),
+        patch("core.llm_router._spend_capped", return_value=False),
+        patch("core.llm_router._alert_spend_cap_breach") as mock_alert,
+    ):
+        s.prefer_cloud_llm = False
+        s.model_worker = "llama3.2:3b"
+        s.model_worker_cloud = "meta-llama/llama-3.3-70b-instruct"
+        s.ollama_base = "http://x:11434"
+        s.openrouter_api_key = "sk-or-test"
+        model, key, _ = await resolve_generation_route(task_type="architecture_planning")
+
+    assert model == "openrouter/meta-llama/llama-3.3-70b-instruct"
+    mock_alert.assert_not_called()
+
+
+def test_spend_capped_false_with_no_tenant():
+    assert llm_router._spend_capped(None) is False
+    assert llm_router._spend_capped("") is False
+
+
+def test_spend_capped_fails_open_on_metering_error():
+    with patch(
+        "vula.integrations.metering.is_over_spend_cap", side_effect=RuntimeError("db down")
+    ):
+        assert llm_router._spend_capped("digg-demo") is False
+
+
 # ── requirement (b): post-response reliability + escalation ───────────────────
 
 def test_looks_unreliable():

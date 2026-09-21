@@ -43,6 +43,12 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   })
   const [err, setErr] = useState('')
   const [prefill, setPrefill] = useState(null)   // signup → pre-filled "+ New tenant" form (P1.4)
+  // Go-live readiness pass (Phase 3.4): create_tenant only sets core config — WhatsApp
+  // connection, KB seeding, and branding remain separate manual steps a master admin has to
+  // remember to do afterward. The existing Onboard tab's 9-step checklist already covers all
+  // of that; this just gets a master admin straight there for the tenant they JUST created,
+  // instead of leaving them on the Tenants tab with nothing pointing at what's still missing.
+  const [onboardSelect, setOnboardSelect] = useState(null)
   // Lightweight per-tenant drill-in (IA overhaul 2026-07-22) — replaces the whole panel body
   // while active. URL-addressable (2026-09-16): #/master/tenant/{id} so a support-ticket link
   // can point straight at a tenant's detail view, and the browser back button steps out of it
@@ -74,8 +80,10 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
     <div style={{ fontFamily: 'system-ui', color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
       <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
-      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)} />}
-      {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }} />}
+      {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
+        onCreated={(tenantId) => { setOnboardSelect(tenantId); setTab('onboard') }} />}
+      {tab === 'onboard' && <OnboardPanel onError={setErr} onOpenTenant={onOpenTenant} onProvision={(s) => { setPrefill(s); setTab('tenants') }}
+        selectTenantId={onboardSelect} onConsumeSelect={() => setOnboardSelect(null)} />}
       {tab === 'health' && <HealthPanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'usage' && <UsagePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'users' && <UsersPanel onError={setErr} />}
@@ -86,7 +94,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
 }
 
 /* ── Onboarding cockpit — guided go-live checklist per tenant (UI overhaul P3) ── */
-function OnboardPanel({ onError, onOpenTenant, onProvision }) {
+function OnboardPanel({ onError, onOpenTenant, onProvision, selectTenantId, onConsumeSelect }) {
   const [tenants, setTenants] = useState([])
   const [selected, setSelected] = useState('')
   const [setup, setSetup] = useState(null)
@@ -100,6 +108,12 @@ function OnboardPanel({ onError, onOpenTenant, onProvision }) {
     }).catch(e => onError(e.message))
     authFetch('/v1/admin/signups?limit=50').then(d => setSignups(d.signups || [])).catch(() => {})
   }, [])  // eslint-disable-line
+
+  useEffect(() => {
+    if (!selectTenantId) return
+    setSelected(selectTenantId)
+    onConsumeSelect && onConsumeSelect()
+  }, [selectTenantId])  // eslint-disable-line
 
   useEffect(() => {
     if (!selected) return
@@ -178,7 +192,7 @@ function OnboardPanel({ onError, onOpenTenant, onProvision }) {
 }
 
 /* ── Tenants & provisioning ─────────────────────────────────────────────────── */
-function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumePrefill }) {
+function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumePrefill, onCreated }) {
   const [rows, setRows] = useState([])
   const [registry, setRegistry] = useState({ business_types: [], modules: [] })
   const [creating, setCreating] = useState(false)
@@ -213,7 +227,11 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
         body: JSON.stringify(form),
       })
       if (r.error) onError(r.error)
-      else { setCreating(false); setForm({ tenant_id: '', display_name: '', business_type: 'retail' }); load() }
+      else {
+        const newTenantId = form.tenant_id
+        setCreating(false); setForm({ tenant_id: '', display_name: '', business_type: 'retail' }); load()
+        onCreated && onCreated(newTenantId)
+      }
     } catch (e) { onError(e.message) } finally { setBusy(false) }
   }
 
@@ -333,6 +351,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
   const [storeUrl, setStoreUrl] = useState(tenant.store_url || '')
   const [gateway, setGateway] = useState(tenant.default_payment_provider || '')
   const [shareNetwork, setShareNetwork] = useState(!!tenant.share_knowledge_with_network)
+  const [spendCap, setSpendCap] = useState(tenant.spend_cap_usd != null ? String(tenant.spend_cap_usd) : '')
   const allModules = registry.modules || []
 
   const toggle = (id) => setModules(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id])
@@ -356,6 +375,13 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
           <b style={{ fontSize: 12.5 }}>Default gateway</b>
           <input value={gateway} onChange={e => setGateway(e.target.value)} placeholder="yoco / payfast / …" style={{ ...input, flex: 1 }} />
         </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <b style={{ fontSize: 12.5 }}>Daily LLM spend cap (USD)</b>
+          <input value={spendCap} onChange={e => setSpendCap(e.target.value)} placeholder="uncapped" type="number" min="0" step="0.01" style={{ ...input, flex: 1 }} />
+        </div>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.muted }}>
+        Empty = uncapped. On breach, generation soft-degrades to local-only for the rest of the day (never blocked) and the team gets a WhatsApp alert. See the Usage tab for today's spend vs. cap per tenant.
       </div>
       <div>
         <b style={{ fontSize: 12.5, display: 'block', marginBottom: 6 }}>Modules</b>
@@ -376,6 +402,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
         onClick={() => onSave({
           modules, plan, store_url: storeUrl, default_payment_provider: gateway,
           share_knowledge_with_network: shareNetwork,
+          spend_cap_usd: spendCap === '' ? null : Number(spendCap),
         })}>Save changes</button>
     </div>
   )
@@ -384,7 +411,18 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
 /* ── Platform health ───────────────────────────────────────────────────────── */
 function HealthPanel({ onError, onViewDetail }) {
   const [h, setH] = useState(null)
+  const [qb, setQb] = useState(null)
+  const [qbBusy, setQbBusy] = useState(false)
   useEffect(() => { authFetch('/v1/master/health').then(setH).catch(e => onError(e.message)) }, [])
+  useEffect(() => { authFetch('/v1/master/qdrant-backup').then(r => setQb(r.statuses || [])).catch(e => onError(e.message)) }, [])
+  const runQdrantBackup = async () => {
+    setQbBusy(true)
+    try {
+      const r = await authFetch('/v1/master/qdrant-backup/run', { method: 'POST' })
+      if (r.error) onError(r.error)
+      else setQb(r.statuses || [])
+    } catch (e) { onError(e.message) } finally { setQbBusy(false) }
+  }
   if (!h) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const router = h.llm_router_24h || {}
   const localPct = router.total ? Math.round((router.local / router.total) * 100) : null
@@ -426,6 +464,31 @@ function HealthPanel({ onError, onViewDetail }) {
                 <td style={{ ...tdSm, color: C.muted }}>{(j.last_fired_at || '—').slice(0, 16).replace('T', ' ')}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h4 style={{ ...h4, margin: 0 }}>🗄️ Qdrant backups (DR)</h4>
+          <button style={{ ...miniBtn, marginLeft: 'auto', color: C.green, fontWeight: 600 }}
+                  disabled={qbBusy} onClick={runQdrantBackup}>
+            {qbBusy ? 'Running…' : 'Run backup now'}
+          </button>
+        </div>
+        <table style={{ ...table, marginTop: 8 }}>
+          <thead><tr style={{ textAlign: 'left', color: C.muted }}>{['Tenant', 'Status', 'Last run', 'Error'].map(x => <th key={x} style={{ ...th, padding: '4px 8px' }}>{x}</th>)}</tr></thead>
+          <tbody>
+            {(qb || []).map(r => (
+              <tr key={r.tenant_id} style={{ borderTop: `1px solid ${C.border}` }}>
+                <td style={tdSm}>{r.tenant_id}</td>
+                <td style={{ ...tdSm, color: r.last_backup_status === 'ok' ? C.green : C.red, fontWeight: 600 }}>
+                  {r.last_backup_status || '—'}
+                </td>
+                <td style={{ ...tdSm, color: C.muted }}>{(r.last_backup_at || '—').slice(0, 16).replace('T', ' ')}</td>
+                <td style={{ ...tdSm, color: C.red, fontSize: 11 }}>{r.last_backup_error ? String(r.last_backup_error).slice(0, 80) : ''}</td>
+              </tr>
+            ))}
+            {!(qb || []).length && <tr><td style={tdSm} colSpan={4}>No backups recorded yet.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -511,10 +574,13 @@ function UsagePanel({ onError, onViewDetail }) {
     <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
       <table style={table}>
         <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
-          {['Tenant', 'AI calls (14d)', 'AI cost', 'Infra cost/day', 'Vectors', 'Storage'].map(x => <th key={x} style={th}>{x}</th>)}
+          {['Tenant', 'AI calls (14d)', 'AI cost', 'Infra cost/day', 'Vectors', 'Storage', 'Spend cap', 'Documents', 'Seats'].map(x => <th key={x} style={th}>{x}</th>)}
         </tr></thead>
         <tbody>
-          {tenants.map(([tid, t]) => (
+          {tenants.map(([tid, t]) => {
+            const docOver = t.doc_cap != null && (t.doc_count || 0) >= t.doc_cap
+            const seatOver = t.seat_cap != null && (t.seat_count || 0) >= t.seat_cap
+            return (
             <tr key={tid} style={{ borderTop: `1px solid ${C.border}` }}>
               <td style={{ ...td, fontWeight: 600 }}>
                 {onViewDetail ? <button onClick={() => onViewDetail(tid)} style={miniBtn}>{tid}</button> : tid}
@@ -524,9 +590,18 @@ function UsagePanel({ onError, onViewDetail }) {
               <td style={td}>${(t.infra_cost_usd || 0).toFixed(2)}</td>
               <td style={td}>{t.vectors ?? '—'}</td>
               <td style={td}>{t.storage_mb != null ? `${Number(t.storage_mb).toFixed(0)} MB` : '—'}</td>
+              <td style={{ ...td, color: t.capped_today ? C.red : C.muted, fontWeight: t.capped_today ? 600 : 400 }}>
+                {t.spend_cap_usd != null ? `$${Number(t.spend_cap_usd).toFixed(2)}/day${t.capped_today ? ' · CAPPED TODAY' : ''}` : 'uncapped'}
+              </td>
+              <td style={{ ...td, color: docOver ? C.red : C.text, fontWeight: docOver ? 600 : 400 }}>
+                {t.doc_count ?? 0}{t.doc_cap != null ? ` / ${t.doc_cap}` : ' / ∞'}
+              </td>
+              <td style={{ ...td, color: seatOver ? C.red : C.text, fontWeight: seatOver ? 600 : 400 }}>
+                {t.seat_count ?? 0}{t.seat_cap != null ? ` / ${t.seat_cap}` : ' / ∞'}
+              </td>
             </tr>
-          ))}
-          {!tenants.length && <tr><td style={td} colSpan={6}>No usage recorded in the last 14 days.</td></tr>}
+          )})}
+          {!tenants.length && <tr><td style={td} colSpan={9}>No usage recorded in the last 14 days.</td></tr>}
         </tbody>
       </table>
     </div>

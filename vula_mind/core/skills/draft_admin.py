@@ -32,8 +32,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "name": "draft_letter",
         "description": (
             "Draft a professional business letter/proposal, put it on the business's branded "
-            "letterhead as a PDF, and send it back as a WhatsApp document. Optionally also save "
-            "it to the user's connected Google Drive."
+            "letterhead as a PDF (or a Word .docx — see output_format), and send it back as a "
+            "WhatsApp document. Optionally also save it to the user's connected Google Drive."
         ),
         "parameters": {"type": "object", "properties": {
             "document_type": {"type": "string", "enum": [
@@ -47,6 +47,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "client_name": {"type": "string"},
             "recipient": {"type": "string", "description": "Who it's addressed to (name/address block)."},
             "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
+            "output_format": {"type": "string", "enum": ["pdf", "docx"],
+                "description": "'pdf' (default) or 'docx' (editable Word document). Only use "
+                               "'docx' when the request explicitly says Word/.docx/editable — "
+                               "never guess; a PDF is the right default for a finished document."},
             "project_value_zar": {"type": "number",
                 "description": "fee_proposal only: project/construction value in ZAR, if known."},
             "floor_area_m2": {"type": "number",
@@ -87,6 +91,28 @@ def _fee_proposal_gaps(args: Dict[str, Any]) -> List[str]:
     if not args.get("fee_basis") and not _FEE_BASIS_RE.search(brief):
         gaps.append("the fee basis (% of construction cost, hourly rate, or fixed fee)")
     return gaps
+
+
+async def _resolve_sign_off(tenant_id: str, phone: str, branding: dict) -> str:
+    """Best-effort 'Kind regards, <sender>, <business>' closing block — the real sender's name
+    if this phone resolves to a known team member, else just the business name. Never invents a
+    name: an unresolved sender gets the business-only fallback rather than a guess."""
+    shop_name = (branding.get("trading_as") or branding.get("name")
+                or tenant_id.replace("-", " ").title())
+    sender_name = ""
+    try:
+        from vula.commerce import service as commerce_service
+        digits = "".join(c for c in (phone or "") if c.isdigit())
+        digits = "27" + digits[1:] if digits.startswith("0") else digits
+        rows = (commerce_service._client().table("vula_team_members").select("name")
+                .eq("tenant_id", tenant_id).eq("whatsapp", digits).eq("active", True)
+                .limit(1).execute().data or [])
+        sender_name = (rows[0].get("name") or "").strip() if rows else ""
+    except Exception as exc:
+        logger.debug("sign-off sender lookup skipped: %s", exc)
+    if sender_name:
+        return f"Kind regards,\n{sender_name}\n{shop_name}"
+    return f"Kind regards,\n{shop_name}"
 
 
 async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
@@ -155,32 +181,51 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
     if extra_markdown:
         content = content + "\n\n" + extra_markdown
 
-    from vula.commerce.pdf import render_letter_pdf, merge_branding
+    from vula.commerce.pdf import render_letter_pdf, render_letter_docx, merge_branding
     from vula.commerce import service as commerce_service
     settings_row = await commerce_service.get_invoice_settings(tenant_id)
     branding = merge_branding(tenant_id, settings_row)
-    pdf_bytes = render_letter_pdf(
+    # 2026-09-18: render_letter_pdf has always accepted a sign_off closing block, but this call
+    # never passed one — every letter generated via WhatsApp went out with no signature of any
+    # kind, typed or otherwise. Best-effort real sender name (falls back to just the business
+    # name); signature_url/signature_name (a captured signature image, migration 165) already
+    # flow through tenant_profile=branding via merge_branding, no extra param needed here.
+    sign_off = await _resolve_sign_off(tenant_id, phone, branding)
+    render_kwargs = dict(
         tenant_id=tenant_id, body_markdown=content, doc_label=doc_config["label"],
         recipient=args.get("recipient"), subject=args.get("project_name"),
-        tenant_profile=branding,
+        tenant_profile=branding, sign_off=sign_off,
     )
+    # 'docx' is opt-in only — the model is told not to guess it, so any value other than the
+    # literal string "docx" (missing, None, a typo) safely defaults to pdf.
+    is_docx = args.get("output_format") == "docx"
+    if is_docx:
+        doc_bytes = render_letter_docx(**render_kwargs)
+        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ext = "docx"
+    else:
+        doc_bytes = render_letter_pdf(**render_kwargs)
+        content_type = "application/pdf"
+        ext = "pdf"
 
-    filename = f"{doc_config['label'].replace(' ', '_')}.pdf"
+    filename = f"{doc_config['label'].replace(' ', '_')}.{ext}"
     result: Dict[str, Any] = {"draft_id": draft_id, "document_type": doc_type,
-                              "word_count": word_count, "has_placeholders": has_placeholders}
+                              "word_count": word_count, "has_placeholders": has_placeholders,
+                              "output_format": ext}
 
     sent = False
     if phone:
         from vula.api.whatsapp import _send_invoice_document
         sent = await _send_invoice_document(
-            phone, pdf_bytes, filename, caption=doc_config["label"], tenant_id=tenant_id,
+            phone, doc_bytes, filename, caption=doc_config["label"], tenant_id=tenant_id,
+            content_type=content_type,
         )
     result["sent_via_whatsapp"] = sent
 
     if args.get("save_to_drive"):
         try:
             from vula.google import service as google_service
-            uploaded = await google_service.drive_upload(tenant_id, filename, "application/pdf", pdf_bytes)
+            uploaded = await google_service.drive_upload(tenant_id, filename, content_type, doc_bytes)
             result["drive"] = {"saved": True, "link": uploaded.get("webViewLink")}
         except Exception as exc:
             result["drive"] = {"saved": False, "reason": "Google not connected" if

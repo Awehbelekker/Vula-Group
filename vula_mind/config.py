@@ -237,6 +237,12 @@ class Settings(BaseSettings):
     from_email: str = "Vula Group <hello@vula.ai>"
     team_email: str = ""                # team notifications (Richard/Judy)
 
+    # ── Error monitoring (Sentry) ────────────────────────────────────────────
+    # Empty (the default) keeps today's behaviour: errors only reach Railway's log stream, no
+    # exception-level alerting. Set to enable — see vula/api/server.py's init for the PII-scrubbing
+    # rules (never send default request bodies/local variables; tenant_id tag only).
+    sentry_dsn: str = ""
+
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 

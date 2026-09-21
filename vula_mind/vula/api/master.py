@@ -71,7 +71,7 @@ async def master_tenants():
             **{k: c.get(k) for k in ("tenant_id", "display_name", "business_type", "modules",
                                      "theme", "active", "plan", "store_url",
                                      "default_payment_provider",
-                                     "share_knowledge_with_network") if k in c},
+                                     "share_knowledge_with_network", "spend_cap_usd") if k in c},
             "paid": s.get("paid"), "signup_status": s.get("status"),
             "trial_ends": s.get("trial_ends"), "signup_email": s.get("email"),
             "logins": user_counts.get(c["tenant_id"], 0),
@@ -84,7 +84,8 @@ async def master_update_tenant(tenant_id: str, body: dict,
                                identity: dict = Depends(require_master)):
     """Update a tenant's config (modules, display_name, theme, active). Audited."""
     allowed = {"display_name", "business_type", "modules", "theme", "active", "plan",
-               "store_url", "default_payment_provider", "share_knowledge_with_network"}
+               "store_url", "default_payment_provider", "share_knowledge_with_network",
+               "spend_cap_usd"}
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
@@ -502,6 +503,42 @@ async def master_usage(days: int = 14):
         t["infra_cost_usd"] = float(r.get("est_cost_usd") or 0)
         t["vectors"] = r.get("vectors")
         t["storage_mb"] = r.get("storage_mb")
+
+    # Spend cap (migration 166) — opt-in per tenant, surfaced here so /master's existing cost
+    # view shows who's capped/near-capped without a separate screen.
+    today = datetime.now(timezone.utc).date().isoformat()
+    today_spend: dict[str, float] = {}
+    for r in ai:
+        if r.get("day") == today:
+            today_spend[r["tenant_id"]] = today_spend.get(r["tenant_id"], 0.0) + float(r.get("est_cost_usd") or 0)
+    caps = {r["tenant_id"]: r.get("spend_cap_usd") for r in
+            (db.table("vula_tenant_config").select("tenant_id,spend_cap_usd").execute().data or [])
+            if r.get("spend_cap_usd") is not None}
+    for tid, cap in caps.items():
+        t = per_tenant.setdefault(tid, {"ai_cost_usd": 0.0, "calls": 0, "infra_cost_usd": 0.0})
+        t["spend_cap_usd"] = float(cap)
+        t["capped_today"] = today_spend.get(tid, 0.0) >= float(cap)
+
+    # Document/seat plan-limit usage (Phase 4.3) — reuses plan_limits' cap constants so this
+    # existing cost view also shows who's near/over their ADVERTISED plan limits (VulaOnboarding
+    # .jsx), not just spend. All-time totals, not day-windowed like the AI/infra data above.
+    from vula.commerce.plan_limits import SEAT_LIMITS, STARTER_DOCUMENT_LIMIT
+    plans = {r["tenant_id"]: (r.get("plan") or "starter").lower() for r in
+             (db.table("vula_tenant_config").select("tenant_id,plan").execute().data or [])}
+    doc_counts: dict[str, int] = {}
+    for r in (db.table("vula_filed_documents").select("tenant_id").execute().data or []):
+        doc_counts[r["tenant_id"]] = doc_counts.get(r["tenant_id"], 0) + 1
+    seat_counts: dict[str, int] = {}
+    for r in (db.table("vula_tenant_users").select("tenant_id,role")
+              .in_("role", ["owner", "staff"]).execute().data or []):
+        seat_counts[r["tenant_id"]] = seat_counts.get(r["tenant_id"], 0) + 1
+    for tid, plan in plans.items():
+        t = per_tenant.setdefault(tid, {"ai_cost_usd": 0.0, "calls": 0, "infra_cost_usd": 0.0})
+        t["doc_count"] = doc_counts.get(tid, 0)
+        t["doc_cap"] = STARTER_DOCUMENT_LIMIT if plan == "starter" else None
+        t["seat_count"] = seat_counts.get(tid, 0)
+        t["seat_cap"] = SEAT_LIMITS.get(plan, 2)
+
     return {"since": since, "per_tenant": per_tenant, "ai_daily": ai}
 
 
@@ -687,3 +724,30 @@ async def master_audit(tenant_id: Optional[str] = None, limit: int = 100):
         return {"events": q.execute().data or []}
     except Exception as exc:
         return {"events": [], "error": f"{exc} (run migration 072?)"}
+
+
+# ── Qdrant backup (DR) ──────────────────────────────────────────────────────────
+
+@router.get("/qdrant-backup")
+async def master_qdrant_backup_status() -> dict:
+    """Per-tenant status from the last daily Qdrant snapshot run (migration 171, see
+    docs/dr.md). Surfaced separately from /health since it's the one DR signal an operator
+    needs at a glance after touching anything backup-related (bucket limits, Qdrant
+    reachability), not just general platform health."""
+    rows = (_client().table("vula_qdrant_backup_status").select("*")
+            .order("tenant_id").execute().data or [])
+    return {"statuses": rows}
+
+
+@router.post("/qdrant-backup/run")
+async def master_run_qdrant_backup(identity: dict = Depends(require_master)) -> dict:
+    """Fire the Qdrant snapshot job (vula/integrations/qdrant_backup.py) on demand instead of
+    waiting up to 24h for the next scheduled run or restarting the service to force an early
+    one — e.g. to confirm a fix (bucket size limit, Qdrant connectivity) actually resolved a
+    prior per-tenant failure without waiting a day to find out."""
+    from vula.integrations.qdrant_backup import backup_all_tenants
+    ok_count = await backup_all_tenants()
+    audit(identity, "qdrant_backup.run", ok_count=ok_count)
+    rows = (_client().table("vula_qdrant_backup_status").select("*")
+            .order("tenant_id").execute().data or [])
+    return {"ok_count": ok_count, "statuses": rows}

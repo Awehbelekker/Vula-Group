@@ -119,15 +119,15 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "estimate the cost", "total cost", "what will it cost"],
     # Architecture/construction BEFORE file_parse so "Stage 4 documentation",
     # "fees", "SACAP" etc consult the SA construction KB (not just tenant docs).
+    # 2026-09-18: this used to also include generic words ("fee", "plan", "design",
+    # "commercial", "structure"...) that would misroute an unrelated tenant's ordinary question
+    # (e.g. a healthcare practice asking about a "plan" or a "fee") into architecture_planning.
+    # Those generic terms moved to _ARCHITECTURE_WEAK_KEYWORDS below, gated by business_type —
+    # only unambiguous AEC jargon stays unconditional here.
     "architecture_planning":["sacap", "nhbrc", "jbcc", "nec ", "sans", "cidb", "procsa",
-                             "bbbee", "b-bbee", "heritage", "sahra", "zoning", "town planning",
-                             "fee", "fees", "stage 1", "stage 2", "stage 3", "stage 4", "stage 5",
-                             "work stage", "documentation", "tender", "boq", "bill of quantities",
-                             "contractor", "subcontract", "municipal", "building plan", "occupation certificate",
-                             "residential", "commercial", "fitout", "construction", "architect",
-                             "design", "drawing", "elevation", "quantity surveyor", "preliminaries",
-                             "provisional sum", "retention", "practical completion", "snag",
-                             "structure", "infrastructure", "plan"],
+                             "bbbee", "b-bbee", "heritage", "sahra", "boq", "bill of quantities",
+                             "occupation certificate", "quantity surveyor", "preliminaries",
+                             "provisional sum", "retention", "practical completion", "snag"],
     "web_search":           ["search", "find online", "latest", "current", "news", "tender alert",
                              "research", "look up", "google"],
     "code_execution":       ["run", "execute", "compute", "code", "script"],
@@ -137,6 +137,21 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
     "financial_reasoning":  ["revenue", "profit", "budget", "cashflow"],
     "reasoning":            [],  # fallback
 }
+
+# Split out of architecture_planning's own keyword list (2026-09-18) — these generic words only
+# mean "this is architecture/construction" in an AEC context; anywhere else they're just
+# ordinary English. Checked only for a tenant whose business_type suggests professional/trades
+# services (see _keyword_skill), never unconditionally. Known residual imprecision: "services"
+# also covers legal/accounting/marketing agencies, not just architecture — a law firm asking
+# about "fees" can still misroute — but it's the only vertical signal that persists past
+# onboarding today, and this is a real improvement over matching every tenant unconditionally.
+_ARCHITECTURE_WEAK_KEYWORDS = [
+    "zoning", "town planning", "fee", "fees", "stage 1", "stage 2", "stage 3", "stage 4",
+    "stage 5", "work stage", "documentation", "tender", "contractor", "subcontract",
+    "municipal", "building plan", "residential", "commercial", "fitout", "construction",
+    "architect", "design", "drawing", "elevation", "structure", "infrastructure", "plan",
+]
+_ARCHITECTURE_WEAK_BUSINESS_TYPES = {"services", "trades"}
 
 
 class HRMOrchestrator:
@@ -197,16 +212,32 @@ class HRMOrchestrator:
         except Exception:
             return self._keyword_complexity(prompt)
 
-    def _keyword_skill(self, prompt: str) -> str | None:
+    def _architecture_weak_ok(self, tenant_id: str | None) -> bool:
+        """True when this tenant's business_type suggests professional/trades services — the
+        only case _ARCHITECTURE_WEAK_KEYWORDS are allowed to match. No tenant_id, no config, or
+        any lookup failure all fail toward False (never matching), the safe direction for a
+        keyword class that exists specifically to stop over-matching."""
+        if not tenant_id:
+            return False
+        try:
+            from vula.api.tenants import get_config
+            return (get_config(tenant_id) or {}).get("business_type") in _ARCHITECTURE_WEAK_BUSINESS_TYPES
+        except Exception:
+            return False
+
+    def _keyword_skill(self, prompt: str, tenant_id: str | None = None) -> str | None:
         """The keyword-table match only — None if nothing matched."""
         lower = prompt.lower()
         for skill_name, keywords in SKILL_KEYWORDS.items():
             if any(kw in lower for kw in keywords):
                 return skill_name
+            if skill_name == "architecture_planning" and self._architecture_weak_ok(tenant_id):
+                if any(kw in lower for kw in _ARCHITECTURE_WEAK_KEYWORDS):
+                    return skill_name
         return None
 
-    def _match_skill(self, prompt: str) -> str:
-        kw = self._keyword_skill(prompt)
+    def _match_skill(self, prompt: str, tenant_id: str | None = None) -> str:
+        kw = self._keyword_skill(prompt, tenant_id)
         if kw:
             return kw
         # No keyword matched — before silently defaulting to the least-specialized skill,
@@ -219,14 +250,14 @@ class HRMOrchestrator:
                 return classified
         return "reasoning"
 
-    def _route_with_reason(self, prompt: str) -> tuple[str, str]:
+    def _route_with_reason(self, prompt: str, tenant_id: str | None = None) -> tuple[str, str]:
         """(skill, matched_by) where matched_by is 'keyword' | 'llm_fallback' | 'default' —
         the reason is emitted as routing telemetry so misroutes, and how often routing falls
         through to the generic 'reasoning' skill, are measurable."""
-        kw = self._keyword_skill(prompt)
+        kw = self._keyword_skill(prompt, tenant_id)
         if kw:
             return kw, "keyword"
-        skill = self._match_skill(prompt)
+        skill = self._match_skill(prompt, tenant_id)
         return skill, ("llm_fallback" if skill != "reasoning" else "default")
 
     def _llm_classify_skill(self, prompt: str) -> str | None:
@@ -303,7 +334,7 @@ class HRMOrchestrator:
         )
         graph.complexity = complexity
 
-        skill_name, matched_by = self._route_with_reason(prompt)
+        skill_name, matched_by = self._route_with_reason(prompt, tenant_id=graph.tenant_id)
         model_tier = self._select_model(complexity, graph.routing_hints,
                                         tenant_id=graph.tenant_id, skill_name=skill_name)
         merge = self._select_merge(complexity, skill_name)

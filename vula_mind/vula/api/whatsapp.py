@@ -52,6 +52,11 @@ _REJECT_RE = re.compile(
     re.IGNORECASE,
 )
 _DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
+# POPIA right-to-access (2026-09-18) — deliberately narrow, same exact-phrase shape as
+# _DELETE_RE above, not a broad keyword match: a request this consequential (assembles and
+# emails a real data export) shouldn't fire on an unrelated message that happens to mention
+# "my data" in passing.
+_EXPORT_RE = re.compile(r"^\s*(export|(send|get)\s+my\s+data|my\s+data\s+export)\s*$", re.IGNORECASE)
 # 2026-09-17: extracted from _maybe_helper_escalation_answer's original inline regexes (same
 # "is this actually an answer, or a greeting / a new question" heuristic reused by
 # _maybe_capture_owner_correction below — pulled out rather than a third inline copy).
@@ -351,6 +356,10 @@ async def receive_message(
                             # Owner tapping the "want this as a document too?" offer after a
                             # web-researched reply — see _maybe_offer_research_writeup.
                             await _handle_research_pdf_reply(phone, reply_id, route_tenant)
+                        elif phone and reply_id and route_tenant and reply_id.startswith("admin_example:"):
+                            # Owner tapping an example from their first-contact capability menu
+                            # (_send_staff_capability_menu) — see _handle_admin_example_reply.
+                            await _handle_admin_example_reply(phone, reply_id, route_tenant)
                         elif phone and reply_id and commerce_tenant:
                             # Handle list/button replies from WhatsApp catalog menu
                             await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
@@ -411,7 +420,7 @@ async def receive_message(
                             # webhook timeout; blocking here is what causes the retry storm.
                             _run_bg(_handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
-                                content_sha=doc.get("sha256") or None,
+                                content_sha=doc.get("sha256") or None, route_mode=route_mode,
                             ), label="document_ingest")
 
                     elif msg_type in ("image", "video"):
@@ -452,10 +461,14 @@ async def receive_message(
                     # record_message_status only knows about BROADCAST recipients — it returns
                     # silently for anything else, which is every ordinary reply. Track those
                     # here so a message that failed after acceptance is not invisible.
-                    try:
-                        await _record_outbound_status(wamid, st, err)
-                    except Exception as exc:
-                        logger.debug("outbound status update skipped: %s", exc)
+                    #
+                    # 2026-09-20: this used to be awaited inline — on a 'failed' status it can
+                    # send an off-WhatsApp alert email (_alert_off_whatsapp), and a hung SMTP
+                    # login was confirmed live blocking this exact webhook handler for ~41s
+                    # (digg-demo). Backgrounded via _run_bg for the same reason document ingest
+                    # already is above: Meta's webhook times out at ~15-20s and re-sends, turning
+                    # one status callback into a burst of duplicate-processed ones.
+                    _run_bg(_record_outbound_status(wamid, st, err), label="record_outbound_status")
 
     return {"status": "ok"}
 
@@ -490,7 +503,10 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     # WRONG person (the original asker of the unrelated old question), while the helper's real
     # question was never actually answered. A trailing '?', or a common question-starter with no
     # closing punctuation, means they're asking — let it fall through to normal routing instead.
-    if text.strip().endswith("?") or _NEW_QUESTION_RE.match(text):
+    # 2026-09-18: _NEW_QUESTION_RE only covers question-word openers ("what/how/can you"...) —
+    # an imperative request ("Give me the price list", "Send the quote") started with neither and
+    # would still be swallowed. _REQUEST_SHAPED (see below) covers those too.
+    if text.strip().endswith("?") or _NEW_QUESTION_RE.match(text) or _REQUEST_SHAPED.match(text):
         return False
     info = esc.answer_escalation(open_esc, text.strip())
     if not info:
@@ -565,8 +581,9 @@ async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key
         stripped = text.strip()
         if len(stripped) < 12:
             return
-        if _GREETING_RE.match(stripped) or stripped.endswith("?") or _NEW_QUESTION_RE.match(stripped):
-            return  # a greeting/ack or the owner's own new question, not a correction
+        if (_GREETING_RE.match(stripped) or stripped.endswith("?")
+                or _NEW_QUESTION_RE.match(stripped) or _REQUEST_SHAPED.match(stripped)):
+            return  # a greeting/ack or the owner's own new question/request, not a correction
         learned_id = esc.capture_owner_correction(tenant_id, prior_q.text, stripped)
         if not learned_id:
             return
@@ -1116,9 +1133,15 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
                 logger.info("Dropping inbound WA message for suspended tenant %s", tenant_id)
                 return
 
+    from core.sentry_utils import tag_tenant
+    tag_tenant(tenant_id)
+
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
+        return
+    if _EXPORT_RE.match(text):
+        await _handle_data_export(phone, tenant_id)
         return
 
     # Deterministic, IN-FLIGHT conversational state — checked BEFORE the sales_rep agent below.
@@ -1143,6 +1166,11 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         _pref = handle_preference_command(tenant_id, phone, text)
         if _pref:
             await _send_reply(phone, _pref, tenant_id)
+            return
+        # A staff member asking to set/update their signature (migration 165).
+        _sig = await _maybe_start_signature_capture(tenant_id, phone, text)
+        if _sig:
+            await _send_reply(phone, _sig, tenant_id)
             return
 
     # ── sales_rep team member → the rep-scoped commerce admin agent, not the generic
@@ -1549,6 +1577,13 @@ async def _handle_image_or_video(
     """Image/video dispatch, extracted from the webhook loop so it runs in the background
     (vision passes + agent turns are far slower than Meta's webhook timeout). `continue` in the
     old inline version becomes `return` here — same control flow, one message."""
+    # A staff member's signature photo, in reply to _maybe_start_signature_capture's prompt —
+    # checked before every other photo branch below so it's never misread as a receipt/site
+    # photo/document upload.
+    if (msg_type == "image" and route_tenant and _recently_asked_about_signature(phone)
+            and (_is_tenant_owner(route_tenant, phone) or await _sender_is_sales_rep(phone, route_tenant))):
+        await _handle_signature_capture(phone, media_id, route_tenant)
+        return
     # sales_rep captioning a photo with an instruction → the CAPTION is the request; give the
     # agent both the caption and a vision description of the photo.
     if msg_type == "image" and caption.strip() and route_tenant and await _sender_is_sales_rep(phone, route_tenant):
@@ -1578,10 +1613,33 @@ async def _handle_image_or_video(
             if await _run_commerce_admin(phone, prompt, route_tenant):
                 return
     if not handled:
+        if route_mode == "commerce" and route_tenant:
+            # 2026-09-18: everyone who wasn't a sales rep used to fall straight into
+            # _handle_document_ingest, which (before its own fix) treated ANY sender on the
+            # tenant's line as admin — a real customer's photo got filed into the tenant KB
+            # under a fabricated admin identity. Check who's actually staff here too, so a
+            # genuine customer's photo gets a real destination (vision description → the
+            # customer-facing agent) instead of either outcome.
+            is_staff = (_is_tenant_owner(route_tenant, phone)
+                        or await _sender_is_sales_rep(phone, route_tenant))
+            if not is_staff:
+                if msg_type == "image":
+                    description = await _describe_photo_for_rep(media_id)
+                    effective_text = (f"{caption}\n\n[What's in the photo: {description}]"
+                                      if description else caption) or "[Sent a photo with no caption]"
+                    if await _run_commerce_assistant(phone, effective_text, route_tenant):
+                        return
+                await _send_reply(phone, (
+                    "Thanks for that! I'm not able to file documents on this line — if "
+                    "you're asking about an order or a product, just tell me what you're "
+                    "after 🙂"
+                ), route_tenant)
+                return
         if route_mode == "knowledge" or route_tenant or expense_intent:
             fname = caption or f"image-{msg_id}.jpg"
             await _handle_document_ingest(phone, media_id, fname, mime_type,
-                                         route_tenant_id=route_tenant, content_sha=content_sha)
+                                         route_tenant_id=route_tenant, content_sha=content_sha,
+                                         route_mode=route_mode)
         else:
             await _send_reply(phone, (
                 "Thanks for the photo! Ask your site manager to register you in Vula so it "
@@ -1592,17 +1650,36 @@ async def _handle_image_or_video(
 async def _handle_document_ingest(
     phone: str, media_id: str, filename: str, mime_type: str,
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
+    route_mode: Optional[str] = None,
 ) -> None:
     """Ingest a document/image sent by a tenant into their knowledge base.
 
-    On a tenant's dedicated line (route_tenant_id set) anyone may upload — the
-    number identifies the tenant. Otherwise the sender must be a registered
-    admin. PDFs, Word, Excel, plain text, and images are accepted.
+    On a knowledge-mode tenant's dedicated line (route_tenant_id set, route_mode
+    "knowledge") anyone may upload — there's no customer concept on that line, the number
+    identifies the tenant. On a COMMERCE-mode line, real customers share the number with
+    staff, so the sender's actual role is checked instead. Otherwise (no route_tenant_id)
+    the sender must be a registered admin. PDFs, Word, Excel, plain text, and images are
+    accepted.
     """
     logger.info("WhatsApp document from %s: %s (%s)", phone, filename, mime_type)
 
     if route_tenant_id:
-        # Dedicated tenant line — the number is the tenant; treat as admin.
+        if route_mode == "commerce":
+            # 2026-09-18: this used to treat ANY sender on a commerce tenant's line as admin
+            # — a real customer's photo/document got filed into the tenant KB under a
+            # fabricated admin identity, and the customer got an admin-flavoured reply
+            # ("I'll book it into your books"). Knowledge-mode lines keep the old
+            # "anyone may upload" behaviour below since there's no customer concept there.
+            is_staff = (_is_tenant_owner(route_tenant_id, phone)
+                        or await _sender_is_sales_rep(phone, route_tenant_id))
+            if not is_staff:
+                await _send_reply(phone, (
+                    "Thanks for that! I'm not able to file documents on this line — if "
+                    "you're asking about an order or a product, just tell me what you're "
+                    "after 🙂"
+                ), route_tenant_id)
+                return
+        # Dedicated tenant line, sender confirmed staff (or a knowledge-mode line): admin.
         tenant_id = route_tenant_id
         role = "admin"
     else:
@@ -2267,15 +2344,23 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
         low = text.lower()
 
         # Answering "company card or your own money?" on the latest unresolved claim.
-        if any(k in low for k in ("company", "own", "personal", "my card", "my money", "cash")):
+        # 2026-09-18: real incident — "Can you give me a breakdown on all jackhammer" was read as
+        # an "own money" answer because "own" is a substring of "breakdown", silently mutated an
+        # unrelated claim's paid_with, and the sender's actual request never reached the agent.
+        # Word-boundary match, and skip entirely when the message is request-shaped (a question
+        # or addressed at Vula) — same guard _looks_like_purpose_attempt already applies below.
+        _paid_with_kw = re.search(r"\b(company|own|personal|my card|my money|cash)\b", low)
+        if _paid_with_kw and not (text.endswith("?") or _REQUEST_SHAPED.match(text)
+                                   or _ADDRESSES_ASSISTANT.search(text)):
             rows = (service._client().table("commerce_expenses").select("*")
                     .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
                     .eq("status", "submitted").is_("paid_with", "null")
                     .order("updated_at", desc=True).limit(1).execute().data or [])
             if rows:
                 claim = rows[0]
-                is_company = "company" in low
-                paid_with = "company_card" if is_company else ("cash" if "cash" in low else "personal")
+                is_company = bool(re.search(r"\bcompany\b", low))
+                paid_with = ("company_card" if is_company
+                             else ("cash" if re.search(r"\bcash\b", low) else "personal"))
                 service._client().table("commerce_expenses").update(
                     {"paid_with": paid_with, "reimbursable": not is_company,
                      "updated_at": service._now()}).eq("id", claim["id"]).execute()
@@ -2345,15 +2430,120 @@ _purpose_prompted_at: dict = {}
 _PURPOSE_PROMPT_WINDOW_S = 900.0     # 15 minutes
 
 
-def _note_purpose_prompt(phone: str) -> None:
+# 2026-09-18: Railway already runs WEB_CONCURRENCY=2 (two uvicorn workers per replica) TODAY —
+# the in-memory dicts above/below are per-worker, so a prompt landing on one worker and its
+# reply on the other silently loses the "we just asked" context, same root cause already fixed
+# once for inbound-message dedup (migration 071/vula_wa_msg_dedup). vula_wa_prompt_state
+# (migration 167) makes both durable: in-memory stays the fast path (checked first, no DB round
+# trip on the common case), the DB is the fallback so a cross-worker miss doesn't re-trap the
+# user. Fails toward letting messages through on any DB error, same as the dedup fix.
+def _note_wa_prompt(phone: str, kind: str, in_memory: dict) -> None:
     import time as _t
-    _purpose_prompted_at[phone] = _t.monotonic()
+    in_memory[phone] = _t.monotonic()
+    try:
+        from vula.commerce import service as _wps_cs
+        _wps_cs._client().table("vula_wa_prompt_state").upsert(
+            {"phone": phone, "kind": kind, "prompted_at": "now()"},
+            on_conflict="phone,kind").execute()
+    except Exception as exc:
+        logger.debug("wa prompt state durable write skipped (run migration 167?): %s", exc)
+
+
+def _recently_asked_wa(phone: str, kind: str, in_memory: dict, window_s: float) -> bool:
+    import time as _t
+    last = in_memory.get(phone)
+    if last and (_t.monotonic() - last) < window_s:
+        return True
+    # In-memory miss — could genuinely be "never asked", or could be a different worker /
+    # this worker restarted since the prompt. Durable fallback before concluding "no".
+    try:
+        from datetime import datetime, timedelta, timezone
+        from vula.commerce import service as _wps_cs
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_s)).isoformat()
+        resp_data = (_wps_cs._client().table("vula_wa_prompt_state").select("prompted_at")
+                     .eq("phone", phone).eq("kind", kind).gte("prompted_at", cutoff)
+                     .limit(1).execute().data)
+        rows = resp_data if isinstance(resp_data, list) else []
+        return bool(rows)
+    except Exception as exc:
+        logger.debug("wa prompt state durable read skipped (run migration 167?): %s", exc)
+        return False
+
+
+def _clear_wa_prompt(phone: str, kind: str, in_memory: dict) -> None:
+    in_memory.pop(phone, None)
+    try:
+        from vula.commerce import service as _wps_cs
+        _wps_cs._client().table("vula_wa_prompt_state").delete().eq(
+            "phone", phone).eq("kind", kind).execute()
+    except Exception as exc:
+        logger.debug("wa prompt state durable clear skipped (run migration 167?): %s", exc)
+
+
+def _note_purpose_prompt(phone: str) -> None:
+    _note_wa_prompt(phone, "purpose", _purpose_prompted_at)
 
 
 def _recently_asked_about_purpose(phone: str) -> bool:
-    import time as _t
-    last = _purpose_prompted_at.get(phone)
-    return bool(last and (_t.monotonic() - last) < _PURPOSE_PROMPT_WINDOW_S)
+    return _recently_asked_wa(phone, "purpose", _purpose_prompted_at, _PURPOSE_PROMPT_WINDOW_S)
+
+
+# 2026-09-18: signature capture (migration 165) — same time-windowed,
+# fails-toward-letting-messages-through pattern as _purpose_prompted_at above. A staff member
+# sends a trigger phrase ("set my signature"), Vula asks for a photo, and ONLY the next photo
+# from that phone within the window is captured as the signature instead of going through the
+# normal photo-vision/document-ingest path.
+_signature_prompted_at: dict = {}
+_SIGNATURE_PROMPT_WINDOW_S = 600.0   # 10 minutes
+
+_SIGNATURE_TRIGGER_RE = re.compile(
+    r"\b(set|update|change|add)\b.{0,20}\bsignature\b|\bsignature\b.{0,20}\b(set|update|change|add)\b",
+    re.IGNORECASE)
+
+
+def _note_signature_prompt(phone: str) -> None:
+    _note_wa_prompt(phone, "signature", _signature_prompted_at)
+
+
+def _recently_asked_about_signature(phone: str) -> bool:
+    return _recently_asked_wa(phone, "signature", _signature_prompted_at, _SIGNATURE_PROMPT_WINDOW_S)
+
+
+async def _maybe_start_signature_capture(tenant_id: str, phone: str, text: str) -> Optional[str]:
+    """A staff member asking to set/update their signature — only staff (never a customer, and
+    never on a line where role can't be confirmed) can trigger this. Returns the 'send me a
+    photo' reply if this was a trigger, else None so the caller routes the message normally."""
+    if not tenant_id or not _SIGNATURE_TRIGGER_RE.search(text or ""):
+        return None
+    if not _is_tenant_owner(tenant_id, phone) and not await _sender_is_sales_rep(phone, tenant_id):
+        return None
+    _note_signature_prompt(phone)
+    return ("✍️ Send a photo of your signature (signed on plain paper is fine) and I'll use it "
+            "on every letter/document from now on.")
+
+
+async def _handle_signature_capture(phone: str, media_id: str, tenant_id: str) -> bool:
+    """The photo reply to _maybe_start_signature_capture's prompt. Returns True if the photo
+    was consumed as a signature capture (caller must not process it any further way)."""
+    try:
+        data = await _download_media_bytes(media_id)
+        if not data:
+            await _send_reply(phone, "Couldn't download that photo — try sending it again.", tenant_id)
+            return True
+        url = _upload_to_storage("signatures", f"{tenant_id}/signature.png", data, "image/jpeg")
+        if not url:
+            await _send_reply(phone, "Couldn't save that signature right now — try again shortly.", tenant_id)
+            return True
+        from vula.commerce import service as commerce_service
+        await commerce_service.upsert_invoice_settings(tenant_id, {"signature_url": url})
+        _clear_wa_prompt(phone, "signature", _signature_prompted_at)
+        await _send_reply(phone, "✅ Signature saved — it'll appear on every letter/document "
+                                 "from now on.", tenant_id)
+        return True
+    except Exception as exc:
+        logger.warning("signature capture failed for %s/%s: %s", tenant_id, phone, exc)
+        await _send_reply(phone, "Something went wrong saving that signature — try again shortly.", tenant_id)
+        return True
 
 
 # Second-person / object pronouns mean the message is aimed AT Vula, not describing a purchase.
@@ -2521,6 +2711,11 @@ async def _maybe_allocate_pending_odometer(tenant_id: str, phone: str, text: str
 
         # 2+ pending — an indexed reply ("1 45280, 2 46100") is the only unambiguous shape;
         # a bare number can't say which fill-up it belongs to.
+        # 2026-09-18: a real request that happens to contain two numbers ("get me 2 quotes for
+        # site 45") can match the digit-pair pattern below as a partial index/km guess — request
+        # shape is checked first so that never displaces the sender's actual message.
+        if text.endswith("?") or _REQUEST_SHAPED.match(text) or _ADDRESSES_ASSISTANT.search(text):
+            return None
         pairs = re.findall(r"(\d+)\D+(\d+)", text)
         n = len(rows)
         parsed: Dict[int, int] = {}
@@ -2647,6 +2842,12 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
                 note = (f"📂 Which project is this for?{hint_txt} "
                         f"Reply with the project name and I'll file it (or 'skip').")
+
+        # Plan limit (go-live readiness, Phase 4.1) — file_document() returns no "id" and a
+        # displayable error rather than raising; override whatever `note` was built above so a
+        # Starter tenant at the cap sees the real reason instead of a false "Filed under X".
+        if row.get("plan_limit_reached"):
+            note = f"📂 {row.get('error')}"
 
         unverified = (fields or {}).get("_unverified_figures")
         if not already_committed and category in _FINANCIAL_DOC_CATEGORIES:
@@ -3542,6 +3743,49 @@ async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
         "For a full deletion or questions, email hello@vula.co.za.",
         tenant_id,
     )
+
+
+_EXPORT_FAILURE_REPLY = (
+    "Sorry, I couldn't put your data export together right now. "
+    "Email hello@vula.co.za and we'll send it to you directly."
+)
+
+
+async def _handle_data_export(phone: str, tenant_id: Optional[str]) -> None:
+    """POPIA right-to-access — assembles and emails the requester's own chat history + orders/
+    invoices for this tenant (vula/api/data_export.py). Fails closed: any failure gets the same
+    "email hello@vula.co.za" fallback _handle_data_deletion above already uses, never a partial
+    or silently-wrong export."""
+    if not tenant_id:
+        await _send_reply(phone, _EXPORT_FAILURE_REPLY, tenant_id)
+        return
+    logger.info("Data export request from %s (tenant=%s)", phone, tenant_id)
+    try:
+        from vula.api.data_export import send_data_export
+        result = await send_data_export(tenant_id, phone)
+    except Exception as exc:
+        logger.warning("data export failed for %s/%s: %s", tenant_id, phone, exc)
+        result = {"error": "unexpected"}
+
+    if result.get("sent"):
+        email = result.get("email", "")
+        masked = (email[:2] + "…" + email.split("@")[-1]) if "@" in email else email
+        await _send_reply(
+            phone,
+            f"✅ Your data export has been emailed to {masked}. "
+            "It includes your conversation history and your own orders/invoices only.",
+            tenant_id,
+        )
+        return
+    if result.get("error") == "no_email_on_file":
+        await _send_reply(
+            phone,
+            "I don't have an email address on file to send your data export to. "
+            "Email hello@vula.co.za and we'll send it to you directly.",
+            tenant_id,
+        )
+        return
+    await _send_reply(phone, _EXPORT_FAILURE_REPLY, tenant_id)
 
 
 async def _handle_task_complete(phone: str, tenant_id: str) -> None:
@@ -4991,10 +5235,14 @@ async def _send_invoice_document(
     filename: str,
     caption: str = "",
     tenant_id: str = "",
+    content_type: str = "application/pdf",
 ) -> bool:
-    """Send a PDF as a WhatsApp document via the Meta Graph API.
+    """Send a document (PDF by default, or any other content_type — e.g. .docx) as a WhatsApp
+    document via the Meta Graph API. Despite the name/param ("pdf_bytes"), this sends whatever
+    bytes+content_type it's given; kept as `pdf_bytes` rather than renamed everywhere since PDF
+    is still the overwhelming majority caller.
 
-    The PDF is first uploaded to Meta's media endpoint, then delivered as a
+    The file is first uploaded to Meta's media endpoint, then delivered as a
     ``document`` message referencing the returned media id — this avoids needing
     a publicly reachable URL. Credentials are resolved per-tenant from Supabase,
     falling back to env vars, exactly like ``_send_reply``.
@@ -5018,8 +5266,8 @@ async def _send_invoice_document(
             upload = await client.post(
                 f"{base}/media",
                 headers={"Authorization": f"Bearer {creds['token']}"},
-                data={"messaging_product": "whatsapp", "type": "application/pdf"},
-                files={"file": (filename, pdf_bytes, "application/pdf")},
+                data={"messaging_product": "whatsapp", "type": content_type},
+                files={"file": (filename, pdf_bytes, content_type)},
             )
             upload.raise_for_status()
             media_id = upload.json().get("id")
@@ -5134,6 +5382,12 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
         await _send_reply(phone, _pref, tenant_id)
         return
 
+    # A staff member asking to set/update their signature (migration 165).
+    _sig = await _maybe_start_signature_capture(tenant_id, phone, text)
+    if _sig:
+        await _send_reply(phone, _sig, tenant_id)
+        return
+
     # Onboarding capture: if this contact is mid opt-in/intro flow, their message is part of
     # it (opt-in → name → delivery address → email), not a normal order. Handle + return.
     try:
@@ -5150,6 +5404,9 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # from a customer who receives broadcasts actually suppresses them.
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
+        return
+    if _EXPORT_RE.match(text):
+        await _handle_data_export(phone, tenant_id)
         return
 
     # Record implied marketing consent on first inbound (POPIA). Best-effort.
@@ -5273,6 +5530,11 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # Owner/staff → admin agent (run the shop); customers → shopping agent.
     if _is_tenant_owner(tenant_id, phone):
         await _maybe_welcome_new_owner(tenant_id, phone)
+        if text.strip().lower() == "menu":
+            # Re-show the capability menu (_send_staff_capability_menu's own footer tells
+            # staff they can do this any time) rather than sending "menu" to the LLM agent.
+            if await _send_staff_capability_menu(phone, tenant_id):
+                return
         if await _run_commerce_admin(phone, text, tenant_id, detected_lang=detected_lang):
             return
         # Admin agent failed → fall through to the customer assistant.
@@ -5436,16 +5698,119 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
                      f"you were given." if dash_url else
                      "\n\nAsk your Vula contact for your dashboard login if you don't have it yet.")
 
-        msg = (f"Hey {first_name}! 🎣 Welcome to Vula — you're all set up as the owner/team "
+        # 2026-09-18: this used to close with a seafood in-joke ("No fish were harmed...") sent
+        # to every tenant's owner regardless of vertical — an architecture firm or a clinic got
+        # the same fish joke Off The Hook did. Generic sign-off instead.
+        msg = (f"Hey {first_name}! 👋 Welcome to Vula — you're all set up as the owner/team "
                f"member for *{shop_name}* here on WhatsApp. This is where your delivery "
                f"briefings, low-stock nudges, order chases and day-to-day questions land from "
-               f"now on.{dash_line} No fish were harmed in the sending of this message. 🐟🎉")
+               f"now on.{dash_line}")
         await _send_reply(phone, msg, tenant_id)
         logger.info("Sent owner welcome to %s (%s)", phone, tenant_id)
+        await _send_staff_capability_menu(phone, tenant_id)
         return True
     except Exception as exc:
         logger.debug("owner welcome skipped: %s", exc)
         return False
+
+
+# 2026-09-18: customers already get a tappable interactive menu on first contact
+# (_send_commerce_welcome, via _send_wa_list) — staff/owners only ever got the welcome text
+# above, no menu of what Vula can actually do. A first-time owner had to already know what to
+# type. Always-on examples first (every tenant has these regardless of enabled modules), then
+# up to 6 more drawn from the tenant's actually-enabled modules — same _GATED_GROUPS keys
+# core/skills/commerce_admin.py's _tools_for already gates tools by, so a module a tenant
+# doesn't have never shows an example for a tool they can't use.
+_STAFF_MENU_ALWAYS_ON = [
+    ("sales", "Check today's sales", "what were today's sales?"),
+    ("expense", "Log an expense", "log R450 packaging from Boxshop"),
+]
+_STAFF_MENU_BY_MODULE = {
+    "invoices": ("invoices", "Invoice a customer", "invoice Jane for R500"),
+    "products": ("products", "Add a product", "add a product called X at R99"),
+    "bookings": ("bookings", "Check bookings", "show tomorrow's bookings"),
+    "orders": ("orders", "Set up a standing order", "set up a weekly order for Jane"),
+    "crm": ("crm", "Look up a customer", "look up customer John's history"),
+    "broadcasts": ("broadcasts", "Send a broadcast", "send this week's specials to customers"),
+    "pages": ("pages", "Edit my site", "update my homepage banner"),
+    "purchase_orders": ("po", "Order from a supplier", "create a purchase order from Acme"),
+    "discounts": ("discounts", "Make a discount code", "create a 10% discount code"),
+    "automations": ("automations", "Set up a reminder", "remind me every Monday to check stock"),
+}
+
+
+def _tenant_menu_overrides(tenant_id: str) -> dict:
+    """{menu_key: {"title": ..., "command": ...}} for this tenant (migration 170). Fail-open to
+    {} on any error or DB miss — a broken/missing override table must never break the menu
+    entirely, only fall back to the hardcoded defaults it's overriding."""
+    try:
+        from vula.commerce import service as _menu_cs
+        rows = (_menu_cs._client().table("vula_tenant_menu_overrides")
+                .select("menu_key,title,command").eq("tenant_id", tenant_id).execute().data or [])
+        if not isinstance(rows, list):
+            return {}
+        return {r["menu_key"]: {"title": r.get("title"), "command": r.get("command")}
+                for r in rows if r.get("menu_key")}
+    except Exception as exc:
+        logger.debug("tenant menu overrides skipped (run migration 170?): %s", exc)
+        return {}
+
+
+async def _send_staff_capability_menu(phone: str, tenant_id: str) -> bool:
+    """A tappable menu of example commands for a first-time owner/staff member — mirrors
+    _send_commerce_welcome's proven interactive-list pattern for customers. Tapping a row
+    forwards that example's exact command text to the admin agent (see the
+    "admin_example:" branch in the interactive-message webhook dispatch), so it's a real
+    shortcut, not just a static hint."""
+    try:
+        creds = await _resolve_wa(tenant_id)
+        if not creds:
+            return False
+        try:
+            from vula.api.tenants import enabled_modules
+            mods = set(enabled_modules(tenant_id) or [])
+        except Exception:
+            mods = set()
+        overrides = _tenant_menu_overrides(tenant_id)
+
+        def _row(key: str, title: str, cmd: str) -> dict:
+            ov = overrides.get(key) or {}
+            title = (ov.get("title") or title)[:24]
+            cmd = ov.get("command") or cmd
+            return {"id": f"admin_example:{key}", "title": title, "description": f"e.g. \"{cmd}\""[:72]}
+
+        rows = [_row(key, title, cmd) for key, title, cmd in _STAFF_MENU_ALWAYS_ON]
+        for mod, (key, title, cmd) in _STAFF_MENU_BY_MODULE.items():
+            if len(rows) >= 8:
+                break
+            if mod in mods:
+                rows.append(_row(key, title, cmd))
+        if not rows:
+            return False
+        return await _send_wa_list(
+            creds, _wa_number(phone), "What can I help with?",
+            "Here's a few things you can ask me — tap one to try it, or just type your own "
+            "question any time.",
+            "Reply *menu* any time to see this again.", "See examples",
+            [{"title": "Try an example", "rows": rows}])
+    except Exception as exc:
+        logger.debug("staff capability menu skipped: %s", exc)
+        return False
+
+
+async def _handle_admin_example_reply(phone: str, reply_id: str, tenant_id: str) -> None:
+    """A tap on _send_staff_capability_menu's list — runs that example's exact command text
+    through the admin agent, same as if the owner had typed it themselves. Respects a per-
+    tenant command override (migration 170) the same way the menu that offered this row did,
+    so the tapped row and what actually runs never disagree."""
+    key = reply_id.split(":", 1)[1] if ":" in reply_id else ""
+    example = next((cmd for k, _title, cmd in _STAFF_MENU_ALWAYS_ON if k == key), None)
+    if example is None:
+        example = next((cmd for k, _title, cmd in _STAFF_MENU_BY_MODULE.values() if k == key), None)
+    override = _tenant_menu_overrides(tenant_id).get(key) or {}
+    example = override.get("command") or example
+    if example:
+        await _run_commerce_admin(phone, example, tenant_id)
 
 
 # Nudge fires once a member's window has been quiet this long since our last message to them —
@@ -6105,7 +6470,8 @@ async def _send_category_products(phone: str, tenant_id: str, category: str) -> 
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
-    """Send the Off the Hook welcome message with interactive category list."""
+    """Send a customer's first-contact welcome with an interactive category list, driven by
+    the tenant's own name/catalog — not hardcoded to any one tenant."""
     # Use the tenant's LIVE WhatsApp creds (phone_id + token) — same source as _send_reply —
     # not a hardcoded (retired) number. Falls back to env. Failures fall back to a text menu.
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
@@ -6118,6 +6484,18 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     number = phone.lstrip("+").replace(" ", "").replace("-", "")
     if number.startswith("0"):
         number = "27" + number[1:]
+
+    # 2026-09-18: this whole message used to be hardcoded to Off The Hook/seafood (header,
+    # body copy, footer, and — worst — the fallback text menu shown to EVERY tenant with no
+    # products yet) regardless of the actual tenant. One settings fetch (previously only used
+    # for the header image below) now also drives the shop name everywhere in this function.
+    try:
+        from vula.commerce import service as _cs
+        inv_settings = await _cs.get_invoice_settings(tenant_id)
+    except Exception:
+        inv_settings = None
+    shop_name = ((inv_settings or {}).get("trading_as") or (inv_settings or {}).get("company_name")
+                 or tenant_id.replace("-", " ").title())
 
     # Build the menu from the tenant's LIVE in-stock catalog.
     try:
@@ -6151,13 +6529,12 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     menu_url = f"{settings.public_base_url.rstrip('/')}/menu/{tenant_id}" if settings.public_base_url else ""
 
     _text_lines = "\n".join(f"• {r['title']}" for r in (cat_rows or spec_rows)) or \
-        "Fresh Fish, Frozen Seafood, Fresh Chicken, Frozen Chicken"
+        "Just tell me what you're looking for and I'll help you find it."
     _text_menu = (
-        "Welcome to Off the Hook! 🐟\n\n"
-        "Cape Town's freshest daily catch, door to door.\n\n"
+        f"Welcome to {shop_name}! 👋\n\n"
         f"What are you looking for?\n{_text_lines}\n\n"
-        "Reply with a product name, or visit offthehook.co.za"
-        + (f"\n\n📸 See photos of the catch: {menu_url}" if menu_url else "")
+        "Reply with a product name, or just ask."
+        + (f"\n\n📸 See photos: {menu_url}" if menu_url else "")
     )
 
     if not sections:
@@ -6166,21 +6543,16 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
 
     # Optional hero image, sent as its own message right before the list — WhatsApp's list
     # type has no image-header slot, so this is the closest thing to a "rich menu" it allows.
-    try:
-        from vula.commerce import service as _cs
-        inv_settings = await _cs.get_invoice_settings(tenant_id)
-        header_image_url = (inv_settings or {}).get("menu_header_image_url") or ""
-    except Exception:
-        header_image_url = ""
+    header_image_url = (inv_settings or {}).get("menu_header_image_url") or ""
     if header_image_url:
         await _send_wa_image(creds, number, header_image_url)
 
-    body_text = "Cape Town's freshest catch, door to door.\n\nTap a special or category, or just tell me what you want."
+    body_text = "Tap a special or category, or just tell me what you want."
     if menu_url:
-        body_text += f"\n\n📸 See photos of the catch: {menu_url}"
+        body_text += f"\n\n📸 See photos: {menu_url}"
     ok = await _send_wa_list(
-        creds, number, "Off the Hook 🐟", body_text,
-        "Free delivery on orders over R500", "View menu", sections,
+        creds, number, shop_name[:60], body_text,
+        "Reply any time with what you're after", "View menu", sections,
     )
     if ok:
         logger.info("Commerce welcome sent to %s (%d specials, %d cats)", phone, len(spec_rows), len(cat_rows))

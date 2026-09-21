@@ -133,6 +133,48 @@ except Exception:  # pragma: no cover
     pass
 log = logging.getLogger("vula.api")
 
+# ─── Error monitoring (Sentry) ─────────────────────────────────────────────────
+# Before this, an exception only reached Railway's log stream — swallowed by the broad
+# `except Exception` blocks in the scheduler loops, with no human paged on a one-off failure.
+# No-op unless SENTRY_DSN is set (config.py). PII: CLAUDE.md's non-negotiable is that telemetry
+# carries type labels only, never raw prompt or customer content — same rule core/log_redaction.py
+# enforces for the stdout logs above, so this must not become the leak that rule was closing.
+# send_default_pii=False + include_local_variables=False (a WhatsApp handler's stack frame can
+# hold message text in a local var) + stripping request bodies/query strings in before_send.
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+
+        def _sentry_scrub_before_send(event, hint):
+            req = event.get("request")
+            if req:
+                req.pop("data", None)
+                req.pop("query_string", None)
+            for bc in (event.get("breadcrumbs") or {}).get("values", []) or []:
+                (bc.get("data") or {}).pop("body", None)
+            return event
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment="development" if settings.debug else "production",
+            integrations=[
+                StarletteIntegration(transaction_style="endpoint"),
+                FastApiIntegration(transaction_style="endpoint"),
+            ],
+            send_default_pii=False,
+            include_local_variables=False,
+            max_request_body_size="never",
+            traces_sample_rate=0.0,  # error tracking only — keep data volume/PII surface minimal
+            before_send=_sentry_scrub_before_send,
+        )
+        log.info("Sentry error monitoring enabled")
+    except Exception:  # pragma: no cover — never let monitoring setup break boot
+        log.exception("Sentry init failed — continuing without error monitoring")
+else:
+    log.info("Sentry disabled (SENTRY_DSN not set)")
+
 # ─── Rate limiter ─────────────────────────────────────────────────────────────
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
@@ -985,6 +1027,53 @@ async def _email_sync_loop() -> None:
         await _asyncio.sleep(60 * 60)   # hourly — email isn't time-critical; saves AI cost
 
 
+async def _clickup_sync_loop() -> None:
+    """Auto-sync connected ClickUp workspaces into each tenant's knowledge base every hour.
+
+    2026-09-18: sync_tenant_clickup_kb (vula/api/clickup.py) already did the right thing but
+    was only ever reachable via its own HTTP route, which nothing called — ClickUp content
+    never actually reached the KB in practice, so a question answerable from a ClickUp task
+    only worked if the model happened to route to clickup_admin's live-API tools instead.
+    Mirrors _email_sync_loop's shape exactly; incremental freshness for comments/new tasks
+    is also wired directly into the webhook handler (_handle_non_status_event) for anyone
+    asking sooner than the next hourly sweep."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(50)  # settle on boot
+    while True:
+        try:
+            from vula.clickup.service import process_all_clickup_sync
+            n = await process_all_clickup_sync()
+            if n:
+                log.info("ClickUp KB sync processed %d list(s)", n)
+        except Exception as exc:
+            log.warning("ClickUp sync loop error: %s", exc)
+        await _asyncio.sleep(60 * 60)   # hourly — matches email's cadence
+
+
+async def _onedrive_sync_loop() -> None:
+    """Auto-sync each connected tenant's recently-modified OneDrive files into their knowledge
+    base every hour — mirrors _email_sync_loop/_clickup_sync_loop's shape exactly.
+
+    2026-09-18: drive_search/drive_download (vula/microsoft/service.py) were on-demand only — a
+    file reached the KB only after the user explicitly asked Vula to pull that specific one
+    in-conversation. No equivalent loop exists for Google Drive: drive.file is a deliberately
+    restrictive OAuth scope (Vula only sees files it created or the user explicitly picked, see
+    vula/google/service.py's own SCOPES comment) that would make an equivalent sweep return
+    nothing useful for a tenant's pre-existing documents — broadening it needs a Google CASA
+    security assessment, a real scope-change decision outside this loop's reach."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(55)  # settle on boot
+    while True:
+        try:
+            from vula.microsoft.service import process_all_onedrive_sync
+            n = await process_all_onedrive_sync()
+            if n:
+                log.info("OneDrive KB sync processed %d file(s)", n)
+        except Exception as exc:
+            log.warning("OneDrive sync loop error: %s", exc)
+        await _asyncio.sleep(60 * 60)   # hourly — matches email/ClickUp's cadence
+
+
 async def _recurring_invoices_loop() -> None:
     """Generate due recurring invoices once a day."""
     import asyncio as _asyncio
@@ -1010,6 +1099,23 @@ async def _infra_snapshot_loop() -> None:
             await snapshot_infra()
         except Exception as exc:
             log.debug("infra snapshot loop error: %s", exc)
+        await _asyncio.sleep(24 * 3600)
+
+
+async def _qdrant_backup_loop() -> None:
+    """Daily per-tenant Qdrant collection snapshot → private Supabase Storage bucket, see
+    docs/dr.md. Qdrant previously had zero backup mechanism — the highest-severity finding in
+    the go-live readiness DR review."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(150)  # settle on boot, after the other startup loops
+    while True:
+        try:
+            from vula.integrations.qdrant_backup import backup_all_tenants
+            n = await backup_all_tenants()
+            if n:
+                log.info("Qdrant backup: %d tenant collection(s) snapshotted", n)
+        except Exception as exc:
+            log.warning("Qdrant backup loop error: %s", exc)
         await _asyncio.sleep(24 * 3600)
 
 
@@ -1074,6 +1180,8 @@ async def _try_acquire_or_renew_scheduler_lock() -> bool:
             log.warning("scheduler lock self-renew returned no rows (holder=%s, "
                         "prev_expires_at=%s, requested_expires_at=%s) — treating as lost",
                         holder, row.get("expires_at"), expires)
+            from core.sentry_utils import note_scheduler_lock_flap
+            note_scheduler_lock_flap(holder, row.get("expires_at") or "", expires)
         return won
     except Exception as exc:
         log.warning("scheduler lock renew failed: %s", exc)
@@ -1108,6 +1216,7 @@ def _start_scheduled_job_tasks() -> None:
     import asyncio as _asyncio
     _scheduled_job_tasks.append(_asyncio.create_task(_seed_training_on_boot()))
     _scheduled_job_tasks.append(_asyncio.create_task(_infra_snapshot_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_qdrant_backup_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_invoices_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_scheduled_campaigns_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_automations_loop()))
@@ -1115,6 +1224,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_weekly_rates_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_call_sheet_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_expense_sheet_loop()))
@@ -1719,6 +1830,22 @@ async def health_check():
         # Ollama on Railway routes to OpenRouter — check accordingly
         if checks.get("ollama", {}).get("status") == "error" and settings.openrouter_api_key:
             checks["ollama"] = {"status": "ok", "models": ["openrouter/cloud"], "note": "via OpenRouter"}
+
+    # Supabase/Postgres reachability — previously unchecked here entirely, so a DB outage never
+    # showed as "degraded" even though every tenant request depends on it more than Ollama/Qdrant
+    # do. Same sync-client-in-a-thread pattern vula/startup_checks.py already uses for its schema
+    # probe; a tiny, always-present table kept the query cheap.
+    try:
+        import asyncio as _asyncio
+        from vula.commerce import service as _commerce_service
+
+        def _db_ping() -> None:
+            _commerce_service._client().table("vula_tenants").select("tenant_id").limit(1).execute()
+
+        await _asyncio.wait_for(_asyncio.to_thread(_db_ping), timeout=3.0)
+        checks["supabase"] = {"status": "ok"}
+    except Exception as exc:
+        checks["supabase"] = {"status": "error", "detail": str(exc)}
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {

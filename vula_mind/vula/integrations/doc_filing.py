@@ -337,7 +337,25 @@ async def file_document(
     """Store a durable copy + a `vula_filed_documents` row, and (if a ClickUp list is
     given and we have bytes) attach the file into ClickUp. Returns the row dict
     plus `clickup_task_id` when attached.
+
+    Plan limit (go-live readiness pass, Phase 4.1): a Starter tenant at the 25-document cap
+    gets no `id` in the returned row (the same "did this actually save" signal every existing
+    caller already checks for a DB failure — see core/skills/commerce_admin.py's file_document
+    caller) plus `plan_limit_reached: True` and a caller-displayable `error` message. Never
+    raises — file_document's existing contract ("swallows its own DB errors and still returns a
+    row dict") is preserved so none of its several callers can be broken by an unexpected
+    exception; check_document_quota itself fails open on a metering read error.
     """
+    from vula.commerce.plan_limits import PlanLimitError, check_document_quota
+    try:
+        check_document_quota(tenant_id)
+    except PlanLimitError as exc:
+        logger.info("document filing blocked by plan limit for %s: %s", tenant_id, exc)
+        return {
+            "tenant_id": tenant_id, "filename": filename, "status": status,
+            "plan_limit_reached": True, "error": str(exc),
+        }
+
     # Content hash (migration 092) computed up front — used both for the skip-duplicate check
     # below and the row itself, so a second distinct file sharing a generic name never gets
     # mistaken for a re-file of the first.

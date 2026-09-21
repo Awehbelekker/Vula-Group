@@ -138,6 +138,22 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["query"]},
     }},
     {"type": "function", "function": {
+        "name": "email_thread_summary",
+        "description": "Summarize the actual CONTENT of every email matching a supplier/sender "
+                       "name, company, or topic — reads the real email bodies (HTML included, "
+                       "not just plain text), never just attachments — and returns who it's "
+                       "with, the current status, and outstanding action items. Use this for "
+                       "'summarize all mail from X', 'what's going on with X', 'what still "
+                       "needs to be done for X' — a request about the CORRESPONDENCE itself, "
+                       "not documents already filed (use find_document for 'what invoices do "
+                       "we have from X'). Needs a connected email account — if none is "
+                       "connected, say so plainly rather than guessing from find_document.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Supplier/sender name, company, or "
+                      "topic — e.g. 'Gardens Handiman Centre', 'jackhammer', 'the Regan order'."}},
+            "required": ["query"]},
+    }},
+    {"type": "function", "function": {
         "name": "add_expense",
         "description": "Record a business expense in Rands.",
         "parameters": {"type": "object", "properties": {
@@ -535,8 +551,8 @@ DRAFT_TOOLS = [
         "name": "draft_letter",
         "description": (
             "Draft a professional business letter/proposal, put it on the business's branded "
-            "letterhead as a PDF, and send it back as a WhatsApp document. Optionally also save "
-            "it to the user's connected Google Drive."
+            "letterhead as a PDF (or a Word .docx — see output_format), and send it back as a "
+            "WhatsApp document. Optionally also save it to the user's connected Google Drive."
         ),
         "parameters": {"type": "object", "properties": {
             "document_type": {"type": "string", "enum": [
@@ -550,6 +566,10 @@ DRAFT_TOOLS = [
             "client_name": {"type": "string"},
             "recipient": {"type": "string", "description": "Who it's addressed to (name/address block)."},
             "save_to_drive": {"type": "boolean", "description": "Also save a copy to Google Drive."},
+            "output_format": {"type": "string", "enum": ["pdf", "docx"],
+                "description": "'pdf' (default) or 'docx' (editable Word document). Only use "
+                               "'docx' when the request explicitly says Word/.docx/editable — "
+                               "never guess; a PDF is the right default for a finished document."},
         }, "required": ["document_type", "brief"]}}},
     {"type": "function", "function": {
         "name": "competitor_check",
@@ -913,6 +933,33 @@ def _resolve_due_at(due_phrase: Optional[str]) -> Optional[str]:
         return None
 
 
+def _product_tools_for(tenant_id: str) -> List[Dict[str, Any]]:
+    """PRODUCT_TOOLS, with update_product's is_daily_catch field only for a food-vertical
+    tenant. 2026-09-18: this seafood-specific schema field used to be exposed to every tenant
+    with the products module on, regardless of vertical — a construction or professional-
+    services tenant's update_product call would never have a legitimate use for it. Known
+    imprecision accepted: business_type=="food" also covers a bakery/restaurant with no daily
+    catch of its own, but it's the only vertical signal that persists past onboarding today
+    (the free-text industry string is discarded after being mapped to this coarse bucket —
+    see vula/api/onboarding.py's _map_business_type) — not worth a new column for one boolean."""
+    try:
+        from vula.api.tenants import get_config
+        business_type = (get_config(tenant_id) or {}).get("business_type")
+    except Exception:
+        business_type = None
+    if business_type == "food":
+        return PRODUCT_TOOLS
+    trimmed = []
+    for t in PRODUCT_TOOLS:
+        if t["function"]["name"] != "update_product":
+            trimmed.append(t)
+            continue
+        t2 = json.loads(json.dumps(t))  # deep copy — never mutate the shared PRODUCT_TOOLS list
+        t2["function"]["parameters"]["properties"].pop("is_daily_catch", None)
+        trimmed.append(t2)
+    return trimmed
+
+
 def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") -> List[Dict[str, Any]]:
     """Base tools + the gated groups this tenant's modules unlock (finance_insights is always on).
     role="sales_rep" gets the narrower personal-scope set (see _REP_TOOL_SPECS) regardless of
@@ -936,7 +983,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         if not (show_all or mod in mods):
             continue
         if matched is None or mod in matched:
-            tools += group
+            tools += _product_tools_for(tenant_id) if mod == "products" else group
     return tools
 
 
@@ -1380,6 +1427,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
             if name == "find_document":      return await self._find_document(tid, args)
+            if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
             if name == "preview_broadcast":  return await self._preview_broadcast(tid, args.get("audience", "all"))
             if name == "finance_insights":   return await self._finance_insights(tid, int(args.get("days") or 30))
@@ -2259,46 +2307,31 @@ class CommerceAdminSkill(BaseSkill):
              "next_run": s.get("next_run")} for s in rows[:15]]}
 
     async def _find_document(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Search vula_filed_documents (invoices/quotes/proof-of-payment/BOQs/receipts) by free
-        text. 2026-08-21: added after a real transcript showed the admin loop guessing among
-        unrelated tools (bookings, log_meeting, finance_insights) three times in a row rather
-        than looking up the specific document the owner referenced — this gives the model
-        something correct to reach for instead. Mirrors vula/api/documents.py's list_filed
-        filter shape (filename/summary ilike) rather than inventing a new search path."""
-        query = (args.get("query") or "").strip()
-        if not query:
-            return {"error": "Give a few words about the document — supplier/customer name, "
-                              "invoice number, amount, or what it was for."}
-        category = (args.get("category") or "").strip()
-        # Commas/parens are PostgREST or_() filter syntax — strip them so free text (which may
-        # come straight from a WhatsApp message) can't alter the query's filter structure.
-        safe_query = re.sub(r"[,()]", " ", query).strip()[:100]
-        try:
-            q = (service._client().table("vula_filed_documents")
-                 .select("id,filename,category,summary,fields,status,created_at,customer_phone")
-                 .eq("tenant_id", tid).order("created_at", desc=True))
-            if category:
-                q = q.eq("category", category)
-            if safe_query:
-                q = q.or_(f"filename.ilike.%{safe_query}%,summary.ilike.%{safe_query}%")
-            rows = q.limit(5).execute().data or []
-        except Exception as exc:
-            logger.warning("find_document query failed: %s", exc)
-            return {"error": "Couldn't search documents right now."}
-        if not rows:
-            return {"message": f"No filed document matches '{query}'. Ask the owner for the "
-                                "invoice/document number, or to resend it — don't guess."}
-        results = []
-        for r in rows:
-            fields = r.get("fields") or {}
-            results.append({
-                "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
-                "summary": (r.get("summary") or "")[:200],
-                "amount": fields.get("amount") or fields.get("total") or fields.get("amount_rands"),
-                "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
-                "filed_at": r.get("created_at"),
-            })
-        return {"matches": results}
+        """Search filed documents (invoices/quotes/proof-of-payment/BOQs/receipts) by free text.
+        2026-08-21: added after a real transcript showed the admin loop guessing among unrelated
+        tools (bookings, log_meeting, finance_insights) three times in a row rather than looking
+        up the specific document the owner referenced — this gives the model something correct
+        to reach for instead. Delegates to service.find_filed_document — a SQL filename/summary
+        match with a semantic-KB fallback for a query that only names something INSIDE a
+        document (see that function's docstring for the 2026-09-18 incident behind the
+        fallback), shared with email_admin.py's identical tool so both answer consistently."""
+        return await service.find_filed_document(
+            tid, args.get("query") or "", category=(args.get("category") or "").strip() or None)
+
+    async def _email_thread_summary(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Summarize the actual correspondence (not just filed attachments) with a supplier/
+        sender — delegates to vula.email_imap.service.summarize_correspondence, shared with
+        email_admin.py's identical tool. Commerce-mode owner/staff messages reach commerce_admin
+        directly (never the HRM keyword router email_admin normally answers through — see
+        _find_document above for the identical reason it's duplicated here), so without this a
+        commerce tenant's owner could never reach the capability at all."""
+        from vula.email_imap.credentials import get_email_creds
+        creds = get_email_creds(tid)
+        if not creds:
+            return {"error": "No email account is connected yet. Connect a mailbox (Gmail, "
+                             "Outlook, or IMAP like GoDaddy) in Settings first."}
+        from vula.email_imap import service as email_service
+        return await email_service.summarize_correspondence(creds, args.get("query") or "")
 
     async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
         from vula.api.commerce import _aggregate_customers, _norm_phone

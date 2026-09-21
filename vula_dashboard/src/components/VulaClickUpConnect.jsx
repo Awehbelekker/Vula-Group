@@ -118,6 +118,7 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
               <span style={styles.value}>{account.default_list_id || '—'}</span>
             )}
           </div>
+          <SyncHealthRow lastSyncedAt={account.last_synced_at} lastSyncStatus={account.last_sync_status} lastSyncError={account.last_sync_error} />
         </div>
       )}
 
@@ -143,6 +144,39 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
           {loading ? '…' : 'Reconnect'}
         </button>
       )}
+    </div>
+  )
+}
+
+function _timeAgo(iso) {
+  if (!iso) return null
+  const ms = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return null
+  const mins = Math.round(ms / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+// Sync HEALTH is distinct from OAuth connection status — a tenant can stay "Connected" (a valid
+// token) while the background sync has been silently failing for days (migration 169, go-live
+// readiness pass Phase 3.2). Shows nothing until at least one sync has actually run.
+function SyncHealthRow({ lastSyncedAt, lastSyncStatus, lastSyncError }) {
+  if (!lastSyncedAt) return null
+  const failing = lastSyncStatus === 'error'
+  return (
+    <div style={{ ...styles.infoRow, borderBottom: 'none' }}>
+      <span style={styles.label}>Sync</span>
+      <span style={{ ...styles.value, color: failing ? '#ef4444' : styles.value.color }}>
+        {failing ? `Failing — ${_timeAgo(lastSyncedAt)}` : `Last synced ${_timeAgo(lastSyncedAt)}`}
+        {failing && lastSyncError && (
+          <span style={{ display: 'block', fontSize: 11, color: '#ef4444', fontWeight: 400, marginTop: 2 }}>
+            {String(lastSyncError).slice(0, 120)}
+          </span>
+        )}
+      </span>
     </div>
   )
 }

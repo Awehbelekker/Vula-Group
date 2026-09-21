@@ -4,8 +4,13 @@ unrelated tools (bookings, log_meeting, finance_insights) three times in a row r
 looking up the specific invoice/proof-of-payment the owner referenced — despite AGENTIC_RULES
 already saying to ask instead of guess. Root cause: there was nothing correct to reach for. See
 core/skills/commerce_admin.py's _find_document and the system-prompt guidance in _system_prompt.
+
+2026-09-18: the actual search (SQL filename/summary match + semantic-KB fallback) moved into
+vula.commerce.service.find_filed_document, shared with email_admin.py's identical tool — see
+test_service_find_filed_document.py for those behavior tests. This file now only checks that
+the handler here delegates to it correctly.
 """
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -19,17 +24,6 @@ TID = "test-tenant"
 @pytest.fixture
 def skill():
     return CommerceAdminSkill()
-
-
-def _mock_filed_documents(rows):
-    """Chainable mock matching vula_filed_documents' select().eq().order()[.eq()][.or_()]
-    .limit().execute() shape — category/or_ filters are optional so both must return self."""
-    m = MagicMock()
-    chain = m.table.return_value.select.return_value.eq.return_value.order.return_value
-    chain.eq.return_value = chain
-    chain.or_.return_value = chain
-    chain.limit.return_value.execute.return_value = MagicMock(data=rows)
-    return m
 
 
 # ── tool registration ────────────────────────────────────────────────────────────
@@ -133,61 +127,30 @@ async def test_find_document_requires_query(skill):
 
 
 @pytest.mark.asyncio
-async def test_find_document_returns_matches(skill):
+async def test_find_document_delegates_to_shared_service_function(skill):
+    """The actual search logic (SQL match + semantic-KB fallback) lives in
+    service.find_filed_document, shared with email_admin.py — see
+    test_service_find_filed_document.py for its behavior tests."""
     import core.skills.commerce_admin as ca
 
-    rows = [{
-        "id": "d1", "filename": "solid-cape-invoice.pdf", "category": "Invoice",
-        "summary": "Invoice from Solid Cape for performer costs, R7,500.00",
-        "fields": {"supplier": "Solid Cape", "amount": "R7,500.00"},
-        "status": "filed", "created_at": "2026-08-19T10:00:00Z", "customer_phone": None,
-    }]
+    expected = {"matches": [{"filename": "solid-cape-invoice.pdf"}], "match_type": "filed_document"}
     with patch.object(ca, "service") as mock_service:
-        mock_service._client.return_value = _mock_filed_documents(rows)
-        res = await skill._find_document(TID, {"query": "Solid Cape performer invoice"})
+        mock_service.find_filed_document = AsyncMock(return_value=expected)
+        res = await skill._find_document(TID, {"query": "Solid Cape invoice", "category": "Invoice"})
 
-    assert "matches" in res
-    assert len(res["matches"]) == 1
-    match = res["matches"][0]
-    assert match["filename"] == "solid-cape-invoice.pdf"
-    assert match["party"] == "Solid Cape"
-    assert match["amount"] == "R7,500.00"
+    mock_service.find_filed_document.assert_awaited_once_with(
+        TID, "Solid Cape invoice", category="Invoice")
+    assert res is expected
 
 
 @pytest.mark.asyncio
-async def test_find_document_no_matches_gives_actionable_message_not_a_guess(skill):
+async def test_find_document_passes_through_no_match_message(skill):
     import core.skills.commerce_admin as ca
 
     with patch.object(ca, "service") as mock_service:
-        mock_service._client.return_value = _mock_filed_documents([])
+        mock_service.find_filed_document = AsyncMock(
+            return_value={"message": "No filed document matches 'nonexistent thing'."})
         res = await skill._find_document(TID, {"query": "nonexistent thing"})
 
     assert "matches" not in res
     assert "message" in res
-    assert "invoice/document number" in res["message"] or "resend" in res["message"]
-
-
-@pytest.mark.asyncio
-async def test_find_document_sanitizes_filter_breaking_characters(skill):
-    import core.skills.commerce_admin as ca
-
-    mock_client = _mock_filed_documents([])
-    with patch.object(ca, "service") as mock_service:
-        mock_service._client.return_value = mock_client
-        await skill._find_document(TID, {"query": "Solid Cape, (urgent)"})
-
-    chain = mock_client.table.return_value.select.return_value.eq.return_value.order.return_value
-    called_with = chain.or_.call_args[0][0]
-    assert "," not in called_with.split("ilike.%")[1].split("%")[0]
-    assert "(" not in called_with and ")" not in called_with
-
-
-@pytest.mark.asyncio
-async def test_find_document_query_failure_returns_error_not_raise(skill):
-    import core.skills.commerce_admin as ca
-
-    with patch.object(ca, "service") as mock_service:
-        mock_service._client.side_effect = RuntimeError("db down")
-        res = await skill._find_document(TID, {"query": "anything"})
-
-    assert "error" in res

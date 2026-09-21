@@ -461,6 +461,10 @@ def merge_branding(tenant_id: str, settings: Optional[dict]) -> dict:
     # reached the PDF renderer before this — body text stayed hardcoded per-theme regardless
     # of what a tenant picked. "" (unset) keeps each theme's existing hardcoded fallback.
     branding["ink_color"] = settings.get("ink_color") or ""
+    # 2026-09-18: a tenant's captured signature (WhatsApp photo capture, migration 165) —
+    # rendered under a letter's sign_off when set; "" (unset) means no image, same as before.
+    branding["signature_url"] = settings.get("signature_url") or ""
+    branding["signature_name"] = settings.get("signature_name") or ""
     return branding
 
 
@@ -657,6 +661,8 @@ __TEMPLATE_CSS__
 .letter-body table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
 .letter-body th, .letter-body td { padding: 6px 8px; font-size: 10pt; border-bottom: 1px solid #eee; text-align: left; }
 .letter-sign { margin-top: 40px; font-size: 10pt; line-height: 1.7; }
+.letter-signature-img { max-height: 56px; margin-bottom: 6px; display: block; }
+.letter-signature-name { font-weight: 700; }
 </style>
 </head>
 <body>
@@ -694,8 +700,12 @@ __TEMPLATE_CSS__
 
 <div class="letter-body">{% if body_html %}{{ body_html | safe }}{% else %}{% for para in body_paragraphs %}<p>{{ para }}</p>{% endfor %}{% endif %}</div>
 
-{% if sign_off %}
-<div class="letter-sign">{{ sign_off | replace("\\n", "<br>") | safe }}</div>
+{% if sign_off or signature_url %}
+<div class="letter-sign">
+  {% if signature_url %}<img src="{{ signature_url }}" class="letter-signature-img" alt="Signature">{% endif %}
+  {% if signature_name %}<div class="letter-signature-name">{{ signature_name }}</div>{% endif %}
+  {% if sign_off %}{{ sign_off | replace("\\n", "<br>") | safe }}{% endif %}
+</div>
 {% endif %}
 
 <div class="footer">
@@ -722,6 +732,8 @@ def render_letter_pdf(
     sign_off: Optional[str] = None,
     issue_date: Optional[str] = None,
     tenant_profile: Optional[dict] = None,
+    signature_url: Optional[str] = None,
+    signature_name: Optional[str] = None,
 ) -> bytes:
     """Render letter content onto the tenant's branded letterhead.
 
@@ -735,6 +747,10 @@ def render_letter_pdf(
         sign_off: closing block, e.g. "Kind regards,\\nJudy Downing\\nDIGG Architects".
         tenant_profile: branding override — falls back to _TENANT_DEFAULTS keyed by tenant_id,
             same as render_invoice_pdf (use merge_branding() to source from saved invoice settings).
+        signature_url: an explicit signature image URL, overriding tenant_profile/branding's
+            own signature_url (merge_branding already carries it from saved settings — this
+            param exists for a caller with a signature not yet persisted to settings).
+        signature_name: likewise, overrides branding's signature_name.
     """
     try:
         from datetime import datetime, timezone
@@ -771,6 +787,8 @@ def render_letter_pdf(
         "body_paragraphs": paragraphs,
         "sign_off": sign_off or "",
         "ink_color": branding.get("ink_color") or "",
+        "signature_url": signature_url or branding.get("signature_url") or "",
+        "signature_name": signature_name or branding.get("signature_name") or "",
         **_font_ctx(branding),
     }
 
@@ -784,6 +802,192 @@ def render_letter_pdf(
 
     log.info("Letter PDF rendered: %s (%s) for %s (%d bytes)", doc_label, choice, tenant_id, len(pdf_bytes))
     return pdf_bytes
+
+
+def _download_image_bytes(url: str) -> Optional[bytes]:
+    """Best-effort fetch for a remote image (logo/signature) to embed in a .docx — unlike
+    WeasyPrint's <img src="url">, python-docx's add_picture needs real bytes, not a URL. Never
+    raises: a broken/unreachable image just means that image is skipped, not a failed document."""
+    if not url:
+        return None
+    try:
+        import httpx
+        resp = httpx.get(url, timeout=10.0, follow_redirects=True)
+        resp.raise_for_status()
+        return resp.content
+    except Exception as exc:
+        log.debug("docx image fetch failed for %s: %s", url, exc)
+        return None
+
+
+def _add_inline_runs(paragraph, text: str) -> None:
+    """Split **bold** and *italic*/_italic_ spans into separate runs so a heavily-formatted
+    LLM-generated paragraph ("**Fee:** R85,000 excl VAT") doesn't render with literal asterisks
+    — block structure (headings/bullets) is handled by the caller; this is inline only."""
+    import re as _re
+    pattern = _re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_")
+    pos = 0
+    for m in pattern.finditer(text):
+        if m.start() > pos:
+            paragraph.add_run(text[pos:m.start()])
+        if m.group(1) is not None:
+            paragraph.add_run(m.group(1)).bold = True
+        else:
+            paragraph.add_run(m.group(2) or m.group(3)).italic = True
+        pos = m.end()
+    if pos < len(text):
+        paragraph.add_run(text[pos:])
+
+
+def _markdown_to_docx(document, text: str) -> None:
+    """A deliberately simple line-based markdown walker — headings (#/##/###), bullets (-/*),
+    numbered lists, paragraphs, and inline **bold**/*italic*. Covers what an LLM-generated
+    letter/proposal actually uses; unlike the PDF path's real markdown->HTML conversion, this
+    does not handle tables (rare in these documents, and python-docx tables need real
+    column-width layout to look right — a genuine follow-up if a document type that actually
+    needs one shows up)."""
+    import re as _re
+    heading_re = _re.compile(r"^(#{1,3})\s+(.*)$")
+    bullet_re = _re.compile(r"^[-*]\s+(.*)$")
+    numbered_re = _re.compile(r"^\d+\.\s+(.*)$")
+
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if buffer:
+            _add_inline_runs(document.add_paragraph(), " ".join(buffer).strip())
+            buffer.clear()
+
+    for raw_line in (text or "").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            flush()
+            continue
+        m = heading_re.match(line)
+        if m:
+            flush()
+            document.add_heading(m.group(2).strip(), level=min(len(m.group(1)) + 1, 4))
+            continue
+        m = bullet_re.match(line)
+        if m:
+            flush()
+            _add_inline_runs(document.add_paragraph(style="List Bullet"), m.group(1).strip())
+            continue
+        m = numbered_re.match(line)
+        if m:
+            flush()
+            _add_inline_runs(document.add_paragraph(style="List Number"), m.group(1).strip())
+            continue
+        buffer.append(line)
+    flush()
+
+
+def render_letter_docx(
+    *,
+    tenant_id: str,
+    body: str = "",
+    body_markdown: Optional[str] = None,
+    doc_label: str = "Letter",
+    subject: Optional[str] = None,
+    recipient: Optional[str] = None,
+    sign_off: Optional[str] = None,
+    issue_date: Optional[str] = None,
+    tenant_profile: Optional[dict] = None,
+    signature_url: Optional[str] = None,
+    signature_name: Optional[str] = None,
+) -> bytes:
+    """Same content/branding as render_letter_pdf, rendered as an editable Word document
+    instead — for the (opt-in only, per an explicit client request) '.docx' output_format.
+    Shares the exact branding source (merge_branding) as the PDF path, so the two never drift
+    apart on what a tenant's letterhead looks like; only the rendering technology differs.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except ImportError as exc:
+        raise RuntimeError(
+            "Word document rendering requires python-docx. Run: pip install python-docx"
+        ) from exc
+    from datetime import datetime, timezone
+
+    branding = tenant_profile or _TENANT_DEFAULTS.get(tenant_id, {})
+    tenant_name = branding.get("name", tenant_id.replace("-", " ").title())
+    trading_as = branding.get("trading_as", "")
+    logo_url = branding.get("logo_url", "")
+    sig_url = signature_url or branding.get("signature_url") or ""
+    sig_name = signature_name or branding.get("signature_name") or ""
+
+    document = Document()
+
+    logo_bytes = _download_image_bytes(logo_url)
+    if logo_bytes:
+        try:
+            import io
+            document.add_picture(io.BytesIO(logo_bytes), height=Inches(0.75))
+        except Exception as exc:
+            log.debug("docx logo embed failed for %s: %s", tenant_id, exc)
+            logo_bytes = None
+    if not logo_bytes:
+        heading = document.add_heading(trading_as or tenant_name, level=1)
+        heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        if trading_as and tenant_name != trading_as:
+            legal = document.add_paragraph(tenant_name)
+            legal.runs[0].italic = True
+
+    addr_lines = [l for l in [
+        branding.get("address", ""), branding.get("email", ""), branding.get("phone", ""),
+        (f"Reg: {branding.get('reg')}" if branding.get("reg") else ""),
+    ] if l]
+    for line in addr_lines:
+        p = document.add_paragraph(line)
+        for run in p.runs:
+            run.font.size = Pt(9)
+
+    title = document.add_paragraph()
+    title_run = title.add_run(doc_label)
+    title_run.bold = True
+    title_run.font.size = Pt(14)
+
+    date_p = document.add_paragraph(issue_date or datetime.now(timezone.utc).date().isoformat())
+    date_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+    if recipient:
+        for line in recipient.split("\n"):
+            document.add_paragraph(line)
+
+    if subject:
+        subj = document.add_paragraph()
+        subj.add_run(f"Re: {subject}").bold = True
+
+    if body_markdown:
+        _markdown_to_docx(document, body_markdown)
+    else:
+        for para in [p.strip() for p in body.split("\n\n") if p.strip()]:
+            document.add_paragraph(para)
+
+    if sign_off or sig_url or sig_name:
+        document.add_paragraph()  # spacing before the signature block
+        sig_bytes = _download_image_bytes(sig_url)
+        if sig_bytes:
+            try:
+                import io
+                document.add_picture(io.BytesIO(sig_bytes), height=Inches(0.6))
+            except Exception as exc:
+                log.debug("docx signature embed failed for %s: %s", tenant_id, exc)
+        if sig_name:
+            name_p = document.add_paragraph()
+            name_p.add_run(sig_name).bold = True
+        if sign_off:
+            for line in sign_off.split("\n"):
+                document.add_paragraph(line)
+
+    import io
+    buf = io.BytesIO()
+    document.save(buf)
+    docx_bytes = buf.getvalue()
+    log.info("Letter docx rendered: %s for %s (%d bytes)", doc_label, tenant_id, len(docx_bytes))
+    return docx_bytes
 
 
 def re_split_blank_lines(text: str) -> list[str]:

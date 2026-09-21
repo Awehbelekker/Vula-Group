@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextvars
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,16 @@ def set_request_tenant(tenant_id: str) -> None:
         _current_tenant.set(tenant_id)
     except Exception:
         pass
+
+
+def get_request_tenant() -> Optional[str]:
+    """The tenant_id set_request_tenant() attached to the current request, if any — read by
+    core/llm_router.py's spend-cap gate so it doesn't need tenant_id threaded through every
+    resolve_generation_route() call site."""
+    try:
+        return _current_tenant.get()
+    except Exception:
+        return None
 
 
 def _client():
@@ -146,6 +157,50 @@ def install_metering() -> None:
         logger.info("Vula metering: litellm CustomLogger installed")
     except Exception as exc:
         logger.warning("metering install failed: %s", exc)
+
+
+# ── Spend cap (migration 166) ────────────────────────────────────────────────
+# Opt-in, per-tenant daily cap. Fail-open throughout: any read error returns "not capped" /
+# "no spend" rather than blocking generation over a metering hiccup — cost control must never
+# become an availability bug.
+
+def today_spend(tenant_id: str) -> float:
+    """Sum of today's est_cost_usd across all models for this tenant."""
+    if not tenant_id:
+        return 0.0
+    day = datetime.now(timezone.utc).date().isoformat()
+    try:
+        db = _client()
+        rows = (db.table("vula_ai_usage").select("est_cost_usd")
+                .eq("tenant_id", tenant_id).eq("day", day).execute().data or [])
+        return sum(float(r.get("est_cost_usd") or 0) for r in rows)
+    except Exception as exc:
+        logger.debug("today_spend read skipped: %s", exc)
+        return 0.0
+
+
+def spend_cap_usd(tenant_id: str) -> Optional[float]:
+    """This tenant's configured daily cap, or None if unset — capping is opt-in, no default cap
+    unless an operator sets one (master_usage()/VulaMasterPanel.jsx)."""
+    if not tenant_id:
+        return None
+    try:
+        db = _client()
+        rows = (db.table("vula_tenant_config").select("spend_cap_usd")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        cap = rows[0].get("spend_cap_usd") if rows else None
+        return float(cap) if cap is not None else None
+    except Exception as exc:
+        logger.debug("spend_cap_usd read skipped: %s", exc)
+        return None
+
+
+def is_over_spend_cap(tenant_id: str) -> bool:
+    """True only if this tenant HAS a cap set AND today's spend has reached it."""
+    cap = spend_cap_usd(tenant_id)
+    if cap is None:
+        return False
+    return today_spend(tenant_id) >= cap
 
 
 async def snapshot_infra() -> int:

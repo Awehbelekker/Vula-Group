@@ -1203,9 +1203,12 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
     show_company_reg:   settings?.show_company_reg ?? true,
     logo_size:          settings?.logo_size || 'md',
     logo_align:         settings?.logo_align || 'left',
+    signature_url:      settings?.signature_url || '',
+    signature_name:     settings?.signature_name || '',
   })
   const [saving, setSaving] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [uploadingSignature, setUploadingSignature] = useState(false)
   const [uploadingMenuImage, setUploadingMenuImage] = useState(false)
   const [showCloneUpload, setShowCloneUpload] = useState(false)
   const [cloning, setCloning] = useState(false)
@@ -1226,6 +1229,21 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
         if (data?.publicUrl) set('logo_url', data.publicUrl)
       }
     } finally { setUploadingLogo(false) }
+  }
+
+  async function uploadSignature(e) {
+    const file = (e.target.files || [])[0]
+    if (!file) return
+    setUploadingSignature(true)
+    try {
+      const clean = file.name.replace(/[^a-zA-Z0-9.-]/g, '-').toLowerCase()
+      const path = `${tenantId}/signature/${Date.now()}-${clean}`
+      const { error } = await supabase.storage.from('signatures').upload(path, file, { cacheControl: '3600', upsert: true })
+      if (!error) {
+        const { data } = supabase.storage.from('signatures').getPublicUrl(path)
+        if (data?.publicUrl) set('signature_url', data.publicUrl)
+      }
+    } finally { setUploadingSignature(false) }
   }
 
   async function uploadMenuImage(e) {
@@ -1466,6 +1484,25 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
           <input type="checkbox" checked={!!form.show_company_reg} onChange={e => set('show_company_reg', e.target.checked)} />
           Show company registration number
         </label>
+      </div>
+
+      <p style={s.sectionLabel}>Signature</p>
+      <div style={s.formSection}>
+        <p style={{ fontSize: 12, color: '#8A8680', margin: '0 0 4px' }}>
+          Appears on every letter/document Vula generates, alongside the name below. You can also
+          set this via WhatsApp by saying "set my signature" and sending a photo — whichever you
+          set most recently is what's used.
+        </p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+            {uploadingSignature ? 'Uploading…' : (form.signature_url ? '↻ Replace signature' : '✍️ Upload signature')}
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadSignature} style={{ display: 'none' }} />
+          </label>
+          {form.signature_url && <img src={form.signature_url} alt="signature" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
+          {form.signature_url && <button type="button" onClick={() => set('signature_url', '')} style={{ background: 'none', border: 'none', color: '#8A8680', cursor: 'pointer', fontSize: 18 }}>×</button>}
+        </div>
+        <input placeholder="Name/title shown under the signature (e.g. Judy Downing, Director)" value={form.signature_name}
+          onChange={e => set('signature_name', e.target.value)} style={s.fInput} />
       </div>
 
       <InvoicePreviewPane tenantId={tenantId} form={form} />
