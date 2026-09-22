@@ -2410,9 +2410,16 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
 # 2026-09-21: same bug class hit the bank-review sibling guard (vula/commerce/bank_review.py) —
 # "I want"/"I need"/"I'd like" (+ "we" forms) are common real-world request openers that none
 # of the command verbs below catch; kept in sync between the two copies of this regex.
+# 2026-09-22: same bug class again — "Okay try Jack Hammer" (bank_review.py's own copy) had
+# neither a recognized opener ("Okay") nor "try" in the verb list; "try" added there and kept
+# in sync here. bank_review.py also strips a leading "Okay,"/"Alright,"/etc before matching —
+# NOT mirrored here on purpose: every usage below is a different pending-answer flow (helper-
+# escalation, paid-with, purpose-attempt, odometer), each with its own tuned short-answer
+# shape, and only the bank-review flow has a confirmed real transcript showing the swallow. Add
+# the same filler-stripping to a given usage below only once a real transcript shows it needed.
 _REQUEST_SHAPED = re.compile(
     r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
-    r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
+    r"list|update|cancel|try|what|where|when|who|which|why|how|can you|could you|please|"
     r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
     r"forward|schedule|arrange|i want|i need|i'd like|we want|we need|we'd like|"
     r"kry|stuur|wys|maak|soek|skryf)\b",
