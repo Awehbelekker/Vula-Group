@@ -4476,14 +4476,23 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 metadata["preferred_language"] = lang
         except Exception as exc:
             logger.debug("rag_reply language detect skipped: %s", exc)
-        result = await runner.run(
-            question=question,
-            tenant_id=tenant_id,
-            conversation_history=conversation_history,
-            metadata=metadata,
-            max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
-            max_tokens=700,    # room to hold working facts + show code calcs
-            top_k=5,           # retrieve enough to surface the right clause/doc
+        # 2026-09-22: HRM can route this to email_admin, whose find_document -> email_thread_
+        # summary fallback chain now sometimes does a real live-IMAP round trip that plain KB/
+        # reasoning turns never needed — same "closes the silent gap" reasoning as
+        # commerce_admin/commerce_assistant's calls into this helper. Safe when phone is empty
+        # (the dashboard-chat caller, vula/api/chat.py) — _run_with_holding_message's own
+        # try/except swallows a failed send with no effect on the real result.
+        result = await _run_with_holding_message(
+            phone, tenant_id,
+            runner.run(
+                question=question,
+                tenant_id=tenant_id,
+                conversation_history=conversation_history,
+                metadata=metadata,
+                max_branches=1,    # cost cap: 1 LLM call per WhatsApp reply
+                max_tokens=700,    # room to hold working facts + show code calcs
+                top_k=5,           # retrieve enough to surface the right clause/doc
+            ),
         )
         if result.final_answer and result.final_answer.strip():
             logger.info(
@@ -6000,14 +6009,22 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     caller_name, caller_role = _caller_identity(tenant_id, phone)
 
     skill = get_skill("commerce_admin")
-    output = await skill(
-        SkillInput(
-            question=text, tenant_id=tenant_id,
-            conversation_history=history + link_context,
-            metadata={"session_id": admin_session_key, "customer_phone": phone,
-                      "caller_name": caller_name, "caller_role": caller_role,
-                      "preferred_language": preferred_language},
-        )
+    # 2026-09-22: a turn that falls back to a live mailbox search (find_document miss ->
+    # email_thread_summary) can now genuinely take several seconds longer than the local-DB-only
+    # turns this used to be silent-but-fast for — same reasoning as commerce_assistant's call
+    # below (_run_with_holding_message), so an owner isn't left wondering if anything is
+    # happening during a real live-IMAP round trip.
+    output = await _run_with_holding_message(
+        phone, tenant_id,
+        skill(
+            SkillInput(
+                question=text, tenant_id=tenant_id,
+                conversation_history=history + link_context,
+                metadata={"session_id": admin_session_key, "customer_phone": phone,
+                          "caller_name": caller_name, "caller_role": caller_role,
+                          "preferred_language": preferred_language},
+            )
+        ),
     )
     if not output.success or not output.answer:
         logger.warning("commerce_admin returned no answer: %s", output.error)

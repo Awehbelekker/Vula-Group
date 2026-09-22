@@ -118,6 +118,25 @@ def test_find_document_tool_spec_excludes_create_requests():
     assert "do not fall back to a different, unrelated tool" in desc
 
 
+# ── live-mailbox fallback (2026-09-22) ───────────────────────────────────────────────
+
+def test_find_document_spec_tells_model_to_try_email_thread_summary_on_a_miss():
+    spec = next(t for t in TOOL_SPECS if t["function"]["name"] == "find_document")
+    assert "not_found_filed" in spec["function"]["description"]
+    assert "email_thread_summary" in spec["function"]["description"]
+
+
+def test_owner_prompt_tells_model_to_try_email_thread_summary_before_giving_up(skill):
+    prompt = skill._system_prompt(TID, role=None, name="Test")
+    assert "not_found_filed" in prompt
+    assert "email_thread_summary next" in prompt
+
+
+def test_owner_prompt_tells_model_not_to_re_ask_a_narrowing_question(skill):
+    prompt = skill._system_prompt(TID, role=None, name="Test")
+    assert "never ask the same question twice" in prompt.lower()
+
+
 # ── _find_document handler ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

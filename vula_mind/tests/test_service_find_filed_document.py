@@ -249,6 +249,109 @@ async def test_crossref_lookup_failure_still_returns_semantic_matches():
     assert res["matches"][0]["filename"] == "gardens_handiman_invoice.pdf"
 
 
+# ── status field (2026-09-22, live-mailbox-fallback feature) ────────────────────────
+#
+# email_admin/commerce_admin's find_document dispatch needs a machine-readable signal to decide
+# whether to try a live mailbox search next, rather than only relaying prose and hoping the model
+# reads it — see core/skills/email_admin.py::_find_document and commerce_admin.py's twin.
+
+@pytest.mark.asyncio
+async def test_sql_hit_carries_found_status():
+    rows = [{
+        "id": "d1", "filename": "invoice.pdf", "category": "Invoice", "summary": "s",
+        "fields": {}, "status": "filed", "created_at": "2026-08-19T10:00:00Z",
+        "customer_phone": None,
+    }]
+    with patch("vula.commerce.service._client", return_value=_mock_filed_documents(rows)):
+        res = await find_filed_document(TID, "invoice")
+    assert res["status"] == "found"
+
+
+@pytest.mark.asyncio
+async def test_semantic_hit_carries_found_status():
+    hit = {"filename": "gardens_handiman_invoice.pdf", "text": "Jackhammer rental", "score": 0.5}
+    mock_client = _mock_filed_documents([])
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=[hit])
+        res = await find_filed_document(TID, "jackhammer")
+    assert res["status"] == "found"
+
+
+@pytest.mark.asyncio
+async def test_total_miss_carries_not_found_filed_status():
+    mock_client = _mock_filed_documents([])
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=[])
+        res = await find_filed_document(TID, "nonexistent thing")
+    assert res["status"] == "not_found_filed"
+
+
+# ── category filter on the semantic fallback (2026-09-22) ───────────────────────────
+#
+# ingest_file (vula/ingestion/pipeline.py) never writes a category payload onto a Qdrant chunk —
+# only the unrelated training-KB seeding path does — so a category filter can only be enforced by
+# cross-referencing each semantic hit back to its vula_filed_documents row (already fetched for
+# the amount enrichment above) and dropping anything that doesn't match, INCLUDING anything with
+# no row to check at all (unverifiable against an explicit filter the caller asked for). This is
+# deliberately NOT enforced by passing category into VulaIngestionPipeline.query() itself — doing
+# that would silently return zero results for every category-scoped call, always, since no real
+# chunk ever carries that key.
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_drops_hits_whose_filed_category_does_not_match():
+    hit = {"filename": "quote.pdf", "text": "a quote, not an invoice", "score": 0.5}
+    crossref_rows = [{"filename": "quote.pdf", "category": "Quote / Estimate", "fields": {}}]
+    mock_client = _mock_filed_documents_with_crossref(crossref_rows)
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=[hit])
+        res = await find_filed_document(TID, "quote", category="Invoice")
+    assert res["status"] == "not_found_filed"
+    assert "matches" not in res
+
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_keeps_hits_whose_filed_category_matches():
+    hit = {"filename": "invoice.pdf", "text": "an invoice", "score": 0.5}
+    crossref_rows = [{"filename": "invoice.pdf", "category": "Invoice", "fields": {}}]
+    mock_client = _mock_filed_documents_with_crossref(crossref_rows)
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=[hit])
+        res = await find_filed_document(TID, "invoice", category="Invoice")
+    assert res["status"] == "found"
+    assert res["matches"][0]["filename"] == "invoice.pdf"
+
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_with_category_drops_unverifiable_hits_with_no_filed_row():
+    """No cross-referenced vula_filed_documents row at all — can't confirm it matches the
+    requested category, so it's dropped rather than assumed to match."""
+    hit = {"filename": "kb_only.pdf", "text": "some text", "score": 0.5}
+    mock_client = _mock_filed_documents_with_crossref([])
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=[hit])
+        res = await find_filed_document(TID, "invoice", category="Invoice")
+    assert res["status"] == "not_found_filed"
+
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_without_category_keeps_unverified_hits():
+    """No category filter requested at all — the pre-existing excerpt-only behaviour (no filed
+    row needed) must be unchanged."""
+    hit = {"filename": "kb_only.pdf", "text": "some text", "score": 0.5}
+    mock_client = _mock_filed_documents_with_crossref([])
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=[hit])
+        res = await find_filed_document(TID, "invoice")
+    assert res["status"] == "found"
+    assert res["matches"][0]["filename"] == "kb_only.pdf"
+
+
 # ── filed_amounts_by_filename (2026-09-21, generalised for reasoning.py/architecture_planning.py) ──
 #
 # Factored out of find_filed_document's semantic-fallback cross-reference so RAG-grounded skills

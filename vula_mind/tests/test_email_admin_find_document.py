@@ -100,3 +100,29 @@ def test_system_prompt_tells_model_to_try_find_document_before_email_search():
     skill = EmailAdminSkill()
     prompt = skill._system("draft")
     assert "call find_document, not email_thread_summary or email_search" in prompt
+
+
+# ── live-mailbox fallback (2026-09-22) ───────────────────────────────────────────────
+#
+# Real complaint: a genuine "couldn't find it" from find_document used to be the end of the
+# road — even when the mailbox itself had the answer. find_document's miss now carries a
+# status the model can act on, and the system prompt tells it to try email_thread_summary next.
+
+@pytest.mark.asyncio
+async def test_find_document_miss_carries_not_found_filed_status(skill):
+    with patch("vula.commerce.service._client", return_value=_mock_filed_documents([])):
+        res = await skill._find_document(TID, {"query": "nonexistent thing"})
+    assert res["status"] == "not_found_filed"
+
+
+def test_system_prompt_tells_model_to_try_email_thread_summary_on_a_find_document_miss():
+    skill = EmailAdminSkill()
+    prompt = skill._system("draft")
+    assert "not_found_filed" in prompt
+    assert "email_thread_summary next" in prompt
+
+
+def test_system_prompt_tells_model_not_to_re_ask_a_narrowing_question():
+    skill = EmailAdminSkill()
+    prompt = skill._system("draft")
+    assert "never ask the same question twice" in prompt.lower()

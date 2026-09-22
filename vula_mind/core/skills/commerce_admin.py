@@ -40,7 +40,12 @@ from vula.commerce import service
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 3
+# 2026-09-22: a full fallback chain (find_document miss -> email_thread_summary -> possibly a
+# narrowing question) is 2-3 tool calls before any clarifying round-trip — bumped from 3 so that
+# chain fits in one turn. This is an owner/staff-only agentic loop (not the high-volume customer
+# path) and the whole turn is already backgrounded off the WhatsApp webhook clock (_run_bg), so
+# one more LLM round-trip is a latency/cost trade-off, not a correctness risk.
+MAX_TOOL_ITERATIONS = 4
 
 # 2026-08-08: the four guardrails that used to live here as a local `_GUARDRAILS` constant
 # (added after a real-transcript review found an off-topic non-answer, a leaked internal tool
@@ -125,11 +130,13 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "the bank statement') and you need to identify exactly which one before "
                        "acting or answering. Do NOT use this for a request to CREATE something "
                        "new (e.g. 'make an invoice for X') — go straight to create_invoice for "
-                       "that, there's no existing document to look up yet. If no result matches "
-                       "well, say so and ask the owner for the invoice/document number, or to "
-                       "resend it — do not fall back to a different, unrelated tool (e.g. "
-                       "logging an expense, checking bookings) just because nothing matched; "
-                       "either proceed with what was actually asked or ask a plain question.",
+                       "that, there's no existing document to look up yet. If this returns "
+                       "status: not_found_filed, that means nothing is FILED yet — not that the "
+                       "data doesn't exist. If a mailbox is connected, call email_thread_summary "
+                       "next before giving up. Only after that also comes up empty should you "
+                       "ask the owner for the invoice/document number or to resend it — do not "
+                       "fall back to a different, unrelated tool (e.g. logging an expense, "
+                       "checking bookings) just because nothing matched.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Free text: supplier/customer name, "
                       "invoice number, amount, or what the document was for."},
@@ -147,10 +154,19 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "needs to be done for X' — a request about the CORRESPONDENCE itself, "
                        "not documents already filed (use find_document for 'what invoices do "
                        "we have from X'). Needs a connected email account — if none is "
-                       "connected, say so plainly rather than guessing from find_document.",
+                       "connected, say so plainly rather than guessing from find_document. If it "
+                       "returns status: need_info, that message IS your reply — send it as-is "
+                       "and stop; it's a narrowing question ('how far back?') because there was "
+                       "genuinely more than could be shown, not a failure. If your own PRIOR "
+                       "message asked that same question and the user's latest message answers "
+                       "it (a period or a specific date), compute the matching `since` date and "
+                       "call this again with it set — never ask the same question twice.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Supplier/sender name, company, or "
-                      "topic — e.g. 'Gardens Handiman Centre', 'jackhammer', 'the Regan order'."}},
+                      "topic — e.g. 'Gardens Handiman Centre', 'jackhammer', 'the Regan order'."},
+            "since": {"type": "string", "description": "Optional start date (YYYY-MM-DD) to "
+                      "narrow the search — pass this once the user has answered a 'how far "
+                      "back?' question, or if they already gave a date/period."}},
             "required": ["query"]},
     }},
     {"type": "function", "function": {
@@ -1188,11 +1204,18 @@ class CommerceAdminSkill(BaseSkill):
             "I sent you', 'this payment'), use find_document to identify exactly which one "
             "BEFORE acting or answering. This does NOT apply to a request to CREATE something "
             "new ('make an invoice for X') — there's nothing to look up yet, go straight to the "
-            "tool that does that. If find_document doesn't turn up a clear match, say so and ask "
-            "for the invoice/document number or for it to be resent — never fall back to a "
-            "different, unrelated tool (bookings, a meeting log, a finance summary, logging an "
-            "expense) just because it's the closest-sounding one; either proceed with what was "
-            "actually asked or ask a plain question.\n"
+            "tool that does that. find_document returning status: not_found_filed means nothing "
+            "is FILED yet — not that the data doesn't exist. If a mailbox is connected, call "
+            "email_thread_summary next before giving up. Only after that also comes up empty "
+            "should you say so and ask for the invoice/document number or for it to be resent — "
+            "never fall back to a different, unrelated tool (bookings, a meeting log, a finance "
+            "summary, logging an expense) just because it's the closest-sounding one; either "
+            "proceed with what was actually asked or ask a plain question. If email_thread_"
+            "summary returns status: need_info, that message IS your reply — send it as-is and "
+            "stop; it's a narrowing question, not a failure. If your own PRIOR message asked "
+            "that same question and the user's latest reply answers it (a period or a specific "
+            "date), compute the matching `since` date and call it again with that set — never "
+            "ask the same question twice.\n"
             "IMPORTANT — for 'what do we sell/offer/charge/colours do we have' questions about "
             "THIS business, AND for a general SA small-business 'how do I...' question (VAT, "
             "tax, BCEA/HR, bookkeeping, customer service, marketing, business planning), call "
@@ -2331,7 +2354,8 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": "No email account is connected yet. Connect a mailbox (Gmail, "
                              "Outlook, or IMAP like GoDaddy) in Settings first."}
         from vula.email_imap import service as email_service
-        return await email_service.summarize_correspondence(creds, args.get("query") or "")
+        return await email_service.summarize_correspondence(
+            creds, args.get("query") or "", since=args.get("since"))
 
     async def _customer_lookup(self, tid: str, query: str) -> Dict[str, Any]:
         from vula.api.commerce import _aggregate_customers, _norm_phone
