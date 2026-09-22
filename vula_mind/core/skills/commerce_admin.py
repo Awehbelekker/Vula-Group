@@ -1070,8 +1070,12 @@ class CommerceAdminSkill(BaseSkill):
             # returned — the adversarial verifier had that same text as grounding and still
             # passed it. Deterministic backstop for exactly that: see
             # core.skills.base.unverified_prices.
+            # 2026-09-22: find_document/email_thread_summary added after a real invoice amount
+            # they sourced correctly was discarded because this whitelist didn't include them —
+            # see the incident note on unverified_prices' definition.
             bad_prices = unverified_prices(answer, collected_sources,
-                                           {"lookup_business_info", "competitor_check"})
+                                           {"lookup_business_info", "competitor_check",
+                                            "find_document", "email_thread_summary"})
             if bad_prices:
                 logger.warning("commerce_admin unverified price(s) in answer, tenant=%s: %s",
                                inp.tenant_id, bad_prices)

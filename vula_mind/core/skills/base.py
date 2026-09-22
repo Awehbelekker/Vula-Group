@@ -238,23 +238,46 @@ def tool_source(name: str, result: Any) -> Dict[str, Any]:
 # structured/DB-backed tools (sales_summary, stock_status, ...) are already ground truth by
 # construction and don't need this: the risk is specifically a free-text KB/web-search tool
 # whose prose the model has to extract a number FROM, which is exactly where invention creeps in.
+#
+# 2026-09-22: real incident, digg-demo — an owner asked for a jackhammer invoice breakdown; the
+# model correctly called find_document/email_thread_summary AND lookup_business_info in the same
+# turn, and the real invoice amount (sourced from find_document) got discarded anyway. Cause:
+# `grounding_tools` here only ever listed lookup_business_info/competitor_check, so when a caller
+# also passes find_document/email_thread_summary the check still only builds `relevant_text` from
+# the (irrelevant, in this turn) lookup_business_info result — the genuinely-grounded price never
+# had a chance to match. Callers should include any tool whose result the model might quote a
+# price from, structured ones included: a structured tool's own numbers are trustworthy grounding
+# text, and including it here doesn't newly expose it to false flags — it can only ever help a
+# correct answer be found (or correctly catch the model mis-transcribing even a structured figure).
 _PRICE_RE = re.compile(r"R\s?\d[\d,]*(?:\.\d{1,2})?")
+_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _amount(s: str) -> Optional[float]:
+    try:
+        return round(float(s.replace(",", "")), 2)
+    except ValueError:
+        return None
 
 
 def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tools: set) -> List[str]:
-    """Any R-prefixed price stated in `answer` that doesn't appear (digits only, ignoring
-    spacing/commas) anywhere in the combined text of `sources` whose tool name is in
-    `grounding_tools`. Returns [] when none of those tools were even called this turn — nothing
-    to check a structured-tool answer against, and nothing to falsely flag."""
+    """Any R-prefixed price stated in `answer` whose numeric value doesn't match (as a rounded
+    float, so "92.0" and "92.00" agree) any number appearing anywhere in the combined text of
+    `sources` whose tool name is in `grounding_tools`. Returns [] when none of those tools were
+    even called this turn — nothing to check a structured-tool answer against, and nothing to
+    falsely flag. Compares parsed amounts rather than raw digit substrings so a source number
+    doesn't have to appear character-for-character the way the model chose to format it."""
     relevant_text = " ".join(s.get("text", "") for s in sources
                              if s.get("name") in grounding_tools and s.get("text"))
     if not relevant_text:
         return []
-    def _digits(s: str) -> str:
-        return re.sub(r"[^\d.]", "", s)
-    source_digits = _digits(relevant_text)
-    return [m.group(0) for m in _PRICE_RE.finditer(answer)
-           if _digits(m.group(0)) and _digits(m.group(0)) not in source_digits]
+    source_amounts = {a for a in (_amount(n) for n in _NUM_RE.findall(relevant_text)) if a is not None}
+    bad = []
+    for m in _PRICE_RE.finditer(answer):
+        amount = _amount(re.sub(r"[^\d.,]", "", m.group(0)))
+        if amount is not None and amount not in source_amounts:
+            bad.append(m.group(0))
+    return bad
 
 
 # Arithmetic stated in an answer, e.g. "11.8 x 18.2 = 215.56" or "214.76 × R198.00 = R42,522.48".
