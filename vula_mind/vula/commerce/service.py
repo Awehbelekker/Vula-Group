@@ -2842,7 +2842,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
                 "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
                 "filed_at": r.get("created_at"),
             })
-        return {"matches": results, "match_type": "filed_document"}
+        return {"matches": results, "match_type": "filed_document", "status": "found"}
 
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
@@ -2851,7 +2851,8 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
         logger.debug("find_filed_document semantic fallback skipped: %s", exc)
         chunks = []
     if not chunks:
-        return {"message": f"No filed document matches '{query}'. Ask the owner for the "
+        return {"status": "not_found_filed",
+                "message": f"No filed document matches '{query}'. Ask the owner for the "
                             "invoice/document number, or to resend it — don't guess."}
 
     # Cross-reference by filename: the same document that surfaced via vector search is very
@@ -2872,16 +2873,27 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     results = []
     for c in chunks:
         fname = c.get("filename") or "document"
+        filed = filed_by_name.get(fname)
+        # A category filter was requested, but the KB chunk itself carries no category payload
+        # (ingest_file never writes one — only the unrelated training-KB seeding path does), so
+        # the only trustworthy signal is the cross-referenced vula_filed_documents row. Drop
+        # anything that doesn't match it, and anything with no row to check at all — an
+        # unverifiable chunk can't be trusted against a filter the caller explicitly asked for.
+        if category and (not filed or filed.get("category") != category):
+            continue
         entry: Dict[str, Any] = {"filename": fname, "excerpt": (c.get("text") or "")[:300],
                                   "score": c.get("score")}
-        filed = filed_by_name.get(fname)
         if filed:
             f = filed.get("fields") or {}
             entry["amount"] = _document_amount(f)
             entry["party"] = f.get("supplier") or f.get("payee_name") or f.get("customer")
             entry["category"] = filed.get("category")
         results.append(entry)
-    return {"matches": results, "match_type": "knowledge_base",
+    if not results:
+        return {"status": "not_found_filed",
+                "message": f"No filed document matches '{query}'. Ask the owner for the "
+                            "invoice/document number, or to resend it — don't guess."}
+    return {"matches": results, "match_type": "knowledge_base", "status": "found",
             "note": "Found in the knowledge base. A match with a non-null 'amount' is a real "
                     "extracted figure from the filed document (safe to sum/quote) — a match "
                     "with no 'amount' is excerpt-only, so read it for context but confirm any "
