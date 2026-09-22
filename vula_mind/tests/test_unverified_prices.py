@@ -57,6 +57,24 @@ def test_ignores_spacing_and_comma_formatting_differences():
     assert unverified_prices(answer, sources, GROUNDING) == []
 
 
+def test_ignores_decimal_precision_differences():
+    # 2026-09-22, digg-demo: a source amount serialized as a bare float ("92.0", one decimal
+    # place — e.g. json.dumps of a Python float from a DB row) must still ground a price the
+    # model states with two decimal places ("R92.00"), and vice versa.
+    answer = "The invoice total was R92.00."
+    sources = [{"name": "lookup_business_info", "text": '{"amount": 92.0}'}]
+    assert unverified_prices(answer, sources, GROUNDING) == []
+
+
+def test_a_source_number_embedded_in_other_digits_does_not_falsely_ground():
+    # The old substring-on-concatenated-digits check could be fooled by a real price being a
+    # sub-string of an unrelated, larger number elsewhere in the source text. Comparing parsed
+    # amounts instead of raw digit substrings must not have this failure mode.
+    answer = "That's R29.90."
+    sources = [{"name": "lookup_business_info", "text": "Order #1129905 confirmed"}]
+    assert unverified_prices(answer, sources, GROUNDING) == ["R29.90"]
+
+
 # ── wiring into commerce_admin.run() ──────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -94,6 +112,35 @@ async def test_run_keeps_answer_when_price_is_verified():
         out = await skill.run(inp)
 
     assert "R198.00" in out.answer
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_a_price_grounded_by_find_document_alongside_an_unrelated_kb_call():
+    # 2026-09-22 real incident, digg-demo: "Need all jack hammer invoice and summary of what was
+    # spent" — the agent correctly called find_document (which had the real invoice amount) AND
+    # lookup_business_info (an unrelated, empty-of-this-price KB lookup) in the same turn. Because
+    # find_document wasn't in commerce_admin's grounding whitelist, unverified_prices only ever
+    # built relevant_text from lookup_business_info's irrelevant text, so the genuinely-sourced
+    # invoice amount was discarded and replaced with the generic "couldn't confirm" message.
+    skill = CommerceAdminSkill()
+
+    async def fake_agent_loop(system_msg, history, question, ctx, tools, sources=None):
+        if sources is not None:
+            sources.append({"type": "tool", "name": "find_document",
+                            "text": '{"status": "found", "amount": 18076.74, '
+                                    '"vendor": "Jack Hammer"}'})
+            sources.append({"type": "tool", "name": "lookup_business_info",
+                            "text": "Jack Hammer is a demolition equipment supplier."})
+        return "The Jack Hammer invoice total was R18,076.74."
+
+    with patch.object(skill, "_agent_loop", new=fake_agent_loop):
+        inp = SkillInput(question="Need all jack hammer invoice and summary of what was spent",
+                         tenant_id=TID, conversation_history="",
+                         metadata={"customer_phone": "27645755210"})
+        out = await skill.run(inp)
+
+    assert "R18,076.74" in out.answer
+    assert "couldn't confirm" not in out.answer.lower()
 
 
 @pytest.mark.asyncio
