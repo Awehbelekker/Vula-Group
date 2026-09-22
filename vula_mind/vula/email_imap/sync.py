@@ -537,6 +537,25 @@ async def _notify_oversized(tenant_id: str, items: list) -> None:
         logger.debug("oversized attachment notify skipped: %s", exc)
 
 
+async def _report_filing_failure(tenant_id: str, em: dict, att: dict, exc: Exception, where: str) -> None:
+    """A document came in by email and the filing pipeline threw somewhere before it ever got
+    a row in vula_filed_documents. 2026-09-22 incident: every catch along that pipeline logged
+    at DEBUG, which vula/api/server.py's logging.basicConfig() suppresses entirely in production
+    (INFO unless settings.debug) — so a failed attachment vanished with literally zero trace:
+    no log line, no notification, and the sync cursor still advanced past it (each attachment is
+    caught independently in the loop above), meaning it was never retried either. Warning-level
+    + a WhatsApp nudge makes a future failure visible and actionable instead of silent data loss."""
+    logger.warning("%s for %s (%s): %s", where, att.get("name"), tenant_id, exc)
+    try:
+        from vula.integrations.notify import notify_team
+        await notify_team(tenant_id, "attachment_filing_failed", (
+            f"⚠️ A document came in by email — *{att.get('name') or '(unnamed)'}* "
+            f"from {em.get('from','')} — but Vula couldn't file it ({str(exc)[:100]}). "
+            f"You may need to forward it again or add it manually."))
+    except Exception:
+        pass
+
+
 async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
                          from_uid: Optional[int] = None) -> dict:
     import asyncio
@@ -607,7 +626,7 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
                 await _file_attachment(tenant_id, em, att, notify_phone)
                 filed += 1
             except Exception as exc:
-                logger.debug("attachment file failed: %s", exc)
+                await _report_filing_failure(tenant_id, em, att, exc, "attachment file failed")
         # Track emails that look like they need a reply — mail the tenant SENT never needs
         # one from them, so skip Sent-folder items outright rather than rely on _needs_reply's
         # own-domain check to filter them out incidentally.
@@ -801,7 +820,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             except Exception as exc:
                 logger.debug("notify ask failed: %s", exc)
     except Exception as exc:
-        logger.debug("filed_documents record skipped: %s", exc)
+        await _report_filing_failure(tenant_id, em, att, exc, "filed_documents record failed")
 
 
 async def process_all_email_sync() -> int:
