@@ -88,6 +88,12 @@ def test_genuine_paid_with_answers_still_match(text):
     "OK try again with Jack Hammer",
     "Alright, check the emails for Jack Hammer",
     "Sure, can you check emails",
+    # 2026-09-22, later the same day — bare "Need"/"Want", no leading "I"/"we":
+    "Need all jack hammer invoice and summary of what was spent",  # exact transcript message
+    "Want a breakdown of what we spent at Jack Hammer",
+    # No recognized opener at all and no addressee pronoun — the word-count safety net alone
+    # must still catch a real sentence-shaped request longer than a plausible short answer.
+    "Summarise everything filed under jack hammer for the last quarter please",
 ])
 def test_a_real_request_is_never_taken_as_a_bank_review_answer(text):
     assert _is_request_shaped(text) is True
@@ -103,6 +109,7 @@ def test_a_real_request_is_never_taken_as_a_bank_review_answer(text):
     "Okay, skip",  # 2026-09-22: a genuine short answer prefixed with filler must still resolve
     "Okay stock",
     "ok fuel",
+    "The Jones Brothers Construction account",  # 2026-09-22: a longer genuine name, still <=6 words
 ])
 def test_genuine_bank_review_answers_are_still_taken(text):
     assert _is_request_shaped(text) is False

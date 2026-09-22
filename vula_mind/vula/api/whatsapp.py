@@ -2417,10 +2417,17 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
 # escalation, paid-with, purpose-attempt, odometer), each with its own tuned short-answer
 # shape, and only the bank-review flow has a confirmed real transcript showing the swallow. Add
 # the same filler-stripping to a given usage below only once a real transcript shows it needed.
+# 2026-09-22, later the same day: "Need all jack hammer invoice and summary of what was spent"
+# (bare "Need", no "I") swallowed bank_review.py's copy again right after the above shipped;
+# "need"/"want" added there and kept in sync here. Slightly higher collision risk here than
+# elsewhere in this list — "Needed diesel for the generator" is a plausible genuine PURPOSE
+# reply (_looks_like_purpose_attempt below) that would now read as request-shaped — but
+# unconfirmed speculatively guarding against that is worse than the confirmed swallow this
+# fixes; revisit if a real purpose-flow transcript shows the new false positive.
 _REQUEST_SHAPED = re.compile(
     r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
-    r"list|update|cancel|try|what|where|when|who|which|why|how|can you|could you|please|"
-    r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
+    r"list|update|cancel|try|need|want|what|where|when|who|which|why|how|can you|could you|"
+    r"please|tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
     r"forward|schedule|arrange|i want|i need|i'd like|we want|we need|we'd like|"
     r"kry|stuur|wys|maak|soek|skryf)\b",
     re.IGNORECASE,
