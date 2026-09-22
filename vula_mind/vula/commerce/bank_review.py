@@ -35,8 +35,8 @@ PENDING = ("default", "asked")
 # openers that plain command verbs don't cover.
 _REQUEST_SHAPED = re.compile(
     r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
-    r"list|update|cancel|try|what|where|when|who|which|why|how|can you|could you|please|"
-    r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
+    r"list|update|cancel|try|need|want|what|where|when|who|which|why|how|can you|could you|"
+    r"please|tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
     r"forward|schedule|arrange|i want|i need|i'd like|we want|we need|we'd like|"
     r"kry|stuur|wys|maak|soek|skryf)\b",
     re.IGNORECASE,
@@ -59,7 +59,20 @@ def _is_request_shaped(text: str) -> bool:
     if t.endswith("?"):
         return True
     stripped = _FILLER_PREFIX.sub("", t, count=1)
-    return bool(_REQUEST_SHAPED.match(stripped) or _ADDRESSES_ASSISTANT.search(stripped))
+    if _REQUEST_SHAPED.match(stripped) or _ADDRESSES_ASSISTANT.search(stripped):
+        return True
+    # 2026-09-22, third real incident in this exact class the same day ("I want"/"I need" fixed
+    # 2026-09-21; "Okay try" fixed earlier today; "Need all jack hammer invoice and summary of
+    # what was spent" — bare "Need", no "I" — swallowed right after that fix shipped).
+    # Enumerating every real-world opener is unbounded. A genuine answer to this flow (an order
+    # number, a customer name, a category word, skip/stop) is reliably a handful of words; a
+    # real sentence-shaped request reliably is not — word count is a coarser but far more
+    # robust signal than chasing openers one real transcript at a time. Conservative direction:
+    # a rare verbose genuine answer just leaves the question open for a plainer reply, versus
+    # the alternative of a real request getting silently swallowed.
+    if len(stripped.split()) > 6:
+        return True
+    return False
 
 
 def _client():
