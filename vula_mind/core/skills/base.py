@@ -328,10 +328,16 @@ _TENANT_DATA_MARKERS = re.compile(
     r"\b("
     # English — reasoning.py's original list (2026-08-18), plus total/outstanding/account
     # (the original code comment promised "total" but the regex never actually included it)
-    r"invoice|expense|receipt|boq|bill of quantities|project|order|payment|logged?|"
+    r"invoice|expenses?|receipt|boq|bill of quantities|project|order|payment|logged?|"
     r"created?|saved?|allocat\w*|owe|owing|balance|quote|quotation|supplier|paid|deposit|"
     r"total|outstanding|account|retention|provisional sum|practical completion|fees?|"
     r"contractor|subcontract\w*|contract|certificate|"
+    # 2026-09-22 real incident (DIGG): "a breakdown on what has been spend at jackhammer" —
+    # ungrammatical but real phrasing, matched no marker at all, so this looked like general
+    # knowledge and got answered from an unrelated KB chunk instead of being routed to a skill
+    # that could actually look the spend up (see HRMOrchestrator._match_skill's mailbox
+    # fallback, which gates on this same function).
+    r"spend\w*|spent|breakdown|"
     # Afrikaans
     r"faktuur|onkoste|kwitansie|projek|betaal|betaling|rekening|skuld|"
     # isiZulu
