@@ -83,6 +83,11 @@ def test_genuine_paid_with_answers_still_match(text):
     "I need the invoice for jackhammer",
     "I'd like to know what we spent on jackhammer",
     "We want a summary of jackhammer spend",
+    "Okay try Jack Hammer",  # 2026-09-22 follow-up transcript — the exact message
+    "Okay, try Jack Hammer",
+    "OK try again with Jack Hammer",
+    "Alright, check the emails for Jack Hammer",
+    "Sure, can you check emails",
 ])
 def test_a_real_request_is_never_taken_as_a_bank_review_answer(text):
     assert _is_request_shaped(text) is True
@@ -95,6 +100,9 @@ def test_a_real_request_is_never_taken_as_a_bank_review_answer(text):
     "stock",
     "fuel",
     "stop",
+    "Okay, skip",  # 2026-09-22: a genuine short answer prefixed with filler must still resolve
+    "Okay stock",
+    "ok fuel",
 ])
 def test_genuine_bank_review_answers_are_still_taken(text):
     assert _is_request_shaped(text) is False

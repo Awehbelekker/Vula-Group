@@ -35,7 +35,7 @@ PENDING = ("default", "asked")
 # openers that plain command verbs don't cover.
 _REQUEST_SHAPED = re.compile(
     r"^\s*(get|find|send|show|check|set|add|create|make|book|remind|call|email|draft|"
-    r"list|update|cancel|what|where|when|who|which|why|how|can you|could you|please|"
+    r"list|update|cancel|try|what|where|when|who|which|why|how|can you|could you|please|"
     r"tell|give|look|search|research|explain|describe|open|start|pull|fetch|write|"
     r"forward|schedule|arrange|i want|i need|i'd like|we want|we need|we'd like|"
     r"kry|stuur|wys|maak|soek|skryf)\b",
@@ -43,12 +43,23 @@ _REQUEST_SHAPED = re.compile(
 )
 _ADDRESSES_ASSISTANT = re.compile(r"\b(me|us|you|your|yours)\b", re.IGNORECASE)
 
+# 2026-09-22, real DIGG transcript, same bug class again: "Okay try Jack Hammer" got swallowed
+# as a bank-review answer — "Okay" isn't a recognized request-opener, so _REQUEST_SHAPED's
+# anchored match never even saw "try" underneath it. Stripped once before that match only; a
+# genuine short answer prefixed the same way ("Okay, skip") is unaffected, since "skip" still
+# matches nothing after stripping — only a real verb/request underneath the filler changes the
+# outcome.
+_FILLER_PREFIX = re.compile(r"^\s*(?:ok(?:ay)?|alright|sure|right|yes)[,.]?\s+", re.IGNORECASE)
+
 
 def _is_request_shaped(text: str) -> bool:
     """True when `text` reads as a request/question aimed at Vula rather than a short direct
     answer (a category, order number, customer name, yes/no) to an outstanding review prompt."""
     t = (text or "").strip()
-    return bool(t.endswith("?") or _REQUEST_SHAPED.match(t) or _ADDRESSES_ASSISTANT.search(t))
+    if t.endswith("?"):
+        return True
+    stripped = _FILLER_PREFIX.sub("", t, count=1)
+    return bool(_REQUEST_SHAPED.match(stripped) or _ADDRESSES_ASSISTANT.search(stripped))
 
 
 def _client():
