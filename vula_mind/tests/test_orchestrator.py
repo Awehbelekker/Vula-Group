@@ -180,6 +180,74 @@ def test_llm_fallback_fails_open_on_error(hrm, monkeypatch):
     assert hrm._match_skill("Just tell me something") == "reasoning"
 
 
+# ── mailbox fallback for a tenant-data question that missed every keyword (2026-09-22) ──
+#
+# Real DIGG transcript: "I want a breakdown on what has been spend at jackhammer" and "Please
+# check expenses from Jack Hammer" both matched no keyword and no LLM classification, so they
+# silently defaulted to 'reasoning' — a zero-tool skill — and it answered from an unrelated KB
+# chunk rather than admitting it didn't know. A tenant-data-shaped question for a tenant with a
+# connected mailbox should reach email_admin instead, so find_document/email_thread_summary get
+# a real chance before giving up.
+
+@pytest.mark.parametrize("prompt", [
+    "I want a breakdown on what has been spend at jackhammer",
+    "Please check expenses from Jack Hammer",
+    "what did we pay the supplier for that invoice",
+])
+def test_tenant_data_question_routes_to_email_admin_when_mailbox_connected(hrm, monkeypatch, prompt):
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: True)
+    assert hrm._match_skill(prompt, tenant_id="digg-demo") == "email_admin"
+
+
+def test_tenant_data_question_stays_on_reasoning_without_a_connected_mailbox(hrm, monkeypatch):
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: False)
+    assert hrm._match_skill("I want a breakdown on what has been spend at jackhammer",
+                            tenant_id="digg-demo") == "reasoning"
+
+
+def test_non_tenant_data_question_stays_on_reasoning_even_with_a_connected_mailbox(hrm, monkeypatch):
+    """The override is gated on looks_like_tenant_data_question — a mailbox being connected
+    alone must never hijack an ordinary general-knowledge question."""
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: True)
+    assert hrm._match_skill("Just tell me something", tenant_id="digg-demo") == "reasoning"
+
+
+def test_mailbox_fallback_never_fires_without_a_tenant_id(hrm):
+    # Exercises the real _has_connected_mailbox (not mocked) — it must return False for
+    # tenant_id=None without attempting a DB call, so no-tenant-id turns stay safe.
+    assert hrm._match_skill("I want a breakdown on what has been spend at jackhammer") == "reasoning"
+
+
+def test_mailbox_fallback_yields_to_a_keyword_match(hrm, monkeypatch):
+    """A real keyword match must always win — the mailbox fallback only fires on a genuine
+    keyword+LLM miss."""
+    def _boom(self, tid):
+        raise AssertionError("mailbox fallback should not even be checked when a keyword hit")
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", _boom)
+    assert hrm._match_skill("check my email", tenant_id="digg-demo") == "email_admin"
+
+
+def test_has_connected_mailbox_returns_false_without_a_tenant_id(hrm):
+    assert hrm._has_connected_mailbox(None) is False
+
+
+def test_has_connected_mailbox_fails_closed_on_error(hrm, monkeypatch):
+    import vula.email_imap.credentials as creds_module
+
+    def _boom(tenant_id):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(creds_module, "get_email_creds", _boom)
+    assert hrm._has_connected_mailbox("digg-demo") is False
+
+
+def test_route_with_reason_reports_mailbox_fallback(hrm, monkeypatch):
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: True)
+    assert hrm._route_with_reason(
+        "I want a breakdown on what has been spend at jackhammer",
+        tenant_id="digg-demo") == ("email_admin", "mailbox_fallback")
+
+
 # ── Appointment-booking routing (customer-facing, not clickup_admin's internal tasks) ──
 
 @pytest.mark.parametrize("prompt", [

@@ -237,9 +237,25 @@ class HRMOrchestrator:
         return None
 
     def _match_skill(self, prompt: str, tenant_id: str | None = None) -> str:
+        return self._route_with_reason(prompt, tenant_id)[0]
+
+    def _has_connected_mailbox(self, tenant_id: str | None) -> bool:
+        if not tenant_id:
+            return False
+        try:
+            from vula.email_imap.credentials import get_email_creds
+            return bool(get_email_creds(tenant_id))
+        except Exception:
+            return False
+
+    def _route_with_reason(self, prompt: str, tenant_id: str | None = None) -> tuple[str, str]:
+        """(skill, matched_by) where matched_by is 'keyword' | 'llm_fallback' |
+        'mailbox_fallback' | 'default' — the reason is emitted as routing telemetry so
+        misroutes, and how often routing falls through to the generic 'reasoning' skill, are
+        measurable."""
         kw = self._keyword_skill(prompt, tenant_id)
         if kw:
-            return kw
+            return kw, "keyword"
         # No keyword matched — before silently defaulting to the least-specialized skill,
         # try one cheap local-model classification pass (2026-07-27: this exact fallthrough
         # is what routed a real supplier-quotation question to generic reasoning instead of
@@ -247,18 +263,22 @@ class HRMOrchestrator:
         if settings.skill_llm_fallback_enabled:
             classified = self._llm_classify_skill(prompt)
             if classified:
-                return classified
-        return "reasoning"
-
-    def _route_with_reason(self, prompt: str, tenant_id: str | None = None) -> tuple[str, str]:
-        """(skill, matched_by) where matched_by is 'keyword' | 'llm_fallback' | 'default' —
-        the reason is emitted as routing telemetry so misroutes, and how often routing falls
-        through to the generic 'reasoning' skill, are measurable."""
-        kw = self._keyword_skill(prompt, tenant_id)
-        if kw:
-            return kw, "keyword"
-        skill = self._match_skill(prompt, tenant_id)
-        return skill, ("llm_fallback" if skill != "reasoning" else "default")
+                return classified, "llm_fallback"
+        # 2026-09-22 real incident (DIGG, knowledge-mode tenant): "I want a breakdown on what
+        # has been spend at jackhammer" and "Please check expenses from Jack Hammer" both
+        # matched no keyword, and the small local classifier model also missed (or is
+        # disabled) — the previous behaviour was a silent default to 'reasoning', a zero-tool
+        # skill that can only answer from whatever the KB semantic search happens to match,
+        # with no ability to check filed documents or search the mailbox. It answered from an
+        # unrelated chunk rather than admitting it didn't know. A tenant-data-shaped question
+        # (see looks_like_tenant_data_question — invoice/expense/spend/etc) for a tenant with
+        # a connected mailbox should reach email_admin instead: find_document, then its own
+        # live-mailbox fallback (2026-09-22), give it a real chance to look the answer up.
+        if self._has_connected_mailbox(tenant_id):
+            from core.skills.base import looks_like_tenant_data_question
+            if looks_like_tenant_data_question(prompt):
+                return "email_admin", "mailbox_fallback"
+        return "reasoning", "default"
 
     def _llm_classify_skill(self, prompt: str) -> str | None:
         """One cheap local-model pass, keyword-miss path only. Returns a skill name from
