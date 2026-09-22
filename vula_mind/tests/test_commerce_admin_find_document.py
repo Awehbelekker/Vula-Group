@@ -173,3 +173,39 @@ async def test_find_document_passes_through_no_match_message(skill):
 
     assert "matches" not in res
     assert "message" in res
+
+
+# ── find_document vs lookup_business_info: supplier-spend-history disambiguation ──
+# Real incident, digg-demo, 2026-09-22: "Need all jack hammer invoice and summary of what was
+# spent" — telemetry (vula_reasoning_telemetry) confirmed the agent called ONLY
+# lookup_business_info, never find_document or email_thread_summary, and stated a price that
+# unverified_prices() correctly flagged as unfounded. Root cause: find_document's own tool
+# description and the matching system-prompt rule both framed it as being for a single ALREADY
+# REFERENCED document ("that invoice", "the proof of payment I sent you") — a broad "all
+# invoices from X" / "what have we spent with X" request doesn't read as that, and
+# lookup_business_info's description explicitly invites "a supplier or distributor name is
+# mentioned" queries, so the model reached for the wrong tool. Both tool descriptions and the
+# system prompt now say explicitly that a named-supplier spend/invoice question is a
+# find_document (then email_thread_summary) query, never lookup_business_info.
+
+def test_find_document_description_covers_broad_supplier_spend_requests():
+    spec = next(t for t in TOOL_SPECS if t["function"]["name"] == "find_document")
+    desc = spec["function"]["description"]
+    assert "all invoices from" in desc.lower()
+    assert "spent" in desc.lower()
+    assert "never lookup_business_info" in desc.lower()
+
+
+def test_lookup_business_info_description_excludes_actual_spend_history():
+    import core.skills.commerce_admin as ca
+
+    spec = next(t for t in ca.KNOWLEDGE_TOOLS if t["function"]["name"] == "lookup_business_info")
+    desc = spec["function"]["description"]
+    assert "transaction history" in desc.lower()
+    assert "find_document" in desc
+
+
+def test_system_prompt_routes_supplier_spend_requests_to_find_document(skill):
+    prompt = skill._system_prompt(TID, role=None, name="Test").lower()
+    assert "what have we spent/paid with x" in prompt or "all invoices from x" in prompt
+    assert "never lookup_business_info" in prompt
