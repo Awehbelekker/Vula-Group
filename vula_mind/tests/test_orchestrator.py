@@ -242,10 +242,51 @@ def test_has_connected_mailbox_fails_closed_on_error(hrm, monkeypatch):
 
 
 def test_route_with_reason_reports_mailbox_fallback(hrm, monkeypatch):
+    # (2026-09-23: this used "a breakdown on what has been spend at jackhammer", which is now
+    # caught earlier as a supplier-history question — see the supplier_history tests below.)
     monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: True)
     assert hrm._route_with_reason(
-        "I want a breakdown on what has been spend at jackhammer",
+        "Please check the expenses for the Belladonna project",
         tenant_id="digg-demo") == ("email_admin", "mailbox_fallback")
+
+
+# ── Supplier spend/materials history → email_admin's find_document (2026-09-23, DIGG) ──
+# "What materials did we buy from Jack Hammer?" hit commerce_assistant's "buy" (the customer
+# shopping skill); "How much have we spent with Jack Hammer" hit finance_admin's ledger.
+
+@pytest.mark.parametrize("prompt", [
+    "What materials did we buy from Jack Hammer?",
+    "How much have we spent with Jack Hammer",
+    "Need all jack hammer invoice and summary of what was spent",
+    "Summary of materials from Jack Hammer",
+    "I want a breakdown on what has been spend at jackhammer",
+    "Please check expenses from Jack Hammer",
+    "What have we bought from Gardens Handiman this month?",
+])
+def test_supplier_history_routes_to_email_admin(hrm, monkeypatch, prompt):
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: True)
+    assert hrm._route_with_reason(prompt, tenant_id="digg-demo") == (
+        "email_admin", "supplier_history")
+
+
+@pytest.mark.parametrize("prompt,expected", [
+    ("How much have we spent on Stage 3", "finance_admin"),          # budget, not supplier
+    ("What's left on the budget for Stage 3", "finance_admin"),
+    ("I want to buy 2kg of hake", "commerce_assistant"),             # a real customer order
+    ("What does Jack Hammer charge for cement? I want to buy some", "commerce_assistant"),
+    ("Draft an email to Jack Hammer about the invoices from them", "email_admin"),
+    ("Remind me to pay all the Jack Hammer invoices", "clickup_admin"),  # explicit match wins
+])
+def test_supplier_history_override_stays_narrow(hrm, monkeypatch, prompt, expected):
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: True)
+    assert hrm._match_skill(prompt, tenant_id="digg-demo") == expected
+
+
+def test_supplier_history_needs_a_connected_mailbox(hrm, monkeypatch):
+    # email_admin declines without a mailbox, so the normal keyword route stands.
+    monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: False)
+    assert hrm._match_skill("What materials did we buy from Jack Hammer?",
+                            tenant_id="digg-demo") == "commerce_assistant"
 
 
 # ── Appointment-booking routing (customer-facing, not clickup_admin's internal tasks) ──
