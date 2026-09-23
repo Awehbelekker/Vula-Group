@@ -73,11 +73,16 @@ def test_is_local_model(model, expected):
 
 # ── per-call kwargs ─────────────────────────────────────────────────────────────
 
-def test_local_kwargs_carry_context_window_and_timeout():
+def test_local_kwargs_carry_timeout_but_no_per_call_context_by_default():
+    # 2026-09-23: a per-call num_ctx that differs between callers makes Ollama reload the
+    # model on every switch (email_admin at 16k vs everything else at the default → 524s).
+    from config import settings as real
+    assert real.ollama_num_ctx == 0 and real.local_context_tokens == 8192
     with patch("core.llm_router.settings") as s:
-        s.ollama_num_ctx, s.local_call_timeout_s = 8192, 60
-        kw = local_generation_kwargs("ollama_chat/llama3.1:8b")
-        assert kw == {"num_ctx": 8192, "timeout": 60}
+        s.ollama_num_ctx, s.local_call_timeout_s = 0, 60
+        assert local_generation_kwargs("ollama_chat/llama3.1:8b") == {"timeout": 60}
+        s.ollama_num_ctx = 8192
+        assert local_generation_kwargs("ollama_chat/llama3.1:8b") == {"num_ctx": 8192, "timeout": 60}
         assert local_generation_kwargs("openrouter/x") == {}
 
 
@@ -107,7 +112,7 @@ def test_generation_kwargs_merges_both():
 
 def test_prompts_that_would_not_fit_the_local_window_go_to_cloud():
     with patch("core.llm_router.settings") as s:
-        s.local_complexity_token_cap, s.ollama_num_ctx = 8000, 8192
+        s.local_complexity_token_cap, s.local_context_tokens = 8000, 8192
         # 6,500 tokens: under the 8k cap, but over num_ctx minus 2k of headroom.
         msgs = [{"role": "user", "content": "x" * (6500 * 4)}]
         assert llm_router.assess_complexity(messages=msgs) == "complexity:tokens>=6144"

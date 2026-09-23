@@ -155,9 +155,9 @@ def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] 
         cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
         # A prompt that doesn't fit the local context window (leaving room for tool results
         # and the reply) can't be answered locally anyway — Ollama would silently drop its start.
-        num_ctx = int(getattr(settings, "ollama_num_ctx", 0) or 0)
-        if num_ctx:
-            cap = min(cap, max(num_ctx - 2048, 1024))
+        ctx = int(getattr(settings, "local_context_tokens", 0) or 0)
+        if ctx:
+            cap = min(cap, max(ctx - 2048, 1024))
         chars = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict))
         if chars // 4 >= cap:
             return f"complexity:tokens>={cap}"
@@ -351,9 +351,9 @@ def is_local_model(model: Optional[str]) -> bool:
 
 
 def local_generation_kwargs(model: str) -> Dict[str, Any]:
-    """Extra litellm kwargs for a local Ollama call: an explicit context window (see
-    settings.ollama_num_ctx) and a timeout below Cloudflare's 100 s tunnel limit (see
-    settings.local_call_timeout_s). For Qwen models, thinking is switched off: Ollama's
+    """Extra litellm kwargs for a local Ollama call: a timeout below Cloudflare's 100 s tunnel
+    limit (settings.local_call_timeout_s), plus num_ctx only if settings.ollama_num_ctx is set
+    (default 0 — the context window is set once on the box, see settings.local_context_tokens). For Qwen models, thinking is switched off: Ollama's
     Qwen3/3.5 templates have open bugs combining thinking with tool calls (ollama#14601,
     #10976, #14745; litellm#18922 drops tool_calls when a thinking field is present). Empty
     for cloud models, so it's safe to splat into any acompletion() call."""

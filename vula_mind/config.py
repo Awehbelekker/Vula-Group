@@ -35,16 +35,19 @@ class Settings(BaseSettings):
     # the ollama.vula-ai.com tunnel, then this cheap cloud model, then escalate to the 70B.
     model_worker_cheap_local: str = "llama3.1:8b"          # free, on the local GPU via the tunnel
     model_worker_cheap: str = "google/gemini-2.5-flash"    # cloud fallback when the tunnel is down
-    # Context window requested from Ollama per call (litellm passes it as num_ctx). Ollama's
-    # own default is only 2048-4096 tokens depending on version, and it silently drops the
-    # START of an over-long prompt — i.e. the system prompt. 2026-09-23: email_admin's system
-    # prompt + tool specs alone are ~4.3k tokens, so the local 8B was answering without most
-    # of its instructions. Same day, #66 set 16k and the very next local call hung past
-    # Cloudflare's 100 s limit (524): on the 11 GB GTX 1080 Ti, 16k of KV cache (~2 GB for
-    # llama3.1:8b, times any parallel slots) plus bge-m3 plus whatever else was loaded spilled
-    # into system RAM. 8k (~1.1 GB of KV) fits with room to spare; assess_complexity() sends
-    # prompts that wouldn't fit to cloud. 0 = leave Ollama's default.
-    ollama_num_ctx: int = 8192
+    # Context window of the local model, in tokens. Set it ON THE OLLAMA BOX
+    # (OLLAMA_CONTEXT_LENGTH=8192), not per call: Ollama reloads a model whenever the requested
+    # context size changes, so callers asking for different sizes make it thrash. 2026-09-23
+    # (digg-demo): #66 had email_admin alone request 16k while every other skill used the
+    # default, and every email_admin turn then hung past Cloudflare's 100 s limit (524) while
+    # `reasoning` on the same model answered in ~10 s. 8k fits the 11 GB GTX 1080 Ti (~1.1 GB of
+    # KV for llama3.1:8b) and covers email_admin's ~4.3k-token prompt plus results.
+    # assess_complexity() sends prompts that wouldn't fit to cloud instead of letting Ollama
+    # silently drop their start.
+    local_context_tokens: int = 8192
+    # Per-call num_ctx override. Keep 0 (don't send one) so every caller shares the box's single
+    # context size; only set it if the box's default can't be changed.
+    ollama_num_ctx: int = 0
     # Per-call timeout for local Ollama calls — below Cloudflare's 100 s tunnel limit, so a
     # stuck local call fails fast (and callers can retry on cloud) instead of surfacing a 524.
     local_call_timeout_s: int = 60
