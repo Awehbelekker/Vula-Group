@@ -6,8 +6,9 @@
   mailbox. It now runs with find_document only.
 - A flat 1,800-char cap on tool results cut a 16-invoice find_document result mid-list, so the
   model never saw the server-computed total/notes/materials. find_document gets a larger budget.
-- Local Ollama calls now request an explicit context window (settings.ollama_num_ctx): the
-  system prompt + tool specs alone are ~4.3k tokens, above Ollama's 2-4k default.
+- Local Ollama calls carry a timeout below Cloudflare's 100 s limit, but NOT a per-call context
+  size: that is set once on the box (OLLAMA_CONTEXT_LENGTH), because callers requesting
+  different sizes make Ollama reload the model (the 524s after #66).
 """
 import json
 from types import SimpleNamespace
@@ -83,7 +84,7 @@ def test_find_document_results_get_a_larger_budget():
 
 
 @pytest.mark.asyncio
-async def test_local_model_calls_request_a_context_window():
+async def test_local_model_calls_use_the_shared_context_and_a_timeout():
     kwargs_seen = []
 
     async def _fake_completion(*a, **kw):
@@ -98,7 +99,8 @@ async def test_local_model_calls_request_a_context_window():
     ):
         await EmailAdminSkill().run(SkillInput(question="check my email", tenant_id=TENANT))
     from config import settings
-    assert kwargs_seen[0]["num_ctx"] == settings.ollama_num_ctx
+    assert "num_ctx" not in kwargs_seen[0]
+    assert kwargs_seen[0]["timeout"] == settings.local_call_timeout_s
 
 
 def test_filed_rows_result_puts_the_summary_before_the_list():

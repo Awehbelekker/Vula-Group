@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 
-from core.llm_router import resolve_generation_route
+from core.llm_router import is_local_model, resolve_generation_route
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
 
@@ -83,7 +83,7 @@ class StandardsLookupSkill(BaseSkill):
 
             # 2026-08-24 chat-accuracy audit: zero adoption of the logprob-confidence escalation
             # wired into reasoning.py/commerce_admin.py/finance_admin.py/architecture_planning.py.
-            if model.startswith("ollama/"):
+            if is_local_model(model):
                 from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
                 logprob_conf = compute_confidence(resp)
                 if looks_unreliable(answer, confidence=logprob_conf,

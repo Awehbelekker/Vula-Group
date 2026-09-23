@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.llm_router import (
-    local_generation_kwargs, resolve_generation_route, substitute_if_degenerate,
+    complete_local_first, resolve_generation_route, substitute_if_degenerate,
 )
 from core.prompt_safety import fence
 from core.skills.base import (
@@ -250,7 +250,7 @@ class EmailAdminSkill(BaseSkill):
     async def _loop(self, history: str, question: str, tenant_id: str, creds: dict) -> str:
         import litellm
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        route = await resolve_generation_route()
         tools = _tools_for(creds)
         system = self._system(creds.get("send_mode"))
         if not creds:
@@ -264,9 +264,9 @@ class EmailAdminSkill(BaseSkill):
         messages.append({"role": "user", "content": question})
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            resp = await litellm.acompletion(model=model, messages=messages, tools=tools,
-                tool_choice="auto", temperature=0.2, max_tokens=800, api_key=api_key, api_base=api_base,
-                **local_generation_kwargs(model))
+            resp, route = await complete_local_first(
+                route, task_type="email_admin", messages=messages, tools=tools,
+                tool_choice="auto", temperature=0.2, max_tokens=800)
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
@@ -306,8 +306,8 @@ class EmailAdminSkill(BaseSkill):
             "an email was sent or drafted unless a tool result above actually shows that. Tell "
             "the user plainly what's missing or what went wrong instead."
         )})
-        resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
-            max_tokens=500, api_key=api_key, api_base=api_base, **local_generation_kwargs(model))
+        resp, route = await complete_local_first(
+            route, task_type="email_admin", messages=messages, temperature=0.2, max_tokens=500)
         return (resp.choices[0].message.content or "").strip()
 
     def _inline(self, content: str):
