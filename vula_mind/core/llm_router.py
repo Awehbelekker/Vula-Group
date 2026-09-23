@@ -225,6 +225,19 @@ def looks_unreliable(text: str, confidence: Optional[float] = None,
 # same wording everywhere a skill's agent loop hits this, so it reads as one platform, not nine.
 DEGENERATE_OUTPUT_FALLBACK = "Sorry, something went wrong generating that reply — could you try again?"
 
+# 2026-09-23 (digg-demo): the cloud 70B returned an empty reply without calling any tool and the
+# owner got "Done." — a success claim for work that never happened. An empty model reply is a
+# failure; say so.
+EMPTY_REPLY_FALLBACK = "Sorry, I didn't get an answer for that — could you try again?"
+
+
+def reply_or_fallback(answer: str, *, skill: str) -> str:
+    """`answer`, or EMPTY_REPLY_FALLBACK (logged) when the model produced nothing."""
+    if (answer or "").strip():
+        return answer
+    logger.warning("empty model reply, skill=%s", skill)
+    return EMPTY_REPLY_FALLBACK
+
 
 def substitute_if_degenerate(answer: str, *, skill: str, tenant_id: Optional[str] = None) -> str:
     """The shared guard every tool-calling skill applies after generating its final answer: if

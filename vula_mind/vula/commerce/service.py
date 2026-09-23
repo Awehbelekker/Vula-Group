@@ -3480,6 +3480,25 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Op
     return "\n".join(lines)
 
 
+async def answer_supplier_history(tenant_id: str, question: str) -> Optional[str]:
+    """The whole answer to a supplier spend/materials question, with no model involved — when
+    the question names a known supplier (commerce_suppliers name or alias) as whole words.
+    None otherwise, so the caller runs its normal tool-calling loop.
+
+    2026-09-23 (digg-demo), after #69: the local box was unreachable, the cloud 70B returned an
+    empty reply without calling find_document, and the owner got "Done.". Once "Jack Hammer" is
+    a saved alias there is nothing left for a model to decide: the supplier is known, the
+    search and total are server-side, and format_supplier_history_reply writes the reply."""
+    padded = f" {_norm_name(question)} "
+    names = await _resolve_supplier_names(tenant_id, question)
+    # Whole-word mentions only — _resolve_supplier_names also accepts a fuzzy whole-query match,
+    # which is fine for a search box but not for answering without a model.
+    if not any(n and f" {n} " in padded for n in (_norm_name(x) for x in names)):
+        return None
+    result = await find_filed_document(tenant_id, names[0], category="Invoice")
+    return format_supplier_history_reply(result, query=names[0])
+
+
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:
     """Cross-reference KB-chunk filenames against vula_filed_documents, returning
     {filename: {"amount": ..., "party": ...}} for every one that was also filed normally with a
