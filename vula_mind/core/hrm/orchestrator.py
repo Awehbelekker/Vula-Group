@@ -264,11 +264,11 @@ class HRMOrchestrator:
         # — not commerce_assistant (matched "buy", the CUSTOMER shopping skill) or finance_admin
         # (matched "how much have we spent", the ledger, which doesn't see filed-but-unbooked
         # supplier invoices). Only overrides those keyword hits or a miss, never an explicit
-        # match like "draft an email"/"remind me"; and only with a connected mailbox, since
-        # email_admin declines to run without one. See looks_like_supplier_history_question.
-        if (kw in _SUPPLIER_HISTORY_OVERRIDABLE
-                and looks_like_supplier_history_question(prompt)
-                and self._has_connected_mailbox(tenant_id)):
+        # match like "draft an email"/"remind me". No mailbox needed (2026-09-23): without one,
+        # email_admin runs with find_document only instead of declining. Needs a tenant, since
+        # filed documents are per tenant. See looks_like_supplier_history_question.
+        if (tenant_id and kw in _SUPPLIER_HISTORY_OVERRIDABLE
+                and looks_like_supplier_history_question(prompt)):
             return "email_admin", "supplier_history"
         if kw:
             return kw, "keyword"

@@ -14,11 +14,16 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from core.llm_router import resolve_generation_route, substitute_if_degenerate
+from core.llm_router import (
+    local_generation_kwargs, resolve_generation_route, substitute_if_degenerate,
+)
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message
+from core.skills.base import (
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
+    need_info_message,
+)
 from vula.email_imap import service
 from vula.email_imap.credentials import get_email_creds
 
@@ -142,19 +147,49 @@ TOOL_SPECS: List[Dict[str, Any]] = [
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
 
 
+# Tool results are capped before they go back to the model. 2026-09-23: the flat 1,800-char
+# cap cut a 16-invoice find_document result off mid-list, so the model never saw the
+# server-computed total, the notes or the materials roll-up — the whole point of that result.
+# find_document now gets a much larger budget (its summary fields come first, so any cut drops
+# surplus rows only); every other tool keeps the old cap.
+_RESULT_CAP = 1800
+_RESULT_CAP_BY_TOOL = {"find_document": 9000}
+
+
+def _fenced_result(name: str, result: Any) -> str:
+    """A tool result, capped per tool and fenced as untrusted content for the prompt."""
+    return fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
+
+
+_MAILBOX_FREE_TOOLS = {"find_document"}
+
+
+def _tools_for(creds: Optional[dict]) -> List[Dict[str, Any]]:
+    """Every tool with a connected mailbox; find_document only without one."""
+    if creds:
+        return TOOL_SPECS
+    return [t for t in TOOL_SPECS if t["function"]["name"] in _MAILBOX_FREE_TOOLS]
+
+
 class EmailAdminSkill(BaseSkill):
     name = "email_admin"
     description = "Search/read mailbox, file attachments to the KB, and draft replies (IMAP/SMTP)."
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         creds = get_email_creds(inp.tenant_id)
-        if not creds:
+        # 2026-09-23: filed-document lookups ("all invoices from X", "what materials did we buy
+        # from X") are routed here for every knowledge-mode owner — this is the only skill on
+        # that path with find_document — but it used to refuse outright without a mailbox, so a
+        # tenant with no mailbox connected could never get those answers. No mailbox now means
+        # find_document only (see _tools_for), not a refusal.
+        if not creds and not looks_like_supplier_history_question(inp.question or ""):
             return SkillOutput(
                 answer="No email account is connected yet. Connect a mailbox (Gmail, Outlook, or "
                        "IMAP like GoDaddy) in Settings and I can search it and draft replies here.",
                 skill_name=self.name, confidence=0.25)
         try:
-            answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id, creds)
+            answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id,
+                                      creds or {})
             answer = substitute_if_degenerate(answer or "", skill=self.name, tenant_id=inp.tenant_id)
             return SkillOutput(answer=answer or "Done.", skill_name=self.name, confidence=0.8)
         except Exception as exc:
@@ -216,14 +251,22 @@ class EmailAdminSkill(BaseSkill):
         import litellm
         litellm.drop_params = True
         model, api_key, api_base = await resolve_generation_route()
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system(creds.get("send_mode"))}]
+        tools = _tools_for(creds)
+        system = self._system(creds.get("send_mode"))
+        if not creds:
+            system += ("\n\nNO MAILBOX IS CONNECTED for this business: the only tool available is "
+                       "find_document (documents already filed). Answer from it; if it finds "
+                       "nothing, say so and mention that connecting a mailbox in Settings would "
+                       "let you search email too.")
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
         if history:
             messages.append({"role": "user", "content": f"(Conversation so far)\n{history}"})
         messages.append({"role": "user", "content": question})
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            resp = await litellm.acompletion(model=model, messages=messages, tools=TOOL_SPECS,
-                tool_choice="auto", temperature=0.2, max_tokens=800, api_key=api_key, api_base=api_base)
+            resp = await litellm.acompletion(model=model, messages=messages, tools=tools,
+                tool_choice="auto", temperature=0.2, max_tokens=800, api_key=api_key, api_base=api_base,
+                **local_generation_kwargs(model))
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
@@ -236,7 +279,7 @@ class EmailAdminSkill(BaseSkill):
                         return need_info
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
-                        f"[{name} returned]:{fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:1500])}\n"
+                        f"[{name} returned]:{_fenced_result(name, result)}\n"
                         "Reply to the user in short plain language. No JSON."})
                     continue
                 return (msg.content or "").strip()
@@ -254,7 +297,7 @@ class EmailAdminSkill(BaseSkill):
                 if need_info:
                     return need_info
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
-                                 "content": fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:1800])})
+                                 "content": _fenced_result(tc.function.name, result)})
 
         # See commerce_admin.py's _agent_loop for why this nudge exists (2026-08-22 real
         # fabricated-success incident) — same fix, same shared need_info_message() upstream.
@@ -264,7 +307,7 @@ class EmailAdminSkill(BaseSkill):
             "the user plainly what's missing or what went wrong instead."
         )})
         resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
-            max_tokens=500, api_key=api_key, api_base=api_base)
+            max_tokens=500, api_key=api_key, api_base=api_base, **local_generation_kwargs(model))
         return (resp.choices[0].message.content or "").strip()
 
     def _inline(self, content: str):
