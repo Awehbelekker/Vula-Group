@@ -394,6 +394,38 @@ def looks_like_tenant_data_question(text: str, require_possessive: bool = False)
     return True
 
 
+# 2026-09-23, DIGG (knowledge-mode tenant, owner reaches skills via the HRM keyword router):
+# "What materials did we buy from Jack Hammer?" matched commerce_assistant's "buy" (the CUSTOMER
+# shopping skill) and "How much have we spent with Jack Hammer" matched finance_admin's "how much
+# have we spent" (the ledger, which doesn't see filed-but-unbooked supplier invoices). Neither
+# can reach find_document, the only tool that returns the full invoice list, server-side total
+# and materials roll-up for a supplier. Deliberately narrow — it needs a supplier-shaped anchor
+# ("spent WITH/AT X", "invoices FROM X", "all ... invoices", "materials we bought"), so a budget
+# question ("how much have we spent ON Stage 3") stays with finance_admin, and a pricing
+# question ("what does X charge") never matches.
+_SUPPLIER_HISTORY_RE = re.compile(
+    r"\b(spent|spend|spending|paid|pay|bought|buy|purchased)\s+(with|at|from)\b|"
+    r"\b(expenses?|purchases?|spend|spending)\s+(from|with|at)\b|"
+    r"\binvoices?\s+(from|by)\b|"
+    r"\b(all|every)\s+(of\s+)?(the\s+|our\s+|my\s+)?([\w'-]+\s+){0,3}invoices?\b|"
+    r"\b(what|which)\s+(materials?|items?|stuff|products?)\s+(have|has|did|were)\s+"
+    r"(we|i|you)?\s*(been\s+)?(buy|bought|get|got|order|ordered|purchase|purchased)\b|"
+    r"\b(summary|list|breakdown)\s+of\s+(the\s+|all\s+)?(our\s+)?materials?\b|"
+    r"\bmaterials?\s+(from|bought|purchased|we\s+(bought|got|ordered))\b",
+    re.IGNORECASE)
+_SUPPLIER_PRICING_RE = re.compile(
+    r"\b(charge|charges|charging|price\s*list|pricing|quote\s+me|sell|sells|selling|"
+    r"catalog(ue)?)\b", re.IGNORECASE)
+
+
+def looks_like_supplier_history_question(text: str) -> bool:
+    """True if `text` asks what the business has actually bought from / spent with / been
+    invoiced by a supplier (totals or materials), as opposed to a budget, pricing or shopping
+    question. See the incident note above."""
+    t = text or ""
+    return bool(_SUPPLIER_HISTORY_RE.search(t)) and not _SUPPLIER_PRICING_RE.search(t)
+
+
 async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
     """Join RAG chunks into a "[filename]: text" grounding block, the same shape reasoning.py/
     architecture_planning.py already built inline in three near-identical places — but now with

@@ -395,3 +395,281 @@ async def test_filed_amounts_by_filename_fails_open():
     with patch("vula.commerce.service._client", side_effect=RuntimeError("db down")):
         out = await filed_amounts_by_filename(TID, ["anything.pdf"])
     assert out == {}
+
+
+# ── 2026-09-23: completeness for an exhaustive supplier query ────────────────────
+# Real DIGG incident: "all Jack Hammer invoices" found 2 of 13 real invoices (R789 of
+# R20,278). Every one had fields.supplier = "GARDENS HANDIMAN CENTRE"; nothing searched that
+# field, "Jack Hammer" is only the owner's nickname for that supplier, and semantic top-k is
+# lossy by design for "give me all of them".
+
+from vula.commerce.service import (  # noqa: E402
+    _document_amount_cents, _dominant_party, _resolve_supplier_names,
+)
+
+_JACK_HAMMER_CENTS = [18900, 69700, 9200, 189500, 146900, 125200, 436100, 23500, 73300,
+                      34000, 630400, 56300, 214800]
+
+
+def _handiman_rows():
+    return [{"id": f"d{i}", "filename": f"POS-{i}.pdf", "category": "Invoice",
+             "summary": "POS Account Sale", "created_at": f"2026-09-{i + 1:02d}T08:00:00Z",
+             "fields": {"supplier": "GARDENS HANDIMAN CENTRE", "total_cents": c},
+             "status": "filed", "customer_phone": None}
+            for i, c in enumerate(_JACK_HAMMER_CENTS)]
+
+
+def _mock_sequential(*results, crossref_rows=None):
+    """Like _mock_filed_documents, but each successive SQL search returns the next result."""
+    m = _mock_filed_documents([])
+    chain = m.table.return_value.select.return_value.eq.return_value.order.return_value
+    chain.limit.return_value.execute.side_effect = [MagicMock(data=r) for r in results]
+    if crossref_rows is not None:
+        eq1 = m.table.return_value.select.return_value.eq.return_value
+        eq1.in_.return_value.execute.return_value = MagicMock(data=crossref_rows)
+    return m
+
+
+def _or_filters(mock_client):
+    chain = mock_client.table.return_value.select.return_value.eq.return_value.order.return_value
+    return [c[0][0] for c in chain.or_.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_sql_search_also_matches_the_counterparty_fields():
+    mock_client = _mock_sequential(_handiman_rows())
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        await find_filed_document(TID, "Gardens Handiman")
+    flt = _or_filters(mock_client)[0]
+    assert "fields->>supplier.ilike.%Gardens Handiman%" in flt
+    assert "fields->>payee_name.ilike" in flt and "filename.ilike" in flt
+
+
+@pytest.mark.asyncio
+async def test_known_alias_returns_every_invoice_with_a_server_side_total():
+    suppliers = [{"name": "GARDENS HANDIMAN CENTRE", "aliases": ["Jack Hammer"]}]
+    mock_client = _mock_sequential([], _handiman_rows())
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=suppliers)):
+        res = await find_filed_document(TID, "all jack hammer invoices")
+
+    assert res["status"] == "found"
+    assert res["total_matches"] == 13
+    assert res["matches_with_amount"] == 13
+    assert res["total_amount_cents"] == 2027800
+    assert res["total_amount"] == "R20,278.00"
+    assert res["resolved_supplier"] == "GARDENS HANDIMAN CENTRE"
+    # The alias search is restricted to the counterparty fields, under every name.
+    alias_filter = _or_filters(mock_client)[1]
+    assert "filename.ilike" not in alias_filter
+    assert "fields->>supplier.ilike.%GARDENS HANDIMAN CENTRE%" in alias_filter
+    assert "fields->>supplier.ilike.%Jack Hammer%" in alias_filter
+
+
+@pytest.mark.asyncio
+async def test_semantic_hits_agreeing_on_a_party_are_re_searched_exactly():
+    chunks = [{"filename": "POS-1.pdf", "text": "Jack Hammer account sale", "score": 0.8},
+              {"filename": "POS-2.pdf", "text": "Jack Hammer account sale", "score": 0.7}]
+    crossref = [{"filename": "POS-1.pdf", "category": "Invoice",
+                 "fields": {"supplier": "GARDENS HANDIMAN CENTRE", "total_cents": 69700}},
+                {"filename": "POS-2.pdf", "category": "Invoice",
+                 "fields": {"supplier": "GARDENS HANDIMAN CENTRE", "total_cents": 9200}}]
+    mock_client = _mock_sequential([], _handiman_rows(), crossref_rows=crossref)
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=chunks)
+        res = await find_filed_document(TID, "Jack Hammer")
+
+    assert res["match_type"] == "resolved_via_knowledge_base"
+    assert res["total_matches"] == 13
+    assert res["total_amount"] == "R20,278.00"
+    assert res["resolved_supplier"] == "GARDENS HANDIMAN CENTRE"
+    assert "confirm" in res["note"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_hits_kept_when_the_party_re_search_finds_nothing():
+    chunks = [{"filename": "a.pdf", "text": "excerpt", "score": 0.8}]
+    crossref = [{"filename": "a.pdf", "category": "Invoice",
+                 "fields": {"supplier": "Acme", "total_cents": 1000}}]
+    mock_client = _mock_sequential([], [], crossref_rows=crossref)
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=chunks)
+        res = await find_filed_document(TID, "something")
+    assert res["match_type"] == "knowledge_base"
+    assert res["matches"][0]["party"] == "Acme"
+
+
+@pytest.mark.asyncio
+async def test_total_excludes_and_flags_matches_without_an_amount():
+    rows = _handiman_rows()[:2]
+    rows[1]["fields"] = {"supplier": "GARDENS HANDIMAN CENTRE"}
+    with patch("vula.commerce.service._client", return_value=_mock_sequential(rows)), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        res = await find_filed_document(TID, "Gardens")
+    assert res["total_amount_cents"] == 18900
+    assert res["matches_with_amount"] == 1
+    assert "NOT in" in res["note"]
+
+
+@pytest.mark.asyncio
+async def test_long_result_lists_are_capped_but_totalled_in_full():
+    rows = [{"id": f"d{i}", "filename": f"f{i}.pdf", "category": "Invoice", "summary": "",
+             "created_at": "2026-09-01", "fields": {"total_cents": 100}} for i in range(40)]
+    with patch("vula.commerce.service._client", return_value=_mock_sequential(rows)), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        res = await find_filed_document(TID, "f")
+    assert len(res["matches"]) == 30
+    assert res["total_matches"] == 40
+    assert res["total_amount_cents"] == 4000
+
+
+@pytest.mark.parametrize("fields,expected", [
+    ({"total_cents": 18900}, 18900),
+    ({"amount_cents": 9200}, 9200),
+    ({"amount": "R7,500.00"}, 750000),
+    ({"amount": 12.5}, 1250),
+    ({"amount": "n/a"}, None),
+    ({}, None),
+])
+def test_document_amount_cents(fields, expected):
+    assert _document_amount_cents(fields) == expected
+
+
+def test_dominant_party_prefers_the_majority_then_the_best_ranked():
+    assert _dominant_party([{"party": "B"}, {"party": "A"}, {"party": "a"}]) == "A"
+    assert _dominant_party([{"party": "B"}, {"party": "A"}]) == "B"
+    assert _dominant_party([{"excerpt": "x"}]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query,expected", [
+    ("all jack hammer invoices", True),
+    ("Jack Hammer", True),
+    ("Gardens Handiman Centre (Pty) Ltd", True),
+    ("Gardens Handyman Centre", True),       # fuzzy, above the auto-apply bar
+    ("hammer drill price", False),
+    ("", False),
+])
+async def test_resolve_supplier_names(query, expected):
+    suppliers = [{"name": "GARDENS HANDIMAN CENTRE", "aliases": ["Jack Hammer"]},
+                 {"name": "Builders Warehouse", "aliases": []}]
+    with patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=suppliers)):
+        names = await _resolve_supplier_names(TID, query)
+    assert (names == ["GARDENS HANDIMAN CENTRE", "Jack Hammer"]) is expected
+
+
+@pytest.mark.asyncio
+async def test_resolve_supplier_names_fails_open():
+    with patch("vula.commerce.service.list_suppliers", AsyncMock(side_effect=RuntimeError("db"))):
+        assert await _resolve_supplier_names(TID, "Jack Hammer") == []
+
+
+@pytest.mark.asyncio
+async def test_refunds_are_subtracted_not_added():
+    # Real DIGG row: a refund filed as category Invoice with a POSITIVE total_cents.
+    rows = _handiman_rows()[:1] + [{
+        "id": "r1", "filename": "POS Account Refund 21-366230.pdf", "category": "Invoice",
+        "summary": "", "created_at": "2026-09-22", "status": "pending_project",
+        "fields": {"supplier": "GARDENS HANDIMAN CENTRE", "total_cents": 95400}}]
+    with patch("vula.commerce.service._client", return_value=_mock_sequential(rows)), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        res = await find_filed_document(TID, "Gardens")
+    assert res["total_amount_cents"] == 18900 - 95400
+    assert res["matches"][1]["is_refund"] is True
+    assert "SUBTRACTED" in res["note"]
+
+
+# ── materials roll-up (2026-09-23) ───────────────────────────────────────────────
+# DIGG wants "what materials have we bought from X", not only the Rand total. Line items are
+# already extracted on every invoice; this checks they're aggregated server-side.
+
+from vula.commerce.service import _aggregate_line_items  # noqa: E402
+
+
+def _li(desc, qty, unit, total=None):
+    return {"description": desc, "quantity": qty, "unit_price_cents": unit,
+            "total_cents": total if total is not None else (None if unit is None else qty * unit)}
+
+
+def test_materials_merge_the_same_item_across_lines_and_invoices():
+    # Real digg-demo shapes: ISOTHERM on two invoices, masonry nails repeated within one.
+    rows = [
+        {"id": "a", "filename": "POS Account Sale 24-223853.pdf", "fields": {"line_items": [
+            _li("ISOTHERM 100MM*1200MM*6M 7.2m2", 5, 74500),
+            _li("RUBBLE BAG WOVEN", 20, 750)]}},
+        {"id": "b", "filename": "POS Account Sale 23-244698.pdf", "fields": {"line_items": [
+            _li("ISOTHERM 100MM*1200MM*6M 7.2m2", 1, 74500),
+            _li("MASONRY NAILS 3.0X50 P25", 1, 2300),
+            _li("masonry nails 3.0x50 p25", 1, 2300)]}},
+    ]
+    items, distinct = _aggregate_line_items(rows)
+    assert distinct == 3
+    top = items[0]
+    assert top["description"] == "ISOTHERM 100MM*1200MM*6M 7.2m2"
+    assert top["quantity"] == 6 and top["spend_cents"] == 447000 and top["documents"] == 2
+    assert top["spend"] == "R4,470.00"
+    nails = next(i for i in items if i["description"].startswith("MASONRY"))
+    assert nails["quantity"] == 2 and nails["spend_cents"] == 4600 and nails["documents"] == 1
+
+
+def test_materials_subtract_refunded_items():
+    rows = [
+        {"id": "a", "filename": "POS Account Sale 1.pdf",
+         "fields": {"line_items": [_li("SAND PER BAG ACC", 20, 3100)]}},
+        {"id": "r", "filename": "POS Account Refund 2.pdf",
+         "fields": {"line_items": [_li("SAND PER BAG ACC", 5, 3100)]}},
+    ]
+    items, _ = _aggregate_line_items(rows)
+    assert items[0]["quantity"] == 15 and items[0]["spend_cents"] == 15 * 3100
+
+
+def test_materials_flag_unpriced_or_unquantified_lines():
+    rows = [{"id": "a", "fields": {"line_items": [
+        {"description": "CUTTING CHARGE WOOD", "quantity": None, "total_cents": 2000},
+        {"description": "BRICK TROWEL", "quantity": 1, "unit_price_cents": None,
+         "total_cents": None},
+        "not-a-dict", {"description": ""}]}}]
+    items, distinct = _aggregate_line_items(rows)
+    assert distinct == 2
+    by = {i["description"]: i for i in items}
+    assert by["CUTTING CHARGE WOOD"]["quantity_incomplete"] is True
+    assert by["BRICK TROWEL"]["spend_incomplete"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_result_carries_the_materials_roll_up():
+    rows = _handiman_rows()[:2]
+    rows[0]["fields"]["line_items"] = [_li("PINE ROUGH 38X38 3M", 2, 4700)]
+    rows[1]["fields"]["line_items"] = [_li("PINE ROUGH 38X38 3M", 3, 4700)]
+    with patch("vula.commerce.service._client", return_value=_mock_sequential(rows)), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        res = await find_filed_document(TID, "Gardens")
+    assert res["materials"] == [{"description": "PINE ROUGH 38X38 3M", "quantity": 5,
+                                 "spend": "R235.00", "spend_cents": 23500, "documents": 2}]
+    assert res["materials_distinct"] == 1
+    assert "materials" in res["note"]
+
+
+@pytest.mark.asyncio
+async def test_no_materials_key_when_no_line_items():
+    with patch("vula.commerce.service._client", return_value=_mock_sequential(_handiman_rows()[:1])), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        res = await find_filed_document(TID, "Gardens")
+    assert "materials" not in res
+
+
+def test_materials_flag_a_likely_misread_quantity():
+    # Real digg-demo: sand at R31/bag everywhere, but one line read as qty 1 @ R465.
+    rows = [{"id": "a", "fields": {"line_items": [_li("SAND PER BAG ACC", 20, 3100)]}},
+            {"id": "b", "fields": {"line_items": [_li("SAND PER BAG ACC", 1, 46500)]}},
+            {"id": "c", "fields": {"line_items": [_li("CEMENT 50KG", 3, 15900),
+                                                  _li("CEMENT 50KG", 1, 15900)]}}]
+    items, _ = _aggregate_line_items(rows)
+    by = {i["description"]: i for i in items}
+    assert by["SAND PER BAG ACC"]["unit_price_varies"] is True
+    assert "unit_price_varies" not in by["CEMENT 50KG"]

@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from config import settings
+from core.skills.base import looks_like_supplier_history_question
 from core.thinkmesh.graph import (
     DeviceRole,
     GraphStatus,
@@ -26,6 +27,10 @@ COMPLEXITY_KEYWORDS = {
     2: ["explain", "summarize", "summarise", "calculate", "plan", "estimate", "research"],
     1: ["what", "who", "when", "where", "list", "define", "show"],
 }
+
+# Keyword hits (and a miss, None) that a supplier spend/materials-history question may be
+# re-routed away from — see _route_with_reason.
+_SUPPLIER_HISTORY_OVERRIDABLE = {None, "commerce_assistant", "finance_admin", "calculations"}
 
 SKILL_KEYWORDS: dict[str, list[str]] = {
     # ClickUp first — explicit task-management phrasing only, so it never shadows
@@ -254,6 +259,17 @@ class HRMOrchestrator:
         misroutes, and how often routing falls through to the generic 'reasoning' skill, are
         measurable."""
         kw = self._keyword_skill(prompt, tenant_id)
+        # 2026-09-23 (DIGG): a supplier spend/materials-history question belongs to
+        # email_admin's find_document (full invoice list, server-side total, materials roll-up)
+        # — not commerce_assistant (matched "buy", the CUSTOMER shopping skill) or finance_admin
+        # (matched "how much have we spent", the ledger, which doesn't see filed-but-unbooked
+        # supplier invoices). Only overrides those keyword hits or a miss, never an explicit
+        # match like "draft an email"/"remind me"; and only with a connected mailbox, since
+        # email_admin declines to run without one. See looks_like_supplier_history_question.
+        if (kw in _SUPPLIER_HISTORY_OVERRIDABLE
+                and looks_like_supplier_history_question(prompt)
+                and self._has_connected_mailbox(tenant_id)):
+            return "email_admin", "supplier_history"
         if kw:
             return kw, "keyword"
         # No keyword matched — before silently defaulting to the least-specialized skill,

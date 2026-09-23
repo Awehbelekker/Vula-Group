@@ -134,7 +134,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "actual filed documents, not a pricing/catalog question, so it goes here "
                        "(then email_thread_summary on a miss) — never lookup_business_info, "
                        "which only answers what THIS business charges/sells, not what it has "
-                       "actually spent or been invoiced. Do NOT use this for a request to CREATE something "
+                       "actually spent or been invoiced. The same goes for 'what materials/items did we buy "
+                       "from X' — found invoices come back with a `materials` roll-up of their "
+                       "line items (quantities and spend already summed), so answer from that. "
+                       "Do NOT use this for a request to CREATE something "
                        "new (e.g. 'make an invoice for X') — go straight to create_invoice for "
                        "that, there's no existing document to look up yet. If this returns "
                        "status: not_found_filed, that means nothing is FILED yet — not that the "
@@ -892,6 +895,45 @@ def _is_pure_create_invoice_request(message: str) -> bool:
     return bool(_CREATE_INVOICE_REQUEST_RE.search(text)) and not _EXISTING_DOCUMENT_REFERENCE_RE.search(text)
 
 
+# 2026-09-23: #62 fixed "Need all jack hammer invoice and summary of what was spent" (digg-demo,
+# 2026-09-22) by rewording find_document's and lookup_business_info's descriptions plus the
+# system prompt — the model had called ONLY lookup_business_info and stated a price that tool
+# never returned. Same lesson as _is_pure_create_invoice_request above: a prompt-only routing
+# rule isn't reliable on its own. For a message that reads as a spend/invoice-HISTORY question,
+# lookup_business_info (what THIS business charges/sells) is removed from the offered tools
+# outright, leaving find_document -> email_thread_summary as the only way to answer it.
+# Deliberately narrow: a message that also asks about pricing/catalog ('what do they charge')
+# keeps the tool, since dropping it there would lose the half of the question it does answer.
+_SPEND_HISTORY_REQUEST_RE = re.compile(
+    r"\b(how\s+much|what)\s+(have|has|had|did|was|were|is|do)?\s*(we|i|us|you)?\s*"
+    r"(been\s+)?(spent|spend|paid|pay)\b|"
+    r"\b(total|our|my)\s+spend(ing)?\b|"
+    r"\bspen[dt]\s+(with|on|at)\b|"
+    r"\bsummary\s+of\s+(the\s+|our\s+)?(spend|spending|payments?|invoices?)\b|"
+    r"\b(all|every|list)\s+(of\s+)?(the\s+|our\s+|my\s+)?([\w-]+\s+){0,3}invoices?\b|"
+    r"\binvoices?\s+(from|by)\b|"
+    # "what materials did we buy from X" / "summary of materials" — same filed invoices, read
+    # for their line items rather than their totals (see service._aggregate_line_items).
+    r"\b(what|which)\s+(materials?|items?|stuff|products?)\s+(have|has|did|were)\s+"
+    r"(we|i|you)?\s*(been\s+)?(buy|bought|get|got|order|ordered|purchase|purchased)\b|"
+    r"\b(summary|list|breakdown)\s+of\s+(the\s+|all\s+)?(our\s+)?(materials?|items?\s+(bought|purchased))\b|"
+    r"\bmaterials?\s+(from|bought|purchased|we\s+(bought|got|ordered))\b",
+    re.IGNORECASE)
+_PRICING_QUESTION_RE = re.compile(
+    r"\b(charge|charges|charging|price\s*list|pricing|sell|sells|selling|catalog(ue)?)\b",
+    re.IGNORECASE)
+
+
+def _is_spend_history_request(message: str) -> bool:
+    """True when the message reads as a question about what the business has actually spent
+    or been invoiced (not what it charges) — see the comment above. Never true for a request
+    to CREATE an invoice, which has its own routing."""
+    text = message or ""
+    return (bool(_SPEND_HISTORY_REQUEST_RE.search(text))
+            and not _PRICING_QUESTION_RE.search(text)
+            and not _is_pure_create_invoice_request(text))
+
+
 def _match_groups(message: str) -> Optional[set]:
     """Which gated tool-groups this message plausibly relates to, by keyword hit. Returns None
     (meaning: don't filter, show everything) if nothing matched confidently."""
@@ -1003,6 +1045,8 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
              + CONTACT_TOOLS + MEETING_TOOLS)  # always on
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
+    elif message and _is_spend_history_request(message):
+        tools = [t for t in tools if t["function"]["name"] != "lookup_business_info"]
     show_all = not mods                       # no config yet → show everything
     matched = _match_groups(message) if message else None
     for mod, group in _GATED_GROUPS:

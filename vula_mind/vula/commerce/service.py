@@ -12,7 +12,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
 from supabase import create_client, Client
@@ -2782,6 +2782,253 @@ def _document_amount(fields: Dict[str, Any]) -> Optional[float]:
     return amount
 
 
+# find_filed_document: how many rows one SQL search pulls (enough for a real "all invoices from
+# X" request — DIGG had 13 from one supplier in 3 weeks) vs how many are handed back to the model
+# row-by-row. The count/total always cover every fetched row, so a long list is summarised
+# server-side rather than silently truncated to whatever fit.
+_FILED_SEARCH_FETCH_CAP = 200
+_FILED_SEARCH_RETURN_CAP = 30
+
+# The JSONB `fields` keys a filed document's counterparty name lives under (see
+# _SUPPLIER_CHECK_FIELD in vula/api/whatsapp.py, and the `party` read below).
+_PARTY_FIELD_KEYS = ("supplier", "payee_name", "customer")
+
+
+def _document_amount_cents(fields: Dict[str, Any]) -> Optional[int]:
+    """_document_amount() as integer cents, so totals are summed server-side in cents (never by
+    the LLM, never as floats). Parses the Smart Scanner's string shape ("R7,500.00") too.
+    None when there's no usable amount."""
+    amount = _document_amount(fields)
+    if amount is None or isinstance(amount, bool):
+        return None
+    if isinstance(amount, (int, float)):
+        return int(round(amount * 100))
+    cleaned = re.sub(r"[^0-9.\-]", "", str(amount).replace(",", ""))
+    try:
+        return int(round(float(cleaned) * 100)) if cleaned else None
+    except ValueError:
+        return None
+
+
+# 2026-09-23, real DIGG data: "POS Account Refund 21-366230.pdf" was filed as category Invoice
+# with a POSITIVE total_cents (extraction has no refund/credit field), so a plain sum counted a
+# R954 refund as R954 more spend. Refunds/credit notes are detected by name and subtracted.
+_REFUND_DOC_RE = re.compile(r"\b(refund|credit[\s-]*note)s?\b", re.IGNORECASE)
+
+
+def _is_refund_row(row: Dict[str, Any]) -> bool:
+    return bool(_REFUND_DOC_RE.search(f"{row.get('filename') or ''} {row.get('summary') or ''}"))
+
+
+def _party_of(fields: Dict[str, Any]) -> Optional[str]:
+    return fields.get("supplier") or fields.get("payee_name") or fields.get("customer")
+
+
+def _pg_term(text: str) -> str:
+    """Free text made safe to embed in a PostgREST or_() filter — commas/parens are its syntax."""
+    return re.sub(r"[,()]", " ", text or "").strip()[:100]
+
+
+async def _resolve_supplier_names(tenant_id: str, query: str) -> List[str]:
+    """Canonical name + aliases of the known supplier (commerce_suppliers) the query refers to,
+    or []. Matches when the whole query is that supplier's name/alias (exact, or fuzzy at
+    match_supplier's auto-apply bar), or when a name/alias appears as whole words inside it
+    ("all jack hammer invoices" -> alias "Jack Hammer" -> GARDENS HANDIMAN CENTRE).
+    Fail-open: any error returns []."""
+    nq = _norm_name(query)
+    if not nq:
+        return []
+    try:
+        suppliers = await list_suppliers(tenant_id)
+    except Exception as exc:
+        logger.debug("find_filed_document supplier alias resolution skipped: %s", exc)
+        return []
+    padded = f" {nq} "
+    best, best_score = None, 0.0
+    for s in suppliers:
+        names = [n for n in [s.get("name")] + list(s.get("aliases") or []) if n]
+        norms = [_norm_name(n) for n in names]
+        if any(n and (n == nq or (len(n) >= 3 and f" {n} " in padded)) for n in norms):
+            return names
+        score = max((difflib.SequenceMatcher(None, nq, n).ratio() for n in norms if n), default=0.0)
+        if score > best_score:
+            best, best_score = names, score
+    return best if best and best_score >= FUZZY_AUTO else []
+
+
+def _filed_rows_query(tenant_id: str, terms: List[str], category: Optional[str], party_only: bool):
+    """vula_filed_documents rows whose filename/summary — or counterparty name in `fields` —
+    contains any of `terms` (already _pg_term-sanitised). party_only restricts the match to the
+    counterparty fields (used once a supplier has been resolved, so its name appearing in an
+    unrelated document's summary doesn't pull that document in)."""
+    q = (_client().table("vula_filed_documents")
+         .select("id,filename,category,summary,fields,status,created_at,customer_phone")
+         .eq("tenant_id", tenant_id).order("created_at", desc=True))
+    if category:
+        q = q.eq("category", category)
+    clauses = []
+    for t in terms:
+        if not party_only:
+            clauses += [f"filename.ilike.%{t}%", f"summary.ilike.%{t}%"]
+        clauses += [f"fields->>{k}.ilike.%{t}%" for k in _PARTY_FIELD_KEYS]
+    if clauses:
+        q = q.or_(",".join(clauses))
+    return q.limit(_FILED_SEARCH_FETCH_CAP).execute().data or []
+
+
+# How many distinct materials/line items _aggregate_line_items hands back (biggest spend first).
+_MATERIALS_RETURN_CAP = 40
+
+
+def _num(v: Any) -> Optional[float]:
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _aggregate_line_items(rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """Roll the invoices' extracted line_items up into one materials summary: the same item
+    (normalised description) merged across lines and documents, with summed quantity and
+    integer-cent spend and the number of documents it appears on. Refund rows subtract. Returns
+    (items sorted by spend desc, capped at _MATERIALS_RETURN_CAP; total distinct items).
+
+    2026-09-23: DIGG wants "what materials have we bought from X", not only the Rand total —
+    every Invoice/Quote/BOQ is already extracted with line_items (see _analyze_document's
+    schema in vula/api/whatsapp.py), so this is aggregation of data already on the row, done
+    here so no quantity or amount is ever summed by the LLM."""
+    agg: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        sign = -1 if _is_refund_row(r) else 1
+        for li in ((r.get("fields") or {}).get("line_items") or []):
+            if not isinstance(li, dict):
+                continue
+            desc = str(li.get("description") or "").strip()
+            key = _norm_name(desc)
+            if not key:
+                continue
+            qty = _num(li.get("quantity"))
+            cents = _num(li.get("total_cents"))
+            if cents is None and qty is not None and _num(li.get("unit_price_cents")) is not None:
+                cents = qty * _num(li.get("unit_price_cents"))
+            a = agg.setdefault(key, {"description": desc, "quantity": 0.0, "spend_cents": 0,
+                                     "documents": set(), "_unpriced": False, "_no_qty": False,
+                                     "_unit": []})
+            if qty and cents is not None:
+                a["_unit"].append(abs(cents / qty))
+            if qty is None:
+                a["_no_qty"] = True
+            else:
+                a["quantity"] += sign * qty
+            if cents is None:
+                a["_unpriced"] = True
+            else:
+                a["spend_cents"] += sign * int(round(cents))
+            a["documents"].add(r.get("id") or r.get("filename"))
+    items = []
+    for a in sorted(agg.values(), key=lambda a: a["spend_cents"], reverse=True):
+        qty = round(a["quantity"], 3)
+        item = {"description": a["description"],
+                "quantity": int(qty) if qty == int(qty) else qty,
+                "spend": f"R{a['spend_cents'] / 100:,.2f}", "spend_cents": a["spend_cents"],
+                "documents": len(a["documents"])}
+        if a["_no_qty"]:
+            item["quantity_incomplete"] = True
+        if a["_unpriced"]:
+            item["spend_incomplete"] = True
+        # Real digg-demo row: "SAND PER BAG ACC" read as qty 1 @ R465 on one invoice, R31/bag on
+        # every other — almost certainly 15 bags misread as 1. The line total still reconciles
+        # with the invoice total, so nothing upstream catches it; flag it here so the quantity
+        # isn't stated as fact.
+        units = [u for u in a["_unit"] if u > 0]
+        if units and max(units) > 1.5 * min(units):
+            item["unit_price_varies"] = True
+        items.append(item)
+    return items[:_MATERIALS_RETURN_CAP], len(items)
+
+
+def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    results = []
+    total_cents, priced, refunds = 0, 0, 0
+    for r in rows:
+        fields = r.get("fields") or {}
+        cents = _document_amount_cents(fields)
+        refund = _is_refund_row(r)
+        if cents is not None:
+            total_cents += -abs(cents) if refund else cents
+            priced += 1
+            refunds += refund
+        if len(results) < _FILED_SEARCH_RETURN_CAP:
+            entry = {
+                "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
+                "summary": (r.get("summary") or "")[:200],
+                "amount": _document_amount(fields),
+                "party": _party_of(fields),
+                "filed_at": r.get("created_at"),
+            }
+            if refund:
+                entry["is_refund"] = True
+            results.append(entry)
+    out: Dict[str, Any] = {
+        "matches": results, "match_type": "filed_document", "status": "found",
+        "total_matches": len(rows),
+        "total_amount": f"R{total_cents / 100:,.2f}",
+        "total_amount_cents": total_cents,
+        "matches_with_amount": priced,
+    }
+    notes = [f"total_amount is the server-computed sum of the {priced} match(es) with an "
+             "extracted amount — quote it as-is rather than re-adding the list."]
+    if refunds:
+        notes.append(f"{refunds} match(es) marked is_refund are refunds/credit notes and were "
+                     "SUBTRACTED from total_amount — mention them as refunds, not purchases.")
+    if priced < len(rows):
+        notes.append(f"{len(rows) - priced} match(es) have no extracted amount and are NOT in "
+                     "that total — say so rather than presenting it as complete.")
+    if len(rows) > len(results):
+        notes.append(f"Only the {len(results)} most recent of {len(rows)} matches are listed; "
+                     "total_amount still covers all of them.")
+    if len(rows) >= _FILED_SEARCH_FETCH_CAP:
+        notes.append(f"The search stopped at {_FILED_SEARCH_FETCH_CAP} documents — there may "
+                     "be more; suggest narrowing by date or category.")
+    materials, distinct = _aggregate_line_items(rows)
+    if materials:
+        out["materials"] = materials
+        out["materials_distinct"] = distinct
+        notes.append("materials rolls up every line item across ALL matches (same item merged, "
+                     "quantity and spend summed server-side, biggest spend first) — use it for a "
+                     "what-did-we-buy / materials summary instead of re-adding line items. Line "
+                     "spend is per item as printed, so it need not equal total_amount exactly "
+                     "(delivery, VAT or rounding lines).")
+        if any(m.get("unit_price_varies") for m in materials):
+            notes.append("An item marked unit_price_varies was bought at very different unit "
+                         "prices across lines — often a misread quantity; flag its quantity as "
+                         "unconfirmed rather than stating it.")
+        if distinct > len(materials):
+            notes.append(f"Only the top {len(materials)} of {distinct} distinct items by spend "
+                         "are listed.")
+    out["note"] = " ".join(notes)
+    return out
+
+
+def _dominant_party(results: List[Dict[str, Any]]) -> Optional[str]:
+    """The counterparty most semantic hits agree on (ties -> the best-ranked hit's), or None."""
+    counts: Dict[str, int] = {}
+    first: Dict[str, str] = {}
+    for r in results:
+        party = (r.get("party") or "").strip()
+        if not party:
+            continue
+        key = _norm_name(party)
+        counts[key] = counts.get(key, 0) + 1
+        first.setdefault(key, party)
+    if not counts:
+        return None
+    best = max(counts, key=lambda k: counts[k])  # max() keeps the first (best-ranked) on a tie
+    return first[best]
+
+
 async def find_filed_document(tenant_id: str, query: str, category: Optional[str] = None,
                               limit: int = 5) -> Dict[str, Any]:
     """Search filed documents (invoices/quotes/proof-of-payment/BOQs/receipts) for `query`.
@@ -2807,6 +3054,20 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     amount rides along whenever the same document was also filed normally, which is the common
     case (semantic search and normal filing both run on every ingested document).
 
+    2026-09-23, same DIGG supplier: "all Jack Hammer invoices" found 2 of 13 real invoices
+    (R789 of R20,278). Every one of the 13 has fields.supplier = "GARDENS HANDIMAN CENTRE", but
+    nothing searched that field, "Jack Hammer" is only the owner's nickname for the supplier,
+    and semantic top-k is lossy by design for an exhaustive request. Three changes, all aimed
+    at an exact, complete answer instead of a fuzzy partial one:
+      - the SQL match also checks the counterparty fields (supplier/payee_name/customer);
+      - a query naming a known supplier by name or alias (commerce_suppliers.aliases, editable
+        in the dashboard) searches under every one of that supplier's names;
+      - when only the semantic path finds anything, the counterparty those hits agree on is
+        re-searched exactly, so the ~2 fuzzy hits become all 13 — labelled as a resolution the
+        owner should confirm, since it's an inference, not a stated alias.
+    SQL results also carry a server-computed total (integer cents) and a full count, fetched
+    up to _FILED_SEARCH_FETCH_CAP rows rather than the first `limit`.
+
     Single implementation so both find_document tools answer identically — see the routing
     incident this was extracted alongside: the same fix landing in one copy and not its sibling
     is exactly how these gaps have recurred before.
@@ -2815,34 +3076,25 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     if not query:
         return {"error": "Give a few words about the document — supplier/customer name, "
                           "invoice number, amount, or what it was for."}
-    # Commas/parens are PostgREST or_() filter syntax — strip them so free text (which may come
-    # straight from a WhatsApp message) can't alter the query's filter structure.
-    safe_query = re.sub(r"[,()]", " ", query).strip()[:100]
+    safe_query = _pg_term(query)
+    aliases = [t for t in (_pg_term(n) for n in await _resolve_supplier_names(tenant_id, query)) if t]
     try:
-        q = (_client().table("vula_filed_documents")
-             .select("id,filename,category,summary,fields,status,created_at,customer_phone")
-             .eq("tenant_id", tenant_id).order("created_at", desc=True))
-        if category:
-            q = q.eq("category", category)
-        if safe_query:
-            q = q.or_(f"filename.ilike.%{safe_query}%,summary.ilike.%{safe_query}%")
-        rows = q.limit(limit).execute().data or []
+        rows = _filed_rows_query(tenant_id, [safe_query] if safe_query else [], category,
+                                 party_only=False)
+        if aliases:
+            seen = {r.get("id") for r in rows}
+            rows += [r for r in _filed_rows_query(tenant_id, aliases, category, party_only=True)
+                     if r.get("id") not in seen]
+            rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     except Exception as exc:
         logger.warning("find_filed_document SQL query failed: %s", exc)
         return {"error": "Couldn't search documents right now."}
 
     if rows:
-        results = []
-        for r in rows:
-            fields = r.get("fields") or {}
-            results.append({
-                "id": r.get("id"), "filename": r.get("filename"), "category": r.get("category"),
-                "summary": (r.get("summary") or "")[:200],
-                "amount": _document_amount(fields),
-                "party": fields.get("supplier") or fields.get("payee_name") or fields.get("customer"),
-                "filed_at": r.get("created_at"),
-            })
-        return {"matches": results, "match_type": "filed_document", "status": "found"}
+        out = _filed_rows_result(rows)
+        if aliases:
+            out["resolved_supplier"] = aliases[0]
+        return out
 
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
@@ -2886,13 +3138,33 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
         if filed:
             f = filed.get("fields") or {}
             entry["amount"] = _document_amount(f)
-            entry["party"] = f.get("supplier") or f.get("payee_name") or f.get("customer")
+            entry["party"] = _party_of(f)
             entry["category"] = filed.get("category")
         results.append(entry)
     if not results:
         return {"status": "not_found_filed",
                 "message": f"No filed document matches '{query}'. Ask the owner for the "
                             "invoice/document number, or to resend it — don't guess."}
+
+    # The semantic hits are a lossy top-k sample. If they point at one counterparty, pull every
+    # filed document for it exactly — see the 2026-09-23 note in the docstring.
+    party = _dominant_party(results)
+    if party and _pg_term(party):
+        try:
+            prows = _filed_rows_query(tenant_id, [_pg_term(party)], category, party_only=True)
+        except Exception as exc:
+            logger.debug("find_filed_document party re-search skipped: %s", exc)
+            prows = []
+        if prows:
+            out = _filed_rows_result(prows)
+            out["match_type"] = "resolved_via_knowledge_base"
+            out["resolved_supplier"] = party
+            out["note"] = (f"'{query}' didn't match any filed document by name. The closest "
+                           f"knowledge-base matches belong to '{party}', so these are ALL filed "
+                           f"documents for '{party}'. Tell the owner you took '{query}' to mean "
+                           f"'{party}' and ask them to confirm. " + out["note"])
+            return out
+
     return {"matches": results, "match_type": "knowledge_base", "status": "found",
             "note": "Found in the knowledge base. A match with a non-null 'amount' is a real "
                     "extracted figure from the filed document (safe to sum/quote) — a match "

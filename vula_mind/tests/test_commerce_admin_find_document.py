@@ -209,3 +209,60 @@ def test_system_prompt_routes_supplier_spend_requests_to_find_document(skill):
     prompt = skill._system_prompt(TID, role=None, name="Test").lower()
     assert "what have we spent/paid with x" in prompt or "all invoices from x" in prompt
     assert "never lookup_business_info" in prompt
+
+
+# ── deterministic backstop for #62 (2026-09-23) ──────────────────────────────────
+# #62's wording fix is prompt-only; this excludes lookup_business_info from the offered tools
+# outright for a spend/invoice-history question, the same way find_document is excluded for a
+# pure create request above.
+
+@pytest.mark.parametrize("message", [
+    "Need all jack hammer invoice and summary of what was spent",
+    "What have we spent with Makro this year?",
+    "How much did we pay Builders Warehouse last month",
+    "Send me all the invoices from Gerflor",
+    "What's our total spend on cement?",
+    "Give me a summary of our payments to Coastal Hire",
+    "What materials did we buy from Jack Hammer?",
+    "Summary of materials from Gardens Handiman this month",
+    "Which items have we ordered from Builders Warehouse",
+])
+def test_spend_history_requests_are_detected(message):
+    from core.skills.commerce_admin import _is_spend_history_request
+    assert _is_spend_history_request(message) is True
+
+
+@pytest.mark.parametrize("message", [
+    "What does Makro charge for hake fillets?",
+    "What have we spent with Makro and what do they charge now?",
+    "Make a customer invoice for Regan for Angel fish at R100/kg",
+    "How's stock looking?",
+    "What's the price of the 3m scaffolding?",
+    "Has Regan paid?",
+    "What materials do you sell?",
+    "Do we have materials in stock for the Smith job?",
+])
+def test_non_spend_history_messages_are_not_flagged(message):
+    from core.skills.commerce_admin import _is_spend_history_request
+    assert _is_spend_history_request(message) is False
+
+
+def test_lookup_business_info_excluded_for_a_spend_history_request():
+    names = [t["function"]["name"] for t in _tools_for(
+        TID, role=None, message="Need all jack hammer invoice and summary of what was spent")]
+    assert "lookup_business_info" not in names
+    assert "find_document" in names
+    assert "email_thread_summary" in names
+
+
+def test_lookup_business_info_still_offered_for_a_pricing_question():
+    names = [t["function"]["name"] for t in _tools_for(
+        TID, role=None, message="What does Makro charge for hake fillets?")]
+    assert "lookup_business_info" in names
+
+
+def test_find_document_description_covers_materials_summaries():
+    spec = next(t for t in TOOL_SPECS if t["function"]["name"] == "find_document")
+    desc = spec["function"]["description"].lower()
+    assert "what materials/items did we buy" in desc
+    assert "materials" in desc
