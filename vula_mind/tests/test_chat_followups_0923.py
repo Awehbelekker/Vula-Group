@@ -224,6 +224,7 @@ async def test_email_admin_answers_supplier_history_without_the_model_reading_nu
         patch("core.skills.email_admin.resolve_generation_route",
               new=AsyncMock(return_value=("ollama_chat/llama3.1:8b", None, "http://x"))),
         patch("vula.commerce.service.find_filed_document", new=AsyncMock(return_value=_RESULT)),
+        patch("vula.commerce.service.answer_supplier_history", new=AsyncMock(return_value=None)),
         patch("litellm.acompletion", new=_fake),
     ):
         out = await EmailAdminSkill().run(SkillInput(
@@ -237,3 +238,80 @@ async def test_non_supplier_questions_still_go_back_to_the_model():
     from core.skills.email_admin import _direct_supplier_answer
     assert _direct_supplier_answer("find the proof of payment I sent", "find_document", {}, _RESULT) is None
     assert _direct_supplier_answer("Need all jack hammer invoices", "email_search", {}, _RESULT) is None
+
+
+# 2026-09-23, after #69 went live: the GPU box was unreachable, the cloud 70B returned an empty
+# reply without calling find_document, and the owner got "Done.". With "Jack Hammer" now a saved
+# alias, the question names a known supplier outright — no model is needed at all.
+
+_SUPPLIERS = [{"name": "GARDENS HANDIMAN CENTRE", "aliases": ["Jack Hammer"]},
+              {"name": "BUILDERS WAREHOUSE", "aliases": []}]
+
+
+@pytest.mark.asyncio
+async def test_a_named_supplier_is_answered_without_any_model_call():
+    from vula.commerce import service as svc
+    find = AsyncMock(return_value=_RESULT)
+    with (
+        patch.object(svc, "list_suppliers", new=AsyncMock(return_value=_SUPPLIERS)),
+        patch.object(svc, "find_filed_document", new=find),
+    ):
+        out = await svc.answer_supplier_history(
+            TID, "Need all jack hammer invoices and a summary of what was spent")
+    find.assert_awaited_once_with(TID, "GARDENS HANDIMAN CENTRE", category="Invoice")
+    assert "total spend *R1,084.00*" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", [
+    "Need all jackhammer rental invoices",       # not a whole-word supplier/alias mention
+    "How much did we spend on sand this month",  # no supplier named
+])
+async def test_no_named_supplier_leaves_it_to_the_tool_loop(question):
+    from vula.commerce import service as svc
+    find = AsyncMock(return_value=_RESULT)
+    with (
+        patch.object(svc, "list_suppliers", new=AsyncMock(return_value=_SUPPLIERS)),
+        patch.object(svc, "find_filed_document", new=find),
+    ):
+        assert await svc.answer_supplier_history(TID, question) is None
+    find.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_email_admin_uses_the_direct_answer_before_any_model_call():
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+    model = AsyncMock(side_effect=AssertionError("no model call expected"))
+    with (
+        patch("vula.commerce.service.answer_supplier_history",
+              new=AsyncMock(return_value="*GARDENS HANDIMAN CENTRE*: 16 documents")),
+        patch("litellm.acompletion", new=model),
+    ):
+        out = await EmailAdminSkill().run(SkillInput(
+            question="Need all jack hammer invoices and a summary of what was spent", tenant_id=TID))
+    assert out.answer.startswith("*GARDENS HANDIMAN CENTRE*: 16 documents")
+    model.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_empty_model_reply_is_never_reported_as_done():
+    from core.llm_router import EMPTY_REPLY_FALLBACK
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+
+    async def _empty(**kw):
+        r = MagicMock()
+        r.choices = [SimpleNamespace(message=SimpleNamespace(content="", tool_calls=None))]
+        return r
+
+    with (
+        patch("core.skills.email_admin.get_email_creds", return_value={"email": "a@b.c"}),
+        patch("core.skills.email_admin.resolve_generation_route",
+              new=AsyncMock(return_value=("openrouter/x", "k", "http://x"))),
+        patch("litellm.acompletion", new=_empty),
+    ):
+        out = await EmailAdminSkill().run(SkillInput(
+            question="any emails waiting on me?", tenant_id=TID))
+    assert out.answer == EMPTY_REPLY_FALLBACK and out.answer != "Done."
+    assert out.confidence < 0.5

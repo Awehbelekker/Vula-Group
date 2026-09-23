@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Any, Dict, List
 
-from core.llm_router import is_local_model, resolve_generation_route, substitute_if_degenerate
+from core.llm_router import is_local_model, resolve_generation_route, reply_or_fallback, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message
 
@@ -243,7 +243,10 @@ class DraftAdminSkill(BaseSkill):
         try:
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id, phone)
             answer = substitute_if_degenerate(answer or "", skill=self.name, tenant_id=inp.tenant_id)
-            return SkillOutput(answer=answer or "Done.", skill_name=self.name, confidence=0.8)
+            if not (answer or "").strip():
+                return SkillOutput(answer=reply_or_fallback(answer, skill=self.name),
+                                   skill_name=self.name, confidence=0.2)
+            return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("draft_admin failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))

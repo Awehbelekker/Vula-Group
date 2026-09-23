@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.llm_router import (
-    complete_local_first, resolve_generation_route, substitute_if_degenerate,
+    complete_local_first, resolve_generation_route, substitute_if_degenerate, reply_or_fallback,
 )
 from core.prompt_safety import fence
 from core.skills.base import (
@@ -189,6 +189,15 @@ class EmailAdminSkill(BaseSkill):
     description = "Search/read mailbox, file attachments to the KB, and draft replies (IMAP/SMTP)."
 
     async def run(self, inp: SkillInput) -> SkillOutput:
+        if looks_like_supplier_history_question(inp.question or ""):
+            try:
+                from vula.commerce.service import answer_supplier_history
+                direct = await answer_supplier_history(inp.tenant_id, inp.question)
+            except Exception as exc:  # noqa: BLE001 — fall through to the tool-calling loop
+                logger.warning("email_admin direct supplier answer failed: %s", exc)
+                direct = None
+            if direct:
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
         creds = get_email_creds(inp.tenant_id)
         # 2026-09-23: filed-document lookups ("all invoices from X", "what materials did we buy
         # from X") are routed here for every knowledge-mode owner — this is the only skill on
@@ -204,7 +213,10 @@ class EmailAdminSkill(BaseSkill):
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id,
                                       creds or {})
             answer = substitute_if_degenerate(answer or "", skill=self.name, tenant_id=inp.tenant_id)
-            return SkillOutput(answer=answer or "Done.", skill_name=self.name, confidence=0.8)
+            if not (answer or "").strip():
+                return SkillOutput(answer=reply_or_fallback(answer, skill=self.name),
+                                   skill_name=self.name, confidence=0.2)
+            return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
         except Exception as exc:
             logger.warning("email_admin failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
