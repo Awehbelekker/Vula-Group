@@ -3029,6 +3029,116 @@ def _dominant_party(results: List[Dict[str, Any]]) -> Optional[str]:
     return first[best]
 
 
+# Request filler the model tends to leave in a find_document query ("jack hammer invoices",
+# "all Jack Hammer invoice and summary of what was spent"). The SQL match is a single substring
+# ilike, so any of these words sinks it; the stripped core ("jack hammer") is searched too.
+_QUERY_FILLER = {
+    "a", "all", "an", "and", "any", "bill", "bills", "can", "documents", "document", "every",
+    "find", "for", "from", "get", "give", "have", "i", "invoice", "invoices", "list", "me",
+    "need", "of", "our", "paid", "payments", "please", "receipt", "receipts", "show", "spend",
+    "spending", "spent", "summary", "the", "to", "total", "us", "was", "we", "were", "what",
+    "with", "materials", "material", "bought", "purchases", "breakdown",
+}
+
+
+def _core_search_term(query: str) -> str:
+    """`query` with request filler removed, or "" when nothing distinctive is left."""
+    words = re.findall(r"[\w'&.-]+", query or "")
+    core = [w for w in words if w.lower().strip("'") not in _QUERY_FILLER]
+    return " ".join(core).strip()
+
+
+def _known_parties(tenant_id: str) -> List[str]:
+    """Every distinct counterparty name on this tenant's filed documents plus its supplier
+    register — the candidates _bridge_party can resolve a nickname to. Fail-open: []."""
+    names: Dict[str, str] = {}
+    try:
+        rows = (_client().table("vula_filed_documents")
+                .select("supplier:fields->>supplier,payee:fields->>payee_name,"
+                        "customer:fields->>customer")
+                .eq("tenant_id", tenant_id).limit(2000).execute().data or [])
+        for r in rows:
+            for v in r.values():
+                if v and _norm_name(v):
+                    names.setdefault(_norm_name(v), v)
+    except Exception as exc:
+        logger.debug("find_filed_document known-party lookup skipped: %s", exc)
+    try:
+        sup = (_client().table("commerce_suppliers").select("name")
+               .eq("tenant_id", tenant_id).execute().data or [])
+        for r in sup:
+            if r.get("name") and _norm_name(r["name"]):
+                names.setdefault(_norm_name(r["name"]), r["name"])
+    except Exception as exc:
+        logger.debug("find_filed_document supplier-register lookup skipped: %s", exc)
+    return list(names.values())
+
+
+# Words too common in SA business names/addresses to link a document to a party on their own.
+_GENERIC_NAME_WORDS = {
+    "aluminium", "and", "bathrooms", "build", "cape", "cash", "center", "centre", "city",
+    "consulting", "design", "designs", "electrical", "energy", "engineers", "furniture", "gas",
+    "glass", "group", "hardware", "head", "hire", "industries", "installations", "management",
+    "manufacturing", "motors", "office", "products", "rental", "rentals", "sales", "security",
+    "service", "services", "signs", "station", "store", "town", "trading", "warehouse",
+}
+
+
+def _bridge_party(term: str, docs: List[Dict[str, Any]], parties: List[str]) -> Optional[Tuple[str, str]]:
+    """Resolve a nickname through a document that names both it and a real counterparty.
+
+    2026-09-23, real DIGG data: "Jack Hammer" appears in no invoice at all — only in the
+    filename "ACCOUNT APPLICATION - Jack Hammer's COD account.pdf", whose summary reads "an
+    account application form for a COD account with Handiman Centre". That document is the
+    owner's own link between the nickname and GARDENS HANDIMAN CENTRE, the supplier on all 16
+    real invoices. Of the docs whose filename/summary contain `term`, return (party, filename)
+    when exactly one known party is named in them (a two-word run of its name, or a single
+    distinctive word for a one-word name); None when zero or several match, since a guess
+    between suppliers is worse than no answer."""
+    nterm = _norm_name(term)
+    if not nterm:
+        return None
+    hits: Dict[str, Tuple[str, str]] = {}
+    for d in docs:
+        text = f" {_norm_name((d.get('filename') or '') + ' ' + (d.get('summary') or ''))} "
+        if f" {nterm} " not in text and nterm.replace(" ", "") not in text.replace(" ", ""):
+            continue
+        for p in parties:
+            toks = _norm_name(p).split()
+            if not toks or " ".join(toks) == nterm:
+                continue
+            grams = ([toks[i:i + 2] for i in range(len(toks) - 1)] if len(toks) > 1
+                     else ([toks] if len(toks[0]) >= 5 else []))
+            # A run only counts if every word is 3+ letters and one is distinctive — otherwise
+            # "T/A" ("t a") or an address ("City of Cape Town" -> "cape town") would link
+            # almost any document to the wrong party.
+            grams = [" ".join(g) for g in grams
+                     if all(len(t) >= 3 for t in g) and any(t not in _GENERIC_NAME_WORDS for t in g)]
+            if any(f" {g} " in text for g in grams):
+                hits.setdefault(_norm_name(p), (p, d.get("filename") or "a document"))
+    return next(iter(hits.values())) if len(hits) == 1 else None
+
+
+def _resolved_party_result(tenant_id: str, query: str, party: str, category: Optional[str],
+                           why: str) -> Optional[Dict[str, Any]]:
+    """Every filed document for `party`, labelled as an inference the owner should confirm —
+    or None when that search finds nothing."""
+    try:
+        prows = _filed_rows_query(tenant_id, [_pg_term(party)], category, party_only=True)
+    except Exception as exc:
+        logger.debug("find_filed_document party re-search skipped: %s", exc)
+        return None
+    if not prows:
+        return None
+    out = _filed_rows_result(prows)
+    out["match_type"] = "resolved_via_knowledge_base"
+    out["resolved_supplier"] = party
+    out["note"] = (f"No filed invoice names '{query}' directly. {why} so these are ALL filed "
+                   f"documents for '{party}'. Tell the owner you took '{query}' to mean "
+                   f"'{party}' and ask them to confirm. " + out["note"])
+    return out
+
+
 async def find_filed_document(tenant_id: str, query: str, category: Optional[str] = None,
                               limit: int = 5) -> Dict[str, Any]:
     """Search filed documents (invoices/quotes/proof-of-payment/BOQs/receipts) for `query`.
@@ -3077,10 +3187,11 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
         return {"error": "Give a few words about the document — supplier/customer name, "
                           "invoice number, amount, or what it was for."}
     safe_query = _pg_term(query)
+    core = _core_search_term(query)
+    terms = [t for t in dict.fromkeys([safe_query, _pg_term(core)]) if t]
     aliases = [t for t in (_pg_term(n) for n in await _resolve_supplier_names(tenant_id, query)) if t]
     try:
-        rows = _filed_rows_query(tenant_id, [safe_query] if safe_query else [], category,
-                                 party_only=False)
+        rows = _filed_rows_query(tenant_id, terms, category, party_only=False)
         if aliases:
             seen = {r.get("id") for r in rows}
             rows += [r for r in _filed_rows_query(tenant_id, aliases, category, party_only=True)
@@ -3091,6 +3202,19 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
         return {"error": "Couldn't search documents right now."}
 
     if rows:
+        # Hits that name no counterparty and carry no amount (e.g. only the "Jack Hammer's COD
+        # account" application) can't answer a spend question on their own — try to bridge
+        # from them to the real supplier before settling for them.
+        if not aliases and core and not any(
+                _party_of(r.get("fields") or {}) or _document_amount(r.get("fields") or {}) is not None
+                for r in rows):
+            bridged = _bridge_party(core, rows, _known_parties(tenant_id))
+            if bridged:
+                resolved = _resolved_party_result(
+                    tenant_id, query, bridged[0], category,
+                    f"'{bridged[1]}' links '{core}' to '{bridged[0]}',")
+                if resolved:
+                    return resolved
         out = _filed_rows_result(rows)
         if aliases:
             out["resolved_supplier"] = aliases[0]
@@ -3116,7 +3240,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     if filenames:
         try:
             frows = (_client().table("vula_filed_documents")
-                     .select("filename,category,fields")
+                     .select("filename,category,summary,fields")
                      .eq("tenant_id", tenant_id).in_("filename", filenames).execute().data or [])
             filed_by_name = {fr["filename"]: fr for fr in frows}
         except Exception as exc:
@@ -3146,27 +3270,33 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
                 "message": f"No filed document matches '{query}'. Ask the owner for the "
                             "invoice/document number, or to resend it — don't guess."}
 
-    # The semantic hits are a lossy top-k sample. If they point at one counterparty, pull every
-    # filed document for it exactly — see the 2026-09-23 note in the docstring.
+    # The semantic hits are a lossy top-k sample. First, a hit that names both the queried
+    # nickname and a real counterparty (see _bridge_party) is the strongest link there is;
+    # failing that, if the hits agree on one counterparty, pull every filed document for it.
+    if core:
+        docs = [{"filename": fn, "summary": fr.get("summary")} for fn, fr in filed_by_name.items()]
+        docs += [{"filename": c.get("filename"), "summary": c.get("text")} for c in chunks]
+        bridged = _bridge_party(core, docs, _known_parties(tenant_id))
+        if bridged:
+            resolved = _resolved_party_result(
+                tenant_id, query, bridged[0], category,
+                f"'{bridged[1]}' links '{core}' to '{bridged[0]}',")
+            if resolved:
+                return resolved
     party = _dominant_party(results)
     if party and _pg_term(party):
-        try:
-            prows = _filed_rows_query(tenant_id, [_pg_term(party)], category, party_only=True)
-        except Exception as exc:
-            logger.debug("find_filed_document party re-search skipped: %s", exc)
-            prows = []
-        if prows:
-            out = _filed_rows_result(prows)
-            out["match_type"] = "resolved_via_knowledge_base"
-            out["resolved_supplier"] = party
-            out["note"] = (f"'{query}' didn't match any filed document by name. The closest "
-                           f"knowledge-base matches belong to '{party}', so these are ALL filed "
-                           f"documents for '{party}'. Tell the owner you took '{query}' to mean "
-                           f"'{party}' and ask them to confirm. " + out["note"])
-            return out
+        resolved = _resolved_party_result(
+            tenant_id, query, party, category,
+            f"The closest knowledge-base matches belong to '{party}',")
+        if resolved:
+            return resolved
 
     return {"matches": results, "match_type": "knowledge_base", "status": "found",
-            "note": "Found in the knowledge base. A match with a non-null 'amount' is a real "
+            "note": "Found in the knowledge base — these are fuzzy matches, NOT confirmed to "
+                    "be from the supplier/customer the user named. Never present a match's "
+                    "amount as theirs unless its 'party' or excerpt actually names them; if "
+                    "none does, say you couldn't find their invoices and ask for the name on "
+                    "the invoice. A match with a non-null 'amount' is a real "
                     "extracted figure from the filed document (safe to sum/quote) — a match "
                     "with no 'amount' is excerpt-only, so read it for context but confirm any "
                     "figure with the owner before acting on it."}
