@@ -628,6 +628,34 @@ def _caller_identity(tenant_id: str, phone: str) -> tuple[Optional[str], Optiona
     return None, None
 
 
+# A message that only asks to retry the last request. 2026-09-23 (digg-demo): after two
+# timeouts on "Need all jack hammer invoices...", the owner sent "Try again", which was routed
+# as a brand-new question (to `reasoning`, no tools) and answered from an unrelated
+# health-and-safety document. Deliberately narrow: "yes please" is usually an answer to the
+# bot's own question, which the history already carries, so it is NOT treated as a retry.
+_RETRY_RE = re.compile(
+    r"^\s*(ok(ay)?[\s,]+|please[\s,]+)*"
+    r"(try\s+(it\s+)?(again|once\s+more)|retry|again|one\s+more\s+time|do\s+it\s+again|redo)"
+    r"(\s+please)?\s*[.!?]*\s*$",
+    re.IGNORECASE)
+
+
+def _resolve_retry(db, tenant_id: str, thread_key: str, text: str) -> str:
+    """If `text` is a bare retry ("Try again"), the owner's most recent real request in this
+    thread (last 2 hours) to route instead; otherwise `text` unchanged. Fail-open."""
+    if not _RETRY_RE.match(text or ""):
+        return text
+    try:
+        for m in reversed(db.get(tenant_id, thread_key, limit=12, max_age_hours=2)):
+            if m.role == "user" and m.text and not _RETRY_RE.match(m.text):
+                logger.info("retry request re-routed to the previous user message, tenant=%s",
+                            tenant_id)
+                return m.text
+    except Exception as exc:
+        logger.debug("retry resolution skipped: %s", exc)
+    return text
+
+
 def _digits_za(p: str) -> str:
     """Normalise an SA number to bare MSISDN digits (0XX… → 27XX…) for comparison."""
     n = "".join(ch for ch in (p or "") if ch.isdigit())
@@ -1273,6 +1301,10 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
 
     from vula.chat.history import get_db
     db = get_db()
+    # A bare "try again" re-runs the previous request (see _resolve_retry). Resolved BEFORE this
+    # turn is saved, so "the previous user message" is the real one; the literal text is still
+    # what's stored, so the history reads exactly as the owner typed it.
+    routed_text = _resolve_retry(db, tenant_id, thread_key, text)
     db.save(tenant_id, thread_key, "user", text)
     history = db.format_for_prompt(tenant_id, thread_key, limit=12, user_label=user_label)
 
@@ -1298,7 +1330,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # to that project and cites the right codes.
     try:
         from vula.integrations.project_context import project_context_block
-        pc = project_context_block(tenant_id, text)
+        pc = project_context_block(tenant_id, routed_text)
         if pc:
             history = f"{pc}\n\n{history}" if history else pc
     except Exception as exc:
@@ -1309,12 +1341,12 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         set_request_tenant(tenant_id)
     except Exception:
         pass
-    reply = await _rag_reply(tenant_id, text, conversation_history=history, phone=phone,
+    reply = await _rag_reply(tenant_id, routed_text, conversation_history=history, phone=phone,
                              caller_name=caller_name, caller_role=caller_role)
 
     # ── Escalate-and-learn: if the agent isn't confident, reuse a learned answer,
     # else ask a human helper on WhatsApp and hold the customer with a friendly note.
-    reply = await _maybe_escalate_and_learn(tenant_id, phone, text, reply, _LAST_CONF.get(),
+    reply = await _maybe_escalate_and_learn(tenant_id, phone, routed_text, reply, _LAST_CONF.get(),
                                             caller_role=caller_role)
 
     # NOTE: deliberately NOT strip_caveat()'d here (unlike the other three db.save("assistant",
@@ -4444,6 +4476,35 @@ async def _tenant_for_phone(phone: str) -> Optional[str]:
 
 # ─── RAG reply ────────────────────────────────────────────────────────────────
 
+async def _maybe_learn_supplier_alias(tenant_id: str, text: str) -> Optional[str]:
+    """If `text` teaches a supplier alias, save it (read back) and return the reply to send;
+    None otherwise. 2026-09-23: "make a note the jack hammer is a alias to the gardens account"
+    went to ClickUp ("make a note") and failed; aliases live in commerce_suppliers, where
+    find_filed_document resolves them."""
+    from vula.commerce import service as cs
+    parsed = cs.parse_alias_statement(text)
+    if not parsed:
+        return None
+    alias, target = parsed
+    res = await cs.learn_supplier_alias(tenant_id, alias, target)
+    status = res.get("status")
+    logger.info("supplier alias request tenant=%s status=%s", tenant_id, status)
+    if status == "added":
+        return (f"Done ✅ \"{alias}\" is now saved as another name for {res['supplier']}. "
+                f"Asking about {alias} will find {res['supplier']}'s invoices and documents.")
+    if status == "exists":
+        return f"\"{alias}\" is already saved as another name for {res['supplier']} 👍"
+    if status == "ambiguous":
+        opts = "\n".join(f"• {c}" for c in res.get("candidates") or [])
+        return (f"I found more than one supplier matching \"{target}\":\n{opts}\n\n"
+                f"Which one is \"{alias}\"? Reply e.g. \"{alias} is an alias for <full name>\".")
+    if status == "not_found":
+        return (f"I couldn't find a supplier called \"{target}\" in your supplier list, so I "
+                f"haven't saved \"{alias}\" yet. What's the supplier's full name as it appears "
+                f"on their invoices?")
+    return "I couldn't save that alias just now — please try again in a moment."
+
+
 async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — routes through the multi-agent runner.
@@ -4459,6 +4520,14 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         set_request_tenant(tenant_id)
     except Exception:
         pass
+
+    # 0. The business teaching a supplier nickname ("Jack Hammer is an alias for Gardens
+    # Handiman") — handled deterministically, never by a model, and only for insiders.
+    if _is_insider(caller_role):
+        alias_reply = await _maybe_learn_supplier_alias(tenant_id, question)
+        if alias_reply:
+            _LAST_CONF.set(1.0)
+            return alias_reply
 
     # 1. Try the full multi-agent runner (research + memory + all skills)
     try:

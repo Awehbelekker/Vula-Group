@@ -411,7 +411,18 @@ _SUPPLIER_HISTORY_RE = re.compile(
     r"\b(what|which)\s+(materials?|items?|stuff|products?)\s+(have|has|did|were)\s+"
     r"(we|i|you)?\s*(been\s+)?(buy|bought|get|got|order|ordered|purchase|purchased)\b|"
     r"\b(summary|list|breakdown)\s+of\s+(the\s+|all\s+)?(our\s+)?materials?\b|"
-    r"\bmaterials?\s+(from|bought|purchased|we\s+(bought|got|ordered))\b",
+    r"\bmaterials?\s+(from|bought|purchased|we\s+(bought|got|ordered))\b|"
+    # 2026-09-23 real digg-demo phrasings that fell through to `reasoning`:
+    # "See if you can find invoices gardening gardens area",
+    # "For gardens handiman full list of spend and material".
+    r"\b(find|search|show|get|pull|fetch|look\s+up)\b[^.?!]{0,30}?\binvoices?\b|"
+    r"\b(list|summary|breakdown|total)\s+of\s+(the\s+|all\s+|our\s+)?"
+    r"(spend|spending|purchases|materials?)\b",
+    re.IGNORECASE)
+# Invoice questions that are about what's OWED (receivables/payables status), not a supplier's
+# history — those stay with finance_admin / commerce skills.
+_NOT_SUPPLIER_HISTORY_RE = re.compile(
+    r"\b(unpaid|outstanding|overdue|owe|owed|owing|due|create|make|draft|send|issue)\b",
     re.IGNORECASE)
 _SUPPLIER_PRICING_RE = re.compile(
     r"\b(charge|charges|charging|price\s*list|pricing|quote\s+me|sell|sells|selling|"
@@ -423,7 +434,8 @@ def looks_like_supplier_history_question(text: str) -> bool:
     invoiced by a supplier (totals or materials), as opposed to a budget, pricing or shopping
     question. See the incident note above."""
     t = text or ""
-    return bool(_SUPPLIER_HISTORY_RE.search(t)) and not _SUPPLIER_PRICING_RE.search(t)
+    return (bool(_SUPPLIER_HISTORY_RE.search(t)) and not _SUPPLIER_PRICING_RE.search(t)
+            and not _NOT_SUPPLIER_HISTORY_RE.search(t))
 
 
 async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
