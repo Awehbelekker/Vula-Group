@@ -5835,7 +5835,8 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
         # Triggers: explicit low confidence, missing/zero total, no line items,
         # or an unparseable response. Only escalates when the primary was local
         # and a cloud route is actually configured.
-        if model.startswith("ollama/") and not _scan_quality_ok(extracted):
+        from core.llm_router import is_local_model
+        if is_local_model(model) and not _scan_quality_ok(extracted):
             cloud = resolve_cloud_vision_route()
             if cloud:
                 log.info("Smart scan: local read weak (%s) — escalating to cloud %s",

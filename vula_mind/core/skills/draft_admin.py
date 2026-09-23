@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route, substitute_if_degenerate
+from core.llm_router import is_local_model, resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message
 
@@ -306,7 +306,7 @@ class DraftAdminSkill(BaseSkill):
                 # escalation wired into reasoning.py/commerce_admin.py/finance_admin.py the
                 # same day. Only affects this chat-reply path — draft_letter's own document
                 # generation is a separate LLM call in vula/api/draft.py, unaffected either way.
-                if model.startswith("ollama/"):
+                if is_local_model(model):
                     from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
                     logprob_conf = compute_confidence(resp)
                     if looks_unreliable(answer, confidence=logprob_conf,

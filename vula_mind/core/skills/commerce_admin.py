@@ -28,7 +28,8 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from core.llm_router import (
-    resolve_generation_route, escalate_to_cloud, substitute_if_degenerate,
+    generation_kwargs, is_local_model, resolve_generation_route, escalate_to_cloud,
+    substitute_if_degenerate,
 )
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
@@ -1347,7 +1348,7 @@ class CommerceAdminSkill(BaseSkill):
                 # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
                 # Matters here specifically for the no-cloud-key fallback case, since this
                 # loop otherwise force-escalates to cloud above.
-                logprobs=True, top_logprobs=1,
+                logprobs=True, top_logprobs=1, **generation_kwargs(model),
             )
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
@@ -1394,9 +1395,9 @@ class CommerceAdminSkill(BaseSkill):
                 # the right trade-off given this skill's much broader tool surface.
                 # 2026-08 accuracy audit: zero adoption of the logprob-confidence escalation
                 # wired into reasoning.py/commerce_assistant.py the same day. Only fires in
-                # the no-cloud-key fallback case (model.startswith("ollama/")) — when the
+                # the no-cloud-key fallback case (is_local_model(model)) — when the
                 # force-escalation above succeeded, model is already a cloud model here.
-                if model.startswith("ollama/"):
+                if is_local_model(model):
                     from config import settings
                     from core.llm_router import looks_unreliable, compute_confidence
                     logprob_conf = compute_confidence(resp)
@@ -1408,7 +1409,7 @@ class CommerceAdminSkill(BaseSkill):
                             resp = await litellm.acompletion(
                                 model=model, messages=messages, temperature=0.2,
                                 max_tokens=900, api_key=api_key, api_base=api_base,
-                                logprobs=True, top_logprobs=1)
+                                logprobs=True, top_logprobs=1, **generation_kwargs(model))
                             answer = (resp.choices[0].message.content or "").strip()
                 return answer
 
@@ -1451,7 +1452,7 @@ class CommerceAdminSkill(BaseSkill):
         )})
         resp = await litellm.acompletion(
             model=model, messages=messages, temperature=0.2, max_tokens=600,
-            api_key=api_key, api_base=api_base,
+            api_key=api_key, api_base=api_base, **generation_kwargs(model),
         )
         answer = (resp.choices[0].message.content or "").strip()
 
@@ -1470,6 +1471,7 @@ class CommerceAdminSkill(BaseSkill):
                     {"role": "user", "content": fence('TOOL_RESULT', json.dumps(result, default=str))},
                 ],
                 temperature=0.2, max_tokens=400, api_key=api_key, api_base=api_base,
+                **generation_kwargs(model),
             )
             answer = (resp.choices[0].message.content or "").strip()
         return answer

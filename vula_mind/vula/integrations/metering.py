@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -40,9 +41,9 @@ def _client():
     return commerce_service._client()
 
 
-# USD per 1M tokens (input, output). ollama/* (local) is free.
+# USD per 1M tokens (input, output). ollama/* and ollama_chat/* (local) are free.
 _PRICES = {
-    "meta-llama/llama-3.3-70b-instruct": (0.13, 0.40),
+    "meta-llama/llama-3.3-70b-instruct": (0.10, 0.32),  # OpenRouter list price, 2026-09
     "google/gemini-2.5-flash": (0.075, 0.30),
     "google/gemini-2.5-flash-lite": (0.04, 0.15),
     "google/gemini-2.5-pro": (1.25, 5.0),
@@ -52,7 +53,7 @@ _DEFAULT = (0.15, 0.45)
 
 def _price(model: str):
     m = model or ""
-    if m.startswith("ollama/"):
+    if m.startswith(("ollama/", "ollama_chat/")):
         return (0.0, 0.0)
     if m.startswith("openrouter/"):
         m = m[len("openrouter/"):]
@@ -64,7 +65,7 @@ def record_llm(tenant_id: str, model: str, prompt_tokens: int, completion_tokens
         return
     pin, pout = _price(model)
     cost = round((prompt_tokens / 1e6) * pin + (completion_tokens / 1e6) * pout, 6)
-    short = (model or "").replace("openrouter/", "").replace("ollama/", "")
+    short = re.sub(r"^(openrouter|ollama_chat|ollama)/", "", model or "")
     day = datetime.now(timezone.utc).date().isoformat()
     try:
         db = _client()
@@ -126,6 +127,19 @@ def meter_response(tenant_id: str, model: str, resp) -> None:
         pass
 
 
+def _callback_model(kwargs: dict) -> str:
+    """The provider-prefixed model name for a litellm callback. litellm passes the BARE model
+    name in kwargs["model"] ("llama3.1:8b", "meta-llama/llama-3.3-70b-instruct") with the
+    provider separately, so _price() never saw the "ollama/" prefix and billed every local
+    call at _DEFAULT (found 2026-09-23: 369 free local calls metered at $0.05)."""
+    model = kwargs.get("model") or ""
+    provider = (kwargs.get("custom_llm_provider")
+                or (kwargs.get("litellm_params") or {}).get("custom_llm_provider") or "")
+    if provider and not model.startswith(f"{provider}/"):
+        return f"{provider}/{model}"
+    return model
+
+
 _INSTALLED = False
 
 
@@ -148,7 +162,7 @@ def install_metering() -> None:
                     u = getattr(response_obj, "usage", None)
                     pt = getattr(u, "prompt_tokens", 0) or 0
                     ct = getattr(u, "completion_tokens", 0) or 0
-                    record_llm(tid, kwargs.get("model") or "", int(pt), int(ct))
+                    record_llm(tid, _callback_model(kwargs), int(pt), int(ct))
                 except Exception:
                     pass
 

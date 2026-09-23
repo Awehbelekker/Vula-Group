@@ -153,6 +153,11 @@ def assess_complexity(messages: Optional[list] = None, task_type: Optional[str] 
         return f"complexity:{task_type}"
     if messages:
         cap = int(getattr(settings, "local_complexity_token_cap", 8000) or 8000)
+        # A prompt that doesn't fit the local context window (leaving room for tool results
+        # and the reply) can't be answered locally anyway — Ollama would silently drop its start.
+        num_ctx = int(getattr(settings, "ollama_num_ctx", 0) or 0)
+        if num_ctx:
+            cap = min(cap, max(num_ctx - 2048, 1024))
         chars = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict))
         if chars // 4 >= cap:
             return f"complexity:tokens>={cap}"
@@ -334,13 +339,47 @@ def _log_decision(*, run_id: str, task: str, outcome: str, escalated: bool,
         pass
 
 
+def _local_prefix() -> str:
+    """litellm provider prefix for local generation — see settings.ollama_native_chat."""
+    return "ollama_chat" if settings.ollama_native_chat else "ollama"
+
+
+def is_local_model(model: Optional[str]) -> bool:
+    """True for a local Ollama route under either litellm provider ("ollama/" or
+    "ollama_chat/"). Use this instead of startswith("ollama/"), which misses "ollama_chat/"."""
+    return (model or "").startswith(("ollama/", "ollama_chat/"))
+
+
 def local_generation_kwargs(model: str) -> Dict[str, Any]:
     """Extra litellm kwargs for a local Ollama call: an explicit context window (see
-    settings.ollama_num_ctx for why). Empty for cloud models, so it's safe to splat into any
-    acompletion() call: `**local_generation_kwargs(model)`."""
-    if model.startswith("ollama") and settings.ollama_num_ctx:
-        return {"num_ctx": settings.ollama_num_ctx}
+    settings.ollama_num_ctx) and a timeout below Cloudflare's 100 s tunnel limit (see
+    settings.local_call_timeout_s). For Qwen models, thinking is switched off: Ollama's
+    Qwen3/3.5 templates have open bugs combining thinking with tool calls (ollama#14601,
+    #10976, #14745; litellm#18922 drops tool_calls when a thinking field is present). Empty
+    for cloud models, so it's safe to splat into any acompletion() call."""
+    if not is_local_model(model):
+        return {}
+    kw: Dict[str, Any] = {}
+    if settings.ollama_num_ctx:
+        kw["num_ctx"] = settings.ollama_num_ctx
+    if settings.local_call_timeout_s:
+        kw["timeout"] = settings.local_call_timeout_s
+    if model.split("/", 1)[-1].lower().startswith("qwen"):
+        kw["think"] = False
+    return kw
+
+
+def cloud_generation_kwargs(model: str) -> Dict[str, Any]:
+    """Extra litellm kwargs for an OpenRouter call: only route to providers that don't train
+    on or retain prompts (settings.openrouter_zdr). Empty for anything else."""
+    if (model or "").startswith("openrouter/") and settings.openrouter_zdr:
+        return {"extra_body": {"provider": {"data_collection": "deny", "zdr": True}}}
     return {}
+
+
+def generation_kwargs(model: str) -> Dict[str, Any]:
+    """local_generation_kwargs + cloud_generation_kwargs — one splat for any route."""
+    return {**local_generation_kwargs(model), **cloud_generation_kwargs(model)}
 
 
 async def resolve_generation_route(
@@ -402,8 +441,8 @@ async def resolve_generation_route(
             return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
         reason = "spend_cap_soft_degrade" if (complex_reason and capped) else "local_first"
         _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
-                      backend=f"ollama/{local_model}", reason=reason)
-        return f"ollama/{local_model}", None, settings.ollama_base
+                      backend=f"{_local_prefix()}/{local_model}", reason=reason)
+        return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
 
     # (a) local unreachable → cloud, logged with the reason a regulator would ask about.
     if settings.openrouter_api_key:
@@ -414,8 +453,8 @@ async def resolve_generation_route(
 
     logger.warning("Local unreachable and no OPENROUTER_API_KEY set — generation will likely fail")
     _log_decision(run_id=run_id, task=task, outcome="local", escalated=False,
-                  backend=f"ollama/{local_model}", reason="local_unreachable_no_cloud_key")
-    return f"ollama/{local_model}", None, settings.ollama_base
+                  backend=f"{_local_prefix()}/{local_model}", reason="local_unreachable_no_cloud_key")
+    return f"{_local_prefix()}/{local_model}", None, settings.ollama_base
 
 
 def _spend_capped(tenant_id: Optional[str]) -> bool:
@@ -468,6 +507,37 @@ def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,
     _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type or "unspecified",
                   outcome="cloud", escalated=True, backend=f"openrouter/{cloud_model}", reason=reason)
     return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE
+
+
+async def complete_local_first(route: Tuple[str, Optional[str], str], *, task_type: str,
+                                **kwargs) -> Tuple[Any, Tuple[str, Optional[str], str]]:
+    """litellm.acompletion on `route` (model, api_key, api_base) with generation_kwargs()
+    applied. If a LOCAL call raises — timeout, Cloudflare 5xx/524, connection error — retry
+    once on the cloud route via escalate_to_cloud("local_error"), logged like every other
+    cloud decision. Returns (response, route_used); callers keep route_used for the rest of the
+    turn so one slow tunnel doesn't cost a timeout per tool round. Cloud-side errors, and local
+    errors with no cloud key configured, propagate unchanged.
+
+    2026-09-23: a local call hung ~126 s behind the Cloudflare tunnel, came back as a 524 HTML
+    page, and email_admin — with no fallback — answered "Sorry, I couldn't work that out"."""
+    import litellm
+    model, api_key, api_base = route
+    try:
+        resp = await litellm.acompletion(model=model, api_key=api_key, api_base=api_base,
+                                         **generation_kwargs(model), **kwargs)
+        return resp, route
+    except Exception as exc:
+        if not is_local_model(model):
+            raise
+        esc = escalate_to_cloud("local_error", task_type=task_type)
+        if not esc:
+            raise
+        logger.warning("Local generation failed (%s: %s) — retrying on cloud, task=%s",
+                       type(exc).__name__, str(exc)[:120], task_type)
+        c_model, c_key, c_base = esc
+        resp = await litellm.acompletion(model=c_model, api_key=c_key, api_base=c_base,
+                                         **generation_kwargs(c_model), **kwargs)
+        return resp, esc
 
 
 async def resolve_cheap_route(model: Optional[str] = None) -> Tuple[str, Optional[str], str]:

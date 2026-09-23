@@ -11,7 +11,7 @@ import logging
 import re
 import time
 
-from core.llm_router import resolve_generation_route
+from core.llm_router import is_local_model, resolve_generation_route
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, format_kb_chunks,
@@ -277,7 +277,7 @@ class ReasoningSkill(BaseSkill):
                 # logprobs (2026-08: previously always None — no caller requested them — so this
                 # branch of looks_unreliable was dead code; now wired via compute_confidence).
                 unreliable = False
-                if model.startswith("ollama/"):
+                if is_local_model(model):
                     logprob_conf = compute_confidence(resp)
                     unreliable = looks_unreliable(
                         answer, confidence=logprob_conf,

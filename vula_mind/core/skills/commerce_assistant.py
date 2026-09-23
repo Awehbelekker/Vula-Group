@@ -19,7 +19,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
-from core.llm_router import resolve_generation_route, substitute_if_degenerate
+from core.llm_router import is_local_model, resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, wrong_arithmetic,
@@ -1150,7 +1150,7 @@ class CommerceAssistantSkill(BaseSkill):
                 if parsed:
                     # A text tool-call means the (local) model isn't doing structured tool-calling.
                     # Escalate this turn to the cloud model — which does — and retry cleanly.
-                    if model.startswith("ollama/"):
+                    if is_local_model(model):
                         esc = escalate_to_cloud("local_toolcall_text", run_id=run_id, task_type="commerce_chat")
                         if esc:
                             model, api_key, api_base = esc
@@ -1180,7 +1180,7 @@ class CommerceAssistantSkill(BaseSkill):
                     logger.warning(
                         "commerce_assistant: suppressed unrecognised raw-JSON final answer "
                         "(model=%s): %.120s", model, answer)
-                    if model.startswith("ollama/"):
+                    if is_local_model(model):
                         esc = escalate_to_cloud("local_json_leak", run_id=run_id, task_type="commerce_chat")
                         if esc:
                             model, api_key, api_base = esc
@@ -1193,7 +1193,7 @@ class CommerceAssistantSkill(BaseSkill):
                 # Requirement (b): a weak local final answer escalates to cloud (tool turns stay local).
                 # logprob_conf is None when the backend returned no logprobs (2026-08: previously
                 # always None since no caller requested them — see compute_confidence docstring).
-                if model.startswith("ollama/"):
+                if is_local_model(model):
                     logprob_conf = compute_confidence(resp)
                     if looks_unreliable(answer, confidence=logprob_conf,
                                         confidence_threshold=settings.local_confidence_threshold):

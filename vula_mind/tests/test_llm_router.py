@@ -45,7 +45,7 @@ async def test_route_prefers_local_even_when_openrouter_key_set():
         s.openrouter_api_key = "sk-or-test"
         model, api_key, api_base = await resolve_generation_route()
 
-    assert model == "ollama/qwen2.5"
+    assert model == "ollama_chat/qwen2.5"
     assert api_key is None
     assert api_base == "http://localhost:11434"
 
@@ -83,7 +83,7 @@ async def test_prefer_cloud_llm_without_key_still_falls_back_to_local():
         s.openrouter_api_key = ""
         model, api_key, api_base = await resolve_generation_route()
 
-    assert model == "ollama/qwen2.5"
+    assert model == "ollama_chat/qwen2.5"
     assert api_key is None
 
 
@@ -120,7 +120,7 @@ async def test_route_stays_local_when_down_and_no_cloud_key():
         s.openrouter_api_key = ""
         model, api_key, api_base = await resolve_generation_route()
 
-    assert model == "ollama/deepseek-r1:8b"
+    assert model == "ollama_chat/deepseek-r1:8b"
     assert api_key is None
     assert api_base == "http://localhost:11434"
 
@@ -137,7 +137,7 @@ async def test_route_honours_explicit_model_override():
         s.openrouter_api_key = ""
         model, _, _ = await resolve_generation_route(model="llava:7b")
 
-    assert model == "ollama/llava:7b"
+    assert model == "ollama_chat/llava:7b"
 
 
 # ── resolve_vision_route ──────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ async def test_local_first_decision_is_logged():
         s.openrouter_api_key = "sk-or-test"
         model, key, _ = await resolve_generation_route(task_type="commerce_chat")
 
-    assert model == "ollama/llama3.2:3b" and key is None
+    assert model == "ollama_chat/llama3.2:3b" and key is None
     assert logged["outcome"] == "local" and logged["escalated"] is False
     assert logged["reason"] == "local_first"
 
@@ -330,7 +330,7 @@ async def test_spend_cap_suppresses_complexity_escalation_to_cloud():
         s.openrouter_api_key = "sk-or-test"
         model, key, _ = await resolve_generation_route(task_type="architecture_planning")
 
-    assert model == "ollama/llama3.2:3b" and key is None
+    assert model == "ollama_chat/llama3.2:3b" and key is None
     assert logged["outcome"] == "local" and logged["escalated"] is False
     assert logged["reason"] == "spend_cap_soft_degrade"
     mock_alert.assert_called_once_with("digg-demo")
@@ -352,7 +352,7 @@ async def test_spend_cap_suppresses_operator_prefer_cloud_override():
         s.openrouter_api_key = "sk-or-test"
         model, api_key, api_base = await resolve_generation_route()
 
-    assert model == "ollama/qwen2.5"
+    assert model == "ollama_chat/qwen2.5"
     assert api_key is None
 
 

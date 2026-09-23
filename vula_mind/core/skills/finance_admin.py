@@ -16,7 +16,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
+from core.llm_router import (
+    complete_local_first, is_local_model, resolve_generation_route, looks_degenerate,
+    substitute_if_degenerate,
+)
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, wrong_arithmetic,
@@ -211,18 +214,20 @@ class FinanceAdminSkill(BaseSkill):
         from config import settings
         from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        route = await resolve_generation_route()
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system(lang)}]
         if history:
             messages.append({"role": "user", "content": f"(Conversation so far)\n{history}"})
         messages.append({"role": "user", "content": question})
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            resp = await litellm.acompletion(model=model, messages=messages, tools=TOOL_SPECS,
-                tool_choice="auto", temperature=0.2, max_tokens=700, api_key=api_key, api_base=api_base,
+            resp, route = await complete_local_first(
+                route, task_type="finance_admin", messages=messages, tools=TOOL_SPECS,
+                tool_choice="auto", temperature=0.2, max_tokens=700,
                 # Unconditional — dropped silently wherever unsupported (cloud routes, older
                 # Ollama builds) rather than erroring. See reasoning.py for the original wiring.
                 logprobs=True, top_logprobs=1)
+            model = route[0]
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
@@ -240,17 +245,16 @@ class FinanceAdminSkill(BaseSkill):
                 # 2026-08 accuracy audit: this skill previously had zero adoption of the
                 # logprob-confidence escalation wired into reasoning.py/commerce_assistant.py
                 # the same day — money-reporting with no low-confidence-local-answer check.
-                if model.startswith("ollama/"):
+                if is_local_model(model):
                     logprob_conf = compute_confidence(resp)
                     if looks_unreliable(answer, confidence=logprob_conf,
                                         confidence_threshold=settings.local_confidence_threshold):
                         esc = escalate_to_cloud("local_unreliable", task_type="finance_admin")
                         if esc:
-                            model, api_key, api_base = esc
-                            resp = await litellm.acompletion(
-                                model=model, messages=messages, temperature=0.2,
-                                max_tokens=700, api_key=api_key, api_base=api_base,
-                                logprobs=True, top_logprobs=1)
+                            route = esc
+                            resp, route = await complete_local_first(
+                                route, task_type="finance_admin", messages=messages,
+                                temperature=0.2, max_tokens=700, logprobs=True, top_logprobs=1)
                             answer = (resp.choices[0].message.content or "").strip()
                 return answer
             messages.append({"role": "assistant", "content": msg.content or "",
@@ -274,8 +278,8 @@ class FinanceAdminSkill(BaseSkill):
             "state a figure unless a tool result above actually returned it. Tell the user "
             "plainly that you couldn't find it instead."
         )})
-        resp = await litellm.acompletion(model=model, messages=messages, temperature=0.2,
-            max_tokens=400, api_key=api_key, api_base=api_base)
+        resp, route = await complete_local_first(
+            route, task_type="finance_admin", messages=messages, temperature=0.2, max_tokens=400)
         return (resp.choices[0].message.content or "").strip()
 
     def _inline(self, content: str):

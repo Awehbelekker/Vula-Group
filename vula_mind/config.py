@@ -39,9 +39,22 @@ class Settings(BaseSettings):
     # own default is only 2048-4096 tokens depending on version, and it silently drops the
     # START of an over-long prompt — i.e. the system prompt. 2026-09-23: email_admin's system
     # prompt + tool specs alone are ~4.3k tokens, so the local 8B was answering without most
-    # of its instructions. 16k covers local_complexity_token_cap (8k) plus tool results;
-    # llama3.1:8b's KV cache at 16k is ~2 GB of VRAM. 0 = leave Ollama's default.
-    ollama_num_ctx: int = 16384
+    # of its instructions. Same day, #66 set 16k and the very next local call hung past
+    # Cloudflare's 100 s limit (524): on the 11 GB GTX 1080 Ti, 16k of KV cache (~2 GB for
+    # llama3.1:8b, times any parallel slots) plus bge-m3 plus whatever else was loaded spilled
+    # into system RAM. 8k (~1.1 GB of KV) fits with room to spare; assess_complexity() sends
+    # prompts that wouldn't fit to cloud. 0 = leave Ollama's default.
+    ollama_num_ctx: int = 8192
+    # Per-call timeout for local Ollama calls — below Cloudflare's 100 s tunnel limit, so a
+    # stuck local call fails fast (and callers can retry on cloud) instead of surfacing a 524.
+    local_call_timeout_s: int = 60
+    # Talk to Ollama through litellm's "ollama_chat/" provider (/api/chat: real message roles,
+    # the model's own chat + native tool-calling template). The old "ollama/" provider
+    # (/api/generate) flattens the conversation into one "### System / ### User" text block and
+    # emulates tools by forcing JSON-only output with the tool list pasted into the prompt —
+    # verified in litellm 1.102 (2026-09-23). false = the old behaviour, as a one-variable
+    # rollback.
+    ollama_native_chat: bool = True
 
     # ── Qdrant ──────────────────────────────────────────────────────────────
     qdrant_base: str = "http://localhost:6333"
@@ -134,6 +147,10 @@ class Settings(BaseSettings):
     # MODEL_EMBED). Use for accuracy-first production; the local GPU stays free
     # for embeddings.
     prefer_cloud_llm: bool = False
+    # Ask OpenRouter to route only to providers that neither train on nor retain prompts
+    # (provider.data_collection="deny" + zdr) — tenant data leaving SA should at least not stay
+    # anywhere. Applied via llm_router.cloud_generation_kwargs().
+    openrouter_zdr: bool = True
 
     # Requirement-(c) complexity threshold for llm_router: local-first is kept unless the estimated
     # prompt size (chars/4 ≈ tokens) reaches this cap, in which case generation escalates to the
