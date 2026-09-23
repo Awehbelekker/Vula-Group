@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Per-call timeout for local Ollama calls — below Cloudflare's 100 s tunnel limit, so a
     # stuck local call fails fast (and callers can retry on cloud) instead of surfacing a 524.
     local_call_timeout_s: int = 60
+    # Hard limit for PyMuPDF text extraction, which runs in a child process
+    # (vula/ingestion/pdf_extract.py) so a pathological PDF can't hang or kill a web worker.
+    pdf_extract_timeout_s: int = 120
     # Talk to Ollama through litellm's "ollama_chat/" provider (/api/chat: real message roles,
     # the model's own chat + native tool-calling template). The old "ollama/" provider
     # (/api/generate) flattens the conversation into one "### System / ### User" text block and
