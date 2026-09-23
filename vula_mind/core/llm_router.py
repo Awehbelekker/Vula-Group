@@ -25,7 +25,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 import httpx
 
@@ -332,6 +332,15 @@ def _log_decision(*, run_id: str, task: str, outcome: str, escalated: bool,
              escalated=escalated, reason=reason, tenant_id=tenant, extra={"backend": backend})
     except Exception:
         pass
+
+
+def local_generation_kwargs(model: str) -> Dict[str, Any]:
+    """Extra litellm kwargs for a local Ollama call: an explicit context window (see
+    settings.ollama_num_ctx for why). Empty for cloud models, so it's safe to splat into any
+    acompletion() call: `**local_generation_kwargs(model)`."""
+    if model.startswith("ollama") and settings.ollama_num_ctx:
+        return {"num_ctx": settings.ollama_num_ctx}
+    return {}
 
 
 async def resolve_generation_route(

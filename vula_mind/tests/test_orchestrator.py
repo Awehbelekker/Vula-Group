@@ -200,8 +200,10 @@ def test_tenant_data_question_routes_to_email_admin_when_mailbox_connected(hrm, 
 
 
 def test_tenant_data_question_stays_on_reasoning_without_a_connected_mailbox(hrm, monkeypatch):
+    # (2026-09-23: a supplier-shaped prompt now routes to email_admin even without a mailbox —
+    # see test_supplier_history_routes_without_a_mailbox — so this uses a project-expenses one.)
     monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: False)
-    assert hrm._match_skill("I want a breakdown on what has been spend at jackhammer",
+    assert hrm._match_skill("Please check the expenses for the Belladonna project",
                             tenant_id="digg-demo") == "reasoning"
 
 
@@ -282,11 +284,17 @@ def test_supplier_history_override_stays_narrow(hrm, monkeypatch, prompt, expect
     assert hrm._match_skill(prompt, tenant_id="digg-demo") == expected
 
 
-def test_supplier_history_needs_a_connected_mailbox(hrm, monkeypatch):
-    # email_admin declines without a mailbox, so the normal keyword route stands.
+def test_supplier_history_routes_without_a_mailbox(hrm, monkeypatch):
+    # 2026-09-23: email_admin now runs find_document-only without a mailbox, so a tenant with
+    # no mailbox connected still reaches filed documents instead of the shop/ledger skills.
     monkeypatch.setattr(HRMOrchestrator, "_has_connected_mailbox", lambda self, tid: False)
-    assert hrm._match_skill("What materials did we buy from Jack Hammer?",
-                            tenant_id="digg-demo") == "commerce_assistant"
+    assert hrm._route_with_reason("What materials did we buy from Jack Hammer?",
+                                  tenant_id="digg-demo") == ("email_admin", "supplier_history")
+
+
+def test_supplier_history_needs_a_tenant(hrm):
+    # Filed documents are per tenant; with no tenant the normal keyword route stands.
+    assert hrm._match_skill("What materials did we buy from Jack Hammer?") == "commerce_assistant"
 
 
 # ── Appointment-booking routing (customer-facing, not clickup_admin's internal tasks) ──

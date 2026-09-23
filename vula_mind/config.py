@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # the ollama.vula-ai.com tunnel, then this cheap cloud model, then escalate to the 70B.
     model_worker_cheap_local: str = "llama3.1:8b"          # free, on the local GPU via the tunnel
     model_worker_cheap: str = "google/gemini-2.5-flash"    # cloud fallback when the tunnel is down
+    # Context window requested from Ollama per call (litellm passes it as num_ctx). Ollama's
+    # own default is only 2048-4096 tokens depending on version, and it silently drops the
+    # START of an over-long prompt — i.e. the system prompt. 2026-09-23: email_admin's system
+    # prompt + tool specs alone are ~4.3k tokens, so the local 8B was answering without most
+    # of its instructions. 16k covers local_complexity_token_cap (8k) plus tool results;
+    # llama3.1:8b's KV cache at 16k is ~2 GB of VRAM. 0 = leave Ollama's default.
+    ollama_num_ctx: int = 16384
 
     # ── Qdrant ──────────────────────────────────────────────────────────────
     qdrant_base: str = "http://localhost:6333"

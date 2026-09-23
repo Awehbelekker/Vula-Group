@@ -3009,6 +3009,10 @@ def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             notes.append(f"Only the top {len(materials)} of {distinct} distinct items by spend "
                          "are listed.")
     out["note"] = " ".join(notes)
+    # Summary first, the long per-document list last: a caller that truncates the serialised
+    # result (email_admin did, at 1,800 chars — 2026-09-23) then loses surplus rows, never the
+    # total, the notes or the materials roll-up.
+    out["matches"] = out.pop("matches")
     return out
 
 
@@ -3328,7 +3332,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
 
     _log_find(tenant_id, category, "knowledge_base", len(results))
 
-    return {"matches": results, "match_type": "knowledge_base", "status": "found",
+    return {"match_type": "knowledge_base", "status": "found",
             "note": "Found in the knowledge base — these are fuzzy matches, NOT confirmed to "
                     "be from the supplier/customer the user named. Never present a match's "
                     "amount as theirs unless its 'party' or excerpt actually names them; if "
@@ -3336,7 +3340,8 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
                     "the invoice. A match with a non-null 'amount' is a real "
                     "extracted figure from the filed document (safe to sum/quote) — a match "
                     "with no 'amount' is excerpt-only, so read it for context but confirm any "
-                    "figure with the owner before acting on it."}
+                    "figure with the owner before acting on it.",
+            "matches": results}
 
 
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:
