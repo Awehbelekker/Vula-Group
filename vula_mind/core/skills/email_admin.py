@@ -161,6 +161,19 @@ def _fenced_result(name: str, result: Any) -> str:
     return fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
 
 
+def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any) -> Optional[str]:
+    """For a supplier spend/materials question, a complete find_document result is answered
+    straight from the numbers (service.format_supplier_history_reply) — never re-read by the
+    model. 2026-09-23: the local 8B turned a correct 16-invoice, R21,256.00 result into
+    "total spent R942.00" with invented quantities."""
+    if tool != "find_document" or not isinstance(result, dict):
+        return None
+    if not looks_like_supplier_history_question(question or ""):
+        return None
+    from vula.commerce.service import format_supplier_history_reply
+    return format_supplier_history_reply(result, query=(args or {}).get("query") or "")
+
+
 _MAILBOX_FREE_TOOLS = {"find_document"}
 
 
@@ -277,6 +290,9 @@ class EmailAdminSkill(BaseSkill):
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
+                    direct = _direct_supplier_answer(question, name, args, result)
+                    if direct:
+                        return direct
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content":
                         f"[{name} returned]:{_fenced_result(name, result)}\n"
@@ -296,6 +312,9 @@ class EmailAdminSkill(BaseSkill):
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
+                direct = _direct_supplier_answer(question, tc.function.name, args, result)
+                if direct:
+                    return direct
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
                                  "content": _fenced_result(tc.function.name, result)})
 
