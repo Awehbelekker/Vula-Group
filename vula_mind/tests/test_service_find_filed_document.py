@@ -673,3 +673,113 @@ def test_materials_flag_a_likely_misread_quantity():
     by = {i["description"]: i for i in items}
     assert by["SAND PER BAG ACC"]["unit_price_varies"] is True
     assert "unit_price_varies" not in by["CEMENT 50KG"]
+
+
+# ── 2026-09-23 live retest: nickname bridged through the account application ─────
+# Deployed #63, then "Need all jack hammer invoices and a summary of what was spent" (routed
+# correctly to email_admin) answered "one invoice from Jack Hammer, R7571.44" — a SOLID CAPE
+# invoice. "Jack Hammer" is on no invoice; the only link is the filed "ACCOUNT APPLICATION -
+# Jack Hammer's COD account.pdf" ("...a COD account with Handiman Centre"), which has no
+# supplier field, so neither the SQL hit nor the semantic hits named a party to re-search.
+
+from vula.commerce.service import _bridge_party, _core_search_term  # noqa: E402
+
+_COD_DOC = {"id": "cod", "filename": "ACCOUNT APPLICATION - Jack Hammer's COD account.pdf",
+            "category": "General Document", "created_at": "2026-09-01", "fields": {},
+            "summary": "This document is an account application form for a COD account with "
+                       "Handiman Centre, requesting details about the applicant"}
+_PARTIES = ["GARDENS HANDIMAN CENTRE", "Gardens Handiman Centre", "SOLID CAPE (PTY) LTD"]
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("Need all jack hammer invoice and summary of what was spent", "jack hammer"),
+    ("jack hammer invoices", "jack hammer"),
+    ("Jack Hammer", "Jack Hammer"),
+    ("invoice 22-190910", "22-190910"),
+    ("all invoices", ""),
+])
+def test_core_search_term_strips_request_filler(query, expected):
+    assert _core_search_term(query) == expected
+
+
+def test_bridge_party_links_the_nickname_through_the_account_application():
+    party, via = _bridge_party("jack hammer", [_COD_DOC], _PARTIES)
+    assert _norm(party) == "gardens handiman centre"
+    assert via == _COD_DOC["filename"]
+
+
+def test_bridge_party_needs_the_doc_to_name_the_queried_term():
+    other = dict(_COD_DOC, filename="Handiman Centre price list.pdf",
+                 summary="Price list from Handiman Centre")
+    assert _bridge_party("jack hammer", [other], _PARTIES) is None
+
+
+def test_bridge_party_refuses_to_guess_between_two_suppliers():
+    doc = dict(_COD_DOC, summary="Jack Hammer account with Handiman Centre and Solid Cape")
+    assert _bridge_party("jack hammer", [doc], _PARTIES + ["Solid Cape"]) is None
+
+
+def _norm(s):
+    from vula.commerce.service import _norm_name
+    return _norm_name(s)
+
+
+@pytest.mark.asyncio
+async def test_sql_hit_on_the_account_application_bridges_to_every_invoice():
+    mock_client = _mock_sequential([_COD_DOC], _handiman_rows())
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
+         patch("vula.commerce.service._known_parties", return_value=_PARTIES):
+        res = await find_filed_document(TID, "jack hammer invoices")
+    assert res["match_type"] == "resolved_via_knowledge_base"
+    assert res["total_matches"] == 13 and res["total_amount"] == "R20,278.00"
+    assert "Jack Hammer's COD account" in res["note"] and "confirm" in res["note"]
+    # Both the raw query and its core were searched.
+    first = _or_filters(mock_client)[0]
+    assert "%jack hammer invoices%" in first and "%jack hammer%" in first
+
+
+@pytest.mark.asyncio
+async def test_semantic_hits_bridge_through_the_account_application():
+    # The real failure: semantic hits were the COD application + a Solid Cape invoice, none
+    # with a party, so the model reported Solid Cape's R7,571.44 as Jack Hammer's.
+    chunks = [{"filename": _COD_DOC["filename"], "text": "COD account application", "score": 0.7},
+              {"filename": "00090117.pdf", "text": "SOLID CAPE tax invoice 7,571.44", "score": 0.6}]
+    crossref = [{"filename": _COD_DOC["filename"], "category": "General Document",
+                 "summary": _COD_DOC["summary"], "fields": {}},
+                {"filename": "00090117.pdf", "category": "Invoice",
+                 "summary": "Tax invoice from SOLID CAPE (PTY) LTD, ZAR 7,571.44", "fields": {}}]
+    mock_client = _mock_sequential([], _handiman_rows(), crossref_rows=crossref)
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
+         patch("vula.commerce.service._known_parties", return_value=_PARTIES), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=chunks)
+        res = await find_filed_document(
+            TID, "Need all jack hammer invoice and summary of what was spent")
+    assert res["match_type"] == "resolved_via_knowledge_base"
+    assert res["total_amount"] == "R20,278.00"
+    assert res["resolved_supplier"] == "GARDENS HANDIMAN CENTRE"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_knowledge_base_hits_warn_against_misattribution():
+    chunks = [{"filename": "00090117.pdf", "text": "SOLID CAPE tax invoice", "score": 0.6}]
+    mock_client = _mock_sequential([], crossref_rows=[])
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
+         patch("vula.commerce.service._known_parties", return_value=_PARTIES), \
+         patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
+        mock_pipeline.return_value.query = AsyncMock(return_value=chunks)
+        res = await find_filed_document(TID, "jack hammer invoices")
+    assert res["match_type"] == "knowledge_base"
+    assert "NOT confirmed" in res["note"]
+
+
+@pytest.mark.parametrize("party", ["City of Cape Town", "Caisson (Pty) Ltd T/A Coastal Hire",
+                                    "BO-KAAP SERVICE STATION"])
+def test_bridge_party_ignores_address_and_trading_as_words(party):
+    # Real digg-demo party names: "cape town" / "t a" / "service station" must not link a
+    # document that merely mentions an address or a trading-as line.
+    doc = dict(_COD_DOC, summary="Jack Hammer account, Cape Town, T/A something, service station")
+    assert _bridge_party("jack hammer", [doc], [party]) is None
