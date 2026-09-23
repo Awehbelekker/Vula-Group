@@ -3048,6 +3048,27 @@ def _core_search_term(query: str) -> str:
     return " ".join(core).strip()
 
 
+def _name_patterns(core: str) -> List[str]:
+    """ilike patterns for a name that tolerate how owners space it: "jack hammer" also matches
+    "Jackhammer"/"Jack-Hammer's" ("jack%hammer"), and a one-word "jackhammer" also matches
+    "Jack Hammer" (every split with 3+ letters each side). Already _pg_term-safe."""
+    t = _pg_term(core)
+    if not t:
+        return []
+    pats = [t]
+    if " " in t:
+        pats.append(re.sub(r"\s+", "%", t))
+    elif len(t) >= 6 and t.isalpha():
+        pats += [f"{t[:i]}%{t[i:]}" for i in range(3, len(t) - 2)]
+    return list(dict.fromkeys(pats))
+
+
+def _log_find(tenant_id: str, category: Optional[str], stage: str, n: int) -> None:
+    # POPIA: stage + counts only, never the query text (it can carry names).
+    logger.info("find_filed_document tenant=%s category=%s stage=%s matches=%d",
+                tenant_id, category or "-", stage, n)
+
+
 def _known_parties(tenant_id: str) -> List[str]:
     """Every distinct counterparty name on this tenant's filed documents plus its supplier
     register — the candidates _bridge_party can resolve a nickname to. Fail-open: []."""
@@ -3201,23 +3222,33 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
         logger.warning("find_filed_document SQL query failed: %s", exc)
         return {"error": "Couldn't search documents right now."}
 
+    # No hit names a counterparty or carries an amount (none at all, or e.g. only the "Jack
+    # Hammer's COD account" application) — so it can't answer a spend question on its own. Try
+    # to bridge to the real supplier first. The bridge documents are searched WITHOUT the
+    # category filter: 2026-09-23 live retest, the linking document is a "General Document",
+    # so a model that (reasonably) passed category="Invoice" filtered out the only link.
+    if not aliases and core and not any(
+            _party_of(r.get("fields") or {}) or _document_amount(r.get("fields") or {}) is not None
+            for r in rows):
+        bridge_docs = list(rows)
+        try:
+            bridge_docs += _filed_rows_query(tenant_id, _name_patterns(core), None, party_only=False)
+        except Exception as exc:
+            logger.debug("find_filed_document bridge-doc search skipped: %s", exc)
+        bridged = _bridge_party(core, bridge_docs, _known_parties(tenant_id)) if bridge_docs else None
+        if bridged:
+            resolved = _resolved_party_result(
+                tenant_id, query, bridged[0], category,
+                f"'{bridged[1]}' links '{core}' to '{bridged[0]}',")
+            if resolved:
+                _log_find(tenant_id, category, "bridge_sql", resolved["total_matches"])
+                return resolved
+
     if rows:
-        # Hits that name no counterparty and carry no amount (e.g. only the "Jack Hammer's COD
-        # account" application) can't answer a spend question on their own — try to bridge
-        # from them to the real supplier before settling for them.
-        if not aliases and core and not any(
-                _party_of(r.get("fields") or {}) or _document_amount(r.get("fields") or {}) is not None
-                for r in rows):
-            bridged = _bridge_party(core, rows, _known_parties(tenant_id))
-            if bridged:
-                resolved = _resolved_party_result(
-                    tenant_id, query, bridged[0], category,
-                    f"'{bridged[1]}' links '{core}' to '{bridged[0]}',")
-                if resolved:
-                    return resolved
         out = _filed_rows_result(rows)
         if aliases:
             out["resolved_supplier"] = aliases[0]
+        _log_find(tenant_id, category, "alias" if aliases else "sql", len(rows))
         return out
 
     try:
@@ -3227,6 +3258,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
         logger.debug("find_filed_document semantic fallback skipped: %s", exc)
         chunks = []
     if not chunks:
+        _log_find(tenant_id, category, "not_found", 0)
         return {"status": "not_found_filed",
                 "message": f"No filed document matches '{query}'. Ask the owner for the "
                             "invoice/document number, or to resend it — don't guess."}
@@ -3266,6 +3298,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
             entry["category"] = filed.get("category")
         results.append(entry)
     if not results:
+        _log_find(tenant_id, category, "not_found", 0)
         return {"status": "not_found_filed",
                 "message": f"No filed document matches '{query}'. Ask the owner for the "
                             "invoice/document number, or to resend it — don't guess."}
@@ -3282,6 +3315,7 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
                 tenant_id, query, bridged[0], category,
                 f"'{bridged[1]}' links '{core}' to '{bridged[0]}',")
             if resolved:
+                _log_find(tenant_id, category, "bridge_semantic", resolved["total_matches"])
                 return resolved
     party = _dominant_party(results)
     if party and _pg_term(party):
@@ -3289,7 +3323,10 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
             tenant_id, query, party, category,
             f"The closest knowledge-base matches belong to '{party}',")
         if resolved:
+            _log_find(tenant_id, category, "semantic_party", resolved["total_matches"])
             return resolved
+
+    _log_find(tenant_id, category, "knowledge_base", len(results))
 
     return {"matches": results, "match_type": "knowledge_base", "status": "found",
             "note": "Found in the knowledge base — these are fuzzy matches, NOT confirmed to "

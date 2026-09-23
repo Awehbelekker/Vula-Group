@@ -475,7 +475,8 @@ async def test_semantic_hits_agreeing_on_a_party_are_re_searched_exactly():
                  "fields": {"supplier": "GARDENS HANDIMAN CENTRE", "total_cents": 69700}},
                 {"filename": "POS-2.pdf", "category": "Invoice",
                  "fields": {"supplier": "GARDENS HANDIMAN CENTRE", "total_cents": 9200}}]
-    mock_client = _mock_sequential([], _handiman_rows(), crossref_rows=crossref)
+    # SQL search, bridge-document search (nothing), then the party re-search.
+    mock_client = _mock_sequential([], [], _handiman_rows(), crossref_rows=crossref)
     with patch("vula.commerce.service._client", return_value=mock_client), \
          patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
          patch("vula.ingestion.pipeline.VulaIngestionPipeline") as mock_pipeline:
@@ -726,7 +727,8 @@ def _norm(s):
 
 @pytest.mark.asyncio
 async def test_sql_hit_on_the_account_application_bridges_to_every_invoice():
-    mock_client = _mock_sequential([_COD_DOC], _handiman_rows())
+    # SQL search, bridge-document search, then the party re-search.
+    mock_client = _mock_sequential([_COD_DOC], [_COD_DOC], _handiman_rows())
     with patch("vula.commerce.service._client", return_value=mock_client), \
          patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
          patch("vula.commerce.service._known_parties", return_value=_PARTIES):
@@ -749,7 +751,7 @@ async def test_semantic_hits_bridge_through_the_account_application():
                  "summary": _COD_DOC["summary"], "fields": {}},
                 {"filename": "00090117.pdf", "category": "Invoice",
                  "summary": "Tax invoice from SOLID CAPE (PTY) LTD, ZAR 7,571.44", "fields": {}}]
-    mock_client = _mock_sequential([], _handiman_rows(), crossref_rows=crossref)
+    mock_client = _mock_sequential([], [], _handiman_rows(), crossref_rows=crossref)
     with patch("vula.commerce.service._client", return_value=mock_client), \
          patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
          patch("vula.commerce.service._known_parties", return_value=_PARTIES), \
@@ -783,3 +785,34 @@ def test_bridge_party_ignores_address_and_trading_as_words(party):
     # document that merely mentions an address or a trading-as line.
     doc = dict(_COD_DOC, summary="Jack Hammer account, Cape Town, T/A something, service station")
     assert _bridge_party("jack hammer", [doc], [party]) is None
+
+
+# ── 2026-09-23 second live retest: category filter hid the linking document ─────
+# After #64, the same message on the local 8B model answered "couldn't find any invoices".
+# A model passing category="Invoice" excludes the COD application (a General Document) —
+# the only link — so bridge documents are now searched without the category filter.
+
+from vula.commerce.service import _name_patterns  # noqa: E402
+
+
+def test_name_patterns_tolerate_spacing():
+    assert "jack%hammer" in _name_patterns("jack hammer")
+    assert "jack%hammer" in _name_patterns("jackhammer")
+    assert _name_patterns("") == []
+
+
+@pytest.mark.asyncio
+async def test_bridge_ignores_the_category_filter_for_the_linking_document():
+    # 1st search (category=Invoice): nothing. 2nd (bridge docs, no category): the COD
+    # application. 3rd (party re-search): the 13 invoices.
+    mock_client = _mock_sequential([], [_COD_DOC], _handiman_rows())
+    with patch("vula.commerce.service._client", return_value=mock_client), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])), \
+         patch("vula.commerce.service._known_parties", return_value=_PARTIES):
+        res = await find_filed_document(TID, "jackhammer", category="Invoice")
+    assert res["match_type"] == "resolved_via_knowledge_base"
+    assert res["total_amount"] == "R20,278.00"
+    chain = mock_client.table.return_value.select.return_value.eq.return_value.order.return_value
+    # Only the 1st and 3rd searches carry the category filter.
+    assert chain.eq.call_count == 2
+    assert "jack%hammer" in _or_filters(mock_client)[1]
