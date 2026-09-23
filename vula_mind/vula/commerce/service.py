@@ -3417,6 +3417,69 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
             "matches": results}
 
 
+def _rands(v: Any) -> str:
+    try:
+        return f"R{float(v):,.2f}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Optional[str]:
+    """A complete WhatsApp answer for a supplier spend/materials question, built only from a
+    find_filed_document result: count, server-computed total, refunds, the invoice list and the
+    materials roll-up. None when the result isn't a complete filed-document answer (not found,
+    or excerpt-only knowledge-base hits), so the caller falls back to the model.
+
+    2026-09-23 (digg-demo): with all 16 invoices and the R21,256.00 total correctly in the tool
+    result, the local llama3.1:8b replied "The total amount spent is R942.00" (the first row),
+    invented quantities, and described the result as "JSON output from an email tool". Money is
+    never left to a model to read back — this writes the reply deterministically instead."""
+    if result.get("status") != "found" or "total_amount_cents" not in result:
+        return None
+    matches = result.get("matches") or []
+    total_n = int(result.get("total_matches") or len(matches))
+    if not total_n:
+        return None
+    supplier = result.get("resolved_supplier") or next(
+        (m.get("party") for m in matches if m.get("party")), None) or "this supplier"
+    refunds = [m for m in matches if m.get("is_refund")]
+    head = f"*{supplier}*: {total_n} document{'s' if total_n != 1 else ''}, total spend " \
+           f"*{result.get('total_amount')}*"
+    if refunds:
+        head += (f" (after {len(refunds)} refund{'s' if len(refunds) != 1 else ''} of "
+                 f"{', '.join(_rands(r.get('amount')) for r in refunds)})")
+    lines = [head + "."]
+    if result.get("match_type") == "resolved_via_knowledge_base" and query:
+        lines.append(f"I took \"{query}\" to mean {supplier} — tell me if that's wrong, or save "
+                     f"it with \"{query} is an alias for {supplier}\".")
+    missing = int(result.get("total_matches") or 0) - int(result.get("matches_with_amount") or 0)
+    if missing > 0:
+        lines.append(f"⚠️ {missing} document{'s have' if missing != 1 else ' has'} no amount on "
+                     f"file and {'are' if missing != 1 else 'is'} not in that total.")
+    lines.append("")
+    lines.append("*Invoices*")
+    for m in matches:
+        name = re.sub(r"\.(pdf|jpe?g|png)$", "", m.get("filename") or "document", flags=re.I)
+        day = (m.get("filed_at") or "")[:10]
+        amt = _rands(m["amount"]) if m.get("amount") is not None else "no amount"
+        tag = " (refund)" if m.get("is_refund") else ""
+        lines.append(f"• {day + ' — ' if day else ''}{name} — {amt}{tag}")
+    if total_n > len(matches):
+        lines.append(f"…and {total_n - len(matches)} more (all included in the total).")
+    materials = result.get("materials") or []
+    if materials:
+        lines.append("")
+        lines.append("*Materials* (biggest spend first)")
+        for it in materials[:12]:
+            q = it.get("quantity")
+            flag = " — ⚠️ quantity to check" if it.get("unit_price_varies") else ""
+            lines.append(f"• {it.get('description')} × {q} — {it.get('spend')}{flag}")
+        extra = int(result.get("materials_distinct") or len(materials)) - min(len(materials), 12)
+        if extra > 0:
+            lines.append(f"…plus {extra} more item{'s' if extra != 1 else ''}.")
+    return "\n".join(lines)
+
+
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:
     """Cross-reference KB-chunk filenames against vula_filed_documents, returning
     {filename: {"amount": ..., "party": ...}} for every one that was also filed normally with a

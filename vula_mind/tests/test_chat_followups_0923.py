@@ -163,3 +163,77 @@ async def test_rag_reply_handles_alias_statements_for_insiders_only():
 ])
 def test_supplier_history_phrasing(text, expected):
     assert looks_like_supplier_history_question(text) is expected
+
+
+# ── 4. supplier-history answers are written from the numbers, not by the model ──
+# Live retest after #68: find_filed_document returned all 16 invoices and R21,256.00, and the
+# local 8B replied "The total amount spent is R942.00" with invented quantities.
+
+from vula.commerce.service import format_supplier_history_reply  # noqa: E402
+
+_RESULT = {
+    "status": "found", "match_type": "resolved_via_knowledge_base",
+    "resolved_supplier": "GARDENS HANDIMAN CENTRE", "total_matches": 3,
+    "total_amount": "R1,084.00", "total_amount_cents": 108400, "matches_with_amount": 3,
+    "materials": [{"description": "SAND PER BAG ACC", "quantity": 40, "spend": "R1,240.00",
+                   "spend_cents": 124000, "documents": 2, "unit_price_varies": True},
+                  {"description": "CEMENT 50KG", "quantity": -3, "spend": "-R477.00",
+                   "spend_cents": -47700, "documents": 1}],
+    "materials_distinct": 2,
+    "matches": [
+        {"filename": "POS Account Sale 24-225537.pdf", "amount": 942.0, "filed_at": "2026-09-22T11:40:03"},
+        {"filename": "POS Account Refund 21-366230.pdf", "amount": 954.0, "is_refund": True,
+         "filed_at": "2026-09-22T10:36:10"},
+        {"filename": "POS Account Sale 23-244976.pdf", "amount": 1252.0, "filed_at": "2026-09-12T09:10:52"},
+    ],
+}
+
+
+def test_reply_states_the_server_total_and_every_invoice():
+    out = format_supplier_history_reply(_RESULT, query="jack hammer")
+    assert "*GARDENS HANDIMAN CENTRE*: 3 documents, total spend *R1,084.00*" in out
+    assert "after 1 refund of R954.00" in out
+    assert "I took \"jack hammer\" to mean GARDENS HANDIMAN CENTRE" in out
+    assert "• 2026-09-22 — POS Account Refund 21-366230 — R954.00 (refund)" in out
+    assert "• SAND PER BAG ACC × 40 — R1,240.00 — ⚠️ quantity to check" in out
+    assert "R942.00" in out and "total spend *R942" not in out
+
+
+def test_reply_is_none_when_there_is_nothing_complete_to_state():
+    assert format_supplier_history_reply({"status": "not_found_filed"}) is None
+    assert format_supplier_history_reply({"status": "found", "match_type": "knowledge_base",
+                                          "matches": [{"excerpt": "x"}]}) is None
+
+
+@pytest.mark.asyncio
+async def test_email_admin_answers_supplier_history_without_the_model_reading_numbers():
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+    calls = {"n": 0}
+
+    async def _fake(**kw):
+        calls["n"] += 1
+        tc = SimpleNamespace(id="c1", function=SimpleNamespace(
+            name="find_document", arguments='{"query": "jack hammer", "category": "Invoice"}'))
+        r = MagicMock()
+        r.choices = [SimpleNamespace(message=SimpleNamespace(content="", tool_calls=[tc]))]
+        return r
+
+    with (
+        patch("core.skills.email_admin.get_email_creds", return_value={"email": "a@b.c"}),
+        patch("core.skills.email_admin.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama_chat/llama3.1:8b", None, "http://x"))),
+        patch("vula.commerce.service.find_filed_document", new=AsyncMock(return_value=_RESULT)),
+        patch("litellm.acompletion", new=_fake),
+    ):
+        out = await EmailAdminSkill().run(SkillInput(
+            question="Need all jack hammer invoices and a summary of what was spent", tenant_id=TID))
+    assert calls["n"] == 1  # the model chose the tool; it never wrote the answer
+    assert "total spend *R1,084.00*" in out.answer
+
+
+@pytest.mark.asyncio
+async def test_non_supplier_questions_still_go_back_to_the_model():
+    from core.skills.email_admin import _direct_supplier_answer
+    assert _direct_supplier_answer("find the proof of payment I sent", "find_document", {}, _RESULT) is None
+    assert _direct_supplier_answer("Need all jack hammer invoices", "email_search", {}, _RESULT) is None

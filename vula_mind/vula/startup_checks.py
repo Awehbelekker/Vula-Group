@@ -95,6 +95,9 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # renamed to 161 — a bookkeeping rename only, already applied to prod under its earlier
     # filenames (108, then 112) — see the file's own header comment.
     ("161", "vula_team_members", "last_notified_at"),
+    # 2026-09-23: without this column every UPDATE on commerce_suppliers fails (009's trigger
+    # sets it) — found when a WhatsApp supplier-alias save failed on digg-demo.
+    ("174", "commerce_suppliers", "updated_at"),
 ]
 
 
