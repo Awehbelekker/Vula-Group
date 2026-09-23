@@ -556,6 +556,23 @@ async def _report_filing_failure(tenant_id: str, em: dict, att: dict, exc: Excep
         pass
 
 
+def _advance_cursor(db, account_id: str, em: dict, sent_folder: Optional[str]) -> None:
+    """Move this account's cursor for `em`'s folder to `em["uid"]`, so a crash while filing
+    this email's attachments skips it next sweep instead of replaying it forever. Best-effort;
+    never moves a cursor backwards (UIDs only grow per folder)."""
+    col = "last_sync_uid_sent" if em.get("is_sent") else "last_sync_uid"
+    if em.get("is_sent") and not sent_folder:
+        return
+    uid = int(em.get("uid") or 0)
+    if uid <= 0:
+        return
+    try:
+        db.table("vula_email_accounts").update({col: uid}).eq("id", account_id) \
+            .lt(col, uid).execute()
+    except Exception as exc:
+        logger.debug("email sync cursor advance skipped: %s", exc)
+
+
 async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
                          from_uid: Optional[int] = None) -> dict:
     import asyncio
@@ -617,6 +634,13 @@ async def _do_email_sync(tenant_id: str, account_id: str, max_emails: int,
     emails = inbox_result["emails"] + sent_result["emails"]
     contacts_seen, filed = set(), 0
     for em in emails:
+        if em["attachments"] and from_uid is None:
+            # Save the cursor up to this email BEFORE filing its attachments. 2026-09-23: one
+            # emailed drawing pack killed the worker mid-ingest; the cursor only advanced after
+            # the whole batch, so every sweep re-fetched the same batch and died again — mail
+            # sync stalled for every tenant for over a day. At-most-once for this one email's
+            # attachments beats never getting past it. (Backfill never moves the live cursor.)
+            _advance_cursor(db, account_id, em, sent_result["folder"])
         for name, addr in em["people"]:
             kind = "internal" if addr.lower().endswith("@" + own_domain) else "external"
             _upsert_contact(db, tenant_id, addr, name, kind, em["when"])

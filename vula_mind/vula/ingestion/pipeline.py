@@ -348,6 +348,11 @@ class OCRProcessor:
 
 # ─── Document Parser ──────────────────────────────────────────────────────────
 
+class PdfTooHeavy(Exception):
+    """PyMuPDF extraction timed out or its process was killed — the document itself is the
+    problem, so no other in-process parser should be tried on it."""
+
+
 class DocumentParser:
     """
     Parses various file types to clean text pages.
@@ -427,6 +432,12 @@ class DocumentParser:
             pages = await self._parse_pdf_fitz(path)
             if pages:
                 return pages
+        except PdfTooHeavy as exc:
+            # pdfplumber and poppler would grind through the same content in-process — don't.
+            # An honest placeholder still lets the document be classified and filed by name.
+            logger.warning(f"PDF too heavy to extract, filing by name only: {path.name} ({exc})")
+            return [(1, f"[Large PDF — its text couldn't be extracted within limits "
+                        f"(often a detailed drawing set). Filename: {path.name}]")]
         except ImportError:
             logger.info("pymupdf not installed — skipping fast path (pip install pymupdf)")
         except Exception as exc:
@@ -444,38 +455,50 @@ class DocumentParser:
     async def _parse_pdf_fitz(self, path: Path) -> List[tuple[int, str]]:
         """Fast, tolerant text + table extraction via PyMuPDF. A page with a real text layer
         never touches OCR; a genuinely bare (image-only) page is rendered and OCR'd, same
-        policy as _parse_pdf_native."""
-        import pymupdf  # aka fitz
+        policy as _parse_pdf_native.
 
-        pages: List[tuple[int, str]] = []
-        with pymupdf.open(path) as doc:
-            for i in range(doc.page_count):
-                page = doc.load_page(i)
-                text = (page.get_text("text") or "").strip()
+        The PyMuPDF work runs in a child process (vula/ingestion/pdf_extract.py) with a hard
+        timeout — see that module for the 2026-09-23 incident where one drawing pack killed a
+        web worker every few minutes. Raises PdfTooHeavy when the child times out or dies from
+        a signal, so _parse_pdf doesn't retry the same document in-process."""
+        import json
+        import shutil
+        import sys
 
-                if len(text) < 50:
-                    # No usable text layer — is there ink to OCR? (a truly blank page: skip)
-                    if page.get_images() or page.get_drawings():
-                        pix = page.get_pixmap(dpi=200)
-                        img_path = Path(tempfile.gettempdir()) / f"vula_fitz_{uuid.uuid4().hex}.png"
-                        pix.save(str(img_path))
-                        text = (await self.ocr.process_image(img_path) or "").strip()
-                        img_path.unlink(missing_ok=True)
-                        if text:
-                            logger.info("OCR'd bare page %d of %s (fitz)", i + 1, path.name)
-                else:
-                    # Tables (pymupdf >= 1.23) — appended, best-effort.
-                    try:
-                        for tbl in page.find_tables().tables:
-                            rows = ["  ".join(str(c) for c in row if c) for row in tbl.extract() if any(row)]
-                            if rows:
-                                text += "\n\n" + "\n".join(rows)
-                    except Exception:
-                        pass
+        render_dir = tempfile.mkdtemp(prefix="vula_fitz_")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "vula.ingestion.pdf_extract", str(path), render_dir,
+                cwd=str(Path(__file__).resolve().parents[2]),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(),
+                                                  timeout=settings.pdf_extract_timeout_s)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise PdfTooHeavy(f"text extraction took over {settings.pdf_extract_timeout_s}s")
+            if proc.returncode and proc.returncode < 0:
+                raise PdfTooHeavy(f"text extraction died (signal {-proc.returncode})")
+            if proc.returncode:
+                tail = (err or b"").decode(errors="replace").strip().splitlines()[-1:] or [""]
+                if "No module named 'pymupdf'" in tail[0]:
+                    raise ImportError(tail[0])
+                raise RuntimeError(f"pymupdf extraction failed: {tail[0][:200]}")
 
+            pages: List[tuple[int, str]] = []
+            # Last line only: PyMuPDF can print its own notices to stdout before the JSON.
+            lines = (out or b"").decode(errors="replace").strip().splitlines()
+            for page_no, text, png in json.loads(lines[-1] if lines else "{}").get("pages", []):
+                if png:
+                    text = (await self.ocr.process_image(Path(png)) or "").strip()
+                    if text:
+                        logger.info("OCR'd bare page %d of %s (fitz)", page_no, path.name)
                 if text:
-                    pages.append((i + 1, text))
-        return pages
+                    pages.append((page_no, text))
+            return pages
+        finally:
+            shutil.rmtree(render_dir, ignore_errors=True)
 
     @staticmethod
     def _image_coverage(page) -> float:
