@@ -2856,6 +2856,79 @@ async def _resolve_supplier_names(tenant_id: str, query: str) -> List[str]:
     return best if best and best_score >= FUZZY_AUTO else []
 
 
+# "Jack Hammer is an alias for the Gardens account" — an owner teaching the system a supplier
+# nickname. 2026-09-23 (digg-demo): "Can you make a note the jack hammer is a alias to the
+# gardens account" matched clickup_admin's "make a note", failed with a ClickUp 404 and never
+# reached commerce_suppliers.aliases — the one place find_filed_document already resolves
+# nicknames from (see _resolve_supplier_names).
+_ALIAS_STATEMENT_RE = re.compile(
+    r"^(?:.*?\b(?:make\s+a\s+note|note|remember|save|record)\s+(?:that\s+)?)?"
+    r"(?:the\s+)?(?P<alias>[\w'&.\-]+(?:\s+[\w'&.\-]+){0,3}?)\s+(?:is|=)\s+"
+    r"(?:an?\s+|the\s+|our\s+)?(?:alias|nickname|another\s+name|short\s+name|short|"
+    r"same(?:\s+thing)?\s+as|name)\s*(?:for|to|of|as)?\s+"
+    r"(?:the\s+|our\s+)?(?P<target>[\w'&.\-]+(?:\s+[\w'&.\-]+){0,5}?)"
+    r"(?:\s+(?:account|supplier|store|shop))?\s*[.!]*$",
+    re.IGNORECASE)
+
+
+def parse_alias_statement(text: str) -> Optional[Tuple[str, str]]:
+    """(alias, target) if a sentence of `text` states that one supplier name is an alias for
+    another, else None."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\.{2,}\s*", text or ""):
+        m = _ALIAS_STATEMENT_RE.match(sentence.strip())
+        if m:
+            alias, target = m.group("alias").strip(" .'"), m.group("target").strip(" .'")
+            if _norm_name(alias) and _norm_name(target) and _norm_name(alias) != _norm_name(target):
+                return alias, target
+    return None
+
+
+async def learn_supplier_alias(tenant_id: str, alias: str, target: str) -> Dict[str, Any]:
+    """Add `alias` to the tenant's supplier matching `target` (commerce_suppliers.aliases), then
+    read it back. Target matching: the target's words appear in the supplier's name (or an
+    existing alias), or a fuzzy match at FUZZY_MIN. Rows that normalise to the same name are
+    one supplier (filing often creates "GARDENS HANDIMAN CENTRE" and "Gardens Handiman Centre")
+    and all get the alias. Several different suppliers → "ambiguous" with candidates, never a
+    guess. Returns {"status": added|exists|ambiguous|not_found|error, ...}."""
+    nt = _norm_name(target)
+    try:
+        suppliers = await list_suppliers(tenant_id)
+    except Exception as exc:
+        logger.warning("learn_supplier_alias: supplier lookup failed: %s", exc)
+        return {"status": "error"}
+    groups: Dict[str, List[dict]] = {}
+    for sp in suppliers:
+        names = [sp.get("name") or ""] + list(sp.get("aliases") or [])
+        norms = [_norm_name(n) for n in names if n]
+        hit = any(f" {nt} " in f" {n} " for n in norms) or max(
+            (difflib.SequenceMatcher(None, nt, n).ratio() for n in norms), default=0.0) >= FUZZY_MIN
+        if hit:
+            groups.setdefault(_norm_name(sp.get("name") or ""), []).append(sp)
+    if not groups:
+        return {"status": "not_found", "target": target}
+    if len(groups) > 1:
+        return {"status": "ambiguous", "target": target,
+                "candidates": [rows[0].get("name") for rows in groups.values()][:5]}
+    rows = next(iter(groups.values()))
+    name = rows[0].get("name")
+    if all(_norm_name(alias) in {_norm_name(a) for a in (r.get("aliases") or [])} for r in rows):
+        return {"status": "exists", "supplier": name, "alias": alias}
+    try:
+        for r in rows:
+            current = list(r.get("aliases") or [])
+            if _norm_name(alias) not in {_norm_name(a) for a in current}:
+                (_client().table("commerce_suppliers").update({"aliases": current + [alias]})
+                 .eq("tenant_id", tenant_id).eq("id", r["id"]).execute())
+        back = (_client().table("commerce_suppliers").select("id,aliases")
+                .eq("tenant_id", tenant_id).in_("id", [r["id"] for r in rows]).execute().data or [])
+    except Exception as exc:
+        logger.warning("learn_supplier_alias: update failed: %s", exc)
+        return {"status": "error"}
+    ok = bool(back) and all(
+        _norm_name(alias) in {_norm_name(a) for a in (b.get("aliases") or [])} for b in back)
+    return {"status": "added" if ok else "error", "supplier": name, "alias": alias}
+
+
 def _filed_rows_query(tenant_id: str, terms: List[str], category: Optional[str], party_only: bool):
     """vula_filed_documents rows whose filename/summary — or counterparty name in `fields` —
     contains any of `terms` (already _pg_term-sanitised). party_only restricts the match to the
