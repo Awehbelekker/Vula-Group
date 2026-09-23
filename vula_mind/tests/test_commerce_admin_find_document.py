@@ -223,6 +223,9 @@ def test_system_prompt_routes_supplier_spend_requests_to_find_document(skill):
     "Send me all the invoices from Gerflor",
     "What's our total spend on cement?",
     "Give me a summary of our payments to Coastal Hire",
+    "What materials did we buy from Jack Hammer?",
+    "Summary of materials from Gardens Handiman this month",
+    "Which items have we ordered from Builders Warehouse",
 ])
 def test_spend_history_requests_are_detected(message):
     from core.skills.commerce_admin import _is_spend_history_request
@@ -236,6 +239,8 @@ def test_spend_history_requests_are_detected(message):
     "How's stock looking?",
     "What's the price of the 3m scaffolding?",
     "Has Regan paid?",
+    "What materials do you sell?",
+    "Do we have materials in stock for the Smith job?",
 ])
 def test_non_spend_history_messages_are_not_flagged(message):
     from core.skills.commerce_admin import _is_spend_history_request
@@ -254,3 +259,10 @@ def test_lookup_business_info_still_offered_for_a_pricing_question():
     names = [t["function"]["name"] for t in _tools_for(
         TID, role=None, message="What does Makro charge for hake fillets?")]
     assert "lookup_business_info" in names
+
+
+def test_find_document_description_covers_materials_summaries():
+    spec = next(t for t in TOOL_SPECS if t["function"]["name"] == "find_document")
+    desc = spec["function"]["description"].lower()
+    assert "what materials/items did we buy" in desc
+    assert "materials" in desc

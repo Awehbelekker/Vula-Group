@@ -134,7 +134,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "actual filed documents, not a pricing/catalog question, so it goes here "
                        "(then email_thread_summary on a miss) — never lookup_business_info, "
                        "which only answers what THIS business charges/sells, not what it has "
-                       "actually spent or been invoiced. Do NOT use this for a request to CREATE something "
+                       "actually spent or been invoiced. The same goes for 'what materials/items did we buy "
+                       "from X' — found invoices come back with a `materials` roll-up of their "
+                       "line items (quantities and spend already summed), so answer from that. "
+                       "Do NOT use this for a request to CREATE something "
                        "new (e.g. 'make an invoice for X') — go straight to create_invoice for "
                        "that, there's no existing document to look up yet. If this returns "
                        "status: not_found_filed, that means nothing is FILED yet — not that the "
@@ -908,7 +911,13 @@ _SPEND_HISTORY_REQUEST_RE = re.compile(
     r"\bspen[dt]\s+(with|on|at)\b|"
     r"\bsummary\s+of\s+(the\s+|our\s+)?(spend|spending|payments?|invoices?)\b|"
     r"\b(all|every|list)\s+(of\s+)?(the\s+|our\s+|my\s+)?([\w-]+\s+){0,3}invoices?\b|"
-    r"\binvoices?\s+(from|by)\b",
+    r"\binvoices?\s+(from|by)\b|"
+    # "what materials did we buy from X" / "summary of materials" — same filed invoices, read
+    # for their line items rather than their totals (see service._aggregate_line_items).
+    r"\b(what|which)\s+(materials?|items?|stuff|products?)\s+(have|has|did|were)\s+"
+    r"(we|i|you)?\s*(been\s+)?(buy|bought|get|got|order|ordered|purchase|purchased)\b|"
+    r"\b(summary|list|breakdown)\s+of\s+(the\s+|all\s+)?(our\s+)?(materials?|items?\s+(bought|purchased))\b|"
+    r"\bmaterials?\s+(from|bought|purchased|we\s+(bought|got|ordered))\b",
     re.IGNORECASE)
 _PRICING_QUESTION_RE = re.compile(
     r"\b(charge|charges|charging|price\s*list|pricing|sell|sells|selling|catalog(ue)?)\b",

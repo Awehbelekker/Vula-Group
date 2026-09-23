@@ -582,3 +582,94 @@ async def test_refunds_are_subtracted_not_added():
     assert res["total_amount_cents"] == 18900 - 95400
     assert res["matches"][1]["is_refund"] is True
     assert "SUBTRACTED" in res["note"]
+
+
+# ── materials roll-up (2026-09-23) ───────────────────────────────────────────────
+# DIGG wants "what materials have we bought from X", not only the Rand total. Line items are
+# already extracted on every invoice; this checks they're aggregated server-side.
+
+from vula.commerce.service import _aggregate_line_items  # noqa: E402
+
+
+def _li(desc, qty, unit, total=None):
+    return {"description": desc, "quantity": qty, "unit_price_cents": unit,
+            "total_cents": total if total is not None else (None if unit is None else qty * unit)}
+
+
+def test_materials_merge_the_same_item_across_lines_and_invoices():
+    # Real digg-demo shapes: ISOTHERM on two invoices, masonry nails repeated within one.
+    rows = [
+        {"id": "a", "filename": "POS Account Sale 24-223853.pdf", "fields": {"line_items": [
+            _li("ISOTHERM 100MM*1200MM*6M 7.2m2", 5, 74500),
+            _li("RUBBLE BAG WOVEN", 20, 750)]}},
+        {"id": "b", "filename": "POS Account Sale 23-244698.pdf", "fields": {"line_items": [
+            _li("ISOTHERM 100MM*1200MM*6M 7.2m2", 1, 74500),
+            _li("MASONRY NAILS 3.0X50 P25", 1, 2300),
+            _li("masonry nails 3.0x50 p25", 1, 2300)]}},
+    ]
+    items, distinct = _aggregate_line_items(rows)
+    assert distinct == 3
+    top = items[0]
+    assert top["description"] == "ISOTHERM 100MM*1200MM*6M 7.2m2"
+    assert top["quantity"] == 6 and top["spend_cents"] == 447000 and top["documents"] == 2
+    assert top["spend"] == "R4,470.00"
+    nails = next(i for i in items if i["description"].startswith("MASONRY"))
+    assert nails["quantity"] == 2 and nails["spend_cents"] == 4600 and nails["documents"] == 1
+
+
+def test_materials_subtract_refunded_items():
+    rows = [
+        {"id": "a", "filename": "POS Account Sale 1.pdf",
+         "fields": {"line_items": [_li("SAND PER BAG ACC", 20, 3100)]}},
+        {"id": "r", "filename": "POS Account Refund 2.pdf",
+         "fields": {"line_items": [_li("SAND PER BAG ACC", 5, 3100)]}},
+    ]
+    items, _ = _aggregate_line_items(rows)
+    assert items[0]["quantity"] == 15 and items[0]["spend_cents"] == 15 * 3100
+
+
+def test_materials_flag_unpriced_or_unquantified_lines():
+    rows = [{"id": "a", "fields": {"line_items": [
+        {"description": "CUTTING CHARGE WOOD", "quantity": None, "total_cents": 2000},
+        {"description": "BRICK TROWEL", "quantity": 1, "unit_price_cents": None,
+         "total_cents": None},
+        "not-a-dict", {"description": ""}]}}]
+    items, distinct = _aggregate_line_items(rows)
+    assert distinct == 2
+    by = {i["description"]: i for i in items}
+    assert by["CUTTING CHARGE WOOD"]["quantity_incomplete"] is True
+    assert by["BRICK TROWEL"]["spend_incomplete"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_result_carries_the_materials_roll_up():
+    rows = _handiman_rows()[:2]
+    rows[0]["fields"]["line_items"] = [_li("PINE ROUGH 38X38 3M", 2, 4700)]
+    rows[1]["fields"]["line_items"] = [_li("PINE ROUGH 38X38 3M", 3, 4700)]
+    with patch("vula.commerce.service._client", return_value=_mock_sequential(rows)), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        res = await find_filed_document(TID, "Gardens")
+    assert res["materials"] == [{"description": "PINE ROUGH 38X38 3M", "quantity": 5,
+                                 "spend": "R235.00", "spend_cents": 23500, "documents": 2}]
+    assert res["materials_distinct"] == 1
+    assert "materials" in res["note"]
+
+
+@pytest.mark.asyncio
+async def test_no_materials_key_when_no_line_items():
+    with patch("vula.commerce.service._client", return_value=_mock_sequential(_handiman_rows()[:1])), \
+         patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
+        res = await find_filed_document(TID, "Gardens")
+    assert "materials" not in res
+
+
+def test_materials_flag_a_likely_misread_quantity():
+    # Real digg-demo: sand at R31/bag everywhere, but one line read as qty 1 @ R465.
+    rows = [{"id": "a", "fields": {"line_items": [_li("SAND PER BAG ACC", 20, 3100)]}},
+            {"id": "b", "fields": {"line_items": [_li("SAND PER BAG ACC", 1, 46500)]}},
+            {"id": "c", "fields": {"line_items": [_li("CEMENT 50KG", 3, 15900),
+                                                  _li("CEMENT 50KG", 1, 15900)]}}]
+    items, _ = _aggregate_line_items(rows)
+    by = {i["description"]: i for i in items}
+    assert by["SAND PER BAG ACC"]["unit_price_varies"] is True
+    assert "unit_price_varies" not in by["CEMENT 50KG"]

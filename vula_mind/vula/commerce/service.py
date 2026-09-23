@@ -12,7 +12,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
 from supabase import create_client, Client
@@ -2876,6 +2876,79 @@ def _filed_rows_query(tenant_id: str, terms: List[str], category: Optional[str],
     return q.limit(_FILED_SEARCH_FETCH_CAP).execute().data or []
 
 
+# How many distinct materials/line items _aggregate_line_items hands back (biggest spend first).
+_MATERIALS_RETURN_CAP = 40
+
+
+def _num(v: Any) -> Optional[float]:
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _aggregate_line_items(rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """Roll the invoices' extracted line_items up into one materials summary: the same item
+    (normalised description) merged across lines and documents, with summed quantity and
+    integer-cent spend and the number of documents it appears on. Refund rows subtract. Returns
+    (items sorted by spend desc, capped at _MATERIALS_RETURN_CAP; total distinct items).
+
+    2026-09-23: DIGG wants "what materials have we bought from X", not only the Rand total —
+    every Invoice/Quote/BOQ is already extracted with line_items (see _analyze_document's
+    schema in vula/api/whatsapp.py), so this is aggregation of data already on the row, done
+    here so no quantity or amount is ever summed by the LLM."""
+    agg: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        sign = -1 if _is_refund_row(r) else 1
+        for li in ((r.get("fields") or {}).get("line_items") or []):
+            if not isinstance(li, dict):
+                continue
+            desc = str(li.get("description") or "").strip()
+            key = _norm_name(desc)
+            if not key:
+                continue
+            qty = _num(li.get("quantity"))
+            cents = _num(li.get("total_cents"))
+            if cents is None and qty is not None and _num(li.get("unit_price_cents")) is not None:
+                cents = qty * _num(li.get("unit_price_cents"))
+            a = agg.setdefault(key, {"description": desc, "quantity": 0.0, "spend_cents": 0,
+                                     "documents": set(), "_unpriced": False, "_no_qty": False,
+                                     "_unit": []})
+            if qty and cents is not None:
+                a["_unit"].append(abs(cents / qty))
+            if qty is None:
+                a["_no_qty"] = True
+            else:
+                a["quantity"] += sign * qty
+            if cents is None:
+                a["_unpriced"] = True
+            else:
+                a["spend_cents"] += sign * int(round(cents))
+            a["documents"].add(r.get("id") or r.get("filename"))
+    items = []
+    for a in sorted(agg.values(), key=lambda a: a["spend_cents"], reverse=True):
+        qty = round(a["quantity"], 3)
+        item = {"description": a["description"],
+                "quantity": int(qty) if qty == int(qty) else qty,
+                "spend": f"R{a['spend_cents'] / 100:,.2f}", "spend_cents": a["spend_cents"],
+                "documents": len(a["documents"])}
+        if a["_no_qty"]:
+            item["quantity_incomplete"] = True
+        if a["_unpriced"]:
+            item["spend_incomplete"] = True
+        # Real digg-demo row: "SAND PER BAG ACC" read as qty 1 @ R465 on one invoice, R31/bag on
+        # every other — almost certainly 15 bags misread as 1. The line total still reconciles
+        # with the invoice total, so nothing upstream catches it; flag it here so the quantity
+        # isn't stated as fact.
+        units = [u for u in a["_unit"] if u > 0]
+        if units and max(units) > 1.5 * min(units):
+            item["unit_price_varies"] = True
+        items.append(item)
+    return items[:_MATERIALS_RETURN_CAP], len(items)
+
+
 def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     results = []
     total_cents, priced, refunds = 0, 0, 0
@@ -2919,6 +2992,22 @@ def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     if len(rows) >= _FILED_SEARCH_FETCH_CAP:
         notes.append(f"The search stopped at {_FILED_SEARCH_FETCH_CAP} documents — there may "
                      "be more; suggest narrowing by date or category.")
+    materials, distinct = _aggregate_line_items(rows)
+    if materials:
+        out["materials"] = materials
+        out["materials_distinct"] = distinct
+        notes.append("materials rolls up every line item across ALL matches (same item merged, "
+                     "quantity and spend summed server-side, biggest spend first) — use it for a "
+                     "what-did-we-buy / materials summary instead of re-adding line items. Line "
+                     "spend is per item as printed, so it need not equal total_amount exactly "
+                     "(delivery, VAT or rounding lines).")
+        if any(m.get("unit_price_varies") for m in materials):
+            notes.append("An item marked unit_price_varies was bought at very different unit "
+                         "prices across lines — often a misread quantity; flag its quantity as "
+                         "unconfirmed rather than stating it.")
+        if distinct > len(materials):
+            notes.append(f"Only the top {len(materials)} of {distinct} distinct items by spend "
+                         "are listed.")
     out["note"] = " ".join(notes)
     return out
 
