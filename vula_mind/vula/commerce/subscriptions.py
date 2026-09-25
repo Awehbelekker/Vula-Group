@@ -102,6 +102,21 @@ async def set_status(tenant_id: str, sub_id: str, status: str) -> dict:
     return (res.data or [{}])[0]
 
 
+async def pause_for_phone(tenant_id: str, phone: str) -> int:
+    """Pause every active subscription for this customer — what "Reply STOP anytime to pause"
+    promises. Matches the stored phone in any of its common formats. Returns how many paused."""
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if not tenant_id or not digits:
+        return 0
+    local = "0" + digits[2:] if digits.startswith("27") else digits
+    variants = list({digits, "+" + digits, local})
+    res = (_client().table("commerce_subscriptions")
+           .update({"status": "paused", "updated_at": _now()})
+           .eq("tenant_id", tenant_id).eq("status", "active").in_("customer_phone", variants)
+           .execute())
+    return len(res.data or [])
+
+
 async def update(tenant_id: str, sub_id: str, patch: Dict[str, Any]) -> dict:
     allowed = {"items", "cadence", "next_run", "delivery_cents", "payment_method",
                "delivery_address", "delivery_slot", "customer_name", "note"}
@@ -183,7 +198,7 @@ async def _notify(sub: dict, order: dict) -> None:
                else "Reply here to arrange payment." )
         await _send_reply(phone, (
             f"Hi {sub.get('customer_name') or 'there'}! Your standing order *{order.get('display_id')}* "
-            f"is booked in ({total}). {pay} Reply STOP anytime to pause. 🐟"
+            f"is booked in ({total}). {pay} Reply STOP anytime to pause your repeat order. 🐟"
         ), sub["tenant_id"])
     except Exception as exc:
         log.debug("subscription notify skipped: %s", exc)

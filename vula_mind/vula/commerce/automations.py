@@ -118,6 +118,13 @@ async def _run_action(tenant_id: str, automation: dict, ctx: dict) -> bool:
         phone = ctx.get("customer_phone")
         if not phone:
             return False
+        # An automation is a proactive message the owner authored, so a customer who replied
+        # STOP must not get it (POPIA) — the suppression list broadcasts already honour.
+        from vula.api.commerce import _norm_phone, _suppressed_phones
+        if _norm_phone(phone) in _suppressed_phones(tenant_id):
+            log.info("automation %s not sent: customer opted out", automation.get("id"))
+            return False
+        # Outside the 24h window _send_reply falls back to the tenant's approved notify template.
         return await _send_reply(phone, message, tenant_id=tenant_id)
     if action_type == "whatsapp_team":
         from vula.escalation import _pick_helper

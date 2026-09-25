@@ -4252,6 +4252,17 @@ def record_inbound_consent(tenant_id: str, phone: str, source: str = "inbound") 
         log.debug("consent record skipped (run migration 020?): %s", exc)
 
 
+def record_opt_in(tenant_id: str, phone: str, source: str = "start_keyword") -> None:
+    """Explicit opt-in (START) — the one path allowed to overturn a previous opt-out."""
+    p = _norm_phone(phone)
+    if not tenant_id or not p:
+        return
+    service._client().table("commerce_consent").upsert({
+        "tenant_id": tenant_id, "phone": p, "status": "opted_in",
+        "source": source, "updated_at": "now()"}, on_conflict="tenant_id,phone").execute()
+    _log_consent_event(tenant_id, p, "opted_in", source)
+
+
 def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> None:
     """Persist a do-not-contact suppression (kept even after PII deletion)."""
     p = _norm_phone(phone)

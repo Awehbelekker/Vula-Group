@@ -51,7 +51,14 @@ _REJECT_RE = re.compile(
     r"^\s*(?:reject\w*|rejct\w*|declin\w*|deny|denied|afgekeur)\b\s*(.*)$",
     re.IGNORECASE,
 )
-_DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
+# 2026-09-25 review: STOP used to share this regex with DELETE, so a customer replying STOP
+# ("Reply STOP anytime to pause" — subscriptions.py) had their contact record and history
+# erased. They're separate POPIA rights: STOP = stop messaging me (opt out, pause
+# subscriptions, keep records); DELETE = erase my data. START undoes STOP.
+_DELETE_RE = re.compile(r"^\s*(delete|delete\s+my\s+data|erase\s+my\s+data|remove\s+my\s+data)\s*$",
+                        re.IGNORECASE)
+_OPTOUT_RE = re.compile(r"^\s*(stop|unsubscribe|opt[\s-]?out)\s*[.!]?\s*$", re.IGNORECASE)
+_OPTIN_RE = re.compile(r"^\s*(start|unstop|opt[\s-]?in|subscribe)\s*[.!]?\s*$", re.IGNORECASE)
 # POPIA right-to-access (2026-09-18) — deliberately narrow, same exact-phrase shape as
 # _DELETE_RE above, not a broad keyword match: a request this consequential (assembles and
 # emails a real data export) shouldn't fire on an unrelated message that happens to mention
@@ -1165,6 +1172,12 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     tag_tenant(tenant_id)
 
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
+    if _OPTOUT_RE.match(text):
+        await _handle_opt_out(phone, tenant_id)
+        return
+    if _OPTIN_RE.match(text):
+        await _handle_opt_in(phone, tenant_id)
+        return
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
         return
@@ -3747,8 +3760,46 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
     return True
 
 
+async def _handle_opt_out(phone: str, tenant_id: Optional[str]) -> None:
+    """STOP / unsubscribe / opt out: no more marketing or proactive messages, and any repeat
+    orders paused — but nothing is erased (that's DELETE). The suppression is the same one
+    DELETE records, so broadcasts/campaigns/automations already honour it."""
+    logger.info("Opt-out request from %s (tenant=%s)", phone, tenant_id)
+    paused = 0
+    if tenant_id:
+        try:
+            from vula.api.commerce import record_opt_out
+            record_opt_out(tenant_id, phone, source="stop_keyword")
+        except Exception as exc:
+            logger.warning("opt-out suppression failed for %s: %s", phone, exc)
+        try:
+            from vula.commerce import subscriptions
+            paused = await subscriptions.pause_for_phone(tenant_id, phone)
+        except Exception as exc:
+            logger.debug("subscription pause on STOP skipped: %s", exc)
+    msg = "✅ Done — you won't get any more marketing or reminder messages from us."
+    if paused:
+        msg += f" Your repeat order{'s are' if paused > 1 else ' is'} paused too."
+    msg += (" You can still message us any time. Reply START to opt back in, or DELETE to "
+            "have your data erased.")
+    await _send_reply(phone, msg, tenant_id)
+
+
+async def _handle_opt_in(phone: str, tenant_id: Optional[str]) -> None:
+    """START: an explicit opt-back-in after STOP (record_inbound_consent never overrides an
+    opt-out, so without this there was no way back)."""
+    if tenant_id:
+        try:
+            from vula.api.commerce import record_opt_in
+            record_opt_in(tenant_id, phone, source="start_keyword")
+        except Exception as exc:
+            logger.warning("opt-in failed for %s: %s", phone, exc)
+    await _send_reply(phone, "✅ You're opted back in — welcome back! Reply STOP any time to "
+                             "stop messages.", tenant_id)
+
+
 async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
-    """Handle a DELETE / STOP / opt-out request — POPIA + Meta compliance.
+    """Handle a DELETE (erase my data) request — POPIA + Meta compliance.
 
     Removes the requester's data: tenant_phones entry, chat history, and
     flags the request. Confirms back to the user.
@@ -5497,6 +5548,12 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
 
     # Opt-out / data deletion (POPIA) — honoured on commerce lines too, so STOP
     # from a customer who receives broadcasts actually suppresses them.
+    if _OPTOUT_RE.match(text):
+        await _handle_opt_out(phone, tenant_id)
+        return
+    if _OPTIN_RE.match(text):
+        await _handle_opt_in(phone, tenant_id)
+        return
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
         return
