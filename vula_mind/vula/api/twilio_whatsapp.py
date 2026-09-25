@@ -29,10 +29,13 @@ Env vars:
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 
 import httpx
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from config import settings
@@ -62,6 +65,10 @@ async def twilio_inbound(
     Twilio sends form-encoded data. 'From' looks like 'whatsapp:+27827077080'.
     We strip the prefix and route to the same handler the Meta path uses.
     """
+    # Only Twilio may post here: without this check anyone could inject messages "from" any
+    # phone number (fake orders, escalations, admin commands from an owner's number).
+    await _verify_twilio_signature(request)
+
     # Strip the 'whatsapp:' prefix and leading +
     phone = From.replace("whatsapp:", "").lstrip("+").strip()
     text = (Body or "").strip()
@@ -71,27 +78,49 @@ async def twilio_inbound(
     if not phone or not text:
         return PlainTextResponse("", status_code=200)
 
-    # Route to the shared brain. We patch _send_reply to use Twilio for this turn.
+    # Route to the shared brain, with replies for THIS request (and background work it spawns,
+    # which inherits the context) sent via Twilio. Other requests are unaffected.
     from vula.api import whatsapp as wa
-
-    # Monkeypatch-free approach: temporarily set a context flag so _send_reply
-    # knows to use Twilio. Simpler: call the handler, but override the sender.
-    original_send = wa._send_reply
 
     async def _twilio_send(to: str, message: str, tenant_id: str = "") -> bool:
         return await send_twilio_reply(to, message)
 
-    wa._send_reply = _twilio_send
+    token = wa._REPLY_TRANSPORT.set(_twilio_send)
     try:
         await wa._handle_message(phone, text, MessageSid)
     except Exception as exc:
         logger.error("Twilio message handling failed: %s", exc)
         await send_twilio_reply(phone, "Sorry, something went wrong. Please try again.")
     finally:
-        wa._send_reply = original_send
+        wa._REPLY_TRANSPORT.reset(token)
 
     # Twilio expects an empty TwiML response (we send async via API)
     return PlainTextResponse("", status_code=200)
+
+
+def twilio_signature(auth_token: str, url: str, params: dict) -> str:
+    """Twilio's X-Twilio-Signature: base64(HMAC-SHA1(auth_token, url + sorted key+value))."""
+    data = url + "".join(f"{k}{params[k]}" for k in sorted(params))
+    return base64.b64encode(hmac.new(auth_token.encode(), data.encode(), hashlib.sha1).digest()).decode()
+
+
+async def _verify_twilio_signature(request: Request) -> None:
+    token = getattr(settings, "twilio_auth_token", "")
+    if not token:
+        if settings.debug:
+            return
+        raise HTTPException(status_code=403, detail="Twilio webhook not configured")
+    got = request.headers.get("x-twilio-signature", "")
+    params = {k: v for k, v in (await request.form()).items()}
+    # Behind Railway's proxy the app sees http://; Twilio signed the public https:// URL.
+    url = str(request.url)
+    candidates = {url, url.replace("http://", "https://", 1)}
+    proto = request.headers.get("x-forwarded-proto")
+    if proto:
+        candidates.add(proto + "://" + url.split("://", 1)[1])
+    if not got or not any(hmac.compare_digest(got, twilio_signature(token, u, params)) for u in candidates):
+        logger.warning("Rejecting Twilio webhook: bad or missing signature")
+        raise HTTPException(status_code=403, detail="Invalid signature")
 
 
 async def send_twilio_reply(to: str, message: str) -> bool:

@@ -4342,7 +4342,6 @@ async def admin_send_email_campaign(tenant_id: str, body: dict):
         name:             campaign label
         test_email:       send only to this address (skips audience + suppression)
     """
-    from urllib.parse import quote
     from uuid import uuid4
     from config import settings as _settings
     from vula.email_imap import service as email_service
@@ -4417,7 +4416,8 @@ async def admin_send_email_campaign(tenant_id: str, body: dict):
         em = c["email"]
         full_body = msg_body
         if base:
-            unsub = f"{base}/email/unsubscribe?tenant={quote(tenant_id)}&email={quote(em)}"
+            from vula.api.email_public import unsubscribe_url
+            unsub = unsubscribe_url(base, tenant_id, em)
             full_body = f"{msg_body}\n\n---\nDon't want these emails? Unsubscribe: {unsub}"
         messages.append({"to": em, "subject": subject, "body": full_body})
 

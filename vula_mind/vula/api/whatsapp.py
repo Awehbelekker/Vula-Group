@@ -5298,11 +5298,20 @@ async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
         logger.debug("read/typing indicator skipped for %s: %s", message_id, exc)
 
 
+# Per-request reply transport override (the Twilio sandbox adapter). A ContextVar, not a swap
+# of the module-level _send_reply: the old swap re-routed EVERY concurrent Meta reply in the
+# process through Twilio for as long as one Twilio message was being handled.
+_REPLY_TRANSPORT: "_contextvars.ContextVar" = _contextvars.ContextVar("vula_reply_transport", default=None)
+
+
 async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
     """
     Send a WhatsApp text message via the Meta Graph API.
     Credentials resolved per-tenant from Supabase, falling back to env vars.
     """
+    transport = _REPLY_TRANSPORT.get()
+    if transport is not None:
+        return await transport(to, _sanitize_outbound(message), tenant_id)
     message = _sanitize_outbound(message)
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
     if not creds:

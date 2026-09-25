@@ -5,6 +5,8 @@ WhatsApp's interactive list message has no image slot per row (Meta platform lim
 page is the workaround: a simple photo grid of in-stock products, linked from the WhatsApp
 welcome menu, using the image_url/description data already on commerce_products.
 """
+import html
+
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
@@ -19,7 +21,9 @@ _PLACEHOLDER_IMG = (
 
 
 def _esc(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Quotes too: _esc is also used inside src="..."/alt="..." attributes, where a product
+    # name or image URL containing " could break out and inject markup (XSS on a public page).
+    return html.escape(str(s or ""), quote=True)
 
 
 def _fmt_price(cents) -> str:
