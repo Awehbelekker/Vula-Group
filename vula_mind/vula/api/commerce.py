@@ -2447,6 +2447,9 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
         try:
             res = db.table("commerce_expenses").insert(exp).execute()
             patch = {"matched_expense_id": (res.data or [exp])[0].get("id"), "match_status": "matched"}
+            # The bank debit already happened — book it to the ledger now.
+            from vula.commerce import expenses as _expenses
+            _expenses.post_to_ledger(tenant_id, (res.data or [exp])[0])
         except Exception as exc:
             return {"error": str(exc)}
     elif body.action == "ignore":
@@ -6246,6 +6249,8 @@ async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
     }).eq("tenant_id", tenant_id).eq("id", expense_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Expense not found")
+    from vula.commerce import expenses as _expenses
+    _expenses.post_to_ledger(tenant_id, result.data[0])
     return result.data[0]
 
 
