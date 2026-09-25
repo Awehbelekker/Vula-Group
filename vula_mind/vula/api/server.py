@@ -57,6 +57,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import re
 import sys
@@ -1384,6 +1385,39 @@ _TENANT_GUARD_RES = [
     re.compile(r"^/v1/commerce/([^/]+)/admin(?:/|$)"),
     re.compile(r"^/v1/team/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/users/([^/]+)(?:/|$)"),
+    # 2026-09-25 review: every other tenant-scoped dashboard router was reachable by anyone who
+    # knew a tenant slug — gateway credentials, bookings (customer PII), project finances,
+    # filed documents, mailbox contacts, WhatsApp/Yoco connect/disconnect. Same rule: group(1)
+    # is the tenant the caller must belong to. Public customer paths are carved out below.
+    re.compile(r"^/v1/payments/(?!webhook/)([^/]+)/"),
+    re.compile(r"^/v1/bookings/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/subscriptions/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/recurring-bills/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/projects/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/documents/([^/]+)/(?:filed|projects|media)(?:/|$)"),
+    re.compile(r"^/v1/qs/rates/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/field/(?:contractors|daily-tasks)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/email/(?:status|set-primary|sync|backfill|contacts|followups|disconnect)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/clickup/(?:status|lists|sync-kb)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/whatsapp/(?:connect/status|disconnect)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/yoco/(?:status|test|disconnect)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/(?:google|microsoft|dynamics365)/status/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/(?:google|dynamics365)/(?!authorize-url|oauth|status)([^/]+)/"),
+]
+
+# Customer-facing calls under a guarded prefix that must stay public: the storefront booking
+# widget (puck BookingWidget) lists services, checks availability and creates a booking.
+_TENANT_GUARD_PUBLIC = [
+    ("GET", re.compile(r"^/v1/bookings/[^/]+/(?:services|availability)/?$")),
+    ("POST", re.compile(r"^/v1/bookings/[^/]+/?$")),
+]
+
+# Cross-tenant listings / platform-wide actions: master only.
+_MASTER_ONLY = [
+    ("GET", re.compile(r"^/v1/tenants/?$")),
+    ("GET", re.compile(r"^/v1/whatsapp/accounts/?$")),
+    ("GET", re.compile(r"^/v1/yoco/accounts/?$")),
+    ("POST", re.compile(r"^/v1/training/(?:business/)?seed/?$")),
 ]
 
 # 2026-08-14: per-tenant LLM cost metering (vula/integrations/metering.py) attributes every
@@ -1413,20 +1447,44 @@ async def tenant_metering_context(request, call_next):
 async def tenant_admin_guard(request, call_next):
     if settings.enforce_tenant_auth and request.method != "OPTIONS":
         path = request.url.path
-        for rx in _TENANT_GUARD_RES:
-            m = rx.match(path)
-            if not m:
-                continue
-            from fastapi.responses import JSONResponse
-            auth_header = request.headers.get("authorization", "")
+        blocked = await _guard_check(request.method, path, request.headers.get("authorization", ""),
+                                     request.headers.get("x-api-key", ""))
+        if blocked is not None:
+            return blocked
+    return await call_next(request)
+
+
+async def _guard_check(method: str, path: str, auth_header: str, api_key: str = ""):
+    """None when the request may proceed, else the 401/403 JSONResponse to return. The shared
+    server API key (X-API-Key — n8n / server-to-server jobs, same as require_auth) passes."""
+    from fastapi.responses import JSONResponse
+    if api_key and settings.api_key and hmac.compare_digest(api_key, settings.api_key):
+        return None
+    for m_, rx in _MASTER_ONLY:
+        if method == m_ and rx.match(path):
             if not auth_header:
                 return JSONResponse({"detail": "Sign in required."}, status_code=401)
-            from vula.api.tenant_auth import is_tenant_member
-            if not await is_tenant_member(auth_header, m.group(1)):
-                return JSONResponse(
-                    {"detail": "You don't have access to this workspace."}, status_code=403)
-            break
-    return await call_next(request)
+            from fastapi import HTTPException as _HTTPException
+            from vula.api.master_auth import require_master
+            try:
+                await require_master(auth_header)
+            except _HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            return None
+    if any(method == m_ and rx.match(path) for m_, rx in _TENANT_GUARD_PUBLIC):
+        return None
+    for rx in _TENANT_GUARD_RES:
+        m = rx.match(path)
+        if not m:
+            continue
+        if not auth_header:
+            return JSONResponse({"detail": "Sign in required."}, status_code=401)
+        from vula.api.tenant_auth import is_tenant_member
+        if not await is_tenant_member(auth_header, m.group(1)):
+            return JSONResponse(
+                {"detail": "You don't have access to this workspace."}, status_code=403)
+        break
+    return None
 
 app.include_router(links_router)  # no prefix — public /l/{code} redirect for broadcast click tracking
 app.include_router(email_public_router)  # no prefix — public /email/unsubscribe for campaigns

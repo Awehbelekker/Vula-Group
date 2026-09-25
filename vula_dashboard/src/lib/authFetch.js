@@ -20,8 +20,14 @@ export async function authFetch(path, opts = {}) {
 
 // Paths that the backend's tenant_admin_guard protects (ENFORCE_TENANT_AUTH). One global
 // wrapper instead of touching ~40 components: every fetch to a guarded Vula path gets the
-// signed-in user's token attached transparently.
-const GUARDED = /\/v1\/(commerce\/[^/]+\/admin(\/|$)|team\/|users\/|master(\/|$)|admin\/)|\/scrape\//
+// signed-in user's token attached transparently. Keep in sync with server.py's
+// _TENANT_GUARD_RES / _MASTER_ONLY — a token on a path the backend leaves public is harmless.
+const GUARDED = new RegExp(
+  '/v1/(commerce/[^/]+/admin(/|$)|team/|users/|master(/|$)|admin/' +
+  '|payments/|bookings/|subscriptions/|recurring-bills/|projects/|documents/|qs/|field/' +
+  '|email/|clickup/|whatsapp/|yoco/|google/|microsoft/|dynamics365/|training/|tenants/?($|\\?))' +
+  '|/scrape/'
+)
 
 /** Patch window.fetch once (call from main.jsx) so ALL existing components send the JWT. */
 export function installAuthFetch() {
