@@ -18,3 +18,9 @@ def test_plain_confirmations(msg):
                                  "yes and please also deliver to my office on Friday afternoon not the morning"])
 def test_not_a_confirmation(msg):
     assert not _is_clear_confirmation(msg)
+
+
+def test_language_tie_goes_to_english():
+    from core.lang import detect_language
+    assert detect_language("I'd like 2 more") == "en"
+    assert detect_language("ek wil more bestel asseblief") == "af"
