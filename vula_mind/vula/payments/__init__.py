@@ -50,6 +50,25 @@ def _rand(cents: int) -> str:
     return f"{(int(cents) / 100):.2f}"
 
 
+def _rands_to_cents(v) -> Optional[int]:
+    """'150.00' / 150 / '1,500.50' -> integer cents; None when absent or unparseable."""
+    if v in (None, ""):
+        return None
+    try:
+        return int(round(float(str(v).replace(",", "").strip()) * 100))
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_cents(v) -> Optional[int]:
+    if v in (None, ""):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 # ── Providers ─────────────────────────────────────────────────────────────────
 
 class _Provider:
@@ -60,7 +79,10 @@ class _Provider:
         raise NotImplementedError
 
     async def verify_webhook(self, creds, headers, body: bytes, form: dict) -> Optional[dict]:
-        """Return {'reference': str, 'paid': bool, 'raw': dict} for a valid event, else None."""
+        """Return {'reference': str, 'paid': bool, 'amount_cents': int|None, 'raw': dict} for a
+        notification whose authenticity was VERIFIED, else None. Fail closed: a notification
+        that can't be verified (missing signature, missing secret, mismatch) is never trusted —
+        the caller would otherwise mark an invoice/order paid on an unauthenticated POST."""
         return None
 
 
@@ -119,14 +141,17 @@ class PayFast(_Provider):
 
     async def verify_webhook(self, creds, headers, body, form):
         d = form or {}
-        # Signature check (order as received, excluding 'signature').
+        # Signature check (order as received, excluding 'signature'). Mandatory: an ITN with no
+        # signature used to be accepted as-is, so anyone could POST payment_status=COMPLETE.
         check = {k: v for k, v in d.items() if k != "signature"}
         expect = self._sig(check, creds.get("passphrase", ""))
-        if d.get("signature") and d["signature"] != expect:
-            logger.warning("PayFast ITN signature mismatch")
+        sig = str(d.get("signature") or "")
+        if not sig or not hmac.compare_digest(sig, expect):
+            logger.warning("PayFast ITN rejected: %s", "signature mismatch" if sig else "no signature")
             return None
         paid = (d.get("payment_status") == "COMPLETE")
-        return {"reference": d.get("m_payment_id"), "paid": paid, "raw": d}
+        return {"reference": d.get("m_payment_id"), "paid": paid,
+                "amount_cents": _rands_to_cents(d.get("amount_gross")), "raw": d}
 
 
 class Paystack(_Provider):
@@ -154,7 +179,8 @@ class Paystack(_Provider):
         except Exception:
             return None
         if data.get("event") == "charge.success":
-            return {"reference": data.get("data", {}).get("reference"), "paid": True, "raw": data}
+            return {"reference": data.get("data", {}).get("reference"), "paid": True,
+                    "amount_cents": _int_cents(data.get("data", {}).get("amount")), "raw": data}
         return None
 
 
@@ -189,10 +215,34 @@ class Ozow(_Provider):
         d = r.json()
         return PayLink(url=d.get("url") or d.get("paymentRequestId"), provider=self.name, reference=reference, raw=d)
 
+    # Ozow notification hash: SHA512 of the lower-cased concatenation of these fields (in this
+    # order) + the private key — the same scheme as the request hashCheck above.
+    _NOTIFY_FIELDS = ("SiteCode", "TransactionId", "TransactionReference", "Amount", "Status",
+                      "Optional1", "Optional2", "Optional3", "Optional4", "Optional5",
+                      "CurrencyCode", "IsTest", "StatusMessage")
+
     async def verify_webhook(self, creds, headers, body, form):
         d = form or {}
+        if not d and body:
+            try:
+                d = json.loads(body)
+            except Exception:
+                d = {}
+        key = creds.get("private_key") or ""
+        got = str(d.get("Hash") or d.get("HashCheck") or "")
+        if not key or not got:
+            logger.warning("Ozow notification rejected: %s", "no private key" if not key else "no hash")
+            return None
+        expect = self._hash([d.get(f) or "" for f in self._NOTIFY_FIELDS], key)
+        if not hmac.compare_digest(got.lower(), expect):
+            logger.warning("Ozow notification rejected: hash mismatch")
+            return None
+        if creds.get("site_code") and d.get("SiteCode") != creds["site_code"]:
+            logger.warning("Ozow notification rejected: site code mismatch")
+            return None
         paid = (str(d.get("Status", "")).lower() == "complete")
-        return {"reference": d.get("TransactionReference"), "paid": paid, "raw": d}
+        return {"reference": d.get("TransactionReference"), "paid": paid,
+                "amount_cents": _rands_to_cents(d.get("Amount")), "raw": d}
 
 
 class Peach(_Provider):
@@ -212,14 +262,33 @@ class Peach(_Provider):
         url = d.get("redirectUrl") or (d.get("checkoutId") and f"{base}/checkout/{d['checkoutId']}")
         return PayLink(url=url, provider=self.name, reference=reference, raw=d)
 
+    @staticmethod
+    def _signature(data: dict, secret: str) -> str:
+        # Peach Checkout: HMAC-SHA256 over the alphabetically-sorted key+value pairs (no
+        # separators), excluding the signature itself, keyed with the webhook secret token.
+        msg = "".join(f"{k}{data[k]}" for k in sorted(data) if k != "signature" and data[k] is not None)
+        return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+
     async def verify_webhook(self, creds, headers, body, form):
-        try:
-            data = json.loads(body or b"{}") if body else (form or {})
-        except Exception:
-            data = form or {}
-        code = str((data.get("result") or {}).get("code", data.get("resultCode", "")))
+        data = form or {}
+        if not data and body:
+            try:
+                data = json.loads(body)
+            except Exception:
+                data = {}
+        secret = creds.get("webhook_secret") or ""
+        got = str(data.get("signature") or "")
+        if not secret or not got:
+            logger.warning("Peach notification rejected: %s", "no webhook secret" if not secret else "no signature")
+            return None
+        flat = {k: v for k, v in data.items() if not isinstance(v, (dict, list))}
+        if not hmac.compare_digest(got.lower(), self._signature(flat, secret)):
+            logger.warning("Peach notification rejected: signature mismatch")
+            return None
+        code = str((data.get("result") or {}).get("code", data.get("resultCode", data.get("result.code", ""))))
         paid = code.startswith("000.000.") or code.startswith("000.100.1")
-        return {"reference": data.get("merchantTransactionId"), "paid": paid, "raw": data}
+        return {"reference": data.get("merchantTransactionId"), "paid": paid,
+                "amount_cents": _rands_to_cents(data.get("amount")), "raw": data}
 
 
 class IKhokha(_Provider):
@@ -248,13 +317,30 @@ class IKhokha(_Provider):
         return PayLink(url=d.get("paylinkUrl") or d.get("paymentUrl"), provider=self.name, reference=reference, raw=d)
 
     async def verify_webhook(self, creds, headers, body, form):
+        # iKhokha signs callbacks the same way requests are signed: IK-SIGN = HMAC-SHA256 of
+        # (callback path + raw body) with the app secret. payment_webhook passes the path it was
+        # called on as the x-vula-path header; a signature over the bare body is also accepted.
+        secret = creds.get("app_secret") or ""
+        h = {str(k).lower(): v for k, v in (headers or {}).items()}
+        got = str(h.get("ik-sign") or "")
+        if not secret or not got or not body:
+            logger.warning("iKhokha callback rejected: %s", "no app secret" if not secret else "no signature")
+            return None
+        raw = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body)
+        candidates = [raw] + ([h["x-vula-path"] + raw] if h.get("x-vula-path") else [])
+        if not any(hmac.compare_digest(got.lower(),
+                                       hmac.new(secret.encode(), c.encode(), hashlib.sha256).hexdigest())
+                   for c in candidates):
+            logger.warning("iKhokha callback rejected: signature mismatch")
+            return None
         try:
-            data = json.loads(body or b"{}") if body else (form or {})
+            data = json.loads(raw)
         except Exception:
-            data = form or {}
+            return None
         status = str(data.get("status", data.get("paymentStatus", ""))).lower()
         paid = status in ("success", "complete", "paid", "successful")
-        return {"reference": data.get("externalTransactionID") or data.get("paymentReference"), "paid": paid, "raw": data}
+        return {"reference": data.get("externalTransactionID") or data.get("paymentReference"), "paid": paid,
+                "amount_cents": _int_cents(data.get("amount")), "raw": data}
 
 
 _REGISTRY = {p.name: p for p in (Yoco(), PayFast(), Peach(), IKhokha(), Ozow(), Paystack())}

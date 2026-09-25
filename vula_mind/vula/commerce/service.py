@@ -620,23 +620,30 @@ async def _attribute_broadcast(tenant_id: str, phone: str) -> Optional[str]:
         return None
 
 
-async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
-    items = cart.get("commerce_cart_items", [])
-    # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
-    subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
+def delivery_fee_cents(tenant_id: str, cart: dict, subtotal_cents: int) -> int:
+    """The delivery fee an order of this cart will actually be charged — the single source for
+    create_order AND every preview (view_cart, review_order), so what the customer is shown is
+    what they pay. Tenant delivery-fee rules (migration 070) override the cart's snapshotted
+    default: configured standard fee, and free delivery at/above the configured subtotal."""
     delivery = cart.get("delivery_cents", 8000)
-    # Tenant delivery-fee rules (migration 070) override the cart's snapshotted default:
-    # configured standard fee, and free delivery at/above the configured subtotal.
     try:
         from vula.commerce.order_workflow import get_order_settings
         _cfg = get_order_settings(tenant_id)
         if _cfg.get("delivery_fee_cents") is not None:
             delivery = int(_cfg["delivery_fee_cents"])
         free_over = _cfg.get("free_delivery_over_cents")
-        if free_over and subtotal >= int(free_over):
+        if free_over and subtotal_cents >= int(free_over):
             delivery = 0
     except Exception:
         pass
+    return delivery
+
+
+async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
+    items = cart.get("commerce_cart_items", [])
+    # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
+    subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
+    delivery = delivery_fee_cents(tenant_id, cart, subtotal)
 
     # Discount code (migration 091) — resolved authoritatively here regardless of any
     # client-side preview, since the actual amount charged must never trust the client.
@@ -762,6 +769,15 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
         for i in items
     ]
     _client().table("commerce_order_items").insert(order_items).execute()
+
+    # The cart is spent — convert it so the next order starts empty. WhatsApp carts are keyed
+    # by the customer's phone (one long-lived "active" cart per number), so without this the
+    # next order re-charged every item from the previous one and a repeated "yes" placed a
+    # duplicate. Never fails the order: it's already placed and the items are recorded.
+    try:
+        await clear_cart(cart["id"])
+    except Exception as exc:
+        logger.warning("cart %s not cleared after order %s: %s", cart.get("id"), order_id, exc)
 
     return result.data[0]
 

@@ -1575,7 +1575,7 @@ class CommerceAssistantSkill(BaseSkill):
                  "quantity": _fmt_qty(prod, it["quantity"]),
                  "line_total": f"R{line_total / 100:.2f}"}
             )
-        delivery = cart.get("delivery_cents", 8000)
+        delivery = service.delivery_fee_cents(tenant_id, cart, subtotal)
         return {
             "items": lines,
             "subtotal": f"R{subtotal / 100:.2f}",
@@ -2071,7 +2071,7 @@ class CommerceAssistantSkill(BaseSkill):
         if not items:
             return {"error": "The cart is empty — add items before reviewing."}
         subtotal = sum(_line_cents(i["quantity"], i["unit_price_cents"]) for i in items)
-        delivery = cart.get("delivery_cents", 8000)
+        delivery = service.delivery_fee_cents(tenant_id, cart, subtotal)
 
         # Discount preview only — never trust this for the amount actually charged. place_order
         # re-resolves the code authoritatively inside service.create_order (same as the
@@ -2229,6 +2229,18 @@ class CommerceAssistantSkill(BaseSkill):
         if method not in enabled:
             offered = ", ".join(ow.PAYMENT_LABELS.get(m, m) for m in enabled)
             return {"error": f"That payment method isn't offered here. Available: {offered}."}
+
+        # Minimum order was prompt-only guidance before — enforce it in code so a model that
+        # ignores the prompt can't place an order the business said it won't fulfil.
+        min_order = cfg.get("min_order_cents")
+        if min_order:
+            _cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+            _sub = sum(_line_cents(i["quantity"], i["unit_price_cents"])
+                       for i in (_cart.get("commerce_cart_items") or []))
+            if _sub and _sub < int(min_order):
+                return {"error": f"The minimum order is R{int(min_order) / 100:.2f} and this cart is "
+                                 f"R{_sub / 100:.2f} — tell the customer and ask if they'd like to add "
+                                 f"more. Do not place the order."}
 
         address = (args.get("delivery_address") or "").strip()
         if not address:
