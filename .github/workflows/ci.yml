@@ -86,3 +86,8 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The Puck editor config and the public page renderer must list the same blocks, or a
+      # page built in the editor renders blank on the live site.
+      - name: Puck config / renderer in sync
+        run: npm run check:puck-sync
