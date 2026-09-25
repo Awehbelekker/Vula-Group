@@ -189,7 +189,9 @@ async def test_update_quote_status(skill, monkeypatch):
         return {}
     monkeypatch.setattr(ca.service, "update_invoice_status", update_invoice_status)
 
-    res = await skill._update_quote_status(TID, "QUO-001", "accepted")
+    preview = await skill._update_quote_status(TID, "QUO-001", "accepted")
+    assert preview["preview"] is True and preview["new_status"] == "accepted"
+    res = await skill._update_quote_status(TID, "QUO-001", "accepted", confirm=True)
     assert res == {"updated": "QUO-001", "new_status": "accepted"}
 
 
