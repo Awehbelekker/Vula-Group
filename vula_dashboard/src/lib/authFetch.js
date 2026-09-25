@@ -25,7 +25,8 @@ export async function authFetch(path, opts = {}) {
 const GUARDED = new RegExp(
   '/v1/(commerce/[^/]+/admin(/|$)|team/|users/|master(/|$)|admin/' +
   '|payments/|bookings/|subscriptions/|recurring-bills/|projects/|documents/|qs/|field/' +
-  '|email/|clickup/|whatsapp/|yoco/|google/|microsoft/|dynamics365/|training/|tenants/?($|\\?))' +
+  '|email/|clickup/|whatsapp/|yoco/|google/|microsoft/|dynamics365/|training/|tenants/?($|\\?)' +
+  '|onboard(/|$))' +
   '|/scrape/'
 )
 

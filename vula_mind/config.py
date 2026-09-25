@@ -170,6 +170,10 @@ class Settings(BaseSettings):
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""
+    # The passphrase set on the PayFast account (Settings -> Integration). Empty = none set.
+    # It is NOT the merchant key — the subscription link used to sign with the merchant key,
+    # which PayFast rejects.
+    payfast_passphrase: str = ""
 
     # ── Yoco (commerce payments) ─────────────────────────────────────────────
     yoco_secret_key: str = ""

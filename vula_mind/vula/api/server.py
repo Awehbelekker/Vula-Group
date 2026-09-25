@@ -279,7 +279,7 @@ async def _daily_trial_expiry_loop() -> None:
                     days_left = (datetime.fromisoformat(trial_end_str).date() - today).days
                     if days_left in (7, 3, 1, 0):
                         payment_url = _payfast_url(
-                            t["tenant_id"], t.get("plan", "starter"),
+                            t.get("workspace_slug") or t["tenant_id"], t.get("plan", "starter"),
                             t.get("email", ""), t.get("contact_name", ""),
                         )
                         await send_trial_expiry_email(
