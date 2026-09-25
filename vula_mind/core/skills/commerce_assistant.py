@@ -2381,7 +2381,7 @@ class CommerceAssistantSkill(BaseSkill):
 
         try:
             from vula.commerce.service import send_order_invoice
-            await send_order_invoice(tenant_id, order["id"])
+            await send_order_invoice(tenant_id, order["id"], with_pay_link=not pay_link)
         except Exception as exc:
             logger.debug("auto invoice send skipped: %s", exc)
 
@@ -2409,16 +2409,20 @@ class CommerceAssistantSkill(BaseSkill):
         """A hosted card pay-link via the tenant's connected gateway, or None if none is set up."""
         try:
             from vula.payments import create_pay_link, default_provider_row
-            base = (settings.store_urls.get(tenant_id, "") or "").rstrip("/") or "https://vula-group-production.up.railway.app"
-            api = "https://vula-group-production.up.railway.app"
+            api = settings.public_base_url.rstrip("/")
+            # A store URL when the tenant has a storefront; otherwise the API's own payment
+            # result pages (/payment/success|cancel — the same ones invoice pay-links use).
+            # The old fallback sent customers to {api}/order/{id}, which doesn't exist.
+            store = (settings.store_urls.get(tenant_id, "") or "").rstrip("/")
             prov = (default_provider_row(tenant_id) or {}).get("provider", "default")
             link = await create_pay_link(
                 tenant_id,
                 amount_cents=order["total_cents"],
                 reference=order["display_id"],
                 description=f"Order {order['display_id']}",
-                success_url=f"{base}/order/{order['display_id']}",
-                cancel_url=f"{base}/cart",
+                success_url=(f"{store}/order/{order['display_id']}" if store
+                             else f"{api}/payment/success?order={order['display_id']}"),
+                cancel_url=f"{store}/cart" if store else f"{api}/payment/cancel?order={order['display_id']}",
                 notify_url=f"{api}/v1/payments/webhook/{tenant_id}/{prov}",
                 customer={"name": order.get("customer_name"), "phone": order.get("customer_phone")},
             )

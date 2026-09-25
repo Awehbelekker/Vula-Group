@@ -1557,7 +1557,7 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     return result.data[0]
 
 
-async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
+async def send_order_invoice(tenant_id: str, order_id: str, with_pay_link: bool = True) -> Optional[dict]:
     """Auto-generate an invoice for a just-placed order and WhatsApp it to the customer —
     the invoice doubles as the payment request, not a post-payment receipt. Self-contained
     and safe to call fire-and-forget: never raises, so a PDF/WhatsApp hiccup can never break
@@ -1606,25 +1606,29 @@ async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
 
     # Best-effort "Pay now" link — a connected gateway is optional, so this never blocks the
     # invoice itself from being created/sent if no provider is set up or the call fails.
-    try:
-        from vula import payments as _payments
-        api_base = "https://vula-group-production.up.railway.app"
-        row = _payments.default_provider_row(tenant_id)
-        provider = row["provider"] if row else "yoco"
-        link = await _payments.create_pay_link(
-            tenant_id, amount_cents=int(invoice["total_cents"]), reference=invoice["id"],
-            description=f"Invoice {invoice.get('invoice_number') or ''}".strip(),
-            success_url=f"{api_base}/payment/success?invoice={invoice['id']}",
-            cancel_url=f"{api_base}/payment/cancel?invoice={invoice['id']}",
-            notify_url=f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}",
-            customer={"email": invoice.get("customer_email"), "phone": phone})
-        if link and link.url:
-            _client().table("commerce_invoices").update(
-                {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id")}
-            ).eq("id", invoice["id"]).execute()
-            invoice["pay_url"] = link.url
-    except Exception as exc:
-        logger.debug("send_order_invoice: pay-link skipped for invoice %s: %s", invoice.get("id"), exc)
+    # with_pay_link=False when the order already carries its own checkout/pay link: two live
+    # links for one order let a customer pay twice.
+    if with_pay_link:
+        try:
+            from vula import payments as _payments
+            from config import settings as _cfg
+            api_base = _cfg.public_base_url.rstrip("/")
+            row = _payments.default_provider_row(tenant_id)
+            provider = row["provider"] if row else "yoco"
+            link = await _payments.create_pay_link(
+                tenant_id, amount_cents=int(invoice["total_cents"]), reference=invoice["id"],
+                description=f"Invoice {invoice.get('invoice_number') or ''}".strip(),
+                success_url=f"{api_base}/payment/success?invoice={invoice['id']}",
+                cancel_url=f"{api_base}/payment/cancel?invoice={invoice['id']}",
+                notify_url=f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}",
+                customer={"email": invoice.get("customer_email"), "phone": phone})
+            if link and link.url:
+                _client().table("commerce_invoices").update(
+                    {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id")}
+                ).eq("id", invoice["id"]).execute()
+                invoice["pay_url"] = link.url
+        except Exception as exc:
+            logger.debug("send_order_invoice: pay-link skipped for invoice %s: %s", invoice.get("id"), exc)
 
     try:
         from vula.commerce.pdf import render_invoice_pdf, merge_branding

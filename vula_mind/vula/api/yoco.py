@@ -132,13 +132,15 @@ async def _notify_order_paid(
         # Customer confirmation
         if customer_phone:
             from vula.api import tenants as _tenants
-            store_url = _tenants.store_url(tenant_id) or "offthehook.co.za"
+            # Every tenant's customers used to be told their "Off the Hook order" was confirmed,
+            # with a link to offthehook.co.za.
+            store_url = _tenants.store_url(tenant_id)
+            track = f"Track at {store_url} or reply" if store_url else "Reply"
             await _send(
                 customer_phone,
-                f"Hi {customer_name or 'there'}! Your Off the Hook order *{display_id}* "
-                f"is confirmed ({amount}). We'll be in touch with your delivery time. "
-                f"Track at {store_url} or reply here with any questions. "
-                f"Thank you!"
+                f"Hi {customer_name or 'there'}! Your {_tenants.display_name(tenant_id)} order "
+                f"*{display_id}* is confirmed ({amount}). We'll be in touch with your delivery "
+                f"time. {track} here with any questions. Thank you!"
             )
 
         # Order item summary (once)

@@ -127,6 +127,16 @@ def invalidate(tenant_id: str) -> None:
     _CACHE.pop(tenant_id, None)
 
 
+def display_name(tenant_id: str) -> str:
+    """The business name customers should see — never another tenant's. Falls back to a
+    title-cased slug ("my-shop" -> "My Shop")."""
+    try:
+        name = (get_config(tenant_id) or {}).get("display_name")
+    except Exception:
+        name = None
+    return (name or (tenant_id or "").replace("-", " ").title() or "us").strip()
+
+
 def store_url(tenant_id: str) -> Optional[str]:
     cfg = get_config(tenant_id)
     if cfg.get("store_url"):

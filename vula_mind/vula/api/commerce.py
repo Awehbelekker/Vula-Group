@@ -587,7 +587,8 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     # background side-effects (statement ingestion jobs).
     import asyncio
     from vula.commerce.service import send_order_invoice
-    asyncio.create_task(send_order_invoice(tenant_id, order["id"]))
+    # with_pay_link=False: the storefront's Yoco checkout above is this order's payment link.
+    asyncio.create_task(send_order_invoice(tenant_id, order["id"], with_pay_link=False))
 
     return {
         "order_id": order["id"],
@@ -744,7 +745,8 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
             first = (order.get("customer_name") or "").split(" ")[0]
             sent = await _send_reply(
                 order["customer_phone"],
-                (f"Hi {first}! 🐟 Your order {order.get('display_id') or ''} has been delivered — "
+                (f"Hi {first}! Your {_tenants_display(tenant_id)} order {order.get('display_id') or ''} "
+                 "has been delivered — "
                  "we hope everything is perfect. How was it? Reply with a rating from 1 to 5 "
                  "(5 = excellent). Thank you!").replace("  ", " "),
                 tenant_id,
@@ -3973,7 +3975,8 @@ async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
     from vula import payments
     from vula.api import tenants as _tenants
     store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
-    api_base = "https://vula-group-production.up.railway.app"
+    from config import settings as _cfg
+    api_base = _cfg.public_base_url.rstrip("/")
     row = payments.default_provider_row(tenant_id)
     provider = row["provider"] if row else "yoco"
     notify_url = f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}"
@@ -5155,6 +5158,11 @@ async def job_weekly_specials(tenant_id: str):
 
 
 # ── Customers (client list / CRM) ─────────────────────────────────────────────
+
+def _tenants_display(tenant_id: str) -> str:
+    from vula.api import tenants as _t
+    return _t.display_name(tenant_id)
+
 
 def _norm_phone(p: Optional[str]) -> str:
     """Normalise a phone number to digits-only E.164-ish (SA: 0xx → 27xx)."""
