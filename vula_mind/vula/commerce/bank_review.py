@@ -15,11 +15,39 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
 PENDING = ("default", "asked")
+
+# 2026-09-25, real DIGG transcript: a bank-review credit-matching question asked on 2026-08-17 —
+# 39 days earlier, never answered — was still being treated as outstanding, and swallowed a
+# genuine, unrelated message ("Excel spreadsheet if possible", 4 words, no recognized request
+# opener) that never reached HRM/email_admin at all. No amount of tuning _is_request_shaped below
+# fixes this class of bug on its own: the real gap is that an 'asked' question here never expires.
+# A question this old is something the owner has moved on from — it stays visible (and
+# resolvable) in the dashboard's Bank/escalations tab, but stops being treated as the thing a
+# fresh WhatsApp message must be answering.
+_STALE_AFTER_HOURS = 24
+
+
+def _is_stale(txn: Dict[str, Any]) -> bool:
+    """True when `txn` was asked (or, lacking that, filed) more than _STALE_AFTER_HOURS ago.
+    No timestamp at all (older rows, or a test fixture) is treated as NOT stale — an unknown age
+    is not evidence of staleness, and every 'asked' row genuinely worth still answering must keep
+    working exactly as before."""
+    raw = txn.get("asked_at") or txn.get("created_at")
+    if not raw:
+        return False
+    try:
+        when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - when > timedelta(hours=_STALE_AFTER_HOURS)
 
 
 # Guards against the same bug class as vula/api/whatsapp.py's _looks_like_purpose_attempt: a real
@@ -160,6 +188,7 @@ async def handle_answer(tenant_id: str, text: str) -> Optional[str]:
                  .limit(1).execute().data or [])
     except Exception:
         return None
+    asked = [t for t in asked if not _is_stale(t)]
     if not asked:
         return None
     txn = asked[0]
@@ -401,12 +430,14 @@ async def handle_client_answer(tenant_id: str, text: str) -> Optional[str]:
                      .limit(1).execute().data or [])
     except Exception:
         asked_out = []
+    asked_out = [t for t in asked_out if not _is_stale(t)]
     try:
         asked = (db.table("commerce_bank_transactions").select("*")
                  .eq("tenant_id", tenant_id).eq("direction", "in")
                  .eq("match_status", "asked").limit(1).execute().data or [])
     except Exception:
         asked = []
+    asked = [t for t in asked if not _is_stale(t)]
     # 2026-09-08: this used to always route to asked_out when it existed, with no regard for
     # whether a money-in question was ALSO pending — a reply clearly meant for the money-in
     # question (e.g. an order number) would still be captured by asked_out and misapplied to
