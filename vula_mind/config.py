@@ -252,6 +252,10 @@ class Settings(BaseSettings):
     # (the ones keywords already failed on), so it's on by default; flip off via env var if
     # it ever misbehaves, no redeploy needed.
     skill_llm_fallback_enabled: bool = True
+    # The local model that classifies a keyword-miss message (orchestrator._llm_classify_skill).
+    # Empty = model_worker_cheap_local — one the Ollama box actually serves (the old hardcoded
+    # qwen2.5:3b wasn't necessarily pulled there).
+    skill_classifier_model: str = ""
 
     @property
     def verification_policies(self) -> dict[str, str]:
