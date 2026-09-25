@@ -455,6 +455,9 @@ async def create_pay_link(tenant_id: str, *, amount_cents: int, reference: str, 
                           customer: dict = None) -> Optional[PayLink]:
     """Create a hosted pay link via the tenant's default gateway. Falls back to a connected
     Yoco account (legacy) if no provider is configured."""
+    # tenant_id rides in the link metadata so the gateway's signed callback can be tied back to
+    # this tenant (Yoco's account-wide webhook resolves the reference with it).
+    customer = {**(customer or {}), "tenant_id": tenant_id}
     row = default_provider_row(tenant_id)
     if row:
         prov = get_provider(row["provider"])

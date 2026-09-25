@@ -266,3 +266,25 @@ async def test_gate_emit_popia_safe(skill, emits, monkeypatch):
     extra = _gate_events(emits)[0]["extra"]
     flat = set(extra["expected"]) | set(extra["observed"])
     assert not flat & {"phone", "customer_phone", "customer_name", "name", "email", "address"}
+
+
+@pytest.mark.asyncio
+async def test_owner_can_mark_order_paid_with_method(skill, emits, monkeypatch):
+    """'paid' was missing from _VALID_ORDER_STATUS, so "she paid cash" was always refused."""
+    calls = []
+
+    async def list_orders(tid, **kw):
+        return [{"id": "o1", "display_id": "OTH-00042", "status": "pending_payment"}]
+
+    async def update_order_status(order_id, status, payment_method=None):
+        calls.append((order_id, status, payment_method))
+
+    async def get_order(order_id):
+        return {"id": "o1", "status": "paid"}
+
+    monkeypatch.setattr(ca.service, "list_orders", list_orders)
+    monkeypatch.setattr(ca.service, "update_order_status", update_order_status)
+    monkeypatch.setattr(ca.service, "get_order", get_order)
+    res = await skill._update_order_status(TID, "oth-00042", "paid", "cash")
+    assert calls == [("o1", "paid", "cash")]
+    assert res["new_status"] == "paid" and res["payment_method"] == "cash" and res["verified"] is True

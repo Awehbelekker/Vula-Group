@@ -1697,7 +1697,35 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
                 ledger.post_invoice_paid(tenant_id, invoice)
         except Exception as exc:
             logger.warning("ledger hook failed for invoice %s: %s", invoice_id, exc)
+        await _settle_linked_order(tenant_id, invoice)
     return invoice
+
+
+async def _settle_linked_order(tenant_id: str, invoice: dict) -> None:
+    """An order's auto-generated invoice (send_order_invoice) was paid → the order is paid too.
+
+    Before this the order stayed pending_payment: never dispatched, and the unpaid-order chase
+    kept nagging a customer who had already paid. The order row is flipped directly (NOT via
+    update_order_status) because the revenue was just posted to the ledger for the invoice —
+    posting it again for the order would double-count it. Conditional on pending_payment so a
+    repeat call is a no-op. Never raises."""
+    order_id = invoice.get("order_id")
+    if not order_id or (invoice.get("direction") or "outbound") == "inbound":
+        return
+    try:
+        res = (_client().table("commerce_orders")
+               .update({"status": "paid", "updated_at": _now()})
+               .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment")
+               .execute())
+        if not res.data:
+            return
+        o = res.data[0]
+        from vula.api.yoco import _notify_order_paid
+        await _notify_order_paid(tenant_id, o.get("display_id") or "", order_id, o.get("customer_phone"),
+                                 o.get("customer_name") or "", int(o.get("total_cents") or 0))
+    except Exception as exc:
+        logger.warning("linked order %s not settled after invoice %s paid: %s",
+                       order_id, invoice.get("id"), exc)
 
 
 async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
@@ -1862,6 +1890,8 @@ async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: 
         ledger.post_invoice_payment(tenant_id, invoice, created_payment)
     except Exception as exc:
         logger.warning("ledger hook failed for invoice payment %s: %s", created_payment.get("id"), exc)
+    if new_status == "paid":
+        await _settle_linked_order(tenant_id, updated)
 
     return {**updated, "payment": created_payment, "total_paid_cents": total_paid,
             "balance_due_cents": max(0, total_due - total_paid)}

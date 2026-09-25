@@ -57,7 +57,10 @@ MAX_TOOL_ITERATIONS = 4
 # rules) entirely, not just these four. See `behaviour_preamble(agentic=True)` below.
 
 _PAID_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered"}
-_VALID_ORDER_STATUS = {"confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
+# "paid" is here so an owner can record a walk-in / cash / EFT payment ("she paid cash") — the
+# tool description and the payment_method branch below were written for it, but without it in
+# this set that branch was unreachable and every such request was refused.
+_VALID_ORDER_STATUS = {"paid", "confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
 
 
 def _readback_gate(tid: str, tool: str, ok: bool, expected: Dict[str, Any],
@@ -1611,12 +1614,27 @@ class CommerceAdminSkill(BaseSkill):
                  "total": self._rands(o.get("total_cents")), "customer": o.get("customer_name")}
                 for o in orders] or {"message": "No orders found."}
 
+    async def _find_order_by_display_id(self, tid: str, display_id: str) -> Optional[dict]:
+        """Exact lookup by display id — the old scan of the latest 200 orders silently missed
+        any older order ("No order found") once a tenant had more than 200."""
+        want = (display_id or "").strip().upper()
+        if not want:
+            return None
+        try:
+            rows = (service._client().table("commerce_orders").select("id,display_id,status")
+                    .eq("tenant_id", tid).eq("display_id", want).limit(1).execute().data or [])
+            if rows:
+                return rows[0]
+        except Exception as exc:
+            logger.debug("display_id lookup failed, scanning recent orders: %s", exc)
+        orders = await service.list_orders(tid, limit=200)
+        return next((o for o in orders if (o.get("display_id") or "").upper() == want), None)
+
     async def _update_order_status(self, tid: str, display_id: str, status: str,
                                    payment_method: Optional[str] = None) -> Dict[str, Any]:
         if status not in _VALID_ORDER_STATUS:
             return {"error": f"status must be one of {sorted(_VALID_ORDER_STATUS)}"}
-        orders = await service.list_orders(tid, limit=200)
-        match = next((o for o in orders if (o.get("display_id") or "").upper() == display_id.strip().upper()), None)
+        match = await self._find_order_by_display_id(tid, display_id)
         if not match:
             return {"error": f"No order {display_id} found."}
         # Only meaningful alongside 'paid' — recording "cash" against a dispatch would be noise.

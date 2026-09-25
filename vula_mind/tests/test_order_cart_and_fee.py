@@ -142,3 +142,31 @@ def test_delivery_fee_uses_tenant_rules_over_cart_snapshot():
         assert service.delivery_fee_cents(TENANT, cart, 50000) == 0
     with patch("vula.commerce.order_workflow.get_order_settings", return_value={}):
         assert service.delivery_fee_cents(TENANT, cart, 10000) == 8000
+
+
+# ── Paying an order's invoice settles the order (2026-09-25 review) ─────────
+
+@pytest.mark.asyncio
+async def test_paid_invoice_marks_linked_order_paid_and_notifies_once():
+    from unittest.mock import AsyncMock
+    db = _FakeDB()
+    db.store["commerce_orders"] = [{"id": "o1", "tenant_id": TENANT, "display_id": "OTH-1",
+                                    "status": "pending_payment", "total_cents": 9000}]
+    notify = AsyncMock()
+    with patch("vula.commerce.service._client", return_value=db), \
+         patch("vula.api.yoco._notify_order_paid", notify):
+        await service._settle_linked_order(TENANT, {"id": "inv-1", "order_id": "o1"})
+        await service._settle_linked_order(TENANT, {"id": "inv-1", "order_id": "o1"})
+    assert db.store["commerce_orders"][0]["status"] == "paid"
+    notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_supplier_bill_never_touches_orders():
+    from unittest.mock import AsyncMock
+    db = _FakeDB()
+    db.store["commerce_orders"] = [{"id": "o1", "tenant_id": TENANT, "status": "pending_payment"}]
+    with patch("vula.commerce.service._client", return_value=db), \
+         patch("vula.api.yoco._notify_order_paid", AsyncMock()):
+        await service._settle_linked_order(TENANT, {"id": "b1", "order_id": "o1", "direction": "inbound"})
+    assert db.store["commerce_orders"][0]["status"] == "pending_payment"

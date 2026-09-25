@@ -2147,8 +2147,12 @@ async def admin_bank_statement_from_text(tenant_id: str, body: dict):
         txns = await bank_rec.extract_transactions(text)
         if not txns:
             return {"error": "no transactions found in the text"}
-        return await bank_rec.reconcile(tenant_id, txns,
-                                        source_file=(body or {}).get("filename") or "pasted-statement")
+        ok = bank_rec.reconciliation_ok(txns)
+        result = await bank_rec.reconcile(tenant_id, txns,
+                                          source_file=(body or {}).get("filename") or "pasted-statement",
+                                          auto_settle=ok)
+        result["extraction_reconciled"] = ok
+        return result
 
     if (body or {}).get("background", True):
         _statement_job(tenant_id, _run())
