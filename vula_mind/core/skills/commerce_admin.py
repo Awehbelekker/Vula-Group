@@ -1057,8 +1057,10 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         mods = set(enabled_modules(tenant_id) or [])
     except Exception:
         mods = set()
+    # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
+    # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1071,6 +1073,58 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         if matched is None or mod in matched:
             tools += _product_tools_for(tenant_id) if mod == "products" else group
     return tools
+
+
+# Which dashboard access scope (vula_team_members.access — the tab ids VulaTeam.jsx grants) a
+# tool needs. A restricted staff member's WhatsApp agent only gets tools for scopes they were
+# granted, the same boundary the dashboard already draws. Tools not listed are general
+# (knowledge, drafting, contacts, meetings, reminders) and stay available to everyone.
+_TOOL_SCOPE: Dict[str, str] = {
+    "sales_summary": "finances", "finance_insights": "finances", "cash_summary": "finances",
+    "reimbursement_balance": "finances", "add_expense": "finances",
+    "outstanding_invoices": "invoices",
+    "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
+    "stock_status": "products", "update_stock": "products",
+    "preview_broadcast": "broadcast",
+}
+for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
+                       ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
+                       ("orders", SUBSCRIPTION_TOOLS), ("customers", CRM_TOOLS),
+                       ("broadcast", BROADCAST_TOOLS)):
+    for _t in _group:
+        _TOOL_SCOPE.setdefault(_t["function"]["name"], _scope)
+
+_FULL_ACCESS_ROLES = {"owner", "manager", "admin"}
+
+
+def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
+    """The caller's granted dashboard scopes, or None for full access (owner/manager, an
+    unrestricted member with an empty list, an unknown sender, or a failed lookup — the
+    behaviour before this existed)."""
+    if not phone:
+        return None
+    try:
+        digits = re.sub(r"\D", "", phone)
+        target = "27" + digits[1:] if digits.startswith("0") else digits
+        rows = (service._client().table("vula_team_members").select("whatsapp,role,access")
+                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+        for r in rows:
+            d = re.sub(r"\D", "", r.get("whatsapp") or "")
+            d = "27" + d[1:] if d.startswith("0") else d
+            if d and d == target:
+                if (r.get("role") or "").lower() in _FULL_ACCESS_ROLES:
+                    return None
+                return list(r.get("access") or []) or None
+    except Exception as exc:
+        logger.debug("member access lookup skipped: %s", exc)
+    return None
+
+
+def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]) -> List[Dict[str, Any]]:
+    if not access:
+        return tools
+    allowed = set(access)
+    return [t for t in tools if _TOOL_SCOPE.get(t["function"]["name"]) in (None, *allowed)]
 
 
 class ConfirmationRequired(Exception):
@@ -1124,6 +1178,8 @@ class CommerceAdminSkill(BaseSkill):
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
+        if caller_role != "sales_rep":   # reps already get their own narrow set
+            tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
         system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
                                          lang=inp.metadata.get("preferred_language", ""))
         collected_sources: List[Dict[str, Any]] = []

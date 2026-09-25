@@ -5689,7 +5689,11 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
                 return
         if await _run_commerce_admin(phone, text, tenant_id, detected_lang=detected_lang):
             return
-        # Admin agent failed → fall through to the customer assistant.
+        # Admin agent failed. This used to fall through to the CUSTOMER shopping assistant, so
+        # an owner asking about invoices got "would you like to see our menu?". Say so honestly.
+        await _send_reply(phone, "Sorry — I couldn't complete that just now. Please try again in "
+                                 "a moment (reply 'try again').", tenant_id)
+        return
 
     handled = await _run_commerce_assistant(phone, text, tenant_id, detected_lang=detected_lang)
     if not handled:
