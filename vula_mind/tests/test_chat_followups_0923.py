@@ -160,6 +160,14 @@ async def test_rag_reply_handles_alias_statements_for_insiders_only():
     ("Show me unpaid invoices", False),
     ("Create an invoice for Regan", False),
     ("Which invoices are overdue?", False),
+    # 2026-09-25: real digg-demo follow-up in the same conversation as a resolved supplier
+    # question — reversed the word order ("materials IN breakdown", not "breakdown OF
+    # materials") that the existing patterns require, so it fell through to the model with a
+    # raw JSON result and no instruction it could follow.
+    ("So me all materials in breakdown.", True),
+    ("materials breakdown please", True),
+    ("give me the breakdown of the materials", True),  # original word order still matches too
+    ("find the proof of payment I sent", False),  # no materials/breakdown at all — must not match
 ])
 def test_supplier_history_phrasing(text, expected):
     assert looks_like_supplier_history_question(text) is expected
@@ -238,6 +246,20 @@ async def test_non_supplier_questions_still_go_back_to_the_model():
     from core.skills.email_admin import _direct_supplier_answer
     assert _direct_supplier_answer("find the proof of payment I sent", "find_document", {}, _RESULT) is None
     assert _direct_supplier_answer("Need all jack hammer invoices", "email_search", {}, _RESULT) is None
+
+
+@pytest.mark.asyncio
+async def test_a_reworded_materials_followup_is_also_answered_deterministically():
+    """The exact real incident: a same-conversation follow-up worded differently enough that it
+    used to miss looks_like_supplier_history_question entirely, leaving the model to describe
+    the raw JSON result instead of answering ("The provided text appears to be a JSON object
+    containing a list of invoices..."). Now caught by the order-agnostic materials/breakdown
+    pattern, so the deterministic formatter answers it exactly as it would the original question."""
+    from core.skills.email_admin import _direct_supplier_answer
+    out = _direct_supplier_answer("So me all materials in breakdown.", "find_document", {}, _RESULT)
+    assert out is not None
+    assert "total spend *R1,084.00*" in out
+    assert "SAND PER BAG ACC" in out
 
 
 # 2026-09-23, after #69 went live: the GPU box was unreachable, the cloud 70B returned an empty
