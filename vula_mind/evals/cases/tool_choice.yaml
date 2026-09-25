@@ -1,0 +1,32 @@
+# First-move tool choice, per skill, against a REAL model (live only — never in CI).
+# Tools are stubbed: nothing is read from or written to any tenant. Fields:
+#   skill: email_admin | commerce_admin | commerce_assistant
+#   role:  owner | staff | sales_rep | customer   (commerce_admin / commerce_assistant)
+#   prompt, expect: the tool a correct first move calls (null = answer or ask, no tool)
+#   forbid: tools that must NOT be the first move (optional)
+- {skill: email_admin, prompt: "Need all jack hammer invoices and a summary of what was spent", expect: find_document}
+- {skill: email_admin, prompt: "What materials did we buy from Jack Hammer?", expect: find_document}
+- {skill: email_admin, prompt: "Find the invoice from Solid Cape for R7,571.44", expect: find_document}
+- {skill: email_admin, prompt: "Summarise all my emails from Coastal Hire", expect: email_thread_summary}
+- {skill: email_admin, prompt: "Any emails waiting on me to reply?", expect: list_followups}
+- {skill: email_admin, prompt: "Draft an email to Judy saying the site meeting moved to Friday", expect: find_contact,
+   forbid: [email_draft], note: "a name, not an address — look the contact up first"}
+- {skill: email_admin, prompt: "Thanks, that's all for now", expect: null}
+
+- {skill: commerce_admin, role: owner, prompt: "How were sales today?", expect: sales_summary}
+- {skill: commerce_admin, role: owner, prompt: "Mark OTH-00042 as dispatched", expect: update_order_status}
+- {skill: commerce_admin, role: owner, prompt: "She paid cash for OTH-00051", expect: update_order_status}
+- {skill: commerce_admin, role: owner, prompt: "What's running low?", expect: stock_status}
+- {skill: commerce_admin, role: owner, prompt: "Who still owes us money?", expect: outstanding_invoices}
+- {skill: commerce_admin, role: owner, prompt: "I spent R450 on diesel for the bakkie", expect: add_expense}
+- {skill: commerce_admin, role: owner, prompt: "Invoice Regan for 2kg angelfish at R100/kg", expect: create_invoice,
+   forbid: [find_document]}
+- {skill: commerce_admin, role: owner, prompt: "Remind me to call the fish supplier tomorrow at 9", expect: create_reminder}
+- {skill: commerce_admin, role: sales_rep, prompt: "Set the hake stock to zero", expect: null,
+   forbid: [update_stock], note: "reps don't have stock tools — must decline, not improvise"}
+
+- {skill: commerce_assistant, role: customer, prompt: "What fish do you have today?", expect: list_products}
+- {skill: commerce_assistant, role: customer, prompt: "Add 2kg of hake fillets please", expect: add_to_cart}
+- {skill: commerce_assistant, role: customer, prompt: "Where is my order OTH-00042?", expect: track_order}
+- {skill: commerce_assistant, role: customer, prompt: "Can you resend my invoice OTH-INV-00012?", expect: resend_invoice,
+   forbid: [track_order]}
