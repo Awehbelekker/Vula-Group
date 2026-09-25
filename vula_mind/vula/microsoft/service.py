@@ -250,7 +250,8 @@ async def process_all_onedrive_sync() -> int:
                 from pathlib import Path
                 d = Path(settings.upload_dir) / tenant_id / "onedrive_sync"
                 d.mkdir(parents=True, exist_ok=True)
-                p = d / (downloaded.get("name") or f["name"])
+                from vula.uploads import safe_upload_path
+                p = safe_upload_path(d, downloaded.get("name") or f["name"])
                 p.write_bytes(downloaded["data"])
                 await pipeline.ingest_file(p, source_type="document")
                 total += 1

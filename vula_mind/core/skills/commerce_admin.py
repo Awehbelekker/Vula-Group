@@ -1162,7 +1162,11 @@ class CommerceAdminSkill(BaseSkill):
             summary = _preview_summary(cr.result)
             row = {
                 "tenant_id": inp.tenant_id, "phone": ctx["phone"] or "", "skill_name": self.name,
-                "tool_name": cr.tool_name, "tool_args": cr.tool_args, "summary": summary,
+                "tool_name": cr.tool_name, "summary": summary,
+                # Who asked travels with the pending action (reserved key, stripped before the
+                # re-dispatch) so the Confirm tap runs with the same role, not a blank one.
+                "tool_args": {**(cr.tool_args or {}),
+                              "_caller": {"role": ctx.get("caller_role"), "name": ctx.get("caller_name")}},
             }
             try:
                 ins = service._client().table("commerce_pending_confirmations").insert(row).execute()
@@ -1329,6 +1333,18 @@ class CommerceAdminSkill(BaseSkill):
         if esc:
             model, api_key, api_base = esc
         tools = tools or TOOL_SPECS
+        # Only a tool that was OFFERED to this caller may run. The model can name any of the
+        # skill's tools (tool_calls, or inline JSON that _parse_inline_toolcall checks against
+        # ALL tools) — a sales rep's turn, or text injected via history/a document, could
+        # otherwise reach owner-only tools (update_stock, send_broadcast, refunds).
+        offered = {t["function"]["name"] for t in tools}
+
+        async def _dispatch(name: str, args: Dict[str, Any]) -> Any:
+            if name not in offered:
+                logger.warning("commerce_admin: refused tool %s — not offered to this caller", name)
+                return {"error": f"{name} isn't available here. Use one of the tools you were given, "
+                                 f"or tell the user you can't do that."}
+            return await self._dispatch_tool(name, args, ctx)
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
         if history:
@@ -1362,7 +1378,7 @@ class CommerceAdminSkill(BaseSkill):
                 inline = self._parse_inline_toolcall(msg.content or "")
                 if inline:
                     name, args = inline
-                    result = await self._dispatch_tool(name, args, ctx)
+                    result = await _dispatch(name, args)
                     if sources is not None:
                         sources.append(tool_source(name, result))
                     if isinstance(result, dict) and result.get("preview") is True:
@@ -1427,7 +1443,7 @@ class CommerceAdminSkill(BaseSkill):
                     args = json.loads(tc.function.arguments or "{}")
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                result = await self._dispatch_tool(tc.function.name, args, ctx)
+                result = await _dispatch(tc.function.name, args)
                 if sources is not None:
                     sources.append(tool_source(tc.function.name, result))
                 if isinstance(result, dict) and result.get("preview") is True:
@@ -1464,7 +1480,7 @@ class CommerceAdminSkill(BaseSkill):
         inline = self._parse_inline_toolcall(answer)
         if inline:
             name, args = inline
-            result = await self._dispatch_tool(name, args, ctx)
+            result = await _dispatch(name, args)
             if sources is not None:
                 sources.append(tool_source(name, result))
             resp = await litellm.acompletion(

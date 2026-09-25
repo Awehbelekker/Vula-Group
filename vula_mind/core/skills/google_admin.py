@@ -144,7 +144,8 @@ class GoogleAdminSkill(BaseSkill):
                 from vula.ingestion.pipeline import VulaIngestionPipeline
                 d = settings.upload_dir / tenant_id
                 d.mkdir(parents=True, exist_ok=True)
-                p: Path = d / f["name"]
+                from vula.uploads import safe_upload_path
+                p: Path = safe_upload_path(d, f["name"])
                 p.write_bytes(f["data"])
                 res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
                 return {"filed": f["name"], "chunks": getattr(res, "chunks_stored", 0)}

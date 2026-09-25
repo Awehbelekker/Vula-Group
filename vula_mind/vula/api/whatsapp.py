@@ -6166,6 +6166,10 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         upd = (db.table("commerce_pending_confirmations")
                .update({"status": new_status, "resolved_at": now_iso})
                .eq("id", pending_id).eq("tenant_id", tenant_id).eq("status", "pending")
+               # Only the person who was asked can confirm: the pending id rides in a button
+               # payload, and a forwarded/replayed payload from another number must not apply
+               # someone else's stock change, refund or broadcast.
+               .eq("phone", phone)
                .gt("expires_at", now_iso)
                .execute())
         row = (upd.data or [None])[0]
@@ -6185,8 +6189,10 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
     try:
         from core.skills.commerce_admin import CommerceAdminSkill
         skill = CommerceAdminSkill()
-        ctx = {"tenant_id": tenant_id, "phone": phone, "caller_name": None, "caller_role": None}
         confirmed_args = dict(row["tool_args"] or {})
+        caller = confirmed_args.pop("_caller", None) or {}
+        ctx = {"tenant_id": tenant_id, "phone": phone, "caller_name": caller.get("name"),
+               "caller_role": caller.get("role")}
         confirmed_args["confirm"] = True
         result = await skill._dispatch_tool(row["tool_name"], confirmed_args, ctx)
     except Exception as exc:

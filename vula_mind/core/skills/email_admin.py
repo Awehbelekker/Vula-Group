@@ -370,7 +370,8 @@ class EmailAdminSkill(BaseSkill):
                 from vula.ingestion.pipeline import VulaIngestionPipeline
                 d = settings.upload_dir / tenant_id
                 d.mkdir(parents=True, exist_ok=True)
-                p: Path = d / att["name"]
+                from vula.uploads import safe_upload_path
+                p: Path = safe_upload_path(d, att["name"])
                 p.write_bytes(att["data"])
                 res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
                 return {"filed": att["name"], "chunks": getattr(res, "chunks_stored", 0)}

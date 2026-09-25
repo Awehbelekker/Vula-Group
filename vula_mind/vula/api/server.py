@@ -74,6 +74,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from config import settings
+from vula.uploads import safe_upload_path
 from vula.ingestion.pipeline import VulaIngestionPipeline
 from vula.skills.web_scraper import VulaWebScraper
 from vula.takeoff.api import router as takeoff_router
@@ -1673,7 +1674,7 @@ async def ingest_document(
 
     tenant_dir = UPLOAD_DIR / tenant_id
     tenant_dir.mkdir(parents=True, exist_ok=True)
-    file_path = tenant_dir / file.filename
+    file_path = safe_upload_path(tenant_dir, file.filename)
     file_path.write_bytes(content)
     mime_type = file.content_type
 
@@ -1724,7 +1725,7 @@ async def ingest_documents_batch(
                                  "reason": f"exceeds {settings.max_file_mb}MB limit"})
                 continue
 
-            file_path = tenant_dir / file.filename
+            file_path = safe_upload_path(tenant_dir, file.filename)
             file_path.write_bytes(content)
             mime_type = file.content_type
 
@@ -1762,7 +1763,7 @@ async def ingest_document_sync(
     content = await file.read()
     tenant_dir = UPLOAD_DIR / tenant_id
     tenant_dir.mkdir(parents=True, exist_ok=True)
-    file_path = tenant_dir / file.filename
+    file_path = safe_upload_path(tenant_dir, file.filename)
     file_path.write_bytes(content)
 
     pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
