@@ -19,7 +19,8 @@ import re
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from vula.api.master_auth import require_auth
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -126,9 +127,17 @@ async def create_review(tenant_id: str, body: ReviewIn):
     service._client().table("commerce_reviews").insert(row).execute()
     service._rating_cache.pop(tenant_id, None)  # bust cache so stars update
     if body.order_id:
+        # Public endpoint: only the order's own customer may rate it, and only once — anyone
+        # knowing an order id could otherwise overwrite its rating.
         try:
-            service._client().table("commerce_orders").update(
-                {"review_rating": body.rating}).eq("id", body.order_id).eq("tenant_id", tenant_id).execute()
+            o = (service._client().table("commerce_orders").select("customer_phone,review_rating")
+                 .eq("id", body.order_id).eq("tenant_id", tenant_id).limit(1).execute().data or [])
+            same = o and _norm_phone(body.customer_phone)[-9:] and \
+                _norm_phone(o[0].get("customer_phone"))[-9:] == _norm_phone(body.customer_phone)[-9:]
+            if same and o[0].get("review_rating") is None:
+                service._client().table("commerce_orders").update(
+                    {"review_rating": body.rating}).eq("id", body.order_id).eq("tenant_id", tenant_id) \
+                    .is_("review_rating", "null").execute()
         except Exception:
             pass
     return {"ok": True}
@@ -4841,6 +4850,20 @@ async def process_due_campaigns() -> int:
         return 0
     n = 0
     for camp in due:
+        # Claim first: advance next_run_at (conditional on it being unchanged) BEFORE sending.
+        # Sending first meant a crash/redeploy mid-broadcast, or a second worker polling the
+        # same minute, re-sent the whole campaign.
+        upd = {"last_run_at": now_iso}
+        nxt = _advance(camp["next_run_at"], camp.get("recurrence") or "once")
+        upd["next_run_at" if nxt else "active"] = nxt if nxt else False
+        try:
+            claimed = (db.table("commerce_campaigns").update(upd).eq("id", camp["id"])
+                       .eq("next_run_at", camp["next_run_at"]).execute().data)
+        except Exception as exc:
+            log.warning("campaign %s claim failed: %s", camp.get("id"), exc)
+            continue
+        if not claimed:
+            continue   # another worker already took this run
         try:
             await admin_send_broadcast(camp["tenant_id"], {
                 "dry_run": False, "template_name": camp.get("template_name") or "",
@@ -4851,17 +4874,10 @@ async def process_due_campaigns() -> int:
             n += 1
         except Exception as exc:
             log.warning("campaign %s send failed: %s", camp.get("id"), exc)
-        upd = {"last_run_at": now_iso}
-        nxt = _advance(camp["next_run_at"], camp.get("recurrence") or "once")
-        upd["next_run_at" if nxt else "active"] = nxt if nxt else False
-        try:
-            db.table("commerce_campaigns").update(upd).eq("id", camp["id"]).execute()
-        except Exception:
-            pass
     return n
 
 
-@router.post("/cron/campaigns")
+@router.post("/cron/campaigns", dependencies=[Depends(require_auth)])
 async def cron_process_campaigns():
     """Backstop trigger for the scheduler (also runs in-process every 60s)."""
     return {"processed": await process_due_campaigns()}
