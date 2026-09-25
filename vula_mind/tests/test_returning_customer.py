@@ -106,6 +106,9 @@ class _Q:
     def in_(self, *a, **k):
         return self
 
+    def ilike(self, *a, **k):   # orders_for_phone's DB-side suffix match
+        return self
+
     def execute(self):
         return type("R", (), {"data": self._rows})()
 
@@ -158,3 +161,23 @@ async def test_lookup_failure_never_blocks_the_order():
         raise RuntimeError("db down")
     with patch.object(service, "_client", _boom):
         assert await service.get_customer_profile(TENANT, "27645755210") is None
+
+
+def test_orders_for_phone_falls_back_to_a_wide_scan_when_formatting_defeats_the_db_match():
+    """'082 123 4567' stored with spaces doesn't match ilike '%821234567' — the Python scan
+    (the old behaviour) still finds it."""
+    from vula.commerce import service
+
+    calls = []
+
+    class _Q2(_Q):
+        def ilike(self, *a, **k):
+            calls.append("ilike")
+            self._rows = []
+            return self
+
+    rows = [{"customer_phone": "082 123 4567", "display_id": "OTH-1"}]
+    client = type("C", (), {"table": lambda self, name: _Q2(list(rows))})()
+    with patch.object(service, "_client", return_value=client):
+        out = service.orders_for_phone("t1", "+27821234567")
+    assert calls == ["ilike"] and out and out[0]["display_id"] == "OTH-1"

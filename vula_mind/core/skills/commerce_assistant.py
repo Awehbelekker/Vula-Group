@@ -1341,7 +1341,7 @@ class CommerceAssistantSkill(BaseSkill):
         if name == "start_checkout":
             return self._exec_start_checkout(tid)
         if name == "track_order":
-            return await self._exec_track_order(tid, args)
+            return await self._exec_track_order(tid, args, phone)
         if name == "resend_invoice":
             return await self._exec_resend_invoice(tid, phone, args)
         if name == "get_daily_catch":
@@ -1655,7 +1655,8 @@ class CommerceAssistantSkill(BaseSkill):
             return {"checkout_url": f"{base}/cart"}
         return {"message": "Reply with your delivery address and we'll send a payment link directly."}
 
-    async def _exec_track_order(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _exec_track_order(self, tenant_id: str, args: Dict[str, Any],
+                                phone: Optional[str] = None) -> Dict[str, Any]:
         display_id = (args.get("order_id") or "").strip().upper()
         # Code-level backstop, not just prompt guidance: an invoice number was given here despite
         # the tool description — confirmed live 2026-07-25, twice in a row on a real customer
@@ -1664,10 +1665,13 @@ class CommerceAssistantSkill(BaseSkill):
         if "INV" in display_id:
             return {"error": f"{display_id} looks like an invoice number, not an order number — "
                               f"call resend_invoice instead, not track_order."}
-        orders = await service.list_orders(tenant_id, limit=50)
+        # Only this customer's own orders — anyone could otherwise read any order's status and
+        # total by guessing display ids.
+        orders = service.orders_for_phone(tenant_id, phone or "", "display_id,status,total_cents,customer_phone",
+                                          limit=50)
         match = next((o for o in orders if (o.get("display_id") or "").upper() == display_id), None)
         if not match:
-            return {"error": f"No order {display_id} found."}
+            return {"error": f"No order {display_id} found for this number."}
         return {
             "order_id": match["display_id"],
             "status": match["status"],
@@ -2202,10 +2206,9 @@ class CommerceAssistantSkill(BaseSkill):
         order to the shop team (line-item edits on a placed order are handled by a person)."""
         note = (args.get("change") or "").strip()
         digits = "".join(c for c in (phone or "") if c.isdigit())
-        orders = await service.list_orders(tenant_id, limit=30)
-        live = [o for o in orders
-                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:] or "x")
-                and o.get("status") not in ("delivered", "cancelled", "refunded")]
+        live = service.orders_for_phone(
+            tenant_id, digits, "id,display_id,customer_phone,customer_name,status,total_cents",
+            exclude_statuses=["delivered", "cancelled", "refunded"])
         if not live:
             return {"error": "I couldn't find a recent order to change — could be already delivered."}
         order = live[0]
@@ -2259,10 +2262,9 @@ class CommerceAssistantSkill(BaseSkill):
         refund (a human step), and this codebase had no cancel path at all before (the assistant
         was previously just improvising a reply with no actual effect)."""
         digits = "".join(c for c in (phone or "") if c.isdigit())
-        orders = await service.list_orders(tenant_id, limit=30)
-        live = [o for o in orders
-                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:] or "x")
-                and o.get("status") not in ("delivered", "cancelled", "refunded")]
+        live = service.orders_for_phone(
+            tenant_id, digits, "id,display_id,customer_phone,customer_name,status,total_cents",
+            exclude_statuses=["delivered", "cancelled", "refunded"])
         if not live:
             return {"error": "I couldn't find a live order to cancel — could be already delivered."}
         try:

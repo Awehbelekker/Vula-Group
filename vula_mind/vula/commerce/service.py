@@ -801,6 +801,36 @@ async def list_orders(
     return result.data or []
 
 
+def orders_for_phone(tenant_id: str, phone: str, columns: str = "*",
+                     exclude_statuses: Optional[List[str]] = None, limit: int = 20) -> List[dict]:
+    """This customer's orders, newest first, matched on the last 9 phone digits.
+
+    2026-09-25 review: every caller used to load the tenant's latest 30-50 orders and filter by
+    phone in Python, so once a shop had more orders than that a returning customer's history
+    was invisible (no reorder, no saved address, "couldn't find your order"). The suffix match
+    now runs in the database; if stored numbers carry spaces/dashes that defeat it, a wider
+    Python scan (the old behaviour, 500 rows) is the fallback."""
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if len(digits) < 9:
+        return []
+    tail = digits[-9:]
+
+    def _mine(rows):
+        return [o for o in rows
+                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(tail)]
+
+    def _q(n):
+        q = _client().table("commerce_orders").select(columns).eq("tenant_id", tenant_id)
+        if exclude_statuses:
+            q = q.not_.in_("status", exclude_statuses)
+        return q.order("created_at", desc=True).limit(n)
+
+    rows = _mine(_q(limit).ilike("customer_phone", f"%{tail}").execute().data or [])
+    if not rows:
+        rows = _mine(_q(500).execute().data or [])[:limit]
+    return rows
+
+
 async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     """Find this customer's most recent order and return its line items, for WhatsApp's
     'reorder'/'same as last time' shortcut. Matches on the last 9 digits of the phone number
@@ -810,11 +840,7 @@ async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     digits = "".join(c for c in (phone or "") if c.isdigit())
     if not digits:
         raise ValueError("no phone number to look up")
-    orders = (_client().table("commerce_orders")
-              .select("id,display_id,customer_phone,created_at")
-              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(50).execute().data or [])
-    mine = [o for o in orders
-            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
+    mine = orders_for_phone(tenant_id, phone, "id,display_id,customer_phone,created_at", limit=1)
     if not mine:
         raise ValueError("no previous order found to repeat")
     last = await get_order(mine[0]["id"])
@@ -928,17 +954,13 @@ async def get_customer_profile(tenant_id: str, phone: str) -> Optional[dict]:
     if not digits:
         return None
     try:
-        orders = (_client().table("commerce_orders")
-                  .select("display_id,customer_name,customer_phone,customer_email,"
-                          "delivery_address,delivery_slot,created_at")
-                  .eq("tenant_id", tenant_id)
-                  .not_.in_("status", ["cancelled", "refunded"])
-                  .order("created_at", desc=True).limit(50).execute().data or [])
+        mine = orders_for_phone(tenant_id, phone,
+                                "display_id,customer_name,customer_phone,customer_email,"
+                                "delivery_address,delivery_slot,created_at",
+                                exclude_statuses=["cancelled", "refunded"], limit=1)
     except Exception as exc:  # never block a live order on a profile lookup
         logger.warning("get_customer_profile lookup failed (tenant=%s): %s", tenant_id, exc)
         return None
-    mine = [o for o in orders
-            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
     if not mine:
         return None
     last = mine[0]
