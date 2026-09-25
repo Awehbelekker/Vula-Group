@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from vula.api.master_auth import require_master
@@ -125,6 +126,28 @@ def invalidate(tenant_id: str) -> None:
     """Drop a tenant's cached config so a write from outside this module (e.g. master's
     suspend/reactivate PATCH) is visible immediately instead of after the 60s TTL."""
     _CACHE.pop(tenant_id, None)
+
+
+def ensure_billing_row(slug: str, company_name: str, *, email: Optional[str] = None,
+                       contact_name: Optional[str] = None, plan: str = "starter",
+                       trial_days: Optional[int] = None) -> None:
+    """Make sure the tenant has a vula_tenants billing row keyed by its slug (workspace_slug).
+    Idempotent and best-effort — never blocks tenant creation (migration 175 must be applied for
+    rows without an email/contact). trial_days=None leaves trial_ends empty (master-created
+    tenants: billing is agreed directly, so no automated trial-expiry emails)."""
+    try:
+        db = _client()
+        if db.table("vula_tenants").select("id").eq("workspace_slug", slug).limit(1).execute().data:
+            return
+        row = {"company_name": company_name or slug, "workspace_slug": slug, "status": "active",
+               "plan": plan if plan in ("starter", "growth", "business") else "starter",
+               "email": email, "contact_name": contact_name}
+        if trial_days:
+            from datetime import timedelta
+            row["trial_ends"] = (datetime.now(timezone.utc) + timedelta(days=trial_days)).isoformat()
+        db.table("vula_tenants").insert({k: v for k, v in row.items() if v is not None}).execute()
+    except Exception as exc:
+        log.warning("billing row for %s not created (run migration 175?): %s", slug, exc)
 
 
 def display_name(tenant_id: str) -> str:
@@ -272,11 +295,16 @@ async def create_tenant(body: TenantIn, identity: dict = Depends(require_master)
         existing = (_client().table("vula_tenant_config").select("tenant_id")
                     .eq("tenant_id", body.tenant_id).limit(1).execute().data or [])
         if existing:
-            _client().table("vula_tenant_config").update(row).eq("tenant_id", body.tenant_id).execute()
-        else:
-            _client().table("vula_tenant_config").insert(row).execute()
+            # "+ New tenant" with a slug that's already taken used to silently overwrite that
+            # tenant's modules/plan/business type. Editing goes through PATCH /v1/master/tenants.
+            raise HTTPException(status_code=409, detail=f"'{body.tenant_id}' already exists — "
+                                                        "edit it from its tenant page instead.")
+        _client().table("vula_tenant_config").insert(row).execute()
+    except HTTPException:
+        raise
     except Exception as exc:
         return {"error": f"{exc} (run migration 040?)"}
+    ensure_billing_row(body.tenant_id, body.display_name or body.tenant_id, plan=body.plan or "starter")
     _CACHE.pop(body.tenant_id, None)
     if not existing:
         # 2026-08-28: widen starter_kb seeding to this (master-created) tenant path — previously

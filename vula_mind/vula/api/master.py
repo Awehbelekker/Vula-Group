@@ -58,8 +58,11 @@ async def master_tenants():
     (vula_tenants, matched on tenant_id) + login count (vula_tenant_users)."""
     db = _client()
     cfg = db.table("vula_tenant_config").select("*").order("display_name").execute().data or []
-    signups = {r.get("tenant_id"): r for r in
-               (db.table("vula_tenants").select("*").execute().data or [])}
+    # Keyed by workspace_slug (the operational tenant id); vula_tenants.tenant_id is a UUID and
+    # never matched a config row, so billing columns were always blank.
+    signups = {}
+    for r in (db.table("vula_tenants").select("*").execute().data or []):
+        signups[r.get("workspace_slug") or str(r.get("tenant_id"))] = r
     users = db.table("vula_tenant_users").select("tenant_id,role").execute().data or []
     user_counts: dict[str, int] = {}
     for u in users:
@@ -116,7 +119,7 @@ async def master_mark_paid(tenant_id: str, identity: dict = Depends(require_mast
     """Manual payment confirmation (EFT, correction) — PayFast's ITN webhook does this
     automatically for a real gateway payment; this covers everything else."""
     res = (_client().table("vula_tenants").update({"paid": True, "status": "active"})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     if not res.data:
         raise _billing_row_not_found(tenant_id)
     audit(identity, "tenant_marked_paid", tenant_id)
@@ -151,7 +154,7 @@ async def master_extend_trial(tenant_id: str, body: dict,
                               identity: dict = Depends(require_master)) -> dict:
     days = int((body or {}).get("days") or 14)
     rows = (_client().table("vula_tenants").select("trial_ends")
-            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+            .eq("workspace_slug", tenant_id).limit(1).execute().data or [])
     if not rows:
         raise _billing_row_not_found(tenant_id)
     current = rows[0].get("trial_ends")
@@ -159,7 +162,7 @@ async def master_extend_trial(tenant_id: str, body: dict,
     base = max(base, datetime.now(timezone.utc))  # extend from today if the trial already lapsed
     new_end = (base + timedelta(days=days)).isoformat()
     res = (_client().table("vula_tenants").update({"trial_ends": new_end})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     audit(identity, "tenant_trial_extended", tenant_id, days=days, new_trial_ends=new_end)
     from vula.api import merchant_audit
     merchant_audit.audit(tenant_id, identity, "billing_trial_extended", days=days)
@@ -169,7 +172,7 @@ async def master_extend_trial(tenant_id: str, body: dict,
 @router.post("/tenants/{tenant_id}/cancel")
 async def master_cancel_subscription(tenant_id: str, identity: dict = Depends(require_master)) -> dict:
     res = (_client().table("vula_tenants").update({"status": "cancelled"})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     if not res.data:
         raise _billing_row_not_found(tenant_id)
     _client().table("vula_tenant_config").update({"active": False}).eq("tenant_id", tenant_id).execute()
@@ -185,7 +188,7 @@ async def master_cancel_subscription(tenant_id: str, identity: dict = Depends(re
 async def master_reactivate_subscription(tenant_id: str,
                                          identity: dict = Depends(require_master)) -> dict:
     res = (_client().table("vula_tenants").update({"status": "active"})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     if not res.data:
         raise _billing_row_not_found(tenant_id)
     _client().table("vula_tenant_config").update({"active": True}).eq("tenant_id", tenant_id).execute()

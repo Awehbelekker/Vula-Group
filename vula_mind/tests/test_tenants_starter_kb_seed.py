@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from vula.api.tenants import TenantIn, create_tenant
 
@@ -47,8 +48,12 @@ async def test_create_tenant_does_not_reseed_on_update_of_existing_tenant():
         patch("vula.api.master.audit"),
         patch("vula.commerce.background_tasks.run_background") as mock_run_bg,
     ):
-        await create_tenant(body, identity=FAKE_IDENTITY)
+        # 2026-09-25: creating an existing slug is refused (it used to silently overwrite the
+        # tenant's modules/plan) — and so, still, nothing is re-seeded.
+        with pytest.raises(HTTPException) as exc:
+            await create_tenant(body, identity=FAKE_IDENTITY)
 
+    assert exc.value.status_code == 409
     mock_run_bg.assert_not_called()
 
 
