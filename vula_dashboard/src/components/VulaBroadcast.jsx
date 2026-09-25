@@ -144,7 +144,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
   async function sendTest() {
     if (useApproved && !approvedName) { setError('Pick an approved template first.'); return }
     if (useApproved && approvedTpl?.header_type === 'IMAGE' && !headerImageUrl.trim()) { setError('This template has an image header — add an image URL.'); return }
-    if (!useApproved && !bodyText.trim()) { setError('Write the message first.'); return }
+    if (!useApproved) { setError('WhatsApp only allows broadcasts from an approved template — pick one, or turn this text into a new template in the 📨 Templates tab.'); return }
     if (!testPhone.trim()) { setError('Enter a phone number to test to.'); return }
     setTestMsg(''); setError(null)
     try {
@@ -241,6 +241,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
 
   // Step 2 — confirmed live send.
   async function sendBroadcast() {
+    if (!useApproved) { setError('WhatsApp only allows broadcasts from an approved template — pick one, or turn this text into a new template in the 📨 Templates tab.'); return }
     if (useApproved && approvedTpl?.header_type === 'IMAGE' && !headerImageUrl.trim()) { setError('This template has an image header — add an image URL.'); return }
     setSending(true); setError(null); setSent(false)
     try {
@@ -280,7 +281,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
         <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
           <button onClick={() => setUseApproved(false)} style={{ ...s.tplBtn, flex: 1, ...(!useApproved ? s.tplBtnActive : {}) }}>
             <span style={s.tplLabel}>💬 Free text</span>
-            <span style={s.tplHint}>Only reaches customers active in the last 24h</span>
+            <span style={s.tplHint}>Draft &amp; preview — sending needs an approved template</span>
           </button>
           <button onClick={() => setUseApproved(true)} style={{ ...s.tplBtn, flex: 1, ...(useApproved ? s.tplBtnActive : {}) }}>
             <span style={s.tplLabel}>📨 Approved template</span>

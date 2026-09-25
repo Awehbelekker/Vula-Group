@@ -23,7 +23,6 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from config import settings
 from vula.commerce import service
 from vula.commerce.models import (
     AddToCartRequest,
@@ -4588,9 +4587,8 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         }
 
     # ── Live send ────────────────────────────────────────────────────────────
-    # Channel resolution: Meta (templates) preferred; Twilio fallback for
-    # free-text broadcasts (works within the 24h customer session window).
-    body_text = body.get("body", "")  # free-text alternative to a Meta template
+    # Broadcasts go out as Meta templates only — a proactive message outside the 24h window
+    # must be an approved template (the Twilio free-text fallback was removed 2026-09-25).
     # Optional trackable link — one short code per recipient, so a click can be attributed to
     # who clicked (not just "someone did"). On free text the link is embedded directly; on a
     # Meta template it fills a URL button's dynamic {{1}} suffix (the button's own URL must be
@@ -4600,22 +4598,23 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     header_image_url = (body.get("header_image_url") or "").strip()
     from vula.api.whatsapp import _get_tenant_wa_creds
     creds = await _get_tenant_wa_creds(tenant_id)
-    use_twilio = (not creds) and bool(
-        getattr(settings, "twilio_account_sid", "")
-        and getattr(settings, "twilio_auth_token", "")
-        and getattr(settings, "twilio_whatsapp_from", "")
-    )
-
-    if not creds and not use_twilio:
+    if not template:
+        # Free text is fine for drafting and the dry-run preview, but a live broadcast via Meta
+        # must be an approved template — this path used to send an empty template name to every
+        # recipient and fail them all.
+        raise HTTPException(status_code=400, detail=(
+            "Broadcasts must use an approved WhatsApp template — pick one, or turn this text "
+            "into a new template in the 📨 Templates tab."))
+    if not creds:
         raise HTTPException(
             status_code=503,
-            detail="No WhatsApp channel configured (connect Meta or set Twilio creds).",
+            detail="No WhatsApp channel configured — connect WhatsApp in Settings first.",
         )
 
     # Rich-media metadata for the selected template (header image, buttons needing a dynamic
     # parameter) — looked up once, not per-recipient.
     tpl_row = None
-    if not use_twilio and template:
+    if template:
         try:
             tpl_row = (db.table("commerce_wa_templates").select("header_type,buttons")
                        .eq("tenant_id", tenant_id).eq("name", template)
@@ -4649,51 +4648,33 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
             number = _norm_phone(c.get("phone"))
             short_code = None
             try:
-                if use_twilio:
-                    # Twilio free-text broadcast
-                    from_addr = settings.twilio_whatsapp_from
-                    if not from_addr.startswith("whatsapp:"):
-                        from_addr = f"whatsapp:{from_addr}"
-                    msg = body_text or f"Hi from {name}!"
-                    if target_url:
-                        short_code = uuid4().hex[:10]
-                        msg = f"{msg}\n\n{settings.public_base_url.rstrip('/')}/l/{short_code}"
-                    resp = await client.post(
-                        f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json",
-                        auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-                        data={"From": from_addr, "To": f"whatsapp:+{number}", "Body": msg[:1600]},
-                    )
-                else:
-                    # Meta template broadcast (compliant for proactive sends)
-                    tpl_components: list[dict] = []
-                    if tpl_row and tpl_row.get("header_type") == "IMAGE" and header_image_url:
-                        tpl_components.append({"type": "header", "parameters": [
-                            {"type": "image", "image": {"link": header_image_url}}]})
-                    if tpl_needs_button_param and target_url:
-                        short_code = uuid4().hex[:10]
-                        tpl_components.append({"type": "button", "sub_type": "url", "index": "0",
-                                               "parameters": [{"type": "text", "text": short_code}]})
-                    tpl_payload: dict = {"name": template, "language": {"code": language}}
-                    if tpl_components:
-                        tpl_payload["components"] = tpl_components
-                    resp = await client.post(
-                        f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
-                        headers={"Authorization": f"Bearer {creds['token']}",
-                                 "Content-Type": "application/json"},
-                        json={
-                            "messaging_product": "whatsapp",
-                            "to": number,
-                            "type": "template",
-                            "template": tpl_payload,
-                        },
-                    )
+                # Meta template broadcast (compliant for proactive sends)
+                tpl_components: list[dict] = []
+                if tpl_row and tpl_row.get("header_type") == "IMAGE" and header_image_url:
+                    tpl_components.append({"type": "header", "parameters": [
+                        {"type": "image", "image": {"link": header_image_url}}]})
+                if tpl_needs_button_param and target_url:
+                    short_code = uuid4().hex[:10]
+                    tpl_components.append({"type": "button", "sub_type": "url", "index": "0",
+                                           "parameters": [{"type": "text", "text": short_code}]})
+                tpl_payload: dict = {"name": template, "language": {"code": language}}
+                if tpl_components:
+                    tpl_payload["components"] = tpl_components
+                resp = await client.post(
+                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                    headers={"Authorization": f"Bearer {creds['token']}",
+                             "Content-Type": "application/json"},
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": number,
+                        "type": "template",
+                        "template": tpl_payload,
+                    },
+                )
                 if resp.is_success:
                     sent += 1
                     wamid = None
                     try:
-                        if use_twilio:
-                            wamid = resp.json().get("sid")
-                        else:
                             wamid = (resp.json().get("messages") or [{}])[0].get("id")
                     except Exception:
                         wamid = None
@@ -4740,7 +4721,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
 
     return {
         "broadcast_id": log_id, "dry_run": False,
-        "channel": "twilio" if use_twilio else "meta",
+        "channel": "meta",
         "template": template or "(free-text)",
         "audience": audience, "recipient_count": len(recipients),
         "suppressed_count": suppressed_count,

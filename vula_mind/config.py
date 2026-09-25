@@ -139,10 +139,6 @@ class Settings(BaseSettings):
     groq_api_key: str = ""             # fallback: https://api.groq.com/openai/v1 (whisper-large-v3)
     openai_api_key: str = ""           # fallback: transcribe via api.openai.com (whisper-1)
 
-    # ── Twilio WhatsApp (alternative to Meta — test via Twilio Sandbox) ─────────
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_whatsapp_from: str = ""   # e.g. "whatsapp:+14155238886" (sandbox number)
 
     # ── Hybrid LLM: local model (Ollama) + cloud fallback model (OpenRouter) ────
     # model_worker = local Ollama model name (used via the vula-ai.com tunnel).
