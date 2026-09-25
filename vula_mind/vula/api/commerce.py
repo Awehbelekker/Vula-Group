@@ -6381,6 +6381,13 @@ async def admin_dismiss_escalation(tenant_id: str, esc_id: str):
 # human handoff toggle, and manual agent reply via WhatsApp).
 
 
+@router.get("/{tenant_id}/admin/setup")
+async def admin_setup_checklist(tenant_id: str):
+    """The tenant's own go-live checklist (same computation master sees)."""
+    from vula.api.master import setup_checklist
+    return setup_checklist(tenant_id)
+
+
 @router.get("/{tenant_id}/admin/conversations")
 async def admin_list_conversations(tenant_id: str, limit: int = Query(50, ge=1, le=200)):
     """Return recent WhatsApp conversation sessions for the shared inbox."""

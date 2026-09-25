@@ -14,6 +14,7 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
+import { MERCHANT_GROUPS } from '../navConfig.jsx'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
@@ -345,6 +346,47 @@ function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingN
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 
+// Which sidebar section a tab lives in (subtabs are nested inside sections since the IA overhaul).
+function sectionFor(tabId) {
+  for (const g of MERCHANT_GROUPS) {
+    for (const it of g.items) {
+      if (it.id === tabId) return { section: tabId }
+      if (it.subtabs?.some(st => st.id === tabId)) return { section: it.id, subtab: tabId }
+    }
+  }
+  return { section: tabId }
+}
+
+// The go-live checklist master already had (GET /admin/setup, same computation) — shown to the
+// business itself until everything's done, each open step linking to the tab that fixes it.
+function GoLiveChecklist({ tenantId, onNavigate }) {
+  const [setup, setSetup] = useState(null)
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/setup`)
+      .then(r => (r.ok ? r.json() : null)).then(setSetup).catch(() => {})
+  }, [tenantId])
+  if (!setup || setup.done >= setup.total) return null
+  const open = setup.steps.filter(st => !st.done)
+  return (
+    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+      <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 14 }}>
+        🚀 Getting you live — {setup.done}/{setup.total} done ({setup.progress_pct}%)
+      </p>
+      <div style={{ height: 6, background: '#F0EDE5', borderRadius: 3, marginBottom: 10 }}>
+        <div style={{ width: `${setup.progress_pct}%`, height: 6, background: 'var(--accent)', borderRadius: 3 }} />
+      </div>
+      {open.map(st => (
+        <button key={st.id} onClick={() => { const n = sectionFor(st.tab || 'settings'); onNavigate && onNavigate(n.section, n.subtab) }}
+                style={{ display: 'flex', justifyContent: 'space-between', width: '100%', border: 'none',
+                         background: 'none', padding: '6px 0', cursor: 'pointer', fontSize: 13, textAlign: 'left' }}>
+          <span>☐ {st.label} <span style={{ color: '#8A8680' }}>— {st.detail}</span></span>
+          <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Do this →</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function OverviewTab({ tenantId, onNavigate }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -376,6 +418,7 @@ function OverviewTab({ tenantId, onNavigate }) {
 
   return (
     <div>
+      <GoLiveChecklist tenantId={tenantId} onNavigate={onNavigate} />
       <div style={styles.statGrid}>
         <StatCard label="Today's revenue" value={fmt(stats.today_revenue_cents)} sub={`${stats.today_orders} orders today`} accent="var(--accent, var(--accent))" />
         <StatCard label="Total revenue"   value={fmt(stats.total_revenue_cents)} sub={`${stats.total_orders} orders`} />

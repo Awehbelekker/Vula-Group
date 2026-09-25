@@ -202,9 +202,16 @@ async def master_reactivate_subscription(tenant_id: str,
 
 @router.get("/tenants/{tenant_id}/setup")
 async def master_tenant_setup(tenant_id: str):
-    """Onboarding cockpit (UI overhaul P3): the 9-step go-live checklist, COMPUTED live from
-    real state (config/team/WhatsApp/templates/payments/products/pages/orders) — no manually
-    maintained status field to drift out of date."""
+    """Onboarding cockpit (UI overhaul P3) — see setup_checklist."""
+    return setup_checklist(tenant_id)
+
+
+def setup_checklist(tenant_id: str) -> dict:
+    """The go-live checklist, COMPUTED live from real state (config/team/WhatsApp/templates/
+    payments/products/knowledge/pages/orders) — no manually maintained status field to drift
+    out of date. Shared by master's cockpit and the tenant's own Home (2026-09-25: tenants
+    never saw it, so a new business had no idea what was left to do). Each step carries the
+    dashboard tab that fixes it."""
     db = _client()
 
     def _count(table, **eq):
@@ -236,33 +243,53 @@ async def master_tenant_setup(tenant_id: str):
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [None])[0]
     except Exception:
         pays = None
-    payments_ready = bool(pays and (pays.get("eft_details") or pays.get("payment_methods")))
+    gateways = _count("vula_payment_providers", tenant_id=tenant_id, active=True) + \
+        _count("vula_yoco_accounts", tenant_id=tenant_id)
+    payments_ready = bool(gateways or (pays and pays.get("eft_details")))
+    try:
+        tpls = db.table("commerce_wa_templates").select("status").eq("tenant_id", tenant_id) \
+            .limit(100).execute().data or []
+    except Exception:
+        tpls = []
+    approved = sum(1 for t in tpls if (t.get("status") or "").upper() == "APPROVED")
+    docs = _count("vula_filed_documents", tenant_id=tenant_id)
+    products = _count("commerce_products", tenant_id=tenant_id)
+    try:
+        vat = (db.table("commerce_invoice_settings").select("vat_registered")
+               .eq("tenant_id", tenant_id).limit(1).execute().data or [None])[0]
+    except Exception:
+        vat = None
+    vat_set = bool(vat) and vat.get("vat_registered") is not None
 
+    team_n = _count("vula_team_members", tenant_id=tenant_id, active=True)
+    orders_n = _count("commerce_orders", tenant_id=tenant_id)
+    pages_n = _count("vula_pages", tenant_id=tenant_id)
     steps = [
-        {"id": "created", "label": "Created from business type", "done": True,
+        {"id": "created", "label": "Created from business type", "done": True, "tab": "settings",
          "detail": f"{len(cfg.get('modules') or [])} modules enabled"},
-        {"id": "branding", "label": "Brand kit", "done": branded,
+        {"id": "branding", "label": "Brand kit", "done": branded, "tab": "settings",
          "detail": "logo/accent set" if branded else "no logo or accent yet"},
-        {"id": "team", "label": "Team & logins",
-         "done": _count("vula_team_members", tenant_id=tenant_id, active=True) > 0,
-         "detail": f"{_count('vula_team_members', tenant_id=tenant_id, active=True)} member(s)"},
-        {"id": "whatsapp", "label": "WhatsApp connected",
+        {"id": "team", "label": "Team & logins", "done": team_n > 0, "tab": "team",
+         "detail": f"{team_n} member(s)"},
+        {"id": "whatsapp", "label": "WhatsApp connected", "tab": "settings",
          "done": bool(wa and wa.get("status") == "connected"),
          "detail": (wa or {}).get("status") or "not connected"},
-        {"id": "templates", "label": "Message templates",
-         "done": _count("commerce_wa_templates", tenant_id=tenant_id) > 0,
-         "detail": f"{_count('commerce_wa_templates', tenant_id=tenant_id)} submitted"},
-        {"id": "payments", "label": "Payment details", "done": payments_ready,
-         "detail": "configured" if payments_ready else "no gateway or EFT details"},
-        {"id": "knowledge", "label": "Products & knowledge",
-         "done": _count("commerce_products", tenant_id=tenant_id) > 0,
-         "detail": f"{_count('commerce_products', tenant_id=tenant_id)} product(s)"},
-        {"id": "storefront", "label": "Storefront pages",
-         "done": _count("vula_pages", tenant_id=tenant_id) > 0 or bool(cfg.get("store_url")),
-         "detail": cfg.get("store_url") or f"{_count('vula_pages', tenant_id=tenant_id)} page(s)"},
-        {"id": "golive", "label": "First order through",
-         "done": _count("commerce_orders", tenant_id=tenant_id) > 0,
-         "detail": f"{_count('commerce_orders', tenant_id=tenant_id)} order(s)"},
+        # APPROVED, not merely submitted: Meta rejects proactive sends on a pending template.
+        {"id": "templates", "label": "Message templates approved", "done": approved > 0,
+         "tab": "wa-templates", "detail": f"{approved} approved of {len(tpls)} submitted"},
+        {"id": "payments", "label": "Payments (gateway or EFT)", "done": payments_ready,
+         "tab": "payments", "detail": "configured" if payments_ready else "no gateway or EFT details"},
+        {"id": "vat", "label": "VAT status confirmed", "done": vat_set, "tab": "invoices",
+         "detail": ("VAT registered" if (vat or {}).get("vat_registered") else "not VAT registered")
+                   if vat_set else "not set — invoices assume VAT-registered until you say"},
+        {"id": "knowledge", "label": "Products & knowledge", "done": products > 0 or docs > 0,
+         "tab": "products" if products or not docs else "documents",
+         "detail": f"{products} product(s), {docs} document(s)"},
+        {"id": "storefront", "label": "Storefront pages", "tab": "pages",
+         "done": pages_n > 0 or bool(cfg.get("store_url")),
+         "detail": cfg.get("store_url") or f"{pages_n} page(s)"},
+        {"id": "golive", "label": "First order through", "done": orders_n > 0, "tab": "orders",
+         "detail": f"{orders_n} order(s)"},
     ]
     done = sum(1 for s in steps if s["done"])
     return {"tenant_id": tenant_id, "display_name": cfg.get("display_name"),
