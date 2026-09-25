@@ -22,7 +22,8 @@ from core.llm_router import (
 )
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, wrong_arithmetic,
+    BaseSkill, SkillInput, SkillOutput, begin_turn, behaviour_preamble, tool_source, turn_local,
+    wrong_arithmetic,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,14 @@ class FinanceAdminSkill(BaseSkill):
     # already, just never turned on here.
     verification_policy = "adversarial"
 
+    # Per-turn bookkeeping — task-local, not shared across concurrent requests (see turn_local).
+    _verified = turn_local()
+    _sources = turn_local()
+    _any_tool_dispatched = turn_local()
+    _all_not_found = turn_local()
+
     async def run(self, inp: SkillInput) -> SkillOutput:
+        begin_turn()
         # A tenant with no PROJECT ledger cannot be answered from one. 2026-09-03: off-the-hook
         # has R148,112.69 of real invoices and zero rows in vula_project_finances, because the
         # ledger is project-scoped and a shop has no projects — so every money question here

@@ -1332,12 +1332,13 @@ class CommerceAdminSkill(BaseSkill):
         esc = escalate_to_cloud("admin_agent_toolcalling", task_type="commerce_admin")
         if esc:
             model, api_key, api_base = esc
+        restrict = tools is not None  # run() always passes the caller's toolset
         tools = tools or TOOL_SPECS
         # Only a tool that was OFFERED to this caller may run. The model can name any of the
         # skill's tools (tool_calls, or inline JSON that _parse_inline_toolcall checks against
         # ALL tools) — a sales rep's turn, or text injected via history/a document, could
         # otherwise reach owner-only tools (update_stock, send_broadcast, refunds).
-        offered = {t["function"]["name"] for t in tools}
+        offered = {t["function"]["name"] for t in tools} if restrict else self._TOOL_NAMES
 
         async def _dispatch(name: str, args: Dict[str, Any]) -> Any:
             if name not in offered:

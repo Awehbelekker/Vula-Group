@@ -20,7 +20,9 @@ from typing import Any, Dict, List
 
 from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import (
+    BaseSkill, SkillInput, SkillOutput, begin_turn, behaviour_preamble, turn_local,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +85,12 @@ class CalculationsSkill(BaseSkill):
     description = "Deterministic SA construction/QS calculations — occupancy, escape widths, areas, parking."
     verification_policy = "deterministic"   # self-verifies via safe_eval anchoring below
 
+    # Per-turn bookkeeping — task-local, not shared across concurrent requests (see turn_local).
+    _verified = turn_local()
+    _calc_errors = turn_local()
+
     async def run(self, inp: SkillInput) -> SkillOutput:
+        begin_turn()
         # Retrieve authoritative context so any rule/ratio cited comes from real docs.
         context = ""
         try:
