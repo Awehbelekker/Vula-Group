@@ -281,6 +281,16 @@ class Settings(BaseSettings):
     # exception-level alerting. Set to enable — see vula/api/server.py's init for the PII-scrubbing
     # rules (never send default request bodies/local variables; tenant_id tag only).
     sentry_dsn: str = ""
+    # Fraction of requests traced for performance (0.0 = errors only, today's default). Traces
+    # carry route names and timings, never bodies (send_default_pii stays off). ~0.05 is enough
+    # to see where WhatsApp replies spend their time.
+    sentry_traces_sample_rate: float = 0.0
+    # Whether THIS process runs the ~20 background scheduler loops (reminders, syncs, campaigns,
+    # subscriptions...). Default true = today's behaviour (web process runs them behind the DB
+    # leader lock). To move them to a dedicated Railway worker: set RUN_SCHEDULED_JOBS=false on
+    # the web service and deploy the same image as a second service with it true — the leader
+    # lock that has flapped (and tripled sends) then only has one candidate.
+    run_scheduled_jobs: bool = True
 
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

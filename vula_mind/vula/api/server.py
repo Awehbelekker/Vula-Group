@@ -167,7 +167,9 @@ if settings.sentry_dsn:
             send_default_pii=False,
             include_local_variables=False,
             max_request_body_size="never",
-            traces_sample_rate=0.0,  # error tracking only — keep data volume/PII surface minimal
+            # 0.0 by default (errors only); SENTRY_TRACES_SAMPLE_RATE turns on sampled
+            # performance traces — timings and route names, never bodies.
+            traces_sample_rate=max(0.0, min(1.0, settings.sentry_traces_sample_rate)),
             before_send=_sentry_scrub_before_send,
         )
         log.info("Sentry error monitoring enabled")
@@ -1355,7 +1357,10 @@ async def lifespan(app: FastAPI):
             log.debug("schema check task failed: %s", exc)
 
     _asyncio.create_task(_schema_check())
-    _asyncio.create_task(_scheduler_leadership_loop())
+    if settings.run_scheduled_jobs:
+        _asyncio.create_task(_scheduler_leadership_loop())
+    else:
+        log.info("Scheduled jobs disabled in this process (RUN_SCHEDULED_JOBS=false)")
     yield
 
 
