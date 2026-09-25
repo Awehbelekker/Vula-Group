@@ -15,6 +15,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -371,14 +372,27 @@ async def public_store_settings(tenant_id: str):
 
 # ── Cart ─────────────────────────────────────────────────────────────────────
 
+_SERVER_SESSION_RE = re.compile(r"^(\+?\d{9,15}|manual-.*|admin:.*)$")
+
+
+def _require_public_session(session_id: str) -> None:
+    """The public cart/checkout endpoints take the storefront's own random session id. A
+    WhatsApp cart's session id IS the customer's phone number (and manual/admin sessions have
+    fixed prefixes), so without this anyone could read, empty, refill or check out a WhatsApp
+    customer's cart just by knowing their number."""
+    if _SERVER_SESSION_RE.match((session_id or "").strip()):
+        raise HTTPException(status_code=400, detail="Invalid cart session.")
+
 @router.get("/{tenant_id}/cart/{session_id}")
 async def get_cart(tenant_id: str, session_id: str, phone: Optional[str] = Query(None)):
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=phone)
     return cart
 
 
 @router.post("/{tenant_id}/cart/{session_id}/add")
 async def add_to_cart(tenant_id: str, session_id: str, body: AddToCartRequest):
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
     item = await service.add_to_cart(tenant_id, cart["id"], str(body.product_id), body.quantity,
                                      variant_id=str(body.variant_id) if body.variant_id else None)
@@ -387,6 +401,7 @@ async def add_to_cart(tenant_id: str, session_id: str, body: AddToCartRequest):
 
 @router.delete("/{tenant_id}/cart/{session_id}/{item_id}")
 async def remove_from_cart(tenant_id: str, session_id: str, item_id: str):
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id)
     await service.remove_from_cart(cart["id"], item_id)
     return {"removed": item_id}
@@ -410,6 +425,7 @@ async def sync_cart(tenant_id: str, session_id: str, body: CartSyncRequest):
     endpoint, removals/quantity changes never reached the server, so a customer could be
     charged for items they removed. The storefront now calls this on every edit AND right
     before checkout as a final reconcile."""
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
     db = service._client()
     db.table("commerce_cart_items").delete().eq("cart_id", cart["id"]).execute()
@@ -513,6 +529,7 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
         raise HTTPException(status_code=403, detail="This store isn't accepting orders right now.")
 
     # Fetch cart
+    _require_public_session(body.session_id)
     cart = await service.get_or_create_cart(tenant_id, body.session_id, customer_phone=body.customer_phone)
     items = cart.get("commerce_cart_items", [])
     if not items:
