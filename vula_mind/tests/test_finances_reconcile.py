@@ -79,8 +79,9 @@ def test_finance_summary_does_not_double_count_reconciled_pair():
          "amount": 12000.0, "project": "HPC_Bokaap"},
     ]
     mock_table = MagicMock()
-    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value \
-        .execute.return_value = MagicMock(data=rows)
+    # finance_summary now pages (order().order().range()) instead of a capped .limit(500).
+    mock_table.select.return_value.eq.return_value.order.return_value.order.return_value \
+        .range.return_value.execute.return_value = MagicMock(data=rows)
     mock_table.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
@@ -110,3 +111,19 @@ def test_project_financials_does_not_double_count_reconciled_pair():
         result = project_financials("digg-demo", "HPC_Bokaap")
 
     assert result["spent"] == 12000.0
+
+
+def test_money_in_out_counts_a_reconciled_pair_once():
+    """finance_admin.money_in_out summed both sides of an invoice/payment pair."""
+    import asyncio
+    from core.skills.finance_admin import FinanceAdminSkill
+    rows = [
+        {"id": "exp1", "matched_id": "pay1", "reconciled": True, "direction": "out", "amount": 500.0},
+        {"id": "pay1", "matched_id": "exp1", "reconciled": True, "direction": "out", "amount": 500.0},
+        {"id": "in1", "direction": "in", "amount": 900.0},
+    ]
+    skill = FinanceAdminSkill()
+    dispatch = next(getattr(skill, n) for n in ("_dispatch", "_dispatch_tool") if hasattr(skill, n))
+    with patch("vula.integrations.finances.all_finance_rows", return_value=rows):
+        res = asyncio.run(dispatch("money_in_out", {"period": "all"}, "digg-demo"))
+    assert res["money_out"] == 500.0 and res["money_in"] == 900.0

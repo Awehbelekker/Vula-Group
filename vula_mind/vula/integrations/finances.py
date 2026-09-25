@@ -253,14 +253,23 @@ def has_commerce_money(tenant_id: str) -> bool:
     return present
 
 
+def all_finance_rows(tenant_id: str, columns: str = "*", project: str = None) -> list:
+    """Every vula_project_finances row for the tenant, newest first, paged past PostgREST's
+    1000-row response cap. Totals built from a capped read (the old .limit(500)) silently
+    dropped older money once a tenant had real volume."""
+    from vula.commerce.ledger import _all_pages
+
+    def _q():
+        q = (_client().table("vula_project_finances").select(columns)
+             .eq("tenant_id", tenant_id).order("created_at", desc=True).order("id"))
+        return q.eq("project", project) if project else q
+    return _all_pages(_q)
+
+
 def finance_summary(tenant_id: str, project: str = None) -> dict:
     """Per-project totals (in/out/net) + budget-vs-actual, plus recent transactions."""
     try:
-        q = (_client().table("vula_project_finances").select("*")
-             .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(500))
-        if project:
-            q = q.eq("project", project)
-        rows = q.execute().data or []
+        rows = all_finance_rows(tenant_id, project=project)
     except Exception as exc:
         logger.debug("finance summary skipped: %s", exc)
         rows = []
