@@ -149,6 +149,11 @@ class Settings(BaseSettings):
     # MODEL_EMBED). Use for accuracy-first production; the local GPU stays free
     # for embeddings.
     prefer_cloud_llm: bool = False
+    # Per-task cloud model, as JSON: {"commerce_admin": "anthropic/claude-sonnet-5",
+    # "commerce_assistant": "google/gemini-2.5-flash"} (OpenRouter model names). Any task not
+    # listed uses model_worker_cloud. Pick entries from `python -m evals.run tools` results, not
+    # reputation. An env change still needs `railway up` to take effect.
+    cloud_model_by_task: str = ""
     # Ask OpenRouter to route only to providers that neither train on nor retain prompts
     # (provider.data_collection="deny" + zdr) — tenant data leaving SA should at least not stay
     # anywhere. Applied via llm_router.cloud_generation_kwargs().
