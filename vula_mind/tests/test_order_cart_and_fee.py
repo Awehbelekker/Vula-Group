@@ -170,3 +170,14 @@ async def test_supplier_bill_never_touches_orders():
          patch("vula.api.yoco._notify_order_paid", AsyncMock()):
         await service._settle_linked_order(TENANT, {"id": "b1", "order_id": "o1", "direction": "inbound"})
     assert db.store["commerce_orders"][0]["status"] == "pending_payment"
+
+
+@pytest.mark.asyncio
+async def test_supplier_history_labels_an_all_time_total_when_a_period_was_asked():
+    from unittest.mock import AsyncMock
+    with patch.object(service, "_resolve_supplier_names", AsyncMock(return_value=["Jack Hammer"])), \
+         patch.object(service, "find_filed_document", AsyncMock(return_value={})), \
+         patch.object(service, "format_supplier_history_reply", return_value="*Jack Hammer*: 3 documents"):
+        monthly = await service.answer_supplier_history(TENANT, "what did we spend at jack hammer this month")
+        alltime = await service.answer_supplier_history(TENANT, "what did we spend at jack hammer")
+    assert "all-time" in monthly and "all-time" not in alltime

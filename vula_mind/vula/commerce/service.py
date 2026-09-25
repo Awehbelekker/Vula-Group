@@ -3542,7 +3542,20 @@ async def answer_supplier_history(tenant_id: str, question: str) -> Optional[str
     if not any(n and f" {n} " in padded for n in (_norm_name(x) for x in names)):
         return None
     result = await find_filed_document(tenant_id, names[0], category="Invoice")
-    return format_supplier_history_reply(result, query=names[0])
+    reply = format_supplier_history_reply(result, query=names[0])
+    if reply and _PERIOD_RE.search(question or ""):
+        # The filed-document total is all-time; answering "this month?" with it unlabelled
+        # read as that month's spend. Say what the figure is rather than imply a period.
+        reply += ("\n\nNote: that's the all-time total across these documents — I can't split "
+                  "supplier spend by date yet, so check the dates listed above for the period "
+                  "you asked about.")
+    return reply
+
+
+_PERIOD_RE = re.compile(
+    r"\b(this|last|past|previous)\s+(week|month|quarter|year)\b|\btoday\b|\byesterday\b"
+    r"|\bsince\b|\bin\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\blast\s+\d+\s+(days|weeks|months)\b", re.IGNORECASE)
 
 
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:
