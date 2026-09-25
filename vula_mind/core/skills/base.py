@@ -417,7 +417,15 @@ _SUPPLIER_HISTORY_RE = re.compile(
     # "For gardens handiman full list of spend and material".
     r"\b(find|search|show|get|pull|fetch|look\s+up)\b[^.?!]{0,30}?\binvoices?\b|"
     r"\b(list|summary|breakdown|total)\s+of\s+(the\s+|all\s+|our\s+)?"
-    r"(spend|spending|purchases|materials?)\b",
+    r"(spend|spending|purchases|materials?)\b|"
+    # 2026-09-25, real digg-demo follow-up in the SAME conversation as a resolved supplier
+    # question: "So me all materials in breakdown." reversed the word order the two patterns
+    # above require ("breakdown OF materials", not "materials IN breakdown"), so it fell
+    # through to the model with a raw find_document JSON result and no instruction it could
+    # follow — see _direct_supplier_answer's docstring in email_admin.py for what that produced.
+    # Order/preposition-agnostic: "materials" and "breakdown" anywhere near each other in the
+    # same clause is unambiguous regardless of which comes first or what connects them.
+    r"\bmaterials?\b[^.?!]{0,25}\bbreakdown\b|\bbreakdown\b[^.?!]{0,25}\bmaterials?\b",
     re.IGNORECASE)
 # Invoice questions that are about what's OWED (receivables/payables status), not a supplier's
 # history — those stay with finance_admin / commerce skills.
