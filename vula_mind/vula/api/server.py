@@ -704,6 +704,32 @@ async def _daily_commerce_jobs_loop() -> None:
         await _asyncio.sleep(86400)  # daily
 
 
+async def _hourly_customer_jobs_loop() -> None:
+    """Hourly, per tenant: WhatsApp reminders for bookings in the next 24h (send_due_reminders
+    existed but only ran if something called POST /v1/bookings/{t}/jobs/reminders — nothing
+    did), and expiry of abandoned online-payment orders so their reserved stock is released."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(180)  # settle on boot
+    while True:
+        try:
+            from vula.api import tenants as _t
+            from vula.bookings.reminders import send_due_reminders
+            from vula.commerce import service as _cs
+            rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+            for r in rows:
+                tid = r.get("tenant_id")
+                if not tid or not _t.is_active(tid):
+                    continue
+                for job in (send_due_reminders, _cs.expire_abandoned_online_orders):
+                    try:
+                        await job(tid)
+                    except Exception as exc:
+                        log.debug("hourly job %s failed for %s: %s", job.__name__, tid, exc)
+        except Exception as exc:
+            log.warning("hourly customer jobs loop error: %s", exc)
+        await _asyncio.sleep(3600)
+
+
 async def _voice_retry_scheduler_loop() -> None:
     """Retry voice notes whose transcription failed, locally (2026-09-01).
 
@@ -1247,6 +1273,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_subscriptions_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))

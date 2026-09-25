@@ -181,3 +181,27 @@ async def test_supplier_history_labels_an_all_time_total_when_a_period_was_asked
         monthly = await service.answer_supplier_history(TENANT, "what did we spend at jack hammer this month")
         alltime = await service.answer_supplier_history(TENANT, "what did we spend at jack hammer")
     assert "all-time" in monthly and "all-time" not in alltime
+
+
+@pytest.mark.asyncio
+async def test_abandoned_online_orders_expire_and_release_stock():
+    from unittest.mock import AsyncMock
+    db = _FakeDB()
+    db.store["commerce_orders"] = [
+        {"id": "o1", "tenant_id": TENANT, "status": "pending_payment", "payment_method": "online"}]
+
+    class _Q2(_Query):
+        def lt(self, *_a):
+            return self
+
+        def execute(self):
+            if self._op == "select":
+                return _Result([r for r in self._db.store.get(self._table, []) if self._match(r)])
+            return super().execute()
+    db.table = lambda name: _Q2(db, name)
+    restore = AsyncMock()
+    with patch("vula.commerce.service._client", return_value=db), \
+         patch("vula.commerce.service.apply_order_stock", restore):
+        n = await service.expire_abandoned_online_orders(TENANT)
+    assert n == 1 and db.store["commerce_orders"][0]["status"] == "cancelled"
+    restore.assert_awaited_once_with("o1", restore=True)

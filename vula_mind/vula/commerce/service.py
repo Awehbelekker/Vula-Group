@@ -782,6 +782,29 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     return result.data[0]
 
 
+async def expire_abandoned_online_orders(tenant_id: str, older_than_hours: int = 24) -> int:
+    """Cancel ONLINE-payment orders still unpaid after `older_than_hours` and release the stock
+    reserved for them at checkout (migration 122). Before this nothing ever expired them, so an
+    abandoned card checkout held its stock forever. COD/EFT orders are left alone — they're
+    legitimately unpaid until delivery / the transfer clears. Returns how many expired."""
+    from datetime import datetime, timedelta, timezone as _tz
+    cutoff = (datetime.now(_tz.utc) - timedelta(hours=older_than_hours)).isoformat()
+    rows = (_client().table("commerce_orders").select("id,display_id")
+            .eq("tenant_id", tenant_id).eq("status", "pending_payment").eq("payment_method", "online")
+            .lt("created_at", cutoff).limit(200).execute().data or [])
+    n = 0
+    for o in rows:
+        res = (_client().table("commerce_orders")
+               .update({"status": "cancelled", "updated_at": _now()})
+               .eq("id", o["id"]).eq("status", "pending_payment").execute())
+        if res.data:
+            await apply_order_stock(o["id"], restore=True)
+            n += 1
+    if n:
+        logger.info("expired %d abandoned online order(s) for %s", n, tenant_id)
+    return n
+
+
 async def list_orders(
     tenant_id: str,
     status: Optional[str] = None,

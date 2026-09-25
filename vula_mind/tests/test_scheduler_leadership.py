@@ -24,7 +24,7 @@ _LOOP_NAMES = (
     "_seed_training_on_boot", "_infra_snapshot_loop", "_qdrant_backup_loop",
     "_recurring_invoices_loop",
     "_scheduled_campaigns_loop", "_automations_loop", "_subscriptions_loop",
-    "_recurring_bills_loop", "_daily_commerce_jobs_loop", "_email_sync_loop",
+    "_recurring_bills_loop", "_daily_commerce_jobs_loop", "_hourly_customer_jobs_loop", "_email_sync_loop",
     "_clickup_sync_loop", "_onedrive_sync_loop",
     "_weekly_rates_loop", "_call_sheet_loop", "_expense_sheet_loop",
     "_daily_trial_expiry_loop", "_commerce_jobs_scheduler_loop",
