@@ -482,7 +482,8 @@ async def receive_message(
 
 # ─── Message routing ─────────────────────────────────────────────────────────
 
-async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
+async def _maybe_helper_escalation_answer(phone: str, text: str,
+                                          tenant_id: Optional[str] = None) -> bool:
     """If this phone is a helper (e.g. Staci) with an open escalation, their message
     IS the answer — relay it to the customer and learn it for next time.
 
@@ -492,7 +493,7 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     """
     try:
         from vula import escalation as esc
-        open_esc = esc.open_escalation_for_helper(phone)
+        open_esc = esc.open_escalation_for_helper(phone, tenant_id)
     except Exception:
         open_esc = None
     if not (open_esc and text.strip()):
@@ -1126,7 +1127,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
 
     # ── Escalation answer: if this phone is a helper with an open escalation, their
     # message IS the answer — relay it to the customer and learn it for next time.
-    if await _maybe_helper_escalation_answer(phone, text):
+    if await _maybe_helper_escalation_answer(phone, text, route_tenant_id):
         return
 
     if route_tenant_id:
@@ -5506,7 +5507,7 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # Escalation answer: if a helper (e.g. Staci) is replying to an open escalation on
     # this tenant's line, their message is the answer — relay + learn, don't treat it as
     # a customer order. Runs on the commerce path too so every tenant is covered.
-    if await _maybe_helper_escalation_answer(phone, text):
+    if await _maybe_helper_escalation_answer(phone, text, tenant_id):
         return
 
     # Answering "which project is that receipt for?" → allocate the pending expense claim.

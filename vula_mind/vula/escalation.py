@@ -343,7 +343,7 @@ def _pick_helper(tenant_id: str, exclude_phone: str = "") -> Optional[dict]:
     return helpers[0] if helpers else None
 
 
-def open_escalation_for_helper(helper_phone: str) -> Optional[dict]:
+def open_escalation_for_helper(helper_phone: str, tenant_id: Optional[str] = None) -> Optional[dict]:
     """The oldest FRESH open escalation assigned to this helper (their next text is the answer).
 
     Escalations older than 48h are expired on sight instead of returned — confirmed live
@@ -356,9 +356,13 @@ def open_escalation_for_helper(helper_phone: str) -> Optional[dict]:
     if not digits:
         return None
     try:
-        rows = (_client().table("vula_escalations").select("*")
-                .eq("helper_phone", digits).eq("status", "open")
-                .order("created_at", desc=False).limit(5).execute().data or [])
+        q = (_client().table("vula_escalations").select("*")
+             .eq("helper_phone", digits).eq("status", "open"))
+        # Scoped to the line the helper replied on: someone on two tenants' teams answering on
+        # tenant A's number must never have that answer relayed to (and learned by) tenant B.
+        if tenant_id:
+            q = q.eq("tenant_id", tenant_id)
+        rows = q.order("created_at", desc=False).limit(5).execute().data or []
     except Exception:
         return None
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()

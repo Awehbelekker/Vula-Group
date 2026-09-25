@@ -833,6 +833,26 @@ async def _stale_escalation_scheduler_loop() -> None:
         await _asyncio.sleep(600)  # poll every 10 minutes; per-tenant interval is job_config-driven
 
 
+def _assigned_member(tenant_id: str, assigned_to: Optional[str]) -> Optional[dict]:
+    """The team member an inbox conversation is assigned to (assigned_to holds their name,
+    email or WhatsApp number), or None."""
+    key = (assigned_to or "").strip().lower()
+    if not key:
+        return None
+    try:
+        from vula.commerce import service as _cs
+        rows = (_cs._client().table("vula_team_members").select("name,email,whatsapp")
+                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+    except Exception:
+        return None
+    digits = re.sub(r"\D", "", key)
+    for r in rows:
+        if key in ((r.get("name") or "").lower(), (r.get("email") or "").lower()) or \
+           (digits and digits == re.sub(r"\D", "", r.get("whatsapp") or "")):
+            return r
+    return None
+
+
 async def _stale_handoff_scheduler_loop() -> None:
     """Human handoff (an owner taking over a WhatsApp thread — vula/api/whatsapp.py's
     "paused" check, set via the admin handoff/reply endpoints in commerce.py) has no expiry:
@@ -874,7 +894,10 @@ async def _stale_handoff_scheduler_loop() -> None:
                     for session in await commerce_service.find_stale_paused_sessions(tenant_id):
                         who = (session.get("customer_name") or session.get("customer_phone")
                               or "a customer")
-                        helper = _pick_helper(tenant_id)
+                        # Whoever the conversation is assigned to in the inbox, else the
+                        # tenant's default helper.
+                        helper = (_assigned_member(tenant_id, session.get("assigned_to"))
+                                  or _pick_helper(tenant_id))
                         if helper and helper.get("whatsapp"):
                             msg = (f"⏰ Heads up — you paused Vula's replies to {who} a while "
                                   f"ago and nothing's happened since. I've resumed answering "

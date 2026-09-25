@@ -6420,10 +6420,16 @@ async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest):
     # Send via WhatsApp.
     try:
         from vula.api.whatsapp import _send_reply
-        await _send_reply(phone, text, tenant_id=tenant_id)
+        delivered = await _send_reply(phone, text, tenant_id=tenant_id)
     except Exception as exc:
         log.warning("Admin reply WhatsApp send failed for %s: %s", session_id, exc)
         raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {exc}") from exc
+    if delivered is False:
+        # _send_reply reports failure by returning False (e.g. outside the 24h window, token
+        # expired) — this used to be ignored and the inbox showed the reply as sent.
+        raise HTTPException(status_code=502, detail=(
+            "WhatsApp didn't accept this message — the customer may be outside the 24-hour "
+            "reply window. Nothing was sent."))
 
     # Persist the agent's message in the thread.
     await service.append_message(tenant_id, session_id, "agent", text)
