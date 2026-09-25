@@ -807,8 +807,12 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "cancel_appointment",
-            "description": "Cancel the customer's upcoming appointment (their most recent confirmed booking).",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "Cancel one of the customer's upcoming appointments. If they have more "
+                           "than one, this returns a numbered list — ask which, then call again "
+                           "with choice set to the number they picked.",
+            "parameters": {"type": "object", "properties": {
+                "choice": {"type": "integer",
+                           "description": "The number the customer picked from the list shown earlier."}}},
         },
     },
 ]
@@ -1373,7 +1377,7 @@ class CommerceAssistantSkill(BaseSkill):
         if name == "book_appointment":
             return await self._exec_book_appointment(tid, phone, args)
         if name == "cancel_appointment":
-            return await self._exec_cancel_appointment(tid, phone)
+            return await self._exec_cancel_appointment(tid, phone, args)
         if name == "create_subscription":
             return await self._exec_create_subscription(tid, sid, phone, args)
         if name == "list_my_subscriptions":
@@ -1506,7 +1510,8 @@ class CommerceAssistantSkill(BaseSkill):
                 "service": b.get("service_name"),
                 "message": f"Booked for {b.get('start_local')}."}
 
-    async def _exec_cancel_appointment(self, tenant_id: str, phone: Optional[str]) -> Dict[str, Any]:
+    async def _exec_cancel_appointment(self, tenant_id: str, phone: Optional[str],
+                                       args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         from vula.bookings import service as bk
         if not phone:
             return {"error": "I need your phone number on file to find the booking."}
@@ -1514,8 +1519,28 @@ class CommerceAssistantSkill(BaseSkill):
                                           from_utc=bk._now_utc().isoformat(), phone=phone)
         if not upcoming:
             return {"message": "You have no upcoming appointments to cancel."}
-        await bk.set_status(tenant_id, upcoming[0]["id"], "cancelled")
-        return {"cancelled": True, "message": "Your appointment has been cancelled."}
+        upcoming = sorted(upcoming, key=lambda b: b.get("start_at") or "")
+        try:
+            choice = int((args or {}).get("choice") or 0)
+        except (TypeError, ValueError):
+            choice = 0
+        if choice:
+            if not 1 <= choice <= len(upcoming):
+                return {"error": f"Pick a number from 1 to {len(upcoming)}."}
+            chosen = upcoming[choice - 1]
+        elif len(upcoming) == 1:
+            chosen = upcoming[0]
+        else:
+            # Used to cancel the earliest one silently — a customer with two bookings could lose
+            # the wrong one. Ask instead.
+            return {"status": "need_info",
+                    "message": "You have more than one upcoming appointment — which one should I "
+                               "cancel? Reply with the number:\n" +
+                               "\n".join(f"{n}. {b.get('service_name') or 'Appointment'} — {b.get('start_at')}"
+                                          for n, b in enumerate(upcoming, 1))}
+        await bk.set_status(tenant_id, chosen["id"], "cancelled")
+        return {"cancelled": True, "service": chosen.get("service_name"), "when": chosen.get("start_at"),
+                "message": "Your appointment has been cancelled."}
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
         products = await service.list_products(
