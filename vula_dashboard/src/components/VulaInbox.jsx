@@ -167,7 +167,26 @@ function Thread({ tenantId, sessionId, onBack }) {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [canned, setCanned] = useState([])
+  const [rated, setRated] = useState({})   // message id -> 'up' | 'down' (this visit)
   const endRef = useRef(null)
+
+  // 👍/👎 on an AI reply. A 👎 can carry "what it should have said", which is also taught to
+  // the assistant for next time (backend: /admin/conversations/{id}/feedback, migration 176).
+  const rate = async (m, i, rating) => {
+    if (!m.id) return
+    let correction = null
+    if (rating === 'down') {
+      correction = window.prompt('What should the assistant have said? (optional — it will learn this)') || null
+    }
+    const question = [...msgs.slice(0, i)].reverse().find(x => x.role === 'user')?.content || null
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/conversations/${sessionId}/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: m.id, rating, question, answer: m.content, correction }),
+      })
+      if (r.ok) setRated(prev => ({ ...prev, [m.id]: rating }))
+    } catch { /* rating is best-effort; the thread still works */ }
+  }
 
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/canned-replies`)
@@ -266,6 +285,14 @@ function Thread({ tenantId, sessionId, onBack }) {
                 {m.role === 'assistant' && <span style={s.roleTag}>🤖 AI</span>}
                 {m.role === 'agent' && <span style={s.roleTag}>🧑 You</span>}
                 <span>{m.content}</span>
+                {m.role === 'assistant' && m.id && (
+                  <span style={{ display: 'flex', gap: 6, marginTop: 4, justifyContent: 'flex-end' }}>
+                    <button type="button" title="Good reply" onClick={() => rate(m, i, 'up')}
+                      style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: rated[m.id] === 'down' ? 0.35 : 1 }}>👍</button>
+                    <button type="button" title="Wrong or unhelpful — correct it" onClick={() => rate(m, i, 'down')}
+                      style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: rated[m.id] === 'up' ? 0.35 : 1 }}>👎</button>
+                  </span>
+                )}
               </div>
             </div>
           )

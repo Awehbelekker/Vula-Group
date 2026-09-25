@@ -1359,7 +1359,8 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
         "assigned_to": session.get("assigned_to"),
         "agent_note": session.get("agent_note"),
         "tags": session.get("tags") or [],
-        "messages": [{"role": m["role"], "content": m["content"], "created_at": m.get("created_at")} for m in messages],
+        "messages": [{"id": m.get("id"), "role": m["role"], "content": m["content"],
+                      "created_at": m.get("created_at")} for m in messages],
     }
 
 
@@ -1381,7 +1382,7 @@ async def get_recent_messages(tenant_id: str, session_id: str, limit: int = DEFA
     q = (
         _client()
         .table("commerce_conversation_messages")
-        .select("role,content,created_at")
+        .select("id,role,content,created_at")
         .eq("tenant_id", tenant_id)
         .eq("session_id", session_id)
     )

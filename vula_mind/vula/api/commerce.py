@@ -1721,6 +1721,59 @@ async def admin_agent_teach(tenant_id: str, body: TeachRequest):
     return {"ok": True, "learned": q}
 
 
+class ReplyFeedback(BaseModel):
+    message_id: str
+    rating: str                      # "up" | "down"
+    question: Optional[str] = None   # the customer message this reply answered
+    answer: Optional[str] = None     # the AI reply being rated
+    correction: Optional[str] = None # what it should have said (optional, with "down")
+
+
+@router.post("/{tenant_id}/admin/conversations/{session_id}/feedback")
+async def admin_reply_feedback(tenant_id: str, session_id: str, body: ReplyFeedback):
+    """👍/👎 on an AI reply in the Inbox (migration 176). A correction is also TAUGHT (same
+    path as agent-teach) so the assistant uses it next time; 👎 rows are the raw material for
+    new eval cases (vula_mind/evals). One rating per message — re-rating replaces it."""
+    if body.rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
+    row = {"tenant_id": tenant_id, "session_id": session_id, "message_id": body.message_id,
+           "rating": body.rating, "question": (body.question or "")[:2000] or None,
+           "answer": (body.answer or "")[:4000] or None,
+           "correction": (body.correction or "").strip()[:4000] or None}
+    try:
+        service._client().table("vula_reply_feedback").upsert(
+            row, on_conflict="tenant_id,message_id").execute()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"{exc} (run migration 176?)")
+    taught = False
+    if row["correction"] and row["question"]:
+        res = await admin_agent_teach(tenant_id, TeachRequest(question=row["question"],
+                                                              answer=row["correction"]))
+        taught = bool(res.get("ok"))
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-reply-feedback", task="rating", tenant_id=tenant_id,
+             outcome=body.rating, extra={"taught": taught})
+    except Exception:
+        pass
+    return {"ok": True, "rating": body.rating, "taught": taught}
+
+
+@router.get("/{tenant_id}/admin/feedback")
+async def admin_list_feedback(tenant_id: str, rating: Optional[str] = Query(None),
+                              limit: int = Query(100, ge=1, le=500)):
+    """Rated replies, newest first — 👎 ones are candidate eval cases."""
+    q = service._client().table("vula_reply_feedback").select("*").eq("tenant_id", tenant_id)
+    if rating in ("up", "down"):
+        q = q.eq("rating", rating)
+    try:
+        rows = q.order("created_at", desc=True).limit(limit).execute().data or []
+    except Exception as exc:
+        log.debug("feedback list skipped (run migration 176?): %s", exc)
+        rows = []
+    return {"tenant_id": tenant_id, "feedback": rows}
+
+
 @router.post("/{tenant_id}/admin/agent-unteach")
 async def admin_agent_unteach(tenant_id: str, body: dict):
     """Remove something previously taught (by the same question)."""
