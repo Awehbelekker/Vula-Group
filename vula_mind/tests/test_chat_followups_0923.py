@@ -213,6 +213,30 @@ def test_reply_is_none_when_there_is_nothing_complete_to_state():
                                           "matches": [{"excerpt": "x"}]}) is None
 
 
+# ── 2026-09-25: honest disclosure when a spreadsheet export is explicitly asked for ───────
+# Real digg-demo incident, same conversation: "...a summary of what was spent in excel" was
+# answered as if "in excel" had never been said; a later "...do a full breakdown in excel"
+# (from a different, non-deterministic code path with no such disclosure either) tried to fake
+# a spreadsheet by rendering a markdown table instead. Vula has no capability to generate an
+# actual .xlsx file at all — say so plainly rather than silently ignoring or faking it.
+
+@pytest.mark.parametrize("question", [
+    "Need all jack hammer invoices and a summary of what was spent in excel",
+    "can you export this as a spreadsheet",
+    "please send as .xlsx",
+    "csv please",
+])
+def test_reply_discloses_no_spreadsheet_export_when_explicitly_asked(question):
+    out = format_supplier_history_reply(_RESULT, query="jack hammer", question=question)
+    assert "can't generate an actual spreadsheet file" in out
+
+
+def test_reply_omits_the_export_note_when_not_asked_for():
+    out = format_supplier_history_reply(_RESULT, query="jack hammer",
+                                        question="Need all jack hammer invoices")
+    assert "spreadsheet" not in out.lower()
+
+
 @pytest.mark.asyncio
 async def test_email_admin_answers_supplier_history_without_the_model_reading_numbers():
     from core.skills.base import SkillInput
@@ -282,6 +306,18 @@ async def test_a_named_supplier_is_answered_without_any_model_call():
             TID, "Need all jack hammer invoices and a summary of what was spent")
     find.assert_awaited_once_with(TID, "GARDENS HANDIMAN CENTRE", category="Invoice")
     assert "total spend *R1,084.00*" in out
+
+
+@pytest.mark.asyncio
+async def test_answer_supplier_history_discloses_no_export_when_the_question_asks_for_excel():
+    from vula.commerce import service as svc
+    with (
+        patch.object(svc, "list_suppliers", new=AsyncMock(return_value=_SUPPLIERS)),
+        patch.object(svc, "find_filed_document", new=AsyncMock(return_value=_RESULT)),
+    ):
+        out = await svc.answer_supplier_history(
+            TID, "Need all jack hammer invoices and a summary of what was spent in excel")
+    assert "can't generate an actual spreadsheet file" in out
 
 
 @pytest.mark.asyncio

@@ -171,7 +171,8 @@ def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], resu
     if not looks_like_supplier_history_question(question or ""):
         return None
     from vula.commerce.service import format_supplier_history_reply
-    return format_supplier_history_reply(result, query=(args or {}).get("query") or "")
+    return format_supplier_history_reply(result, query=(args or {}).get("query") or "",
+                                         question=question or "")
 
 
 _MAILBOX_FREE_TOOLS = {"find_document"}
