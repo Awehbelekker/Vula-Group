@@ -4,23 +4,30 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
-import { REP_DEFAULT_ACCESS } from "../navConfig.jsx";
+import { REP_DEFAULT_ACCESS, MERCHANT_GROUPS } from "../navConfig.jsx";
 
 const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
 
-// Access modules map 1:1 to dashboard tab ids.
-const MODULES = [
-  ["overview", "Overview"], ["assistant", "Assistant"], ["orders", "Orders"], ["products", "Products"],
-  ["invoices", "Invoices"], ["finances", "Finances"], ["budget", "Budget"], ["customers", "Customers"],
-  ["contacts", "Contacts"], ["followups", "Follow-ups"], ["broadcast", "Broadcast"],
-  ["projects", "Projects"], ["qsrates", "QS Rates"], ["documents", "Documents"], ["scanner", "Scanner"],
-  // Sales rep dashboard ("My Work") tabs — a sales_rep login gets these by default (see
-  // createLogin below); listed here too so any member's access can be manually adjusted.
-  ["rep-contacts", "My Contacts"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"],
-  ["rep-documents", "My Documents"], ["rep-reminders", "My Reminders"], ["rep-expenses", "My Expenses"],
-  ["rep-crm", "My Dynamics 365"],
-];
+// Access modules map 1:1 to dashboard tab ids — generated from the sidebar (navConfig) so a
+// new tab can always be granted. The hand-kept list had drifted: ~28 tabs (Inbox, Expenses,
+// Bank, Payments, Bookings, Pages, Templates, QS, Takeoff...) couldn't be given to a
+// restricted member at all. Section ids with subtabs are groupings, not permissions — only
+// their children are listed.
+const MODULES = (() => {
+  const out = [];
+  for (const g of MERCHANT_GROUPS) {
+    for (const it of g.items) {
+      if (it.subtabs) it.subtabs.forEach(st => out.push([st.id, st.label]));
+      else out.push([it.id, it.label]);
+    }
+  }
+  // Sales rep ("My Work") tabs — a sales_rep login gets these by default (see createLogin).
+  for (const r of [["rep-contacts", "My Contacts"], ["rep-callsheet", "My Call Sheet"], ["rep-bookings", "My Bookings"], ["rep-documents", "My Documents"], ["rep-reminders", "My Reminders"], ["rep-expenses", "My Expenses"], ["rep-crm", "My Dynamics 365"]]) {
+    if (!out.some(([k]) => k === r[0])) out.push(r);
+  }
+  return out;
+})();
 const EVENTS = [
   ["which_project", "Which-project?"], ["followup_digest", "Follow-up digest"],
   ["payment_received", "Payments"], ["new_invoice", "New invoices"],

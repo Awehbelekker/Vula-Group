@@ -1,3 +1,4 @@
+import { VULA_API } from "../lib/authFetch";
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 
 // Blueprint engineering aesthetic — dark navy, cyan grid lines, white annotations
@@ -330,7 +331,9 @@ export default function VulaTakeoff() {
   );
 
   // Live API state
-  const [apiHost] = useState(() => localStorage.getItem("vula_host") || "http://localhost:7438");
+  // The real API (nothing ever set localStorage.vula_host, so production always hit
+  // localhost:7438, failed, and fell back to mock data). A local override still works.
+  const [apiHost] = useState(() => localStorage.getItem("vula_host") || VULA_API);
   const [liveJob, setLiveJob] = useState(null); // { job_id, status, filename, boq }
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef();

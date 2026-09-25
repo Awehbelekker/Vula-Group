@@ -45,6 +45,7 @@ const COLORS = {
   green: "#2C5545",
   muted: "#8A8680",
   charcoal: "#1E1E1E",
+  amber: "#F5C451",   // master-mode banner (was referenced but never defined -> no background)
 };
 
 const TABS = [
