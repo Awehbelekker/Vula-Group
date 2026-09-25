@@ -239,6 +239,67 @@ _CONFIRM_RE = re.compile(
     re.IGNORECASE)
 
 
+# A "yes" that comes with a change is NOT a confirmation of the order as reviewed. 2026-09-25
+# review: _CONFIRM_RE found "yes" anywhere, so "yes but change the address to 12 Main Rd" placed
+# the order at the OLD address. Any of these alongside a yes means "not yet — review again".
+_CHANGE_RE = re.compile(
+    r"\b(but|change|instead|except|remove|add|also|wait|hold on|actually|different|update|"
+    r"replace|rather|swap|not|no|don'?t|cancel|wrong|edit|make it|"
+    r"maar|verander|nee|nie|wag|"                         # Afrikaans
+    r"kodwa|cha|hhayi|linda)\b",                          # isiZulu/isiXhosa: but / no / wait
+    re.IGNORECASE)
+
+
+def _is_clear_confirmation(message: str) -> bool:
+    """True only for a plain yes — a confirm word, no change request, and short enough to be
+    an answer rather than a new instruction."""
+    msg = (message or "").strip()
+    return (bool(_CONFIRM_RE.search(msg)) and not _CHANGE_RE.search(msg)
+            and len(msg.split()) <= 12)
+
+
+def _name_tokens(text: str) -> List[str]:
+    toks = re.findall(r"[a-z0-9]+", (text or "").lower())
+    # crude singular: "fillets" ~ "fillet", "prawns" ~ "prawn" (never shorten tiny words)
+    return [t[:-1] if len(t) > 3 and t.endswith("s") and not t.endswith("ss") else t for t in toks]
+
+
+def _match_product(name: str, candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The product a customer meant. Substring first (the old behaviour), then every word of
+    the request present in the product name ignoring plurals/order ("hake fillets" -> "Hake
+    Fillet"), then a close spelling match. 2026-09-25 review: plain substring matching turned
+    "hake fillets" into "no product matching" for a product called "Hake Fillet"."""
+    want = (name or "").strip().lower()
+    if not want:
+        return None
+    hit = next((p for p in candidates if want in (p.get("name") or "").lower()), None)
+    if hit:
+        return hit
+    wt = set(_name_tokens(want))
+    if wt:
+        hits = [p for p in candidates if wt <= set(_name_tokens(p.get("name") or ""))]
+        if len(hits) == 1:
+            return hits[0]
+    import difflib
+    names = {(p.get("name") or "").lower(): p for p in candidates}
+    close = difflib.get_close_matches(want, list(names), n=1, cutoff=0.85)
+    return names[close[0]] if close else None
+
+
+def _suggest_products(name: str, candidates: List[Dict[str, Any]], n: int = 3) -> List[str]:
+    import difflib
+    names = [p.get("name") or "" for p in candidates]
+    lower = {x.lower(): x for x in names}
+    out = difflib.get_close_matches((name or "").lower(), list(lower), n=n, cutoff=0.45)
+    wt = set(_name_tokens(name))
+    for x in names:   # also anything sharing a word ("hake" -> every hake product)
+        if len(out) >= n:
+            break
+        if wt & set(_name_tokens(x)) and x.lower() not in out:
+            out.append(x.lower())
+    return [lower[o] for o in out[:n]]
+
+
 def _is_kg(product) -> bool:
     return str((product or {}).get("sold_by") or "").lower() == "kg"
 
@@ -1499,10 +1560,15 @@ class CommerceAssistantSkill(BaseSkill):
         product = None
         if re.match(r"^[a-z0-9-]+$", name):
             product = await service.get_product_by_slug(tenant_id, name, statuses={"active", "unlisted"})
+        candidates: List[Dict[str, Any]] = []
         if not product:
             candidates = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
-            product = next((p for p in candidates if name.lower() in p["name"].lower()), None)
+            product = _match_product(name, candidates)
         if not product:
+            maybe = _suggest_products(name, candidates)
+            if maybe:
+                return {"error": f"No in-stock product called '{name}'. Did you mean: "
+                                 f"{', '.join(maybe)}? Ask the customer which one."}
             return {"error": f"No in-stock product matching '{name}'."}
 
         option_names = product.get("options") or []
@@ -1977,7 +2043,7 @@ class CommerceAssistantSkill(BaseSkill):
             if product:
                 return product
         candidates = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
-        return next((p for p in candidates if name.lower() in p["name"].lower()), None)
+        return _match_product(name, candidates)
 
     async def _exec_create_quote(
         self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
@@ -1985,9 +2051,12 @@ class CommerceAssistantSkill(BaseSkill):
         line_items: List[Dict[str, Any]] = []
         items_arg = args.get("items") or []
         if items_arg:
+            unmatched: List[str] = []
             for it in items_arg:
                 product = await self._resolve_product(tenant_id, it.get("product", ""))
                 if not product:
+                    # Used to be silently skipped — the customer got a quote missing items.
+                    unmatched.append(str(it.get("product") or "?"))
                     continue
                 qty = _norm_qty(product, it.get("quantity", 1))   # decimals for kg items
                 line_items.append(
@@ -1998,6 +2067,10 @@ class CommerceAssistantSkill(BaseSkill):
                         "product_id": product["id"],
                     }
                 )
+            if unmatched:
+                return {"error": f"Couldn't find {', '.join(repr(u) for u in unmatched)} in stock, so "
+                                 "no quote was made. Ask the customer to pick from the product list "
+                                 "(call list_products) and try again."}
         else:
             cart = await service.get_or_create_cart(tenant_id, session_id, phone)
             for it in cart.get("commerce_cart_items", []) or []:
@@ -2215,7 +2288,7 @@ class CommerceAssistantSkill(BaseSkill):
         from vula.commerce import order_workflow as ow
 
         current_msg = ((ctx or {}).get("current_message") or "").strip()
-        if not _CONFIRM_RE.search(current_msg):
+        if not _is_clear_confirmation(current_msg):
             return {"error": "The customer has NOT explicitly confirmed in their latest message — "
                               "do not place the order. Call review_order to show them the itemised "
                               "total first, then wait for them to reply CONFIRM (or a clear yes) "
