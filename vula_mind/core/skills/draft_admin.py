@@ -208,7 +208,13 @@ async def draft_letter(args: Dict[str, Any], tenant_id: str, phone: str,
         content_type = "application/pdf"
         ext = "pdf"
 
-    filename = f"{doc_config['label'].replace(' ', '_')}.{ext}"
+    # Distinct, recognisable names: every fee proposal used to be "Fee_Proposal.pdf", so on
+    # WhatsApp and in Drive the owner couldn't tell which client/project a file was for.
+    import re as _re
+    _parts = [doc_config["label"], args.get("client_name") or args.get("recipient") or "",
+              args.get("project_name") or "", datetime.now(timezone.utc).strftime("%Y-%m-%d")]
+    _stem = "_".join(_re.sub(r"[^A-Za-z0-9]+", "-", str(p)).strip("-") for p in _parts if p)
+    filename = f"{_stem[:120]}.{ext}"
     result: Dict[str, Any] = {"draft_id": draft_id, "document_type": doc_type,
                               "word_count": word_count, "has_placeholders": has_placeholders,
                               "output_format": ext}
