@@ -845,12 +845,19 @@ function ModelsPanel({ onError }) {
   const [reports, setReports] = useState(null)
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(null)
+  const [fbCases, setFbCases] = useState(null)
+  const [copied, setCopied] = useState('')
+  const copy = (text, id) => {
+    try { navigator.clipboard.writeText(text); setCopied(id); setTimeout(() => setCopied(''), 1500) }
+    catch { onError('Copy failed — select the text instead.') }
+  }
 
   const loadReports = () => authFetch('/v1/master/evals/reports?limit=30')
     .then(d => setReports(d.reports || [])).catch(e => onError(e.message))
   useEffect(() => {
     authFetch('/v1/master/evals/candidates').then(d => { setInfo(d); setPicked(d.candidates || []) }).catch(e => onError(e.message))
     loadReports()
+    authFetch('/v1/master/evals/feedback-cases?limit=50').then(d => setFbCases(d.cases || [])).catch(() => setFbCases([]))
   }, [])
   const running = (reports || []).some(r => r.status === 'running')
   useEffect(() => {
@@ -944,6 +951,34 @@ function ModelsPanel({ onError }) {
             {reports && !reports.length && <tr><td style={td} colSpan={9}>No runs yet — pick models above and press Run.</td></tr>}
           </tbody>
         </table>
+      </div>
+
+      <div style={card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <h4 style={{ ...h4, margin: 0 }}>Test cases from 👎 feedback</h4>
+          {(fbCases || []).length > 0 &&
+            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={() => copy(fbCases.map(c => c.yaml).join('\n'), 'all')}>
+              {copied === 'all' ? 'Copied' : 'Copy all'}
+            </button>}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+          Replies people rated 👎 in the Inbox, as routing cases for <code>evals/cases/routing.yaml</code>. Phones and emails are
+          masked. <b>expect</b> is where the question routes today — change it to the right skill before adding it, so the
+          mistake can't come back.
+        </div>
+        {fbCases === null && <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>}
+        {fbCases && !fbCases.length && <div style={{ color: C.muted, fontSize: 13 }}>No 👎 ratings yet.</div>}
+        {(fbCases || []).map(c => (
+          <div key={c.id} style={{ borderTop: `1px solid ${C.border}`, padding: '8px 0', fontSize: 12.5 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <div>“{c.question}” <span style={{ color: C.muted }}>· {c.tenant_id} · routes to <b>{c.routes_to}</b></span></div>
+                {c.correction && <div style={{ color: C.muted, marginTop: 2 }}>Should have said: {c.correction}</div>}
+              </div>
+              <button style={miniBtn} onClick={() => copy(c.yaml, c.id)}>{copied === c.id ? 'Copied' : 'Copy YAML'}</button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

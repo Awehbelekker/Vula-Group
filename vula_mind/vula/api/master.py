@@ -929,3 +929,52 @@ async def master_eval_reports(limit: int = 30) -> dict:
                           "error": x.get("error")} for x in (rep.get("rows") or []) if not x.get("ok")],
         })
     return {"reports": out}
+
+
+# ── 👎 feedback → eval cases ────────────────────────────────────────────────────
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def _redact(text: str) -> str:
+    """Phones and emails out before a customer's words go anywhere near the eval set (which
+    lives in the repo). Same phone shape core/log_redaction masks in logs."""
+    from core.log_redaction import _PHONE_RE
+    return _EMAIL_RE.sub("<email>", _PHONE_RE.sub("<phone>", text or ""))
+
+
+def _yaml_str(s: str) -> str:
+    import json
+    return json.dumps(s, ensure_ascii=False)   # a JSON string is a valid YAML flow scalar
+
+
+@router.get("/evals/feedback-cases")
+async def master_feedback_cases(limit: int = 50) -> dict:
+    """Recent 👎-rated replies across tenants, each as a ready-to-paste routing case for
+    evals/cases/routing.yaml. `expect` is pre-filled with where the question routes TODAY —
+    the reviewer confirms or corrects it, since only a person knows the right answer."""
+    try:
+        rows = (_client().table("vula_reply_feedback")
+                .select("id,tenant_id,question,answer,correction,created_at")
+                .eq("rating", "down").order("created_at", desc=True)
+                .limit(max(1, min(limit, 200))).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        return {"cases": [], "error": f"{exc} (run migration 176?)"}
+    from evals import harness
+    cases = []
+    for r in rows:
+        q = _redact((r.get("question") or "").strip())
+        if not q:
+            continue
+        try:
+            got, how = harness.route(q, r.get("tenant_id"))
+        except Exception:  # noqa: BLE001
+            got, how = "reasoning", "error"
+        note = f"👎 {str(r.get('created_at') or '')[:10]}; routes to {got} today ({how})"
+        if r.get("correction"):
+            note += f"; should have said: {_redact(r['correction'])[:120]}"
+        line = (f"- {{prompt: {_yaml_str(q[:300])}, expect: {got}, tenant: {r.get('tenant_id')}, "
+                f"note: {_yaml_str(note)}}}")
+        cases.append({"id": r.get("id"), "tenant_id": r.get("tenant_id"), "question": q[:300],
+                      "routes_to": got, "correction": _redact(r.get("correction") or "")[:300],
+                      "yaml": line})
+    return {"cases": cases}

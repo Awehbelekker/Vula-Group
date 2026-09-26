@@ -1750,13 +1750,20 @@ async def admin_reply_feedback(tenant_id: str, session_id: str, body: ReplyFeedb
         res = await admin_agent_teach(tenant_id, TeachRequest(question=row["question"],
                                                               answer=row["correction"]))
         taught = bool(res.get("ok"))
+    learned = False
+    if row["question"]:
+        try:
+            from core.memory.reflection import ReflectionAgent
+            learned = ReflectionAgent().apply_feedback(tenant_id, row["question"], body.rating == "up")
+        except Exception as exc:
+            log.debug("feedback -> reflection skipped: %s", exc)
     try:
         from core.reasoning_telemetry import emit
         emit(system="vula-reply-feedback", task="rating", tenant_id=tenant_id,
-             outcome=body.rating, extra={"taught": taught})
+             outcome=body.rating, extra={"taught": taught, "routing_updated": learned})
     except Exception:
         pass
-    return {"ok": True, "rating": body.rating, "taught": taught}
+    return {"ok": True, "rating": body.rating, "taught": taught, "routing_updated": learned}
 
 
 @router.get("/{tenant_id}/admin/feedback")

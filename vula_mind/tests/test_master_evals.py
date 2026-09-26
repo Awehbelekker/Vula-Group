@@ -105,3 +105,24 @@ async def test_reports_pull_out_headline_numbers_and_failures():
     r = out["reports"][0]
     assert r["p50_secs"] == 1.0 and r["cost_per_100_usd"] == 0.5
     assert r["failures"] == [{"prompt": "bye", "expect": "y", "got": None, "error": None}]
+
+
+@pytest.mark.asyncio
+async def test_feedback_cases_are_redacted_and_prefilled_with_todays_route():
+    db = MagicMock()
+    q = db.table.return_value
+    for m in ("select", "eq", "order", "limit"):
+        getattr(q, m).return_value = q
+    q.execute.return_value.data = [{
+        "id": "f1", "tenant_id": "digg-demo", "created_at": "2026-09-25T10:00:00Z",
+        "question": "Email jan@site.co.za the Jack Hammer invoices, call me on 082 555 1234",
+        "correction": "Send them to jan@site.co.za"}]
+    with patch("vula.api.master._client", return_value=db), \
+         patch("evals.harness.route", return_value=("email_admin", "keyword")):
+        out = await master.master_feedback_cases()
+    case = out["cases"][0]
+    assert "jan@site" not in case["yaml"] and "555" not in case["yaml"]
+    assert "<email>" in case["question"] and "<phone>" in case["question"]
+    import yaml
+    parsed = yaml.safe_load(case["yaml"])[0]
+    assert parsed["expect"] == "email_admin" and parsed["tenant"] == "digg-demo"
