@@ -15,6 +15,7 @@ import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { MERCHANT_GROUPS } from '../navConfig.jsx'
+import { useAuthStore } from '../store/auth'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
@@ -115,6 +116,8 @@ function subtabsFor(navGroups, sectionId) {
 // with its own hand-rolled tab strip and gating, was dead code superseded by that shell takeover
 // — deleted 2026-07-21 rather than kept as an unused second nav path to drift out of sync again.)
 export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange }) {
+  // Who is connecting WhatsApp/Yoco/email — recorded as connected_by (was always blank).
+  const adminEmail = useAuthStore(st => st.user?.email) || ""
   const tab = activeTab
   const setTab = onTabChange
   // A member with a defined access list sees only those modules (+ overview). Owners/
@@ -182,7 +185,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
           {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'team'      && <VulaTeam          tenantId={tenantId} />}
-          {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail="" />}
+          {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />}
         </div>
     </>
   )
