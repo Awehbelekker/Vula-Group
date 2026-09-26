@@ -494,9 +494,20 @@ _MIGRATION_PROBES: list[tuple[str, str, str] | tuple[str, str, str, str]] = [
 ]
 
 
+def _all_probes() -> list[tuple]:
+    """The hand-listed probes above PLUS every boot-time sentinel (vula/startup_checks.py) —
+    this list used to stop at 108 while the repo reached 177, so Health showed 'all applied'
+    while newer migrations were missing. One list to maintain from now on: add a sentinel."""
+    from vula.startup_checks import _SENTINELS
+    seen = {p[0] for p in _MIGRATION_PROBES}
+    extra = [(num, table, f"{table}.{col}" if col else table, *([col] if col else []))
+             for num, table, col in _SENTINELS if num not in seen]
+    return sorted(list(_MIGRATION_PROBES) + extra, key=lambda p: p[0])
+
+
 def _probe_migrations(db) -> list[dict]:
     out = []
-    for num, table, note, *rest in _MIGRATION_PROBES:
+    for num, table, note, *rest in _all_probes():
         column = rest[0] if rest else None  # probe a specific column for column-only migrations
         try:
             db.table(table).select(column or "*").limit(1).execute()
@@ -555,12 +566,15 @@ async def master_usage(days: int = 14):
     from vula.commerce.plan_limits import SEAT_LIMITS, STARTER_DOCUMENT_LIMIT
     plans = {r["tenant_id"]: (r.get("plan") or "starter").lower() for r in
              (db.table("vula_tenant_config").select("tenant_id,plan").execute().data or [])}
+    # Paged: PostgREST caps a response at 1000 rows, so a busy tenant's document count (and the
+    # Starter 25-document cap check shown next to it) used to be silently wrong.
+    from vula.commerce.ledger import _all_pages
     doc_counts: dict[str, int] = {}
-    for r in (db.table("vula_filed_documents").select("tenant_id").execute().data or []):
+    for r in _all_pages(lambda: db.table("vula_filed_documents").select("tenant_id,id").order("id")):
         doc_counts[r["tenant_id"]] = doc_counts.get(r["tenant_id"], 0) + 1
     seat_counts: dict[str, int] = {}
-    for r in (db.table("vula_tenant_users").select("tenant_id,role")
-              .in_("role", ["owner", "staff"]).execute().data or []):
+    for r in _all_pages(lambda: db.table("vula_tenant_users").select("tenant_id,role,user_id")
+                        .in_("role", ["owner", "staff"]).order("user_id")):
         seat_counts[r["tenant_id"]] = seat_counts.get(r["tenant_id"], 0) + 1
     for tid, plan in plans.items():
         t = per_tenant.setdefault(tid, {"ai_cost_usd": 0.0, "calls": 0, "infra_cost_usd": 0.0})

@@ -10,3 +10,12 @@
 
 alter table vula_tenants alter column contact_name drop not null;
 alter table vula_tenants alter column email drop not null;
+
+-- Backfill: a billing row for every existing tenant that has none (keyed by slug), so master's
+-- Signups/Subscriptions views and billing actions cover tenants created before this change.
+-- No trial_ends — existing tenants' billing is agreed directly, so no automated trial emails.
+insert into vula_tenants (company_name, workspace_slug, status, plan)
+select coalesce(c.display_name, c.tenant_id), c.tenant_id, 'active',
+       case when c.plan in ('starter', 'growth', 'business') then c.plan else 'starter' end
+from vula_tenant_config c
+where not exists (select 1 from vula_tenants t where t.workspace_slug = c.tenant_id);
