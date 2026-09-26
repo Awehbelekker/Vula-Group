@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { VULA_API } from "../lib/authFetch";
 
 // ── Design Direction ──────────────────────────────────────────────────────────
 // Organic/natural meets industrial precision
@@ -8,7 +9,6 @@ import { useState, useRef, useEffect, useCallback } from "react";
 
 // Default to the production Railway API so the dashboard works everywhere,
 // including local dev without a local API running. Override with VITE_API_URL.
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
 const COLORS = {
   bg: "#F7F4EE",

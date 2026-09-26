@@ -4,8 +4,8 @@
  * flat-pricing sales story made concrete: local-first inference = near-zero marginal cost.
  */
 import { useState, useEffect } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
 export default function VulaCSMetrics({ tenantId }) {
   const [m, setM] = useState(null);

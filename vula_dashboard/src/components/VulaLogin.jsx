@@ -16,11 +16,11 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../store/auth'
 import { resolveTenantFromHost, getTenantTheme } from '../theme/tenantThemes'
+import { VULA_API } from '../lib/authFetch'
 
 // If reached via a tenant subdomain (offthehook.vula-ai.com), brand the login.
 const LOGIN_TENANT = resolveTenantFromHost()
 const LOGIN_THEME = LOGIN_TENANT ? getTenantTheme(LOGIN_TENANT) : null
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const COLORS = {
   bg: '#F7F4EE',

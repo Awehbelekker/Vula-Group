@@ -144,7 +144,7 @@ export default function App() {
     if (!meta) { meta = document.createElement("meta"); meta.name = "theme-color"; document.head.appendChild(meta); }
     meta.content = baseTheme.accent;
 
-    const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+    const API = VULA_API;
     setBrandLogoUrl(null); // reset on tenant switch so a stale logo never flashes for the wrong tenant
     if (!tid) return;
     fetch(`${API}/v1/commerce/${tid}/admin/invoice-settings`)
@@ -170,7 +170,7 @@ export default function App() {
     if (!user || (role !== "owner" && role !== "staff")) return;
     const tid = ownTenant;
     if (!tid) return;
-    const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+    const API = VULA_API;
     fetch(`${API}/v1/team/${tid}/me?email=${encodeURIComponent(user.email || "")}`)
       .then((r) => r.json())
       .then((d) => setMember({ access: d.access, full: d.full, role: d.role, whatsapp: d.whatsapp }))
@@ -188,7 +188,7 @@ export default function App() {
     if (!user || role === "master" && activeTab !== "merchant") return;
     const tid = (role === "master") ? masterTenant : ownTenant;
     if (!tid) return;
-    const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
+    const API = VULA_API;
     const poll = () => fetch(`${API}/v1/commerce/${tid}/admin/escalations?status=open`)
       .then(r => r.json())
       .then(d => setOpenEscalations(d.open_count ?? (d.escalations || []).length ?? 0))

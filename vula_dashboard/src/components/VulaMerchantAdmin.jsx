@@ -67,8 +67,8 @@ import VulaFlowBuilder from './VulaFlowBuilder'
 // Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
 const VulaPages = lazy(() => import('./VulaPages'))
 import VulaPayments from './VulaPayments'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const STATUS_LABELS = {
   pending_payment: { label: 'Awaiting payment', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },

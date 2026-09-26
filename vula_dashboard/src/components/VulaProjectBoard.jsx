@@ -9,8 +9,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import { supabase } from '../lib/supabase'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 const PROTECT_MS = 2500
 const POLL_MS = 15000
 const EPS = 0.5   // ignore drag/resize "changes" smaller than this — avoids no-op saves

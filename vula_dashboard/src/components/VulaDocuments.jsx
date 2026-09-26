@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
@@ -475,7 +475,6 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
   const [error, setError] = useState("");
   const [queue, setQueue] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const [apiKey, setApiKey] = useState("")  // optional override; the signed-in session JWT is attached by authFetch;
   const [libraryKey, setLibraryKey] = useState(0);
 
   const load = useCallback(async () => {
@@ -483,8 +482,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
     setLoading(true);
     setError("");
     try {
-      const headers = apiKey ? { "X-API-Key": apiKey } : {};
-      const resp = await fetch(`${VULA_API}/documents/${tenantId.trim()}`, { headers });
+      const resp = await fetch(`${VULA_API}/documents/${tenantId.trim()}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       setDocs(data.documents || []);
@@ -493,7 +491,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
     } finally {
       setLoading(false);
     }
-  }, [tenantId, apiKey]);
+  }, [tenantId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -522,8 +520,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
       const fd = new FormData();
       fd.append("tenant_id", tenantId.trim());
       pending.forEach((item) => fd.append("files", item.file));
-      const headers = apiKey ? { "X-API-Key": apiKey } : {};
-      const resp = await fetch(`${VULA_API}/ingest/batch`, { method: "POST", headers, body: fd });
+      const resp = await fetch(`${VULA_API}/ingest/batch`, { method: "POST", body: fd });
 
       if (resp.ok) {
         const data = await resp.json();
@@ -582,18 +579,6 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
             onChange={(e) => setTenantId(e.target.value)}
             onBlur={load}
             placeholder="default"
-            style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, color: C.text, background: C.surface, boxSizing: "border-box" }}
-          />
-        </div>
-        <div style={{ flex: 1, minWidth: 180 }}>
-          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: 6 }}>
-            API Key
-          </label>
-          <input
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            type="password"
-            placeholder="Leave blank for dev mode"
             style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, color: C.text, background: C.surface, boxSizing: "border-box" }}
           />
         </div>

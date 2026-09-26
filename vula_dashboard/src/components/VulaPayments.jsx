@@ -6,8 +6,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { T } from "../theme/tokens";
 import { Card, Button, Badge, SectionTitle, inputStyle } from "./ui";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
 const META = {
   yoco:     { blurb: "Cards. Popular with SA SMEs.", where: "portal.yoco.com → Sell Online → Payment gateway → API keys" },

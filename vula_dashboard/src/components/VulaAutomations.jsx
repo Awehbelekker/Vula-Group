@@ -4,8 +4,8 @@
  * customer or the team helper. Evaluated by a backend poller every 5 minutes.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const ORDER_STATUSES = ['paid', 'confirmed', 'packing', 'dispatched', 'delivered', 'cancelled']
 
