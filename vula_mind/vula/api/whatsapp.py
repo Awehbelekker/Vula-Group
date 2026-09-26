@@ -133,6 +133,42 @@ _ORDER_RE = re.compile(
 _processed_msg_ids: list[str] = []
 _MAX_PROCESSED_IDS = 1000
 
+# Per-sender flood guard (settings.wa_sender_rate_limit). One number looping a bot, or someone
+# pasting 40 lines one message at a time, otherwise buys 40 full assistant runs (LLM spend +
+# 40 replies). Per worker, in memory — a rough ceiling, not an exact quota.
+_SENDER_WINDOW_SECS = 60.0
+_sender_hits: dict[tuple[str, str], list[float]] = {}
+_sender_warned_at: dict[tuple[str, str], float] = {}
+
+
+def _sender_over_limit(tenant_id: str, phone: str, now: float | None = None) -> bool:
+    """Record one inbound message and say whether this sender is over the per-minute limit."""
+    import time as _time
+    limit = int(settings.wa_sender_rate_limit or 0)
+    if limit <= 0 or not phone:
+        return False
+    now = _time.monotonic() if now is None else now
+    key = (tenant_id or "", phone)
+    hits = [t for t in _sender_hits.get(key, []) if now - t < _SENDER_WINDOW_SECS]
+    hits.append(now)
+    _sender_hits[key] = hits
+    if len(_sender_hits) > 5000:   # drop idle senders so the map can't grow without bound
+        for k in [k for k, v in _sender_hits.items() if now - v[-1] >= _SENDER_WINDOW_SECS]:
+            _sender_hits.pop(k, None)
+            _sender_warned_at.pop(k, None)
+    return len(hits) > limit
+
+
+def _should_warn_sender(tenant_id: str, phone: str, now: float | None = None) -> bool:
+    """At most one "please wait" reply per sender per window."""
+    import time as _time
+    now = _time.monotonic() if now is None else now
+    key = (tenant_id or "", phone)
+    if now - _sender_warned_at.get(key, -1e9) < _SENDER_WINDOW_SECS:
+        return False
+    _sender_warned_at[key] = now
+    return True
+
 
 # ─── Meta verification handshake ─────────────────────────────────────────────
 
@@ -285,6 +321,19 @@ async def receive_message(
                     if not _tenants.is_active(route_tenant):
                         logger.info("Dropping inbound WA message for suspended tenant %s", route_tenant)
                         continue
+
+                # Flood guard — after dedup (a Meta redelivery isn't a new message) and the
+                # suspended check; the business's own team is never limited.
+                if (_sender_over_limit(route_tenant or "", phone)
+                        and not (route_tenant and _is_tenant_owner(route_tenant, phone))):
+                    logger.warning("WA sender over rate limit, not processing: tenant=%s msg=%s",
+                                   route_tenant, msg_id)
+                    if route_tenant and _should_warn_sender(route_tenant, phone):
+                        _run_bg(_send_reply(phone, (
+                            "I'm getting a lot of messages from you at once, so I've paused for "
+                            "a minute. Please wait a moment, then send your question again in "
+                            "one message."), route_tenant), label="sender_rate_limit")
+                    continue
 
                 # Blue-tick it and show "typing…" before we start work. Placed after the dedup
                 # and suspended-tenant guards (so a dropped message never gets false ticks) and

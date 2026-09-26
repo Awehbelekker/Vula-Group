@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     # recorded, nothing is silently substituted.
     whatsapp_notify_template: str = ""
     whatsapp_notify_template_lang: str = "en"
+    # Inbound messages one customer number may send one tenant per minute before Vula stops
+    # running the assistant on them (one "please wait" reply per minute instead). Every Meta
+    # webhook comes from Meta's IPs, so the per-IP slowapi limit can't tell senders apart.
+    # The business's own team is exempt. 0 = off.
+    wa_sender_rate_limit: int = 15
     vula_base_url: str = "https://app.vula.ai"
     # The dashboard's actual reachable URL — vula_base_url above is a stale placeholder (see
     # vula/api/links.py's own comment), not something to build a real customer-facing link on.
