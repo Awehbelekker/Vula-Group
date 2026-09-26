@@ -22,7 +22,7 @@ from core.llm_router import (
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
-    need_info_message,
+    need_info_message, tool_source, unverified_prices, wrong_arithmetic,
 )
 from vula.email_imap import service
 from vula.email_imap.credentials import get_email_creds
@@ -206,6 +206,17 @@ def _tools_for(creds: Optional[dict]) -> List[Dict[str, Any]]:
 class EmailAdminSkill(BaseSkill):
     name = "email_admin"
     description = "Search/read mailbox, file attachments to the KB, and draft replies (IMAP/SMTP)."
+    # 2026-09-26: this skill dispatches the exact same find_document/email_thread_summary tools
+    # as commerce_admin.py, for the same class of money-shaped tenant data, but never had
+    # commerce_admin.py's fabrication backstops — no verification_policy override (defaulted to
+    # "none", so the adversarial checker never ran), no SkillOutput.sources, no wrong_arithmetic/
+    # unverified_prices. A knowledge-mode tenant's money question that doesn't land the clean
+    # answer_supplier_history shortcut below (e.g. it falls into the general tool loop) got zero
+    # protection against the model paraphrasing/inventing a figure — the same failure class
+    # commerce_admin.py/commerce_assistant.py were already fixed for after real incidents
+    # (Gerflor wrong arithmetic, digg-demo unfounded R129.90/m² price). Same fix, same file
+    # family, low volume (owner/staff-only), so the added cost is smallest where it matters most.
+    verification_policy = "adversarial"
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         phone = inp.metadata.get("customer_phone") or ""
@@ -239,14 +250,38 @@ class EmailAdminSkill(BaseSkill):
                 answer="No email account is connected yet. Connect a mailbox (Gmail, Outlook, or "
                        "IMAP like GoDaddy) in Settings and I can search it and draft replies here.",
                 skill_name=self.name, confidence=0.25)
+        collected_sources: List[Dict[str, Any]] = []
         try:
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id,
-                                      creds or {}, phone=phone)
+                                      creds or {}, phone=phone, sources=collected_sources)
             answer = substitute_if_degenerate(answer or "", skill=self.name, tenant_id=inp.tenant_id)
             if not (answer or "").strip():
                 return SkillOutput(answer=reply_or_fallback(answer, skill=self.name),
                                    skill_name=self.name, confidence=0.2)
-            return SkillOutput(answer=answer, skill_name=self.name, confidence=0.8)
+            # Same deterministic backstops as commerce_admin.py's run() — see the class-level
+            # comment above for why this file needed them too.
+            bad_prices = unverified_prices(answer, collected_sources,
+                                           {"find_document", "email_thread_summary", "email_read"})
+            if bad_prices:
+                logger.warning("email_admin unverified price(s) in answer, tenant=%s: %s",
+                               inp.tenant_id, bad_prices)
+                answer = ("I found some information but couldn't confirm the exact price from "
+                          "our documents — could you check the price list directly, or ask me "
+                          "to search again with more specific details?")
+            confidence = 0.8
+            bad_maths = wrong_arithmetic(answer)
+            if bad_maths:
+                logger.warning("email_admin WRONG ARITHMETIC, tenant=%s: %s",
+                               inp.tenant_id, bad_maths)
+                fixes = "\n".join(
+                    f"• {b['claim']} — that should be {b['actual']:,.2f}, not {b['stated']:,.2f}"
+                    for b in bad_maths)
+                answer += ("\n\n⚠️ Hold on — I need to correct my own maths before you use "
+                           f"these figures:\n{fixes}\n\nLet me redo that properly rather than "
+                           "you working off a wrong total.")
+                confidence = 0.3
+            return SkillOutput(answer=answer, skill_name=self.name, confidence=confidence,
+                               sources=collected_sources)
         except Exception as exc:
             logger.warning("email_admin failed: %s", exc)
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
@@ -303,7 +338,7 @@ class EmailAdminSkill(BaseSkill):
                 "\nNever invent emails. Keep replies short and WhatsApp-friendly.")
 
     async def _loop(self, history: str, question: str, tenant_id: str, creds: dict,
-                    phone: str = "") -> str:
+                    phone: str = "", sources: Optional[List[Dict[str, Any]]] = None) -> str:
         import litellm
         litellm.drop_params = True
         route = await resolve_generation_route()
@@ -330,6 +365,8 @@ class EmailAdminSkill(BaseSkill):
                 if inline:
                     name, args = inline
                     result = await self._dispatch(name, args, tenant_id, creds)
+                    if sources is not None:
+                        sources.append(tool_source(name, result))
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
@@ -354,6 +391,8 @@ class EmailAdminSkill(BaseSkill):
                 except Exception:
                     args = {}
                 result = await self._dispatch(tc.function.name, args, tenant_id, creds)
+                if sources is not None:
+                    sources.append(tool_source(tc.function.name, result))
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
