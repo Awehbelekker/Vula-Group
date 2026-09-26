@@ -62,7 +62,6 @@ import VulaRepExpenseSheet from './VulaRepExpenseSheet'
 import VulaRepReminders from './VulaRepReminders'
 import VulaRepCrmLookup from './VulaRepCrmLookup'
 import VulaDraft from './VulaDraft'
-import VulaTraining from './VulaTraining'
 import VulaAutomations from './VulaAutomations'
 import VulaFlowBuilder from './VulaFlowBuilder'
 // Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
@@ -342,7 +341,6 @@ function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingN
       {active === 'qspro' && <VulaQSPro />}
       {active === 'takeoff' && <VulaTakeoff />}
       {active === 'draft' && <VulaDraft tenantId={tenantId} />}
-      {active === 'training' && <VulaTraining />}
     </div>
   )
 }
