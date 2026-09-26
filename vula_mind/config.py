@@ -291,6 +291,10 @@ class Settings(BaseSettings):
     # the web service and deploy the same image as a second service with it true — the leader
     # lock that has flapped (and tripled sends) then only has one candidate.
     run_scheduled_jobs: bool = True
+    # Embedded Signup: also POST /{phone_id}/register after connecting (a new Cloud API number
+    # can't send until registered). Off until verified live; needs the 6-digit two-step PIN.
+    whatsapp_register_on_connect: bool = False
+    whatsapp_registration_pin: str = ""
 
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

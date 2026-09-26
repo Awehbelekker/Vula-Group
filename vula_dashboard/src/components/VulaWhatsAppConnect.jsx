@@ -17,7 +17,7 @@
  * Ian never needs to touch Meta credentials again.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 const FB_APP_ID = import.meta.env.VITE_FB_APP_ID || ''
@@ -40,6 +40,24 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
       })
       .catch(() => setStatus('error'))
   }, [tenantId])
+
+  // Embedded Signup (sessionInfoVersion 2) posts the WhatsApp account + number the owner picked
+  // as a window message. Sending those to the backend connects THAT number — before, the first
+  // number found on any of the owner's businesses was used.
+  const sessionInfo = useRef(null)
+  useEffect(() => {
+    const onMessage = (event) => {
+      try {
+        if (!/facebook\.com$/.test(new URL(event.origin).hostname)) return
+        const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+        if (msg?.type === 'WA_EMBEDDED_SIGNUP' && msg.event === 'FINISH' && msg.data) {
+          sessionInfo.current = { waba_id: msg.data.waba_id, phone_number_id: msg.data.phone_number_id }
+        }
+      } catch { /* not a signup message */ }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
 
   // Load Meta Facebook SDK
   useEffect(() => {
@@ -87,6 +105,7 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
               tenant_id: tenantId,
               code,
               connected_by: adminEmail,
+              ...(sessionInfo.current || {}),
             }),
           })
 
