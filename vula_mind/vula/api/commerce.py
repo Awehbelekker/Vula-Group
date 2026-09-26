@@ -4684,7 +4684,7 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     tpl_row = None
     if template:
         try:
-            tpl_row = (db.table("commerce_wa_templates").select("header_type,buttons")
+            tpl_row = (db.table("commerce_wa_templates").select("header_type,buttons,param_count")
                        .eq("tenant_id", tenant_id).eq("name", template)
                        .limit(1).execute().data or [None])[0]
         except Exception:
@@ -4701,92 +4701,113 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         "status": "sending", "recipient_count": len(recipients),
     }).execute()
 
-    sent = failed = 0
-    errors: list[str] = []
-    recipient_rows: list[dict] = []
-    # Pace sends — Meta's Cloud API throughput cap (~80 msg/s on standard tier) and per-recipient
-    # pair-rate limits mean a tight unthrottled loop risks silent throttling/blocking at real list
-    # sizes (confirmed gap, 2026-07-15: this loop had zero pacing before). 10/s is comfortably under
-    # every published tier while still finishing a 1,000-contact batch in under 2 minutes.
-    import asyncio as _asyncio
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        for i, c in enumerate(recipients):
-            if i:
-                await _asyncio.sleep(0.1)
-            number = _norm_phone(c.get("phone"))
-            short_code = None
-            try:
-                # Meta template broadcast (compliant for proactive sends)
-                tpl_components: list[dict] = []
-                if tpl_row and tpl_row.get("header_type") == "IMAGE" and header_image_url:
-                    tpl_components.append({"type": "header", "parameters": [
-                        {"type": "image", "image": {"link": header_image_url}}]})
-                if tpl_needs_button_param and target_url:
-                    short_code = uuid4().hex[:10]
-                    tpl_components.append({"type": "button", "sub_type": "url", "index": "0",
-                                           "parameters": [{"type": "text", "text": short_code}]})
-                tpl_payload: dict = {"name": template, "language": {"code": language}}
-                if tpl_components:
-                    tpl_payload["components"] = tpl_components
-                resp = await client.post(
-                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
-                    headers={"Authorization": f"Bearer {creds['token']}",
-                             "Content-Type": "application/json"},
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": number,
-                        "type": "template",
-                        "template": tpl_payload,
-                    },
-                )
-                if resp.is_success:
-                    sent += 1
-                    wamid = None
-                    try:
-                            wamid = (resp.json().get("messages") or [{}])[0].get("id")
-                    except Exception:
+    # Template body placeholders ({{1}}, {{2}}…): {{1}} is the recipient's first name unless the
+    # caller supplies template_params; Meta rejects a template send whose body parameters are
+    # missing, so every broadcast on a template with a {{1}} used to fail for every recipient.
+    static_params = [str(x) for x in (body.get("template_params") or [])]
+
+    async def _deliver() -> tuple:
+        sent = failed = 0
+        errors: list[str] = []
+        recipient_rows: list[dict] = []
+        # Pace sends — Meta's Cloud API throughput cap (~80 msg/s on standard tier) and per-recipient
+        # pair-rate limits mean a tight unthrottled loop risks silent throttling/blocking at real list
+        # sizes (confirmed gap, 2026-07-15: this loop had zero pacing before). 10/s is comfortably under
+        # every published tier while still finishing a 1,000-contact batch in under 2 minutes.
+        import asyncio as _asyncio
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for i, c in enumerate(recipients):
+                if i:
+                    await _asyncio.sleep(0.1)
+                number = _norm_phone(c.get("phone"))
+                short_code = None
+                try:
+                    # Meta template broadcast (compliant for proactive sends)
+                    tpl_components: list[dict] = []
+                    if tpl_row and tpl_row.get("header_type") == "IMAGE" and header_image_url:
+                        tpl_components.append({"type": "header", "parameters": [
+                            {"type": "image", "image": {"link": header_image_url}}]})
+                    if tpl_needs_button_param and target_url:
+                        short_code = uuid4().hex[:10]
+                        tpl_components.append({"type": "button", "sub_type": "url", "index": "0",
+                                               "parameters": [{"type": "text", "text": short_code}]})
+                    tpl_payload: dict = {"name": template, "language": {"code": language}}
+                    body_params = _template_body_params(tpl_row, c, static_params)
+                    if body_params:
+                        tpl_components.append({"type": "body", "parameters": body_params})
+                    if tpl_components:
+                        tpl_payload["components"] = tpl_components
+                    resp = await client.post(
+                        f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                        headers={"Authorization": f"Bearer {creds['token']}",
+                                 "Content-Type": "application/json"},
+                        json={
+                            "messaging_product": "whatsapp",
+                            "to": number,
+                            "type": "template",
+                            "template": tpl_payload,
+                        },
+                    )
+                    if resp.is_success:
+                        sent += 1
                         wamid = None
-                    row = {"tenant_id": tenant_id, "broadcast_id": log_id,
-                          "phone": number, "wamid": wamid, "status": "sent"}
-                    if short_code:
-                        row["short_code"] = short_code
-                        row["target_url"] = target_url
-                    recipient_rows.append(row)
-                else:
+                        try:
+                            wamid = (resp.json().get("messages") or [{}])[0].get("id")
+                        except Exception:
+                            wamid = None
+                        row = {"tenant_id": tenant_id, "broadcast_id": log_id,
+                              "phone": number, "wamid": wamid, "status": "sent"}
+                        if short_code:
+                            row["short_code"] = short_code
+                            row["target_url"] = target_url
+                        recipient_rows.append(row)
+                    else:
+                        failed += 1
+                        recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
+                                               "phone": number, "status": "failed",
+                                               "error": resp.text[:200]})
+                        if len(errors) < 3:
+                            errors.append(resp.text[:200])
+                except Exception as exc:
                     failed += 1
                     recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
-                                           "phone": number, "status": "failed",
-                                           "error": resp.text[:200]})
+                                           "phone": number, "status": "failed", "error": str(exc)[:200]})
                     if len(errors) < 3:
-                        errors.append(resp.text[:200])
-            except Exception as exc:
-                failed += 1
-                recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
-                                       "phone": number, "status": "failed", "error": str(exc)[:200]})
-                if len(errors) < 3:
-                    errors.append(str(exc)[:200])
+                        errors.append(str(exc)[:200])
 
-    # Persist per-recipient rows so Meta status callbacks can update delivery/read.
-    if recipient_rows:
-        try:
-            db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
-        except Exception as exc:
-            log.debug("recipient rows insert retrying without click-tracking cols (run migration 064?): %s", exc)
-            for r in recipient_rows:
-                r.pop("short_code", None)
-                r.pop("target_url", None)
+        # Persist per-recipient rows so Meta status callbacks can update delivery/read.
+        if recipient_rows:
             try:
                 db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
-            except Exception as exc2:
-                log.debug("recipient rows insert skipped (run migration 020?): %s", exc2)
+            except Exception as exc:
+                log.debug("recipient rows insert retrying without click-tracking cols (run migration 064?): %s", exc)
+                for r in recipient_rows:
+                    r.pop("short_code", None)
+                    r.pop("target_url", None)
+                try:
+                    db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
+                except Exception as exc2:
+                    log.debug("recipient rows insert skipped (run migration 020?): %s", exc2)
 
-    db.table("commerce_broadcast_logs").update({
-        "status": "sent" if sent else "failed",
-        "sent_count": sent,
-        "failed_count": failed,
-        "last_error": errors[0] if errors else None,
-    }).eq("id", log_id).execute()
+        db.table("commerce_broadcast_logs").update({
+            "status": "sent" if sent else "failed",
+            "sent_count": sent,
+            "failed_count": failed,
+            "last_error": errors[0] if errors else None,
+        }).eq("id", log_id).execute()
 
+        return sent, failed, errors
+
+    # Big audiences send in the background (paced at 10/s, a 1,000-contact list takes ~2 min —
+    # far past an HTTP request's patience); the dashboard's broadcast history shows progress.
+    if len(recipients) > 50 and not test_phone:
+        from vula.commerce.background_tasks import run_background
+        run_background(tenant_id, "broadcast_send", _deliver())
+        return {"broadcast_id": log_id, "dry_run": False, "queued": True, "channel": "meta",
+                "template": template, "audience": audience, "recipient_count": len(recipients),
+                "suppressed_count": suppressed_count, "sent": 0, "failed": 0, "errors": None}
+
+    sent, failed, errors = await _deliver()
     return {
         "broadcast_id": log_id, "dry_run": False,
         "channel": "meta",
@@ -5227,6 +5248,18 @@ async def job_weekly_specials(tenant_id: str):
 
 
 # ── Customers (client list / CRM) ─────────────────────────────────────────────
+
+def _template_body_params(tpl_row: Optional[dict], contact: dict, static: list) -> list:
+    """Body parameters for a template with {{n}} placeholders (param_count from migration 063)."""
+    n = int((tpl_row or {}).get("param_count") or 0)
+    if n <= 0:
+        return []
+    first = ((contact.get("name") or "").split(" ")[0] or "there").strip() or "there"
+    vals = list(static[:n]) or [first]
+    while len(vals) < n:
+        vals.append(first if not vals else "-")
+    return [{"type": "text", "text": v or "-"} for v in vals[:n]]
+
 
 def _tenants_display(tenant_id: str) -> str:
     from vula.api import tenants as _t

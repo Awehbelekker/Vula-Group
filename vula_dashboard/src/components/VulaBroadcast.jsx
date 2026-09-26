@@ -426,8 +426,9 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
         {error && <p style={s.error}>{error}</p>}
         {sent && (
           <p style={s.success}>
-            ✓ Sent to {sent.sent} recipient{sent.sent !== 1 ? 's' : ''}
-            {sent.failed ? ` · ${sent.failed} failed` : ''}.
+            {sent.queued
+              ? `✓ Sending to ${sent.recipient_count} recipients in the background (about ${Math.ceil(sent.recipient_count / 600)} min) — progress shows in the history below.`
+              : <>✓ Sent to {sent.sent} recipient{sent.sent !== 1 ? 's' : ''}{sent.failed ? ` · ${sent.failed} failed` : ''}.</>}
           </p>
         )}
 
