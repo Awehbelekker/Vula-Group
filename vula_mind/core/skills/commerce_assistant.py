@@ -22,7 +22,8 @@ from config import settings
 from core.llm_router import is_local_model, resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, wrong_arithmetic,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, unverified_prices,
+    wrong_arithmetic,
 )
 from vula.commerce import service
 
@@ -810,10 +811,23 @@ class CommerceAssistantSkill(BaseSkill):
             if not answer:
                 raise RuntimeError("empty answer from agent loop")
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
+            confidence = 0.8 if kb_context else 0.7
+            # 2026-09-26: this skill quotes prices straight to paying customers from KB context
+            # (the storefront price list) but, unlike commerce_admin.py, never checked a stated
+            # price actually appears in that context — the same gerflor-incident failure class
+            # (a confident, unfounded R129.90/m² price) applies just as much here. KB sources are
+            # tagged "name": "kb" above specifically so this grounding check can see them.
+            bad_prices = unverified_prices(answer, sources, {"kb"})
+            if bad_prices:
+                logger.warning("commerce_assistant unverified price(s) in answer, tenant=%s: %s",
+                               inp.tenant_id, bad_prices)
+                answer = ("I found some information but couldn't confirm the exact price from "
+                          "our price list — could you check with us directly, or ask me to "
+                          "search again with more specific details?")
+                confidence = 0.3
             # Deterministic arithmetic backstop — same as commerce_admin. A customer-facing
             # quote with a wrong total (e.g. "11.8 × 18.2 = 215.56", correct 214.76) costs real
             # money; prompt rules alone don't stop the model doing the sum in its head.
-            confidence = 0.8 if kb_context else 0.7
             bad_maths = wrong_arithmetic(answer)
             if bad_maths:
                 logger.warning("commerce_assistant WRONG ARITHMETIC, tenant=%s: %s",
@@ -1072,8 +1086,8 @@ class CommerceAssistantSkill(BaseSkill):
             f"[{c.get('filename', 'doc')}]: {c.get('text', '')[:400]}" for c in chunks
         )
         sources = [
-            {"type": "kb", "filename": c.get("filename", "?"), "score": round(c.get("score", 0.0), 3),
-             "text": c.get("text", "")[:400]}
+            {"type": "kb", "name": "kb", "filename": c.get("filename", "?"),
+             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:400]}
             for c in chunks
         ]
         return kb_context, sources
