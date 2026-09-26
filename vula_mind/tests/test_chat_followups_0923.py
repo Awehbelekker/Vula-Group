@@ -213,12 +213,14 @@ def test_reply_is_none_when_there_is_nothing_complete_to_state():
                                           "matches": [{"excerpt": "x"}]}) is None
 
 
-# ── 2026-09-25: honest disclosure when a spreadsheet export is explicitly asked for ───────
+# ── 2026-09-25/26: honest disclosure when a spreadsheet export is explicitly asked for ───────
 # Real digg-demo incident, same conversation: "...a summary of what was spent in excel" was
 # answered as if "in excel" had never been said; a later "...do a full breakdown in excel"
 # (from a different, non-deterministic code path with no such disclosure either) tried to fake
-# a spreadsheet by rendering a markdown table instead. Vula has no capability to generate an
-# actual .xlsx file at all — say so plainly rather than silently ignoring or faking it.
+# a spreadsheet by rendering a markdown table instead. Vula can now actually build and WhatsApp
+# a real .xlsx (see send_supplier_history_xlsx) — the caller passes xlsx_sent through so the
+# wording matches what actually happened (sent vs. couldn't send), never silently ignoring or
+# faking the request either way.
 
 @pytest.mark.parametrize("question", [
     "Need all jack hammer invoices and a summary of what was spent in excel",
@@ -226,9 +228,20 @@ def test_reply_is_none_when_there_is_nothing_complete_to_state():
     "please send as .xlsx",
     "csv please",
 ])
-def test_reply_discloses_no_spreadsheet_export_when_explicitly_asked(question):
+def test_reply_discloses_failed_export_when_explicitly_asked_and_xlsx_sent_is_false(question):
     out = format_supplier_history_reply(_RESULT, query="jack hammer", question=question)
-    assert "can't generate an actual spreadsheet file" in out
+    assert "Couldn't send an Excel file this time" in out
+
+
+@pytest.mark.parametrize("question", [
+    "Need all jack hammer invoices and a summary of what was spent in excel",
+    "can you export this as a spreadsheet",
+])
+def test_reply_confirms_the_export_when_xlsx_sent_is_true(question):
+    out = format_supplier_history_reply(_RESULT, query="jack hammer", question=question,
+                                        xlsx_sent=True)
+    assert "Sent the full breakdown as an Excel file too" in out
+    assert "Couldn't send" not in out
 
 
 def test_reply_omits_the_export_note_when_not_asked_for():
@@ -312,6 +325,8 @@ async def test_a_named_supplier_is_answered_without_any_model_call():
 
 @pytest.mark.asyncio
 async def test_answer_supplier_history_discloses_no_export_when_the_question_asks_for_excel():
+    """No `phone` passed (as no caller would omit here) means send_supplier_history_xlsx
+    short-circuits before ever touching xlsx/WhatsApp — xlsx_sent stays False."""
     from vula.commerce import service as svc
     with (
         patch.object(svc, "list_suppliers", new=AsyncMock(return_value=_SUPPLIERS)),
@@ -319,7 +334,30 @@ async def test_answer_supplier_history_discloses_no_export_when_the_question_ask
     ):
         out = await svc.answer_supplier_history(
             TID, "Need all jack hammer invoices and a summary of what was spent in excel")
-    assert "can't generate an actual spreadsheet file" in out
+    assert "Couldn't send an Excel file this time" in out
+
+
+@pytest.mark.asyncio
+async def test_answer_supplier_history_sends_a_real_xlsx_when_phone_is_given():
+    from vula.commerce import service as svc
+    send_doc = AsyncMock(return_value=True)
+    with (
+        patch.object(svc, "list_suppliers", new=AsyncMock(return_value=_SUPPLIERS)),
+        patch.object(svc, "find_filed_document", new=AsyncMock(return_value=_RESULT)),
+        patch("vula.commerce.xlsx.render_supplier_history_xlsx", return_value=b"fake-xlsx-bytes"),
+        patch("vula.api.whatsapp._send_invoice_document", new=send_doc),
+    ):
+        out = await svc.answer_supplier_history(
+            TID, "Need all jack hammer invoices and a summary of what was spent in excel",
+            phone="+27821234567")
+    assert "Sent the full breakdown as an Excel file too" in out
+    send_doc.assert_awaited_once()
+    call_args = send_doc.call_args
+    assert call_args[0][0] == "+27821234567"
+    assert call_args[0][1] == b"fake-xlsx-bytes"
+    assert call_args[0][2].endswith(".xlsx")
+    assert call_args[1]["content_type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @pytest.mark.asyncio
@@ -420,6 +458,7 @@ def test_last_supplier_from_history_none_without_a_prior_reply():
 
 @pytest.mark.asyncio
 async def test_continuation_answers_the_real_break_down_in_excel_followup():
+    """No `phone` passed — send_supplier_history_xlsx short-circuits, xlsx_sent stays False."""
     from vula.commerce import service as svc
     find = AsyncMock(return_value=_RESULT)
     with patch.object(svc, "find_filed_document", new=find):
@@ -427,7 +466,23 @@ async def test_continuation_answers_the_real_break_down_in_excel_followup():
             TID, _HISTORY, "Please show all and do a full.break down in excel")
     find.assert_awaited_once_with(TID, "GARDENS HANDIMAN CENTRE", category="Invoice")
     assert "total spend *R1,084.00*" in out
-    assert "can't generate an actual spreadsheet file" in out
+    assert "Couldn't send an Excel file this time" in out
+
+
+@pytest.mark.asyncio
+async def test_continuation_sends_a_real_xlsx_when_phone_is_given():
+    from vula.commerce import service as svc
+    send_doc = AsyncMock(return_value=True)
+    with (
+        patch.object(svc, "find_filed_document", new=AsyncMock(return_value=_RESULT)),
+        patch("vula.commerce.xlsx.render_supplier_history_xlsx", return_value=b"fake-xlsx-bytes"),
+        patch("vula.api.whatsapp._send_invoice_document", new=send_doc),
+    ):
+        out = await svc.answer_supplier_history_continuation(
+            TID, _HISTORY, "Please show all and do a full.break down in excel",
+            phone="+27821234567")
+    assert "Sent the full breakdown as an Excel file too" in out
+    send_doc.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -505,3 +560,48 @@ async def test_direct_supplier_answer_ignores_continuation_without_tenant_or_his
         "show me everything", "find_document", {}, _RESULT, tenant_id=TID) is None
     assert await _direct_supplier_answer(
         "show me everything", "find_document", {}, _RESULT, history=_HISTORY) is None
+
+
+# ── 2026-09-26: a real .xlsx is WhatsApped when the caller has a phone to send to ──────────
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_sends_a_real_xlsx_when_phone_is_given():
+    from core.skills.email_admin import _direct_supplier_answer
+    send_doc = AsyncMock(return_value=True)
+    with patch("vula.api.whatsapp._send_invoice_document", new=send_doc):
+        out = await _direct_supplier_answer(
+            "Need all jack hammer invoices in excel please", "find_document", {}, _RESULT,
+            phone="+27821234567")
+    assert "Sent the full breakdown as an Excel file too" in out
+    send_doc.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_email_admin_run_threads_customer_phone_into_the_direct_answer():
+    """EmailAdminSkill.run() reads phone from inp.metadata (the established SkillInput
+    convention — see draft_admin.py/commerce_admin.py's identical inp.metadata.get(
+    "customer_phone")) and passes it through to answer_supplier_history, so an explicit
+    "in excel" request sent from a real WhatsApp turn actually gets a file, not just text."""
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+    answer_supplier_history = AsyncMock(return_value="*GARDENS HANDIMAN CENTRE*: sent")
+    with patch("vula.commerce.service.answer_supplier_history", new=answer_supplier_history):
+        await EmailAdminSkill().run(SkillInput(
+            question="Need all jack hammer invoices and a summary in excel", tenant_id=TID,
+            metadata={"customer_phone": "+27821234567"}))
+    answer_supplier_history.assert_awaited_once_with(
+        TID, "Need all jack hammer invoices and a summary in excel", phone="+27821234567")
+
+
+@pytest.mark.asyncio
+async def test_email_admin_run_threads_phone_into_the_continuation_path_too():
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+    continuation = AsyncMock(return_value=None)
+    with patch("vula.commerce.service.answer_supplier_history_continuation", new=continuation), \
+         patch("core.skills.email_admin.get_email_creds", return_value=None):
+        await EmailAdminSkill().run(SkillInput(
+            question="show me everything", tenant_id=TID, conversation_history=_HISTORY,
+            metadata={"customer_phone": "+27821234567"}))
+    continuation.assert_awaited_once_with(TID, _HISTORY, "show me everything",
+                                          phone="+27821234567")
