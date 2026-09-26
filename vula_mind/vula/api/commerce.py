@@ -4866,9 +4866,10 @@ async def admin_add_recipe(tenant_id: str, body: dict):
     if not (title and text):
         raise HTTPException(status_code=400, detail="title and text are required")
     slug = "".join(c if c.isalnum() else "-" for c in title.lower()).strip("-")[:60] or "recipe"
+    from vula.api import tenants as _tenants
     from vula.ingestion.pipeline import VulaIngestionPipeline
     await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
-        content=f"# {title}\n\n{text}\n\n(Off the Hook recipe)", filename=f"recipe-{slug}.md")
+        content=f"# {title}\n\n{text}\n\n({_tenants.display_name(tenant_id)} recipe)", filename=f"recipe-{slug}.md")
     return {"ok": True, "title": title}
 
 

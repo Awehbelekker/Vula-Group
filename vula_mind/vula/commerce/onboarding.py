@@ -105,6 +105,12 @@ def _update(tenant_id: str, phone: str, patch: dict) -> None:
         logger.warning("contact update failed: %s", exc)
 
 
+def _business_name(tenant_id: str) -> str:
+    """The tenant's own name — these messages used to say "Off the Hook" for every shop."""
+    from vula.api.tenants import display_name
+    return display_name(tenant_id)
+
+
 async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]:
     """Advance the onboarding state machine for one inbound message. Returns the reply to send,
     or None if this message is NOT part of onboarding (caller falls through to normal ordering)."""
@@ -122,7 +128,7 @@ async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]
             record_opt_out(tenant_id, phone, source="onboarding_stop")
         except Exception:
             pass
-        return "No problem — you won't get marketing messages from us. You can still order anytime. 🐟"
+        return "No problem — you won't get marketing messages from us. You can still order anytime."
 
     if _looks_like_a_request(body):
         return None
@@ -133,8 +139,8 @@ async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]
         # NEXT reply (confirming_optin below), which is the stronger proof-of-consent step.
         _update(tenant_id, phone, {"onboarding_state": "confirming_optin"})
         return ("Hi! 👋 Just confirming — reply to this message if you'd like to receive order "
-                "updates and specials from *Off the Hook* here on WhatsApp. Reply *STOP* anytime "
-                "to opt out.")
+                f"updates and specials from *{_business_name(tenant_id)}* here on WhatsApp. Reply "
+                "*STOP* anytime to opt out.")
 
     if state == "confirming_optin":
         # Second reply = explicit confirmation. This is what actually flips consent — the first
@@ -146,8 +152,8 @@ async def handle_capture(tenant_id: str, phone: str, text: str) -> Optional[str]
             record_inbound_consent(tenant_id, phone, source="onboarding_double_optin_confirmed")
         except Exception:
             pass
-        return ("🎉 Welcome to *Off the Hook* on WhatsApp! Let's set up your account so ordering is "
-                "quick.\n\nFirst — what name should we put on your orders?")
+        return (f"🎉 Welcome to *{_business_name(tenant_id)}* on WhatsApp! Let's set up your account "
+                "so ordering is quick.\n\nFirst — what name should we put on your orders?")
 
     if state == "collecting_name":
         _update(tenant_id, phone, {"name": body[:80], "onboarding_state": "collecting_address"})

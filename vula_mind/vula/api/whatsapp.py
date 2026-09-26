@@ -129,6 +129,16 @@ _ORDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Supplier-intake forms for tenants that had one before vula_tenant_config.supplier_intake_url
+# existed — the config value wins when set.
+_SUPPLIER_INTAKE_URLS = {"off-the-hook": "https://offthehook.co.za/suppliers"}
+
+
+def _tenants_mod():
+    from vula.api import tenants
+    return tenants
+
+
 # Idempotency cache for inbound message IDs
 _processed_msg_ids: list[str] = []
 _MAX_PROCESSED_IDS = 1000
@@ -5914,10 +5924,16 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     supplier_keywords = {"supply", "sell", "catch", "supplier", "verskaf", "fish for you"}
     if (not _customer_asking_re.search(text_lower)
             and any(re.search(rf"\b{re.escape(k)}\b", text_lower) for k in supplier_keywords)):
+        # Each shop's own intake form (vula_tenant_config.supplier_intake_url) — this reply
+        # used to send every commerce tenant's would-be suppliers to Off the Hook's form.
+        from vula.api import tenants as _tenants
+        intake = ((_tenants.get_config(tenant_id) or {}).get("supplier_intake_url")
+                  or _SUPPLIER_INTAKE_URLS.get(tenant_id))
         reply = (
-            "Thanks for reaching out! 🐟 We're always looking for quality suppliers. "
-            "Please complete our intake form here: https://offthehook.co.za/suppliers "
-            "Our team will review it and get back to you."
+            "Thanks for reaching out! We're always looking for quality suppliers. "
+            + (f"Please complete our intake form here: {intake} " if intake else
+               "I've passed your details to the team. ")
+            + "Our team will review it and get back to you."
         )
         await _send_reply(phone, reply, tenant_id)
         # Log lead to Supabase (assuming table exists or using a generic log)
@@ -6900,11 +6916,12 @@ async def _send_category_products(phone: str, tenant_id: str, category: str) -> 
     rows = [{"id": f"prod_{p.get('id')}", "title": (p.get("name") or "Item")[:24],
              "description": _product_desc(p)} for p in prods[:10]]
     if not rows:
-        await _send_reply(phone, "Nothing in stock there right now — type what you're after and I'll help. 🐟", tenant_id=tenant_id)
+        await _send_reply(phone, "Nothing in stock there right now — type what you're after and I'll help.", tenant_id=tenant_id)
         return True
     label = (_CATEGORY_LABELS.get(category) or category.replace("_", " ").title())
     return await _send_wa_list(creds, _wa_number(phone), label, "Tap an item to order, or type a question.",
-                               "Off the Hook 🐟", "Choose item", [{"title": label[:24], "rows": rows}])
+                               _tenants_mod().display_name(tenant_id)[:60], "Choose item",
+                               [{"title": label[:24], "rows": rows}])
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
@@ -7004,7 +7021,7 @@ async def _forward_to_n8n_commerce(
     """Forward message to n8n for AI-powered order processing."""
     n8n_base = getattr(settings, "n8n_webhook_base", None)
     if not n8n_base:
-        await _send_reply(phone, "On it! Our team will be in touch shortly. 🐟", tenant_id)
+        await _send_reply(phone, "On it! Our team will be in touch shortly.", tenant_id)
         return
 
     try:
@@ -7021,4 +7038,4 @@ async def _forward_to_n8n_commerce(
             )
     except Exception as exc:
         logger.warning("n8n commerce forward failed (non-fatal): %s", exc)
-        await _send_reply(phone, "Got it! We'll be in touch in a few minutes. 🐟", tenant_id)
+        await _send_reply(phone, "Got it! We'll be in touch in a few minutes.", tenant_id)
