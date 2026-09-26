@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_BASE = settings.ollama_base
 LLM_MODEL   = settings.model_worker
-DB_PATH     = Path.home() / ".vula" / "construction_rates.db"
+DB_PATH     = settings.data_dir / "construction_rates.db"  # persistent volume, not ~/.vula
 QDRANT_BASE = settings.qdrant_base
 COLLECTION  = "vula_digg_rates"
 

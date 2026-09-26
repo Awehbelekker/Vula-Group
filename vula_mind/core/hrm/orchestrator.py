@@ -163,10 +163,10 @@ class HRMOrchestrator:
     def __init__(
         self,
         ollama_url: str | None = None,
-        model: str = "qwen2.5:3b",
+        model: str | None = None,
     ):
         self.ollama_url = ollama_url or settings.ollama_base
-        self.model = model
+        self.model = model or settings.skill_classifier_model or settings.model_worker_cheap_local
         self._skill_registry: dict[str, Any] = {}
         self._load_registry()
 
@@ -300,14 +300,19 @@ class HRMOrchestrator:
         """One cheap local-model pass, keyword-miss path only. Returns a skill name from
         SKILL_KEYWORDS, or None (caller falls back to "reasoning") on any failure/non-match."""
         try:
+            from core.llm_router import _ollama_headers
             options = ", ".join(SKILL_KEYWORDS.keys())
+            # CF-Access headers: the Ollama tunnel rejects requests without the service token,
+            # and this call never sent it — so in production the fallback silently never ran.
             resp = httpx.post(
                 f"{self.ollama_url}/api/generate",
+                headers=_ollama_headers(),
                 json={
                     "model": self.model,
                     "prompt": (
                         f"Pick the ONE best-fitting skill for this request from this exact "
-                        f"list: {options}. Reply with only the skill name, nothing else.\n"
+                        f"list: {options}. If none clearly fits, reply 'none'. Reply with only "
+                        f"the skill name, nothing else.\n"
                         f"Request: {prompt}"
                     ),
                     "stream": False,

@@ -22,7 +22,8 @@ from core.llm_router import (
 )
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, wrong_arithmetic,
+    BaseSkill, SkillInput, SkillOutput, begin_turn, behaviour_preamble, tool_source, turn_local,
+    wrong_arithmetic,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,14 @@ class FinanceAdminSkill(BaseSkill):
     # already, just never turned on here.
     verification_policy = "adversarial"
 
+    # Per-turn bookkeeping — task-local, not shared across concurrent requests (see turn_local).
+    _verified = turn_local()
+    _sources = turn_local()
+    _any_tool_dispatched = turn_local()
+    _all_not_found = turn_local()
+
     async def run(self, inp: SkillInput) -> SkillOutput:
+        begin_turn()
         # A tenant with no PROJECT ledger cannot be answered from one. 2026-09-03: off-the-hook
         # has R148,112.69 of real invoices and zero rows in vula_project_finances, because the
         # ledger is project-scoped and a shop has no projects — so every money question here
@@ -399,7 +407,7 @@ class FinanceAdminSkill(BaseSkill):
         return hint
 
     async def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
-        from vula.integrations.finances import finance_summary, _client
+        from vula.integrations.finances import finance_summary
         try:
             if name == "budget_status" and not (args.get("project") or "").strip():
                 # 2026-08-24: confirmed real bug — with no project hint, _match_project always
@@ -432,8 +440,10 @@ class FinanceAdminSkill(BaseSkill):
                         "transactions": row["count"]}
             if name == "money_in_out":
                 period = args.get("period", "all")
-                rows = (_client().table("vula_project_finances").select("amount,direction,occurred_at,created_at")
-                        .eq("tenant_id", tenant_id).execute().data or [])
+                # Paged + reconciled-pair deduped, same as finance_summary — summing both sides
+                # of an invoice/payment pair double-counted the money.
+                from vula.integrations.finances import _dedupe_reconciled, all_finance_rows
+                rows = _dedupe_reconciled(all_finance_rows(tenant_id))
                 if period in ("this_month", "last_30"):
                     if period == "last_30":
                         cut = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
@@ -447,8 +457,8 @@ class FinanceAdminSkill(BaseSkill):
             if name == "supplier_lookup":
                 q = (args.get("query") or "").strip()
                 digits = re.sub(r"\D", "", q)
-                rows = (_client().table("vula_project_finances").select("*")
-                        .eq("tenant_id", tenant_id).execute().data or [])
+                from vula.integrations.finances import _dedupe_reconciled, all_finance_rows
+                rows = _dedupe_reconciled(all_finance_rows(tenant_id))
                 hits = [r for r in rows if (digits and digits in re.sub(r"\D", "", r.get("bank_account") or ""))
                         or (q.lower() in (r.get("counterparty") or "").lower())]
                 if not hits:

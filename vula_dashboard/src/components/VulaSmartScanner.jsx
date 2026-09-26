@@ -14,10 +14,9 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
-const API_KEY  = import.meta.env.VITE_API_KEY  || ''
-const H = { 'Content-Type': 'application/json', ...(API_KEY ? { 'X-API-Key': API_KEY } : {}) }
+const H = { 'Content-Type': 'application/json' }  // JWT attached by lib/authFetch
 
 const DOC_TYPES = [
   { id: 'auto',          label: '✨ Auto-detect',     hint: 'Let AI figure it out' },

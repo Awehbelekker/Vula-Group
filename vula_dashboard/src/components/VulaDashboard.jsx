@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { VULA_API } from "../lib/authFetch";
 
 // ── Design Direction ──────────────────────────────────────────────────────────
 // Organic/natural meets industrial precision
@@ -8,8 +9,6 @@ import { useState, useRef, useEffect, useCallback } from "react";
 
 // Default to the production Railway API so the dashboard works everywhere,
 // including local dev without a local API running. Override with VITE_API_URL.
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
-const VULA_API_KEY = import.meta.env.VITE_API_KEY || "";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -471,7 +470,7 @@ const labelStyle = {
 };
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function VulaDashboard() {
+export default function VulaDashboard({ tenantId: tenantIdProp }) {
   // Use the logged-in user's tenant; fall back to DIGG demo
   const authTenant = (() => {
     try {
@@ -479,18 +478,19 @@ export default function VulaDashboard() {
       return raw ? JSON.parse(raw)?.state?.tenantId : null;
     } catch { return null; }
   })();
-  const [tenantId] = useState(authTenant || "digg-demo");
+  // The tenant the shell is showing (master's switcher, or the owner's own), else the login's.
+  const tenantId = tenantIdProp || (authTenant && authTenant !== "master" ? authTenant : "");
   const [apiStatus, setApiStatus] = useState("checking");
   const [docCount, setDocCount] = useState(0);
 
   useEffect(() => {
-    const authHeaders = VULA_API_KEY ? { "X-API-Key": VULA_API_KEY } : {};
     fetch(`${VULA_API}/status`)
       .then(r => r.json())
       .then(d => setApiStatus(d.status))
       .catch(() => setApiStatus("offline"));
 
-    fetch(`${VULA_API}/documents/${tenantId}`, { headers: authHeaders })
+    if (!tenantId) return;
+    fetch(`${VULA_API}/documents/${tenantId}`)
       .then(r => r.json())
       .then(d => setDocCount(d.kb_chunks || d.count || 0))
       .catch(() => {});
@@ -587,8 +587,7 @@ export default function VulaDashboard() {
           {/* Grid */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
             <UploadZone tenantId={tenantId} onUploaded={() => {
-              const h = VULA_API_KEY ? { "X-API-Key": VULA_API_KEY } : {};
-              fetch(`${VULA_API}/documents/${tenantId}`, { headers: h }).then(r => r.json()).then(d => setDocCount(d.kb_chunks || d.count || 0)).catch(() => {});
+              fetch(`${VULA_API}/documents/${tenantId}`).then(r => r.json()).then(d => setDocCount(d.kb_chunks || d.count || 0)).catch(() => {});
             }} />
             <QueryPanel tenantId={tenantId} />
             <div style={{ gridColumn: "1 / -1" }}>

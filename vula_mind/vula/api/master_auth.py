@@ -122,7 +122,39 @@ async def require_auth(api_key: str | None = Security(_api_key_header),
             return
         except HTTPException:
             pass
+        # 2026-09-25: a signed-in member of the tenant the request is about. Before this, the
+        # dashboard could only call these endpoints (AI Draft, document ingest, /query) by
+        # shipping the shared server API key inside the browser bundle (VITE_API_KEY), where
+        # anyone could read it and act on every tenant.
+        tenant = await _request_tenant(request)
+        if tenant:
+            from vula.api.tenant_auth import is_tenant_member
+            if await is_tenant_member(auth_header, tenant):
+                return
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or missing API key. Set X-API-Key header or sign in as master.",
+        detail="Invalid or missing API key. Set X-API-Key header or sign in.",
     )
+
+
+async def _request_tenant(request: Request | None) -> str:
+    """The one tenant a request is about — path param, query param, and JSON/form body
+    tenant_id must all agree. Two different values → "" (refused), so a member of tenant A
+    can't pass the check with ?tenant_id=A while the body the endpoint acts on names B."""
+    if request is None:
+        return ""
+    found = {str(v) for v in (request.path_params.get("tenant_id"),
+                              request.query_params.get("tenant_id")) if v}
+    ctype = request.headers.get("content-type", "")
+    try:
+        if "application/json" in ctype:
+            body = await request.json()   # cached by Starlette — the endpoint still reads it
+            if isinstance(body, dict) and body.get("tenant_id"):
+                found.add(str(body["tenant_id"]))
+        elif "form" in ctype:
+            t = (await request.form()).get("tenant_id")
+            if t:
+                found.add(str(t))
+    except Exception:
+        return ""
+    return found.pop() if len(found) == 1 else ""

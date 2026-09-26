@@ -495,3 +495,20 @@ def test_cold_start_fails_open_when_the_pattern_library_lookup_raises(hrm, monke
     g = TaskGraph(original_prompt="Who is the president of South Africa?", tenant_id="new-tenant")
     g = hrm.plan(g)  # must not raise
     assert g.branches[0].model_tier == ModelTier.WORKER
+
+
+def test_llm_classifier_sends_tunnel_auth_and_uses_a_served_model(monkeypatch):
+    """The fallback posted to the CF-Access-protected tunnel with no service token (so it always
+    failed in production) and named qwen2.5:3b, which the box may not serve."""
+    from unittest.mock import MagicMock, patch
+    from config import settings
+    from core.hrm.orchestrator import HRMOrchestrator
+    monkeypatch.setattr(settings, "skill_classifier_model", "")
+    hrm = HRMOrchestrator()
+    assert hrm.model == settings.model_worker_cheap_local
+    resp = MagicMock()
+    resp.json.return_value = {"response": "email_admin"}
+    with patch("core.llm_router._ollama_headers", return_value={"CF-Access-Client-Id": "x"}), \
+         patch("core.hrm.orchestrator.httpx.post", return_value=resp) as post:
+        assert hrm._llm_classify_skill("where's that thing from the supplier") == "email_admin"
+    assert post.call_args.kwargs["headers"] == {"CF-Access-Client-Id": "x"}

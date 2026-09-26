@@ -37,7 +37,9 @@ from vula.takeoff.plan_reader import ExtractedProject
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path.home() / ".vula" / "construction_rates.db"
+# On the persistent data volume (/data on Railway) — ~/.vula was wiped on every deploy.
+from config import settings as _settings  # noqa: E402
+DB_PATH = _settings.data_dir / "construction_rates.db"
 
 # ─── BOQ data structures ─────────────────────────────────────────────────────
 

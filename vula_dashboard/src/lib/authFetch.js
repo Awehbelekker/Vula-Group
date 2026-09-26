@@ -18,11 +18,11 @@ export async function authFetch(path, opts = {}) {
   return resp.json()
 }
 
-// Paths that the backend's tenant_admin_guard protects (ENFORCE_TENANT_AUTH). One global
-// wrapper instead of touching ~40 components: every fetch to a guarded Vula path gets the
-// signed-in user's token attached transparently.
-const GUARDED = /\/v1\/(commerce\/[^/]+\/admin(\/|$)|team\/|users\/|master(\/|$)|admin\/)|\/scrape\//
-
+// Every call to the Vula API carries the signed-in user's token. This used to be a hand-kept
+// regex of "guarded" paths that had to mirror server.py's _TENANT_GUARD_RES / _MASTER_ONLY —
+// each new endpoint needed editing in both places, and a miss surfaced only as a 401 once
+// ENFORCE_TENANT_AUTH was on. A token on a path the backend leaves public is harmless, and it
+// never goes to any other host.
 /** Patch window.fetch once (call from main.jsx) so ALL existing components send the JWT. */
 export function installAuthFetch() {
   if (window.__vulaAuthFetchInstalled) return
@@ -31,7 +31,7 @@ export function installAuthFetch() {
   window.fetch = async (input, init = {}) => {
     try {
       const url = typeof input === 'string' ? input : (input?.url || '')
-      if (url.startsWith(VULA_API) && GUARDED.test(url)) {
+      if (url.startsWith(VULA_API)) {
         const { data } = await supabase.auth.getSession()
         const token = data?.session?.access_token
         if (token) {

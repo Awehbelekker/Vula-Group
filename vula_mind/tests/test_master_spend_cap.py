@@ -107,13 +107,13 @@ async def test_master_usage_surfaces_document_and_seat_plan_usage():
                       {"tenant_id": "off-the-hook", "plan": "growth"}]
             )
         elif name == "vula_filed_documents":
-            m.select.return_value.execute.return_value = MagicMock(
+            # paged read (select().order().range()) — see master_usage
+            m.select.return_value.order.return_value.range.return_value.execute.return_value = MagicMock(
                 data=[{"tenant_id": "digg-demo"}] * 26
             )
         elif name == "vula_tenant_users":
-            m.select.return_value.in_.return_value.execute.return_value = MagicMock(
-                data=[{"tenant_id": "digg-demo", "role": "owner"}]
-            )
+            m.select.return_value.in_.return_value.order.return_value.range.return_value.execute.return_value = \
+                MagicMock(data=[{"tenant_id": "digg-demo", "role": "owner"}])
         return m
 
     mock_db.table.side_effect = table

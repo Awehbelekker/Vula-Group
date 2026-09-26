@@ -64,6 +64,20 @@ async def is_tenant_member(authorization: str, tenant_id: str) -> bool:
     return allowed
 
 
+async def check_body_tenant(tenant_id: str, authorization: str) -> None:
+    """For endpoints that take the tenant in the request BODY (WhatsApp/Yoco/email connect),
+    which the path-based tenant_admin_guard can't see. Same rule and same switch
+    (ENFORCE_TENANT_AUTH): otherwise anyone could attach their own WhatsApp number, Yoco keys
+    or mailbox to another business's workspace."""
+    from config import settings
+    if not settings.enforce_tenant_auth:
+        return
+    if not await is_tenant_member(authorization, tenant_id):
+        if not (authorization or "").removeprefix("Bearer ").strip():
+            raise HTTPException(status_code=401, detail="Sign in required.")
+        raise HTTPException(status_code=403, detail="You don't have access to this workspace.")
+
+
 async def require_tenant_actor(tenant: str, authorization: str = Header(default="")) -> dict:
     """FastAPI dependency for merchant-admin WRITE endpoints (team.py/users.py) that need to
     know WHO acted, for the merchant audit trail (vula/api/merchant_audit.py). Enforces the

@@ -239,6 +239,71 @@ _CONFIRM_RE = re.compile(
     re.IGNORECASE)
 
 
+# A "yes" that comes with a change is NOT a confirmation of the order as reviewed. 2026-09-25
+# review: _CONFIRM_RE found "yes" anywhere, so "yes but change the address to 12 Main Rd" placed
+# the order at the OLD address. Any of these alongside a yes means "not yet — review again".
+_CHANGE_RE = re.compile(
+    r"\b(but|change|instead|except|remove|add|also|wait|hold on|actually|different|update|"
+    r"replace|rather|swap|not|no|don'?t|cancel|wrong|edit|make it|"
+    r"maar|verander|nee|nie|wag|"                         # Afrikaans
+    r"kodwa|cha|hhayi|linda)\b",                          # isiZulu/isiXhosa: but / no / wait
+    re.IGNORECASE)
+
+
+def _is_clear_confirmation(message: str) -> bool:
+    """True only for a plain yes — a confirm word, no change request, and short enough to be
+    an answer rather than a new instruction."""
+    msg = (message or "").strip()
+    return (bool(_CONFIRM_RE.search(msg)) and not _CHANGE_RE.search(msg)
+            and len(msg.split()) <= 12)
+
+
+def _wants_collection(args: Dict[str, Any]) -> bool:
+    return str((args or {}).get("fulfilment") or "").strip().lower() == "collection"
+
+
+def _name_tokens(text: str) -> List[str]:
+    toks = re.findall(r"[a-z0-9]+", (text or "").lower())
+    # crude singular: "fillets" ~ "fillet", "prawns" ~ "prawn" (never shorten tiny words)
+    return [t[:-1] if len(t) > 3 and t.endswith("s") and not t.endswith("ss") else t for t in toks]
+
+
+def _match_product(name: str, candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The product a customer meant. Substring first (the old behaviour), then every word of
+    the request present in the product name ignoring plurals/order ("hake fillets" -> "Hake
+    Fillet"), then a close spelling match. 2026-09-25 review: plain substring matching turned
+    "hake fillets" into "no product matching" for a product called "Hake Fillet"."""
+    want = (name or "").strip().lower()
+    if not want:
+        return None
+    hit = next((p for p in candidates if want in (p.get("name") or "").lower()), None)
+    if hit:
+        return hit
+    wt = set(_name_tokens(want))
+    if wt:
+        hits = [p for p in candidates if wt <= set(_name_tokens(p.get("name") or ""))]
+        if len(hits) == 1:
+            return hits[0]
+    import difflib
+    names = {(p.get("name") or "").lower(): p for p in candidates}
+    close = difflib.get_close_matches(want, list(names), n=1, cutoff=0.85)
+    return names[close[0]] if close else None
+
+
+def _suggest_products(name: str, candidates: List[Dict[str, Any]], n: int = 3) -> List[str]:
+    import difflib
+    names = [p.get("name") or "" for p in candidates]
+    lower = {x.lower(): x for x in names}
+    out = difflib.get_close_matches((name or "").lower(), list(lower), n=n, cutoff=0.45)
+    wt = set(_name_tokens(name))
+    for x in names:   # also anything sharing a word ("hake" -> every hake product)
+        if len(out) >= n:
+            break
+        if wt & set(_name_tokens(x)) and x.lower() not in out:
+            out.append(x.lower())
+    return [lower[o] for o in out[:n]]
+
+
 def _is_kg(product) -> bool:
     return str((product or {}).get("sold_by") or "").lower() == "kg"
 
@@ -547,7 +612,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                         "enum": ["online", "cod", "eft"],
                         "description": "How the customer chose to pay: online card, cod (pay on delivery), or eft (bank transfer).",
                     },
-                    "delivery_address": {"type": "string", "description": "Where to deliver the order."},
+                    "fulfilment": {"type": "string", "enum": ["delivery", "collection"],
+                                   "description": "delivery (default) or collection — collection only "
+                                                  "if the shop offers it; then no address is needed."},
+                    "delivery_address": {"type": "string", "description": "Where to deliver the order (not needed for collection)."},
                     "customer_name": {"type": "string", "description": "Customer's name."},
                     "delivery_slot": {
                         "type": "string",
@@ -574,6 +642,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "payment_method": {"type": "string", "enum": ["online", "cod", "eft"]},
+                    "fulfilment": {"type": "string", "enum": ["delivery", "collection"]},
                     "delivery_address": {"type": "string"},
                     "customer_name": {"type": "string"},
                     "delivery_slot": {"type": "string", "enum": ["morning", "afternoon", "express"]},
@@ -746,8 +815,26 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "cancel_appointment",
-            "description": "Cancel the customer's upcoming appointment (their most recent confirmed booking).",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "Cancel one of the customer's upcoming appointments. If they have more "
+                           "than one, this returns a numbered list — ask which, then call again "
+                           "with choice set to the number they picked.",
+            "parameters": {"type": "object", "properties": {
+                "choice": {"type": "integer",
+                           "description": "The number the customer picked from the list shown earlier."}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reschedule_appointment",
+            "description": "Move one of the customer's upcoming appointments to a new time (check "
+                           "availability first). If they have more than one, this returns a "
+                           "numbered list — ask which, then call again with choice. The old "
+                           "booking is only cancelled once the new slot is confirmed.",
+            "parameters": {"type": "object", "properties": {
+                "start": {"type": "string", "description": "New slot as YYYY-MM-DDTHH:MM (local time)."},
+                "choice": {"type": "integer", "description": "Which booking, from the list shown earlier."}},
+                "required": ["start"]},
         },
     },
 ]
@@ -968,6 +1055,12 @@ class CommerceAssistantSkill(BaseSkill):
             if cfg.get("min_order_cents"):
                 lines.append(f"Minimum order: R{cfg['min_order_cents'] / 100:.2f} — politely decline "
                              "smaller orders and suggest adding something.")
+            if cfg.get("collection_enabled"):
+                lines.append("Customers may COLLECT instead of delivery (no delivery fee): pass "
+                             "fulfilment='collection' to review_order/place_order."
+                             + (f" Collection details: {cfg['collection_note']}" if cfg.get("collection_note") else ""))
+            else:
+                lines.append("Collection is NOT offered — every order is delivered.")
             if cfg.get("delivery_radius_km") and cfg.get("origin_lat") is not None:
                 lines.append(f"We deliver within {cfg['delivery_radius_km']:g} km of "
                              f"{cfg.get('origin_label') or 'the shop'}. If a customer shares their "
@@ -1280,7 +1373,7 @@ class CommerceAssistantSkill(BaseSkill):
         if name == "start_checkout":
             return self._exec_start_checkout(tid)
         if name == "track_order":
-            return await self._exec_track_order(tid, args)
+            return await self._exec_track_order(tid, args, phone)
         if name == "resend_invoice":
             return await self._exec_resend_invoice(tid, phone, args)
         if name == "get_daily_catch":
@@ -1312,7 +1405,9 @@ class CommerceAssistantSkill(BaseSkill):
         if name == "book_appointment":
             return await self._exec_book_appointment(tid, phone, args)
         if name == "cancel_appointment":
-            return await self._exec_cancel_appointment(tid, phone)
+            return await self._exec_cancel_appointment(tid, phone, args)
+        if name == "reschedule_appointment":
+            return await self._exec_reschedule_appointment(tid, phone, args)
         if name == "create_subscription":
             return await self._exec_create_subscription(tid, sid, phone, args)
         if name == "list_my_subscriptions":
@@ -1445,16 +1540,66 @@ class CommerceAssistantSkill(BaseSkill):
                 "service": b.get("service_name"),
                 "message": f"Booked for {b.get('start_local')}."}
 
-    async def _exec_cancel_appointment(self, tenant_id: str, phone: Optional[str]) -> Dict[str, Any]:
+    async def _pick_upcoming(self, tenant_id: str, phone: Optional[str], args: Optional[Dict[str, Any]],
+                             verb: str) -> tuple:
+        """(chosen booking, None) or (None, reply dict). With several upcoming bookings and no
+        numbered `choice`, asks which — never picks one silently (cancel used to take the
+        earliest, so a customer with two bookings could lose the wrong one)."""
         from vula.bookings import service as bk
         if not phone:
-            return {"error": "I need your phone number on file to find the booking."}
+            return None, {"error": "I need your phone number on file to find the booking."}
         upcoming = await bk.list_bookings(tenant_id, status="confirmed",
                                           from_utc=bk._now_utc().isoformat(), phone=phone)
         if not upcoming:
-            return {"message": "You have no upcoming appointments to cancel."}
-        await bk.set_status(tenant_id, upcoming[0]["id"], "cancelled")
-        return {"cancelled": True, "message": "Your appointment has been cancelled."}
+            return None, {"message": f"You have no upcoming appointments to {verb}."}
+        upcoming = sorted(upcoming, key=lambda b: b.get("start_at") or "")
+        try:
+            choice = int((args or {}).get("choice") or 0)
+        except (TypeError, ValueError):
+            choice = 0
+        if choice:
+            if not 1 <= choice <= len(upcoming):
+                return None, {"error": f"Pick a number from 1 to {len(upcoming)}."}
+            return upcoming[choice - 1], None
+        if len(upcoming) == 1:
+            return upcoming[0], None
+        return None, {"status": "need_info",
+                      "message": f"You have more than one upcoming appointment — which one should I "
+                                 f"{verb}? Reply with the number:\n" +
+                                 "\n".join(f"{n}. {b.get('service_name') or 'Appointment'} — {b.get('start_at')}"
+                                            for n, b in enumerate(upcoming, 1))}
+
+    async def _exec_cancel_appointment(self, tenant_id: str, phone: Optional[str],
+                                       args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from vula.bookings import service as bk
+        chosen, reply = await self._pick_upcoming(tenant_id, phone, args, "cancel")
+        if reply:
+            return reply
+        await bk.set_status(tenant_id, chosen["id"], "cancelled")
+        return {"cancelled": True, "service": chosen.get("service_name"), "when": chosen.get("start_at"),
+                "message": "Your appointment has been cancelled."}
+
+    async def _exec_reschedule_appointment(self, tenant_id: str, phone: Optional[str],
+                                           args: Dict[str, Any]) -> Dict[str, Any]:
+        """Move a booking: book the NEW slot first (create_booking checks availability), and
+        only once that succeeded cancel the old one — a failed move never loses the booking."""
+        from vula.bookings import service as bk
+        if not (args.get("start") or "").strip():
+            return {"error": "Ask the customer for the new date and time first (check_availability)."}
+        chosen, reply = await self._pick_upcoming(tenant_id, phone, args, "move")
+        if reply:
+            return reply
+        res = await bk.create_booking(tenant_id, {
+            "service_id": chosen.get("service_id"), "service_name": chosen.get("service_name"),
+            "customer_name": chosen.get("customer_name"), "customer_phone": phone,
+            "start": args.get("start"), "channel": "whatsapp",
+        })
+        if res.get("error"):
+            return res   # e.g. slot taken — the original booking is untouched
+        await bk.set_status(tenant_id, chosen["id"], "cancelled")
+        b = res["booking"]
+        return {"rescheduled": True, "service": b.get("service_name"), "when": b.get("start_local"),
+                "message": f"Moved to {b.get('start_local')}."}
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
         products = await service.list_products(
@@ -1499,10 +1644,15 @@ class CommerceAssistantSkill(BaseSkill):
         product = None
         if re.match(r"^[a-z0-9-]+$", name):
             product = await service.get_product_by_slug(tenant_id, name, statuses={"active", "unlisted"})
+        candidates: List[Dict[str, Any]] = []
         if not product:
             candidates = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
-            product = next((p for p in candidates if name.lower() in p["name"].lower()), None)
+            product = _match_product(name, candidates)
         if not product:
+            maybe = _suggest_products(name, candidates)
+            if maybe:
+                return {"error": f"No in-stock product called '{name}'. Did you mean: "
+                                 f"{', '.join(maybe)}? Ask the customer which one."}
             return {"error": f"No in-stock product matching '{name}'."}
 
         option_names = product.get("options") or []
@@ -1575,7 +1725,7 @@ class CommerceAssistantSkill(BaseSkill):
                  "quantity": _fmt_qty(prod, it["quantity"]),
                  "line_total": f"R{line_total / 100:.2f}"}
             )
-        delivery = cart.get("delivery_cents", 8000)
+        delivery = service.delivery_fee_cents(tenant_id, cart, subtotal)
         return {
             "items": lines,
             "subtotal": f"R{subtotal / 100:.2f}",
@@ -1589,7 +1739,8 @@ class CommerceAssistantSkill(BaseSkill):
             return {"checkout_url": f"{base}/cart"}
         return {"message": "Reply with your delivery address and we'll send a payment link directly."}
 
-    async def _exec_track_order(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _exec_track_order(self, tenant_id: str, args: Dict[str, Any],
+                                phone: Optional[str] = None) -> Dict[str, Any]:
         display_id = (args.get("order_id") or "").strip().upper()
         # Code-level backstop, not just prompt guidance: an invoice number was given here despite
         # the tool description — confirmed live 2026-07-25, twice in a row on a real customer
@@ -1598,10 +1749,13 @@ class CommerceAssistantSkill(BaseSkill):
         if "INV" in display_id:
             return {"error": f"{display_id} looks like an invoice number, not an order number — "
                               f"call resend_invoice instead, not track_order."}
-        orders = await service.list_orders(tenant_id, limit=50)
+        # Only this customer's own orders — anyone could otherwise read any order's status and
+        # total by guessing display ids.
+        orders = service.orders_for_phone(tenant_id, phone or "", "display_id,status,total_cents,customer_phone",
+                                          limit=50)
         match = next((o for o in orders if (o.get("display_id") or "").upper() == display_id), None)
         if not match:
-            return {"error": f"No order {display_id} found."}
+            return {"error": f"No order {display_id} found for this number."}
         return {
             "order_id": match["display_id"],
             "status": match["status"],
@@ -1977,7 +2131,7 @@ class CommerceAssistantSkill(BaseSkill):
             if product:
                 return product
         candidates = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
-        return next((p for p in candidates if name.lower() in p["name"].lower()), None)
+        return _match_product(name, candidates)
 
     async def _exec_create_quote(
         self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any]
@@ -1985,9 +2139,12 @@ class CommerceAssistantSkill(BaseSkill):
         line_items: List[Dict[str, Any]] = []
         items_arg = args.get("items") or []
         if items_arg:
+            unmatched: List[str] = []
             for it in items_arg:
                 product = await self._resolve_product(tenant_id, it.get("product", ""))
                 if not product:
+                    # Used to be silently skipped — the customer got a quote missing items.
+                    unmatched.append(str(it.get("product") or "?"))
                     continue
                 qty = _norm_qty(product, it.get("quantity", 1))   # decimals for kg items
                 line_items.append(
@@ -1998,6 +2155,10 @@ class CommerceAssistantSkill(BaseSkill):
                         "product_id": product["id"],
                     }
                 )
+            if unmatched:
+                return {"error": f"Couldn't find {', '.join(repr(u) for u in unmatched)} in stock, so "
+                                 "no quote was made. Ask the customer to pick from the product list "
+                                 "(call list_products) and try again."}
         else:
             cart = await service.get_or_create_cart(tenant_id, session_id, phone)
             for it in cart.get("commerce_cart_items", []) or []:
@@ -2071,7 +2232,10 @@ class CommerceAssistantSkill(BaseSkill):
         if not items:
             return {"error": "The cart is empty — add items before reviewing."}
         subtotal = sum(_line_cents(i["quantity"], i["unit_price_cents"]) for i in items)
-        delivery = cart.get("delivery_cents", 8000)
+        collect = _wants_collection(args)
+        if collect and not cfg.get("collection_enabled"):
+            return {"error": "This shop doesn't offer collection — ask for a delivery address instead."}
+        delivery = 0 if collect else service.delivery_fee_cents(tenant_id, cart, subtotal)
 
         # Discount preview only — never trust this for the amount actually charged. place_order
         # re-resolves the code authoritatively inside service.create_order (same as the
@@ -2098,12 +2262,13 @@ class CommerceAssistantSkill(BaseSkill):
             f"🧾 *Please check your order:*\n{item_lines}\n"
             f"Subtotal: R{subtotal / 100:.2f}\nDelivery: R{delivery / 100:.2f}" + discount_note
             + f"\n*Total: R{total / 100:.2f}*"
-            + (f"\nDeliver to: {addr}" if addr else "")
+            + (f"\nCollection{': ' + cfg['collection_note'] if cfg.get('collection_note') else ''}"
+               if collect else (f"\nDeliver to: {addr}" if addr else ""))
             + (f"\nPayment: {pay}" if pay else "")
             + "\n\nReply *CONFIRM* to place it, or tell me what to change.")
         return {
             "preview": preview,
-            "still_needed": [k for k, v in (("delivery address", addr), ("payment method", pay)) if not v],
+            "still_needed": [k for k, v in (("delivery address", addr or collect), ("payment method", pay)) if not v],
             "instruction_to_assistant": ("Send 'preview' to the customer verbatim. Do NOT call "
                                          "place_order until they reply CONFIRM. Ask for anything in "
                                          "'still_needed' first."),
@@ -2129,10 +2294,9 @@ class CommerceAssistantSkill(BaseSkill):
         order to the shop team (line-item edits on a placed order are handled by a person)."""
         note = (args.get("change") or "").strip()
         digits = "".join(c for c in (phone or "") if c.isdigit())
-        orders = await service.list_orders(tenant_id, limit=30)
-        live = [o for o in orders
-                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:] or "x")
-                and o.get("status") not in ("delivered", "cancelled", "refunded")]
+        live = service.orders_for_phone(
+            tenant_id, digits, "id,display_id,customer_phone,customer_name,status,total_cents",
+            exclude_statuses=["delivered", "cancelled", "refunded"])
         if not live:
             return {"error": "I couldn't find a recent order to change — could be already delivered."}
         order = live[0]
@@ -2186,10 +2350,9 @@ class CommerceAssistantSkill(BaseSkill):
         refund (a human step), and this codebase had no cancel path at all before (the assistant
         was previously just improvising a reply with no actual effect)."""
         digits = "".join(c for c in (phone or "") if c.isdigit())
-        orders = await service.list_orders(tenant_id, limit=30)
-        live = [o for o in orders
-                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:] or "x")
-                and o.get("status") not in ("delivered", "cancelled", "refunded")]
+        live = service.orders_for_phone(
+            tenant_id, digits, "id,display_id,customer_phone,customer_name,status,total_cents",
+            exclude_statuses=["delivered", "cancelled", "refunded"])
         if not live:
             return {"error": "I couldn't find a live order to cancel — could be already delivered."}
         try:
@@ -2215,7 +2378,7 @@ class CommerceAssistantSkill(BaseSkill):
         from vula.commerce import order_workflow as ow
 
         current_msg = ((ctx or {}).get("current_message") or "").strip()
-        if not _CONFIRM_RE.search(current_msg):
+        if not _is_clear_confirmation(current_msg):
             return {"error": "The customer has NOT explicitly confirmed in their latest message — "
                               "do not place the order. Call review_order to show them the itemised "
                               "total first, then wait for them to reply CONFIRM (or a clear yes) "
@@ -2230,7 +2393,22 @@ class CommerceAssistantSkill(BaseSkill):
             offered = ", ".join(ow.PAYMENT_LABELS.get(m, m) for m in enabled)
             return {"error": f"That payment method isn't offered here. Available: {offered}."}
 
-        address = (args.get("delivery_address") or "").strip()
+        # Minimum order was prompt-only guidance before — enforce it in code so a model that
+        # ignores the prompt can't place an order the business said it won't fulfil.
+        min_order = cfg.get("min_order_cents")
+        if min_order:
+            _cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+            _sub = sum(_line_cents(i["quantity"], i["unit_price_cents"])
+                       for i in (_cart.get("commerce_cart_items") or []))
+            if _sub and _sub < int(min_order):
+                return {"error": f"The minimum order is R{int(min_order) / 100:.2f} and this cart is "
+                                 f"R{_sub / 100:.2f} — tell the customer and ask if they'd like to add "
+                                 f"more. Do not place the order."}
+
+        collect = _wants_collection(args)
+        if collect and not cfg.get("collection_enabled"):
+            return {"error": "This shop doesn't offer collection — ask for a delivery address instead."}
+        address = "Collection" if collect else (args.get("delivery_address") or "").strip()
         if not address:
             return {"error": "Need a delivery address before placing the order — ask the customer for it."}
         # Prefer the verified on-file contact name over whatever the model supplied — a local
@@ -2259,7 +2437,9 @@ class CommerceAssistantSkill(BaseSkill):
                 "customer_name": name,
                 "delivery_address": address,
                 "delivery_slot": slot,
-                "delivery_notes": args.get("delivery_notes"),
+                "delivery_notes": ("COLLECTION — customer will collect. " if collect else "")
+                                  + (args.get("delivery_notes") or ""),
+                "fulfilment": "collection" if collect else "delivery",
                 "channel": "whatsapp",
                 "payment_method": method,
                 # Resolved authoritatively inside create_order (never trusts a client-side
@@ -2294,7 +2474,7 @@ class CommerceAssistantSkill(BaseSkill):
 
         try:
             from vula.commerce.service import send_order_invoice
-            await send_order_invoice(tenant_id, order["id"])
+            await send_order_invoice(tenant_id, order["id"], with_pay_link=not pay_link)
         except Exception as exc:
             logger.debug("auto invoice send skipped: %s", exc)
 
@@ -2322,16 +2502,20 @@ class CommerceAssistantSkill(BaseSkill):
         """A hosted card pay-link via the tenant's connected gateway, or None if none is set up."""
         try:
             from vula.payments import create_pay_link, default_provider_row
-            base = (settings.store_urls.get(tenant_id, "") or "").rstrip("/") or "https://vula-group-production.up.railway.app"
-            api = "https://vula-group-production.up.railway.app"
+            api = settings.public_base_url.rstrip("/")
+            # A store URL when the tenant has a storefront; otherwise the API's own payment
+            # result pages (/payment/success|cancel — the same ones invoice pay-links use).
+            # The old fallback sent customers to {api}/order/{id}, which doesn't exist.
+            store = (settings.store_urls.get(tenant_id, "") or "").rstrip("/")
             prov = (default_provider_row(tenant_id) or {}).get("provider", "default")
             link = await create_pay_link(
                 tenant_id,
                 amount_cents=order["total_cents"],
                 reference=order["display_id"],
                 description=f"Order {order['display_id']}",
-                success_url=f"{base}/order/{order['display_id']}",
-                cancel_url=f"{base}/cart",
+                success_url=(f"{store}/order/{order['display_id']}" if store
+                             else f"{api}/payment/success?order={order['display_id']}"),
+                cancel_url=f"{store}/cart" if store else f"{api}/payment/cancel?order={order['display_id']}",
                 notify_url=f"{api}/v1/payments/webhook/{tenant_id}/{prov}",
                 customer={"name": order.get("customer_name"), "phone": order.get("customer_phone")},
             )

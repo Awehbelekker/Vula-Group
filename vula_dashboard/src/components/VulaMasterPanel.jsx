@@ -21,6 +21,7 @@ const SUBTABS = [
   { id: 'users', label: 'Users', icon: '👤' },
   { id: 'knowledge', label: 'Knowledge', icon: '🧠' },
   { id: 'audit', label: 'Audit', icon: '📜' },
+  { id: 'models', label: 'Models', icon: '🧪' },
 ]
 
 // #/master/tenant/{id} — bookmarkable/shareable deep link into the tenant drill-in (2026-09-16).
@@ -89,6 +90,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
       {tab === 'users' && <UsersPanel onError={setErr} />}
       {tab === 'knowledge' && <KnowledgePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
+      {tab === 'models' && <ModelsPanel onError={setErr} />}
     </div>
   )
 }
@@ -411,6 +413,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
 /* ── Platform health ───────────────────────────────────────────────────────── */
 function HealthPanel({ onError, onViewDetail }) {
   const [h, setH] = useState(null)
+  const [migMsg, setMigMsg] = useState('')
   const [qb, setQb] = useState(null)
   const [qbBusy, setQbBusy] = useState(false)
   useEffect(() => { authFetch('/v1/master/health').then(setH).catch(e => onError(e.message)) }, [])
@@ -552,7 +555,21 @@ function HealthPanel({ onError, onViewDetail }) {
 
       {(h.migration_state || []).some(m => !m.applied) && (
         <div style={{ ...card, borderColor: C.amber }}>
-          <h4 style={h4}>🗄️ Migrations not yet applied</h4>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h4 style={{ ...h4, margin: 0 }}>🗄️ Migrations not yet applied</h4>
+            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={async () => {
+              try {
+                const r = await authFetch('/v1/master/migrations/pending-sql')
+                if (!r.sql) return setMigMsg('Nothing pending.')
+                await navigator.clipboard.writeText(r.sql)
+                setMigMsg(`Copied SQL for ${r.migrations.join(', ')} — paste it into the Supabase SQL editor and run once, then reload this page.`)
+              } catch (e) { onError(`Couldn't copy: ${e.message}`) }
+            }}>Copy SQL to apply</button>
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, margin: '4px 0 6px' }}>
+            One script of every missing migration, in order. Each one is idempotent, so it's safe to run once in the Supabase SQL editor.
+          </div>
+          {migMsg && <div style={{ fontSize: 12, color: C.green, marginBottom: 6 }}>{migMsg}</div>}
           {(h.migration_state || []).filter(m => !m.applied).map(m => (
             <div key={m.migration} style={{ fontSize: 12.5, padding: '3px 0' }}>
               <b>{m.migration}</b> — {m.note} <span style={{ color: C.muted }}>({m.table})</span>
@@ -827,6 +844,157 @@ function AuditPanel({ onError, onViewDetail }) {
           {!events.length && <tr><td style={td} colSpan={5}>No admin actions recorded yet — actions you take here (suspend, edit modules, create users) will show up in this trail.</td></tr>}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+/* ── Models (bake-off) ─────────────────────────────────────────────────────────
+ * Runs vula_mind/evals tool-choice cases against real models ON THE SERVER (the OpenRouter key
+ * never leaves Railway). Every tool is stubbed and the sandbox tenant has no data, so nothing
+ * touches a real business. Results decide CLOUD_MODEL_BY_TASK — a human change on Railway. */
+function ModelsPanel({ onError }) {
+  const [info, setInfo] = useState(null)
+  const [picked, setPicked] = useState([])
+  const [custom, setCustom] = useState('')
+  const [skill, setSkill] = useState('')
+  const [reports, setReports] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(null)
+  const [fbCases, setFbCases] = useState(null)
+  const [copied, setCopied] = useState('')
+  const copy = (text, id) => {
+    try { navigator.clipboard.writeText(text); setCopied(id); setTimeout(() => setCopied(''), 1500) }
+    catch { onError('Copy failed — select the text instead.') }
+  }
+
+  const loadReports = () => authFetch('/v1/master/evals/reports?limit=30')
+    .then(d => setReports(d.reports || [])).catch(e => onError(e.message))
+  useEffect(() => {
+    authFetch('/v1/master/evals/candidates').then(d => { setInfo(d); setPicked(d.candidates || []) }).catch(e => onError(e.message))
+    loadReports()
+    authFetch('/v1/master/evals/feedback-cases?limit=50').then(d => setFbCases(d.cases || [])).catch(() => setFbCases([]))
+  }, [])
+  const running = (reports || []).some(r => r.status === 'running')
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(loadReports, 10000)
+    return () => clearInterval(t)
+  }, [running])
+
+  const run = async () => {
+    const models = [...picked, ...custom.split(',').map(x => x.trim()).filter(Boolean)]
+    setBusy(true)
+    try {
+      const r = await authFetch('/v1/master/evals/tools', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ models, skill: skill || null }),
+      })
+      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
+      else { setCustom(''); loadReports() }
+    } catch (e) { onError(e.message) } finally { setBusy(false) }
+  }
+
+  if (!info) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
+  const toggle = (m) => setPicked(p => p.includes(m) ? p.filter(x => x !== m) : [...p, m])
+  const pct = (r) => r.total ? Math.round(100 * r.passed / r.total) : null
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div style={card}>
+        <h4 style={h4}>Model bake-off</h4>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+          Scores each model's first move on Vula's own admin, customer and email cases (tools stubbed — no tenant data, nothing sent).
+          Today: cloud fallback <b>{info.current.model_worker_cloud}</b>, cheap <b>{info.current.model_worker_cheap}</b>
+          {info.current.cloud_model_by_task ? <>, per-task map <code>{info.current.cloud_model_by_task}</code></> : ', no per-task map'}.
+          {!info.openrouter_configured && <span style={{ color: C.red }}> OPENROUTER_API_KEY isn't set on the server.</span>}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          {info.candidates.map(m => (
+            <button key={m} onClick={() => toggle(m)} style={{ ...miniBtn, ...(picked.includes(m) ? btnOn : {}) }}>
+              {m.replace('openrouter/', '')}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <input style={{ ...input, flex: 1, minWidth: 220 }} value={custom} onChange={e => setCustom(e.target.value)}
+            placeholder="More models, comma-separated (openrouter/vendor/model)" />
+          <select style={input} value={skill} onChange={e => setSkill(e.target.value)}>
+            <option value="">All skills</option>
+            <option value="commerce_admin">Owner / staff admin</option>
+            <option value="commerce_assistant">Customer assistant</option>
+            <option value="email_admin">Email</option>
+          </select>
+          <button style={{ ...btn, ...btnOn }} disabled={busy || running} onClick={run}>
+            {running ? 'Running…' : busy ? 'Starting…' : 'Run'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+        <table style={table}>
+          <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
+            {['When', 'Model', 'Skill', 'Pass', 'p50', 'p95', '$/100 turns', 'Errors', ''].map(x => <th key={x} style={th}>{x}</th>)}
+          </tr></thead>
+          <tbody>
+            {(reports || []).map(r => (
+              <Fragment key={r.id}>
+                <tr style={{ borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ ...td, color: C.muted, whiteSpace: 'nowrap' }}>{(r.created_at || '').slice(0, 16).replace('T', ' ')}</td>
+                  <td style={{ ...td, fontWeight: 600 }}>{(r.model || '').replace('openrouter/', '')}</td>
+                  <td style={td}>{r.skill || 'all'}</td>
+                  <td style={{ ...td, color: r.status === 'failed' ? C.red : C.text }}>
+                    {r.status === 'running' ? 'running…' : r.status === 'failed' ? (r.error || 'failed')
+                      : `${r.passed}/${r.total} (${pct(r)}%)`}
+                  </td>
+                  <td style={td}>{r.p50_secs != null ? `${r.p50_secs}s` : '—'}</td>
+                  <td style={td}>{r.p95_secs != null ? `${r.p95_secs}s` : '—'}</td>
+                  <td style={td}>{r.cost_per_100_usd != null ? `$${r.cost_per_100_usd}` : '—'}</td>
+                  <td style={td}>{r.errors ?? '—'}</td>
+                  <td style={td}>{(r.failures || []).length > 0 &&
+                    <button style={miniBtn} onClick={() => setOpen(open === r.id ? null : r.id)}>{open === r.id ? 'Hide' : 'Misses'}</button>}</td>
+                </tr>
+                {open === r.id && (
+                  <tr><td colSpan={9} style={{ ...td, background: C.alt }}>
+                    {(r.failures || []).map((f, i) => (
+                      <div key={i} style={{ fontSize: 12, marginBottom: 4 }}>
+                        “{f.prompt}” — expected <b>{f.expect || 'no tool'}</b>, got <b>{f.error ? `error: ${f.error}` : (f.got || 'no tool')}</b>
+                      </div>
+                    ))}
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+            {reports && !reports.length && <tr><td style={td} colSpan={9}>No runs yet — pick models above and press Run.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <h4 style={{ ...h4, margin: 0 }}>Test cases from 👎 feedback</h4>
+          {(fbCases || []).length > 0 &&
+            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={() => copy(fbCases.map(c => c.yaml).join('\n'), 'all')}>
+              {copied === 'all' ? 'Copied' : 'Copy all'}
+            </button>}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+          Replies people rated 👎 in the Inbox, as routing cases for <code>evals/cases/routing.yaml</code>. Phones and emails are
+          masked. <b>expect</b> is where the question routes today — change it to the right skill before adding it, so the
+          mistake can't come back.
+        </div>
+        {fbCases === null && <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>}
+        {fbCases && !fbCases.length && <div style={{ color: C.muted, fontSize: 13 }}>No 👎 ratings yet.</div>}
+        {(fbCases || []).map(c => (
+          <div key={c.id} style={{ borderTop: `1px solid ${C.border}`, padding: '8px 0', fontSize: 12.5 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <div>“{c.question}” <span style={{ color: C.muted }}>· {c.tenant_id} · routes to <b>{c.routes_to}</b></span></div>
+                {c.correction && <div style={{ color: C.muted, marginTop: 2 }}>Should have said: {c.correction}</div>}
+              </div>
+              <button style={miniBtn} onClick={() => copy(c.yaml, c.id)}>{copied === c.id ? 'Copied' : 'Copy YAML'}</button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

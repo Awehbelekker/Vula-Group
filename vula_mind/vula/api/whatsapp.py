@@ -51,7 +51,14 @@ _REJECT_RE = re.compile(
     r"^\s*(?:reject\w*|rejct\w*|declin\w*|deny|denied|afgekeur)\b\s*(.*)$",
     re.IGNORECASE,
 )
-_DELETE_RE = re.compile(r"^\s*(delete|stop|unsubscribe|opt[\s-]?out)\s*$", re.IGNORECASE)
+# 2026-09-25 review: STOP used to share this regex with DELETE, so a customer replying STOP
+# ("Reply STOP anytime to pause" — subscriptions.py) had their contact record and history
+# erased. They're separate POPIA rights: STOP = stop messaging me (opt out, pause
+# subscriptions, keep records); DELETE = erase my data. START undoes STOP.
+_DELETE_RE = re.compile(r"^\s*(delete|delete\s+my\s+data|erase\s+my\s+data|remove\s+my\s+data)\s*$",
+                        re.IGNORECASE)
+_OPTOUT_RE = re.compile(r"^\s*(stop|unsubscribe|opt[\s-]?out)\s*[.!]?\s*$", re.IGNORECASE)
+_OPTIN_RE = re.compile(r"^\s*(start|unstop|opt[\s-]?in|subscribe)\s*[.!]?\s*$", re.IGNORECASE)
 # POPIA right-to-access (2026-09-18) — deliberately narrow, same exact-phrase shape as
 # _DELETE_RE above, not a broad keyword match: a request this consequential (assembles and
 # emails a real data export) shouldn't fire on an unrelated message that happens to mention
@@ -122,9 +129,55 @@ _ORDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Supplier-intake forms for tenants that had one before vula_tenant_config.supplier_intake_url
+# existed — the config value wins when set.
+_SUPPLIER_INTAKE_URLS = {"off-the-hook": "https://offthehook.co.za/suppliers"}
+
+
+def _tenants_mod():
+    from vula.api import tenants
+    return tenants
+
+
 # Idempotency cache for inbound message IDs
 _processed_msg_ids: list[str] = []
 _MAX_PROCESSED_IDS = 1000
+
+# Per-sender flood guard (settings.wa_sender_rate_limit). One number looping a bot, or someone
+# pasting 40 lines one message at a time, otherwise buys 40 full assistant runs (LLM spend +
+# 40 replies). Per worker, in memory — a rough ceiling, not an exact quota.
+_SENDER_WINDOW_SECS = 60.0
+_sender_hits: dict[tuple[str, str], list[float]] = {}
+_sender_warned_at: dict[tuple[str, str], float] = {}
+
+
+def _sender_over_limit(tenant_id: str, phone: str, now: float | None = None) -> bool:
+    """Record one inbound message and say whether this sender is over the per-minute limit."""
+    import time as _time
+    limit = int(settings.wa_sender_rate_limit or 0)
+    if limit <= 0 or not phone:
+        return False
+    now = _time.monotonic() if now is None else now
+    key = (tenant_id or "", phone)
+    hits = [t for t in _sender_hits.get(key, []) if now - t < _SENDER_WINDOW_SECS]
+    hits.append(now)
+    _sender_hits[key] = hits
+    if len(_sender_hits) > 5000:   # drop idle senders so the map can't grow without bound
+        for k in [k for k, v in _sender_hits.items() if now - v[-1] >= _SENDER_WINDOW_SECS]:
+            _sender_hits.pop(k, None)
+            _sender_warned_at.pop(k, None)
+    return len(hits) > limit
+
+
+def _should_warn_sender(tenant_id: str, phone: str, now: float | None = None) -> bool:
+    """At most one "please wait" reply per sender per window."""
+    import time as _time
+    now = _time.monotonic() if now is None else now
+    key = (tenant_id or "", phone)
+    if now - _sender_warned_at.get(key, -1e9) < _SENDER_WINDOW_SECS:
+        return False
+    _sender_warned_at[key] = now
+    return True
 
 
 # ─── Meta verification handshake ─────────────────────────────────────────────
@@ -155,24 +208,153 @@ async def verify_webhook(
 _bg_tasks: set = set()
 
 
-def _run_bg(coro, *, label: str) -> None:
+def _durable_dedup_claim(msg_id: str) -> bool:
+    """Atomically claim an inbound msg_id in vula_wa_msg_dedup (migration 071) — the primary key
+    rejects a second insert from any worker. False = already claimed (a Meta redelivery). A
+    missing table or transient DB error fails OPEN (True): the in-memory dedup still applies,
+    and a message is never silently dropped."""
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").insert({"msg_id": msg_id}).execute()
+    except Exception as exc:  # noqa: BLE001
+        s = str(exc)
+        if "23505" in s or "duplicate" in s.lower():
+            return False
+        logger.debug("durable dedup unavailable (run migration 071?): %s", exc)
+    return True
+
+
+def _now_iso() -> str:
+    from datetime import datetime as _dt, timezone as _tz
+    return _dt.now(_tz.utc).isoformat()
+
+
+def _track_inbound(msg_id: Optional[str], **fields) -> None:
+    """Best-effort state update on the message's dedup row. Never raises — before migration
+    179 the columns don't exist and messages must still flow exactly as before."""
+    if not msg_id:
+        return
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").update(
+            {**fields, "updated_at": _now_iso()}).eq("msg_id", msg_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("inbound tracking skipped for %s (migration 179?): %s", msg_id, exc)
+
+
+def _run_bg(coro, *, label: str, track: Optional[dict] = None) -> None:
     """Fire a slow handler as a background task and return control to the webhook immediately.
 
     2026-09-10: a document upload was processed INLINE (26–56s: download + a 503-ing local
     vision model + cloud escalation + KB ingest + reply). Meta's webhook times out at ~15–20s
     and re-sends — turning one file into a burst of distinct messages, each a full run. Returning
-    200 fast is Meta's own requirement. Exceptions are logged (a bare create_task swallows them)."""
+    200 fast is Meta's own requirement. Exceptions are logged (a bare create_task swallows them).
+
+    `track` ({msg_id, tenant_id, phone, kind, payload}) makes the work durable: the message's
+    vula_wa_msg_dedup row (migration 179) is marked processing → done, so one that a redeploy
+    or crash cut off mid-run is re-driven by redrive_stuck_inbound() instead of silently lost
+    (Meta won't redeliver it — the webhook already returned 200)."""
     import asyncio as _a
 
     async def _wrapped():
+        if track:
+            await _a.to_thread(_track_inbound, track.get("msg_id"), status="processing",
+                               tenant_id=track.get("tenant_id") or "", phone=track.get("phone") or "",
+                               kind=track.get("kind"), payload=track.get("payload"))
         try:
             await coro
         except Exception as exc:  # noqa: BLE001
             logger.error("background handler %s failed: %s: %s", label, type(exc).__name__, exc)
+            if track:
+                await _a.to_thread(_track_inbound, track.get("msg_id"), status="failed", payload=None)
+            return
+        if track:
+            # The message text isn't kept once handled — it's already in the conversation log.
+            await _a.to_thread(_track_inbound, track.get("msg_id"), status="done", payload=None)
 
     t = _a.create_task(_wrapped())
     _bg_tasks.add(t)
     t.add_done_callback(_bg_tasks.discard)
+
+
+def _text_track(msg_id: str, tenant_id: Optional[str], phone: str, text: str, route_mode: Optional[str]) -> dict:
+    return {"msg_id": msg_id, "tenant_id": tenant_id, "phone": phone, "kind": "text",
+            "payload": {"text": text, "route_mode": route_mode}}
+
+
+_REDRIVE_AFTER_MIN = 5       # a normal run finishes well inside this
+_REDRIVE_GIVE_UP_MIN = 60    # older than this, a reply would be more confusing than helpful
+_REDRIVE_MAX_ATTEMPTS = 2
+
+
+async def redrive_stuck_inbound() -> int:
+    """Re-run inbound text / voice messages whose handler never finished (process restarted or
+    crashed mid-run). Each row is claimed with a conditional update so two workers can't both
+    take it; after _REDRIVE_MAX_ATTEMPTS or _REDRIVE_GIVE_UP_MIN the customer is told honestly
+    to resend instead (same give-up policy as vula/voice_retry.py). Returns rows re-driven."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from vula.commerce import service as _cs
+    db = _cs._client()
+    now = _dt.now(_tz.utc)
+    try:
+        rows = (db.table("vula_wa_msg_dedup")
+                .select("msg_id,tenant_id,phone,kind,payload,attempts,seen_at")
+                .eq("status", "processing")
+                .lt("updated_at", (now - _td(minutes=_REDRIVE_AFTER_MIN)).isoformat())
+                .limit(50).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("inbound re-drive skipped (migration 179?): %s", exc)
+        return 0
+
+    done = 0
+    for r in rows:
+        msg_id, attempts = r["msg_id"], int(r.get("attempts") or 0)
+        tenant_id, phone = r.get("tenant_id") or "", r.get("phone") or ""
+        try:
+            seen = _dt.fromisoformat(str(r.get("seen_at")).replace("Z", "+00:00"))
+        except ValueError:
+            seen = now
+        too_old = now - seen > _td(minutes=_REDRIVE_GIVE_UP_MIN)
+        if too_old or attempts >= _REDRIVE_MAX_ATTEMPTS:
+            claimed = (db.table("vula_wa_msg_dedup").update({"status": "abandoned", "payload": None,
+                                                              "updated_at": now.isoformat()})
+                       .eq("msg_id", msg_id).eq("status", "processing").eq("attempts", attempts)
+                       .execute().data)
+            if claimed and phone:
+                await _send_reply(phone, (
+                    "Sorry, I lost track of your last message while the system restarted. "
+                    "Could you send it again?"), tenant_id)
+            logger.warning("abandoned stuck inbound %s after %d attempts", msg_id, attempts)
+            continue
+        claimed = (db.table("vula_wa_msg_dedup").update({"attempts": attempts + 1,
+                                                          "updated_at": now.isoformat()})
+                   .eq("msg_id", msg_id).eq("status", "processing").eq("attempts", attempts)
+                   .execute().data)
+        if not claimed:
+            continue
+        p = r.get("payload") or {}
+        mode = p.get("route_mode")
+        try:
+            if r.get("kind") == "text" and p.get("text"):
+                if mode == "commerce" and tenant_id:
+                    await _handle_commerce_message(phone, p["text"], msg_id, tenant_id)
+                elif mode == "knowledge" and tenant_id:
+                    await _handle_message(phone, p["text"], msg_id, route_tenant_id=tenant_id)
+                else:
+                    await _handle_message(phone, p["text"], msg_id)
+            elif r.get("kind") == "audio" and p.get("media_id"):
+                await _handle_voice_note(phone, p["media_id"], p.get("mime_type") or "audio/ogg",
+                                         msg_id, mode or "", tenant_id or None)
+            else:
+                _track_inbound(msg_id, status="abandoned", payload=None)
+                continue
+            _track_inbound(msg_id, status="done", payload=None)
+            done += 1
+            logger.info("re-drove stuck inbound %s (attempt %d)", msg_id, attempts + 1)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("re-drive of %s failed: %s: %s", msg_id, type(exc).__name__, exc)
+            _track_inbound(msg_id, status="failed", payload=None)
+    return done
 
 
 @router.post("/webhook")
@@ -253,18 +435,12 @@ async def receive_message(
                     _processed_msg_ids.append(msg_id)
                     if len(_processed_msg_ids) > _MAX_PROCESSED_IDS:
                         _processed_msg_ids.pop(0)
-                    try:
-                        from vula.commerce import service as _dedup_cs
-                        _dedup_cs._client().table("vula_wa_msg_dedup").insert(
-                            {"msg_id": msg_id}).execute()
-                    except Exception as _dedup_exc:
-                        _s = str(_dedup_exc)
-                        if "23505" in _s or "duplicate" in _s.lower():
-                            logger.info("Skipping duplicate WhatsApp message (cross-worker): %s", msg_id)
-                            continue
-                        # Table missing / transient DB error → fail OPEN (in-memory dedup still
-                        # applies) so messages are never silently dropped before migration 071.
-                        logger.debug("durable dedup unavailable (run migration 071?): %s", _dedup_exc)
+                    # Off the event loop: the Supabase client is synchronous, and a slow
+                    # round-trip here would stall every other conversation on this worker.
+                    import asyncio as _aio
+                    if not await _aio.to_thread(_durable_dedup_claim, msg_id):
+                        logger.info("Skipping duplicate WhatsApp message (cross-worker): %s", msg_id)
+                        continue
 
                 # Route by the number the person messaged → (tenant, mode)
                 phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
@@ -278,6 +454,19 @@ async def receive_message(
                     if not _tenants.is_active(route_tenant):
                         logger.info("Dropping inbound WA message for suspended tenant %s", route_tenant)
                         continue
+
+                # Flood guard — after dedup (a Meta redelivery isn't a new message) and the
+                # suspended check; the business's own team is never limited.
+                if (_sender_over_limit(route_tenant or "", phone)
+                        and not (route_tenant and _is_tenant_owner(route_tenant, phone))):
+                    logger.warning("WA sender over rate limit, not processing: tenant=%s msg=%s",
+                                   route_tenant, msg_id)
+                    if route_tenant and _should_warn_sender(route_tenant, phone):
+                        _run_bg(_send_reply(phone, (
+                            "I'm getting a lot of messages from you at once, so I've paused for "
+                            "a minute. Please wait a moment, then send your question again in "
+                            "one message."), route_tenant), label="sender_rate_limit")
+                    continue
 
                 # Blue-tick it and show "typing…" before we start work. Placed after the dedup
                 # and suspended-tenant guards (so a dropped message never gets false ticks) and
@@ -307,13 +496,16 @@ async def receive_message(
                             # _send_reply, so backgrounding them changes nothing about delivery.
                             if route_mode == "commerce":
                                 # Number is a shop line → ordering flow
-                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message")
+                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message",
+                                        track=_text_track(msg_id, route_tenant, phone, text, route_mode))
                             elif route_mode == "knowledge":
                                 # Number is a tenant's assistant line → that tenant's model
-                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message")
+                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message",
+                                        track=_text_track(msg_id, route_tenant, phone, text, route_mode))
                             else:
                                 # Unmapped number → fall back to sender-based lookup
-                                _run_bg(_handle_message(phone, text, msg_id), label="text_message")
+                                _run_bg(_handle_message(phone, text, msg_id), label="text_message",
+                                        track=_text_track(msg_id, route_tenant, phone, text, route_mode))
 
                     elif msg_type == "interactive":
                         interactive = msg.get("interactive", {})
@@ -379,7 +571,9 @@ async def receive_message(
                         if phone and media_id:
                             _run_bg(_handle_voice_note(
                                 phone, media_id, mime_type, msg_id, route_mode, route_tenant
-                            ), label="voice_note")
+                            ), label="voice_note", track={
+                                "msg_id": msg_id, "tenant_id": route_tenant, "phone": phone, "kind": "audio",
+                                "payload": {"media_id": media_id, "mime_type": mime_type, "route_mode": route_mode}})
 
                     elif msg_type == "location":
                         # Shared pin (e.g. delivery address step) → a Maps link, routed through the
@@ -475,7 +669,8 @@ async def receive_message(
 
 # ─── Message routing ─────────────────────────────────────────────────────────
 
-async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
+async def _maybe_helper_escalation_answer(phone: str, text: str,
+                                          tenant_id: Optional[str] = None) -> bool:
     """If this phone is a helper (e.g. Staci) with an open escalation, their message
     IS the answer — relay it to the customer and learn it for next time.
 
@@ -485,7 +680,7 @@ async def _maybe_helper_escalation_answer(phone: str, text: str) -> bool:
     """
     try:
         from vula import escalation as esc
-        open_esc = esc.open_escalation_for_helper(phone)
+        open_esc = esc.open_escalation_for_helper(phone, tenant_id)
     except Exception:
         open_esc = None
     if not (open_esc and text.strip()):
@@ -1119,7 +1314,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
 
     # ── Escalation answer: if this phone is a helper with an open escalation, their
     # message IS the answer — relay it to the customer and learn it for next time.
-    if await _maybe_helper_escalation_answer(phone, text):
+    if await _maybe_helper_escalation_answer(phone, text, route_tenant_id):
         return
 
     if route_tenant_id:
@@ -1165,6 +1360,12 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     tag_tenant(tenant_id)
 
     # ── Data deletion / opt-out (POPIA + Meta requirement) ───────────────────
+    if _OPTOUT_RE.match(text):
+        await _handle_opt_out(phone, tenant_id)
+        return
+    if _OPTIN_RE.match(text):
+        await _handle_opt_in(phone, tenant_id)
+        return
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
         return
@@ -1655,6 +1856,8 @@ async def _handle_image_or_video(
             is_staff = (_is_tenant_owner(route_tenant, phone)
                         or await _sender_is_sales_rep(phone, route_tenant))
             if not is_staff:
+                if msg_type == "image" and await _maybe_customer_pop(phone, media_id, route_tenant):
+                    return
                 if msg_type == "image":
                     description = await _describe_photo_for_rep(media_id)
                     effective_text = (f"{caption}\n\n[What's in the photo: {description}]"
@@ -3747,8 +3950,46 @@ async def _handle_media(phone: str, media_id: str, caption: str, msg_id: str) ->
     return True
 
 
+async def _handle_opt_out(phone: str, tenant_id: Optional[str]) -> None:
+    """STOP / unsubscribe / opt out: no more marketing or proactive messages, and any repeat
+    orders paused — but nothing is erased (that's DELETE). The suppression is the same one
+    DELETE records, so broadcasts/campaigns/automations already honour it."""
+    logger.info("Opt-out request from %s (tenant=%s)", phone, tenant_id)
+    paused = 0
+    if tenant_id:
+        try:
+            from vula.api.commerce import record_opt_out
+            record_opt_out(tenant_id, phone, source="stop_keyword")
+        except Exception as exc:
+            logger.warning("opt-out suppression failed for %s: %s", phone, exc)
+        try:
+            from vula.commerce import subscriptions
+            paused = await subscriptions.pause_for_phone(tenant_id, phone)
+        except Exception as exc:
+            logger.debug("subscription pause on STOP skipped: %s", exc)
+    msg = "✅ Done — you won't get any more marketing or reminder messages from us."
+    if paused:
+        msg += f" Your repeat order{'s are' if paused > 1 else ' is'} paused too."
+    msg += (" You can still message us any time. Reply START to opt back in, or DELETE to "
+            "have your data erased.")
+    await _send_reply(phone, msg, tenant_id)
+
+
+async def _handle_opt_in(phone: str, tenant_id: Optional[str]) -> None:
+    """START: an explicit opt-back-in after STOP (record_inbound_consent never overrides an
+    opt-out, so without this there was no way back)."""
+    if tenant_id:
+        try:
+            from vula.api.commerce import record_opt_in
+            record_opt_in(tenant_id, phone, source="start_keyword")
+        except Exception as exc:
+            logger.warning("opt-in failed for %s: %s", phone, exc)
+    await _send_reply(phone, "✅ You're opted back in — welcome back! Reply STOP any time to "
+                             "stop messages.", tenant_id)
+
+
 async def _handle_data_deletion(phone: str, tenant_id: Optional[str]) -> None:
-    """Handle a DELETE / STOP / opt-out request — POPIA + Meta compliance.
+    """Handle a DELETE (erase my data) request — POPIA + Meta compliance.
 
     Removes the requester's data: tenant_phones entry, chat history, and
     flags the request. Confirms back to the user.
@@ -4070,6 +4311,50 @@ def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str
     """Upload an evidence photo to the 'evidence' bucket. Returns a public URL,
     or None on failure (caller falls back to the local path)."""
     return _upload_to_storage("evidence", object_path, data, content_type)
+
+
+async def _maybe_customer_pop(phone: str, media_id: str, tenant_id: str) -> bool:
+    """A CUSTOMER sent a proof-of-payment screenshot for their EFT order. Stage it into the same
+    owner review the staff path uses (bank_rec.stage_pop_for_review, matched to this customer's
+    own open orders/invoices first) — but the "does this match X? reply yes" question goes to the
+    BUSINESS, never back to the customer (only team members may answer it: a customer confirming
+    their own payment would be no check at all). The customer just gets an acknowledgement.
+    Before this, the screenshot was only described to the shopping assistant and nobody was told.
+    Returns True when handled as a POP; False for any other photo (normal handling continues)."""
+    import tempfile
+    from pathlib import Path as _Path
+    try:
+        data = await _download_media_bytes(media_id)
+        if not data:
+            return False
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as fh:
+            fh.write(data)
+            tmp = fh.name
+        try:
+            fin = await _scan_financial_photo(tmp)
+        finally:
+            _Path(tmp).unlink(missing_ok=True)
+        total_r = _num((fin or {}).get("total"))
+        if not fin or fin.get("doc_type") != "payment_confirmation" or total_r <= 0:
+            return False
+        from vula.commerce import bank_rec
+        proposal = bank_rec.stage_pop_for_review(
+            tenant_id, round(total_r * 100), fin.get("date"), fin.get("reference"),
+            fin.get("payee"), sender_phone=phone)
+        from vula.integrations.notify import notify_team
+        note = f"📸 A customer ({phone}) sent a proof of payment.\n{proposal}"
+        if not await notify_team(tenant_id, "payment_received", note):
+            from vula.escalation import _pick_helper
+            helper = _pick_helper(tenant_id)
+            if helper and helper.get("whatsapp"):
+                await _send_reply(helper["whatsapp"], note, tenant_id)
+        await _send_reply(phone, (f"Thanks — we've received your proof of payment for "
+                                  f"R{total_r:,.2f}. The team will confirm it shortly; your order "
+                                  f"is marked paid once they have."), tenant_id)
+        return True
+    except Exception as exc:
+        logger.warning("customer POP handling failed for %s: %s", tenant_id, exc)
+        return False
 
 
 async def _describe_photo_for_rep(media_id: str) -> str:
@@ -5247,11 +5532,66 @@ async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
         logger.debug("read/typing indicator skipped for %s: %s", message_id, exc)
 
 
-async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
+_sent_keys: dict[str, float] = {}
+
+
+def _outbound_key_id(tenant_id: str, idem_key: str) -> str:
+    return f"out:{tenant_id or '-'}:{idem_key}"[:200]
+
+
+def _claim_outbound(tenant_id: str, idem_key: str) -> bool:
+    """Claim a once-only automated send. False = already sent (this worker, or any worker via
+    the vula_wa_msg_dedup primary key). A DB outage fails open to the in-memory check."""
+    import time as _time
+    key = _outbound_key_id(tenant_id, idem_key)
+    now = _time.monotonic()
+    if now - _sent_keys.get(key, -1e9) < 86400:
+        return False
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").insert({"msg_id": key}).execute()
+    except Exception as exc:  # noqa: BLE001
+        s = str(exc)
+        if "23505" in s or "duplicate" in s.lower():
+            _sent_keys[key] = now
+            return False
+        logger.debug("outbound send key not stored (%s): %s", key, exc)
+    _sent_keys[key] = now
+    if len(_sent_keys) > 20000:
+        for k in [k for k, t in _sent_keys.items() if now - t >= 86400]:
+            _sent_keys.pop(k, None)
+    return True
+
+
+def _release_outbound(tenant_id: str, idem_key: str) -> None:
+    """The send failed — let a later retry of the same key go out."""
+    key = _outbound_key_id(tenant_id, idem_key)
+    _sent_keys.pop(key, None)
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").delete().eq("msg_id", key).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("outbound send key not released (%s): %s", key, exc)
+
+
+async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Optional[str] = None) -> bool:
     """
     Send a WhatsApp text message via the Meta Graph API.
     Credentials resolved per-tenant from Supabase, falling back to env vars.
+
+    idem_key: for automated sends (reminders, standing-order notices) — the same key for the
+    same tenant goes out once, however many workers or retries reach it. Returns True for a
+    skipped duplicate (it WAS sent), so callers record it as done.
     """
+    if idem_key:
+        import asyncio as _aio
+        if not await _aio.to_thread(_claim_outbound, tenant_id, idem_key):
+            logger.info("skipping duplicate automated send %s", idem_key)
+            return True
+        ok = await _send_reply(to, message, tenant_id)
+        if not ok:
+            await _aio.to_thread(_release_outbound, tenant_id, idem_key)
+        return ok
     message = _sanitize_outbound(message)
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
     if not creds:
@@ -5455,7 +5795,7 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # Escalation answer: if a helper (e.g. Staci) is replying to an open escalation on
     # this tenant's line, their message is the answer — relay + learn, don't treat it as
     # a customer order. Runs on the commerce path too so every tenant is covered.
-    if await _maybe_helper_escalation_answer(phone, text):
+    if await _maybe_helper_escalation_answer(phone, text, tenant_id):
         return
 
     # Answering "which project is that receipt for?" → allocate the pending expense claim.
@@ -5497,6 +5837,12 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
 
     # Opt-out / data deletion (POPIA) — honoured on commerce lines too, so STOP
     # from a customer who receives broadcasts actually suppresses them.
+    if _OPTOUT_RE.match(text):
+        await _handle_opt_out(phone, tenant_id)
+        return
+    if _OPTIN_RE.match(text):
+        await _handle_opt_in(phone, tenant_id)
+        return
     if _DELETE_RE.match(text):
         await _handle_data_deletion(phone, tenant_id)
         return
@@ -5589,10 +5935,16 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     supplier_keywords = {"supply", "sell", "catch", "supplier", "verskaf", "fish for you"}
     if (not _customer_asking_re.search(text_lower)
             and any(re.search(rf"\b{re.escape(k)}\b", text_lower) for k in supplier_keywords)):
+        # Each shop's own intake form (vula_tenant_config.supplier_intake_url) — this reply
+        # used to send every commerce tenant's would-be suppliers to Off the Hook's form.
+        from vula.api import tenants as _tenants
+        intake = ((_tenants.get_config(tenant_id) or {}).get("supplier_intake_url")
+                  or _SUPPLIER_INTAKE_URLS.get(tenant_id))
         reply = (
-            "Thanks for reaching out! 🐟 We're always looking for quality suppliers. "
-            "Please complete our intake form here: https://offthehook.co.za/suppliers "
-            "Our team will review it and get back to you."
+            "Thanks for reaching out! We're always looking for quality suppliers. "
+            + (f"Please complete our intake form here: {intake} " if intake else
+               "I've passed your details to the team. ")
+            + "Our team will review it and get back to you."
         )
         await _send_reply(phone, reply, tenant_id)
         # Log lead to Supabase (assuming table exists or using a generic log)
@@ -5632,7 +5984,11 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
                 return
         if await _run_commerce_admin(phone, text, tenant_id, detected_lang=detected_lang):
             return
-        # Admin agent failed → fall through to the customer assistant.
+        # Admin agent failed. This used to fall through to the CUSTOMER shopping assistant, so
+        # an owner asking about invoices got "would you like to see our menu?". Say so honestly.
+        await _send_reply(phone, "Sorry — I couldn't complete that just now. Please try again in "
+                                 "a moment (reply 'try again').", tenant_id)
+        return
 
     handled = await _run_commerce_assistant(phone, text, tenant_id, detected_lang=detected_lang)
     if not handled:
@@ -6166,6 +6522,10 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         upd = (db.table("commerce_pending_confirmations")
                .update({"status": new_status, "resolved_at": now_iso})
                .eq("id", pending_id).eq("tenant_id", tenant_id).eq("status", "pending")
+               # Only the person who was asked can confirm: the pending id rides in a button
+               # payload, and a forwarded/replayed payload from another number must not apply
+               # someone else's stock change, refund or broadcast.
+               .eq("phone", phone)
                .gt("expires_at", now_iso)
                .execute())
         row = (upd.data or [None])[0]
@@ -6185,8 +6545,10 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
     try:
         from core.skills.commerce_admin import CommerceAdminSkill
         skill = CommerceAdminSkill()
-        ctx = {"tenant_id": tenant_id, "phone": phone, "caller_name": None, "caller_role": None}
         confirmed_args = dict(row["tool_args"] or {})
+        caller = confirmed_args.pop("_caller", None) or {}
+        ctx = {"tenant_id": tenant_id, "phone": phone, "caller_name": caller.get("name"),
+               "caller_role": caller.get("role")}
         confirmed_args["confirm"] = True
         result = await skill._dispatch_tool(row["tool_name"], confirmed_args, ctx)
     except Exception as exc:
@@ -6565,11 +6927,12 @@ async def _send_category_products(phone: str, tenant_id: str, category: str) -> 
     rows = [{"id": f"prod_{p.get('id')}", "title": (p.get("name") or "Item")[:24],
              "description": _product_desc(p)} for p in prods[:10]]
     if not rows:
-        await _send_reply(phone, "Nothing in stock there right now — type what you're after and I'll help. 🐟", tenant_id=tenant_id)
+        await _send_reply(phone, "Nothing in stock there right now — type what you're after and I'll help.", tenant_id=tenant_id)
         return True
     label = (_CATEGORY_LABELS.get(category) or category.replace("_", " ").title())
     return await _send_wa_list(creds, _wa_number(phone), label, "Tap an item to order, or type a question.",
-                               "Off the Hook 🐟", "Choose item", [{"title": label[:24], "rows": rows}])
+                               _tenants_mod().display_name(tenant_id)[:60], "Choose item",
+                               [{"title": label[:24], "rows": rows}])
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
@@ -6669,7 +7032,7 @@ async def _forward_to_n8n_commerce(
     """Forward message to n8n for AI-powered order processing."""
     n8n_base = getattr(settings, "n8n_webhook_base", None)
     if not n8n_base:
-        await _send_reply(phone, "On it! Our team will be in touch shortly. 🐟", tenant_id)
+        await _send_reply(phone, "On it! Our team will be in touch shortly.", tenant_id)
         return
 
     try:
@@ -6686,4 +7049,4 @@ async def _forward_to_n8n_commerce(
             )
     except Exception as exc:
         logger.warning("n8n commerce forward failed (non-fatal): %s", exc)
-        await _send_reply(phone, "Got it! We'll be in touch in a few minutes. 🐟", tenant_id)
+        await _send_reply(phone, "Got it! We'll be in touch in a few minutes.", tenant_id)

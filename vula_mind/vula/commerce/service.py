@@ -620,23 +620,31 @@ async def _attribute_broadcast(tenant_id: str, phone: str) -> Optional[str]:
         return None
 
 
-async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
-    items = cart.get("commerce_cart_items", [])
-    # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
-    subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
+def delivery_fee_cents(tenant_id: str, cart: dict, subtotal_cents: int) -> int:
+    """The delivery fee an order of this cart will actually be charged — the single source for
+    create_order AND every preview (view_cart, review_order), so what the customer is shown is
+    what they pay. Tenant delivery-fee rules (migration 070) override the cart's snapshotted
+    default: configured standard fee, and free delivery at/above the configured subtotal."""
     delivery = cart.get("delivery_cents", 8000)
-    # Tenant delivery-fee rules (migration 070) override the cart's snapshotted default:
-    # configured standard fee, and free delivery at/above the configured subtotal.
     try:
         from vula.commerce.order_workflow import get_order_settings
         _cfg = get_order_settings(tenant_id)
         if _cfg.get("delivery_fee_cents") is not None:
             delivery = int(_cfg["delivery_fee_cents"])
         free_over = _cfg.get("free_delivery_over_cents")
-        if free_over and subtotal >= int(free_over):
+        if free_over and subtotal_cents >= int(free_over):
             delivery = 0
     except Exception:
         pass
+    return delivery
+
+
+async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
+    items = cart.get("commerce_cart_items", [])
+    # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
+    subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
+    # A collection (pickup) order is never charged delivery (migration 177).
+    delivery = 0 if checkout_data.get("fulfilment") == "collection" else delivery_fee_cents(tenant_id, cart, subtotal)
 
     # Discount code (migration 091) — resolved authoritatively here regardless of any
     # client-side preview, since the actual amount charged must never trust the client.
@@ -763,7 +771,39 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     ]
     _client().table("commerce_order_items").insert(order_items).execute()
 
+    # The cart is spent — convert it so the next order starts empty. WhatsApp carts are keyed
+    # by the customer's phone (one long-lived "active" cart per number), so without this the
+    # next order re-charged every item from the previous one and a repeated "yes" placed a
+    # duplicate. Never fails the order: it's already placed and the items are recorded.
+    try:
+        await clear_cart(cart["id"])
+    except Exception as exc:
+        logger.warning("cart %s not cleared after order %s: %s", cart.get("id"), order_id, exc)
+
     return result.data[0]
+
+
+async def expire_abandoned_online_orders(tenant_id: str, older_than_hours: int = 24) -> int:
+    """Cancel ONLINE-payment orders still unpaid after `older_than_hours` and release the stock
+    reserved for them at checkout (migration 122). Before this nothing ever expired them, so an
+    abandoned card checkout held its stock forever. COD/EFT orders are left alone — they're
+    legitimately unpaid until delivery / the transfer clears. Returns how many expired."""
+    from datetime import datetime, timedelta, timezone as _tz
+    cutoff = (datetime.now(_tz.utc) - timedelta(hours=older_than_hours)).isoformat()
+    rows = (_client().table("commerce_orders").select("id,display_id")
+            .eq("tenant_id", tenant_id).eq("status", "pending_payment").eq("payment_method", "online")
+            .lt("created_at", cutoff).limit(200).execute().data or [])
+    n = 0
+    for o in rows:
+        res = (_client().table("commerce_orders")
+               .update({"status": "cancelled", "updated_at": _now()})
+               .eq("id", o["id"]).eq("status", "pending_payment").execute())
+        if res.data:
+            await apply_order_stock(o["id"], restore=True)
+            n += 1
+    if n:
+        logger.info("expired %d abandoned online order(s) for %s", n, tenant_id)
+    return n
 
 
 async def list_orders(
@@ -785,6 +825,36 @@ async def list_orders(
     return result.data or []
 
 
+def orders_for_phone(tenant_id: str, phone: str, columns: str = "*",
+                     exclude_statuses: Optional[List[str]] = None, limit: int = 20) -> List[dict]:
+    """This customer's orders, newest first, matched on the last 9 phone digits.
+
+    2026-09-25 review: every caller used to load the tenant's latest 30-50 orders and filter by
+    phone in Python, so once a shop had more orders than that a returning customer's history
+    was invisible (no reorder, no saved address, "couldn't find your order"). The suffix match
+    now runs in the database; if stored numbers carry spaces/dashes that defeat it, a wider
+    Python scan (the old behaviour, 500 rows) is the fallback."""
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if len(digits) < 9:
+        return []
+    tail = digits[-9:]
+
+    def _mine(rows):
+        return [o for o in rows
+                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(tail)]
+
+    def _q(n):
+        q = _client().table("commerce_orders").select(columns).eq("tenant_id", tenant_id)
+        if exclude_statuses:
+            q = q.not_.in_("status", exclude_statuses)
+        return q.order("created_at", desc=True).limit(n)
+
+    rows = _mine(_q(limit).ilike("customer_phone", f"%{tail}").execute().data or [])
+    if not rows:
+        rows = _mine(_q(500).execute().data or [])[:limit]
+    return rows
+
+
 async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     """Find this customer's most recent order and return its line items, for WhatsApp's
     'reorder'/'same as last time' shortcut. Matches on the last 9 digits of the phone number
@@ -794,11 +864,7 @@ async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     digits = "".join(c for c in (phone or "") if c.isdigit())
     if not digits:
         raise ValueError("no phone number to look up")
-    orders = (_client().table("commerce_orders")
-              .select("id,display_id,customer_phone,created_at")
-              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(50).execute().data or [])
-    mine = [o for o in orders
-            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
+    mine = orders_for_phone(tenant_id, phone, "id,display_id,customer_phone,created_at", limit=1)
     if not mine:
         raise ValueError("no previous order found to repeat")
     last = await get_order(mine[0]["id"])
@@ -912,17 +978,13 @@ async def get_customer_profile(tenant_id: str, phone: str) -> Optional[dict]:
     if not digits:
         return None
     try:
-        orders = (_client().table("commerce_orders")
-                  .select("display_id,customer_name,customer_phone,customer_email,"
-                          "delivery_address,delivery_slot,created_at")
-                  .eq("tenant_id", tenant_id)
-                  .not_.in_("status", ["cancelled", "refunded"])
-                  .order("created_at", desc=True).limit(50).execute().data or [])
+        mine = orders_for_phone(tenant_id, phone,
+                                "display_id,customer_name,customer_phone,customer_email,"
+                                "delivery_address,delivery_slot,created_at",
+                                exclude_statuses=["cancelled", "refunded"], limit=1)
     except Exception as exc:  # never block a live order on a profile lookup
         logger.warning("get_customer_profile lookup failed (tenant=%s): %s", tenant_id, exc)
         return None
-    mine = [o for o in orders
-            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
     if not mine:
         return None
     last = mine[0]
@@ -1298,7 +1360,8 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
         "assigned_to": session.get("assigned_to"),
         "agent_note": session.get("agent_note"),
         "tags": session.get("tags") or [],
-        "messages": [{"role": m["role"], "content": m["content"], "created_at": m.get("created_at")} for m in messages],
+        "messages": [{"id": m.get("id"), "role": m["role"], "content": m["content"],
+                      "created_at": m.get("created_at")} for m in messages],
     }
 
 
@@ -1320,7 +1383,7 @@ async def get_recent_messages(tenant_id: str, session_id: str, limit: int = DEFA
     q = (
         _client()
         .table("commerce_conversation_messages")
-        .select("role,content,created_at")
+        .select("id,role,content,created_at")
         .eq("tenant_id", tenant_id)
         .eq("session_id", session_id)
     )
@@ -1519,7 +1582,7 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     return result.data[0]
 
 
-async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
+async def send_order_invoice(tenant_id: str, order_id: str, with_pay_link: bool = True) -> Optional[dict]:
     """Auto-generate an invoice for a just-placed order and WhatsApp it to the customer —
     the invoice doubles as the payment request, not a post-payment receipt. Self-contained
     and safe to call fire-and-forget: never raises, so a PDF/WhatsApp hiccup can never break
@@ -1568,25 +1631,29 @@ async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
 
     # Best-effort "Pay now" link — a connected gateway is optional, so this never blocks the
     # invoice itself from being created/sent if no provider is set up or the call fails.
-    try:
-        from vula import payments as _payments
-        api_base = "https://vula-group-production.up.railway.app"
-        row = _payments.default_provider_row(tenant_id)
-        provider = row["provider"] if row else "yoco"
-        link = await _payments.create_pay_link(
-            tenant_id, amount_cents=int(invoice["total_cents"]), reference=invoice["id"],
-            description=f"Invoice {invoice.get('invoice_number') or ''}".strip(),
-            success_url=f"{api_base}/payment/success?invoice={invoice['id']}",
-            cancel_url=f"{api_base}/payment/cancel?invoice={invoice['id']}",
-            notify_url=f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}",
-            customer={"email": invoice.get("customer_email"), "phone": phone})
-        if link and link.url:
-            _client().table("commerce_invoices").update(
-                {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id")}
-            ).eq("id", invoice["id"]).execute()
-            invoice["pay_url"] = link.url
-    except Exception as exc:
-        logger.debug("send_order_invoice: pay-link skipped for invoice %s: %s", invoice.get("id"), exc)
+    # with_pay_link=False when the order already carries its own checkout/pay link: two live
+    # links for one order let a customer pay twice.
+    if with_pay_link:
+        try:
+            from vula import payments as _payments
+            from config import settings as _cfg
+            api_base = _cfg.public_base_url.rstrip("/")
+            row = _payments.default_provider_row(tenant_id)
+            provider = row["provider"] if row else "yoco"
+            link = await _payments.create_pay_link(
+                tenant_id, amount_cents=int(invoice["total_cents"]), reference=invoice["id"],
+                description=f"Invoice {invoice.get('invoice_number') or ''}".strip(),
+                success_url=f"{api_base}/payment/success?invoice={invoice['id']}",
+                cancel_url=f"{api_base}/payment/cancel?invoice={invoice['id']}",
+                notify_url=f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}",
+                customer={"email": invoice.get("customer_email"), "phone": phone})
+            if link and link.url:
+                _client().table("commerce_invoices").update(
+                    {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id")}
+                ).eq("id", invoice["id"]).execute()
+                invoice["pay_url"] = link.url
+        except Exception as exc:
+            logger.debug("send_order_invoice: pay-link skipped for invoice %s: %s", invoice.get("id"), exc)
 
     try:
         from vula.commerce.pdf import render_invoice_pdf, merge_branding
@@ -1681,7 +1748,35 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
                 ledger.post_invoice_paid(tenant_id, invoice)
         except Exception as exc:
             logger.warning("ledger hook failed for invoice %s: %s", invoice_id, exc)
+        await _settle_linked_order(tenant_id, invoice)
     return invoice
+
+
+async def _settle_linked_order(tenant_id: str, invoice: dict) -> None:
+    """An order's auto-generated invoice (send_order_invoice) was paid → the order is paid too.
+
+    Before this the order stayed pending_payment: never dispatched, and the unpaid-order chase
+    kept nagging a customer who had already paid. The order row is flipped directly (NOT via
+    update_order_status) because the revenue was just posted to the ledger for the invoice —
+    posting it again for the order would double-count it. Conditional on pending_payment so a
+    repeat call is a no-op. Never raises."""
+    order_id = invoice.get("order_id")
+    if not order_id or (invoice.get("direction") or "outbound") == "inbound":
+        return
+    try:
+        res = (_client().table("commerce_orders")
+               .update({"status": "paid", "updated_at": _now()})
+               .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment")
+               .execute())
+        if not res.data:
+            return
+        o = res.data[0]
+        from vula.api.yoco import _notify_order_paid
+        await _notify_order_paid(tenant_id, o.get("display_id") or "", order_id, o.get("customer_phone"),
+                                 o.get("customer_name") or "", int(o.get("total_cents") or 0))
+    except Exception as exc:
+        logger.warning("linked order %s not settled after invoice %s paid: %s",
+                       order_id, invoice.get("id"), exc)
 
 
 async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
@@ -1846,6 +1941,8 @@ async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: 
         ledger.post_invoice_payment(tenant_id, invoice, created_payment)
     except Exception as exc:
         logger.warning("ledger hook failed for invoice payment %s: %s", created_payment.get("id"), exc)
+    if new_status == "paid":
+        await _settle_linked_order(tenant_id, updated)
 
     return {**updated, "payment": created_payment, "total_paid_cents": total_paid,
             "balance_due_cents": max(0, total_due - total_paid)}
@@ -3547,7 +3644,25 @@ async def answer_supplier_history(tenant_id: str, question: str, phone: str = ""
         return None
     result = await find_filed_document(tenant_id, names[0], category="Invoice")
     xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question, result, names[0])
-    return format_supplier_history_reply(result, query=names[0], question=question, xlsx_sent=xlsx_sent)
+    return _with_period_note(
+        format_supplier_history_reply(result, query=names[0], question=question, xlsx_sent=xlsx_sent),
+        question)
+
+
+_PERIOD_RE = re.compile(
+    r"\b(this|last|past|previous)\s+(week|month|quarter|year)\b|\btoday\b|\byesterday\b"
+    r"|\bsince\b|\bin\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\blast\s+\d+\s+(days|weeks|months)\b", re.IGNORECASE)
+
+
+def _with_period_note(reply: Optional[str], question: str) -> Optional[str]:
+    """The filed-document total is all-time; answering "this month?" with it unlabelled read as
+    that month's spend. Say what the figure is rather than imply a period."""
+    if reply and _PERIOD_RE.search(question or ""):
+        reply += ("\n\nNote: that's the all-time total across these documents — I can't split "
+                  "supplier spend by date yet, so check the dates listed above for the period "
+                  "you asked about.")
+    return reply
 
 
 # Matches the head line format_supplier_history_reply always writes first, as it appears once
@@ -3599,7 +3714,8 @@ async def answer_supplier_history_continuation(tenant_id: str, history: str, que
     if result.get("resolved_supplier") and _norm_name(result["resolved_supplier"]) != _norm_name(supplier):
         return None
     xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question, result, supplier)
-    return format_supplier_history_reply(result, question=question, xlsx_sent=xlsx_sent)
+    return _with_period_note(format_supplier_history_reply(result, question=question, xlsx_sent=xlsx_sent),
+                             question)
 
 
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:

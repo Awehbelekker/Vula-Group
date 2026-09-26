@@ -32,7 +32,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
@@ -44,10 +44,11 @@ router = APIRouter(tags=["draft"])
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def _require_auth(api_key: str | None = Security(_api_key_header)) -> None:
-    import secrets as _s
-    if settings.api_key and (not api_key or not _s.compare_digest(api_key, settings.api_key)):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+async def _require_auth(request: Request, api_key: str | None = Security(_api_key_header)) -> None:
+    """API key, a master login, or a signed-in member of the request's tenant (shared rule —
+    vula/api/master_auth.py::require_auth)."""
+    from vula.api.master_auth import require_auth
+    await require_auth(api_key, request)
 
 
 # ── Document type definitions ──────────────────────────────────────────────────
@@ -464,23 +465,26 @@ async def draft_history(tenant_id: str, limit: int = 20) -> dict:
 
 
 @router.get("/draft/{draft_id}", dependencies=[Depends(_require_auth)])
-async def get_draft(draft_id: str) -> dict:
-    """Retrieve a previously generated draft by ID."""
+async def get_draft(draft_id: str, tenant_id: Optional[str] = None) -> dict:
+    """Retrieve a previously generated draft by ID. ?tenant_id= is how a signed-in tenant
+    member authenticates (require_auth) — the draft must then belong to that tenant."""
     draft = _store.get(draft_id)
-    if not draft:
+    if not draft or (tenant_id and draft.get("tenant_id") != tenant_id):
         raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found.")
     return draft
 
 
 @router.get("/draft/{draft_id}/pdf", dependencies=[Depends(_require_auth)])
-async def get_draft_pdf(draft_id: str, recipient: Optional[str] = None, sign_off: Optional[str] = None):
+async def get_draft_pdf(draft_id: str, recipient: Optional[str] = None, sign_off: Optional[str] = None,
+                        tenant_id: Optional[str] = None):
     """Render a previously generated draft onto the tenant's branded letterhead as a PDF.
 
     ?recipient= and ?sign_off= are optional plain-text overrides (the drafted content
-    usually already includes these as part of its generated sections).
+    usually already includes these as part of its generated sections). ?tenant_id= scopes
+    it the same way as get_draft.
     """
     draft = _store.get(draft_id)
-    if not draft:
+    if not draft or (tenant_id and draft.get("tenant_id") != tenant_id):
         raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found.")
 
     doc_config = DOCUMENT_TYPES.get(draft["doc_type"], {})

@@ -102,6 +102,21 @@ async def set_status(tenant_id: str, sub_id: str, status: str) -> dict:
     return (res.data or [{}])[0]
 
 
+async def pause_for_phone(tenant_id: str, phone: str) -> int:
+    """Pause every active subscription for this customer — what "Reply STOP anytime to pause"
+    promises. Matches the stored phone in any of its common formats. Returns how many paused."""
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if not tenant_id or not digits:
+        return 0
+    local = "0" + digits[2:] if digits.startswith("27") else digits
+    variants = list({digits, "+" + digits, local})
+    res = (_client().table("commerce_subscriptions")
+           .update({"status": "paused", "updated_at": _now()})
+           .eq("tenant_id", tenant_id).eq("status", "active").in_("customer_phone", variants)
+           .execute())
+    return len(res.data or [])
+
+
 async def update(tenant_id: str, sub_id: str, patch: Dict[str, Any]) -> dict:
     allowed = {"items", "cadence", "next_run", "delivery_cents", "payment_method",
                "delivery_address", "delivery_slot", "customer_name", "note"}
@@ -115,6 +130,27 @@ async def update(tenant_id: str, sub_id: str, patch: Dict[str, Any]) -> dict:
 
 
 # ── Order creation + scheduler ────────────────────────────────────────────────
+
+async def _repriced(sub: dict) -> dict:
+    """The subscription with each item at TODAY's product price. Items stored their price on the
+    day the subscription was created and were charged that forever, however prices moved.
+    An item whose product can't be found keeps its stored price."""
+    from vula.commerce import service
+    items = []
+    for i in sub.get("items") or []:
+        i = dict(i)
+        pid = i.get("product_id")
+        if pid and not i.get("variant_id"):   # a variant has its own price — leave it
+            try:
+                rows = (service._client().table("commerce_products").select("price_cents")
+                        .eq("tenant_id", sub["tenant_id"]).eq("id", pid).limit(1).execute().data or [])
+                if rows and rows[0].get("price_cents") is not None:
+                    i["unit_price_cents"] = int(rows[0]["price_cents"])
+            except Exception as exc:
+                log.debug("subscription reprice skipped for %s: %s", pid, exc)
+        items.append(i)
+    return {**sub, "items": items}
+
 
 async def _place_order(sub: dict) -> Optional[dict]:
     """Create a real commerce_order from a subscription's items."""
@@ -183,8 +219,8 @@ async def _notify(sub: dict, order: dict) -> None:
                else "Reply here to arrange payment." )
         await _send_reply(phone, (
             f"Hi {sub.get('customer_name') or 'there'}! Your standing order *{order.get('display_id')}* "
-            f"is booked in ({total}). {pay} Reply STOP anytime to pause. 🐟"
-        ), sub["tenant_id"])
+            f"is booked in ({total}). {pay} Reply STOP anytime to pause your repeat order."
+        ), sub["tenant_id"], idem_key=f"standing_order:{order.get('id') or order.get('display_id')}")
     except Exception as exc:
         log.debug("subscription notify skipped: %s", exc)
 
@@ -205,9 +241,6 @@ async def process_due(tenant_id: Optional[str] = None) -> int:
     made = 0
     for sub in due:
         try:
-            order = await _place_order(sub)
-            if not order:
-                continue
             # advance next_run from the scheduled date (not today) so cadence doesn't drift.
             try:
                 base = date.fromisoformat(sub["next_run"])
@@ -217,9 +250,17 @@ async def process_due(tenant_id: Optional[str] = None) -> int:
             # if we're catching up (missed runs), keep advancing past today
             while nxt <= _today():
                 nxt = _advance(nxt, sub.get("cadence") or "weekly")
-            _client().table("commerce_subscriptions").update(
+            # Claim the run BEFORE creating the order (conditional on next_run unchanged): the
+            # order used to be created first, so a crash between the two — or a second worker
+            # polling at the same time — created a duplicate order for the customer.
+            claimed = (_client().table("commerce_subscriptions").update(
                 {"next_run": nxt.isoformat(), "last_run": _now(), "updated_at": _now()}
-            ).eq("id", sub["id"]).execute()
+            ).eq("id", sub["id"]).eq("next_run", sub["next_run"]).execute().data)
+            if not claimed:
+                continue
+            order = await _place_order(await _repriced(sub))
+            if not order:
+                continue
             await _notify(sub, order)
             made += 1
         except Exception as exc:

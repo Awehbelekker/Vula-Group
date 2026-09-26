@@ -185,7 +185,8 @@ def test_probe_migrations_checks_the_specific_column_for_column_only_entries():
     mock_table.select.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
-    with patch.object(master, "_MIGRATION_PROBES", [("108", "vula_tenants", "Billing paid column", "paid")]):
+    with patch.object(master, "_MIGRATION_PROBES", [("108", "vula_tenants", "Billing paid column", "paid")]), \
+         patch("vula.startup_checks._SENTINELS", []):
         result = master._probe_migrations(mock_db)
     mock_table.select.assert_called_once_with("paid")
     assert result == [{"migration": "108", "table": "vula_tenants",
@@ -197,6 +198,7 @@ def test_probe_migrations_flags_not_applied_on_missing_column():
     mock_table.select.return_value.limit.return_value.execute.side_effect = RuntimeError("column paid does not exist")
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
-    with patch.object(master, "_MIGRATION_PROBES", [("108", "vula_tenants", "Billing paid column", "paid")]):
+    with patch.object(master, "_MIGRATION_PROBES", [("108", "vula_tenants", "Billing paid column", "paid")]), \
+         patch("vula.startup_checks._SENTINELS", []):
         result = master._probe_migrations(mock_db)
     assert result[0]["applied"] is False

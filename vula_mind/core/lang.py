@@ -57,7 +57,10 @@ _EN_MARKERS = {
     "want", "would", "like", "have", "order", "cash", "card", "deliver", "delivery",
     "please", "cancel", "confirm", "when", "today", "tomorrow", "kg", "much",
 }
-_MARKERS_WITH_EN = {**_MARKERS, "en": _EN_MARKERS}
+# English first: detect_language keeps the first language on a tie, so a message like "I'd
+# like 2 more" (one English marker, one Afrikaans — "more" is Afrikaans for tomorrow) stays
+# English instead of flipping the whole conversation to Afrikaans.
+_MARKERS_WITH_EN = {"en": _EN_MARKERS, **_MARKERS}
 
 
 def detect_language(text: Optional[str]) -> Optional[str]:

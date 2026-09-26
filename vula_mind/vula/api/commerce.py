@@ -15,14 +15,15 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from vula.api.master_auth import require_auth
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from config import settings
 from vula.commerce import service
 from vula.commerce.models import (
     AddToCartRequest,
@@ -126,9 +127,17 @@ async def create_review(tenant_id: str, body: ReviewIn):
     service._client().table("commerce_reviews").insert(row).execute()
     service._rating_cache.pop(tenant_id, None)  # bust cache so stars update
     if body.order_id:
+        # Public endpoint: only the order's own customer may rate it, and only once — anyone
+        # knowing an order id could otherwise overwrite its rating.
         try:
-            service._client().table("commerce_orders").update(
-                {"review_rating": body.rating}).eq("id", body.order_id).eq("tenant_id", tenant_id).execute()
+            o = (service._client().table("commerce_orders").select("customer_phone,review_rating")
+                 .eq("id", body.order_id).eq("tenant_id", tenant_id).limit(1).execute().data or [])
+            same = o and _norm_phone(body.customer_phone)[-9:] and \
+                _norm_phone(o[0].get("customer_phone"))[-9:] == _norm_phone(body.customer_phone)[-9:]
+            if same and o[0].get("review_rating") is None:
+                service._client().table("commerce_orders").update(
+                    {"review_rating": body.rating}).eq("id", body.order_id).eq("tenant_id", tenant_id) \
+                    .is_("review_rating", "null").execute()
         except Exception:
             pass
     return {"ok": True}
@@ -371,14 +380,27 @@ async def public_store_settings(tenant_id: str):
 
 # ── Cart ─────────────────────────────────────────────────────────────────────
 
+_SERVER_SESSION_RE = re.compile(r"^(\+?\d{9,15}|manual-.*|admin:.*)$")
+
+
+def _require_public_session(session_id: str) -> None:
+    """The public cart/checkout endpoints take the storefront's own random session id. A
+    WhatsApp cart's session id IS the customer's phone number (and manual/admin sessions have
+    fixed prefixes), so without this anyone could read, empty, refill or check out a WhatsApp
+    customer's cart just by knowing their number."""
+    if _SERVER_SESSION_RE.match((session_id or "").strip()):
+        raise HTTPException(status_code=400, detail="Invalid cart session.")
+
 @router.get("/{tenant_id}/cart/{session_id}")
 async def get_cart(tenant_id: str, session_id: str, phone: Optional[str] = Query(None)):
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=phone)
     return cart
 
 
 @router.post("/{tenant_id}/cart/{session_id}/add")
 async def add_to_cart(tenant_id: str, session_id: str, body: AddToCartRequest):
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
     item = await service.add_to_cart(tenant_id, cart["id"], str(body.product_id), body.quantity,
                                      variant_id=str(body.variant_id) if body.variant_id else None)
@@ -387,6 +409,7 @@ async def add_to_cart(tenant_id: str, session_id: str, body: AddToCartRequest):
 
 @router.delete("/{tenant_id}/cart/{session_id}/{item_id}")
 async def remove_from_cart(tenant_id: str, session_id: str, item_id: str):
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id)
     await service.remove_from_cart(cart["id"], item_id)
     return {"removed": item_id}
@@ -410,6 +433,7 @@ async def sync_cart(tenant_id: str, session_id: str, body: CartSyncRequest):
     endpoint, removals/quantity changes never reached the server, so a customer could be
     charged for items they removed. The storefront now calls this on every edit AND right
     before checkout as a final reconcile."""
+    _require_public_session(session_id)
     cart = await service.get_or_create_cart(tenant_id, session_id, customer_phone=body.customer_phone)
     db = service._client()
     db.table("commerce_cart_items").delete().eq("cart_id", cart["id"]).execute()
@@ -513,6 +537,7 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
         raise HTTPException(status_code=403, detail="This store isn't accepting orders right now.")
 
     # Fetch cart
+    _require_public_session(body.session_id)
     cart = await service.get_or_create_cart(tenant_id, body.session_id, customer_phone=body.customer_phone)
     items = cart.get("commerce_cart_items", [])
     if not items:
@@ -571,7 +596,8 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     # background side-effects (statement ingestion jobs).
     import asyncio
     from vula.commerce.service import send_order_invoice
-    asyncio.create_task(send_order_invoice(tenant_id, order["id"]))
+    # with_pay_link=False: the storefront's Yoco checkout above is this order's payment link.
+    asyncio.create_task(send_order_invoice(tenant_id, order["id"], with_pay_link=False))
 
     return {
         "order_id": order["id"],
@@ -728,7 +754,8 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
             first = (order.get("customer_name") or "").split(" ")[0]
             sent = await _send_reply(
                 order["customer_phone"],
-                (f"Hi {first}! 🐟 Your order {order.get('display_id') or ''} has been delivered — "
+                (f"Hi {first}! Your {_tenants_display(tenant_id)} order {order.get('display_id') or ''} "
+                 "has been delivered — "
                  "we hope everything is perfect. How was it? Reply with a rating from 1 to 5 "
                  "(5 = excellent). Thank you!").replace("  ", " "),
                 tenant_id,
@@ -1694,6 +1721,66 @@ async def admin_agent_teach(tenant_id: str, body: TeachRequest):
     return {"ok": True, "learned": q}
 
 
+class ReplyFeedback(BaseModel):
+    message_id: str
+    rating: str                      # "up" | "down"
+    question: Optional[str] = None   # the customer message this reply answered
+    answer: Optional[str] = None     # the AI reply being rated
+    correction: Optional[str] = None # what it should have said (optional, with "down")
+
+
+@router.post("/{tenant_id}/admin/conversations/{session_id}/feedback")
+async def admin_reply_feedback(tenant_id: str, session_id: str, body: ReplyFeedback):
+    """👍/👎 on an AI reply in the Inbox (migration 176). A correction is also TAUGHT (same
+    path as agent-teach) so the assistant uses it next time; 👎 rows are the raw material for
+    new eval cases (vula_mind/evals). One rating per message — re-rating replaces it."""
+    if body.rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
+    row = {"tenant_id": tenant_id, "session_id": session_id, "message_id": body.message_id,
+           "rating": body.rating, "question": (body.question or "")[:2000] or None,
+           "answer": (body.answer or "")[:4000] or None,
+           "correction": (body.correction or "").strip()[:4000] or None}
+    try:
+        service._client().table("vula_reply_feedback").upsert(
+            row, on_conflict="tenant_id,message_id").execute()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"{exc} (run migration 176?)")
+    taught = False
+    if row["correction"] and row["question"]:
+        res = await admin_agent_teach(tenant_id, TeachRequest(question=row["question"],
+                                                              answer=row["correction"]))
+        taught = bool(res.get("ok"))
+    learned = False
+    if row["question"]:
+        try:
+            from core.memory.reflection import ReflectionAgent
+            learned = ReflectionAgent().apply_feedback(tenant_id, row["question"], body.rating == "up")
+        except Exception as exc:
+            log.debug("feedback -> reflection skipped: %s", exc)
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-reply-feedback", task="rating", tenant_id=tenant_id,
+             outcome=body.rating, extra={"taught": taught, "routing_updated": learned})
+    except Exception:
+        pass
+    return {"ok": True, "rating": body.rating, "taught": taught, "routing_updated": learned}
+
+
+@router.get("/{tenant_id}/admin/feedback")
+async def admin_list_feedback(tenant_id: str, rating: Optional[str] = Query(None),
+                              limit: int = Query(100, ge=1, le=500)):
+    """Rated replies, newest first — 👎 ones are candidate eval cases."""
+    q = service._client().table("vula_reply_feedback").select("*").eq("tenant_id", tenant_id)
+    if rating in ("up", "down"):
+        q = q.eq("rating", rating)
+    try:
+        rows = q.order("created_at", desc=True).limit(limit).execute().data or []
+    except Exception as exc:
+        log.debug("feedback list skipped (run migration 176?): %s", exc)
+        rows = []
+    return {"tenant_id": tenant_id, "feedback": rows}
+
+
 @router.post("/{tenant_id}/admin/agent-unteach")
 async def admin_agent_unteach(tenant_id: str, body: dict):
     """Remove something previously taught (by the same question)."""
@@ -2147,8 +2234,12 @@ async def admin_bank_statement_from_text(tenant_id: str, body: dict):
         txns = await bank_rec.extract_transactions(text)
         if not txns:
             return {"error": "no transactions found in the text"}
-        return await bank_rec.reconcile(tenant_id, txns,
-                                        source_file=(body or {}).get("filename") or "pasted-statement")
+        ok = bank_rec.reconciliation_ok(txns)
+        result = await bank_rec.reconcile(tenant_id, txns,
+                                          source_file=(body or {}).get("filename") or "pasted-statement",
+                                          auto_settle=ok)
+        result["extraction_reconciled"] = ok
+        return result
 
     if (body or {}).get("background", True):
         _statement_job(tenant_id, _run())
@@ -2427,6 +2518,9 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
         try:
             res = db.table("commerce_expenses").insert(exp).execute()
             patch = {"matched_expense_id": (res.data or [exp])[0].get("id"), "match_status": "matched"}
+            # The bank debit already happened — book it to the ledger now.
+            from vula.commerce import expenses as _expenses
+            _expenses.post_to_ledger(tenant_id, (res.data or [exp])[0])
         except Exception as exc:
             return {"error": str(exc)}
     elif body.action == "ignore":
@@ -3893,7 +3987,7 @@ async def admin_delete_recurring(tenant_id: str, rec_id: str):
     return {"deleted": rec_id}
 
 
-@router.post("/cron/recurring-invoices")
+@router.post("/cron/recurring-invoices", dependencies=[Depends(require_auth)])
 async def cron_recurring_invoices():
     """Generate invoices for all due recurring templates (called by the scheduler)."""
     return {"generated": await service.process_due_recurring()}
@@ -3950,7 +4044,8 @@ async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
     from vula import payments
     from vula.api import tenants as _tenants
     store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
-    api_base = "https://vula-group-production.up.railway.app"
+    from config import settings as _cfg
+    api_base = _cfg.public_base_url.rstrip("/")
     row = payments.default_provider_row(tenant_id)
     provider = row["provider"] if row else "yoco"
     notify_url = f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}"
@@ -4248,6 +4343,17 @@ def record_inbound_consent(tenant_id: str, phone: str, source: str = "inbound") 
         log.debug("consent record skipped (run migration 020?): %s", exc)
 
 
+def record_opt_in(tenant_id: str, phone: str, source: str = "start_keyword") -> None:
+    """Explicit opt-in (START) — the one path allowed to overturn a previous opt-out."""
+    p = _norm_phone(phone)
+    if not tenant_id or not p:
+        return
+    service._client().table("commerce_consent").upsert({
+        "tenant_id": tenant_id, "phone": p, "status": "opted_in",
+        "source": source, "updated_at": "now()"}, on_conflict="tenant_id,phone").execute()
+    _log_consent_event(tenant_id, p, "opted_in", source)
+
+
 def record_opt_out(tenant_id: str, phone: str, source: str = "stop_keyword") -> None:
     """Persist a do-not-contact suppression (kept even after PII deletion)."""
     p = _norm_phone(phone)
@@ -4327,7 +4433,6 @@ async def admin_send_email_campaign(tenant_id: str, body: dict):
         name:             campaign label
         test_email:       send only to this address (skips audience + suppression)
     """
-    from urllib.parse import quote
     from uuid import uuid4
     from config import settings as _settings
     from vula.email_imap import service as email_service
@@ -4402,7 +4507,8 @@ async def admin_send_email_campaign(tenant_id: str, body: dict):
         em = c["email"]
         full_body = msg_body
         if base:
-            unsub = f"{base}/email/unsubscribe?tenant={quote(tenant_id)}&email={quote(em)}"
+            from vula.api.email_public import unsubscribe_url
+            unsub = unsubscribe_url(base, tenant_id, em)
             full_body = f"{msg_body}\n\n---\nDon't want these emails? Unsubscribe: {unsub}"
         messages.append({"to": em, "subject": subject, "body": full_body})
 
@@ -4556,9 +4662,8 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         }
 
     # ── Live send ────────────────────────────────────────────────────────────
-    # Channel resolution: Meta (templates) preferred; Twilio fallback for
-    # free-text broadcasts (works within the 24h customer session window).
-    body_text = body.get("body", "")  # free-text alternative to a Meta template
+    # Broadcasts go out as Meta templates only — a proactive message outside the 24h window
+    # must be an approved template (the Twilio free-text fallback was removed 2026-09-25).
     # Optional trackable link — one short code per recipient, so a click can be attributed to
     # who clicked (not just "someone did"). On free text the link is embedded directly; on a
     # Meta template it fills a URL button's dynamic {{1}} suffix (the button's own URL must be
@@ -4568,24 +4673,25 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
     header_image_url = (body.get("header_image_url") or "").strip()
     from vula.api.whatsapp import _get_tenant_wa_creds
     creds = await _get_tenant_wa_creds(tenant_id)
-    use_twilio = (not creds) and bool(
-        getattr(settings, "twilio_account_sid", "")
-        and getattr(settings, "twilio_auth_token", "")
-        and getattr(settings, "twilio_whatsapp_from", "")
-    )
-
-    if not creds and not use_twilio:
+    if not template:
+        # Free text is fine for drafting and the dry-run preview, but a live broadcast via Meta
+        # must be an approved template — this path used to send an empty template name to every
+        # recipient and fail them all.
+        raise HTTPException(status_code=400, detail=(
+            "Broadcasts must use an approved WhatsApp template — pick one, or turn this text "
+            "into a new template in the 📨 Templates tab."))
+    if not creds:
         raise HTTPException(
             status_code=503,
-            detail="No WhatsApp channel configured (connect Meta or set Twilio creds).",
+            detail="No WhatsApp channel configured — connect WhatsApp in Settings first.",
         )
 
     # Rich-media metadata for the selected template (header image, buttons needing a dynamic
     # parameter) — looked up once, not per-recipient.
     tpl_row = None
-    if not use_twilio and template:
+    if template:
         try:
-            tpl_row = (db.table("commerce_wa_templates").select("header_type,buttons")
+            tpl_row = (db.table("commerce_wa_templates").select("header_type,buttons,param_count")
                        .eq("tenant_id", tenant_id).eq("name", template)
                        .limit(1).execute().data or [None])[0]
         except Exception:
@@ -4602,36 +4708,27 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
         "status": "sending", "recipient_count": len(recipients),
     }).execute()
 
-    sent = failed = 0
-    errors: list[str] = []
-    recipient_rows: list[dict] = []
-    # Pace sends — Meta's Cloud API throughput cap (~80 msg/s on standard tier) and per-recipient
-    # pair-rate limits mean a tight unthrottled loop risks silent throttling/blocking at real list
-    # sizes (confirmed gap, 2026-07-15: this loop had zero pacing before). 10/s is comfortably under
-    # every published tier while still finishing a 1,000-contact batch in under 2 minutes.
-    import asyncio as _asyncio
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        for i, c in enumerate(recipients):
-            if i:
-                await _asyncio.sleep(0.1)
-            number = _norm_phone(c.get("phone"))
-            short_code = None
-            try:
-                if use_twilio:
-                    # Twilio free-text broadcast
-                    from_addr = settings.twilio_whatsapp_from
-                    if not from_addr.startswith("whatsapp:"):
-                        from_addr = f"whatsapp:{from_addr}"
-                    msg = body_text or f"Hi from {name}!"
-                    if target_url:
-                        short_code = uuid4().hex[:10]
-                        msg = f"{msg}\n\n{settings.public_base_url.rstrip('/')}/l/{short_code}"
-                    resp = await client.post(
-                        f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json",
-                        auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-                        data={"From": from_addr, "To": f"whatsapp:+{number}", "Body": msg[:1600]},
-                    )
-                else:
+    # Template body placeholders ({{1}}, {{2}}…): {{1}} is the recipient's first name unless the
+    # caller supplies template_params; Meta rejects a template send whose body parameters are
+    # missing, so every broadcast on a template with a {{1}} used to fail for every recipient.
+    static_params = [str(x) for x in (body.get("template_params") or [])]
+
+    async def _deliver() -> tuple:
+        sent = failed = 0
+        errors: list[str] = []
+        recipient_rows: list[dict] = []
+        # Pace sends — Meta's Cloud API throughput cap (~80 msg/s on standard tier) and per-recipient
+        # pair-rate limits mean a tight unthrottled loop risks silent throttling/blocking at real list
+        # sizes (confirmed gap, 2026-07-15: this loop had zero pacing before). 10/s is comfortably under
+        # every published tier while still finishing a 1,000-contact batch in under 2 minutes.
+        import asyncio as _asyncio
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for i, c in enumerate(recipients):
+                if i:
+                    await _asyncio.sleep(0.1)
+                number = _norm_phone(c.get("phone"))
+                short_code = None
+                try:
                     # Meta template broadcast (compliant for proactive sends)
                     tpl_components: list[dict] = []
                     if tpl_row and tpl_row.get("header_type") == "IMAGE" and header_image_url:
@@ -4642,6 +4739,9 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                         tpl_components.append({"type": "button", "sub_type": "url", "index": "0",
                                                "parameters": [{"type": "text", "text": short_code}]})
                     tpl_payload: dict = {"name": template, "language": {"code": language}}
+                    body_params = _template_body_params(tpl_row, c, static_params)
+                    if body_params:
+                        tpl_components.append({"type": "body", "parameters": body_params})
                     if tpl_components:
                         tpl_payload["components"] = tpl_components
                     resp = await client.post(
@@ -4655,60 +4755,69 @@ async def admin_send_broadcast(tenant_id: str, body: dict):
                             "template": tpl_payload,
                         },
                     )
-                if resp.is_success:
-                    sent += 1
-                    wamid = None
-                    try:
-                        if use_twilio:
-                            wamid = resp.json().get("sid")
-                        else:
-                            wamid = (resp.json().get("messages") or [{}])[0].get("id")
-                    except Exception:
+                    if resp.is_success:
+                        sent += 1
                         wamid = None
-                    row = {"tenant_id": tenant_id, "broadcast_id": log_id,
-                          "phone": number, "wamid": wamid, "status": "sent"}
-                    if short_code:
-                        row["short_code"] = short_code
-                        row["target_url"] = target_url
-                    recipient_rows.append(row)
-                else:
+                        try:
+                            wamid = (resp.json().get("messages") or [{}])[0].get("id")
+                        except Exception:
+                            wamid = None
+                        row = {"tenant_id": tenant_id, "broadcast_id": log_id,
+                              "phone": number, "wamid": wamid, "status": "sent"}
+                        if short_code:
+                            row["short_code"] = short_code
+                            row["target_url"] = target_url
+                        recipient_rows.append(row)
+                    else:
+                        failed += 1
+                        recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
+                                               "phone": number, "status": "failed",
+                                               "error": resp.text[:200]})
+                        if len(errors) < 3:
+                            errors.append(resp.text[:200])
+                except Exception as exc:
                     failed += 1
                     recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
-                                           "phone": number, "status": "failed",
-                                           "error": resp.text[:200]})
+                                           "phone": number, "status": "failed", "error": str(exc)[:200]})
                     if len(errors) < 3:
-                        errors.append(resp.text[:200])
-            except Exception as exc:
-                failed += 1
-                recipient_rows.append({"tenant_id": tenant_id, "broadcast_id": log_id,
-                                       "phone": number, "status": "failed", "error": str(exc)[:200]})
-                if len(errors) < 3:
-                    errors.append(str(exc)[:200])
+                        errors.append(str(exc)[:200])
 
-    # Persist per-recipient rows so Meta status callbacks can update delivery/read.
-    if recipient_rows:
-        try:
-            db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
-        except Exception as exc:
-            log.debug("recipient rows insert retrying without click-tracking cols (run migration 064?): %s", exc)
-            for r in recipient_rows:
-                r.pop("short_code", None)
-                r.pop("target_url", None)
+        # Persist per-recipient rows so Meta status callbacks can update delivery/read.
+        if recipient_rows:
             try:
                 db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
-            except Exception as exc2:
-                log.debug("recipient rows insert skipped (run migration 020?): %s", exc2)
+            except Exception as exc:
+                log.debug("recipient rows insert retrying without click-tracking cols (run migration 064?): %s", exc)
+                for r in recipient_rows:
+                    r.pop("short_code", None)
+                    r.pop("target_url", None)
+                try:
+                    db.table("commerce_broadcast_recipients").insert(recipient_rows).execute()
+                except Exception as exc2:
+                    log.debug("recipient rows insert skipped (run migration 020?): %s", exc2)
 
-    db.table("commerce_broadcast_logs").update({
-        "status": "sent" if sent else "failed",
-        "sent_count": sent,
-        "failed_count": failed,
-        "last_error": errors[0] if errors else None,
-    }).eq("id", log_id).execute()
+        db.table("commerce_broadcast_logs").update({
+            "status": "sent" if sent else "failed",
+            "sent_count": sent,
+            "failed_count": failed,
+            "last_error": errors[0] if errors else None,
+        }).eq("id", log_id).execute()
 
+        return sent, failed, errors
+
+    # Big audiences send in the background (paced at 10/s, a 1,000-contact list takes ~2 min —
+    # far past an HTTP request's patience); the dashboard's broadcast history shows progress.
+    if len(recipients) > 50 and not test_phone:
+        from vula.commerce.background_tasks import run_background
+        run_background(tenant_id, "broadcast_send", _deliver())
+        return {"broadcast_id": log_id, "dry_run": False, "queued": True, "channel": "meta",
+                "template": template, "audience": audience, "recipient_count": len(recipients),
+                "suppressed_count": suppressed_count, "sent": 0, "failed": 0, "errors": None}
+
+    sent, failed, errors = await _deliver()
     return {
         "broadcast_id": log_id, "dry_run": False,
-        "channel": "twilio" if use_twilio else "meta",
+        "channel": "meta",
         "template": template or "(free-text)",
         "audience": audience, "recipient_count": len(recipients),
         "suppressed_count": suppressed_count,
@@ -4764,9 +4873,10 @@ async def admin_add_recipe(tenant_id: str, body: dict):
     if not (title and text):
         raise HTTPException(status_code=400, detail="title and text are required")
     slug = "".join(c if c.isalnum() else "-" for c in title.lower()).strip("-")[:60] or "recipe"
+    from vula.api import tenants as _tenants
     from vula.ingestion.pipeline import VulaIngestionPipeline
     await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
-        content=f"# {title}\n\n{text}\n\n(Off the Hook recipe)", filename=f"recipe-{slug}.md")
+        content=f"# {title}\n\n{text}\n\n({_tenants.display_name(tenant_id)} recipe)", filename=f"recipe-{slug}.md")
     return {"ok": True, "title": title}
 
 
@@ -4822,6 +4932,20 @@ async def process_due_campaigns() -> int:
         return 0
     n = 0
     for camp in due:
+        # Claim first: advance next_run_at (conditional on it being unchanged) BEFORE sending.
+        # Sending first meant a crash/redeploy mid-broadcast, or a second worker polling the
+        # same minute, re-sent the whole campaign.
+        upd = {"last_run_at": now_iso}
+        nxt = _advance(camp["next_run_at"], camp.get("recurrence") or "once")
+        upd["next_run_at" if nxt else "active"] = nxt if nxt else False
+        try:
+            claimed = (db.table("commerce_campaigns").update(upd).eq("id", camp["id"])
+                       .eq("next_run_at", camp["next_run_at"]).execute().data)
+        except Exception as exc:
+            log.warning("campaign %s claim failed: %s", camp.get("id"), exc)
+            continue
+        if not claimed:
+            continue   # another worker already took this run
         try:
             await admin_send_broadcast(camp["tenant_id"], {
                 "dry_run": False, "template_name": camp.get("template_name") or "",
@@ -4832,17 +4956,10 @@ async def process_due_campaigns() -> int:
             n += 1
         except Exception as exc:
             log.warning("campaign %s send failed: %s", camp.get("id"), exc)
-        upd = {"last_run_at": now_iso}
-        nxt = _advance(camp["next_run_at"], camp.get("recurrence") or "once")
-        upd["next_run_at" if nxt else "active"] = nxt if nxt else False
-        try:
-            db.table("commerce_campaigns").update(upd).eq("id", camp["id"]).execute()
-        except Exception:
-            pass
     return n
 
 
-@router.post("/cron/campaigns")
+@router.post("/cron/campaigns", dependencies=[Depends(require_auth)])
 async def cron_process_campaigns():
     """Backstop trigger for the scheduler (also runs in-process every 60s)."""
     return {"processed": await process_due_campaigns()}
@@ -4953,33 +5070,22 @@ async def admin_delete_segment(tenant_id: str, segment_id: str):
 
 # ── Scheduled Jobs ──────────────────────────────────────────────────────────
 
-@router.post("/{tenant_id}/jobs/abandoned-carts")
+@router.post("/{tenant_id}/jobs/abandoned-carts", dependencies=[Depends(require_auth)])
 async def job_abandoned_carts(tenant_id: str):
-    """Scan for abandoned carts and trigger notifications."""
+    """Report only. Nudges now come from an 'abandoned cart' automation (Assistant ->
+    Automations), which stages each message for the owner to approve. This used to mark carts
+    'recovery_sent' without sending anything."""
     abandoned = await service.get_abandoned_carts(tenant_id, hours_old=1)
-    # Filter for carts that haven't received recovery yet
-    to_notify = [c for c in abandoned if not (c.get("metadata") or {}).get("recovery_sent")]
-
-    count = 0
-    for cart in to_notify:
-        # In a real app, you'd fire a WhatsApp template here or n8n
-        # For now, we'll just mark them so we don't repeat
-        meta = cart.get("metadata") or {}
-        meta["recovery_sent"] = True
-        service._client().table("commerce_carts") \
-            .update({"metadata": meta, "updated_at": service._now()}) \
-            .eq("id", cart["id"]).execute()
-        count += 1
-
-    return {"ok": True, "processed": count, "found": len(abandoned)}
+    return {"ok": True, "found": len(abandoned),
+            "note": "Set up an 'abandoned cart' automation to nudge these customers."}
 
 
-@router.post("/{tenant_id}/jobs/reorder-reminders")
+@router.post("/{tenant_id}/jobs/reorder-reminders", dependencies=[Depends(require_auth)])
 async def job_reorder_reminders(tenant_id: str):
-    """Scan for customers who ordered 7 days ago."""
+    """Report only — see the 'reorder due' automation trigger."""
     candidates = await service.get_reorder_candidates(tenant_id, days_ago=7)
-    # logic to fire WhatsApp messages via n8n or direct
-    return {"ok": True, "candidates": len(candidates)}
+    return {"ok": True, "candidates": len(candidates),
+            "note": "Set up a 'reorder due' automation to nudge these customers."}
 
 
 _last_stock_alert: dict[str, str] = {}   # tenant → date, so we alert at most once a day
@@ -5115,19 +5221,19 @@ async def _process_overdue_invoices(tenant_id: str) -> int:
     return reminded
 
 
-@router.post("/{tenant_id}/jobs/stock-alerts")
+@router.post("/{tenant_id}/jobs/stock-alerts", dependencies=[Depends(require_auth)])
 async def job_stock_alerts(tenant_id: str):
     """Alert the team about low-stock items (scheduler + manual trigger)."""
     return {"ok": True, "alerted": await _process_stock_alerts(tenant_id, force=True)}
 
 
-@router.post("/{tenant_id}/jobs/overdue-invoices")
+@router.post("/{tenant_id}/jobs/overdue-invoices", dependencies=[Depends(require_auth)])
 async def job_overdue_invoices(tenant_id: str):
     """Mark past-due invoices overdue + remind customers (scheduler + manual trigger)."""
     return {"ok": True, "reminded": await _process_overdue_invoices(tenant_id)}
 
 
-@router.post("/{tenant_id}/jobs/weekly-specials")
+@router.post("/{tenant_id}/jobs/weekly-specials", dependencies=[Depends(require_auth)])
 async def job_weekly_specials(tenant_id: str):
     """Fire the weekly specials broadcast."""
     # This logic matches OTH-05: Monday 07:00
@@ -5139,6 +5245,23 @@ async def job_weekly_specials(tenant_id: str):
 
 
 # ── Customers (client list / CRM) ─────────────────────────────────────────────
+
+def _template_body_params(tpl_row: Optional[dict], contact: dict, static: list) -> list:
+    """Body parameters for a template with {{n}} placeholders (param_count from migration 063)."""
+    n = int((tpl_row or {}).get("param_count") or 0)
+    if n <= 0:
+        return []
+    first = ((contact.get("name") or "").split(" ")[0] or "there").strip() or "there"
+    vals = list(static[:n]) or [first]
+    while len(vals) < n:
+        vals.append(first if not vals else "-")
+    return [{"type": "text", "text": v or "-"} for v in vals[:n]]
+
+
+def _tenants_display(tenant_id: str) -> str:
+    from vula.api import tenants as _t
+    return _t.display_name(tenant_id)
+
 
 def _norm_phone(p: Optional[str]) -> str:
     """Normalise a phone number to digits-only E.164-ish (SA: 0xx → 27xx)."""
@@ -6233,6 +6356,8 @@ async def admin_mark_expense_paid(tenant_id: str, expense_id: str):
     }).eq("tenant_id", tenant_id).eq("id", expense_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Expense not found")
+    from vula.commerce import expenses as _expenses
+    _expenses.post_to_ledger(tenant_id, result.data[0])
     return result.data[0]
 
 
@@ -6339,6 +6464,13 @@ async def admin_dismiss_escalation(tenant_id: str, esc_id: str):
 # human handoff toggle, and manual agent reply via WhatsApp).
 
 
+@router.get("/{tenant_id}/admin/setup")
+async def admin_setup_checklist(tenant_id: str):
+    """The tenant's own go-live checklist (same computation master sees)."""
+    from vula.api.master import setup_checklist
+    return setup_checklist(tenant_id)
+
+
 @router.get("/{tenant_id}/admin/conversations")
 async def admin_list_conversations(tenant_id: str, limit: int = Query(50, ge=1, le=200)):
     """Return recent WhatsApp conversation sessions for the shared inbox."""
@@ -6402,10 +6534,16 @@ async def admin_reply(tenant_id: str, session_id: str, body: AgentReplyRequest):
     # Send via WhatsApp.
     try:
         from vula.api.whatsapp import _send_reply
-        await _send_reply(phone, text, tenant_id=tenant_id)
+        delivered = await _send_reply(phone, text, tenant_id=tenant_id)
     except Exception as exc:
         log.warning("Admin reply WhatsApp send failed for %s: %s", session_id, exc)
         raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {exc}") from exc
+    if delivered is False:
+        # _send_reply reports failure by returning False (e.g. outside the 24h window, token
+        # expired) — this used to be ignored and the inbox showed the reply as sent.
+        raise HTTPException(status_code=502, detail=(
+            "WhatsApp didn't accept this message — the customer may be outside the 24-hour "
+            "reply window. Nothing was sent."))
 
     # Persist the agent's message in the thread.
     await service.append_message(tenant_id, session_id, "agent", text)

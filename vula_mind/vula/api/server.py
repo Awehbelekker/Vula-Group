@@ -57,6 +57,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import re
 import sys
@@ -73,6 +74,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from config import settings
+from vula.uploads import safe_upload_path
 from vula.ingestion.pipeline import VulaIngestionPipeline
 from vula.skills.web_scraper import VulaWebScraper
 from vula.takeoff.api import router as takeoff_router
@@ -104,7 +106,6 @@ from vula.api.whatsapp_connect import router as whatsapp_connect_router
 from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.draft import router as draft_router
 from vula.api.agent import router as agent_router
-from vula.api.twilio_whatsapp import router as twilio_router
 from vula.api.links import router as links_router
 from vula.api.master import router as master_router
 from vula.api.master_auth import require_auth
@@ -166,7 +167,9 @@ if settings.sentry_dsn:
             send_default_pii=False,
             include_local_variables=False,
             max_request_body_size="never",
-            traces_sample_rate=0.0,  # error tracking only — keep data volume/PII surface minimal
+            # 0.0 by default (errors only); SENTRY_TRACES_SAMPLE_RATE turns on sampled
+            # performance traces — timings and route names, never bodies.
+            traces_sample_rate=max(0.0, min(1.0, settings.sentry_traces_sample_rate)),
             before_send=_sentry_scrub_before_send,
         )
         log.info("Sentry error monitoring enabled")
@@ -278,7 +281,7 @@ async def _daily_trial_expiry_loop() -> None:
                     days_left = (datetime.fromisoformat(trial_end_str).date() - today).days
                     if days_left in (7, 3, 1, 0):
                         payment_url = _payfast_url(
-                            t["tenant_id"], t.get("plan", "starter"),
+                            t.get("workspace_slug") or t["tenant_id"], t.get("plan", "starter"),
                             t.get("email", ""), t.get("contact_name", ""),
                         )
                         await send_trial_expiry_email(
@@ -703,6 +706,32 @@ async def _daily_commerce_jobs_loop() -> None:
         await _asyncio.sleep(86400)  # daily
 
 
+async def _hourly_customer_jobs_loop() -> None:
+    """Hourly, per tenant: WhatsApp reminders for bookings in the next 24h (send_due_reminders
+    existed but only ran if something called POST /v1/bookings/{t}/jobs/reminders — nothing
+    did), and expiry of abandoned online-payment orders so their reserved stock is released."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(180)  # settle on boot
+    while True:
+        try:
+            from vula.api import tenants as _t
+            from vula.bookings.reminders import send_due_reminders
+            from vula.commerce import service as _cs
+            rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+            for r in rows:
+                tid = r.get("tenant_id")
+                if not tid or not _t.is_active(tid):
+                    continue
+                for job in (send_due_reminders, _cs.expire_abandoned_online_orders):
+                    try:
+                        await job(tid)
+                    except Exception as exc:
+                        log.debug("hourly job %s failed for %s: %s", job.__name__, tid, exc)
+        except Exception as exc:
+            log.warning("hourly customer jobs loop error: %s", exc)
+        await _asyncio.sleep(3600)
+
+
 async def _voice_retry_scheduler_loop() -> None:
     """Retry voice notes whose transcription failed, locally (2026-09-01).
 
@@ -765,6 +794,24 @@ async def _voice_retry_scheduler_loop() -> None:
         except Exception as exc:
             log.warning("voice retry scheduler tick failed: %s", exc)
         await _asyncio.sleep(120)  # the box usually comes back quickly; retry often
+
+
+async def _inbound_redrive_loop() -> None:
+    """Re-run inbound WhatsApp messages a restart cut off mid-handling (migration 179) — see
+    vula/api/whatsapp.py::redrive_stuck_inbound. Runs soon after boot, since a redeploy is
+    exactly when messages get stranded."""
+    import asyncio as _asyncio
+    from vula.api.whatsapp import redrive_stuck_inbound
+
+    await _asyncio.sleep(90)  # settle on boot, and let the old process's work age past the cutoff
+    while True:
+        try:
+            n = await redrive_stuck_inbound()
+            if n:
+                log.info("re-drove %d stuck inbound message(s)", n)
+        except Exception as exc:
+            log.warning("inbound re-drive tick failed: %s", exc)
+        await _asyncio.sleep(120)
 
 
 async def _stale_escalation_scheduler_loop() -> None:
@@ -832,6 +879,26 @@ async def _stale_escalation_scheduler_loop() -> None:
         await _asyncio.sleep(600)  # poll every 10 minutes; per-tenant interval is job_config-driven
 
 
+def _assigned_member(tenant_id: str, assigned_to: Optional[str]) -> Optional[dict]:
+    """The team member an inbox conversation is assigned to (assigned_to holds their name,
+    email or WhatsApp number), or None."""
+    key = (assigned_to or "").strip().lower()
+    if not key:
+        return None
+    try:
+        from vula.commerce import service as _cs
+        rows = (_cs._client().table("vula_team_members").select("name,email,whatsapp")
+                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+    except Exception:
+        return None
+    digits = re.sub(r"\D", "", key)
+    for r in rows:
+        if key in ((r.get("name") or "").lower(), (r.get("email") or "").lower()) or \
+           (digits and digits == re.sub(r"\D", "", r.get("whatsapp") or "")):
+            return r
+    return None
+
+
 async def _stale_handoff_scheduler_loop() -> None:
     """Human handoff (an owner taking over a WhatsApp thread — vula/api/whatsapp.py's
     "paused" check, set via the admin handoff/reply endpoints in commerce.py) has no expiry:
@@ -873,7 +940,10 @@ async def _stale_handoff_scheduler_loop() -> None:
                     for session in await commerce_service.find_stale_paused_sessions(tenant_id):
                         who = (session.get("customer_name") or session.get("customer_phone")
                               or "a customer")
-                        helper = _pick_helper(tenant_id)
+                        # Whoever the conversation is assigned to in the inbox, else the
+                        # tenant's default helper.
+                        helper = (_assigned_member(tenant_id, session.get("assigned_to"))
+                                  or _pick_helper(tenant_id))
                         if helper and helper.get("whatsapp"):
                             msg = (f"⏰ Heads up — you paused Vula's replies to {who} a while "
                                   f"ago and nothing's happened since. I've resumed answering "
@@ -1223,6 +1293,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_subscriptions_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
@@ -1240,6 +1311,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_stale_handoff_scheduler_loop()))
     # Retries voice notes parked when transcription was unreachable (migration 148).
     _scheduled_job_tasks.append(_asyncio.create_task(_voice_retry_scheduler_loop()))
+    # Re-drives text/voice messages a restart cut off mid-handling (migration 179).
+    _scheduled_job_tasks.append(_asyncio.create_task(_inbound_redrive_loop()))
     # Mass Mind Phase 1 — cross-tenant rollup of the two recovery loops above (migration 160).
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).
@@ -1304,7 +1377,10 @@ async def lifespan(app: FastAPI):
             log.debug("schema check task failed: %s", exc)
 
     _asyncio.create_task(_schema_check())
-    _asyncio.create_task(_scheduler_leadership_loop())
+    if settings.run_scheduled_jobs:
+        _asyncio.create_task(_scheduler_leadership_loop())
+    else:
+        log.info("Scheduled jobs disabled in this process (RUN_SCHEDULED_JOBS=false)")
     yield
 
 
@@ -1384,6 +1460,39 @@ _TENANT_GUARD_RES = [
     re.compile(r"^/v1/commerce/([^/]+)/admin(?:/|$)"),
     re.compile(r"^/v1/team/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/users/([^/]+)(?:/|$)"),
+    # 2026-09-25 review: every other tenant-scoped dashboard router was reachable by anyone who
+    # knew a tenant slug — gateway credentials, bookings (customer PII), project finances,
+    # filed documents, mailbox contacts, WhatsApp/Yoco connect/disconnect. Same rule: group(1)
+    # is the tenant the caller must belong to. Public customer paths are carved out below.
+    re.compile(r"^/v1/payments/(?!webhook/)([^/]+)/"),
+    re.compile(r"^/v1/bookings/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/subscriptions/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/recurring-bills/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/projects/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/documents/([^/]+)/(?:filed|projects|media)(?:/|$)"),
+    re.compile(r"^/v1/qs/rates/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/field/(?:contractors|daily-tasks)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/email/(?:status|set-primary|sync|backfill|contacts|followups|disconnect)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/clickup/(?:status|lists|sync-kb)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/whatsapp/(?:connect/status|disconnect)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/yoco/(?:status|test|disconnect)/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/(?:google|microsoft|dynamics365)/status/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/(?:google|dynamics365)/(?!authorize-url|oauth|status)([^/]+)/"),
+]
+
+# Customer-facing calls under a guarded prefix that must stay public: the storefront booking
+# widget (puck BookingWidget) lists services, checks availability and creates a booking.
+_TENANT_GUARD_PUBLIC = [
+    ("GET", re.compile(r"^/v1/bookings/[^/]+/(?:services|availability)/?$")),
+    ("POST", re.compile(r"^/v1/bookings/[^/]+/?$")),
+]
+
+# Cross-tenant listings / platform-wide actions: master only.
+_MASTER_ONLY = [
+    ("GET", re.compile(r"^/v1/tenants/?$")),
+    ("GET", re.compile(r"^/v1/whatsapp/accounts/?$")),
+    ("GET", re.compile(r"^/v1/yoco/accounts/?$")),
+    ("POST", re.compile(r"^/v1/training/(?:business/)?seed/?$")),
 ]
 
 # 2026-08-14: per-tenant LLM cost metering (vula/integrations/metering.py) attributes every
@@ -1413,32 +1522,60 @@ async def tenant_metering_context(request, call_next):
 async def tenant_admin_guard(request, call_next):
     if settings.enforce_tenant_auth and request.method != "OPTIONS":
         path = request.url.path
-        for rx in _TENANT_GUARD_RES:
-            m = rx.match(path)
-            if not m:
-                continue
-            from fastapi.responses import JSONResponse
-            auth_header = request.headers.get("authorization", "")
+        blocked = await _guard_check(request.method, path, request.headers.get("authorization", ""),
+                                     request.headers.get("x-api-key", ""))
+        if blocked is not None:
+            return blocked
+    return await call_next(request)
+
+
+async def _guard_check(method: str, path: str, auth_header: str, api_key: str = ""):
+    """None when the request may proceed, else the 401/403 JSONResponse to return. The shared
+    server API key (X-API-Key — n8n / server-to-server jobs, same as require_auth) passes."""
+    from fastapi.responses import JSONResponse
+    if api_key and settings.api_key and hmac.compare_digest(api_key, settings.api_key):
+        return None
+    for m_, rx in _MASTER_ONLY:
+        if method == m_ and rx.match(path):
             if not auth_header:
                 return JSONResponse({"detail": "Sign in required."}, status_code=401)
-            from vula.api.tenant_auth import is_tenant_member
-            if not await is_tenant_member(auth_header, m.group(1)):
-                return JSONResponse(
-                    {"detail": "You don't have access to this workspace."}, status_code=403)
-            break
-    return await call_next(request)
+            from fastapi import HTTPException as _HTTPException
+            from vula.api.master_auth import require_master
+            try:
+                await require_master(auth_header)
+            except _HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            return None
+    if any(method == m_ and rx.match(path) for m_, rx in _TENANT_GUARD_PUBLIC):
+        return None
+    for rx in _TENANT_GUARD_RES:
+        m = rx.match(path)
+        if not m:
+            continue
+        if not auth_header:
+            return JSONResponse({"detail": "Sign in required."}, status_code=401)
+        from vula.api.tenant_auth import is_tenant_member
+        if not await is_tenant_member(auth_header, m.group(1)):
+            return JSONResponse(
+                {"detail": "You don't have access to this workspace."}, status_code=403)
+        break
+    return None
 
 app.include_router(links_router)  # no prefix — public /l/{code} redirect for broadcast click tracking
 app.include_router(email_public_router)  # no prefix — public /email/unsubscribe for campaigns
 app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} photo menu
 app.include_router(master_router, prefix="/v1/master")  # ALL endpoints require verified master JWT
-app.include_router(takeoff_router, prefix="/takeoff")
+# Takeoff was reachable by anyone (upload, jobs, BOQ, supplier edits, RFQs). API key, master, or a
+# member of the tenant named in the request (form/query tenant_id) — see master_auth.require_auth.
+app.include_router(takeoff_router, prefix="/takeoff", dependencies=[Depends(require_auth)])
 app.include_router(onboarding_router, prefix="/v1")
 app.include_router(signup_router, prefix="/v1")
 app.include_router(whatsapp_router, prefix="/v1/whatsapp")
 app.include_router(training_router, prefix="/v1")
 app.include_router(chat_router, prefix="/v1")
-app.include_router(field_ops_router, prefix="/v1/field")
+# Field ops had id-only routes (task/project/walkthrough) open to anyone — contractor phones,
+# task evidence, and WhatsApp sends to contractors. Same rule as takeoff above.
+app.include_router(field_ops_router, prefix="/v1/field", dependencies=[Depends(require_auth)])
 app.include_router(clickup_router, prefix="/v1/clickup")
 app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(projects_router, prefix="/v1/projects")
@@ -1460,7 +1597,6 @@ app.include_router(yoco_connect_router, prefix="/v1/yoco")
 app.include_router(whatsapp_connect_router, prefix="/v1/whatsapp")
 app.include_router(draft_router, prefix="/v1")
 app.include_router(agent_router, prefix="/v1")
-app.include_router(twilio_router, prefix="/v1/twilio")
 
 UPLOAD_DIR = settings.upload_dir
 
@@ -1487,35 +1623,35 @@ def validate_tenant(tenant_id: str) -> str:
 
 # ─── OTH manual briefing triggers (for testing / on-demand) ──────────────────
 
-@app.post("/v1/oth/briefing/morning", tags=["oth"])
+@app.post("/v1/oth/briefing/morning", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_morning_briefing():
     """Manually fire the morning delivery list — for testing or on-demand sends."""
     await _send_oth_delivery_briefing()
     return {"sent": True, "briefing": "morning"}
 
 
-@app.post("/v1/oth/briefing/evening", tags=["oth"])
+@app.post("/v1/oth/briefing/evening", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_evening_summary():
     """Manually fire the 18:00 sales summary — for testing or on-demand sends."""
     await _send_oth_sales_summary()
     return {"sent": True, "briefing": "evening"}
 
 
-@app.post("/v1/oth/briefing/low-stock", tags=["oth"])
+@app.post("/v1/oth/briefing/low-stock", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_low_stock_alert():
     """Manually fire the low stock alert to Stacy."""
     await _send_low_stock_alert()
     return {"sent": True, "briefing": "low_stock"}
 
 
-@app.post("/v1/oth/briefing/friday-catch", tags=["oth"])
+@app.post("/v1/oth/briefing/friday-catch", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_friday_catch_reminder():
     """Manually fire the Friday catch reminder to Stacy."""
     await _send_friday_catch_reminder()
     return {"sent": True, "briefing": "friday_catch"}
 
 
-@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"])
+@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_chase_unpaid():
     """Manually fire the unpaid order follow-up chase."""
     await _chase_unpaid_orders()
@@ -1615,7 +1751,7 @@ async def ingest_document(
 
     tenant_dir = UPLOAD_DIR / tenant_id
     tenant_dir.mkdir(parents=True, exist_ok=True)
-    file_path = tenant_dir / file.filename
+    file_path = safe_upload_path(tenant_dir, file.filename)
     file_path.write_bytes(content)
     mime_type = file.content_type
 
@@ -1666,7 +1802,7 @@ async def ingest_documents_batch(
                                  "reason": f"exceeds {settings.max_file_mb}MB limit"})
                 continue
 
-            file_path = tenant_dir / file.filename
+            file_path = safe_upload_path(tenant_dir, file.filename)
             file_path.write_bytes(content)
             mime_type = file.content_type
 
@@ -1704,7 +1840,7 @@ async def ingest_document_sync(
     content = await file.read()
     tenant_dir = UPLOAD_DIR / tenant_id
     tenant_dir.mkdir(parents=True, exist_ok=True)
-    file_path = tenant_dir / file.filename
+    file_path = safe_upload_path(tenant_dir, file.filename)
     file_path.write_bytes(content)
 
     pipeline = VulaIngestionPipeline(tenant_id=tenant_id)

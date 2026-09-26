@@ -95,6 +95,7 @@ class OnboardingRequest(BaseModel):
 
 class OnboardingResponse(BaseModel):
     tenant_id: str
+    workspace_slug: Optional[str] = None   # the operational tenant id (used for document upload)
     workspace_url: str
     temp_password: str
     trial_ends: str
@@ -117,9 +118,11 @@ def _payfast_url(tenant_id: str, plan: str, email: str, name: str) -> Optional[s
     amount = tier.get("price_cents", 0) / 100
 
     host = "sandbox.payfast.co.za" if settings.debug else "www.payfast.co.za"
-    notify_url = f"{settings.vula_base_url}/api/v1/payfast/notify"
-    return_url = f"{settings.vula_base_url}/welcome?tenant={tenant_id}"
-    cancel_url = f"{settings.vula_base_url}/signup?cancelled=1"
+    # notify_url must reach THIS API (it had an /api prefix on the stale dashboard placeholder
+    # host, so PayFast's ITN never arrived and no subscription was ever marked paid).
+    notify_url = f"{settings.public_base_url.rstrip('/')}/v1/payfast/notify"
+    return_url = f"{settings.dashboard_url.rstrip('/')}/?welcome={tenant_id}"
+    cancel_url = f"{settings.dashboard_url.rstrip('/')}/?signup_cancelled=1"
 
     params = {
         "merchant_id": settings.payfast_merchant_id,
@@ -130,7 +133,9 @@ def _payfast_url(tenant_id: str, plan: str, email: str, name: str) -> Optional[s
         "name_first": name.split()[0],
         "name_last": name.split()[-1] if len(name.split()) > 1 else "",
         "email_address": email,
-        "m_payment_id": tenant_id[:20],
+        # The workspace slug, whole — the ITN handler finds the billing row by it. It used to be
+        # a UUID truncated to 20 chars, which matched nothing.
+        "m_payment_id": tenant_id,
         "amount": f"{amount:.2f}",
         "item_name": f"Vula {plan.title()} — Monthly Subscription",
         "item_description": tier.get("label", plan),
@@ -143,7 +148,8 @@ def _payfast_url(tenant_id: str, plan: str, email: str, name: str) -> Optional[s
 
     # Build signature
     sig_str = "&".join(f"{k}={urllib.parse.quote_plus(str(v))}" for k, v in params.items() if v != "")
-    sig_str += f"&passphrase={urllib.parse.quote_plus(settings.payfast_merchant_key)}"
+    if settings.payfast_passphrase:
+        sig_str += f"&passphrase={urllib.parse.quote_plus(settings.payfast_passphrase)}"
     signature = hashlib.md5(sig_str.encode()).hexdigest()
     params["signature"] = signature
 
@@ -200,7 +206,7 @@ async def payfast_notify(request: Request) -> dict:
     try:
         await _supabase.update(
             "vula_tenants",
-            {"tenant_id": tenant_id},
+            {"workspace_slug": tenant_id},   # m_payment_id carries the slug
             {"status": "active", "paid": True},
         )
         logger.info("Payment confirmed for tenant %s: R%s (ref=%s)", tenant_id, amount_gross, pf_ref)
@@ -209,7 +215,7 @@ async def payfast_notify(request: Request) -> dict:
 
     # Send payment receipt email
     try:
-        rows = await _supabase.select("vula_tenants", {"tenant_id": tenant_id})
+        rows = await _supabase.select("vula_tenants", {"workspace_slug": tenant_id})
         if rows:
             t = rows[0]
             first_name = (t.get("contact_name") or "there").split()[0]
@@ -445,7 +451,7 @@ async def _background_tasks(record: dict, temp_password: str, req: OnboardingReq
         )
 
     payment_url = _payfast_url(
-        tenant_id=record["tenant_id"],
+        tenant_id=record["workspace_slug"],
         plan=req.plan,
         email=str(req.email),
         name=req.contact_name,
@@ -516,7 +522,7 @@ async def onboard_client(
     background_tasks.add_task(_background_tasks, record, temp_password, req)
 
     payment_url = _payfast_url(
-        tenant_id=record["tenant_id"],
+        tenant_id=record["workspace_slug"],
         plan=req.plan,
         email=str(req.email),
         name=req.contact_name,
@@ -524,6 +530,7 @@ async def onboard_client(
 
     return OnboardingResponse(
         tenant_id=record["tenant_id"],
+        workspace_slug=record["workspace_slug"],
         workspace_url=record["workspace_url"],
         temp_password=temp_password,
         trial_ends=record["trial_ends"][:10],
@@ -544,14 +551,25 @@ async def upload_onboarding_documents(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
+    # These used to be read and thrown away while the reply said "queued for ingestion" — the
+    # new tenant's knowledge base stayed empty. Save each file and ingest it in the background.
+    from vula.uploads import safe_upload_path
+    from vula.ingestion.pipeline import VulaIngestionPipeline
+    from vula.commerce.background_tasks import run_background
+    tenant_dir = settings.upload_dir / tenant_id
+    tenant_dir.mkdir(parents=True, exist_ok=True)
     received = []
     for f in files[:10]:
         content = await f.read()
+        path = safe_upload_path(tenant_dir, f.filename or "document")
+        path.write_bytes(content)
+        run_background(tenant_id, "onboarding_document_ingest",
+                       VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(path, source_type="document"))
         received.append({
-            "filename": f.filename,
+            "filename": path.name,
             "size_kb": len(content) // 1024,
             "content_type": f.content_type,
-            "status": "queued_for_ingestion",
+            "status": "ingesting",
         })
 
     logger.info("Received %d documents for tenant %s", len(received), tenant_id)
@@ -559,7 +577,7 @@ async def upload_onboarding_documents(
         "tenant_id": tenant_id,
         "documents_received": len(received),
         "files": received,
-        "message": "Documents queued. AI processing begins within 1 hour.",
+        "message": "Documents received — they'll be in the knowledge base within a few minutes.",
     }
 
 

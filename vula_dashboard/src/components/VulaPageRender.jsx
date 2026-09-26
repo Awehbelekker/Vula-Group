@@ -13,8 +13,8 @@ import "@measured/puck/puck.css";
 import { config, VULA_PUCK_STYLES } from "../puck/config";
 import { getTenantTheme } from "../theme/tenantThemes";
 import { FONT_PAIRINGS } from "../theme/tokens";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const centre = { padding: 48, fontFamily: "system-ui", textAlign: "center", color: "#666" };
 
 export default function VulaPageRender({ tenant, slug }) {

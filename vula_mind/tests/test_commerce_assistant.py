@@ -134,9 +134,19 @@ async def test_add_to_cart_without_ctx_does_not_crash():
 async def test_dispatch_track_order_found():
     skill = CommerceAssistantSkill()
     orders = [{"display_id": "OTH-00042", "status": "dispatched", "total_cents": 25000}]
-    with patch("core.skills.commerce_assistant.service.list_orders", new=AsyncMock(return_value=orders)):
+    # Scoped to the caller's own orders (orders_for_phone), not any order by guessed id.
+    with patch("core.skills.commerce_assistant.service.orders_for_phone", return_value=orders) as ofp:
         out = await skill._dispatch_tool("track_order", {"order_id": "oth-00042"}, CTX)
     assert out == {"order_id": "OTH-00042", "status": "dispatched", "total": "R250.00"}
+    assert ofp.call_args.args[1] == CTX["customer_phone"]
+
+
+@pytest.mark.asyncio
+async def test_track_order_of_another_customer_is_not_found():
+    skill = CommerceAssistantSkill()
+    with patch("core.skills.commerce_assistant.service.orders_for_phone", return_value=[]):
+        out = await skill._dispatch_tool("track_order", {"order_id": "OTH-00099"}, CTX)
+    assert "error" in out
 
 
 @pytest.mark.asyncio
@@ -403,7 +413,8 @@ async def test_agent_loop_uses_ask_team_only_tools_when_booking_focused():
 
     tool_names = {t["function"]["name"] for t in captured["tools"]}
     expected_ask_team = {t["function"]["name"] for t in _ASK_TEAM_ONLY}
-    assert tool_names == expected_ask_team | {"list_availability", "book_appointment", "cancel_appointment"}
+    assert tool_names == expected_ask_team | {"list_availability", "book_appointment", "cancel_appointment",
+                                              "reschedule_appointment"}
     assert "list_products" not in tool_names
 
 

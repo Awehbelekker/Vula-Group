@@ -18,12 +18,11 @@
  * direct Railway/Supabase access; see master.py's docstrings on those for what each pulls from.
  */
 import { useEffect, useState } from 'react'
-import { authFetch } from '../lib/authFetch'
+import { authFetch, VULA_API } from '../lib/authFetch'
 import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { ManageTenantRow } from './VulaMasterPanel'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 const C = { surface: '#FFFFFF', border: '#DDD8CE', green: 'var(--accent)', red: '#A23B2D', amber: '#B7791F', text: '#2A2A2A', muted: '#8A8680', alt: '#F0EDE5' }
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }
 const btn = { padding: '7px 13px', border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: 'pointer' }

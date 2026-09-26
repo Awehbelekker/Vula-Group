@@ -132,13 +132,15 @@ async def _notify_order_paid(
         # Customer confirmation
         if customer_phone:
             from vula.api import tenants as _tenants
-            store_url = _tenants.store_url(tenant_id) or "offthehook.co.za"
+            # Every tenant's customers used to be told their "Off the Hook order" was confirmed,
+            # with a link to offthehook.co.za.
+            store_url = _tenants.store_url(tenant_id)
+            track = f"Track at {store_url} or reply" if store_url else "Reply"
             await _send(
                 customer_phone,
-                f"Hi {customer_name or 'there'}! Your Off the Hook order *{display_id}* "
-                f"is confirmed ({amount}). We'll be in touch with your delivery time. "
-                f"Track at {store_url} or reply here with any questions. "
-                f"Thank you!"
+                f"Hi {customer_name or 'there'}! Your {_tenants.display_name(tenant_id)} order "
+                f"*{display_id}* is confirmed ({amount}). We'll be in touch with your delivery "
+                f"time. {track} here with any questions. Thank you!"
             )
 
         # Order item summary (once)
@@ -227,7 +229,8 @@ async def _get_tenant_yoco_creds(tenant_id: str) -> Optional[dict]:
     return None
 
 
-async def refund_yoco_payment(tenant_id: str, checkout_id: str, amount_cents: int) -> dict:
+async def refund_yoco_payment(tenant_id: str, checkout_id: str, amount_cents: int,
+                              idempotency_key: Optional[str] = None) -> dict:
     """Issue a real refund via Yoco's Checkout API (POST /api/checkouts/{id}/refund).
 
     A 200/202 means Yoco *accepted* the refund request — the money movement itself is
@@ -240,7 +243,6 @@ async def refund_yoco_payment(tenant_id: str, checkout_id: str, amount_cents: in
     creds = await _get_tenant_yoco_creds(tenant_id)
     if not creds or not creds.get("secret_key"):
         return {"ok": False, "detail": "No Yoco account connected for this tenant."}
-    import uuid
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
@@ -248,7 +250,9 @@ async def refund_yoco_payment(tenant_id: str, checkout_id: str, amount_cents: in
                 headers={
                     "Authorization": f"Bearer {creds['secret_key']}",
                     "Content-Type": "application/json",
-                    "Idempotency-Key": str(uuid.uuid4()),
+                    # Stable per refund target so a double-click / retry can't refund twice;
+                    # a fresh uuid per call made every retry a brand-new refund.
+                    "Idempotency-Key": idempotency_key or f"refund-{checkout_id}-{int(amount_cents)}",
                 },
                 json={"amount": int(amount_cents)},
             )
@@ -295,13 +299,13 @@ async def yoco_webhook(request: Request) -> dict:
     webhook_secret = webhook_secret or settings.yoco_webhook_secret
 
     if webhook_secret:
-        expected = hmac.new(
-            webhook_secret.encode(),
-            raw_body,
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac.compare_digest(signature, expected):
+        if not _yoco_signature_ok(webhook_secret, raw_body, signature, request.headers):
             raise HTTPException(status_code=401, detail="Invalid Yoco webhook signature")
+    elif not settings.debug:
+        # Fail closed: with no secret configured anywhere, an unsigned POST here could mark any
+        # order/invoice paid and trigger fulfilment. Only a local dev run may skip verification.
+        log.error("Rejecting Yoco webhook: no webhook secret configured (set YOCO_WEBHOOK_SECRET)")
+        raise HTTPException(status_code=403, detail="Webhook signature verification not configured")
 
     # payload_preview was already parsed above; reuse it
     payload = payload_preview
@@ -327,8 +331,24 @@ async def yoco_webhook(request: Request) -> dict:
 
     # Invoice pay-links carry invoice_id (not order_id) → mark the invoice paid.
     invoice_id = metadata.get("invoice_id")
+
+    # Links made through vula.payments.create_pay_link (WhatsApp orders, invoice "Pay now")
+    # carry only {reference, tenant_id}: reference is the invoice id or the order display_id.
+    # Before this, those webhooks hit "missing order_id" and were never auto-marked paid.
+    if tenant_id and not order_id and not invoice_id and metadata.get("reference"):
+        order_id, invoice_id, found = await _resolve_reference(tenant_id, str(metadata["reference"]))
+        if found:
+            display_id = display_id or found.get("display_id") or ""
+            customer_phone = customer_phone or found.get("customer_phone")
+            customer_name = customer_name or found.get("customer_name") or ""
+
     if invoice_id and event_type in ("payment.succeeded", "checkout.completed"):
         try:
+            inv = (commerce._client().table("commerce_invoices").select("status")
+                   .eq("tenant_id", tenant_id).eq("id", invoice_id).limit(1).execute().data or [])
+            if inv and inv[0].get("status") == "paid":
+                log.info("Invoice %s already paid — duplicate Yoco event ignored", invoice_id)
+                return {"received": True}
             # Routed through the shared service function (not a direct table write) so this
             # also fires the general-ledger posting hook — a direct write here would silently
             # skip journal posting for pay-link invoices.
@@ -342,7 +362,15 @@ async def yoco_webhook(request: Request) -> dict:
         log.warning("Yoco webhook missing order_id in metadata")
         return {"received": True}
 
+    current = await _order_status(order_id)
+
     if event_type in ("payment.succeeded", "checkout.completed"):
+        # Idempotent: Yoco retries and sends both payment.succeeded and checkout.completed for
+        # one payment. Only the first transition out of pending_payment notifies anyone —
+        # repeats used to re-send the customer confirmation and re-create approvals/dispatch.
+        if current is not None and current != "pending_payment":
+            log.info("Order %s already %s — duplicate Yoco %s ignored", display_id or order_id, current, event_type)
+            return {"received": True}
         await commerce.update_order_status(order_id, "paid")
         log.info("Order %s paid via Yoco", display_id)
 
@@ -373,7 +401,76 @@ async def yoco_webhook(request: Request) -> dict:
                 log.warning("n8n notification failed (non-fatal): %s", exc)
 
     elif event_type in ("payment.failed", "checkout.expired"):
+        # Only an unpaid order is cancelled (a late "expired" for a checkout that was paid via
+        # another link must not cancel a paid order), and the stock reserved for it at checkout
+        # (migration 122) is released — it used to stay reserved forever.
+        if current is not None and current != "pending_payment":
+            log.info("Order %s is %s — Yoco %s ignored", display_id or order_id, current, event_type)
+            return {"received": True}
         await commerce.update_order_status(order_id, "cancelled")
+        try:
+            await commerce.apply_order_stock(order_id, restore=True)
+        except Exception as exc:
+            log.warning("stock release after failed payment skipped for %s: %s", order_id, exc)
         log.info("Order %s payment failed/expired", display_id)
 
     return {"received": True}
+
+
+def _yoco_signature_ok(secret: str, raw_body: bytes, legacy_sig: str, headers) -> bool:
+    """Accept Yoco's signed webhooks in either form: the legacy hex HMAC-SHA256 of the body in
+    `yoco-signature`, or the standard-webhooks form (`webhook-id`, `webhook-timestamp`,
+    `webhook-signature: v1,<base64 HMAC-SHA256 of "id.timestamp.body">`, keyed with the
+    base64 part of a `whsec_` secret)."""
+    import base64
+    if legacy_sig:
+        expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(legacy_sig, expected):
+            return True
+    wid = headers.get("webhook-id") or ""
+    wts = headers.get("webhook-timestamp") or ""
+    wsig = headers.get("webhook-signature") or ""
+    if not (wid and wts and wsig):
+        return False
+    try:
+        key = base64.b64decode(secret.split("_", 1)[1] if secret.startswith("whsec_") else secret)
+    except Exception:
+        key = secret.encode()
+    signed = f"{wid}.{wts}.".encode() + raw_body
+    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    for part in wsig.split():
+        _, _, sig = part.partition(",")
+        if sig and hmac.compare_digest(sig, expected):
+            return True
+    return False
+
+
+async def _order_status(order_id: str) -> Optional[str]:
+    try:
+        rows = (commerce._client().table("commerce_orders").select("status")
+                .eq("id", order_id).limit(1).execute().data or [])
+        return rows[0].get("status") if rows else None
+    except Exception as exc:
+        log.debug("order status lookup skipped for %s: %s", order_id, exc)
+        return None
+
+
+async def _resolve_reference(tenant_id: str, reference: str) -> tuple[Optional[str], Optional[str], dict]:
+    """reference -> (order_id, invoice_id, row). Invoice pay-links use the invoice id, order
+    pay-links the order display_id — both scoped to the tenant named in the signed payload."""
+    db = commerce._client()
+    try:
+        inv = (db.table("commerce_invoices").select("id").eq("tenant_id", tenant_id)
+               .eq("id", reference).limit(1).execute().data or [])
+        if inv:
+            return None, inv[0]["id"], {}
+    except Exception:
+        pass  # reference isn't a uuid — it's an order display_id
+    try:
+        rows = (db.table("commerce_orders").select("id,display_id,customer_phone,customer_name")
+                .eq("tenant_id", tenant_id).eq("display_id", reference).limit(1).execute().data or [])
+        if rows:
+            return rows[0]["id"], None, rows[0]
+    except Exception as exc:
+        log.debug("Yoco reference lookup failed for %s: %s", reference, exc)
+    return None, None, {}

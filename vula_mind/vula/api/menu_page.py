@@ -5,6 +5,8 @@ WhatsApp's interactive list message has no image slot per row (Meta platform lim
 page is the workaround: a simple photo grid of in-stock products, linked from the WhatsApp
 welcome menu, using the image_url/description data already on commerce_products.
 """
+import html
+
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
@@ -19,7 +21,9 @@ _PLACEHOLDER_IMG = (
 
 
 def _esc(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Quotes too: _esc is also used inside src="..."/alt="..." attributes, where a product
+    # name or image URL containing " could break out and inject markup (XSS on a public page).
+    return html.escape(str(s or ""), quote=True)
 
 
 def _fmt_price(cents) -> str:
@@ -109,3 +113,25 @@ async def photo_menu(tenant_id: str) -> HTMLResponse:
   <p class="cta">To order, message us on WhatsApp and reply <b>menu</b>.</p>
 </body></html>"""
     return HTMLResponse(html)
+
+
+# Landing pages for hosted-checkout redirects (invoice and WhatsApp-order pay links point here
+# when the tenant has no storefront). The payment itself is confirmed by the gateway webhook,
+# never by this page — it only tells the customer where they stand.
+def _result_page(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{_esc(title)}</title></head><body style='font-family:system-ui;text-align:center;"
+        f"padding:48px 16px;color:#2C5545'><h2>{_esc(title)}</h2><p>{_esc(body)}</p></body></html>")
+
+
+@router.get("/payment/success")
+async def payment_success() -> HTMLResponse:
+    return _result_page("Thank you — payment received",
+                        "You'll get a WhatsApp confirmation shortly. You can close this page.")
+
+
+@router.get("/payment/cancel")
+async def payment_cancel() -> HTMLResponse:
+    return _result_page("Payment not completed",
+                        "Nothing was charged. Reply on WhatsApp if you'd like a new payment link.")

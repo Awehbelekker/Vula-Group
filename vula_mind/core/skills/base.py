@@ -14,6 +14,7 @@ import json
 import re
 import time
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -576,3 +577,43 @@ class BaseSkill(ABC):
         except Exception:
             pass
         return result
+
+
+# ── Per-request skill state ───────────────────────────────────────────────────
+# Skills are process-wide singletons (core/skills/loader.py::_SKILLS), so a plain `self._x = ...`
+# set during run() is shared by every request in flight. 2026-09-25 review: finance_admin kept
+# each turn's verified figures / sources on self, so two tenants answering at the same time
+# could have one tenant's numbers "verify" (or leak as sources into) the other's reply.
+# turn_local keeps the attribute syntax but stores the value per asyncio task (contextvars).
+_TURN_STATE: ContextVar[Optional[dict]] = ContextVar("vula_skill_turn_state", default=None)
+
+
+def begin_turn() -> None:
+    """Give the current task its own state dict. Call at the top of run(): a task inherits its
+    parent's context, so without this two sibling tasks would share the parent's dict object."""
+    _TURN_STATE.set(dict(_TURN_STATE.get() or {}))
+
+
+class turn_local:
+    """Descriptor: a skill attribute whose value is private to the current asyncio task.
+    Reading one that was never set this turn raises AttributeError, so hasattr()/getattr()
+    defaults behave exactly as they did for a plain instance attribute."""
+
+    def __set_name__(self, owner, name):
+        self.key = name
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self
+        state = _TURN_STATE.get()
+        try:
+            return state[(id(obj), self.key)]
+        except (TypeError, KeyError):
+            raise AttributeError(self.key) from None
+
+    def __set__(self, obj, value):
+        state = _TURN_STATE.get()
+        if state is None:
+            state = {}
+            _TURN_STATE.set(state)
+        state[(id(obj), self.key)] = value

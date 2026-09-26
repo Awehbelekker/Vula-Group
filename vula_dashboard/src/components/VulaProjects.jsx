@@ -5,8 +5,8 @@
  * many projects) + the professional-team directory. Mirrors the practice hierarchy.
  */
 import { useState, useEffect, useCallback } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",

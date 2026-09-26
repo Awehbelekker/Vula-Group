@@ -13,6 +13,8 @@ writes go through the audit() helper so vula_admin_audit (migration 072) records
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -58,8 +60,11 @@ async def master_tenants():
     (vula_tenants, matched on tenant_id) + login count (vula_tenant_users)."""
     db = _client()
     cfg = db.table("vula_tenant_config").select("*").order("display_name").execute().data or []
-    signups = {r.get("tenant_id"): r for r in
-               (db.table("vula_tenants").select("*").execute().data or [])}
+    # Keyed by workspace_slug (the operational tenant id); vula_tenants.tenant_id is a UUID and
+    # never matched a config row, so billing columns were always blank.
+    signups = {}
+    for r in (db.table("vula_tenants").select("*").execute().data or []):
+        signups[r.get("workspace_slug") or str(r.get("tenant_id"))] = r
     users = db.table("vula_tenant_users").select("tenant_id,role").execute().data or []
     user_counts: dict[str, int] = {}
     for u in users:
@@ -116,7 +121,7 @@ async def master_mark_paid(tenant_id: str, identity: dict = Depends(require_mast
     """Manual payment confirmation (EFT, correction) — PayFast's ITN webhook does this
     automatically for a real gateway payment; this covers everything else."""
     res = (_client().table("vula_tenants").update({"paid": True, "status": "active"})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     if not res.data:
         raise _billing_row_not_found(tenant_id)
     audit(identity, "tenant_marked_paid", tenant_id)
@@ -151,7 +156,7 @@ async def master_extend_trial(tenant_id: str, body: dict,
                               identity: dict = Depends(require_master)) -> dict:
     days = int((body or {}).get("days") or 14)
     rows = (_client().table("vula_tenants").select("trial_ends")
-            .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+            .eq("workspace_slug", tenant_id).limit(1).execute().data or [])
     if not rows:
         raise _billing_row_not_found(tenant_id)
     current = rows[0].get("trial_ends")
@@ -159,7 +164,7 @@ async def master_extend_trial(tenant_id: str, body: dict,
     base = max(base, datetime.now(timezone.utc))  # extend from today if the trial already lapsed
     new_end = (base + timedelta(days=days)).isoformat()
     res = (_client().table("vula_tenants").update({"trial_ends": new_end})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     audit(identity, "tenant_trial_extended", tenant_id, days=days, new_trial_ends=new_end)
     from vula.api import merchant_audit
     merchant_audit.audit(tenant_id, identity, "billing_trial_extended", days=days)
@@ -169,7 +174,7 @@ async def master_extend_trial(tenant_id: str, body: dict,
 @router.post("/tenants/{tenant_id}/cancel")
 async def master_cancel_subscription(tenant_id: str, identity: dict = Depends(require_master)) -> dict:
     res = (_client().table("vula_tenants").update({"status": "cancelled"})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     if not res.data:
         raise _billing_row_not_found(tenant_id)
     _client().table("vula_tenant_config").update({"active": False}).eq("tenant_id", tenant_id).execute()
@@ -185,7 +190,7 @@ async def master_cancel_subscription(tenant_id: str, identity: dict = Depends(re
 async def master_reactivate_subscription(tenant_id: str,
                                          identity: dict = Depends(require_master)) -> dict:
     res = (_client().table("vula_tenants").update({"status": "active"})
-           .eq("tenant_id", tenant_id).execute())
+           .eq("workspace_slug", tenant_id).execute())
     if not res.data:
         raise _billing_row_not_found(tenant_id)
     _client().table("vula_tenant_config").update({"active": True}).eq("tenant_id", tenant_id).execute()
@@ -199,9 +204,16 @@ async def master_reactivate_subscription(tenant_id: str,
 
 @router.get("/tenants/{tenant_id}/setup")
 async def master_tenant_setup(tenant_id: str):
-    """Onboarding cockpit (UI overhaul P3): the 9-step go-live checklist, COMPUTED live from
-    real state (config/team/WhatsApp/templates/payments/products/pages/orders) — no manually
-    maintained status field to drift out of date."""
+    """Onboarding cockpit (UI overhaul P3) — see setup_checklist."""
+    return setup_checklist(tenant_id)
+
+
+def setup_checklist(tenant_id: str) -> dict:
+    """The go-live checklist, COMPUTED live from real state (config/team/WhatsApp/templates/
+    payments/products/knowledge/pages/orders) — no manually maintained status field to drift
+    out of date. Shared by master's cockpit and the tenant's own Home (2026-09-25: tenants
+    never saw it, so a new business had no idea what was left to do). Each step carries the
+    dashboard tab that fixes it."""
     db = _client()
 
     def _count(table, **eq):
@@ -233,33 +245,53 @@ async def master_tenant_setup(tenant_id: str):
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [None])[0]
     except Exception:
         pays = None
-    payments_ready = bool(pays and (pays.get("eft_details") or pays.get("payment_methods")))
+    gateways = _count("vula_payment_providers", tenant_id=tenant_id, active=True) + \
+        _count("vula_yoco_accounts", tenant_id=tenant_id)
+    payments_ready = bool(gateways or (pays and pays.get("eft_details")))
+    try:
+        tpls = db.table("commerce_wa_templates").select("status").eq("tenant_id", tenant_id) \
+            .limit(100).execute().data or []
+    except Exception:
+        tpls = []
+    approved = sum(1 for t in tpls if (t.get("status") or "").upper() == "APPROVED")
+    docs = _count("vula_filed_documents", tenant_id=tenant_id)
+    products = _count("commerce_products", tenant_id=tenant_id)
+    try:
+        vat = (db.table("commerce_invoice_settings").select("vat_registered")
+               .eq("tenant_id", tenant_id).limit(1).execute().data or [None])[0]
+    except Exception:
+        vat = None
+    vat_set = bool(vat) and vat.get("vat_registered") is not None
 
+    team_n = _count("vula_team_members", tenant_id=tenant_id, active=True)
+    orders_n = _count("commerce_orders", tenant_id=tenant_id)
+    pages_n = _count("vula_pages", tenant_id=tenant_id)
     steps = [
-        {"id": "created", "label": "Created from business type", "done": True,
+        {"id": "created", "label": "Created from business type", "done": True, "tab": "settings",
          "detail": f"{len(cfg.get('modules') or [])} modules enabled"},
-        {"id": "branding", "label": "Brand kit", "done": branded,
+        {"id": "branding", "label": "Brand kit", "done": branded, "tab": "settings",
          "detail": "logo/accent set" if branded else "no logo or accent yet"},
-        {"id": "team", "label": "Team & logins",
-         "done": _count("vula_team_members", tenant_id=tenant_id, active=True) > 0,
-         "detail": f"{_count('vula_team_members', tenant_id=tenant_id, active=True)} member(s)"},
-        {"id": "whatsapp", "label": "WhatsApp connected",
+        {"id": "team", "label": "Team & logins", "done": team_n > 0, "tab": "team",
+         "detail": f"{team_n} member(s)"},
+        {"id": "whatsapp", "label": "WhatsApp connected", "tab": "settings",
          "done": bool(wa and wa.get("status") == "connected"),
          "detail": (wa or {}).get("status") or "not connected"},
-        {"id": "templates", "label": "Message templates",
-         "done": _count("commerce_wa_templates", tenant_id=tenant_id) > 0,
-         "detail": f"{_count('commerce_wa_templates', tenant_id=tenant_id)} submitted"},
-        {"id": "payments", "label": "Payment details", "done": payments_ready,
-         "detail": "configured" if payments_ready else "no gateway or EFT details"},
-        {"id": "knowledge", "label": "Products & knowledge",
-         "done": _count("commerce_products", tenant_id=tenant_id) > 0,
-         "detail": f"{_count('commerce_products', tenant_id=tenant_id)} product(s)"},
-        {"id": "storefront", "label": "Storefront pages",
-         "done": _count("vula_pages", tenant_id=tenant_id) > 0 or bool(cfg.get("store_url")),
-         "detail": cfg.get("store_url") or f"{_count('vula_pages', tenant_id=tenant_id)} page(s)"},
-        {"id": "golive", "label": "First order through",
-         "done": _count("commerce_orders", tenant_id=tenant_id) > 0,
-         "detail": f"{_count('commerce_orders', tenant_id=tenant_id)} order(s)"},
+        # APPROVED, not merely submitted: Meta rejects proactive sends on a pending template.
+        {"id": "templates", "label": "Message templates approved", "done": approved > 0,
+         "tab": "wa-templates", "detail": f"{approved} approved of {len(tpls)} submitted"},
+        {"id": "payments", "label": "Payments (gateway or EFT)", "done": payments_ready,
+         "tab": "payments", "detail": "configured" if payments_ready else "no gateway or EFT details"},
+        {"id": "vat", "label": "VAT status confirmed", "done": vat_set, "tab": "invoices",
+         "detail": ("VAT registered" if (vat or {}).get("vat_registered") else "not VAT registered")
+                   if vat_set else "not set — invoices assume VAT-registered until you say"},
+        {"id": "knowledge", "label": "Products & knowledge", "done": products > 0 or docs > 0,
+         "tab": "products" if products or not docs else "documents",
+         "detail": f"{products} product(s), {docs} document(s)"},
+        {"id": "storefront", "label": "Storefront pages", "tab": "pages",
+         "done": pages_n > 0 or bool(cfg.get("store_url")),
+         "detail": cfg.get("store_url") or f"{pages_n} page(s)"},
+        {"id": "golive", "label": "First order through", "done": orders_n > 0, "tab": "orders",
+         "detail": f"{orders_n} order(s)"},
     ]
     done = sum(1 for s in steps if s["done"])
     return {"tenant_id": tenant_id, "display_name": cfg.get("display_name"),
@@ -464,9 +496,20 @@ _MIGRATION_PROBES: list[tuple[str, str, str] | tuple[str, str, str, str]] = [
 ]
 
 
+def _all_probes() -> list[tuple]:
+    """The hand-listed probes above PLUS every boot-time sentinel (vula/startup_checks.py) —
+    this list used to stop at 108 while the repo reached 177, so Health showed 'all applied'
+    while newer migrations were missing. One list to maintain from now on: add a sentinel."""
+    from vula.startup_checks import _SENTINELS
+    seen = {p[0] for p in _MIGRATION_PROBES}
+    extra = [(num, table, f"{table}.{col}" if col else table, *([col] if col else []))
+             for num, table, col in _SENTINELS if num not in seen]
+    return sorted(list(_MIGRATION_PROBES) + extra, key=lambda p: p[0])
+
+
 def _probe_migrations(db) -> list[dict]:
     out = []
-    for num, table, note, *rest in _MIGRATION_PROBES:
+    for num, table, note, *rest in _all_probes():
         column = rest[0] if rest else None  # probe a specific column for column-only migrations
         try:
             db.table(table).select(column or "*").limit(1).execute()
@@ -475,6 +518,32 @@ def _probe_migrations(db) -> list[dict]:
             applied = False
         out.append({"migration": num, "table": table, "note": note, "applied": applied})
     return out
+
+
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
+
+
+def _migration_files(numbers: list[str]) -> list:
+    """migrations/<num>_*.sql for each number, in migration order."""
+    files = []
+    for num in sorted(set(numbers), key=lambda n: int(n) if n.isdigit() else 0):
+        files.extend(sorted(_MIGRATIONS_DIR.glob(f"{num}_*.sql")))
+    return files
+
+
+@router.get("/migrations/pending-sql")
+async def master_pending_migrations_sql() -> dict:
+    """One paste-ready script of the migrations Health reports as not applied, in order.
+    Migrations are still applied by a person in the Supabase SQL editor — this removes the
+    "which files, in what order" step. Every migration is idempotent, so re-running one that
+    was in fact applied is harmless."""
+    missing = [m["migration"] for m in _probe_migrations(_client()) if not m["applied"]]
+    files = _migration_files(missing)
+    parts = [f"-- Vula: pending migrations ({', '.join(f.name for f in files) or 'none'})\n"
+             f"-- Generated {datetime.now(timezone.utc).isoformat()[:16]}Z from Master › Health.\n"]
+    for f in files:
+        parts.append(f"\n-- ===== {f.name} =====\n{f.read_text()}")
+    return {"migrations": [f.name for f in files], "sql": "".join(parts) if files else ""}
 
 
 # ── Usage & billing ───────────────────────────────────────────────────────────
@@ -525,12 +594,15 @@ async def master_usage(days: int = 14):
     from vula.commerce.plan_limits import SEAT_LIMITS, STARTER_DOCUMENT_LIMIT
     plans = {r["tenant_id"]: (r.get("plan") or "starter").lower() for r in
              (db.table("vula_tenant_config").select("tenant_id,plan").execute().data or [])}
+    # Paged: PostgREST caps a response at 1000 rows, so a busy tenant's document count (and the
+    # Starter 25-document cap check shown next to it) used to be silently wrong.
+    from vula.commerce.ledger import _all_pages
     doc_counts: dict[str, int] = {}
-    for r in (db.table("vula_filed_documents").select("tenant_id").execute().data or []):
+    for r in _all_pages(lambda: db.table("vula_filed_documents").select("tenant_id,id").order("id")):
         doc_counts[r["tenant_id"]] = doc_counts.get(r["tenant_id"], 0) + 1
     seat_counts: dict[str, int] = {}
-    for r in (db.table("vula_tenant_users").select("tenant_id,role")
-              .in_("role", ["owner", "staff"]).execute().data or []):
+    for r in _all_pages(lambda: db.table("vula_tenant_users").select("tenant_id,role,user_id")
+                        .in_("role", ["owner", "staff"]).order("user_id")):
         seat_counts[r["tenant_id"]] = seat_counts.get(r["tenant_id"], 0) + 1
     for tid, plan in plans.items():
         t = per_tenant.setdefault(tid, {"ai_cost_usd": 0.0, "calls": 0, "infra_cost_usd": 0.0})
@@ -751,3 +823,185 @@ async def master_run_qdrant_backup(identity: dict = Depends(require_master)) -> 
     rows = (_client().table("vula_qdrant_backup_status").select("*")
             .order("tenant_id").execute().data or [])
     return {"ok_count": ok_count, "statuses": rows}
+
+
+# ── Model bake-off (evals/harness.py tool-choice layer) ─────────────────────────
+# The live eval needs the OpenRouter key, which only the deployed API holds, so the Master
+# panel starts it here and each model's report is stored in vula_eval_reports (migration 178).
+# Every tool is stubbed and prompts use a no-data sandbox tenant — nothing is read from or sent
+# to any real tenant or customer. Choosing new defaults from the results stays a human
+# decision (CLOUD_MODEL_BY_TASK / MODEL_WORKER_CLOUD on Railway, then `railway up`).
+
+EVAL_CANDIDATES = [
+    "openrouter/meta-llama/llama-3.3-70b-instruct",   # today's model_worker_cloud — the baseline
+    "openrouter/google/gemini-2.5-flash",             # today's model_worker_cheap
+    "openrouter/anthropic/claude-haiku-4.5",
+    "openrouter/anthropic/claude-sonnet-5",
+    "openrouter/openai/gpt-5-mini",
+    "openrouter/qwen/qwen3-235b-a22b",
+]
+_EVAL_SKILLS = {"email_admin", "commerce_admin", "commerce_assistant"}
+_EVAL_MODEL_RE = re.compile(r"^(openrouter/[\w.\-]+/[\w.\-:]+|ollama_chat/[\w.\-:/]+)$")
+_MAX_EVAL_MODELS = 6
+
+
+@router.get("/evals/candidates")
+async def master_eval_candidates() -> dict:
+    """Suggested models plus what's configured today, so results can be read against it."""
+    from config import settings
+    return {
+        "candidates": EVAL_CANDIDATES,
+        "openrouter_configured": bool(settings.openrouter_api_key),
+        "current": {
+            "model_worker_cloud": settings.model_worker_cloud,
+            "model_worker_cheap": settings.model_worker_cheap,
+            "cloud_model_by_task": settings.cloud_model_by_task or "",
+        },
+    }
+
+
+@router.post("/evals/tools")
+async def master_run_tool_evals(body: dict, identity: dict = Depends(require_master)) -> dict:
+    """Queue one tool-choice eval per model; runs in the background, one model after another.
+    Poll GET /evals/reports for results."""
+    from config import settings
+    models = list(dict.fromkeys(str(m).strip() for m in (body.get("models") or []) if str(m).strip()))
+    skill = (body.get("skill") or None)
+    if not models or len(models) > _MAX_EVAL_MODELS:
+        raise HTTPException(status_code=422, detail=f"Pick 1–{_MAX_EVAL_MODELS} models.")
+    bad = [m for m in models if not _EVAL_MODEL_RE.match(m)]
+    if bad:
+        raise HTTPException(status_code=422,
+                            detail=f"Use openrouter/<vendor>/<model> or ollama_chat/<model>: {', '.join(bad)}")
+    if skill and skill not in _EVAL_SKILLS:
+        raise HTTPException(status_code=422, detail=f"skill must be one of {sorted(_EVAL_SKILLS)}")
+    if any(m.startswith("openrouter/") for m in models) and not settings.openrouter_api_key:
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY is not set on this server.")
+
+    db = _client()
+    jobs = []
+    for m in models:
+        row = (db.table("vula_eval_reports")
+               .insert({"model": m, "skill": skill, "status": "running",
+                        "created_by": identity.get("email") or identity.get("user_id")})
+               .execute().data or [{}])[0]
+        if row.get("id"):
+            jobs.append((row["id"], m))
+    if not jobs:
+        raise HTTPException(status_code=500, detail="Couldn't record the run (migration 178 applied?).")
+    audit(identity, "evals.run", models=models, skill=skill)
+
+    from vula.commerce.background_tasks import run_background
+    run_background("master", "model_bakeoff", _run_eval_batch(jobs, skill))
+    return {"queued": [j[0] for j in jobs]}
+
+
+async def _openrouter_model_ids() -> Optional[set]:
+    """OpenRouter's public model list, or None when it can't be fetched (then don't pre-check)."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://openrouter.ai/api/v1/models")
+            r.raise_for_status()
+            return {m.get("id") for m in (r.json().get("data") or []) if m.get("id")}
+    except Exception as exc:  # noqa: BLE001
+        log.info("OpenRouter model list unavailable, skipping id pre-check: %s", exc)
+        return None
+
+
+async def _run_eval_batch(jobs: list, skill: Optional[str]) -> None:
+    from core.llm_router import install_ollama_auth
+    from evals import harness
+    install_ollama_auth()
+    known = await _openrouter_model_ids()
+    db = _client()
+    def now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    for job_id, model in jobs:
+        if known is not None and model.startswith("openrouter/") and model.removeprefix("openrouter/") not in known:
+            upd = {"status": "failed", "error": "Not an OpenRouter model id (check openrouter.ai/models).",
+                   "finished_at": now()}
+        else:
+            try:
+                rep = await harness.run_tools(model, skill)
+                upd = {"status": "done", "passed": rep["passed"], "total": rep["total"],
+                       "report": rep, "finished_at": now()}
+            except Exception as exc:  # noqa: BLE001
+                upd = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                       "finished_at": now()}
+        try:
+            db.table("vula_eval_reports").update(upd).eq("id", job_id).execute()
+        except Exception as exc:  # noqa: BLE001
+            log.error("eval report %s not saved: %s", job_id, exc)
+
+
+@router.get("/evals/reports")
+async def master_eval_reports(limit: int = 30) -> dict:
+    """Latest runs, newest first, with the headline numbers pulled out of each report."""
+    try:
+        rows = (_client().table("vula_eval_reports").select("*")
+                .order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        return {"reports": [], "error": f"{exc} (run migration 178?)"}
+    out = []
+    for r in rows:
+        rep = r.get("report") or {}
+        out.append({
+            **{k: r.get(k) for k in ("id", "model", "skill", "status", "passed", "total", "error",
+                                     "created_by", "created_at", "finished_at")},
+            "p50_secs": rep.get("p50_secs"), "p95_secs": rep.get("p95_secs"),
+            "cost_per_100_usd": rep.get("cost_per_100_usd"), "errors": rep.get("errors"),
+            "failures": [{"prompt": x.get("prompt"), "expect": x.get("expect"), "got": x.get("got"),
+                          "error": x.get("error")} for x in (rep.get("rows") or []) if not x.get("ok")],
+        })
+    return {"reports": out}
+
+
+# ── 👎 feedback → eval cases ────────────────────────────────────────────────────
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def _redact(text: str) -> str:
+    """Phones and emails out before a customer's words go anywhere near the eval set (which
+    lives in the repo). Same phone shape core/log_redaction masks in logs."""
+    from core.log_redaction import _PHONE_RE
+    return _EMAIL_RE.sub("<email>", _PHONE_RE.sub("<phone>", text or ""))
+
+
+def _yaml_str(s: str) -> str:
+    import json
+    return json.dumps(s, ensure_ascii=False)   # a JSON string is a valid YAML flow scalar
+
+
+@router.get("/evals/feedback-cases")
+async def master_feedback_cases(limit: int = 50) -> dict:
+    """Recent 👎-rated replies across tenants, each as a ready-to-paste routing case for
+    evals/cases/routing.yaml. `expect` is pre-filled with where the question routes TODAY —
+    the reviewer confirms or corrects it, since only a person knows the right answer."""
+    try:
+        rows = (_client().table("vula_reply_feedback")
+                .select("id,tenant_id,question,answer,correction,created_at")
+                .eq("rating", "down").order("created_at", desc=True)
+                .limit(max(1, min(limit, 200))).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        return {"cases": [], "error": f"{exc} (run migration 176?)"}
+    from evals import harness
+    cases = []
+    for r in rows:
+        q = _redact((r.get("question") or "").strip())
+        if not q:
+            continue
+        try:
+            got, how = harness.route(q, r.get("tenant_id"))
+        except Exception:  # noqa: BLE001
+            got, how = "reasoning", "error"
+        note = f"👎 {str(r.get('created_at') or '')[:10]}; routes to {got} today ({how})"
+        if r.get("correction"):
+            note += f"; should have said: {_redact(r['correction'])[:120]}"
+        line = (f"- {{prompt: {_yaml_str(q[:300])}, expect: {got}, tenant: {r.get('tenant_id')}, "
+                f"note: {_yaml_str(note)}}}")
+        cases.append({"id": r.get("id"), "tenant_id": r.get("tenant_id"), "question": q[:300],
+                      "routes_to": got, "correction": _redact(r.get("correction") or "")[:300],
+                      "yaml": line})
+    return {"cases": cases}

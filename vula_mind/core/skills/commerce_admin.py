@@ -57,7 +57,10 @@ MAX_TOOL_ITERATIONS = 4
 # rules) entirely, not just these four. See `behaviour_preamble(agentic=True)` below.
 
 _PAID_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered"}
-_VALID_ORDER_STATUS = {"confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
+# "paid" is here so an owner can record a walk-in / cash / EFT payment ("she paid cash") — the
+# tool description and the payment_method branch below were written for it, but without it in
+# this set that branch was unreachable and every such request was refused.
+_VALID_ORDER_STATUS = {"paid", "confirmed", "packing", "dispatched", "delivered", "cancelled", "refunded"}
 
 
 def _readback_gate(tid: str, tool: str, ok: bool, expected: Dict[str, Any],
@@ -98,7 +101,9 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "order_id": {"type": "string"},
             "status": {"type": "string", "enum": sorted(_VALID_ORDER_STATUS)},
             "payment_method": {"type": "string",
-                               "description": "e.g. cash, eft, card, snapscan — only with status=paid"}},
+                               "description": "e.g. cash, eft, card, snapscan — only with status=paid"},
+            "confirm": {"type": "boolean", "description": "Required for cancelled/refunded — "
+                        "without it a preview is returned; only pass after the owner confirms."}},
             "required": ["order_id", "status"]},
     }},
     {"type": "function", "function": {
@@ -181,12 +186,15 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "add_expense",
-        "description": "Record a business expense in Rands.",
+        "description": "Record a business expense in Rands. Without confirm=true, returns a "
+                       "preview instead of recording it — only pass confirm=true after the owner "
+                       "has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "amount_rands": {"type": "number"},
             "category": {"type": "string", "description": "stock, delivery, packaging, marketing, equipment, staff, rent, utilities, or other"},
             "description": {"type": "string"},
-            "supplier": {"type": "string"}},
+            "supplier": {"type": "string"},
+            "confirm": {"type": "boolean"}},
             "required": ["amount_rands", "description"]},
     }},
     {"type": "function", "function": {
@@ -238,7 +246,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "after the owner has explicitly confirmed they want to use it.",
         "parameters": {"type": "object", "properties": {
             "persona_prompt": {"type": "string", "description": "The exact suggested tone text "
-                               "to adopt, as returned by learn_my_voice."}},
+                               "to adopt, as returned by learn_my_voice."},
+            "confirm": {"type": "boolean"}},
             "required": ["persona_prompt"]},
     }},
     {"type": "function", "function": {
@@ -304,8 +313,12 @@ INVOICE_TOOLS = [
             "required": ["customer_name", "line_items"]}}},
     {"type": "function", "function": {
         "name": "send_invoice",
-        "description": "Send an existing invoice to the customer on WhatsApp, by its number (e.g. OTH-INV-00001).",
-        "parameters": {"type": "object", "properties": {"invoice_number": {"type": "string"}},
+        "description": "Send an existing invoice to the customer on WhatsApp, by its number "
+                       "(e.g. OTH-INV-00001). Without confirm=true, returns a preview of who it "
+                       "goes to instead of sending — only pass confirm=true after the owner has "
+                       "explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {"invoice_number": {"type": "string"},
+                                                        "confirm": {"type": "boolean"}},
                        "required": ["invoice_number"]}}},
     {"type": "function", "function": {
         "name": "record_payment",
@@ -336,10 +349,12 @@ INVOICE_TOOLS = [
     {"type": "function", "function": {
         "name": "update_quote_status",
         "description": "Change a quote's status by its number, e.g. mark it accepted after "
-                       "the customer agrees, or declined/expired.",
+                       "the customer agrees, or declined/expired. Without confirm=true, returns a "
+                       "preview instead of changing it.",
         "parameters": {"type": "object", "properties": {
             "quote_number": {"type": "string"},
-            "status": {"type": "string", "enum": ["sent", "accepted", "declined", "expired"]}},
+            "status": {"type": "string", "enum": ["sent", "accepted", "declined", "expired"]},
+            "confirm": {"type": "boolean"}},
             "required": ["quote_number", "status"]}}},
 ]
 PURCHASE_ORDER_TOOLS = [
@@ -1042,8 +1057,10 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         mods = set(enabled_modules(tenant_id) or [])
     except Exception:
         mods = set()
+    # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
+    # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1056,6 +1073,58 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         if matched is None or mod in matched:
             tools += _product_tools_for(tenant_id) if mod == "products" else group
     return tools
+
+
+# Which dashboard access scope (vula_team_members.access — the tab ids VulaTeam.jsx grants) a
+# tool needs. A restricted staff member's WhatsApp agent only gets tools for scopes they were
+# granted, the same boundary the dashboard already draws. Tools not listed are general
+# (knowledge, drafting, contacts, meetings, reminders) and stay available to everyone.
+_TOOL_SCOPE: Dict[str, str] = {
+    "sales_summary": "finances", "finance_insights": "finances", "cash_summary": "finances",
+    "reimbursement_balance": "finances", "add_expense": "finances",
+    "outstanding_invoices": "invoices",
+    "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
+    "stock_status": "products", "update_stock": "products",
+    "preview_broadcast": "broadcast",
+}
+for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
+                       ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
+                       ("orders", SUBSCRIPTION_TOOLS), ("customers", CRM_TOOLS),
+                       ("broadcast", BROADCAST_TOOLS)):
+    for _t in _group:
+        _TOOL_SCOPE.setdefault(_t["function"]["name"], _scope)
+
+_FULL_ACCESS_ROLES = {"owner", "manager", "admin"}
+
+
+def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
+    """The caller's granted dashboard scopes, or None for full access (owner/manager, an
+    unrestricted member with an empty list, an unknown sender, or a failed lookup — the
+    behaviour before this existed)."""
+    if not phone:
+        return None
+    try:
+        digits = re.sub(r"\D", "", phone)
+        target = "27" + digits[1:] if digits.startswith("0") else digits
+        rows = (service._client().table("vula_team_members").select("whatsapp,role,access")
+                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+        for r in rows:
+            d = re.sub(r"\D", "", r.get("whatsapp") or "")
+            d = "27" + d[1:] if d.startswith("0") else d
+            if d and d == target:
+                if (r.get("role") or "").lower() in _FULL_ACCESS_ROLES:
+                    return None
+                return list(r.get("access") or []) or None
+    except Exception as exc:
+        logger.debug("member access lookup skipped: %s", exc)
+    return None
+
+
+def _restrict_to_access(tools: List[Dict[str, Any]], access: Optional[List[str]]) -> List[Dict[str, Any]]:
+    if not access:
+        return tools
+    allowed = set(access)
+    return [t for t in tools if _TOOL_SCOPE.get(t["function"]["name"]) in (None, *allowed)]
 
 
 class ConfirmationRequired(Exception):
@@ -1165,6 +1234,8 @@ class CommerceAdminSkill(BaseSkill):
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
+        if caller_role != "sales_rep":   # reps already get their own narrow set
+            tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
         system_msg = self._system_prompt(inp.tenant_id, role=caller_role, name=ctx["caller_name"],
                                          lang=inp.metadata.get("preferred_language", ""))
         collected_sources: List[Dict[str, Any]] = []
@@ -1215,7 +1286,11 @@ class CommerceAdminSkill(BaseSkill):
             summary = _preview_summary(cr.result)
             row = {
                 "tenant_id": inp.tenant_id, "phone": ctx["phone"] or "", "skill_name": self.name,
-                "tool_name": cr.tool_name, "tool_args": cr.tool_args, "summary": summary,
+                "tool_name": cr.tool_name, "summary": summary,
+                # Who asked travels with the pending action (reserved key, stripped before the
+                # re-dispatch) so the Confirm tap runs with the same role, not a blank one.
+                "tool_args": {**(cr.tool_args or {}),
+                              "_caller": {"role": ctx.get("caller_role"), "name": ctx.get("caller_name")}},
             }
             try:
                 ins = service._client().table("commerce_pending_confirmations").insert(row).execute()
@@ -1381,7 +1456,20 @@ class CommerceAdminSkill(BaseSkill):
         esc = escalate_to_cloud("admin_agent_toolcalling", task_type="commerce_admin")
         if esc:
             model, api_key, api_base = esc
+        restrict = tools is not None  # run() always passes the caller's toolset
         tools = tools or TOOL_SPECS
+        # Only a tool that was OFFERED to this caller may run. The model can name any of the
+        # skill's tools (tool_calls, or inline JSON that _parse_inline_toolcall checks against
+        # ALL tools) — a sales rep's turn, or text injected via history/a document, could
+        # otherwise reach owner-only tools (update_stock, send_broadcast, refunds).
+        offered = {t["function"]["name"] for t in tools} if restrict else self._TOOL_NAMES
+
+        async def _dispatch(name: str, args: Dict[str, Any]) -> Any:
+            if name not in offered:
+                logger.warning("commerce_admin: refused tool %s — not offered to this caller", name)
+                return {"error": f"{name} isn't available here. Use one of the tools you were given, "
+                                 f"or tell the user you can't do that."}
+            return await self._dispatch_tool(name, args, ctx)
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_msg}]
         if history:
@@ -1415,7 +1503,7 @@ class CommerceAdminSkill(BaseSkill):
                 inline = self._parse_inline_toolcall(msg.content or "")
                 if inline:
                     name, args = inline
-                    result = await self._dispatch_tool(name, args, ctx)
+                    result = await _dispatch(name, args)
                     if sources is not None:
                         sources.append(tool_source(name, result))
                     if isinstance(result, dict) and result.get("preview") is True:
@@ -1485,7 +1573,7 @@ class CommerceAdminSkill(BaseSkill):
                     args = json.loads(tc.function.arguments or "{}")
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                result = await self._dispatch_tool(tc.function.name, args, ctx)
+                result = await _dispatch(tc.function.name, args)
                 if sources is not None:
                     sources.append(tool_source(tc.function.name, result))
                 if isinstance(result, dict) and result.get("preview") is True:
@@ -1527,7 +1615,7 @@ class CommerceAdminSkill(BaseSkill):
         inline = self._parse_inline_toolcall(answer)
         if inline:
             name, args = inline
-            result = await self._dispatch_tool(name, args, ctx)
+            result = await _dispatch(name, args)
             if sources is not None:
                 sources.append(tool_source(name, result))
             resp = await litellm.acompletion(
@@ -1576,7 +1664,7 @@ class CommerceAdminSkill(BaseSkill):
         try:
             if name == "sales_summary":      return await self._sales_summary(tid, args.get("period", "today"))
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))
-            if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""), args.get("payment_method"))
+            if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""), args.get("payment_method"), bool(args.get("confirm")))
             if name == "stock_status":       return await self._stock_status(tid, bool(args.get("low_only")))
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
@@ -1588,13 +1676,13 @@ class CommerceAdminSkill(BaseSkill):
             if name == "cash_summary":       return await self._cash_summary(tid, args)
             if name == "reimbursement_balance": return await self._reimbursement_balance(tid, args.get("payee", ""))
             if name == "learn_my_voice":     return await self._learn_my_voice(tid)
-            if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""))
+            if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
-            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""))
+            if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
             if name == "record_payment":     return await self._record_payment(tid, args)
             if name == "list_quotes":        return await self._list_quotes(tid, args.get("status"))
             if name == "convert_quote_to_invoice": return await self._convert_quote_to_invoice(tid, args.get("quote_number", ""))
-            if name == "update_quote_status": return await self._update_quote_status(tid, args.get("quote_number", ""), args.get("status", ""))
+            if name == "update_quote_status": return await self._update_quote_status(tid, args.get("quote_number", ""), args.get("status", ""), bool(args.get("confirm")))
             if name == "list_suppliers":     return await self._list_suppliers(tid)
             if name == "upsert_supplier":    return await self._upsert_supplier(tid, args)
             if name == "delete_supplier":    return await self._delete_supplier(tid, args.get("name", ""), bool(args.get("confirm")))
@@ -1677,14 +1765,37 @@ class CommerceAdminSkill(BaseSkill):
                  "total": self._rands(o.get("total_cents")), "customer": o.get("customer_name")}
                 for o in orders] or {"message": "No orders found."}
 
+    async def _find_order_by_display_id(self, tid: str, display_id: str) -> Optional[dict]:
+        """Exact lookup by display id — the old scan of the latest 200 orders silently missed
+        any older order ("No order found") once a tenant had more than 200."""
+        want = (display_id or "").strip().upper()
+        if not want:
+            return None
+        try:
+            rows = (service._client().table("commerce_orders").select("id,display_id,status")
+                    .eq("tenant_id", tid).eq("display_id", want).limit(1).execute().data or [])
+            if rows:
+                return rows[0]
+        except Exception as exc:
+            logger.debug("display_id lookup failed, scanning recent orders: %s", exc)
+        orders = await service.list_orders(tid, limit=200)
+        return next((o for o in orders if (o.get("display_id") or "").upper() == want), None)
+
     async def _update_order_status(self, tid: str, display_id: str, status: str,
-                                   payment_method: Optional[str] = None) -> Dict[str, Any]:
+                                   payment_method: Optional[str] = None,
+                                   confirm: bool = False) -> Dict[str, Any]:
         if status not in _VALID_ORDER_STATUS:
             return {"error": f"status must be one of {sorted(_VALID_ORDER_STATUS)}"}
-        orders = await service.list_orders(tid, limit=200)
-        match = next((o for o in orders if (o.get("display_id") or "").upper() == display_id.strip().upper()), None)
+        match = await self._find_order_by_display_id(tid, display_id)
         if not match:
             return {"error": f"No order {display_id} found."}
+        # Cancelling or refunding is the one irreversible status change (stock restore, refund
+        # expectations, customer comms) — same preview-then-confirm gate as the other mutators.
+        if status in ("cancelled", "refunded") and not confirm:
+            return {"preview": True, "order": match.get("display_id"),
+                    "current_status": match.get("status"), "new_status": status,
+                    "message": f"Confirm to mark {match.get('display_id')} {status} "
+                               f"(call again with confirm=true)."}
         # Only meaningful alongside 'paid' — recording "cash" against a dispatch would be noise.
         method = payment_method if status == "paid" else None
         # Passed only when there is one, so the ordinary status change keeps its long-standing
@@ -1767,19 +1878,26 @@ class CommerceAdminSkill(BaseSkill):
         return {"outstanding_total": self._rands(owed), "count": len(invoices), "invoices": invoices[:15]}
 
     async def _add_expense(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        from uuid import uuid4
         cents = int(round(float(args.get("amount_rands", 0)) * 100))
         if cents <= 0:
             return {"error": "amount_rands must be positive"}
-        row = {
-            "id": str(uuid4()), "tenant_id": tid,
-            "date": datetime.now(timezone.utc).date().isoformat(),
-            "category": args.get("category") or "other",
-            "description": args.get("description") or "Expense (WhatsApp)",
-            "amount_cents": cents, "supplier": args.get("supplier"), "source": "whatsapp_admin",
-        }
-        service._client().table("commerce_expenses").insert(row).execute()
-        return {"logged": self._rands(cents), "category": row["category"], "description": row["description"]}
+        description = args.get("description") or "Expense (WhatsApp)"
+        if not args.get("confirm"):
+            return {"preview": True, "amount": self._rands(cents), "description": description,
+                    "supplier": args.get("supplier"), "category": args.get("category") or "other",
+                    "message": "Confirm to record this expense (call again with confirm=true)."}
+        # Through the same path as dashboard/receipt expenses (expenses.create_claim): posts to
+        # the general ledger, backs out VAT, matches a project, and dedupes a repeat. The direct
+        # table insert used before skipped all of that, so the trial balance understated costs.
+        from vula.commerce import expenses
+        row = await expenses.create_claim(
+            tid, amount_cents=cents, description=description, supplier=args.get("supplier"),
+            category=args.get("category"), channel="whatsapp_admin")
+        if row.get("duplicate"):
+            return {"duplicate": True, "message": f"An expense of {self._rands(cents)} for that "
+                                                  f"supplier is already recorded today — not added twice."}
+        return {"logged": self._rands(cents), "category": row.get("category") or args.get("category") or "other",
+                "description": description}
 
     async def _preview_broadcast(self, tid: str, audience: str) -> Dict[str, Any]:
         from vula.api.commerce import _aggregate_customers, _filter_audience, _norm_phone
@@ -1838,12 +1956,17 @@ class CommerceAdminSkill(BaseSkill):
                 "note": "Show this to the owner and ask if they'd like Vula to sound like this — "
                        "only call apply_voice_persona if they say yes."}
 
-    async def _apply_voice_persona(self, tid: str, persona_prompt: str) -> Dict[str, Any]:
+    async def _apply_voice_persona(self, tid: str, persona_prompt: str,
+                                   confirm: bool = False) -> Dict[str, Any]:
         """Same accept semantics as vula/api/commerce.py's admin_set_persona: set persona_prompt,
         clear the pending suggestion either way so it doesn't linger stale."""
         persona_prompt = (persona_prompt or "").strip()
         if not persona_prompt:
             return {"error": "No persona text given — call learn_my_voice first."}
+        if not confirm:
+            return {"preview": True, "new_voice": persona_prompt[:300],
+                    "message": "Confirm to change how Vula sounds to customers "
+                               "(call again with confirm=true)."}
         service._client().table("vula_tenant_config").update({
             "persona_prompt": persona_prompt,
             "persona_prompt_suggested": None,
@@ -1908,14 +2031,20 @@ class CommerceAdminSkill(BaseSkill):
             result["verified"] = True
         return result
 
-    async def _send_invoice(self, tid: str, invoice_number: str) -> Dict[str, Any]:
+    async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False) -> Dict[str, Any]:
         num = (invoice_number or "").strip()
-        rows = (service._client().table("commerce_invoices").select("id,invoice_number,customer_phone")
+        rows = (service._client().table("commerce_invoices")
+                .select("id,invoice_number,customer_phone,customer_name,total_cents")
                 .eq("tenant_id", tid).eq("invoice_number", num).limit(1).execute().data or [])
         if not rows:
             return {"error": f"No invoice {num} found."}
         if not rows[0].get("customer_phone"):
             return {"error": f"Invoice {num} has no customer phone on file to send to."}
+        if not confirm:
+            # Messages a customer — preview who it goes to first, like every other outbound tool.
+            return {"preview": True, "invoice_number": num, "customer": rows[0].get("customer_name"),
+                    "to": rows[0].get("customer_phone"), "total": self._rands(rows[0].get("total_cents")),
+                    "message": "Confirm to send this invoice on WhatsApp (call again with confirm=true)."}
         from vula.api.commerce import admin_send_invoice_whatsapp
         await admin_send_invoice_whatsapp(tid, rows[0]["id"], {})
         return {"sent": True, "invoice_number": num}
@@ -1993,13 +2122,18 @@ class CommerceAdminSkill(BaseSkill):
             result["verified"] = True
         return result
 
-    async def _update_quote_status(self, tid: str, quote_number: str, status: str) -> Dict[str, Any]:
+    async def _update_quote_status(self, tid: str, quote_number: str, status: str,
+                                   confirm: bool = False) -> Dict[str, Any]:
         valid = {"sent", "accepted", "declined", "expired"}
         if status not in valid:
             return {"error": f"status must be one of {sorted(valid)}"}
         quote = await self._find_invoice_by_number(tid, quote_number)
         if not quote:
             return {"error": f"No quote {quote_number} found."}
+        if not confirm:
+            return {"preview": True, "quote": quote_number, "current_status": quote.get("status"),
+                    "new_status": status,
+                    "message": f"Confirm to mark {quote_number} {status} (call again with confirm=true)."}
         await service.update_invoice_status(tid, quote["id"], status)
         return {"updated": quote_number, "new_status": status}
 

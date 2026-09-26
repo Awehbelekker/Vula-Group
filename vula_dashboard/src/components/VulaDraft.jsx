@@ -1,7 +1,6 @@
 import { useState } from "react";
 
-const API = import.meta.env.VITE_API_URL || "";
-const API_KEY = import.meta.env.VITE_API_KEY || "";
+import { VULA_API as API } from "../lib/authFetch";
 
 const DOC_TYPES = [
   { id: "fee_proposal", label: "Fee Proposal" },
@@ -14,7 +13,7 @@ const DOC_TYPES = [
 ];
 
 export default function VulaDraft({ tenantId: tenantIdProp }) {
-  const [tenantIdInput, setTenantIdInput] = useState("digg-demo");
+  const [tenantIdInput, setTenantIdInput] = useState("");
   const tenantId = tenantIdProp || tenantIdInput;
   const [docType, setDocType] = useState("fee_proposal");
   const [brief, setBrief] = useState("");
@@ -26,14 +25,14 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
   const [error, setError] = useState(null);
 
   async function generate() {
-    if (!brief.trim()) return;
+    if (!brief.trim() || !tenantId) return;
     setLoading(true);
     setError(null);
     setResult(null);
     try {
       const res = await fetch(`${API}/v1/draft/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tenant_id: tenantId,
           document_type: docType,
@@ -107,7 +106,7 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
 
         <button
           onClick={generate}
-          disabled={loading || !brief.trim()}
+          disabled={loading || !brief.trim() || !tenantId}
           style={btnStyle(loading || !brief.trim())}
         >
           {loading ? "Generating…" : "Generate Document"}

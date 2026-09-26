@@ -223,10 +223,14 @@ async def process_all_onedrive_sync() -> int:
     — no doc_id bookkeeping needed here."""
     from vula.microsoft.credentials import _client
     try:
-        rows = (_client().table("vula_microsoft_accounts").select("tenant_id")
+        rows = (_client().table("vula_microsoft_accounts").select("tenant_id,last_synced_at")
                 .eq("status", "connected").execute().data or [])
     except Exception:
-        return 0
+        try:   # pre-migration-169: no last_synced_at column yet
+            rows = (_client().table("vula_microsoft_accounts").select("tenant_id")
+                    .eq("status", "connected").execute().data or [])
+        except Exception:
+            return 0
     from vula.integrations.sync_status import record_sync_result
 
     total = 0
@@ -243,14 +247,21 @@ async def process_all_onedrive_sync() -> int:
             continue
         from vula.ingestion.pipeline import VulaIngestionPipeline
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+        # Only files modified since the last successful sweep: every sweep used to re-download
+        # and re-embed up to 20 unchanged files per tenant, hourly (the content-hash doc_id kept
+        # it correct, but it was pure wasted download/OCR/embedding work).
+        since = r.get("last_synced_at") or ""
         for f in files:
+            if since and f.get("modifiedTime") and str(f["modifiedTime"]) < str(since):
+                continue
             try:
                 downloaded = await drive_download(tenant_id, f["id"])
                 from config import settings
                 from pathlib import Path
                 d = Path(settings.upload_dir) / tenant_id / "onedrive_sync"
                 d.mkdir(parents=True, exist_ok=True)
-                p = d / (downloaded.get("name") or f["name"])
+                from vula.uploads import safe_upload_path
+                p = safe_upload_path(d, downloaded.get("name") or f["name"])
                 p.write_bytes(downloaded["data"])
                 await pipeline.ingest_file(p, source_type="document")
                 total += 1

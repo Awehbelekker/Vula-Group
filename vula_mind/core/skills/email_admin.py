@@ -79,7 +79,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "Never invent or guess an address.",
         "parameters": {"type": "object", "properties": {
             "to": {"type": "string", "description": "A full email address, never a person's name."},
-            "subject": {"type": "string"}, "body": {"type": "string"}},
+            "subject": {"type": "string"}, "body": {"type": "string"},
+            "confirm": {"type": "boolean", "description": "Only when this mailbox SENDS directly: "
+                        "pass true only after the user said yes to the exact recipient, subject "
+                        "and body you showed them."}},
             "required": ["to", "subject", "body"]}}},
     {"type": "function", "function": {
         "name": "list_followups",
@@ -405,7 +408,8 @@ class EmailAdminSkill(BaseSkill):
                 from vula.ingestion.pipeline import VulaIngestionPipeline
                 d = settings.upload_dir / tenant_id
                 d.mkdir(parents=True, exist_ok=True)
-                p: Path = d / att["name"]
+                from vula.uploads import safe_upload_path
+                p: Path = safe_upload_path(d, att["name"])
                 p.write_bytes(att["data"])
                 res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
                 return {"filed": att["name"], "chunks": getattr(res, "chunks_stored", 0)}
@@ -440,6 +444,16 @@ class EmailAdminSkill(BaseSkill):
                     # The address check above (2026-08-08, widened to both modes 2026-09-01)
                     # already guarantees a real address by this point, which matters most here:
                     # in send mode this call is an irreversible real send.
+                    if not args.get("confirm"):
+                        # 2026-09-25: the "confirm before sending" rule was prompt-only — a model
+                        # that skipped it sent real email. Now enforced here.
+                        return {"status": "need_info", "preview": {"to": to, "subject": subj,
+                                                                   "body": body[:600]},
+                                # need_info short-circuits: this text IS the reply the user
+                                # sees; their "yes" next turn leads to a confirm=true call.
+                                "message": (f"Ready to send this email — it goes out immediately:\n"
+                                            f"To: {to}\nSubject: {subj}\n\n{body[:600]}\n\n"
+                                            "Reply YES to send it, or tell me what to change.")}
                     return await service.send(creds, to, subj, body)
                 return await service.save_draft(creds, to, subj, body)
             if name == "list_followups":

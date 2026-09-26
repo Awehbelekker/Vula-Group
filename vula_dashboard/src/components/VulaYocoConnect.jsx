@@ -7,8 +7,8 @@
  */
 
 import { useState, useEffect } from 'react'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 export default function VulaYocoConnect({ tenantId, tenantName, adminEmail }) {
   const [status, setStatus] = useState(null)

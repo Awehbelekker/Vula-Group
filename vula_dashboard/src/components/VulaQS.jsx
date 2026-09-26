@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import { VULA_API } from "../lib/authFetch";
 
 // ─── AECOM 2025/26 COST DATA (scraped & verified from AECOM Africa Cost Guide)
 // Source: AECOM Africa Property & Construction Cost Guide 2025/26, pp.47–62
@@ -165,7 +166,7 @@ function Row({ label, value, sub, highlight, bold }) {
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function VulaQS() {
+export default function VulaQS({ tenantId }) {
   const categories = [...new Set(Object.values(AECOM_RATES).map(r => r.category))];
 
   // Project inputs
@@ -175,6 +176,14 @@ export default function VulaQS() {
   const [rateKey, setRateKey]         = useState("fitout_standard");
   const [useRange, setUseRange]       = useState("mid"); // low | mid | high
   const [customRate, setCustomRate]   = useState("");
+  // The business's own per-m² rates (QS Rates tab) — pick one instead of typing it in.
+  const [ownM2Rates, setOwnM2Rates]   = useState([]);
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${VULA_API}/v1/qs/rates/${tenantId}`).then(r => r.json())
+      .then(d => setOwnM2Rates((d.rates || []).filter(r => /^(m2|m²|sqm|per m2|per m²)$/i.test((r.unit || "").trim()))))
+      .catch(() => setOwnM2Rates([]));
+  }, [tenantId]);
   const [complexity, setComplexity]   = useState("medium");
   const [location, setLocation]       = useState("western_cape");
 
@@ -354,6 +363,12 @@ export default function VulaQS() {
                 <div>
                   <label style={lbl}>Custom Rate R/m² (overrides)</label>
                   <input type="number" value={customRate} onChange={e => setCustomRate(e.target.value)} style={inp} placeholder={`e.g. ${R(AECOM_RATES[rateKey]?.low || 0).replace("R ", "")}`} />
+                  {ownM2Rates.length > 0 && (
+                    <select value="" onChange={e => e.target.value && setCustomRate(e.target.value)} style={{ ...inp, marginTop: 6 }}>
+                      <option value="">Use one of your rates…</option>
+                      {ownM2Rates.map(r => <option key={`${r.code || r.description}-${r.rate}`} value={r.rate}>{r.description || r.code} — {R(r.rate)}/m²</option>)}
+                    </select>
+                  )}
                 </div>
               </div>
 
