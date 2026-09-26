@@ -231,7 +231,12 @@ class Settings(BaseSettings):
     # JSON map of skill name → policy ("none"|"deterministic"|"adversarial"), overriding the
     # skill's class attribute. Flip per skill via env, no redeploy: e.g. '{"reasoning": "adversarial"}'
     verification_policy_overrides: str = "{}"
-    verification_adversarial_action: str = "caveat"   # caveat | escalate (escalate reserved)
+    # caveat: today's behaviour (drop confidence, append the caveat, stop there).
+    # escalate: additionally fires one backgrounded corrective retry on the cloud route after a
+    # confirmed defect (core/verification.py's _background_defect_retry) — sends a WhatsApp
+    # follow-up only if the retry actually clears verification. Default stays "caveat" until
+    # watched in production; flip via env, no redeploy.
+    verification_adversarial_action: str = "caveat"   # caveat | escalate
     # 2026-09-17: every adversarial checker call sampled over 7 days routed to cloud (task_type
     # "verification" always escalates to a stronger judge model, by design) — an 8s cap left the
     # check failing open (fail-open, so the answer ships unverified with no caveat) on ~13% of
