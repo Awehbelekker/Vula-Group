@@ -3424,7 +3424,11 @@ def _rands(v: Any) -> str:
         return str(v)
 
 
-def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Optional[str]:
+_FILE_EXPORT_RE = re.compile(r"\b(excel|spreadsheet|xlsx?|csv)\b", re.IGNORECASE)
+
+
+def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
+                                  question: str = "") -> Optional[str]:
     """A complete WhatsApp answer for a supplier spend/materials question, built only from a
     find_filed_document result: count, server-computed total, refunds, the invoice list and the
     materials roll-up. None when the result isn't a complete filed-document answer (not found,
@@ -3433,7 +3437,16 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Op
     2026-09-23 (digg-demo): with all 16 invoices and the R21,256.00 total correctly in the tool
     result, the local llama3.1:8b replied "The total amount spent is R942.00" (the first row),
     invented quantities, and described the result as "JSON output from an email tool". Money is
-    never left to a model to read back — this writes the reply deterministically instead."""
+    never left to a model to read back — this writes the reply deterministically instead.
+
+    `question` (the caller's ORIGINAL raw message — distinct from `query`, the resolved search
+    term used for the "I took X to mean Y" line) is checked for an explicit file-format ask.
+    2026-09-25, same tenant: "...a summary of what was spent in excel" and, a reply later,
+    "...do a full breakdown in excel" — Vula has no capability to generate an actual .xlsx file
+    at all, and both requests were silently answered as if "in excel" had never been said (the
+    second attempt, from a different code path with no such disclosure either, tried to fake a
+    spreadsheet by rendering a markdown table instead). Say so plainly instead of ignoring the
+    part of the request that can't be done or pretending a markdown table is a substitute."""
     if result.get("status") != "found" or "total_amount_cents" not in result:
         return None
     matches = result.get("matches") or []
@@ -3449,6 +3462,9 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Op
         head += (f" (after {len(refunds)} refund{'s' if len(refunds) != 1 else ''} of "
                  f"{', '.join(_rands(r.get('amount')) for r in refunds)})")
     lines = [head + "."]
+    if _FILE_EXPORT_RE.search(question or ""):
+        lines.append("📎 I can't generate an actual spreadsheet file yet — here's the full "
+                      "breakdown as text below; copy it into a spreadsheet if you need one.")
     if result.get("match_type") == "resolved_via_knowledge_base" and query:
         lines.append(f"I took \"{query}\" to mean {supplier} — tell me if that's wrong, or save "
                      f"it with \"{query} is an alias for {supplier}\".")
@@ -3496,7 +3512,58 @@ async def answer_supplier_history(tenant_id: str, question: str) -> Optional[str
     if not any(n and f" {n} " in padded for n in (_norm_name(x) for x in names)):
         return None
     result = await find_filed_document(tenant_id, names[0], category="Invoice")
-    return format_supplier_history_reply(result, query=names[0])
+    return format_supplier_history_reply(result, query=names[0], question=question)
+
+
+# Matches the head line format_supplier_history_reply always writes first, as it appears once
+# persisted into conversation_history by ChatHistoryDB.format_for_prompt() (f"Vula AI{age_tag}:
+# {text}" — the reply's own internal newlines survive, so this must search the whole history
+# string, not split it into lines first). Captures the supplier name.
+_SUPPLIER_REPLY_SIGNATURE_RE = re.compile(
+    r"Vula AI[^:\n]*:\s*\*([^*]+)\*:\s*\d+\s+documents?,\s*total spend", re.IGNORECASE)
+
+# 2026-09-25 real incident: "Please show all and do a full.break down in excel" named no
+# supplier at all — it only made sense as a follow-up to the Jack Hammer question two turns
+# earlier. This is a deliberately narrow safety gate (not just "any follow-up"): it only fires
+# on wording that asks for MORE of something already answered, so an unrelated request that
+# happens to land right after a supplier answer (e.g. "please create an invoice for Regan")
+# does not get mistaken for a continuation. Public (no leading underscore): core/skills/
+# email_admin.py's _direct_supplier_answer reuses it for the same gate inside the tool loop.
+CONTINUATION_INTENT_RE = re.compile(
+    r"\b(all|everything|full|complete|entire|more|rest|break\s*[.\-]?\s*down)\b", re.IGNORECASE)
+
+
+def last_supplier_from_history(history: str) -> Optional[str]:
+    """The supplier named in the most recent format_supplier_history_reply answer found in
+    `history`, or None. History is chronological, so the LAST regex match is the most recent."""
+    if not history:
+        return None
+    matches = _SUPPLIER_REPLY_SIGNATURE_RE.findall(history)
+    return matches[-1].strip() if matches else None
+
+
+async def answer_supplier_history_continuation(tenant_id: str, history: str,
+                                                question: str) -> Optional[str]:
+    """answer_supplier_history's counterpart for a follow-up that names no supplier itself —
+    only makes sense read against the just-answered question in conversation history. None
+    unless BOTH a prior supplier-history answer is found in `history` AND `question` reads as
+    asking for more of it (CONTINUATION_INTENT_RE); either gate alone is too weak (a bare
+    "more" a turn after an unrelated answer, or a genuinely new supplier question that happens
+    to use the word "full", are both real risks this two-gate design is meant to avoid).
+
+    2026-09-25 (digg-demo): "Please show all and do a full.break down in excel" landed right
+    after the Jack Hammer total was given, named no supplier, and fell all the way through to
+    `reasoning` (no find_document tool at all), which just paraphrased the prior WhatsApp reply
+    from history into a garbled, cut-off markdown table instead of answering properly."""
+    if not CONTINUATION_INTENT_RE.search(question or ""):
+        return None
+    supplier = last_supplier_from_history(history)
+    if not supplier:
+        return None
+    result = await find_filed_document(tenant_id, supplier, category="Invoice")
+    if result.get("resolved_supplier") and _norm_name(result["resolved_supplier"]) != _norm_name(supplier):
+        return None
+    return format_supplier_history_reply(result, question=question)
 
 
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:

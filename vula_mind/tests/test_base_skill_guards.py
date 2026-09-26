@@ -47,6 +47,18 @@ def test_empty_question_does_not_match():
     assert not looks_like_tenant_data_question(None)
 
 
+def test_breakdown_typo_split_across_two_words_still_matches():
+    """Real digg-demo incident, 2026-09-25: "Please show all and do a full.break down in
+    excel" — a stray typo period split "breakdown" into two separate words, missing the
+    literal \\bbreakdown\\b marker entirely. HRM's mailbox-fallback routing (which gates on
+    this function) never fired, and the message fell all the way through to `reasoning` (no
+    find_document tool at all), which just paraphrased the prior WhatsApp reply from
+    conversation history into a markdown table instead of answering properly."""
+    assert looks_like_tenant_data_question("Please show all and do a full.break down in excel")
+    assert looks_like_tenant_data_question("give me a break-down of expenses")
+    assert looks_like_tenant_data_question("break  down please")  # double space, still tolerated
+
+
 # ── tool_source ────────────────────────────────────────────────────────────────────
 
 def test_tool_source_shape():

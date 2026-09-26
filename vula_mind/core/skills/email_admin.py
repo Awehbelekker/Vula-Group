@@ -161,17 +161,29 @@ def _fenced_result(name: str, result: Any) -> str:
     return fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
 
 
-def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any) -> Optional[str]:
+async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any,
+                                  tenant_id: str = "", history: str = "") -> Optional[str]:
     """For a supplier spend/materials question, a complete find_document result is answered
     straight from the numbers (service.format_supplier_history_reply) — never re-read by the
     model. 2026-09-23: the local 8B turned a correct 16-invoice, R21,256.00 result into
-    "total spent R942.00" with invented quantities."""
+    "total spent R942.00" with invented quantities.
+
+    2026-09-25: a follow-up naming no supplier itself ("show all... full breakdown... in
+    excel") can still reach here — the model called find_document (maybe with an off-target
+    query) but the wording gate below doesn't recognize the question as a supplier-history ask.
+    Rather than let that fall through to the model paraphrasing raw JSON, re-check via
+    answer_supplier_history_continuation, which reads conversation history for the supplier the
+    prior turn already answered about and does its own fresh, verified search."""
     if tool != "find_document" or not isinstance(result, dict):
         return None
-    if not looks_like_supplier_history_question(question or ""):
+    if looks_like_supplier_history_question(question or ""):
+        from vula.commerce.service import format_supplier_history_reply
+        return format_supplier_history_reply(result, query=(args or {}).get("query") or "",
+                                             question=question or "")
+    if not tenant_id or not history:
         return None
-    from vula.commerce.service import format_supplier_history_reply
-    return format_supplier_history_reply(result, query=(args or {}).get("query") or "")
+    from vula.commerce.service import answer_supplier_history_continuation
+    return await answer_supplier_history_continuation(tenant_id, history, question or "")
 
 
 _MAILBOX_FREE_TOOLS = {"find_document"}
@@ -195,6 +207,16 @@ class EmailAdminSkill(BaseSkill):
                 direct = await answer_supplier_history(inp.tenant_id, inp.question)
             except Exception as exc:  # noqa: BLE001 — fall through to the tool-calling loop
                 logger.warning("email_admin direct supplier answer failed: %s", exc)
+                direct = None
+            if direct:
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
+        else:
+            try:
+                from vula.commerce.service import answer_supplier_history_continuation
+                direct = await answer_supplier_history_continuation(
+                    inp.tenant_id, inp.conversation_history or "", inp.question or "")
+            except Exception as exc:  # noqa: BLE001 — fall through to the tool-calling loop
+                logger.warning("email_admin supplier-history continuation failed: %s", exc)
                 direct = None
             if direct:
                 return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
@@ -302,7 +324,8 @@ class EmailAdminSkill(BaseSkill):
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
-                    direct = _direct_supplier_answer(question, name, args, result)
+                    direct = await _direct_supplier_answer(question, name, args, result,
+                                                            tenant_id=tenant_id, history=history)
                     if direct:
                         return direct
                     messages.append({"role": "assistant", "content": msg.content or ""})
@@ -324,7 +347,8 @@ class EmailAdminSkill(BaseSkill):
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
-                direct = _direct_supplier_answer(question, tc.function.name, args, result)
+                direct = await _direct_supplier_answer(question, tc.function.name, args, result,
+                                                        tenant_id=tenant_id, history=history)
                 if direct:
                     return direct
                 messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name,
