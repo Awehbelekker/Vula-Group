@@ -796,6 +796,24 @@ async def _voice_retry_scheduler_loop() -> None:
         await _asyncio.sleep(120)  # the box usually comes back quickly; retry often
 
 
+async def _inbound_redrive_loop() -> None:
+    """Re-run inbound WhatsApp messages a restart cut off mid-handling (migration 179) — see
+    vula/api/whatsapp.py::redrive_stuck_inbound. Runs soon after boot, since a redeploy is
+    exactly when messages get stranded."""
+    import asyncio as _asyncio
+    from vula.api.whatsapp import redrive_stuck_inbound
+
+    await _asyncio.sleep(90)  # settle on boot, and let the old process's work age past the cutoff
+    while True:
+        try:
+            n = await redrive_stuck_inbound()
+            if n:
+                log.info("re-drove %d stuck inbound message(s)", n)
+        except Exception as exc:
+            log.warning("inbound re-drive tick failed: %s", exc)
+        await _asyncio.sleep(120)
+
+
 async def _stale_escalation_scheduler_loop() -> None:
     """Tenant-agnostic 'conversation gone stale' nudge (2026-07-28) — generalizes proactive
     re-engagement past commerce-only tenants. _commerce_jobs_scheduler_loop only ever iterates
@@ -1293,6 +1311,8 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_stale_handoff_scheduler_loop()))
     # Retries voice notes parked when transcription was unreachable (migration 148).
     _scheduled_job_tasks.append(_asyncio.create_task(_voice_retry_scheduler_loop()))
+    # Re-drives text/voice messages a restart cut off mid-handling (migration 179).
+    _scheduled_job_tasks.append(_asyncio.create_task(_inbound_redrive_loop()))
     # Mass Mind Phase 1 — cross-tenant rollup of the two recovery loops above (migration 160).
     _scheduled_job_tasks.append(_asyncio.create_task(_mass_mind_health_watch_loop()))
     # Mass Mind Phase 1 — anonymized pattern library + cold-start routing fallback (migration 162).

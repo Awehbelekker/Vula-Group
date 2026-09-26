@@ -198,24 +198,137 @@ async def verify_webhook(
 _bg_tasks: set = set()
 
 
-def _run_bg(coro, *, label: str) -> None:
+def _now_iso() -> str:
+    from datetime import datetime as _dt, timezone as _tz
+    return _dt.now(_tz.utc).isoformat()
+
+
+def _track_inbound(msg_id: Optional[str], **fields) -> None:
+    """Best-effort state update on the message's dedup row. Never raises — before migration
+    179 the columns don't exist and messages must still flow exactly as before."""
+    if not msg_id:
+        return
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").update(
+            {**fields, "updated_at": _now_iso()}).eq("msg_id", msg_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("inbound tracking skipped for %s (migration 179?): %s", msg_id, exc)
+
+
+def _run_bg(coro, *, label: str, track: Optional[dict] = None) -> None:
     """Fire a slow handler as a background task and return control to the webhook immediately.
 
     2026-09-10: a document upload was processed INLINE (26–56s: download + a 503-ing local
     vision model + cloud escalation + KB ingest + reply). Meta's webhook times out at ~15–20s
     and re-sends — turning one file into a burst of distinct messages, each a full run. Returning
-    200 fast is Meta's own requirement. Exceptions are logged (a bare create_task swallows them)."""
+    200 fast is Meta's own requirement. Exceptions are logged (a bare create_task swallows them).
+
+    `track` ({msg_id, tenant_id, phone, kind, payload}) makes the work durable: the message's
+    vula_wa_msg_dedup row (migration 179) is marked processing → done, so one that a redeploy
+    or crash cut off mid-run is re-driven by redrive_stuck_inbound() instead of silently lost
+    (Meta won't redeliver it — the webhook already returned 200)."""
     import asyncio as _a
 
     async def _wrapped():
+        if track:
+            _track_inbound(track.get("msg_id"), status="processing",
+                           tenant_id=track.get("tenant_id") or "", phone=track.get("phone") or "",
+                           kind=track.get("kind"), payload=track.get("payload"))
         try:
             await coro
         except Exception as exc:  # noqa: BLE001
             logger.error("background handler %s failed: %s: %s", label, type(exc).__name__, exc)
+            if track:
+                _track_inbound(track.get("msg_id"), status="failed", payload=None)
+            return
+        if track:
+            # The message text isn't kept once handled — it's already in the conversation log.
+            _track_inbound(track.get("msg_id"), status="done", payload=None)
 
     t = _a.create_task(_wrapped())
     _bg_tasks.add(t)
     t.add_done_callback(_bg_tasks.discard)
+
+
+def _text_track(msg_id: str, tenant_id: Optional[str], phone: str, text: str, route_mode: Optional[str]) -> dict:
+    return {"msg_id": msg_id, "tenant_id": tenant_id, "phone": phone, "kind": "text",
+            "payload": {"text": text, "route_mode": route_mode}}
+
+
+_REDRIVE_AFTER_MIN = 5       # a normal run finishes well inside this
+_REDRIVE_GIVE_UP_MIN = 60    # older than this, a reply would be more confusing than helpful
+_REDRIVE_MAX_ATTEMPTS = 2
+
+
+async def redrive_stuck_inbound() -> int:
+    """Re-run inbound text / voice messages whose handler never finished (process restarted or
+    crashed mid-run). Each row is claimed with a conditional update so two workers can't both
+    take it; after _REDRIVE_MAX_ATTEMPTS or _REDRIVE_GIVE_UP_MIN the customer is told honestly
+    to resend instead (same give-up policy as vula/voice_retry.py). Returns rows re-driven."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from vula.commerce import service as _cs
+    db = _cs._client()
+    now = _dt.now(_tz.utc)
+    try:
+        rows = (db.table("vula_wa_msg_dedup")
+                .select("msg_id,tenant_id,phone,kind,payload,attempts,seen_at")
+                .eq("status", "processing")
+                .lt("updated_at", (now - _td(minutes=_REDRIVE_AFTER_MIN)).isoformat())
+                .limit(50).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("inbound re-drive skipped (migration 179?): %s", exc)
+        return 0
+
+    done = 0
+    for r in rows:
+        msg_id, attempts = r["msg_id"], int(r.get("attempts") or 0)
+        tenant_id, phone = r.get("tenant_id") or "", r.get("phone") or ""
+        try:
+            seen = _dt.fromisoformat(str(r.get("seen_at")).replace("Z", "+00:00"))
+        except ValueError:
+            seen = now
+        too_old = now - seen > _td(minutes=_REDRIVE_GIVE_UP_MIN)
+        if too_old or attempts >= _REDRIVE_MAX_ATTEMPTS:
+            claimed = (db.table("vula_wa_msg_dedup").update({"status": "abandoned", "payload": None,
+                                                              "updated_at": now.isoformat()})
+                       .eq("msg_id", msg_id).eq("status", "processing").eq("attempts", attempts)
+                       .execute().data)
+            if claimed and phone:
+                await _send_reply(phone, (
+                    "Sorry, I lost track of your last message while the system restarted. "
+                    "Could you send it again?"), tenant_id)
+            logger.warning("abandoned stuck inbound %s after %d attempts", msg_id, attempts)
+            continue
+        claimed = (db.table("vula_wa_msg_dedup").update({"attempts": attempts + 1,
+                                                          "updated_at": now.isoformat()})
+                   .eq("msg_id", msg_id).eq("status", "processing").eq("attempts", attempts)
+                   .execute().data)
+        if not claimed:
+            continue
+        p = r.get("payload") or {}
+        mode = p.get("route_mode")
+        try:
+            if r.get("kind") == "text" and p.get("text"):
+                if mode == "commerce" and tenant_id:
+                    await _handle_commerce_message(phone, p["text"], msg_id, tenant_id)
+                elif mode == "knowledge" and tenant_id:
+                    await _handle_message(phone, p["text"], msg_id, route_tenant_id=tenant_id)
+                else:
+                    await _handle_message(phone, p["text"], msg_id)
+            elif r.get("kind") == "audio" and p.get("media_id"):
+                await _handle_voice_note(phone, p["media_id"], p.get("mime_type") or "audio/ogg",
+                                         msg_id, mode or "", tenant_id or None)
+            else:
+                _track_inbound(msg_id, status="abandoned", payload=None)
+                continue
+            _track_inbound(msg_id, status="done", payload=None)
+            done += 1
+            logger.info("re-drove stuck inbound %s (attempt %d)", msg_id, attempts + 1)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("re-drive of %s failed: %s: %s", msg_id, type(exc).__name__, exc)
+            _track_inbound(msg_id, status="failed", payload=None)
+    return done
 
 
 @router.post("/webhook")
@@ -363,13 +476,16 @@ async def receive_message(
                             # _send_reply, so backgrounding them changes nothing about delivery.
                             if route_mode == "commerce":
                                 # Number is a shop line → ordering flow
-                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message")
+                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message",
+                                        track=_text_track(msg_id, route_tenant, phone, text, route_mode))
                             elif route_mode == "knowledge":
                                 # Number is a tenant's assistant line → that tenant's model
-                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message")
+                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message",
+                                        track=_text_track(msg_id, route_tenant, phone, text, route_mode))
                             else:
                                 # Unmapped number → fall back to sender-based lookup
-                                _run_bg(_handle_message(phone, text, msg_id), label="text_message")
+                                _run_bg(_handle_message(phone, text, msg_id), label="text_message",
+                                        track=_text_track(msg_id, route_tenant, phone, text, route_mode))
 
                     elif msg_type == "interactive":
                         interactive = msg.get("interactive", {})
@@ -435,7 +551,9 @@ async def receive_message(
                         if phone and media_id:
                             _run_bg(_handle_voice_note(
                                 phone, media_id, mime_type, msg_id, route_mode, route_tenant
-                            ), label="voice_note")
+                            ), label="voice_note", track={
+                                "msg_id": msg_id, "tenant_id": route_tenant, "phone": phone, "kind": "audio",
+                                "payload": {"media_id": media_id, "mime_type": mime_type, "route_mode": route_mode}})
 
                     elif msg_type == "location":
                         # Shared pin (e.g. delivery address step) → a Maps link, routed through the
