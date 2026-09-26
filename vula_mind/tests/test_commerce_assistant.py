@@ -249,6 +249,55 @@ async def test_agent_loop_returns_content_without_tool_calls():
     assert answer == "Howzit! 🐟"
 
 
+# ── unverified_prices wiring (2026-09-26) ───────────────────────────────────────
+# This skill quotes prices straight to paying customers from KB context (the storefront price
+# list) but never checked a stated price actually appears in that context — same failure class
+# as the real gerflor incident (a confident, unfounded R129.90/m² price) that motivated
+# unverified_prices() in commerce_admin.py in the first place.
+
+@pytest.mark.asyncio
+async def test_run_replaces_answer_when_kb_price_is_unverified():
+    skill = CommerceAssistantSkill()
+    sources = [{"type": "kb", "name": "kb", "filename": "pricelist.pdf", "score": 0.9,
+               "text": "Fresh Snoek R185.00 per kg"}]
+    inp = SkillInput(question="what's the snoek price?", tenant_id=TENANT, metadata=CTX)
+    with (
+        patch.object(skill, "_retrieve_kb", new=AsyncMock(return_value=("Fresh Snoek R185.00", sources))),
+        patch.object(skill, "_agent_loop", new=AsyncMock(return_value="Snoek is R999.00 per kg.")),
+    ):
+        out = await skill.run(inp)
+    assert "999.00" not in out.answer
+    assert "couldn't confirm" in out.answer.lower()
+    assert out.confidence == 0.3
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_answer_when_kb_price_is_verified():
+    skill = CommerceAssistantSkill()
+    sources = [{"type": "kb", "name": "kb", "filename": "pricelist.pdf", "score": 0.9,
+               "text": "Fresh Snoek R185.00 per kg"}]
+    inp = SkillInput(question="what's the snoek price?", tenant_id=TENANT, metadata=CTX)
+    with (
+        patch.object(skill, "_retrieve_kb", new=AsyncMock(return_value=("Fresh Snoek R185.00", sources))),
+        patch.object(skill, "_agent_loop", new=AsyncMock(return_value="Snoek is R185.00 per kg.")),
+    ):
+        out = await skill.run(inp)
+    assert "R185.00" in out.answer
+    assert "couldn't confirm" not in out.answer.lower()
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_flag_a_price_with_no_kb_context_at_all():
+    skill = CommerceAssistantSkill()
+    inp = SkillInput(question="what's the snoek price?", tenant_id=TENANT, metadata=CTX)
+    with (
+        patch.object(skill, "_retrieve_kb", new=AsyncMock(return_value=("", []))),
+        patch.object(skill, "_agent_loop", new=AsyncMock(return_value="Snoek is R185.00 per kg.")),
+    ):
+        out = await skill.run(inp)
+    assert "R185.00" in out.answer
+
+
 @pytest.mark.asyncio
 async def test_run_falls_back_when_loop_fails():
     skill = CommerceAssistantSkill()
@@ -281,6 +330,9 @@ async def test_retrieve_kb_sources_carry_chunk_text():
         _, sources = await skill._retrieve_kb(SkillInput(question="snoek price", tenant_id=TENANT))
     assert sources[0]["text"] == "Fresh snoek R185/kg"
     assert sources[0]["type"] == "kb"
+    # 2026-09-26: unverified_prices() filters sources by `name`, which KB entries didn't carry
+    # at all before — nothing without this key would ever ground-check a KB-sourced price.
+    assert sources[0]["name"] == "kb"
 
 
 # ── Booking-focused conditioning (health/services tenants, no storefront) ──────
