@@ -83,11 +83,10 @@ const TENANT_NAMES = {
   "awake-sa": "Awake South Africa",
 };
 
-// Fallback switcher list if /v1/tenants is unreachable — the live list is DB-driven.
-const MASTER_TENANTS_FALLBACK = [
-  { id: "digg-demo", label: "DIGG Architecture" },
-  { id: "off-the-hook", label: "Off the Hook" },
-];
+// The master's last-picked tenant, so a reload lands back on it. No hardcoded fallback tenant:
+// silently showing a demo tenant's data when the real list or login is missing hid real faults.
+const MASTER_TENANT_KEY = "vula.masterTenant";
+const savedMasterTenant = () => { try { return localStorage.getItem(MASTER_TENANT_KEY) || ""; } catch { return ""; } };
 
 // A #/master/tenant/{id} deep link (VulaMasterPanel's bookmarkable tenant drill-in) needs the
 // Master shell mounted before it can read that hash back — seed the initial tab from it so a
@@ -98,8 +97,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [merchTab, setMerchTab] = useState("overview");
   const [route, setRoute] = useState(window.location.hash);
-  const [masterTenant, setMasterTenant] = useState("digg-demo");
-  const [masterTenants, setMasterTenants] = useState(MASTER_TENANTS_FALLBACK);
+  const [masterTenant, setMasterTenant] = useState(savedMasterTenant);
+  const [masterTenants, setMasterTenants] = useState([]);
   const [impersonateReason, setImpersonateReason] = useState(""); // shown in the "viewing as tenant" banner
   const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
@@ -113,9 +112,18 @@ export default function App() {
     if (role !== "master") return;
     fetch(`${VULA_API}/v1/tenants`).then(r => r.json()).then(d => {
       const list = (d.tenants || []).map(t => ({ id: t.tenant_id, label: t.display_name || t.tenant_id }));
-      if (list.length) setMasterTenants(list);
+      setMasterTenants(list);
+      setMasterTenant(cur => (cur && list.some(t => t.id === cur)) ? cur : (list[0]?.id || ""));
     }).catch(() => {});
   }, [role]);
+
+  useEffect(() => {
+    if (role !== "master" || !masterTenant) return;
+    try { localStorage.setItem(MASTER_TENANT_KEY, masterTenant); } catch { /* private mode */ }
+  }, [role, masterTenant]);
+
+  // The signed-in user's own business ("" until the login carries one — never a stand-in).
+  const ownTenant = tenantId && tenantId !== "master" ? tenantId : "";
 
   // Track hash changes for public legal routes
   useEffect(() => {
@@ -128,8 +136,7 @@ export default function App() {
   // override from the DB (commerce_invoice_settings — accent/ink/font) so a tenant's own choices
   // drive buttons/tabs/borders/headings everywhere — not just the invoice PDF (P3 brand kit).
   useEffect(() => {
-    const tid = (role === "master") ? masterTenant
-      : (tenantId && tenantId !== "master" ? tenantId : "digg-demo");
+    const tid = (role === "master") ? masterTenant : ownTenant;
     const baseTheme = getTenantTheme(tid);
     applyAccent(baseTheme.accent);
     applyInk(baseTheme.ink);
@@ -139,6 +146,7 @@ export default function App() {
 
     const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
     setBrandLogoUrl(null); // reset on tenant switch so a stale logo never flashes for the wrong tenant
+    if (!tid) return;
     fetch(`${API}/v1/commerce/${tid}/admin/invoice-settings`)
       .then((r) => r.json())
       .then((d) => {
@@ -160,7 +168,8 @@ export default function App() {
   // Load this member's access scope (which modules they may see) for owners/staff.
   useEffect(() => {
     if (!user || (role !== "owner" && role !== "staff")) return;
-    const tid = tenantId && tenantId !== "master" ? tenantId : "digg-demo";
+    const tid = ownTenant;
+    if (!tid) return;
     const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
     fetch(`${API}/v1/team/${tid}/me?email=${encodeURIComponent(user.email || "")}`)
       .then((r) => r.json())
@@ -177,8 +186,8 @@ export default function App() {
   // effective tenant, for whichever shell (owner/staff or master-open-as-tenant) is live.
   useEffect(() => {
     if (!user || role === "master" && activeTab !== "merchant") return;
-    const tid = (role === "master") ? masterTenant
-      : (tenantId && tenantId !== "master" ? tenantId : "digg-demo");
+    const tid = (role === "master") ? masterTenant : ownTenant;
+    if (!tid) return;
     const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
     const poll = () => fetch(`${API}/v1/commerce/${tid}/admin/escalations?status=open`)
       .then(r => r.json())
@@ -220,9 +229,7 @@ export default function App() {
   }
 
   // Resolve effective tenant — master picks via the switcher; owners see their own
-  const effectiveTenantId = (role === "master")
-    ? masterTenant
-    : (tenantId && tenantId !== "master" ? tenantId : "digg-demo");
+  const effectiveTenantId = (role === "master") ? masterTenant : ownTenant;
 
   const ActiveComponent = TABS.find((t) => t.id === activeTab)?.component ?? VulaDashboard;
 
@@ -234,6 +241,21 @@ export default function App() {
   // ── Merchant owners/staff get a scoped, single-store admin ───────────────────
   // Sidebar shell (UI overhaul Phase 2) themed as THEIR brand — logo + accent at the top,
   // "Powered by Vula" at the bottom. Same VulaMerchantAdmin content, shell-controlled nav.
+  if ((role === "owner" || role === "staff") && !ownTenant) {
+    return (
+      <div style={{ padding: 32, fontFamily: "system-ui", color: "#2A2A2A", maxWidth: 480, margin: "10vh auto" }}>
+        <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Your login isn't linked to a business yet</h2>
+        <p style={{ fontSize: 14, color: "#8A8680", lineHeight: 1.5 }}>
+          Ask the business owner to add you under Team, or contact Vula support. Nothing is shown
+          until your login belongs to a business, so you never see someone else's data.
+        </p>
+        <button onClick={logout} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, border: "1px solid #DDD8CE", background: "#fff", cursor: "pointer" }}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
   if (role === "owner" || role === "staff") {
     const theme = getTenantTheme(effectiveTenantId);
     const tenantName = theme.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
@@ -333,6 +355,7 @@ export default function App() {
               fontSize: 12, fontFamily: "system-ui", cursor: "pointer",
             }}
           >
+            {!masterTenants.length && <option value="">{masterTenant || "No tenants loaded"}</option>}
             {masterTenants.map((t) => (
               <option key={t.id} value={t.id}>{t.label}</option>
             ))}

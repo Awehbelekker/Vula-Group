@@ -470,7 +470,7 @@ const labelStyle = {
 };
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function VulaDashboard() {
+export default function VulaDashboard({ tenantId: tenantIdProp }) {
   // Use the logged-in user's tenant; fall back to DIGG demo
   const authTenant = (() => {
     try {
@@ -478,7 +478,8 @@ export default function VulaDashboard() {
       return raw ? JSON.parse(raw)?.state?.tenantId : null;
     } catch { return null; }
   })();
-  const [tenantId] = useState(authTenant || "digg-demo");
+  // The tenant the shell is showing (master's switcher, or the owner's own), else the login's.
+  const tenantId = tenantIdProp || (authTenant && authTenant !== "master" ? authTenant : "");
   const [apiStatus, setApiStatus] = useState("checking");
   const [docCount, setDocCount] = useState(0);
 
@@ -488,6 +489,7 @@ export default function VulaDashboard() {
       .then(d => setApiStatus(d.status))
       .catch(() => setApiStatus("offline"));
 
+    if (!tenantId) return;
     fetch(`${VULA_API}/documents/${tenantId}`)
       .then(r => r.json())
       .then(d => setDocCount(d.kb_chunks || d.count || 0))

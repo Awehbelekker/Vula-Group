@@ -2,15 +2,15 @@ import { useState } from "react";
 
 import { VULA_API as API } from "../lib/authFetch";
 
-export default function VulaAgent() {
-  const [tenantId, setTenantId] = useState("digg-demo");
+export default function VulaAgent({ tenantId: tenantIdProp }) {
+  const [tenantId, setTenantId] = useState(tenantIdProp || "");
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
   async function run() {
-    if (!question.trim()) return;
+    if (!question.trim() || !tenantId.trim()) return;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -52,7 +52,7 @@ export default function VulaAgent() {
             onKeyDown={e => { if (e.key === "Enter" && e.ctrlKey) run(); }}
           />
         </div>
-        <button onClick={run} disabled={loading || !question.trim()} style={btnStyle(loading || !question.trim())}>
+        <button onClick={run} disabled={loading || !question.trim() || !tenantId.trim()} style={btnStyle(loading || !question.trim() || !tenantId.trim())}>
           {loading ? "Thinking…" : "Run Agent (Ctrl+Enter)"}
         </button>
       </div>
