@@ -413,7 +413,8 @@ async def test_agent_loop_uses_ask_team_only_tools_when_booking_focused():
 
     tool_names = {t["function"]["name"] for t in captured["tools"]}
     expected_ask_team = {t["function"]["name"] for t in _ASK_TEAM_ONLY}
-    assert tool_names == expected_ask_team | {"list_availability", "book_appointment", "cancel_appointment"}
+    assert tool_names == expected_ask_team | {"list_availability", "book_appointment", "cancel_appointment",
+                                              "reschedule_appointment"}
     assert "list_products" not in tool_names
 
 
