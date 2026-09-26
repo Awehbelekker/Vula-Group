@@ -179,8 +179,19 @@ async def approve_firing(tenant_id: str, firing_id: str) -> dict:
     firing = rows[0]
     if firing["status"] != "pending":
         return firing  # already decided — no-op
+    # Claim it atomically before sending: the read-then-send above let a double-click (or two
+    # people approving at once) both pass the check and send the customer the message twice.
+    claimed = (_client().table("commerce_automation_firings").update({"status": "sending"})
+               .eq("tenant_id", tenant_id).eq("id", firing_id).eq("status", "pending").execute().data)
+    if not claimed:
+        return {**firing, "status": "in_progress"}
     automation = {"action_type": firing["action_type"], "action_config": firing["action_config"]}
-    sent = await _run_action(tenant_id, automation, firing.get("trigger_context") or {})
+    try:
+        sent = await _run_action(tenant_id, automation, firing.get("trigger_context") or {})
+    except Exception:
+        _client().table("commerce_automation_firings").update({"status": "pending"}) \
+            .eq("tenant_id", tenant_id).eq("id", firing_id).execute()
+        raise
     upd = {"status": "approved" if sent else "rejected", "decided_at": service._now()}
     res = (_client().table("commerce_automation_firings").update(upd)
            .eq("tenant_id", tenant_id).eq("id", firing_id).execute())

@@ -55,3 +55,22 @@ def test_customer_message_allowed_on_new_triggers_not_low_stock():
     bad = au._validate_parsed_rule({"trigger_type": "low_stock", "action_type": "whatsapp_customer",
                                     "action_config": {"message": "Hi"}})
     assert "error" in bad
+
+
+@pytest.mark.asyncio
+async def test_approving_twice_sends_once():
+    from unittest.mock import MagicMock
+    firing = {"id": "f1", "status": "pending", "action_type": "whatsapp_customer",
+              "action_config": {"message": "hi"}, "trigger_context": {"customer_phone": "2782"}}
+    q = MagicMock()
+    for m in ("select", "eq", "limit", "update"):
+        getattr(q, m).return_value = q
+    # read (pending), claim lost to the other click
+    q.execute.side_effect = [MagicMock(data=[firing]), MagicMock(data=[])]
+    db = MagicMock()
+    db.table.return_value = q
+    send = AsyncMock(return_value=True)
+    with patch.object(au, "_client", return_value=db), patch.object(au, "_run_action", send):
+        out = await au.approve_firing("t1", "f1")
+    send.assert_not_awaited()
+    assert out["status"] == "in_progress"
