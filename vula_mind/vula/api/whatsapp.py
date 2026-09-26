@@ -1669,6 +1669,8 @@ async def _handle_image_or_video(
             is_staff = (_is_tenant_owner(route_tenant, phone)
                         or await _sender_is_sales_rep(phone, route_tenant))
             if not is_staff:
+                if msg_type == "image" and await _maybe_customer_pop(phone, media_id, route_tenant):
+                    return
                 if msg_type == "image":
                     description = await _describe_photo_for_rep(media_id)
                     effective_text = (f"{caption}\n\n[What's in the photo: {description}]"
@@ -4122,6 +4124,50 @@ def _upload_evidence_to_storage(data: bytes, object_path: str, content_type: str
     """Upload an evidence photo to the 'evidence' bucket. Returns a public URL,
     or None on failure (caller falls back to the local path)."""
     return _upload_to_storage("evidence", object_path, data, content_type)
+
+
+async def _maybe_customer_pop(phone: str, media_id: str, tenant_id: str) -> bool:
+    """A CUSTOMER sent a proof-of-payment screenshot for their EFT order. Stage it into the same
+    owner review the staff path uses (bank_rec.stage_pop_for_review, matched to this customer's
+    own open orders/invoices first) — but the "does this match X? reply yes" question goes to the
+    BUSINESS, never back to the customer (only team members may answer it: a customer confirming
+    their own payment would be no check at all). The customer just gets an acknowledgement.
+    Before this, the screenshot was only described to the shopping assistant and nobody was told.
+    Returns True when handled as a POP; False for any other photo (normal handling continues)."""
+    import tempfile
+    from pathlib import Path as _Path
+    try:
+        data = await _download_media_bytes(media_id)
+        if not data:
+            return False
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as fh:
+            fh.write(data)
+            tmp = fh.name
+        try:
+            fin = await _scan_financial_photo(tmp)
+        finally:
+            _Path(tmp).unlink(missing_ok=True)
+        total_r = _num((fin or {}).get("total"))
+        if not fin or fin.get("doc_type") != "payment_confirmation" or total_r <= 0:
+            return False
+        from vula.commerce import bank_rec
+        proposal = bank_rec.stage_pop_for_review(
+            tenant_id, round(total_r * 100), fin.get("date"), fin.get("reference"),
+            fin.get("payee"), sender_phone=phone)
+        from vula.integrations.notify import notify_team
+        note = f"📸 A customer ({phone}) sent a proof of payment.\n{proposal}"
+        if not await notify_team(tenant_id, "payment_received", note):
+            from vula.escalation import _pick_helper
+            helper = _pick_helper(tenant_id)
+            if helper and helper.get("whatsapp"):
+                await _send_reply(helper["whatsapp"], note, tenant_id)
+        await _send_reply(phone, (f"Thanks — we've received your proof of payment for "
+                                  f"R{total_r:,.2f}. The team will confirm it shortly; your order "
+                                  f"is marked paid once they have."), tenant_id)
+        return True
+    except Exception as exc:
+        logger.warning("customer POP handling failed for %s: %s", tenant_id, exc)
+        return False
 
 
 async def _describe_photo_for_rep(media_id: str) -> str:
