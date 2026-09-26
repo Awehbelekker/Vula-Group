@@ -208,6 +208,22 @@ async def verify_webhook(
 _bg_tasks: set = set()
 
 
+def _durable_dedup_claim(msg_id: str) -> bool:
+    """Atomically claim an inbound msg_id in vula_wa_msg_dedup (migration 071) — the primary key
+    rejects a second insert from any worker. False = already claimed (a Meta redelivery). A
+    missing table or transient DB error fails OPEN (True): the in-memory dedup still applies,
+    and a message is never silently dropped."""
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").insert({"msg_id": msg_id}).execute()
+    except Exception as exc:  # noqa: BLE001
+        s = str(exc)
+        if "23505" in s or "duplicate" in s.lower():
+            return False
+        logger.debug("durable dedup unavailable (run migration 071?): %s", exc)
+    return True
+
+
 def _now_iso() -> str:
     from datetime import datetime as _dt, timezone as _tz
     return _dt.now(_tz.utc).isoformat()
@@ -242,19 +258,19 @@ def _run_bg(coro, *, label: str, track: Optional[dict] = None) -> None:
 
     async def _wrapped():
         if track:
-            _track_inbound(track.get("msg_id"), status="processing",
-                           tenant_id=track.get("tenant_id") or "", phone=track.get("phone") or "",
-                           kind=track.get("kind"), payload=track.get("payload"))
+            await _a.to_thread(_track_inbound, track.get("msg_id"), status="processing",
+                               tenant_id=track.get("tenant_id") or "", phone=track.get("phone") or "",
+                               kind=track.get("kind"), payload=track.get("payload"))
         try:
             await coro
         except Exception as exc:  # noqa: BLE001
             logger.error("background handler %s failed: %s: %s", label, type(exc).__name__, exc)
             if track:
-                _track_inbound(track.get("msg_id"), status="failed", payload=None)
+                await _a.to_thread(_track_inbound, track.get("msg_id"), status="failed", payload=None)
             return
         if track:
             # The message text isn't kept once handled — it's already in the conversation log.
-            _track_inbound(track.get("msg_id"), status="done", payload=None)
+            await _a.to_thread(_track_inbound, track.get("msg_id"), status="done", payload=None)
 
     t = _a.create_task(_wrapped())
     _bg_tasks.add(t)
@@ -419,18 +435,12 @@ async def receive_message(
                     _processed_msg_ids.append(msg_id)
                     if len(_processed_msg_ids) > _MAX_PROCESSED_IDS:
                         _processed_msg_ids.pop(0)
-                    try:
-                        from vula.commerce import service as _dedup_cs
-                        _dedup_cs._client().table("vula_wa_msg_dedup").insert(
-                            {"msg_id": msg_id}).execute()
-                    except Exception as _dedup_exc:
-                        _s = str(_dedup_exc)
-                        if "23505" in _s or "duplicate" in _s.lower():
-                            logger.info("Skipping duplicate WhatsApp message (cross-worker): %s", msg_id)
-                            continue
-                        # Table missing / transient DB error → fail OPEN (in-memory dedup still
-                        # applies) so messages are never silently dropped before migration 071.
-                        logger.debug("durable dedup unavailable (run migration 071?): %s", _dedup_exc)
+                    # Off the event loop: the Supabase client is synchronous, and a slow
+                    # round-trip here would stall every other conversation on this worker.
+                    import asyncio as _aio
+                    if not await _aio.to_thread(_durable_dedup_claim, msg_id):
+                        logger.info("Skipping duplicate WhatsApp message (cross-worker): %s", msg_id)
+                        continue
 
                 # Route by the number the person messaged → (tenant, mode)
                 phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
@@ -5574,12 +5584,13 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
     skipped duplicate (it WAS sent), so callers record it as done.
     """
     if idem_key:
-        if not _claim_outbound(tenant_id, idem_key):
+        import asyncio as _aio
+        if not await _aio.to_thread(_claim_outbound, tenant_id, idem_key):
             logger.info("skipping duplicate automated send %s", idem_key)
             return True
         ok = await _send_reply(to, message, tenant_id)
         if not ok:
-            _release_outbound(tenant_id, idem_key)
+            await _aio.to_thread(_release_outbound, tenant_id, idem_key)
         return ok
     message = _sanitize_outbound(message)
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None

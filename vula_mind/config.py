@@ -116,7 +116,9 @@ class Settings(BaseSettings):
     # Inbound messages one customer number may send one tenant per minute before Vula stops
     # running the assistant on them (one "please wait" reply per minute instead). Every Meta
     # webhook comes from Meta's IPs, so the per-IP slowapi limit can't tell senders apart.
-    # The business's own team is exempt. 0 = off.
+    # The business's own team is exempt. 0 = off. Counted per worker process, in memory — with
+    # N web workers a sender can get up to N x this before being slowed. Deliberately not a DB
+    # counter (that would add a write to every inbound message); tighten the number instead.
     wa_sender_rate_limit: int = 15
     vula_base_url: str = "https://app.vula.ai"
     # The dashboard's actual reachable URL — vula_base_url above is a stale placeholder (see

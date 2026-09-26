@@ -38,7 +38,7 @@ def _payload(i, run, phone="27820000009"):
     }}]}]}
 
 
-def _post_many(n, *, owner=False):
+def _post_many(n, *, owner=False, db=None):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     import uuid
@@ -55,7 +55,8 @@ def _post_many(n, *, owner=False):
          patch.object(wa, "_mark_read_and_typing", new=AsyncMock()), \
          patch.object(wa, "_handle_commerce_message", new=handled), \
          patch.object(wa, "_send_reply", new=sent), \
-         patch("vula.commerce.service._client", side_effect=RuntimeError("no db")):
+         patch("vula.commerce.service._client", **({"return_value": db} if db is not None
+                                                     else {"side_effect": RuntimeError("no db")})):
         c = TestClient(app)
         for i in range(n):
             assert c.post("/v1/whatsapp/webhook", json=_payload(i, run)).status_code == 200
@@ -71,3 +72,29 @@ def test_webhook_stops_running_the_assistant_and_warns_once():
 def test_webhook_never_limits_the_team():
     handled, sent = _post_many(6, owner=True)
     assert handled.call_count == 6 and sent.call_count == 0
+
+
+def test_durable_dedup_claim_runs_off_the_event_loop_and_rejects_redelivery():
+    """The synchronous Supabase insert goes through asyncio.to_thread (never blocks other
+    conversations), and a duplicate-key error means 'already handled' — skip it."""
+    import asyncio
+    real_to_thread = asyncio.to_thread
+    called = []
+
+    async def spy(fn, *a, **k):
+        called.append(fn.__name__)
+        return await real_to_thread(fn, *a, **k)
+
+    from unittest.mock import MagicMock
+    db = MagicMock()
+    db.table.return_value.insert.return_value.execute.side_effect = Exception(
+        'duplicate key value violates unique constraint "vula_wa_msg_dedup_pkey" (23505)')
+    with patch("asyncio.to_thread", new=spy):
+        handled, _ = _post_many(1, db=db)
+    assert "_durable_dedup_claim" in called
+    assert handled.call_count == 0          # the DB says another worker already has it
+
+
+def test_durable_dedup_fails_open_when_the_table_is_missing():
+    with patch("vula.commerce.service._client", side_effect=RuntimeError("relation does not exist")):
+        assert wa._durable_dedup_claim("wamid.z") is True
