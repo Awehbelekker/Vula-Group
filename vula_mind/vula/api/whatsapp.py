@@ -5512,11 +5512,65 @@ async def _mark_read_and_typing(message_id: str, tenant_id: str = "") -> None:
         logger.debug("read/typing indicator skipped for %s: %s", message_id, exc)
 
 
-async def _send_reply(to: str, message: str, tenant_id: str = "") -> bool:
+_sent_keys: dict[str, float] = {}
+
+
+def _outbound_key_id(tenant_id: str, idem_key: str) -> str:
+    return f"out:{tenant_id or '-'}:{idem_key}"[:200]
+
+
+def _claim_outbound(tenant_id: str, idem_key: str) -> bool:
+    """Claim a once-only automated send. False = already sent (this worker, or any worker via
+    the vula_wa_msg_dedup primary key). A DB outage fails open to the in-memory check."""
+    import time as _time
+    key = _outbound_key_id(tenant_id, idem_key)
+    now = _time.monotonic()
+    if now - _sent_keys.get(key, -1e9) < 86400:
+        return False
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").insert({"msg_id": key}).execute()
+    except Exception as exc:  # noqa: BLE001
+        s = str(exc)
+        if "23505" in s or "duplicate" in s.lower():
+            _sent_keys[key] = now
+            return False
+        logger.debug("outbound send key not stored (%s): %s", key, exc)
+    _sent_keys[key] = now
+    if len(_sent_keys) > 20000:
+        for k in [k for k, t in _sent_keys.items() if now - t >= 86400]:
+            _sent_keys.pop(k, None)
+    return True
+
+
+def _release_outbound(tenant_id: str, idem_key: str) -> None:
+    """The send failed — let a later retry of the same key go out."""
+    key = _outbound_key_id(tenant_id, idem_key)
+    _sent_keys.pop(key, None)
+    try:
+        from vula.commerce import service as _cs
+        _cs._client().table("vula_wa_msg_dedup").delete().eq("msg_id", key).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("outbound send key not released (%s): %s", key, exc)
+
+
+async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Optional[str] = None) -> bool:
     """
     Send a WhatsApp text message via the Meta Graph API.
     Credentials resolved per-tenant from Supabase, falling back to env vars.
+
+    idem_key: for automated sends (reminders, standing-order notices) — the same key for the
+    same tenant goes out once, however many workers or retries reach it. Returns True for a
+    skipped duplicate (it WAS sent), so callers record it as done.
     """
+    if idem_key:
+        if not _claim_outbound(tenant_id, idem_key):
+            logger.info("skipping duplicate automated send %s", idem_key)
+            return True
+        ok = await _send_reply(to, message, tenant_id)
+        if not ok:
+            _release_outbound(tenant_id, idem_key)
+        return ok
     message = _sanitize_outbound(message)
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
     if not creds:

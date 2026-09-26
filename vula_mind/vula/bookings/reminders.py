@@ -55,7 +55,9 @@ async def send_due_reminders(tenant_id: str) -> int:
         svc = b.get("service_name") or "your appointment"
         body = (f"Hi {b.get('customer_name') or 'there'}! Reminder: *{svc}* with {name} "
                 f"is booked for {when}. Reply here to reschedule or cancel. See you then! 📅")
-        ok = await _send_reply(phone, body, tenant_id)
+        # Keyed: two workers, or a crash between the send and the reminder_sent update below,
+        # must not remind the customer twice.
+        ok = await _send_reply(phone, body, tenant_id, idem_key=f"booking_reminder:{b['id']}")
         if ok:
             try:
                 bs._client().table("commerce_bookings").update(

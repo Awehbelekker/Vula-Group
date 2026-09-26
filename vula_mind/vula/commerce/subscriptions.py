@@ -220,7 +220,7 @@ async def _notify(sub: dict, order: dict) -> None:
         await _send_reply(phone, (
             f"Hi {sub.get('customer_name') or 'there'}! Your standing order *{order.get('display_id')}* "
             f"is booked in ({total}). {pay} Reply STOP anytime to pause your repeat order."
-        ), sub["tenant_id"])
+        ), sub["tenant_id"], idem_key=f"standing_order:{order.get('id') or order.get('display_id')}")
     except Exception as exc:
         log.debug("subscription notify skipped: %s", exc)
 
