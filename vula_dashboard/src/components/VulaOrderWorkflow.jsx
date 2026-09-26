@@ -69,6 +69,18 @@ export default function VulaOrderWorkflow({ tenantId }) {
       </div>
 
       <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 16, paddingTop: 14 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.text, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!s.collection_enabled} onChange={(e) => save({ collection_enabled: e.target.checked })} />
+          Offer collection (pickup) — no delivery fee, no address needed
+        </label>
+        {s.collection_enabled && (
+          <input defaultValue={s.collection_note || ""} placeholder="Where & when to collect, e.g. Shop, 12 Main Rd — weekdays 9–5"
+            style={{ ...field, width: "100%", boxSizing: "border-box", marginTop: 8 }}
+            onBlur={(e) => e.target.value !== (s.collection_note || "") && save({ collection_note: e.target.value })} />
+        )}
+      </div>
+
+      <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 16, paddingTop: 14 }}>
         <span style={{ fontWeight: 700, color: C.text, fontSize: 13 }}>Payment options offered to customers</span>
         <p style={{ fontSize: 12, color: C.muted, margin: "2px 0 10px" }}>
           Which ways can customers pay when ordering over WhatsApp?

@@ -258,6 +258,10 @@ def _is_clear_confirmation(message: str) -> bool:
             and len(msg.split()) <= 12)
 
 
+def _wants_collection(args: Dict[str, Any]) -> bool:
+    return str((args or {}).get("fulfilment") or "").strip().lower() == "collection"
+
+
 def _name_tokens(text: str) -> List[str]:
     toks = re.findall(r"[a-z0-9]+", (text or "").lower())
     # crude singular: "fillets" ~ "fillet", "prawns" ~ "prawn" (never shorten tiny words)
@@ -608,7 +612,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                         "enum": ["online", "cod", "eft"],
                         "description": "How the customer chose to pay: online card, cod (pay on delivery), or eft (bank transfer).",
                     },
-                    "delivery_address": {"type": "string", "description": "Where to deliver the order."},
+                    "fulfilment": {"type": "string", "enum": ["delivery", "collection"],
+                                   "description": "delivery (default) or collection — collection only "
+                                                  "if the shop offers it; then no address is needed."},
+                    "delivery_address": {"type": "string", "description": "Where to deliver the order (not needed for collection)."},
                     "customer_name": {"type": "string", "description": "Customer's name."},
                     "delivery_slot": {
                         "type": "string",
@@ -635,6 +642,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "payment_method": {"type": "string", "enum": ["online", "cod", "eft"]},
+                    "fulfilment": {"type": "string", "enum": ["delivery", "collection"]},
                     "delivery_address": {"type": "string"},
                     "customer_name": {"type": "string"},
                     "delivery_slot": {"type": "string", "enum": ["morning", "afternoon", "express"]},
@@ -1033,6 +1041,12 @@ class CommerceAssistantSkill(BaseSkill):
             if cfg.get("min_order_cents"):
                 lines.append(f"Minimum order: R{cfg['min_order_cents'] / 100:.2f} — politely decline "
                              "smaller orders and suggest adding something.")
+            if cfg.get("collection_enabled"):
+                lines.append("Customers may COLLECT instead of delivery (no delivery fee): pass "
+                             "fulfilment='collection' to review_order/place_order."
+                             + (f" Collection details: {cfg['collection_note']}" if cfg.get("collection_note") else ""))
+            else:
+                lines.append("Collection is NOT offered — every order is delivered.")
             if cfg.get("delivery_radius_km") and cfg.get("origin_lat") is not None:
                 lines.append(f"We deliver within {cfg['delivery_radius_km']:g} km of "
                              f"{cfg.get('origin_label') or 'the shop'}. If a customer shares their "
@@ -2173,7 +2187,10 @@ class CommerceAssistantSkill(BaseSkill):
         if not items:
             return {"error": "The cart is empty — add items before reviewing."}
         subtotal = sum(_line_cents(i["quantity"], i["unit_price_cents"]) for i in items)
-        delivery = service.delivery_fee_cents(tenant_id, cart, subtotal)
+        collect = _wants_collection(args)
+        if collect and not cfg.get("collection_enabled"):
+            return {"error": "This shop doesn't offer collection — ask for a delivery address instead."}
+        delivery = 0 if collect else service.delivery_fee_cents(tenant_id, cart, subtotal)
 
         # Discount preview only — never trust this for the amount actually charged. place_order
         # re-resolves the code authoritatively inside service.create_order (same as the
@@ -2200,12 +2217,13 @@ class CommerceAssistantSkill(BaseSkill):
             f"🧾 *Please check your order:*\n{item_lines}\n"
             f"Subtotal: R{subtotal / 100:.2f}\nDelivery: R{delivery / 100:.2f}" + discount_note
             + f"\n*Total: R{total / 100:.2f}*"
-            + (f"\nDeliver to: {addr}" if addr else "")
+            + (f"\nCollection{': ' + cfg['collection_note'] if cfg.get('collection_note') else ''}"
+               if collect else (f"\nDeliver to: {addr}" if addr else ""))
             + (f"\nPayment: {pay}" if pay else "")
             + "\n\nReply *CONFIRM* to place it, or tell me what to change.")
         return {
             "preview": preview,
-            "still_needed": [k for k, v in (("delivery address", addr), ("payment method", pay)) if not v],
+            "still_needed": [k for k, v in (("delivery address", addr or collect), ("payment method", pay)) if not v],
             "instruction_to_assistant": ("Send 'preview' to the customer verbatim. Do NOT call "
                                          "place_order until they reply CONFIRM. Ask for anything in "
                                          "'still_needed' first."),
@@ -2342,7 +2360,10 @@ class CommerceAssistantSkill(BaseSkill):
                                  f"R{_sub / 100:.2f} — tell the customer and ask if they'd like to add "
                                  f"more. Do not place the order."}
 
-        address = (args.get("delivery_address") or "").strip()
+        collect = _wants_collection(args)
+        if collect and not cfg.get("collection_enabled"):
+            return {"error": "This shop doesn't offer collection — ask for a delivery address instead."}
+        address = "Collection" if collect else (args.get("delivery_address") or "").strip()
         if not address:
             return {"error": "Need a delivery address before placing the order — ask the customer for it."}
         # Prefer the verified on-file contact name over whatever the model supplied — a local
@@ -2371,7 +2392,9 @@ class CommerceAssistantSkill(BaseSkill):
                 "customer_name": name,
                 "delivery_address": address,
                 "delivery_slot": slot,
-                "delivery_notes": args.get("delivery_notes"),
+                "delivery_notes": ("COLLECTION — customer will collect. " if collect else "")
+                                  + (args.get("delivery_notes") or ""),
+                "fulfilment": "collection" if collect else "delivery",
                 "channel": "whatsapp",
                 "payment_method": method,
                 # Resolved authoritatively inside create_order (never trusts a client-side

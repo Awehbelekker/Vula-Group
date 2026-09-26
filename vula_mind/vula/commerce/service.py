@@ -643,7 +643,8 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     items = cart.get("commerce_cart_items", [])
     # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
     subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
-    delivery = delivery_fee_cents(tenant_id, cart, subtotal)
+    # A collection (pickup) order is never charged delivery (migration 177).
+    delivery = 0 if checkout_data.get("fulfilment") == "collection" else delivery_fee_cents(tenant_id, cart, subtotal)
 
     # Discount code (migration 091) — resolved authoritatively here regardless of any
     # client-side preview, since the actual amount charged must never trust the client.
