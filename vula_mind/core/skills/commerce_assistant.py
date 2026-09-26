@@ -823,6 +823,20 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
                            "description": "The number the customer picked from the list shown earlier."}}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "reschedule_appointment",
+            "description": "Move one of the customer's upcoming appointments to a new time (check "
+                           "availability first). If they have more than one, this returns a "
+                           "numbered list — ask which, then call again with choice. The old "
+                           "booking is only cancelled once the new slot is confirmed.",
+            "parameters": {"type": "object", "properties": {
+                "start": {"type": "string", "description": "New slot as YYYY-MM-DDTHH:MM (local time)."},
+                "choice": {"type": "integer", "description": "Which booking, from the list shown earlier."}},
+                "required": ["start"]},
+        },
+    },
 ]
 
 # Derived from the specs so the leak guard can never drift out of sync with the real tool list
@@ -1392,6 +1406,8 @@ class CommerceAssistantSkill(BaseSkill):
             return await self._exec_book_appointment(tid, phone, args)
         if name == "cancel_appointment":
             return await self._exec_cancel_appointment(tid, phone, args)
+        if name == "reschedule_appointment":
+            return await self._exec_reschedule_appointment(tid, phone, args)
         if name == "create_subscription":
             return await self._exec_create_subscription(tid, sid, phone, args)
         if name == "list_my_subscriptions":
@@ -1524,15 +1540,18 @@ class CommerceAssistantSkill(BaseSkill):
                 "service": b.get("service_name"),
                 "message": f"Booked for {b.get('start_local')}."}
 
-    async def _exec_cancel_appointment(self, tenant_id: str, phone: Optional[str],
-                                       args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _pick_upcoming(self, tenant_id: str, phone: Optional[str], args: Optional[Dict[str, Any]],
+                             verb: str) -> tuple:
+        """(chosen booking, None) or (None, reply dict). With several upcoming bookings and no
+        numbered `choice`, asks which — never picks one silently (cancel used to take the
+        earliest, so a customer with two bookings could lose the wrong one)."""
         from vula.bookings import service as bk
         if not phone:
-            return {"error": "I need your phone number on file to find the booking."}
+            return None, {"error": "I need your phone number on file to find the booking."}
         upcoming = await bk.list_bookings(tenant_id, status="confirmed",
                                           from_utc=bk._now_utc().isoformat(), phone=phone)
         if not upcoming:
-            return {"message": "You have no upcoming appointments to cancel."}
+            return None, {"message": f"You have no upcoming appointments to {verb}."}
         upcoming = sorted(upcoming, key=lambda b: b.get("start_at") or "")
         try:
             choice = int((args or {}).get("choice") or 0)
@@ -1540,21 +1559,47 @@ class CommerceAssistantSkill(BaseSkill):
             choice = 0
         if choice:
             if not 1 <= choice <= len(upcoming):
-                return {"error": f"Pick a number from 1 to {len(upcoming)}."}
-            chosen = upcoming[choice - 1]
-        elif len(upcoming) == 1:
-            chosen = upcoming[0]
-        else:
-            # Used to cancel the earliest one silently — a customer with two bookings could lose
-            # the wrong one. Ask instead.
-            return {"status": "need_info",
-                    "message": "You have more than one upcoming appointment — which one should I "
-                               "cancel? Reply with the number:\n" +
-                               "\n".join(f"{n}. {b.get('service_name') or 'Appointment'} — {b.get('start_at')}"
-                                          for n, b in enumerate(upcoming, 1))}
+                return None, {"error": f"Pick a number from 1 to {len(upcoming)}."}
+            return upcoming[choice - 1], None
+        if len(upcoming) == 1:
+            return upcoming[0], None
+        return None, {"status": "need_info",
+                      "message": f"You have more than one upcoming appointment — which one should I "
+                                 f"{verb}? Reply with the number:\n" +
+                                 "\n".join(f"{n}. {b.get('service_name') or 'Appointment'} — {b.get('start_at')}"
+                                            for n, b in enumerate(upcoming, 1))}
+
+    async def _exec_cancel_appointment(self, tenant_id: str, phone: Optional[str],
+                                       args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from vula.bookings import service as bk
+        chosen, reply = await self._pick_upcoming(tenant_id, phone, args, "cancel")
+        if reply:
+            return reply
         await bk.set_status(tenant_id, chosen["id"], "cancelled")
         return {"cancelled": True, "service": chosen.get("service_name"), "when": chosen.get("start_at"),
                 "message": "Your appointment has been cancelled."}
+
+    async def _exec_reschedule_appointment(self, tenant_id: str, phone: Optional[str],
+                                           args: Dict[str, Any]) -> Dict[str, Any]:
+        """Move a booking: book the NEW slot first (create_booking checks availability), and
+        only once that succeeded cancel the old one — a failed move never loses the booking."""
+        from vula.bookings import service as bk
+        if not (args.get("start") or "").strip():
+            return {"error": "Ask the customer for the new date and time first (check_availability)."}
+        chosen, reply = await self._pick_upcoming(tenant_id, phone, args, "move")
+        if reply:
+            return reply
+        res = await bk.create_booking(tenant_id, {
+            "service_id": chosen.get("service_id"), "service_name": chosen.get("service_name"),
+            "customer_name": chosen.get("customer_name"), "customer_phone": phone,
+            "start": args.get("start"), "channel": "whatsapp",
+        })
+        if res.get("error"):
+            return res   # e.g. slot taken — the original booking is untouched
+        await bk.set_status(tenant_id, chosen["id"], "cancelled")
+        b = res["booking"]
+        return {"rescheduled": True, "service": b.get("service_name"), "when": b.get("start_local"),
+                "message": f"Moved to {b.get('start_local')}."}
 
     async def _exec_list_products(self, tenant_id: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
         products = await service.list_products(
