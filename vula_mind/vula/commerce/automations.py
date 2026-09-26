@@ -24,7 +24,9 @@ import re
 
 log = logging.getLogger(__name__)
 
-TRIGGER_TYPES = {"order_status", "low_stock"}
+TRIGGER_TYPES = {"order_status", "low_stock", "abandoned_cart", "reorder_due"}
+# Triggers that have a customer to message (whatsapp_customer is only valid with these).
+CUSTOMER_TRIGGERS = {"order_status", "abandoned_cart", "reorder_due"}
 ACTION_TYPES = {"whatsapp_customer", "whatsapp_team"}
 ORDER_STATUSES = {"paid", "confirmed", "packing", "dispatched", "delivered", "cancelled"}
 
@@ -50,8 +52,8 @@ def create_automation(tenant_id: str, body: dict) -> dict:
         raise ValueError(f"trigger_type must be one of {sorted(TRIGGER_TYPES)}")
     if action_type not in ACTION_TYPES:
         raise ValueError(f"action_type must be one of {sorted(ACTION_TYPES)}")
-    if action_type == "whatsapp_customer" and trigger_type != "order_status":
-        raise ValueError("whatsapp_customer only applies to an order_status trigger (no customer on a low_stock event)")
+    if action_type == "whatsapp_customer" and trigger_type not in CUSTOMER_TRIGGERS:
+        raise ValueError("whatsapp_customer needs a trigger with a customer (not low_stock)")
     row = {
         "tenant_id": tenant_id, "name": body.get("name") or f"{trigger_type} → {action_type}",
         "trigger_type": trigger_type, "trigger_config": body.get("trigger_config") or {},
@@ -264,6 +266,67 @@ async def _check_low_stock(tenant_id: str, automation: dict) -> int:
     return fired
 
 
+async def _check_abandoned_cart(tenant_id: str, automation: dict) -> int:
+    """A customer left items in their WhatsApp cart (no order) for `hours` (default 2) — stage a
+    nudge for the owner to approve. Only carts touched in the last 3 days, so switching this on
+    never nudges months-old carts. Replaces the /jobs/abandoned-carts stub, which marked carts
+    'recovery_sent' without sending anything."""
+    from datetime import datetime, timedelta, timezone
+    from vula.commerce import service
+    hours = int((automation.get("trigger_config") or {}).get("hours") or 2)
+    oldest = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    try:
+        carts = await service.get_abandoned_carts(tenant_id, hours_old=hours)
+    except Exception as exc:
+        log.debug("abandoned_cart automation check skipped: %s", exc)
+        return 0
+    fired = 0
+    for c in carts:
+        items = c.get("commerce_cart_items") or []
+        phone = c.get("customer_phone") or ""
+        if not items or not phone or (c.get("updated_at") or "") < oldest \
+                or str(c.get("session_id") or "").startswith(("manual-", "admin:")):
+            continue
+        key = f"{c['id']}:{c.get('updated_at')}"   # a cart re-abandoned after new edits can nudge again
+        if _already_fired(automation["id"], key):
+            continue
+        names = ", ".join((it.get("commerce_products") or {}).get("name") or "item" for it in items[:4])
+        ctx = {"customer_name": "there", "customer_phone": phone, "items": names}
+        if _stage_firing(tenant_id, automation, ctx):
+            fired += 1
+        _mark_fired(automation["id"], key)
+    return fired
+
+
+async def _check_reorder_due(tenant_id: str, automation: dict) -> int:
+    """A customer's last delivered order was `days` ago (default 7) — stage a "time to
+    restock?" nudge for approval. Replaces the /jobs/reorder-reminders stub (counted only)."""
+    from datetime import date
+    from vula.commerce import service
+    days = int((automation.get("trigger_config") or {}).get("days") or 7)
+    try:
+        rows = await service.get_reorder_candidates(tenant_id, days_ago=days)
+    except Exception as exc:
+        log.debug("reorder_due automation check skipped: %s", exc)
+        return 0
+    fired, seen = 0, set()
+    for o in rows:
+        phone = o.get("customer_phone") or ""
+        if not phone or phone in seen:
+            continue
+        seen.add(phone)
+        key = f"{phone}:{date.today().isoformat()}"
+        if _already_fired(automation["id"], key):
+            continue
+        items = ", ".join(i.get("product_name") or "" for i in (o.get("commerce_order_items") or [])[:4])
+        ctx = {"customer_name": (o.get("customer_name") or "there").split(" ")[0],
+               "customer_phone": phone, "items": items}
+        if _stage_firing(tenant_id, automation, ctx):
+            fired += 1
+        _mark_fired(automation["id"], key)
+    return fired
+
+
 async def process_due_automations() -> int:
     """Evaluate every enabled automation across all tenants. Called by the scheduler loop."""
     try:
@@ -280,6 +343,10 @@ async def process_due_automations() -> int:
                 n = await _check_order_status(tenant_id, automation)
             elif automation["trigger_type"] == "low_stock":
                 n = await _check_low_stock(tenant_id, automation)
+            elif automation["trigger_type"] == "abandoned_cart":
+                n = await _check_abandoned_cart(tenant_id, automation)
+            elif automation["trigger_type"] == "reorder_due":
+                n = await _check_reorder_due(tenant_id, automation)
             else:
                 n = 0
             if n:
@@ -299,17 +366,20 @@ _RULE_PARSE_PROMPT = (
     "A South African small-business owner just described an automation rule in their own "
     "words, over WhatsApp or chat. Map it onto EXACTLY this vocabulary — never invent a "
     "trigger, action, or status outside these lists:\n\n"
-    "trigger_type: one of \"order_status\" (fires when an order reaches a chosen status) or "
+    "trigger_type: one of \"order_status\" (fires when an order reaches a chosen status), "
     "\"low_stock\" (fires when a product's stock drops to/below its reorder threshold, "
-    "configured separately in Products — this trigger takes no other config).\n"
+    "configured separately in Products — this trigger takes no other config), "
+    "\"abandoned_cart\" (a customer left items in their cart without ordering) or "
+    "\"reorder_due\" (a customer's last order was delivered about a week ago).\n"
     f"If trigger_type is order_status, trigger_config.to_status must be one of: "
     f"{sorted(ORDER_STATUSES)}.\n\n"
-    "action_type: one of \"whatsapp_customer\" (message the customer on the order — only valid "
-    "with trigger_type=order_status) or \"whatsapp_team\" (message the team helper).\n"
+    "action_type: one of \"whatsapp_customer\" (message the customer — not valid with "
+    "low_stock) or \"whatsapp_team\" (message the team helper).\n"
     "action_config.message: the message to send, written in the owner's own words if they gave "
     "one, otherwise write a short, sensible default. You may use {{order_id}}, "
     "{{customer_name}}, {{status}} placeholders for order_status, or {{product_name}}, "
-    "{{stock}}, {{threshold}} for low_stock.\n\n"
+    "{{stock}}, {{threshold}} for low_stock, or {{customer_name}}, {{items}} for "
+    "abandoned_cart/reorder_due.\n\n"
     "If the request doesn't clearly map onto this vocabulary (e.g. it asks for a trigger/action "
     "this engine doesn't support), return {\"error\": \"<short plain-English reason>\"} instead.\n\n"
     "Return STRICT JSON only, no other text, in exactly this shape:\n"
@@ -345,8 +415,8 @@ def _validate_parsed_rule(obj: dict) -> dict:
         return {"error": f"I can only automate on: {sorted(TRIGGER_TYPES)}."}
     if action_type not in ACTION_TYPES:
         return {"error": f"I can only take these actions: {sorted(ACTION_TYPES)}."}
-    if action_type == "whatsapp_customer" and trigger_type != "order_status":
-        return {"error": "Messaging the customer only works with the order-status trigger."}
+    if action_type == "whatsapp_customer" and trigger_type not in CUSTOMER_TRIGGERS:
+        return {"error": "Messaging the customer doesn't work with the low-stock trigger."}
 
     trigger_config = {}
     if trigger_type == "order_status":

@@ -5064,31 +5064,20 @@ async def admin_delete_segment(tenant_id: str, segment_id: str):
 
 @router.post("/{tenant_id}/jobs/abandoned-carts")
 async def job_abandoned_carts(tenant_id: str):
-    """Scan for abandoned carts and trigger notifications."""
+    """Report only. Nudges now come from an 'abandoned cart' automation (Assistant ->
+    Automations), which stages each message for the owner to approve. This used to mark carts
+    'recovery_sent' without sending anything."""
     abandoned = await service.get_abandoned_carts(tenant_id, hours_old=1)
-    # Filter for carts that haven't received recovery yet
-    to_notify = [c for c in abandoned if not (c.get("metadata") or {}).get("recovery_sent")]
-
-    count = 0
-    for cart in to_notify:
-        # In a real app, you'd fire a WhatsApp template here or n8n
-        # For now, we'll just mark them so we don't repeat
-        meta = cart.get("metadata") or {}
-        meta["recovery_sent"] = True
-        service._client().table("commerce_carts") \
-            .update({"metadata": meta, "updated_at": service._now()}) \
-            .eq("id", cart["id"]).execute()
-        count += 1
-
-    return {"ok": True, "processed": count, "found": len(abandoned)}
+    return {"ok": True, "found": len(abandoned),
+            "note": "Set up an 'abandoned cart' automation to nudge these customers."}
 
 
 @router.post("/{tenant_id}/jobs/reorder-reminders")
 async def job_reorder_reminders(tenant_id: str):
-    """Scan for customers who ordered 7 days ago."""
+    """Report only — see the 'reorder due' automation trigger."""
     candidates = await service.get_reorder_candidates(tenant_id, days_ago=7)
-    # logic to fire WhatsApp messages via n8n or direct
-    return {"ok": True, "candidates": len(candidates)}
+    return {"ok": True, "candidates": len(candidates),
+            "note": "Set up a 'reorder due' automation to nudge these customers."}
 
 
 _last_stock_alert: dict[str, str] = {}   # tenant → date, so we alert at most once a day
