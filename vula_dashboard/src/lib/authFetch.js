@@ -26,8 +26,8 @@ const GUARDED = new RegExp(
   '/v1/(commerce/[^/]+/admin(/|$)|team/|users/|master(/|$)|admin/' +
   '|payments/|bookings/|subscriptions/|recurring-bills/|projects/|documents/|qs/|field/' +
   '|email/|clickup/|whatsapp/|yoco/|google/|microsoft/|dynamics365/|training/|tenants/?($|\\?)' +
-  '|onboard(/|$))' +
-  '|/scrape/'
+  '|onboard(/|$)|draft/|agent/)' +
+  '|/scrape/|/(ingest|query|metrics)(/|$|\\?)|/documents/'
 )
 
 /** Patch window.fetch once (call from main.jsx) so ALL existing components send the JWT. */

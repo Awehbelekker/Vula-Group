@@ -1,7 +1,6 @@
 import { useState } from "react";
 
-const API = import.meta.env.VITE_API_URL || "";
-const API_KEY = import.meta.env.VITE_API_KEY || "";
+import { VULA_API as API } from "../lib/authFetch";
 
 export default function VulaAgent() {
   const [tenantId, setTenantId] = useState("digg-demo");
@@ -18,7 +17,7 @@ export default function VulaAgent() {
     try {
       const res = await fetch(`${API}/v1/agent/run`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tenant_id: tenantId, question }),
       });
       const data = await res.json();

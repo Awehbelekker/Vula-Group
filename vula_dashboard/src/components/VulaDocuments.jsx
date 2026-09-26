@@ -475,7 +475,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
   const [error, setError] = useState("");
   const [queue, setQueue] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const [apiKey, setApiKey] = useState(import.meta.env.VITE_API_KEY ?? "");
+  const [apiKey, setApiKey] = useState("")  // optional override; the signed-in session JWT is attached by authFetch;
   const [libraryKey, setLibraryKey] = useState(0);
 
   const load = useCallback(async () => {

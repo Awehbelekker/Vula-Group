@@ -9,8 +9,7 @@
 import { useState, useEffect, useCallback } from 'react'
 
 const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
-const API_KEY  = import.meta.env.VITE_API_KEY  || ''
-const H = { 'Content-Type': 'application/json', ...(API_KEY ? { 'X-API-Key': API_KEY } : {}) }
+const H = { 'Content-Type': 'application/json' }  // JWT attached by lib/authFetch
 
 const TEMPLATES = [
   { id: 'weekly_fish',   label: '🐟 Weekly fish specials', hint: 'This week\'s fresh catch + prices' },

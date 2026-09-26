@@ -1,7 +1,6 @@
 import { useState } from "react";
 
-const API = import.meta.env.VITE_API_URL || "";
-const API_KEY = import.meta.env.VITE_API_KEY || "";
+import { VULA_API as API } from "../lib/authFetch";
 
 const DOC_TYPES = [
   { id: "fee_proposal", label: "Fee Proposal" },
@@ -33,7 +32,7 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
     try {
       const res = await fetch(`${API}/v1/draft/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tenant_id: tenantId,
           document_type: docType,
