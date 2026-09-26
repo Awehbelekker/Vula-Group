@@ -18,7 +18,7 @@ from core.llm_router import is_local_model, resolve_generation_route
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, format_kb_chunks,
-    looks_like_tenant_data_question,
+    looks_like_tenant_data_question, wrong_arithmetic,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,22 @@ class ArchitecturePlanningSkill(BaseSkill):
                 # but that score never reaches the WhatsApp user; make the uncertainty visible.
                 answer += ("\n\n⚠️ No specific document/standard was found for this — worth "
                            "confirming against the actual source before relying on it.")
+            # 2026-09-26: this skill gives fee/rate/BOQ money guidance in free prose — the same
+            # deterministic arithmetic backstop commerce_admin.py/commerce_assistant.py already
+            # have, added here after an audit found this skill was the one money-answering
+            # skill missing it entirely (real incident elsewhere: "11.8 x 18.2 = 215.56",
+            # correct 214.76 — prompt rules alone don't stop a model doing the sum in its head).
+            bad_maths = wrong_arithmetic(answer)
+            if bad_maths:
+                logger.warning("architecture_planning WRONG ARITHMETIC, tenant=%s: %s",
+                               inp.tenant_id, bad_maths)
+                fixes = "\n".join(
+                    f"• {b['claim']} — that should be {b['actual']:,.2f}, not {b['stated']:,.2f}"
+                    for b in bad_maths)
+                answer += ("\n\n⚠️ Hold on — I need to correct my own maths before you use "
+                           f"these figures:\n{fixes}\n\nLet me redo that properly rather than "
+                           "you working off a wrong total.")
+                confidence = 0.3
             return SkillOutput(
                 answer=answer,
                 skill_name=self.name,
