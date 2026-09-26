@@ -361,7 +361,12 @@ _TENANT_DATA_MARKERS = re.compile(
     # knowledge and got answered from an unrelated KB chunk instead of being routed to a skill
     # that could actually look the spend up (see HRMOrchestrator._match_skill's mailbox
     # fallback, which gates on this same function).
-    r"spend\w*|spent|breakdown|"
+    # 2026-09-25 real incident: "do a full.break down in excel" (a stray typo period) split
+    # "breakdown" into two separate words, missing the literal \bbreakdown\b below — this
+    # tolerates any amount of whitespace plus an optional period/hyphen between the two
+    # halves, covering the real typo along with the far more common genuine "break down"
+    # two-word spelling.
+    r"spend\w*|spent|break\s*[.\-]?\s*down|"
     # Afrikaans
     r"faktuur|onkoste|kwitansie|projek|betaal|betaling|rekening|skuld|"
     # isiZulu
@@ -411,14 +416,22 @@ _SUPPLIER_HISTORY_RE = re.compile(
     r"\b(all|every)\s+(of\s+)?(the\s+|our\s+|my\s+)?([\w'-]+\s+){0,3}invoices?\b|"
     r"\b(what|which)\s+(materials?|items?|stuff|products?)\s+(have|has|did|were)\s+"
     r"(we|i|you)?\s*(been\s+)?(buy|bought|get|got|order|ordered|purchase|purchased)\b|"
-    r"\b(summary|list|breakdown)\s+of\s+(the\s+|all\s+)?(our\s+)?materials?\b|"
+    r"\b(summary|list|break\s*[.\-]?\s*down)\s+of\s+(the\s+|all\s+)?(our\s+)?materials?\b|"
     r"\bmaterials?\s+(from|bought|purchased|we\s+(bought|got|ordered))\b|"
     # 2026-09-23 real digg-demo phrasings that fell through to `reasoning`:
     # "See if you can find invoices gardening gardens area",
     # "For gardens handiman full list of spend and material".
     r"\b(find|search|show|get|pull|fetch|look\s+up)\b[^.?!]{0,30}?\binvoices?\b|"
-    r"\b(list|summary|breakdown|total)\s+of\s+(the\s+|all\s+|our\s+)?"
-    r"(spend|spending|purchases|materials?)\b",
+    r"\b(list|summary|break\s*[.\-]?\s*down|total)\s+of\s+(the\s+|all\s+|our\s+)?"
+    r"(spend|spending|purchases|materials?)\b|"
+    # 2026-09-25, real digg-demo follow-up in the SAME conversation as a resolved supplier
+    # question: "So me all materials in breakdown." reversed the word order the two patterns
+    # above require ("breakdown OF materials", not "materials IN breakdown"), so it fell
+    # through to the model with a raw find_document JSON result and no instruction it could
+    # follow — see _direct_supplier_answer's docstring in email_admin.py for what that produced.
+    # Order/preposition-agnostic: "materials" and "breakdown" anywhere near each other in the
+    # same clause is unambiguous regardless of which comes first or what connects them.
+    r"\bmaterials?\b[^.?!]{0,25}\bbreak\s*[.\-]?\s*down\b|\bbreak\s*[.\-]?\s*down\b[^.?!]{0,25}\bmaterials?\b",
     re.IGNORECASE)
 # Invoice questions that are about what's OWED (receivables/payables status), not a supplier's
 # history — those stay with finance_admin / commerce skills.

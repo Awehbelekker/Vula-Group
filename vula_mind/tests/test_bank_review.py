@@ -4,11 +4,19 @@ number reply, order marked paid, and correctly chaining to the next pending item
 live against off-the-hook with synthetic test rows during development (cleaned up after,
 including self-healing a real row it touched as a side effect of the intended chaining
 behavior). This file locks in the pure formatting/parsing pieces with a mocked DB."""
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from vula.commerce.bank_review import _client_question
+
+# Recency-ordering tests below need two real, recent 'asked'/'created' timestamps (not stale per
+# _is_stale's 24h window, added 2026-09-25) — computed relative to now rather than hardcoded, so
+# they never age past that window themselves.
+_NOW = datetime.now(timezone.utc)
+_EARLIER = (_NOW - timedelta(hours=2)).isoformat()
+_LATER = (_NOW - timedelta(hours=1)).isoformat()
 
 
 def test_client_question_format():
@@ -174,10 +182,10 @@ async def test_a_reply_goes_to_the_more_recently_asked_money_in_question():
     out_txn = {"id": "out1", "amount_cents": 45200, "direction": "out",
                "match_status": "asked", "source_file": "whatsapp_pop",
                "proposed_match_type": "supplier_bill", "proposed_match_id": "bill-1",
-               "asked_at": "2026-09-08T10:00:00+00:00"}
+               "asked_at": _EARLIER}
     in_txn = {"id": "in1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
               "direction": "in", "proposed_match_type": "order", "proposed_match_id": "ord1",
-              "asked_at": "2026-09-08T11:00:00+00:00"}  # asked LATER than the money-out one
+              "asked_at": _LATER}  # asked LATER than the money-out one
     order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
              "customer_phone": "27821234567", "total_cents": 15000, "status": "pending_payment"}
     db = _FakeDB({
@@ -202,10 +210,10 @@ async def test_a_reply_goes_to_the_more_recently_asked_supplier_bill_question():
     out_txn = {"id": "out1", "amount_cents": 45200, "direction": "out",
                "match_status": "asked", "source_file": "whatsapp_pop",
                "proposed_match_type": "supplier_bill", "proposed_match_id": "bill-1",
-               "asked_at": "2026-09-08T11:00:00+00:00"}  # asked LATER than the money-in one
+               "asked_at": _LATER}  # asked LATER than the money-in one
     in_txn = {"id": "in1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
               "direction": "in", "proposed_match_type": "order", "proposed_match_id": "ord1",
-              "asked_at": "2026-09-08T10:00:00+00:00"}
+              "asked_at": _EARLIER}
     bill = {"id": "bill-1", "invoice_number": "BILL-0007", "supplier": "Atlantis Seafood",
             "total_cents": 45200, "status": "sent"}
     db = _FakeDB({
@@ -233,10 +241,10 @@ async def test_missing_asked_at_falls_back_to_created_at_for_recency():
     out_txn = {"id": "out1", "amount_cents": 45200, "direction": "out",
                "match_status": "asked", "source_file": "whatsapp_pop",
                "proposed_match_type": "supplier_bill", "proposed_match_id": "bill-1",
-               "created_at": "2026-09-08T10:00:00+00:00"}
+               "created_at": _EARLIER}
     in_txn = {"id": "in1", "amount_cents": 15000, "txn_date": "2026-08-15", "description": "x",
               "direction": "in", "proposed_match_type": "order", "proposed_match_id": "ord1",
-              "created_at": "2026-09-08T11:00:00+00:00"}
+              "created_at": _LATER}
     order = {"id": "ord1", "display_id": "OFF-00006", "customer_name": "Staci Brits",
              "customer_phone": "27821234567", "total_cents": 15000, "status": "pending_payment"}
     db = _FakeDB({
@@ -252,3 +260,77 @@ async def test_missing_asked_at_falls_back_to_created_at_for_recency():
         reply = await handle_client_answer("off-the-hook", "yes")
     assert "OFF-00006" in reply
     mock_update.assert_awaited_once_with("ord1", "paid")
+
+
+# ── 2026-09-25: a stale 'asked' question must stop swallowing new messages ─────────────────
+# Real digg-demo incident: a credit-matching question asked 2026-08-17 (39 days earlier, never
+# answered) was still being treated as outstanding, and ate "Excel spreadsheet if possible" — a
+# genuine, unrelated message that never reached HRM/email_admin. _is_request_shaped alone can't
+# fix this class of bug: the real gap is that an 'asked' question here never expired.
+
+def test_is_stale_true_past_the_window():
+    from vula.commerce.bank_review import _is_stale
+    old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    assert _is_stale({"asked_at": old}) is True
+
+
+def test_is_stale_false_within_the_window():
+    from vula.commerce.bank_review import _is_stale
+    recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    assert _is_stale({"asked_at": recent}) is False
+
+
+def test_is_stale_falls_back_to_created_at():
+    from vula.commerce.bank_review import _is_stale
+    old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    assert _is_stale({"created_at": old}) is True
+
+
+def test_is_stale_false_with_no_timestamp_at_all():
+    """Unknown age is never treated as evidence of staleness — every existing 'asked' row and
+    test fixture with no timestamp field must keep behaving exactly as before."""
+    from vula.commerce.bank_review import _is_stale
+    assert _is_stale({}) is False
+
+
+@pytest.mark.asyncio
+async def test_stale_asked_question_no_longer_swallows_a_new_message():
+    """The exact real incident: an 'asked' row from 39 days ago must not intercept 'Excel
+    spreadsheet if possible' — handle_client_answer returns None so the message reaches HRM."""
+    stale = {"id": "in1", "amount_cents": 300000, "txn_date": "2026-08-17",
+              "description": "WhatsApp proof of payment — Mr Onito Tiler", "direction": "in",
+              "match_status": "asked",
+              "asked_at": (datetime.now(timezone.utc) - timedelta(days=39)).isoformat()}
+    db = _FakeDB({"commerce_bank_transactions": _FakeTable([stale])})
+    with patch("vula.commerce.bank_review._client", return_value=db):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("digg-demo", "Excel spreadsheet if possible")
+    assert reply is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_asked_question_still_swallows_as_before():
+    """The other side of the fix: a question asked minutes ago must still work exactly as
+    before — this is not a blanket disable of the pending-question flow."""
+    fresh = {"id": "in1", "amount_cents": 22000, "txn_date": "2026-09-25", "description": "x",
+             "direction": "in",
+             "asked_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()}
+    db = _FakeDB({"commerce_bank_transactions": _FakeTable([fresh])})
+    with patch("vula.commerce.bank_review._client", return_value=db):
+        from vula.commerce.bank_review import handle_client_answer
+        reply = await handle_client_answer("digg-demo", "stop")
+    assert "Bank tab" in reply
+
+
+@pytest.mark.asyncio
+async def test_stale_category_question_no_longer_swallows_a_new_message():
+    """handle_answer (the expense-category loop) gets the same staleness guard as
+    handle_client_answer (the credit-matching loop) — both are the same bug class."""
+    stale = {"id": "cat1", "amount_cents": 5000, "direction": "out",
+             "categorized_by": "asked",
+             "asked_at": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()}
+    db = _FakeDB({"commerce_bank_transactions": _FakeTable([stale])})
+    with patch("vula.commerce.bank_review._client", return_value=db):
+        from vula.commerce.bank_review import handle_answer
+        reply = await handle_answer("digg-demo", "Excel spreadsheet if possible")
+    assert reply is None

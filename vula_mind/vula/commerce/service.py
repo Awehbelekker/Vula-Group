@@ -3521,7 +3521,37 @@ def _rands(v: Any) -> str:
         return str(v)
 
 
-def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Optional[str]:
+_FILE_EXPORT_RE = re.compile(r"\b(excel|spreadsheet|xlsx?|csv)\b", re.IGNORECASE)
+
+
+async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
+                                     result: Dict[str, Any], supplier: str) -> bool:
+    """Best-effort: builds and WhatsApps a real .xlsx for an explicit export request
+    (excel/spreadsheet/xlsx/csv — _FILE_EXPORT_RE) alongside the deterministic text answer.
+    False (never raises) when no export was asked for, there's no phone to send to, or the
+    render/send itself fails — a spreadsheet hiccup must never break the text answer sitting
+    right next to it. Reuses _send_invoice_document (vula/api/whatsapp.py), the same
+    Meta-media-upload mechanism send_order_invoice already relies on for invoice PDFs — no
+    public URL needed."""
+    if not phone or not _FILE_EXPORT_RE.search(question or ""):
+        return False
+    try:
+        from vula.commerce.xlsx import render_supplier_history_xlsx
+        xlsx_bytes = render_supplier_history_xlsx(result, supplier)
+        if not xlsx_bytes:
+            return False
+        from vula.api.whatsapp import _send_invoice_document
+        safe_name = re.sub(r"[^A-Za-z0-9]+", "_", supplier).strip("_") or "supplier"
+        return await _send_invoice_document(
+            phone, xlsx_bytes, f"{safe_name}_history.xlsx", "", tenant_id,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as exc:
+        logger.warning("supplier-history xlsx send failed for %s: %s", tenant_id, exc)
+        return False
+
+
+def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
+                                  question: str = "", xlsx_sent: bool = False) -> Optional[str]:
     """A complete WhatsApp answer for a supplier spend/materials question, built only from a
     find_filed_document result: count, server-computed total, refunds, the invoice list and the
     materials roll-up. None when the result isn't a complete filed-document answer (not found,
@@ -3530,7 +3560,17 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Op
     2026-09-23 (digg-demo): with all 16 invoices and the R21,256.00 total correctly in the tool
     result, the local llama3.1:8b replied "The total amount spent is R942.00" (the first row),
     invented quantities, and described the result as "JSON output from an email tool". Money is
-    never left to a model to read back — this writes the reply deterministically instead."""
+    never left to a model to read back — this writes the reply deterministically instead.
+
+    `question` (the caller's ORIGINAL raw message — distinct from `query`, the resolved search
+    term used for the "I took X to mean Y" line) is checked for an explicit file-format ask.
+    2026-09-25, same tenant: "...a summary of what was spent in excel" and, a reply later,
+    "...do a full breakdown in excel" were both silently answered as if "in excel" had never
+    been said (one attempt tried to fake a spreadsheet by rendering a markdown table instead).
+    `xlsx_sent` (set by the caller from send_supplier_history_xlsx's return) says whether a real
+    .xlsx was actually WhatsApped alongside this text — the wording differs accordingly; when
+    it's False (no phone to send to, or the render/send failed), this still says plainly that no
+    file went out rather than silently ignoring the request or claiming success it can't back up."""
     if result.get("status") != "found" or "total_amount_cents" not in result:
         return None
     matches = result.get("matches") or []
@@ -3546,6 +3586,13 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Op
         head += (f" (after {len(refunds)} refund{'s' if len(refunds) != 1 else ''} of "
                  f"{', '.join(_rands(r.get('amount')) for r in refunds)})")
     lines = [head + "."]
+    if _FILE_EXPORT_RE.search(question or ""):
+        if xlsx_sent:
+            lines.append("📎 Sent the full breakdown as an Excel file too — check your WhatsApp "
+                          "attachments.")
+        else:
+            lines.append("📎 Couldn't send an Excel file this time — here's the full breakdown "
+                          "as text below; copy it into a spreadsheet if you need one.")
     if result.get("match_type") == "resolved_via_knowledge_base" and query:
         lines.append(f"I took \"{query}\" to mean {supplier} — tell me if that's wrong, or save "
                      f"it with \"{query} is an alias for {supplier}\".")
@@ -3577,7 +3624,7 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "") -> Op
     return "\n".join(lines)
 
 
-async def answer_supplier_history(tenant_id: str, question: str) -> Optional[str]:
+async def answer_supplier_history(tenant_id: str, question: str, phone: str = "") -> Optional[str]:
     """The whole answer to a supplier spend/materials question, with no model involved — when
     the question names a known supplier (commerce_suppliers name or alias) as whole words.
     None otherwise, so the caller runs its normal tool-calling loop.
@@ -3585,7 +3632,10 @@ async def answer_supplier_history(tenant_id: str, question: str) -> Optional[str
     2026-09-23 (digg-demo), after #69: the local box was unreachable, the cloud 70B returned an
     empty reply without calling find_document, and the owner got "Done.". Once "Jack Hammer" is
     a saved alias there is nothing left for a model to decide: the supplier is known, the
-    search and total are server-side, and format_supplier_history_reply writes the reply."""
+    search and total are server-side, and format_supplier_history_reply writes the reply.
+
+    `phone` (the WhatsApp number to send an .xlsx to, when asked for one — see
+    send_supplier_history_xlsx) is optional so this stays callable without it (e.g. tests)."""
     padded = f" {_norm_name(question)} "
     names = await _resolve_supplier_names(tenant_id, question)
     # Whole-word mentions only — _resolve_supplier_names also accepts a fuzzy whole-query match,
@@ -3593,20 +3643,79 @@ async def answer_supplier_history(tenant_id: str, question: str) -> Optional[str
     if not any(n and f" {n} " in padded for n in (_norm_name(x) for x in names)):
         return None
     result = await find_filed_document(tenant_id, names[0], category="Invoice")
-    reply = format_supplier_history_reply(result, query=names[0])
-    if reply and _PERIOD_RE.search(question or ""):
-        # The filed-document total is all-time; answering "this month?" with it unlabelled
-        # read as that month's spend. Say what the figure is rather than imply a period.
-        reply += ("\n\nNote: that's the all-time total across these documents — I can't split "
-                  "supplier spend by date yet, so check the dates listed above for the period "
-                  "you asked about.")
-    return reply
+    xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question, result, names[0])
+    return _with_period_note(
+        format_supplier_history_reply(result, query=names[0], question=question, xlsx_sent=xlsx_sent),
+        question)
 
 
 _PERIOD_RE = re.compile(
     r"\b(this|last|past|previous)\s+(week|month|quarter|year)\b|\btoday\b|\byesterday\b"
     r"|\bsince\b|\bin\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
     r"|\blast\s+\d+\s+(days|weeks|months)\b", re.IGNORECASE)
+
+
+def _with_period_note(reply: Optional[str], question: str) -> Optional[str]:
+    """The filed-document total is all-time; answering "this month?" with it unlabelled read as
+    that month's spend. Say what the figure is rather than imply a period."""
+    if reply and _PERIOD_RE.search(question or ""):
+        reply += ("\n\nNote: that's the all-time total across these documents — I can't split "
+                  "supplier spend by date yet, so check the dates listed above for the period "
+                  "you asked about.")
+    return reply
+
+
+# Matches the head line format_supplier_history_reply always writes first, as it appears once
+# persisted into conversation_history by ChatHistoryDB.format_for_prompt() (f"Vula AI{age_tag}:
+# {text}" — the reply's own internal newlines survive, so this must search the whole history
+# string, not split it into lines first). Captures the supplier name.
+_SUPPLIER_REPLY_SIGNATURE_RE = re.compile(
+    r"Vula AI[^:\n]*:\s*\*([^*]+)\*:\s*\d+\s+documents?,\s*total spend", re.IGNORECASE)
+
+# 2026-09-25 real incident: "Please show all and do a full.break down in excel" named no
+# supplier at all — it only made sense as a follow-up to the Jack Hammer question two turns
+# earlier. This is a deliberately narrow safety gate (not just "any follow-up"): it only fires
+# on wording that asks for MORE of something already answered, so an unrelated request that
+# happens to land right after a supplier answer (e.g. "please create an invoice for Regan")
+# does not get mistaken for a continuation. Public (no leading underscore): core/skills/
+# email_admin.py's _direct_supplier_answer reuses it for the same gate inside the tool loop.
+CONTINUATION_INTENT_RE = re.compile(
+    r"\b(all|everything|full|complete|entire|more|rest|break\s*[.\-]?\s*down)\b", re.IGNORECASE)
+
+
+def last_supplier_from_history(history: str) -> Optional[str]:
+    """The supplier named in the most recent format_supplier_history_reply answer found in
+    `history`, or None. History is chronological, so the LAST regex match is the most recent."""
+    if not history:
+        return None
+    matches = _SUPPLIER_REPLY_SIGNATURE_RE.findall(history)
+    return matches[-1].strip() if matches else None
+
+
+async def answer_supplier_history_continuation(tenant_id: str, history: str, question: str,
+                                                phone: str = "") -> Optional[str]:
+    """answer_supplier_history's counterpart for a follow-up that names no supplier itself —
+    only makes sense read against the just-answered question in conversation history. None
+    unless BOTH a prior supplier-history answer is found in `history` AND `question` reads as
+    asking for more of it (CONTINUATION_INTENT_RE); either gate alone is too weak (a bare
+    "more" a turn after an unrelated answer, or a genuinely new supplier question that happens
+    to use the word "full", are both real risks this two-gate design is meant to avoid).
+
+    2026-09-25 (digg-demo): "Please show all and do a full.break down in excel" landed right
+    after the Jack Hammer total was given, named no supplier, and fell all the way through to
+    `reasoning` (no find_document tool at all), which just paraphrased the prior WhatsApp reply
+    from history into a garbled, cut-off markdown table instead of answering properly."""
+    if not CONTINUATION_INTENT_RE.search(question or ""):
+        return None
+    supplier = last_supplier_from_history(history)
+    if not supplier:
+        return None
+    result = await find_filed_document(tenant_id, supplier, category="Invoice")
+    if result.get("resolved_supplier") and _norm_name(result["resolved_supplier"]) != _norm_name(supplier):
+        return None
+    xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question, result, supplier)
+    return _with_period_note(format_supplier_history_reply(result, question=question, xlsx_sent=xlsx_sent),
+                             question)
 
 
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:

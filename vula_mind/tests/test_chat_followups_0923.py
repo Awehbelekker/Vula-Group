@@ -160,6 +160,14 @@ async def test_rag_reply_handles_alias_statements_for_insiders_only():
     ("Show me unpaid invoices", False),
     ("Create an invoice for Regan", False),
     ("Which invoices are overdue?", False),
+    # 2026-09-25: real digg-demo follow-up in the same conversation as a resolved supplier
+    # question — reversed the word order ("materials IN breakdown", not "breakdown OF
+    # materials") that the existing patterns require, so it fell through to the model with a
+    # raw JSON result and no instruction it could follow.
+    ("So me all materials in breakdown.", True),
+    ("materials breakdown please", True),
+    ("give me the breakdown of the materials", True),  # original word order still matches too
+    ("find the proof of payment I sent", False),  # no materials/breakdown at all — must not match
 ])
 def test_supplier_history_phrasing(text, expected):
     assert looks_like_supplier_history_question(text) is expected
@@ -205,6 +213,43 @@ def test_reply_is_none_when_there_is_nothing_complete_to_state():
                                           "matches": [{"excerpt": "x"}]}) is None
 
 
+# ── 2026-09-25/26: honest disclosure when a spreadsheet export is explicitly asked for ───────
+# Real digg-demo incident, same conversation: "...a summary of what was spent in excel" was
+# answered as if "in excel" had never been said; a later "...do a full breakdown in excel"
+# (from a different, non-deterministic code path with no such disclosure either) tried to fake
+# a spreadsheet by rendering a markdown table instead. Vula can now actually build and WhatsApp
+# a real .xlsx (see send_supplier_history_xlsx) — the caller passes xlsx_sent through so the
+# wording matches what actually happened (sent vs. couldn't send), never silently ignoring or
+# faking the request either way.
+
+@pytest.mark.parametrize("question", [
+    "Need all jack hammer invoices and a summary of what was spent in excel",
+    "can you export this as a spreadsheet",
+    "please send as .xlsx",
+    "csv please",
+])
+def test_reply_discloses_failed_export_when_explicitly_asked_and_xlsx_sent_is_false(question):
+    out = format_supplier_history_reply(_RESULT, query="jack hammer", question=question)
+    assert "Couldn't send an Excel file this time" in out
+
+
+@pytest.mark.parametrize("question", [
+    "Need all jack hammer invoices and a summary of what was spent in excel",
+    "can you export this as a spreadsheet",
+])
+def test_reply_confirms_the_export_when_xlsx_sent_is_true(question):
+    out = format_supplier_history_reply(_RESULT, query="jack hammer", question=question,
+                                        xlsx_sent=True)
+    assert "Sent the full breakdown as an Excel file too" in out
+    assert "Couldn't send" not in out
+
+
+def test_reply_omits_the_export_note_when_not_asked_for():
+    out = format_supplier_history_reply(_RESULT, query="jack hammer",
+                                        question="Need all jack hammer invoices")
+    assert "spreadsheet" not in out.lower()
+
+
 @pytest.mark.asyncio
 async def test_email_admin_answers_supplier_history_without_the_model_reading_numbers():
     from core.skills.base import SkillInput
@@ -236,8 +281,24 @@ async def test_email_admin_answers_supplier_history_without_the_model_reading_nu
 @pytest.mark.asyncio
 async def test_non_supplier_questions_still_go_back_to_the_model():
     from core.skills.email_admin import _direct_supplier_answer
-    assert _direct_supplier_answer("find the proof of payment I sent", "find_document", {}, _RESULT) is None
-    assert _direct_supplier_answer("Need all jack hammer invoices", "email_search", {}, _RESULT) is None
+    assert await _direct_supplier_answer(
+        "find the proof of payment I sent", "find_document", {}, _RESULT) is None
+    assert await _direct_supplier_answer(
+        "Need all jack hammer invoices", "email_search", {}, _RESULT) is None
+
+
+@pytest.mark.asyncio
+async def test_a_reworded_materials_followup_is_also_answered_deterministically():
+    """The exact real incident: a same-conversation follow-up worded differently enough that it
+    used to miss looks_like_supplier_history_question entirely, leaving the model to describe
+    the raw JSON result instead of answering ("The provided text appears to be a JSON object
+    containing a list of invoices..."). Now caught by the order-agnostic materials/breakdown
+    pattern, so the deterministic formatter answers it exactly as it would the original question."""
+    from core.skills.email_admin import _direct_supplier_answer
+    out = await _direct_supplier_answer("So me all materials in breakdown.", "find_document", {}, _RESULT)
+    assert out is not None
+    assert "total spend *R1,084.00*" in out
+    assert "SAND PER BAG ACC" in out
 
 
 # 2026-09-23, after #69 went live: the GPU box was unreachable, the cloud 70B returned an empty
@@ -260,6 +321,43 @@ async def test_a_named_supplier_is_answered_without_any_model_call():
             TID, "Need all jack hammer invoices and a summary of what was spent")
     find.assert_awaited_once_with(TID, "GARDENS HANDIMAN CENTRE", category="Invoice")
     assert "total spend *R1,084.00*" in out
+
+
+@pytest.mark.asyncio
+async def test_answer_supplier_history_discloses_no_export_when_the_question_asks_for_excel():
+    """No `phone` passed (as no caller would omit here) means send_supplier_history_xlsx
+    short-circuits before ever touching xlsx/WhatsApp — xlsx_sent stays False."""
+    from vula.commerce import service as svc
+    with (
+        patch.object(svc, "list_suppliers", new=AsyncMock(return_value=_SUPPLIERS)),
+        patch.object(svc, "find_filed_document", new=AsyncMock(return_value=_RESULT)),
+    ):
+        out = await svc.answer_supplier_history(
+            TID, "Need all jack hammer invoices and a summary of what was spent in excel")
+    assert "Couldn't send an Excel file this time" in out
+
+
+@pytest.mark.asyncio
+async def test_answer_supplier_history_sends_a_real_xlsx_when_phone_is_given():
+    from vula.commerce import service as svc
+    send_doc = AsyncMock(return_value=True)
+    with (
+        patch.object(svc, "list_suppliers", new=AsyncMock(return_value=_SUPPLIERS)),
+        patch.object(svc, "find_filed_document", new=AsyncMock(return_value=_RESULT)),
+        patch("vula.commerce.xlsx.render_supplier_history_xlsx", return_value=b"fake-xlsx-bytes"),
+        patch("vula.api.whatsapp._send_invoice_document", new=send_doc),
+    ):
+        out = await svc.answer_supplier_history(
+            TID, "Need all jack hammer invoices and a summary of what was spent in excel",
+            phone="+27821234567")
+    assert "Sent the full breakdown as an Excel file too" in out
+    send_doc.assert_awaited_once()
+    call_args = send_doc.call_args
+    assert call_args[0][0] == "+27821234567"
+    assert call_args[0][1] == b"fake-xlsx-bytes"
+    assert call_args[0][2].endswith(".xlsx")
+    assert call_args[1]["content_type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @pytest.mark.asyncio
@@ -315,3 +413,195 @@ async def test_an_empty_model_reply_is_never_reported_as_done():
             question="any emails waiting on me?", tenant_id=TID))
     assert out.answer == EMPTY_REPLY_FALLBACK and out.answer != "Done."
     assert out.confidence < 0.5
+
+
+# ── 2026-09-25: a follow-up naming no supplier itself, understood from conversation history ────
+# Real digg-demo incident, same conversation: after the Jack Hammer total was answered correctly,
+# "Please show all and do a full.break down in excel" named no supplier at all and fell through
+# to `reasoning`, which paraphrased the prior WhatsApp reply from history into a garbled,
+# cut-off markdown table. It reads as a continuation of the just-answered supplier question.
+
+from vula.commerce.service import (  # noqa: E402
+    answer_supplier_history_continuation, last_supplier_from_history, CONTINUATION_INTENT_RE,
+)
+
+_HISTORY = (
+    "User (2m ago): Need all jack hammer invoices and a summary of what was spent\n"
+    "Vula AI (2m ago): *GARDENS HANDIMAN CENTRE*: 3 documents, total spend *R1,084.00*.\n"
+    "\n"
+    "*Invoices*\n"
+    "• 2026-09-22 — POS Account Sale 24-225537 — R942.00\n"
+    "• 2026-09-12 — POS Account Sale 23-244976 — R1252.00"
+)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Please show all and do a full.break down in excel", True),
+    ("show me everything", True),
+    ("the rest please", True),
+    ("give me the complete list", True),
+    ("please create an invoice for Regan", False),
+    ("what's the weather like", False),
+])
+def test_continuation_intent_regex(text, expected):
+    assert bool(CONTINUATION_INTENT_RE.search(text)) is expected
+
+
+def test_last_supplier_from_history_reads_the_most_recent_reply():
+    assert last_supplier_from_history(_HISTORY) == "GARDENS HANDIMAN CENTRE"
+
+
+def test_last_supplier_from_history_none_without_a_prior_reply():
+    assert last_supplier_from_history("") is None
+    assert last_supplier_from_history("User (1m ago): hello\nVula AI (1m ago): hi there") is None
+
+
+@pytest.mark.asyncio
+async def test_continuation_answers_the_real_break_down_in_excel_followup():
+    """No `phone` passed — send_supplier_history_xlsx short-circuits, xlsx_sent stays False."""
+    from vula.commerce import service as svc
+    find = AsyncMock(return_value=_RESULT)
+    with patch.object(svc, "find_filed_document", new=find):
+        out = await svc.answer_supplier_history_continuation(
+            TID, _HISTORY, "Please show all and do a full.break down in excel")
+    find.assert_awaited_once_with(TID, "GARDENS HANDIMAN CENTRE", category="Invoice")
+    assert "total spend *R1,084.00*" in out
+    assert "Couldn't send an Excel file this time" in out
+
+
+@pytest.mark.asyncio
+async def test_continuation_sends_a_real_xlsx_when_phone_is_given():
+    from vula.commerce import service as svc
+    send_doc = AsyncMock(return_value=True)
+    with (
+        patch.object(svc, "find_filed_document", new=AsyncMock(return_value=_RESULT)),
+        patch("vula.commerce.xlsx.render_supplier_history_xlsx", return_value=b"fake-xlsx-bytes"),
+        patch("vula.api.whatsapp._send_invoice_document", new=send_doc),
+    ):
+        out = await svc.answer_supplier_history_continuation(
+            TID, _HISTORY, "Please show all and do a full.break down in excel",
+            phone="+27821234567")
+    assert "Sent the full breakdown as an Excel file too" in out
+    send_doc.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_continuation_does_nothing_without_continuation_wording():
+    """A genuinely new, unrelated request landing right after a supplier answer must not be
+    mistaken for "more of the same" just because a supplier was recently discussed."""
+    from vula.commerce import service as svc
+    find = AsyncMock(return_value=_RESULT)
+    with patch.object(svc, "find_filed_document", new=find):
+        out = await svc.answer_supplier_history_continuation(
+            TID, _HISTORY, "please create an invoice for Regan")
+    assert out is None
+    find.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_continuation_does_nothing_without_a_prior_supplier_reply_in_history():
+    from vula.commerce import service as svc
+    find = AsyncMock(return_value=_RESULT)
+    with patch.object(svc, "find_filed_document", new=find):
+        out = await svc.answer_supplier_history_continuation(TID, "", "show me everything")
+    assert out is None
+    find.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_continuation_rejects_a_result_resolved_to_a_different_supplier():
+    """Safety valve: if the fresh search resolves to a different supplier than the one named in
+    history (e.g. the alias now points elsewhere), don't present it as the continuation."""
+    from vula.commerce import service as svc
+    mismatched = dict(_RESULT, resolved_supplier="SOLID CAPE")
+    with patch.object(svc, "find_filed_document", new=AsyncMock(return_value=mismatched)):
+        out = await svc.answer_supplier_history_continuation(
+            TID, _HISTORY, "show me everything")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_email_admin_run_falls_back_to_continuation_when_wording_gate_fails():
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+    model = AsyncMock(side_effect=AssertionError("no model call expected"))
+    with (
+        patch("vula.commerce.service.find_filed_document", new=AsyncMock(return_value=_RESULT)),
+        patch("litellm.acompletion", new=model),
+    ):
+        out = await EmailAdminSkill().run(SkillInput(
+            question="Please show all and do a full.break down in excel", tenant_id=TID,
+            conversation_history=_HISTORY))
+    assert "total spend *R1,084.00*" in out.answer
+    model.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_falls_back_to_continuation_within_the_tool_loop():
+    """The model itself calls find_document (possibly with an off-target query, since the
+    question named no supplier) — _direct_supplier_answer (called from inside _loop, after the
+    upfront run() check has already been bypassed in this unit test) still needs to fire the
+    deterministic formatter instead of letting the model paraphrase the raw tool JSON."""
+    from core.skills.email_admin import _direct_supplier_answer
+    with patch("vula.commerce.service.find_filed_document", new=AsyncMock(return_value=_RESULT)):
+        out = await _direct_supplier_answer(
+            "show me everything", "find_document", {"query": "materials breakdown"}, _RESULT,
+            tenant_id=TID, history=_HISTORY)
+    assert out is not None
+    assert "total spend *R1,084.00*" in out
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_ignores_continuation_without_tenant_or_history():
+    from core.skills.email_admin import _direct_supplier_answer
+    assert await _direct_supplier_answer(
+        "show me everything", "find_document", {}, _RESULT) is None
+    assert await _direct_supplier_answer(
+        "show me everything", "find_document", {}, _RESULT, tenant_id=TID) is None
+    assert await _direct_supplier_answer(
+        "show me everything", "find_document", {}, _RESULT, history=_HISTORY) is None
+
+
+# ── 2026-09-26: a real .xlsx is WhatsApped when the caller has a phone to send to ──────────
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_sends_a_real_xlsx_when_phone_is_given():
+    from core.skills.email_admin import _direct_supplier_answer
+    send_doc = AsyncMock(return_value=True)
+    with patch("vula.api.whatsapp._send_invoice_document", new=send_doc):
+        out = await _direct_supplier_answer(
+            "Need all jack hammer invoices in excel please", "find_document", {}, _RESULT,
+            phone="+27821234567")
+    assert "Sent the full breakdown as an Excel file too" in out
+    send_doc.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_email_admin_run_threads_customer_phone_into_the_direct_answer():
+    """EmailAdminSkill.run() reads phone from inp.metadata (the established SkillInput
+    convention — see draft_admin.py/commerce_admin.py's identical inp.metadata.get(
+    "customer_phone")) and passes it through to answer_supplier_history, so an explicit
+    "in excel" request sent from a real WhatsApp turn actually gets a file, not just text."""
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+    answer_supplier_history = AsyncMock(return_value="*GARDENS HANDIMAN CENTRE*: sent")
+    with patch("vula.commerce.service.answer_supplier_history", new=answer_supplier_history):
+        await EmailAdminSkill().run(SkillInput(
+            question="Need all jack hammer invoices and a summary in excel", tenant_id=TID,
+            metadata={"customer_phone": "+27821234567"}))
+    answer_supplier_history.assert_awaited_once_with(
+        TID, "Need all jack hammer invoices and a summary in excel", phone="+27821234567")
+
+
+@pytest.mark.asyncio
+async def test_email_admin_run_threads_phone_into_the_continuation_path_too():
+    from core.skills.base import SkillInput
+    from core.skills.email_admin import EmailAdminSkill
+    continuation = AsyncMock(return_value=None)
+    with patch("vula.commerce.service.answer_supplier_history_continuation", new=continuation), \
+         patch("core.skills.email_admin.get_email_creds", return_value=None):
+        await EmailAdminSkill().run(SkillInput(
+            question="show me everything", tenant_id=TID, conversation_history=_HISTORY,
+            metadata={"customer_phone": "+27821234567"}))
+    continuation.assert_awaited_once_with(TID, _HISTORY, "show me everything",
+                                          phone="+27821234567")
