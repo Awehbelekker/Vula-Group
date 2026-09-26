@@ -34,8 +34,8 @@ from core.llm_router import (
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, need_info_message, tool_source,
-    unverified_prices, wrong_arithmetic,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
+    need_info_message, tool_source, unverified_prices, wrong_arithmetic,
 )
 from vula.commerce import service
 
@@ -1089,6 +1089,37 @@ def _preview_summary(result: Dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "Confirm this action?"
 
 
+async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any,
+                                  tenant_id: str = "", history: str = "",
+                                  phone: str = "") -> Optional[str]:
+    """Ported from core/skills/email_admin.py, 2026-09-26 — for a supplier spend/materials
+    question, a complete find_document result is answered straight from the numbers
+    (service.format_supplier_history_reply) — never re-read by the model — with a real .xlsx
+    sent too when the question explicitly asked for excel/spreadsheet/csv (see
+    service.send_supplier_history_xlsx). Previously only email_admin.py's identical mechanism
+    existed, so a commerce-mode tenant's merchant/staff/sales-rep message (routed here directly,
+    bypassing HRM per CLAUDE.md) had no protection against the model paraphrasing raw
+    find_document JSON, and no export capability at all.
+
+    A follow-up naming no supplier itself (a vague "show all... full breakdown... in excel")
+    falls back to answer_supplier_history_continuation, which reads conversation history for
+    the supplier the prior turn already answered about and does its own fresh, verified
+    search."""
+    if tool != "find_document" or not isinstance(result, dict):
+        return None
+    if looks_like_supplier_history_question(question or ""):
+        supplier = result.get("resolved_supplier") or (args or {}).get("query") or ""
+        xlsx_sent = await service.send_supplier_history_xlsx(tenant_id, phone, question or "",
+                                                              result, supplier)
+        return service.format_supplier_history_reply(
+            result, query=(args or {}).get("query") or "", question=question or "",
+            xlsx_sent=xlsx_sent)
+    if not tenant_id or not history:
+        return None
+    return await service.answer_supplier_history_continuation(tenant_id, history, question or "",
+                                                               phone=phone)
+
+
 class CommerceAdminSkill(BaseSkill):
     name = "commerce_admin"
     description = (
@@ -1106,6 +1137,31 @@ class CommerceAdminSkill(BaseSkill):
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         caller_role = inp.metadata.get("caller_role")
+        phone = inp.metadata.get("customer_phone") or ""
+        # 2026-09-26: ported from core/skills/email_admin.py — a commerce-mode tenant's
+        # merchant/staff/sales-rep message reaches this skill directly (bypassing HRM per
+        # CLAUDE.md's routing rules), so it never had this shortcut at all: a named supplier
+        # (or, failing that, a no-anchor follow-up naming none but continuing the last
+        # supplier-history answer) is answered from the numbers with no model call, and an
+        # explicit "in excel"/"spreadsheet" ask gets a real .xlsx — see
+        # vula.commerce.service.answer_supplier_history/answer_supplier_history_continuation.
+        if looks_like_supplier_history_question(inp.question or ""):
+            try:
+                direct = await service.answer_supplier_history(inp.tenant_id, inp.question, phone=phone)
+            except Exception as exc:  # noqa: BLE001 — fall through to the tool-calling loop
+                logger.warning("commerce_admin direct supplier answer failed: %s", exc)
+                direct = None
+            if direct:
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
+        else:
+            try:
+                direct = await service.answer_supplier_history_continuation(
+                    inp.tenant_id, inp.conversation_history or "", inp.question or "", phone=phone)
+            except Exception as exc:  # noqa: BLE001 — fall through to the tool-calling loop
+                logger.warning("commerce_admin supplier-history continuation failed: %s", exc)
+                direct = None
+            if direct:
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
@@ -1367,6 +1423,11 @@ class CommerceAdminSkill(BaseSkill):
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
+                    direct = await _direct_supplier_answer(
+                        question, name, args, result, tenant_id=ctx.get("tenant_id") or "",
+                        history=history, phone=ctx.get("phone") or "")
+                    if direct:
+                        return direct
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content": (
                         f"[tool {name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str))}\n"
@@ -1432,6 +1493,11 @@ class CommerceAdminSkill(BaseSkill):
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
+                direct = await _direct_supplier_answer(
+                    question, tc.function.name, args, result, tenant_id=ctx.get("tenant_id") or "",
+                    history=history, phone=ctx.get("phone") or "")
+                if direct:
+                    return direct
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "name": tc.function.name,
                                  "content": fence('TOOL_RESULT', json.dumps(result, default=str))})
