@@ -79,7 +79,9 @@ def _prompt_and_tools(case: ToolCase) -> tuple[str, list]:
         return ca.CommerceAdminSkill()._system_prompt(EVAL_TENANT, role=case.role, name="Eval"), tools
     if case.skill == "commerce_assistant":
         from core.skills import commerce_assistant as cas
-        return cas.CommerceAssistantSkill()._system_prompt(EVAL_TENANT, ""), cas.TOOL_SPECS
+        # A shop with bookings on — the widest customer toolset production offers.
+        return (cas.CommerceAssistantSkill()._system_prompt(EVAL_TENANT, ""),
+                cas.TOOL_SPECS + cas.BOOKING_TOOL_SPECS)
     raise ValueError(f"unknown skill {case.skill}")
 
 

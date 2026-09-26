@@ -13,6 +13,7 @@ writes go through the audit() helper so vula_admin_audit (migration 072) records
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -795,3 +796,136 @@ async def master_run_qdrant_backup(identity: dict = Depends(require_master)) -> 
     rows = (_client().table("vula_qdrant_backup_status").select("*")
             .order("tenant_id").execute().data or [])
     return {"ok_count": ok_count, "statuses": rows}
+
+
+# ── Model bake-off (evals/harness.py tool-choice layer) ─────────────────────────
+# The live eval needs the OpenRouter key, which only the deployed API holds, so the Master
+# panel starts it here and each model's report is stored in vula_eval_reports (migration 178).
+# Every tool is stubbed and prompts use a no-data sandbox tenant — nothing is read from or sent
+# to any real tenant or customer. Choosing new defaults from the results stays a human
+# decision (CLOUD_MODEL_BY_TASK / MODEL_WORKER_CLOUD on Railway, then `railway up`).
+
+EVAL_CANDIDATES = [
+    "openrouter/meta-llama/llama-3.3-70b-instruct",   # today's model_worker_cloud — the baseline
+    "openrouter/google/gemini-2.5-flash",             # today's model_worker_cheap
+    "openrouter/anthropic/claude-haiku-4.5",
+    "openrouter/anthropic/claude-sonnet-5",
+    "openrouter/openai/gpt-5-mini",
+    "openrouter/qwen/qwen3-235b-a22b",
+]
+_EVAL_SKILLS = {"email_admin", "commerce_admin", "commerce_assistant"}
+_EVAL_MODEL_RE = re.compile(r"^(openrouter/[\w.\-]+/[\w.\-:]+|ollama_chat/[\w.\-:/]+)$")
+_MAX_EVAL_MODELS = 6
+
+
+@router.get("/evals/candidates")
+async def master_eval_candidates() -> dict:
+    """Suggested models plus what's configured today, so results can be read against it."""
+    from config import settings
+    return {
+        "candidates": EVAL_CANDIDATES,
+        "openrouter_configured": bool(settings.openrouter_api_key),
+        "current": {
+            "model_worker_cloud": settings.model_worker_cloud,
+            "model_worker_cheap": settings.model_worker_cheap,
+            "cloud_model_by_task": settings.cloud_model_by_task or "",
+        },
+    }
+
+
+@router.post("/evals/tools")
+async def master_run_tool_evals(body: dict, identity: dict = Depends(require_master)) -> dict:
+    """Queue one tool-choice eval per model; runs in the background, one model after another.
+    Poll GET /evals/reports for results."""
+    from config import settings
+    models = list(dict.fromkeys(str(m).strip() for m in (body.get("models") or []) if str(m).strip()))
+    skill = (body.get("skill") or None)
+    if not models or len(models) > _MAX_EVAL_MODELS:
+        raise HTTPException(status_code=422, detail=f"Pick 1–{_MAX_EVAL_MODELS} models.")
+    bad = [m for m in models if not _EVAL_MODEL_RE.match(m)]
+    if bad:
+        raise HTTPException(status_code=422,
+                            detail=f"Use openrouter/<vendor>/<model> or ollama_chat/<model>: {', '.join(bad)}")
+    if skill and skill not in _EVAL_SKILLS:
+        raise HTTPException(status_code=422, detail=f"skill must be one of {sorted(_EVAL_SKILLS)}")
+    if any(m.startswith("openrouter/") for m in models) and not settings.openrouter_api_key:
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY is not set on this server.")
+
+    db = _client()
+    jobs = []
+    for m in models:
+        row = (db.table("vula_eval_reports")
+               .insert({"model": m, "skill": skill, "status": "running",
+                        "created_by": identity.get("email") or identity.get("user_id")})
+               .execute().data or [{}])[0]
+        if row.get("id"):
+            jobs.append((row["id"], m))
+    if not jobs:
+        raise HTTPException(status_code=500, detail="Couldn't record the run (migration 178 applied?).")
+    audit(identity, "evals.run", models=models, skill=skill)
+
+    from vula.commerce.background_tasks import run_background
+    run_background("master", "model_bakeoff", _run_eval_batch(jobs, skill))
+    return {"queued": [j[0] for j in jobs]}
+
+
+async def _openrouter_model_ids() -> Optional[set]:
+    """OpenRouter's public model list, or None when it can't be fetched (then don't pre-check)."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://openrouter.ai/api/v1/models")
+            r.raise_for_status()
+            return {m.get("id") for m in (r.json().get("data") or []) if m.get("id")}
+    except Exception as exc:  # noqa: BLE001
+        log.info("OpenRouter model list unavailable, skipping id pre-check: %s", exc)
+        return None
+
+
+async def _run_eval_batch(jobs: list, skill: Optional[str]) -> None:
+    from core.llm_router import install_ollama_auth
+    from evals import harness
+    install_ollama_auth()
+    known = await _openrouter_model_ids()
+    db = _client()
+    def now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    for job_id, model in jobs:
+        if known is not None and model.startswith("openrouter/") and model.removeprefix("openrouter/") not in known:
+            upd = {"status": "failed", "error": "Not an OpenRouter model id (check openrouter.ai/models).",
+                   "finished_at": now()}
+        else:
+            try:
+                rep = await harness.run_tools(model, skill)
+                upd = {"status": "done", "passed": rep["passed"], "total": rep["total"],
+                       "report": rep, "finished_at": now()}
+            except Exception as exc:  # noqa: BLE001
+                upd = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                       "finished_at": now()}
+        try:
+            db.table("vula_eval_reports").update(upd).eq("id", job_id).execute()
+        except Exception as exc:  # noqa: BLE001
+            log.error("eval report %s not saved: %s", job_id, exc)
+
+
+@router.get("/evals/reports")
+async def master_eval_reports(limit: int = 30) -> dict:
+    """Latest runs, newest first, with the headline numbers pulled out of each report."""
+    try:
+        rows = (_client().table("vula_eval_reports").select("*")
+                .order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        return {"reports": [], "error": f"{exc} (run migration 178?)"}
+    out = []
+    for r in rows:
+        rep = r.get("report") or {}
+        out.append({
+            **{k: r.get(k) for k in ("id", "model", "skill", "status", "passed", "total", "error",
+                                     "created_by", "created_at", "finished_at")},
+            "p50_secs": rep.get("p50_secs"), "p95_secs": rep.get("p95_secs"),
+            "cost_per_100_usd": rep.get("cost_per_100_usd"), "errors": rep.get("errors"),
+            "failures": [{"prompt": x.get("prompt"), "expect": x.get("expect"), "got": x.get("got"),
+                          "error": x.get("error")} for x in (rep.get("rows") or []) if not x.get("ok")],
+        })
+    return {"reports": out}

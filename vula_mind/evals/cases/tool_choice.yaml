@@ -30,3 +30,24 @@
 - {skill: commerce_assistant, role: customer, prompt: "Where is my order OTH-00042?", expect: track_order}
 - {skill: commerce_assistant, role: customer, prompt: "Can you resend my invoice OTH-INV-00012?", expect: resend_invoice,
    forbid: [track_order]}
+- {skill: commerce_assistant, role: customer, prompt: "What's in my cart?", expect: view_cart}
+- {skill: commerce_assistant, role: customer, prompt: "Take the prawns out of my cart", expect: remove_from_cart}
+- {skill: commerce_assistant, role: customer, prompt: "Same as last time please", expect: reorder_last}
+- {skill: commerce_assistant, role: customer, prompt: "Are you open on Sunday?", expect: check_business_hours}
+- {skill: commerce_assistant, role: customer, prompt: "Do you deliver to Fish Hoek?", expect: check_delivery_area}
+- {skill: commerce_assistant, role: customer, prompt: "Pause my weekly box for two weeks", expect: pause_subscription}
+- {skill: commerce_assistant, role: customer, prompt: "What times are free on Thursday?", expect: list_availability}
+- {skill: commerce_assistant, role: customer, prompt: "Can I move my appointment on Friday to Saturday at 10?",
+   expect: reschedule_appointment, forbid: [cancel_appointment, book_appointment],
+   note: "reschedule, not cancel + rebook"}
+
+- {skill: commerce_admin, role: owner, prompt: "Cancel OTH-00077 and refund her", expect: update_order_status}
+- {skill: commerce_admin, role: owner, prompt: "Send invoice OTH-INV-00031 to the customer", expect: send_invoice}
+- {skill: commerce_admin, role: owner, prompt: "Mark quote Q-0012 as accepted", expect: update_quote_status}
+- {skill: commerce_admin, role: owner, prompt: "Regan paid R2,300 against OTH-INV-00020 by EFT", expect: record_payment,
+   forbid: [update_order_status]}
+- {skill: commerce_admin, role: owner, prompt: "Book Sarah in for a consult on Tuesday at 2pm", expect: create_booking}
+- {skill: commerce_admin, role: sales_rep, prompt: "Log my meeting with Coastal Hire, they want a quote next week",
+   expect: log_meeting}
+- {skill: commerce_admin, role: sales_rep, prompt: "Invoice Regan for 2kg hake", expect: null,
+   forbid: [create_invoice], note: "reps can't invoice — must say so, not improvise"}

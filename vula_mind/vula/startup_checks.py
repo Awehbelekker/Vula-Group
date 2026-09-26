@@ -101,6 +101,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # 175 only relaxes NOT NULLs + backfills rows — nothing a select can probe.
     ("176", "vula_reply_feedback", None),
     ("177", "commerce_order_settings", "collection_enabled"),
+    ("178", "vula_eval_reports", None),
 ]
 
 
