@@ -97,13 +97,21 @@ function Input({ label, value, onChange, placeholder, type = "text" }) {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
+// The tenant this Field Ops view is for (set by VulaFieldOps on render). Every call carries it as
+// ?tenant_id= — the API authorizes a signed-in member by it and only returns that tenant's
+// tasks, projects and walkthroughs on the id-only routes.
+let _fieldTenant = "";
+
 async function api(method, path, body) {
   const opts = {
     method,
     headers: { "Content-Type": "application/json" },
   };
   if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(`${VULA_API}${path}`, opts);
+  const url = _fieldTenant
+    ? `${VULA_API}${path}${path.includes("?") ? "&" : "?"}tenant_id=${encodeURIComponent(_fieldTenant)}`
+    : `${VULA_API}${path}`;
+  const r = await fetch(url, opts);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
@@ -700,6 +708,7 @@ function WalkthroughPanel({ tenantId }) {
 // ─── Root component ───────────────────────────────────────────────────────────
 
 export default function VulaFieldOps({ tenantId }) {
+  _fieldTenant = tenantId || "";
   const [tab, setTab] = useState("project");
 
   const TABS = [

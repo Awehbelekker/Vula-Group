@@ -255,7 +255,7 @@ export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = 
     if (!proj) return;
     await fetch(`${VULA_API}/v1/documents/${docId}/assign-project`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: proj.label, clickup_list_id: proj.clickup_list_id }),
+      body: JSON.stringify({ tenant_id: tenantId.trim(), project: proj.label, clickup_list_id: proj.clickup_list_id }),
     });
     load(false);
   };

@@ -251,7 +251,7 @@ function OrderSheet({ items, markup, selectedTrades, projectName }) {
   );
 }
 
-function RatesView({ apiHost }) {
+function RatesView({ apiHost, tenantId }) {
   const [rates, setRates] = useState([]);
   const [loading, setLoading] = useState(false);
   const [changedOnly, setChangedOnly] = useState(false);
@@ -261,7 +261,7 @@ function RatesView({ apiHost }) {
     setLoading(true);
     setError(null);
     try {
-      const url = `${apiHost}/takeoff/rates${changedOnly ? "?changed_only=true" : ""}`;
+      const url = withTenant(`${apiHost}/takeoff/rates${changedOnly ? "?changed_only=true" : ""}`, tenantId);
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
@@ -325,7 +325,12 @@ function RatesView({ apiHost }) {
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
-export default function VulaTakeoff() {
+// The API authorizes a signed-in member by the tenant a request names, and only shows that
+// tenant's jobs — every takeoff call carries ?tenant_id=.
+const withTenant = (url, tenantId) =>
+  tenantId ? `${url}${url.includes("?") ? "&" : "?"}tenant_id=${encodeURIComponent(tenantId)}` : url;
+
+export default function VulaTakeoff({ tenantId = "" }) {
   const [tab, setTab] = useState("boq");
   const [markup, setMarkup] = useState(15);
   const [selectedTrades, setSelectedTrades] = useState(Object.keys(TRADES));
@@ -387,9 +392,9 @@ export default function VulaTakeoff() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("tenant_id", "dashboard");
+      fd.append("tenant_id", tenantId || "dashboard");
       fd.append("markup", String(markup));
-      const resp = await fetch(`${apiHost}/takeoff/upload`, { method: "POST", body: fd });
+      const resp = await fetch(withTenant(`${apiHost}/takeoff/upload`, tenantId), { method: "POST", body: fd });
       if (!resp.ok) throw new Error(`Upload failed: HTTP ${resp.status}`);
       const data = await resp.json();
       setLiveJob({ job_id: data.job_id, status: "queued", filename: data.filename, boq: null });
@@ -399,7 +404,7 @@ export default function VulaTakeoff() {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
-  }, [apiHost, markup]);
+  }, [apiHost, markup, tenantId]);
 
   const handleUploadClick = useCallback(() => {
     fileRef.current?.click();
@@ -414,21 +419,22 @@ export default function VulaTakeoff() {
     clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
       try {
-        const resp = await fetch(`${apiHost}/takeoff/${liveJob.job_id}`);
+        const resp = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}`, tenantId));
         const data = await resp.json();
         if (data.status === "complete") {
-          const boqResp = await fetch(`${apiHost}/takeoff/${liveJob.job_id}/boq`);
+          const boqResp = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}/boq`, tenantId));
           const boqData = await boqResp.json();
-          setLiveJob(j => ({ ...j, status: "complete", boq: boqData.boq }));
+          // project carries the rooms and floor area read from the plans (room schedule, cost/m²)
+          setLiveJob(j => ({ ...j, status: "complete", project: data.project, boq: boqData.boq }));
         } else if (data.status === "failed") {
           setLiveJob(j => ({ ...j, status: "failed", error: data.error }));
         } else {
-          setLiveJob(j => ({ ...j, status: data.status }));
+          setLiveJob(j => ({ ...j, status: data.status, project: data.project || j.project }));
         }
       } catch { /* network error — keep polling */ }
     }, 3000);
     return () => clearInterval(pollRef.current);
-  }, [liveJob?.job_id, liveJob?.status, apiHost]);
+  }, [liveJob?.job_id, liveJob?.status, apiHost, tenantId]);
 
   // ── Totals ─────────────────────────────────────────────────────────────────
   const filtered = displayItems.filter(i => selectedTrades.includes(i.trade));
@@ -596,7 +602,7 @@ export default function VulaTakeoff() {
             />
           )}
           {tab === "rooms" && <RoomSchedule rooms={rooms} />}
-          {tab === "rates" && <RatesView apiHost={apiHost} />}
+          {tab === "rates" && <RatesView apiHost={apiHost} tenantId={tenantId} />}
 
           {tab === "boq" && (
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
@@ -606,13 +612,22 @@ export default function VulaTakeoff() {
                 </span>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
                   {isLive && liveJob?.job_id && (
-                    <a
-                      href={`${apiHost}/takeoff/${liveJob.job_id}/boq/excel`}
-                      target="_blank" rel="noreferrer"
-                      style={{ padding: "4px 12px", background: C.green, borderRadius: 4, color: C.navy, fontSize: 10, fontWeight: 700, textDecoration: "none", ...mono }}
+                    <button
+                      onClick={async () => {
+                        // Fetched rather than linked: a plain link can't carry the sign-in token.
+                        try {
+                          const r = await fetch(withTenant(`${apiHost}/takeoff/${liveJob.job_id}/boq/excel`, tenantId));
+                          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                          const url = URL.createObjectURL(await r.blob());
+                          const a = document.createElement("a");
+                          a.href = url; a.download = `BOQ_${liveJob.job_id}.xlsx`; a.click();
+                          setTimeout(() => URL.revokeObjectURL(url), 5000);
+                        } catch (e) { alert(`Download failed: ${e.message}`); }
+                      }}
+                      style={{ padding: "4px 12px", background: C.green, border: "none", borderRadius: 4, color: C.navy, fontSize: 10, fontWeight: 700, cursor: "pointer", ...mono }}
                     >
                       ↓ Download Excel
-                    </a>
+                    </button>
                   )}
                   <button onClick={() => {
                     const lines = filtered.map(i => `${i.description}\t${i.qty}\t${i.unit}\t${R(parseFloat(itemRates[i.id]) || mid(i))}\t${R((parseFloat(itemRates[i.id]) || mid(i)) * i.qty * (1 + markup / 100))}`).join("\n");

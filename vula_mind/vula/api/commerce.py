@@ -3987,7 +3987,7 @@ async def admin_delete_recurring(tenant_id: str, rec_id: str):
     return {"deleted": rec_id}
 
 
-@router.post("/cron/recurring-invoices")
+@router.post("/cron/recurring-invoices", dependencies=[Depends(require_auth)])
 async def cron_recurring_invoices():
     """Generate invoices for all due recurring templates (called by the scheduler)."""
     return {"generated": await service.process_due_recurring()}
@@ -5070,7 +5070,7 @@ async def admin_delete_segment(tenant_id: str, segment_id: str):
 
 # ── Scheduled Jobs ──────────────────────────────────────────────────────────
 
-@router.post("/{tenant_id}/jobs/abandoned-carts")
+@router.post("/{tenant_id}/jobs/abandoned-carts", dependencies=[Depends(require_auth)])
 async def job_abandoned_carts(tenant_id: str):
     """Report only. Nudges now come from an 'abandoned cart' automation (Assistant ->
     Automations), which stages each message for the owner to approve. This used to mark carts
@@ -5080,7 +5080,7 @@ async def job_abandoned_carts(tenant_id: str):
             "note": "Set up an 'abandoned cart' automation to nudge these customers."}
 
 
-@router.post("/{tenant_id}/jobs/reorder-reminders")
+@router.post("/{tenant_id}/jobs/reorder-reminders", dependencies=[Depends(require_auth)])
 async def job_reorder_reminders(tenant_id: str):
     """Report only — see the 'reorder due' automation trigger."""
     candidates = await service.get_reorder_candidates(tenant_id, days_ago=7)
@@ -5221,19 +5221,19 @@ async def _process_overdue_invoices(tenant_id: str) -> int:
     return reminded
 
 
-@router.post("/{tenant_id}/jobs/stock-alerts")
+@router.post("/{tenant_id}/jobs/stock-alerts", dependencies=[Depends(require_auth)])
 async def job_stock_alerts(tenant_id: str):
     """Alert the team about low-stock items (scheduler + manual trigger)."""
     return {"ok": True, "alerted": await _process_stock_alerts(tenant_id, force=True)}
 
 
-@router.post("/{tenant_id}/jobs/overdue-invoices")
+@router.post("/{tenant_id}/jobs/overdue-invoices", dependencies=[Depends(require_auth)])
 async def job_overdue_invoices(tenant_id: str):
     """Mark past-due invoices overdue + remind customers (scheduler + manual trigger)."""
     return {"ok": True, "reminded": await _process_overdue_invoices(tenant_id)}
 
 
-@router.post("/{tenant_id}/jobs/weekly-specials")
+@router.post("/{tenant_id}/jobs/weekly-specials", dependencies=[Depends(require_auth)])
 async def job_weekly_specials(tenant_id: str):
     """Fire the weekly specials broadcast."""
     # This logic matches OTH-05: Monday 07:00

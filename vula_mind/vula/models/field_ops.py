@@ -211,9 +211,11 @@ class FieldOpsDB:
         }).execute()
         return pa
 
-    def get_project_team(self, project_id: str) -> List[dict]:
-        assigns = (_client().table(_T_ASSIGN).select("contractor_id,role,assigned_at")
-                   .eq("project_id", project_id).execute()).data or []
+    def get_project_team(self, project_id: str, tenant_id: Optional[str] = None) -> List[dict]:
+        q = _client().table(_T_ASSIGN).select("contractor_id,role,assigned_at").eq("project_id", project_id)
+        if tenant_id:
+            q = q.eq("tenant_id", tenant_id)
+        assigns = q.execute().data or []
         if not assigns:
             return []
         ids = list({a["contractor_id"] for a in assigns})
@@ -276,9 +278,11 @@ class FieldOpsDB:
         res = q.order("due_date").order("created_at").execute()
         return [_to_task(r) for r in (res.data or [])]
 
-    def get_tasks_for_project(self, project_id: str) -> List[Task]:
-        res = (_client().table(_T_TASKS).select("*").eq("project_id", project_id)
-               .order("due_date").order("trade").order("created_at").execute())
+    def get_tasks_for_project(self, project_id: str, tenant_id: Optional[str] = None) -> List[Task]:
+        q = _client().table(_T_TASKS).select("*").eq("project_id", project_id)
+        if tenant_id:
+            q = q.eq("tenant_id", tenant_id)
+        res = q.order("due_date").order("trade").order("created_at").execute()
         return [_to_task(r) for r in (res.data or [])]
 
     def get_tasks_due_today(self, tenant_id: str) -> List[Task]:
@@ -386,10 +390,13 @@ class FieldOpsDB:
                         "contractor_phone": cphone, "contractor_name": cname})
         return out
 
-    def project_status_summary(self, project_id: str) -> dict:
-        tasks = (_client().table(_T_TASKS).select("status").eq("project_id", project_id).execute()).data or []
-        team = (_client().table(_T_ASSIGN).select("id", count="exact")
-                .eq("project_id", project_id).execute())
+    def project_status_summary(self, project_id: str, tenant_id: Optional[str] = None) -> dict:
+        tq = _client().table(_T_TASKS).select("status").eq("project_id", project_id)
+        aq = _client().table(_T_ASSIGN).select("id", count="exact").eq("project_id", project_id)
+        if tenant_id:
+            tq, aq = tq.eq("tenant_id", tenant_id), aq.eq("tenant_id", tenant_id)
+        tasks = tq.execute().data or []
+        team = aq.execute()
         team_count = team.count if team.count is not None else len(team.data or [])
         status_counts: dict = {}
         for t in tasks:

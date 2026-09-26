@@ -211,11 +211,21 @@ async def upload_plans(
     }
 
 
+def _job_for(job_id: str, tenant_id: Optional[str]) -> Optional[dict]:
+    """The job, or None when it doesn't exist or belongs to another tenant. ?tenant_id= is how a
+    signed-in tenant member authenticates on these id-only routes (master_auth.require_auth,
+    applied to this whole router in server.py) — the job must then be that tenant's."""
+    job = _jobs.get(job_id)
+    if not job or (tenant_id and job.get("tenant_id") != tenant_id):
+        return None
+    return job
+
+
 @router.get("/{job_id}")
-async def get_job_status(job_id: str):
-    if job_id not in _jobs:
+async def get_job_status(job_id: str, tenant_id: Optional[str] = None):
+    job = _job_for(job_id, tenant_id)
+    if not job:
         raise HTTPException(404, f"Job {job_id} not found")
-    job = _jobs[job_id]
     return {
         "job_id": job_id,
         "status": job["status"],
@@ -226,8 +236,8 @@ async def get_job_status(job_id: str):
 
 
 @router.get("/{job_id}/boq")
-async def get_boq(job_id: str):
-    job = _jobs.get(job_id)
+async def get_boq(job_id: str, tenant_id: Optional[str] = None):
+    job = _job_for(job_id, tenant_id)
     if not job:
         raise HTTPException(404)
     if job["status"] not in ("complete",):
@@ -236,8 +246,8 @@ async def get_boq(job_id: str):
 
 
 @router.get("/{job_id}/orders")
-async def get_orders(job_id: str):
-    job = _jobs.get(job_id)
+async def get_orders(job_id: str, tenant_id: Optional[str] = None):
+    job = _job_for(job_id, tenant_id)
     if not job:
         raise HTTPException(404)
     if job["status"] != "complete":
@@ -250,9 +260,9 @@ async def get_orders(job_id: str):
 
 
 @router.get("/{job_id}/boq/excel")
-async def download_boq_excel(job_id: str):
+async def download_boq_excel(job_id: str, tenant_id: Optional[str] = None):
     """Download the BOQ as a formatted Excel workbook (.xlsx)."""
-    job = _jobs.get(job_id)
+    job = _job_for(job_id, tenant_id)
     if not job:
         raise HTTPException(404, "Job not found")
     if job["status"] != "complete":
@@ -269,9 +279,9 @@ async def download_boq_excel(job_id: str):
 
 
 @router.post("/{job_id}/send")
-async def send_rfqs(job_id: str, request: SendRFQRequest):
+async def send_rfqs(job_id: str, request: SendRFQRequest, tenant_id: Optional[str] = None):
     """Send RFQs to suppliers. Set dry_run=false to actually send."""
-    job = _jobs.get(job_id)
+    job = _job_for(job_id, tenant_id)
     if not job or job["status"] != "complete":
         raise HTTPException(404, "Job not found or not complete")
 

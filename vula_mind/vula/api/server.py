@@ -1565,13 +1565,17 @@ app.include_router(links_router)  # no prefix — public /l/{code} redirect for 
 app.include_router(email_public_router)  # no prefix — public /email/unsubscribe for campaigns
 app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} photo menu
 app.include_router(master_router, prefix="/v1/master")  # ALL endpoints require verified master JWT
-app.include_router(takeoff_router, prefix="/takeoff")
+# Takeoff was reachable by anyone (upload, jobs, BOQ, supplier edits, RFQs). API key, master, or a
+# member of the tenant named in the request (form/query tenant_id) — see master_auth.require_auth.
+app.include_router(takeoff_router, prefix="/takeoff", dependencies=[Depends(require_auth)])
 app.include_router(onboarding_router, prefix="/v1")
 app.include_router(signup_router, prefix="/v1")
 app.include_router(whatsapp_router, prefix="/v1/whatsapp")
 app.include_router(training_router, prefix="/v1")
 app.include_router(chat_router, prefix="/v1")
-app.include_router(field_ops_router, prefix="/v1/field")
+# Field ops had id-only routes (task/project/walkthrough) open to anyone — contractor phones,
+# task evidence, and WhatsApp sends to contractors. Same rule as takeoff above.
+app.include_router(field_ops_router, prefix="/v1/field", dependencies=[Depends(require_auth)])
 app.include_router(clickup_router, prefix="/v1/clickup")
 app.include_router(documents_router, prefix="/v1/documents")
 app.include_router(projects_router, prefix="/v1/projects")
@@ -1619,35 +1623,35 @@ def validate_tenant(tenant_id: str) -> str:
 
 # ─── OTH manual briefing triggers (for testing / on-demand) ──────────────────
 
-@app.post("/v1/oth/briefing/morning", tags=["oth"])
+@app.post("/v1/oth/briefing/morning", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_morning_briefing():
     """Manually fire the morning delivery list — for testing or on-demand sends."""
     await _send_oth_delivery_briefing()
     return {"sent": True, "briefing": "morning"}
 
 
-@app.post("/v1/oth/briefing/evening", tags=["oth"])
+@app.post("/v1/oth/briefing/evening", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_evening_summary():
     """Manually fire the 18:00 sales summary — for testing or on-demand sends."""
     await _send_oth_sales_summary()
     return {"sent": True, "briefing": "evening"}
 
 
-@app.post("/v1/oth/briefing/low-stock", tags=["oth"])
+@app.post("/v1/oth/briefing/low-stock", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_low_stock_alert():
     """Manually fire the low stock alert to Stacy."""
     await _send_low_stock_alert()
     return {"sent": True, "briefing": "low_stock"}
 
 
-@app.post("/v1/oth/briefing/friday-catch", tags=["oth"])
+@app.post("/v1/oth/briefing/friday-catch", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_friday_catch_reminder():
     """Manually fire the Friday catch reminder to Stacy."""
     await _send_friday_catch_reminder()
     return {"sent": True, "briefing": "friday_catch"}
 
 
-@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"])
+@app.post("/v1/oth/briefing/chase-unpaid", tags=["oth"], dependencies=[Depends(require_auth)])
 async def trigger_chase_unpaid():
     """Manually fire the unpaid order follow-up chase."""
     await _chase_unpaid_orders()
