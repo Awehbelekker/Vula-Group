@@ -75,6 +75,11 @@ async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: f
             "title": project.title_block.project_name,
             "sheets": len(project.sheets),
             "rooms": len(project.rooms),
+            # The rooms themselves — the dashboard's room schedule showed demo rooms for every
+            # real job because only the count was returned.
+            "room_list": [{"name": r.name, "area": round(r.area or 0, 1), "floor": r.floor_finish,
+                           "ceiling": r.ceiling_finish, "walls": r.wall_finish}
+                          for r in project.rooms],
             "gfa": project.gross_floor_area,
             "confidence": round(project.confidence_overall * 100, 1),
             "notes": project.extraction_notes,

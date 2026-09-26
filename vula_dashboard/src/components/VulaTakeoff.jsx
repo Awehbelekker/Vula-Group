@@ -154,7 +154,7 @@ function PlanViewer({ drawings, areas, rooms: _rooms, onUpload }) {
           {[
             { label: "Gross Floor Area", value: `${areas.gross} m²` },
             { label: "Net Usable Area", value: `${areas.net} m²` },
-            { label: "Mezzanine", value: `${areas.mezzanine} m²` },
+            { label: "Mezzanine", value: typeof areas.mezzanine === "number" ? `${areas.mezzanine} m²` : "—" },
           ].map(s => (
             <div key={s.label}>
               <div style={{ fontSize: 9, color: C.muted, ...mono, textTransform: "uppercase" }}>{s.label}</div>
@@ -187,11 +187,16 @@ function RoomSchedule({ rooms }) {
               <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
                 <td style={{ padding: "8px 12px", fontSize: 12, color: C.text, ...sans }}>{r.name}</td>
                 <td style={{ padding: "8px 12px", fontSize: 12, color: C.cyan, ...mono, fontWeight: 600 }}>{r.area}</td>
-                <td style={{ padding: "8px 12px", fontSize: 11, color: C.muted, ...mono }}>{r.floor.replace(/_/g," ")}</td>
-                <td style={{ padding: "8px 12px", fontSize: 11, color: C.muted, ...mono }}>{r.ceiling.replace(/_/g," ")}</td>
-                <td style={{ padding: "8px 12px", fontSize: 11, color: C.muted, ...mono }}>{r.walls.replace(/_/g," ")}</td>
+                <td style={{ padding: "8px 12px", fontSize: 11, color: C.muted, ...mono }}>{(r.floor || "—").replace(/_/g," ")}</td>
+                <td style={{ padding: "8px 12px", fontSize: 11, color: C.muted, ...mono }}>{(r.ceiling || "—").replace(/_/g," ")}</td>
+                <td style={{ padding: "8px 12px", fontSize: 11, color: C.muted, ...mono }}>{(r.walls || "—").replace(/_/g," ")}</td>
               </tr>
             ))}
+            {!rooms.length && (
+              <tr><td colSpan={5} style={{ padding: "12px", fontSize: 12, color: C.muted, ...sans }}>
+                No rooms could be read from these plans — the BOQ uses the gross floor area instead.
+              </td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -364,6 +369,13 @@ export default function VulaTakeoff() {
   }, [liveItems]);
 
   const displayItems = liveItems || MOCK_TAKEOFF.items;
+  // A real job shows its own rooms and areas (empty if the reader found none), never the demo's.
+  const liveRooms = liveJob?.project ? (liveJob.project.room_list || []) : null;
+  const rooms = liveRooms ?? MOCK_TAKEOFF.rooms;
+  const areas = liveJob?.project
+    ? { gross: Math.round(liveJob.project.gfa || 0),
+        net: Math.round((liveRooms || []).reduce((s, r) => s + (r.area || 0), 0)), mezzanine: "—" }
+    : MOCK_TAKEOFF.areas;
   const isLive = !!liveItems;
   const projectName = liveJob?.boq?.project_name || MOCK_TAKEOFF.projectName;
 
@@ -540,7 +552,7 @@ export default function VulaTakeoff() {
             <SummaryCard label="Total Project Cost" value={R(totals.total)} sub={`incl. ${pct(markup)} markup`} color={C.cyan} />
             <SummaryCard label="Your Profit Margin" value={R(totals.profit)} sub={pct(markup) + " on net cost"} color={C.amber} />
             <SummaryCard label="Line Items" value={`${filtered.length}`} sub={`${selectedTrades.length} trades active`} color={C.text} />
-            <SummaryCard label="Cost / m²" value={R(totals.total / (liveJob?.boq?.project?.gfa || MOCK_TAKEOFF.areas.gross))} sub="all-in incl. markup" color={C.violet} />
+            <SummaryCard label="Cost / m²" value={(areas.gross ? R(totals.total / areas.gross) : "—")} sub="all-in incl. markup" color={C.violet} />
             <SummaryCard label="Net Cost" value={R(totals.total / (1 + markup / 100))} sub="before markup" color={C.muted} />
           </div>
 
@@ -578,12 +590,12 @@ export default function VulaTakeoff() {
           {tab === "plans" && (
             <PlanViewer
               drawings={liveJob?.project?.sheets ? [] : MOCK_TAKEOFF.drawings}
-              areas={MOCK_TAKEOFF.areas}
-              rooms={MOCK_TAKEOFF.rooms}
+              areas={areas}
+              rooms={rooms}
               onUpload={handleUploadClick}
             />
           )}
-          {tab === "rooms" && <RoomSchedule rooms={MOCK_TAKEOFF.rooms} />}
+          {tab === "rooms" && <RoomSchedule rooms={rooms} />}
           {tab === "rates" && <RatesView apiHost={apiHost} />}
 
           {tab === "boq" && (
