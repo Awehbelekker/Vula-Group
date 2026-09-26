@@ -99,9 +99,22 @@ def match_project(tenant_id: str, text: str) -> Optional[dict]:
         # ── ClickUp lists — highest-priority tier, can also attach the file into the list ──
         scored = []  # [(score, label, list_id)]
         for lid, lname in _clickup_candidates(tenant_id):
-            overlap = _tokens(lname) & text_tokens
+            label = _project_label(lname)
+            # Score against the RESOLVED LABEL's own tokens, not the full nested list name.
+            # 2026-09-21 incident (real DIGG data): a multi-room/multi-phase project's deepest
+            # segment — e.g. "Team Space / Sporty – Phase 2 / Sporty P2 – Office (First Floor)"
+            # — is exactly what _project_label() already discards down to "Sporty – Phase 2".
+            # Scoring against the full raw name anyway let generic room/business vocabulary in
+            # that discarded segment ("office", "floor", "meeting", "design"...) win confident
+            # matches against completely unrelated documents that never mention Sporty at all
+            # (a "Meeting Minutes" doc about a different project matched "Sporty P2 – Meeting
+            # Room" on the single word "meeting"). Scoring the same text that's actually
+            # returned as the result closes the gap with no hardcoded word list and no per-
+            # tenant corpus query — a real project mention (the label's own name) still matches
+            # every one of that project's sub-lists identically, which is the desired behaviour.
+            overlap = _tokens(label) & text_tokens
             if overlap:
-                scored.append((len(overlap), _project_label(lname), lid))
+                scored.append((len(overlap), label, lid))
         if scored:
             best_score = max(s for s, _, _ in scored)
             top = [c for c in scored if c[0] == best_score]
