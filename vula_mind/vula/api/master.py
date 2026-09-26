@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -517,6 +518,32 @@ def _probe_migrations(db) -> list[dict]:
             applied = False
         out.append({"migration": num, "table": table, "note": note, "applied": applied})
     return out
+
+
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
+
+
+def _migration_files(numbers: list[str]) -> list:
+    """migrations/<num>_*.sql for each number, in migration order."""
+    files = []
+    for num in sorted(set(numbers), key=lambda n: int(n) if n.isdigit() else 0):
+        files.extend(sorted(_MIGRATIONS_DIR.glob(f"{num}_*.sql")))
+    return files
+
+
+@router.get("/migrations/pending-sql")
+async def master_pending_migrations_sql() -> dict:
+    """One paste-ready script of the migrations Health reports as not applied, in order.
+    Migrations are still applied by a person in the Supabase SQL editor — this removes the
+    "which files, in what order" step. Every migration is idempotent, so re-running one that
+    was in fact applied is harmless."""
+    missing = [m["migration"] for m in _probe_migrations(_client()) if not m["applied"]]
+    files = _migration_files(missing)
+    parts = [f"-- Vula: pending migrations ({', '.join(f.name for f in files) or 'none'})\n"
+             f"-- Generated {datetime.now(timezone.utc).isoformat()[:16]}Z from Master › Health.\n"]
+    for f in files:
+        parts.append(f"\n-- ===== {f.name} =====\n{f.read_text()}")
+    return {"migrations": [f.name for f in files], "sql": "".join(parts) if files else ""}
 
 
 # ── Usage & billing ───────────────────────────────────────────────────────────

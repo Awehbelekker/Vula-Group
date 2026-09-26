@@ -53,6 +53,11 @@ jobs:
       - name: Check RLS coverage
         run: python tools/check_migrations_rls.py
 
+      # Every new migration needs a startup_checks sentinel, so Master › Health (and the boot
+      # schema check) can tell whether it was actually applied in the SQL editor.
+      - name: Check migration sentinels
+        run: python tools/check_migration_sentinels.py
+
   # ── Docker image — the actual Railway build ───────────────────────────────────
   # Every deploy 2026-09-02 → 2026-09-10 failed silently at build (`COPY
   # requirements.txt` — wrong context) while GitHub CI stayed green, so prod ran

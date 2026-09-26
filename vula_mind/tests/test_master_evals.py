@@ -126,3 +126,24 @@ async def test_feedback_cases_are_redacted_and_prefilled_with_todays_route():
     import yaml
     parsed = yaml.safe_load(case["yaml"])[0]
     assert parsed["expect"] == "email_admin" and parsed["tenant"] == "digg-demo"
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_sql_concatenates_only_missing_files_in_order():
+    probes = [{"migration": "179", "applied": False}, {"migration": "176", "applied": False},
+              {"migration": "177", "applied": True}]
+    with patch("vula.api.master._client"), \
+         patch("vula.api.master._probe_migrations", return_value=probes):
+        out = await master.master_pending_migrations_sql()
+    assert out["migrations"] == ["176_reply_feedback.sql", "179_wa_inbound_tracking.sql"]
+    assert out["sql"].index("176_reply_feedback") < out["sql"].index("179_wa_inbound_tracking")
+    assert "create table if not exists vula_reply_feedback" in out["sql"]
+    assert "177_" not in out["sql"]
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_sql_is_empty_when_all_applied():
+    with patch("vula.api.master._client"), \
+         patch("vula.api.master._probe_migrations", return_value=[{"migration": "176", "applied": True}]):
+        out = await master.master_pending_migrations_sql()
+    assert out == {"migrations": [], "sql": ""}

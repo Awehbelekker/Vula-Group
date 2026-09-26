@@ -413,6 +413,7 @@ export function ManageTenantRow({ tenant, registry, onSave }) {
 /* ── Platform health ───────────────────────────────────────────────────────── */
 function HealthPanel({ onError, onViewDetail }) {
   const [h, setH] = useState(null)
+  const [migMsg, setMigMsg] = useState('')
   const [qb, setQb] = useState(null)
   const [qbBusy, setQbBusy] = useState(false)
   useEffect(() => { authFetch('/v1/master/health').then(setH).catch(e => onError(e.message)) }, [])
@@ -554,7 +555,21 @@ function HealthPanel({ onError, onViewDetail }) {
 
       {(h.migration_state || []).some(m => !m.applied) && (
         <div style={{ ...card, borderColor: C.amber }}>
-          <h4 style={h4}>🗄️ Migrations not yet applied</h4>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h4 style={{ ...h4, margin: 0 }}>🗄️ Migrations not yet applied</h4>
+            <button style={{ ...miniBtn, marginLeft: 'auto' }} onClick={async () => {
+              try {
+                const r = await authFetch('/v1/master/migrations/pending-sql')
+                if (!r.sql) return setMigMsg('Nothing pending.')
+                await navigator.clipboard.writeText(r.sql)
+                setMigMsg(`Copied SQL for ${r.migrations.join(', ')} — paste it into the Supabase SQL editor and run once, then reload this page.`)
+              } catch (e) { onError(`Couldn't copy: ${e.message}`) }
+            }}>Copy SQL to apply</button>
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, margin: '4px 0 6px' }}>
+            One script of every missing migration, in order. Each one is idempotent, so it's safe to run once in the Supabase SQL editor.
+          </div>
+          {migMsg && <div style={{ fontSize: 12, color: C.green, marginBottom: 6 }}>{migMsg}</div>}
           {(h.migration_state || []).filter(m => !m.applied).map(m => (
             <div key={m.migration} style={{ fontSize: 12.5, padding: '3px 0' }}>
               <b>{m.migration}</b> — {m.note} <span style={{ color: C.muted }}>({m.table})</span>
