@@ -51,7 +51,7 @@ python tools/check_migrations_rls.py
 
 Dashboard (`vula_dashboard/`): `npm install && npm run dev` (Vite), `npm run build` (must pass in CI).
 
-**Deploy:** backend → Railway (`railway up`; Dockerfile build, health check `/status`). Dashboard + storefronts → Vercel. **After changing Railway env vars you must `railway up` again** — env changes alone redeploy stale code.
+**Deploy:** backend → Railway (`railway up`; Dockerfile build, health check `/status`). Dashboard + storefronts → Vercel. **After changing Railway env vars you must `railway up` again** — env changes alone redeploy stale code. Test risky changes on staging first — see `docs/staging.md` (Supabase branch + Railway `staging` environment + Meta test number; not set up yet).
 
 **Migrations:** SQL files in `vula_mind/migrations/` (numbered, idempotent, currently ~157). Applied **manually** in the Supabase SQL editor — there is no migration runner. `vula_mind/db/migrations/` is a near-empty legacy path; ignore it.
 
