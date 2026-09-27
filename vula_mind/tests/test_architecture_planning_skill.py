@@ -203,3 +203,47 @@ async def test_decline_guard_does_not_fire_when_tenant_docs_were_actually_retrie
 
     assert "don't have a document on file" not in out.answer
     assert "5%" in out.answer
+
+
+# ── deterministic arithmetic backstop (2026-09-26) ────────────────────────────────
+# This skill gives fee/rate/BOQ money guidance in free prose — an audit found it was the one
+# money-answering skill (unlike commerce_admin.py/commerce_assistant.py) with no wrong_arithmetic
+# check at all, despite the real Gerflor incident ("11.8 x 18.2 = 215.56", correct 214.76) that
+# motivated wrong_arithmetic() in the first place applying just as much to a fee/area calculation
+# here.
+
+@pytest.mark.asyncio
+async def test_wrong_arithmetic_in_the_answer_is_corrected():
+    async def _fake_completion(*a, **kw):
+        return _Resp("Area: 11.8 x 18.2 = 215.56 sqm, so the fee is R42,731.08.")
+
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock([])),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(
+            SkillInput(question="what's the BOQ fee for an 11.8 x 18.2m room", tenant_id="digg-demo"))
+
+    assert "correct my own maths" in out.answer
+    assert out.confidence == 0.3
+
+
+@pytest.mark.asyncio
+async def test_correct_arithmetic_is_left_untouched():
+    async def _fake_completion(*a, **kw):
+        return _Resp("Area: 11.8 x 18.2 = 214.76 sqm.")
+
+    chunks = [{"filename": "boq.pdf", "text": "11.8 x 18.2", "score": 0.9}]
+    with (
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=_pipeline_mock(chunks)),
+        patch("litellm.acompletion", new=_fake_completion),
+        patch("core.skills.architecture_planning.resolve_generation_route",
+              new=AsyncMock(return_value=("ollama/test", None, "http://localhost:11434"))),
+    ):
+        out = await ArchitecturePlanningSkill().run(
+            SkillInput(question="what's the area", tenant_id="digg-demo"))
+
+    assert "correct my own maths" not in out.answer
+    assert out.confidence == 0.85

@@ -266,3 +266,126 @@ def test_find_document_description_covers_materials_summaries():
     desc = spec["function"]["description"].lower()
     assert "what materials/items did we buy" in desc
     assert "materials" in desc
+
+
+# ── deterministic supplier-history answer, ported from email_admin.py (2026-09-26) ─────────
+# Previously only email_admin.py (the knowledge-mode mailbox-fallback path) had a deterministic
+# answer-from-the-numbers shortcut for find_document results, plus real .xlsx export. A
+# commerce-mode tenant's merchant/staff/sales-rep message reaches commerce_admin directly
+# (bypassing HRM entirely, per CLAUDE.md), so it had neither: the model could paraphrase raw
+# find_document JSON, and an explicit "in excel" ask got nothing. Same mechanism, same tests
+# shape as tests/test_chat_followups_0923.py's email_admin.py coverage.
+
+from core.skills.base import SkillInput  # noqa: E402
+from core.skills.commerce_admin import _direct_supplier_answer  # noqa: E402
+
+_XLSX_RESULT = {
+    "status": "found", "match_type": "resolved_via_knowledge_base",
+    "resolved_supplier": "GARDENS HANDIMAN CENTRE", "total_matches": 1,
+    "total_amount": "R942.00", "total_amount_cents": 94200, "matches_with_amount": 1,
+    "matches": [{"filename": "POS Account Sale 24-225537.pdf", "amount": 942.0,
+                 "filed_at": "2026-09-22T11:40:03"}],
+}
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_ignores_a_non_find_document_tool():
+    assert await _direct_supplier_answer(
+        "find the proof of payment I sent", "email_search", {}, _XLSX_RESULT) is None
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_ignores_a_non_supplier_question():
+    assert await _direct_supplier_answer(
+        "find the proof of payment I sent", "find_document", {}, _XLSX_RESULT) is None
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_writes_the_reply_from_the_numbers():
+    out = await _direct_supplier_answer(
+        "Need all jack hammer invoices and a summary of what was spent",
+        "find_document", {"query": "jack hammer"}, _XLSX_RESULT)
+    assert out is not None
+    assert "total spend *R942.00*" in out
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_sends_a_real_xlsx_when_phone_is_given():
+    with patch("vula.api.whatsapp._send_invoice_document", new=AsyncMock(return_value=True)):
+        out = await _direct_supplier_answer(
+            "Need all jack hammer invoices in excel please", "find_document", {}, _XLSX_RESULT,
+            phone="+27821234567")
+    assert "Sent the full breakdown as an Excel file too" in out
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_falls_back_to_continuation():
+    history = ("Vula AI (2m ago): *GARDENS HANDIMAN CENTRE*: 1 documents, total spend "
+               "*R942.00*.\n\n*Invoices*\n• POS Account Sale 24-225537 — R942.00")
+    with patch("vula.commerce.service.find_filed_document", new=AsyncMock(return_value=_XLSX_RESULT)):
+        out = await _direct_supplier_answer(
+            "show me everything", "find_document", {"query": "materials breakdown"},
+            _XLSX_RESULT, tenant_id=TID, history=history)
+    assert out is not None
+    assert "total spend *R942.00*" in out
+
+
+@pytest.mark.asyncio
+async def test_direct_supplier_answer_ignores_continuation_without_tenant_or_history():
+    assert await _direct_supplier_answer(
+        "show me everything", "find_document", {}, _XLSX_RESULT) is None
+
+
+@pytest.mark.asyncio
+async def test_run_answers_a_named_supplier_with_no_model_call(skill):
+    model = AsyncMock(side_effect=AssertionError("no model call expected"))
+    with (
+        patch("vula.commerce.service.answer_supplier_history",
+              new=AsyncMock(return_value="*GARDENS HANDIMAN CENTRE*: 1 document")),
+        patch("litellm.acompletion", new=model),
+    ):
+        out = await skill.run(SkillInput(
+            question="Need all jack hammer invoices and a summary of what was spent",
+            tenant_id=TID, metadata={"customer_phone": "+27821234567"}))
+    assert out.answer.startswith("*GARDENS HANDIMAN CENTRE*: 1 document")
+    model.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_threads_customer_phone_into_the_direct_answer(skill):
+    answer_supplier_history = AsyncMock(return_value="*GARDENS HANDIMAN CENTRE*: sent")
+    with patch("vula.commerce.service.answer_supplier_history", new=answer_supplier_history):
+        await skill.run(SkillInput(
+            question="Need all jack hammer invoices and a summary in excel", tenant_id=TID,
+            metadata={"customer_phone": "+27821234567"}))
+    answer_supplier_history.assert_awaited_once_with(
+        TID, "Need all jack hammer invoices and a summary in excel", phone="+27821234567")
+
+
+@pytest.mark.asyncio
+async def test_run_tries_continuation_when_the_wording_gate_fails(skill):
+    import core.skills.commerce_admin as ca
+
+    continuation = AsyncMock(return_value=None)
+    with (
+        patch("vula.commerce.service.answer_supplier_history_continuation", new=continuation),
+        patch.object(ca.CommerceAdminSkill, "_agent_loop", new=AsyncMock(return_value="ok")),
+    ):
+        await skill.run(SkillInput(
+            question="show me everything", tenant_id=TID, conversation_history="some history",
+            metadata={"customer_phone": "+27821234567"}))
+    continuation.assert_awaited_once_with(TID, "some history", "show me everything",
+                                          phone="+27821234567")
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_short_circuit_a_genuinely_unrelated_question(skill):
+    """A normal owner question must still reach the agent loop, not the supplier-history
+    shortcut — confirmed by mocking _agent_loop itself and checking it was actually called."""
+    import core.skills.commerce_admin as ca
+
+    with patch.object(ca.CommerceAdminSkill, "_agent_loop",
+                      new=AsyncMock(return_value="Today's sales were R500.")) as agent_loop:
+        out = await skill.run(SkillInput(question="what were today's sales?", tenant_id=TID))
+    agent_loop.assert_awaited_once()
+    assert out.answer == "Today's sales were R500."
