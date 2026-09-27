@@ -227,3 +227,29 @@ async def test_link_an_unknown_barcode_then_it_scans(db):
     with pytest.raises(HTTPException) as e:                         # not this tenant's product
         await api.admin_link_barcode(TID, "px", {"barcode": "111"})
     assert e.value.status_code == 404
+
+
+# ── Smart Scanner: server-side line matching and cost prices ──────────────────
+
+@pytest.mark.asyncio
+async def test_scanned_lines_are_matched_on_the_server(db):
+    res = await api.admin_scan_match_lines(TID, {"lines": [
+        {"description": "HAKE", "quantity": 5, "unit_price_cents": 4800},
+        {"description": "Prawn", "quantity": 2},
+        {"description": "Cement 50kg", "quantity": 1},
+        {"description": "Theirs", "quantity": 1}]})
+    got = {ln["description"]: (ln["match"] or {}).get("product_id") for ln in res["lines"]}
+    assert got == {"HAKE": "p1", "Prawn": "p3", "Cement 50kg": None, "Theirs": None}
+    assert res["matched"] == 2
+    assert res["lines"][0]["match"]["cost_cents"] == 5000        # current cost shown for review
+    assert db.tables["commerce_products"][0]["stock_quantity"] == 10 and _moves(db) == []
+
+
+@pytest.mark.asyncio
+async def test_cost_prices_from_a_price_list_are_tenant_scoped(db):
+    out = await api.admin_update_costs(TID, {"costs": [
+        {"product_id": "p1", "cost_cents": 5500}, {"product_id": "px", "cost_cents": 1},
+        {"product_id": "p2", "cost_cents": 0}]})
+    assert out == {"updated": 1}
+    assert db.tables["commerce_products"][0]["cost_cents"] == 5500
+    assert "cost_cents" not in db.tables["commerce_products"][3]

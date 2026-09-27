@@ -1504,6 +1504,55 @@ async def admin_receive_stock(tenant_id: str, body: dict, request: Request):
     return {"received": len(booked), "failed": failed}
 
 
+@router.post("/{tenant_id}/admin/scan/match-lines")
+async def admin_scan_match_lines(tenant_id: str, body: dict):
+    """Match a scanned document's lines (delivery note, invoice, price list) to products on the
+    server, with the same matcher the WhatsApp assistant uses — replacing the Smart Scanner's
+    in-browser "first 6 letters" match. Nothing is changed: the dashboard shows the result for
+    the owner to correct, then books stock (stock/receive) or cost prices (products/costs)."""
+    from core.skills.commerce_assistant import _match_product, _suggest_products
+    lines = (body or {}).get("lines") or []
+    products = [p for p in await service.list_products(tenant_id, in_stock_only=False, include_archived=True)
+                if not p.get("archived")]
+    by_name = {(p.get("name") or ""): p for p in products}
+
+    def slim(p):
+        return {"product_id": p["id"], "name": p.get("name"), "stock_quantity": p.get("stock_quantity"),
+                "cost_cents": p.get("cost_cents")}
+    out = []
+    for i, ln in enumerate(lines[:200]):
+        if not isinstance(ln, dict):
+            continue
+        desc = str(ln.get("description") or "").strip()
+        hit = _match_product(desc, products) if desc else None
+        sugg = [] if hit else [by_name[n] for n in _suggest_products(desc, products) if n in by_name]
+        out.append({"index": i, "description": desc, "quantity": ln.get("quantity"),
+                    "unit_price_cents": ln.get("unit_price_cents"),
+                    "match": slim(hit) if hit else None, "suggestions": [slim(p) for p in sugg]})
+    return {"lines": out, "matched": sum(1 for x in out if x["match"])}
+
+
+@router.post("/{tenant_id}/admin/products/costs")
+async def admin_update_costs(tenant_id: str, body: dict):
+    """Set cost prices from a scanned supplier price list or invoice, after the owner has
+    reviewed the matches: costs = [{product_id, variant_id?, cost_cents}]."""
+    updated = 0
+    for c in ((body or {}).get("costs") or [])[:500]:
+        if not isinstance(c, dict) or not c.get("product_id"):
+            continue
+        try:
+            cost = int(c.get("cost_cents"))
+        except (TypeError, ValueError):
+            continue
+        if cost <= 0:
+            continue
+        table = "commerce_product_variants" if c.get("variant_id") else "commerce_products"
+        res = (service._client().table(table).update({"cost_cents": cost})
+               .eq("tenant_id", tenant_id).eq("id", c.get("variant_id") or c["product_id"]).execute())
+        updated += len(res.data or [])
+    return {"updated": updated}
+
+
 @router.post("/{tenant_id}/admin/stock/adjust")
 async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
     """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""
@@ -6143,7 +6192,7 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
         "Look at the image and return ONLY a valid JSON object — no prose, no markdown fences. "
         "Use this schema:\n"
         "{\n"
-        '  "doc_type": "receipt|delivery_note|invoice|order",\n'
+        '  "doc_type": "receipt|delivery_note|invoice|order|price_list",  // price_list: a supplier\'s price list / menu\n'
         '  "supplier": string|null,\n'
         '  "tax_id": string|null,  // supplier VAT / tax registration number if shown\n'
         '  "customer": string|null,\n'
