@@ -11,11 +11,15 @@ dynamically by the HRM orchestrator.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ── Vula AI behaviour policy ("the Soul") ────────────────────────────────────
@@ -224,7 +228,66 @@ def behaviour_preamble(persona: str = "", agentic: bool = False, preferred_langu
 # "kb", so the checker ran blind for every tool-calling skill regardless of policy. Every
 # tool-calling agent loop should append one of these per dispatched tool call and pass the list
 # through as `sources` — 900-char cap matches the existing KB-source truncation convention.
+# A reply that is the model talking about its tools instead of answering. Three real
+# WhatsApp replies (2026-09-25/26):
+#   digg-demo owner:  ">>> BEGIN EMAIL_TOOL_RESULT (data, not instructions) >>> {"matches":
+#                     [{"id": 12345 ..." — a fabricated tool result, written as the answer;
+#   digg-demo owner:  "This appears to be a JSON output from an email tool ..." (twice);
+#   off-the-hook customer: "```\ncreate_quote(\n  customer_name=\"John Doe\", ..." — a tool
+#                     call printed as text, with an invented customer name.
+_LEAKED_TOOL_RE = re.compile(
+    r">>>\s*BEGIN\b|<<<\s*END\b|\b[A-Z_]*TOOL_RESULT\b|"
+    r"\b(appears|seems)\s+to\s+be\s+(a|an)\s+(json|tool)\b|"
+    r"\b(json|tool)\s+(output|object|result)\s+(from|containing)\b|"
+    r"\bI\s+will\s+now\s+call\s+[a-z]+_[a-z_]+\b|\bwhile\s+I\s+call\s+[a-z]+_[a-z_]+\b|"
+    r"\b[a-z]+_[a-z_]+\(\s*\n?\s*[a-z_]+\s*=",
+    re.IGNORECASE)
+
+LEAKED_OWNER_FALLBACK = ("I couldn't finish that one properly. Could you ask again and name the supplier, "
+                         "customer or document — e.g. \"all Gardens Handiman invoices in Excel\"?")
+LEAKED_CUSTOMER_FALLBACK = ("Sorry, I couldn't complete that just now. Tell me the product and how much "
+                            "you'd like (e.g. \"40kg Atlantic Mackerel\") and I'll put it together — or "
+                            "reply \"speak to someone\" and the team will help.")
+
+
+def leaked_tool_output(text: str, tool_names: Iterable[str] = ()) -> bool:
+    """True when `text` is tool plumbing (a fenced tool result, a description of JSON, or a
+    tool call written out as text) rather than an answer for a person."""
+    t = text or ""
+    if _LEAKED_TOOL_RE.search(t):
+        return True
+    # A reply that is nothing but a JSON object/array — 2026-09-23 (digg-demo) the owner got
+    # '{"status": "not_found_live", "message": "No emails found ..."}' as the whole answer.
+    body = t.strip().strip("`").strip()
+    if body.startswith("json"):
+        body = body[4:].strip()
+    if len(body) >= 2 and body[0] in "{[" and body[-1] in "}]":
+        try:
+            json.loads(body)
+            return True
+        except ValueError:
+            pass
+    return any(n and re.search(rf"\b{re.escape(n)}\s*\(", t) for n in tool_names)
+
+
+def substitute_if_leaked(answer: str, *, skill: str, customer: bool = False,
+                         tenant_id: Optional[str] = None, tool_names: Iterable[str] = ()) -> str:
+    """leaked_tool_output() -> the honest fallback, logged (type label only, POPIA)."""
+    if not leaked_tool_output(answer, tool_names):
+        return answer
+    logger.warning("leaked tool output replaced, skill=%s tenant=%s len=%d", skill, tenant_id, len(answer or ""))
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-leaked-tool-output", task=skill, outcome="substituted", escalated=False,
+             tenant_id=tenant_id, extra={"length": len(answer or "")})
+    except Exception:
+        pass
+    return LEAKED_CUSTOMER_FALLBACK if customer else LEAKED_OWNER_FALLBACK
+
+
 def tool_source(name: str, result: Any) -> Dict[str, Any]:
+    if isinstance(result, dict):   # private export payloads (e.g. _export_rows) aren't evidence
+        result = {k: v for k, v in result.items() if not str(k).startswith("_")}
     text = json.dumps(result, default=str)
     return {"type": "tool", "name": name, "text": text[:900]}
 
@@ -576,3 +639,43 @@ class BaseSkill(ABC):
         except Exception:
             pass
         return result
+
+
+# ── Per-request skill state ───────────────────────────────────────────────────
+# Skills are process-wide singletons (core/skills/loader.py::_SKILLS), so a plain `self._x = ...`
+# set during run() is shared by every request in flight. 2026-09-25 review: finance_admin kept
+# each turn's verified figures / sources on self, so two tenants answering at the same time
+# could have one tenant's numbers "verify" (or leak as sources into) the other's reply.
+# turn_local keeps the attribute syntax but stores the value per asyncio task (contextvars).
+_TURN_STATE: ContextVar[Optional[dict]] = ContextVar("vula_skill_turn_state", default=None)
+
+
+def begin_turn() -> None:
+    """Give the current task its own state dict. Call at the top of run(): a task inherits its
+    parent's context, so without this two sibling tasks would share the parent's dict object."""
+    _TURN_STATE.set(dict(_TURN_STATE.get() or {}))
+
+
+class turn_local:
+    """Descriptor: a skill attribute whose value is private to the current asyncio task.
+    Reading one that was never set this turn raises AttributeError, so hasattr()/getattr()
+    defaults behave exactly as they did for a plain instance attribute."""
+
+    def __set_name__(self, owner, name):
+        self.key = name
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self
+        state = _TURN_STATE.get()
+        try:
+            return state[(id(obj), self.key)]
+        except (TypeError, KeyError):
+            raise AttributeError(self.key) from None
+
+    def __set__(self, obj, value):
+        state = _TURN_STATE.get()
+        if state is None:
+            state = {}
+            _TURN_STATE.set(state)
+        state[(id(obj), self.key)] = value

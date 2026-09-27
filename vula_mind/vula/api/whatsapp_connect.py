@@ -29,7 +29,7 @@ import logging
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from config import settings
@@ -56,6 +56,11 @@ class ConnectRequest(BaseModel):
     tenant_id: str
     code: str                    # Short-lived code from Meta Embedded Signup
     connected_by: Optional[str] = None  # email of the admin who clicked Connect
+    # From Embedded Signup's session-info message (sessionInfoVersion 2): the WhatsApp account
+    # and number the owner actually picked. Without these the first number found on ANY of the
+    # token's businesses was used — the wrong one for an owner with several.
+    waba_id: Optional[str] = None
+    phone_number_id: Optional[str] = None
 
 
 class ConnectResponse(BaseModel):
@@ -71,7 +76,9 @@ class ConnectResponse(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/connect", response_model=ConnectResponse)
-async def connect_whatsapp(body: ConnectRequest):
+async def connect_whatsapp(body: ConnectRequest, authorization: str = Header(default="")):
+    from vula.api.tenant_auth import check_body_tenant
+    await check_body_tenant(body.tenant_id, authorization)
     """
     Exchange the short-lived code from Meta Embedded Signup for a
     long-lived access token, discover the phone number details,
@@ -107,17 +114,32 @@ async def connect_whatsapp(body: ConnectRequest):
 
         auth_headers = {"Authorization": f"Bearer {access_token}"}
 
-        # Step 2 — discover WABA and phone numbers for this token
-        waba_resp = await client.get(
-            f"{GRAPH_BASE}/me/businesses",
-            headers=auth_headers,
-        )
-        businesses = waba_resp.json().get("data", [])
-
         waba_id = None
         phone_number_id = None
         phone_number = None
         verified_name = None
+
+        # Step 2a — the number the owner chose in the signup popup, when the frontend sent it.
+        if body.waba_id and body.phone_number_id:
+            chosen = await client.get(f"{GRAPH_BASE}/{body.phone_number_id}",
+                                      params={"fields": "id,display_phone_number,verified_name"},
+                                      headers=auth_headers)
+            if chosen.is_success:
+                waba_id, phone_number_id = body.waba_id, body.phone_number_id
+                phone_number = chosen.json().get("display_phone_number", "")
+                verified_name = chosen.json().get("verified_name", "")
+            else:
+                log.warning("chosen phone %s not readable with this token, discovering instead: %s",
+                            body.phone_number_id, chosen.text[:200])
+
+        # Step 2b — otherwise discover WABA and phone numbers for this token
+        businesses = []
+        if not phone_number_id:
+            waba_resp = await client.get(
+                f"{GRAPH_BASE}/me/businesses",
+                headers=auth_headers,
+            )
+            businesses = waba_resp.json().get("data", [])
 
         for biz in businesses:
             wa_resp = await client.get(
@@ -147,6 +169,19 @@ async def connect_whatsapp(body: ConnectRequest):
                 detail="No WhatsApp phone numbers found for this account. "
                        "Please verify the phone number in Meta Business Manager first.",
             )
+
+        # Step 2c — register the number for Cloud API messaging (a number added through Embedded
+        # Signup can't send until it is). Behind a flag until tested live: registering sets the
+        # number's two-step PIN, so it needs WHATSAPP_REGISTRATION_PIN, and fails harmlessly on
+        # a number that's already registered with a different PIN.
+        if settings.whatsapp_register_on_connect and settings.whatsapp_registration_pin:
+            reg = await client.post(f"{GRAPH_BASE}/{phone_number_id}/register", headers=auth_headers,
+                                    json={"messaging_product": "whatsapp",
+                                          "pin": settings.whatsapp_registration_pin})
+            if reg.is_success:
+                log.info("Registered phone %s for Cloud API", phone_number_id)
+            else:
+                log.warning("Phone registration failed (non-fatal): %s", reg.text[:300])
 
         # Step 3 — register Vula's webhook with Meta for this WABA
         webhook_registered = False

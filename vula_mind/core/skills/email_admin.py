@@ -22,7 +22,7 @@ from core.llm_router import (
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
-    need_info_message, tool_source, unverified_prices, wrong_arithmetic,
+    need_info_message, substitute_if_leaked, tool_source, unverified_prices, wrong_arithmetic,
 )
 from vula.email_imap import service
 from vula.email_imap.credentials import get_email_creds
@@ -79,7 +79,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "Never invent or guess an address.",
         "parameters": {"type": "object", "properties": {
             "to": {"type": "string", "description": "A full email address, never a person's name."},
-            "subject": {"type": "string"}, "body": {"type": "string"}},
+            "subject": {"type": "string"}, "body": {"type": "string"},
+            "confirm": {"type": "boolean", "description": "Only when this mailbox SENDS directly: "
+                        "pass true only after the user said yes to the exact recipient, subject "
+                        "and body you showed them."}},
             "required": ["to", "subject", "body"]}}},
     {"type": "function", "function": {
         "name": "list_followups",
@@ -158,7 +161,9 @@ _RESULT_CAP_BY_TOOL = {"find_document": 9000}
 
 def _fenced_result(name: str, result: Any) -> str:
     """A tool result, capped per tool and fenced as untrusted content for the prompt."""
-    return fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
+    from vula.commerce.service import for_model
+    return fence('EMAIL_TOOL_RESULT',
+                 json.dumps(for_model(result), default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
 
 
 async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any,
@@ -182,9 +187,19 @@ async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any]
     if tool != "find_document" or not isinstance(result, dict):
         return None
     if looks_like_supplier_history_question(question or ""):
-        from vula.commerce.service import format_supplier_history_reply, send_supplier_history_xlsx
-        supplier = result.get("resolved_supplier") or (args or {}).get("query") or ""
-        xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question or "", result, supplier)
+        from vula.commerce.service import (answer_all_invoices, format_supplier_history_reply,
+                                           names_no_party, send_supplier_history_xlsx,
+                                           supplier_label)
+        # Never label (or name the file) after the model's own search words — 2026-09-26.
+        supplier = supplier_label(result)
+        if not supplier:
+            everything = await answer_all_invoices(tenant_id, question or "", phone=phone)
+            if everything:
+                return everything
+            q = (args or {}).get("query") or ""
+            supplier = "" if names_no_party(q) else q
+        xlsx_sent = (await send_supplier_history_xlsx(tenant_id, phone, question or "", result, supplier)
+                     if supplier else False)
         return format_supplier_history_reply(result, query=(args or {}).get("query") or "",
                                              question=question or "", xlsx_sent=xlsx_sent)
     if not tenant_id or not history:
@@ -255,6 +270,9 @@ class EmailAdminSkill(BaseSkill):
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id,
                                       creds or {}, phone=phone, sources=collected_sources)
             answer = substitute_if_degenerate(answer or "", skill=self.name, tenant_id=inp.tenant_id)
+            if (answer or "").strip():
+                answer = substitute_if_leaked(answer, skill=self.name, tenant_id=inp.tenant_id,
+                                              tool_names=[t["function"]["name"] for t in TOOL_SPECS])
             if not (answer or "").strip():
                 return SkillOutput(answer=reply_or_fallback(answer, skill=self.name),
                                    skill_name=self.name, confidence=0.2)
@@ -444,7 +462,8 @@ class EmailAdminSkill(BaseSkill):
                 from vula.ingestion.pipeline import VulaIngestionPipeline
                 d = settings.upload_dir / tenant_id
                 d.mkdir(parents=True, exist_ok=True)
-                p: Path = d / att["name"]
+                from vula.uploads import safe_upload_path
+                p: Path = safe_upload_path(d, att["name"])
                 p.write_bytes(att["data"])
                 res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
                 return {"filed": att["name"], "chunks": getattr(res, "chunks_stored", 0)}
@@ -479,6 +498,16 @@ class EmailAdminSkill(BaseSkill):
                     # The address check above (2026-08-08, widened to both modes 2026-09-01)
                     # already guarantees a real address by this point, which matters most here:
                     # in send mode this call is an irreversible real send.
+                    if not args.get("confirm"):
+                        # 2026-09-25: the "confirm before sending" rule was prompt-only — a model
+                        # that skipped it sent real email. Now enforced here.
+                        return {"status": "need_info", "preview": {"to": to, "subject": subj,
+                                                                   "body": body[:600]},
+                                # need_info short-circuits: this text IS the reply the user
+                                # sees; their "yes" next turn leads to a confirm=true call.
+                                "message": (f"Ready to send this email — it goes out immediately:\n"
+                                            f"To: {to}\nSubject: {subj}\n\n{body[:600]}\n\n"
+                                            "Reply YES to send it, or tell me what to change.")}
                     return await service.send(creds, to, subj, body)
                 return await service.save_draft(creds, to, subj, body)
             if name == "list_followups":

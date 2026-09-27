@@ -195,17 +195,33 @@ def post_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
           source_type="expense", source_id=expense.get("id"), lines=lines)
 
 
+def _all_pages(make_query, page: int = 1000) -> List[Dict[str, Any]]:
+    """Run a PostgREST query page by page (it caps each response at 1000 rows)."""
+    out: List[Dict[str, Any]] = []
+    start = 0
+    while True:
+        rows = make_query().range(start, start + page - 1).execute().data or []
+        out.extend(rows)
+        if len(rows) < page:
+            return out
+        start += page
+
+
 def trial_balance(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None) -> Dict[str, Any]:
     """Sum debits/credits per account across posted journal entries — total debits should always
     equal total credits, since every entry is balance-checked at post time by the RPC."""
     db = _client()
-    try:
+
+    def _entries_query():
         q = db.table("journal_entries").select("id").eq("tenant_id", tenant_id)
         if since:
             q = q.gte("entry_date", since)
         if until:
             q = q.lte("entry_date", until)
-        entries = q.execute().data or []
+        return q.order("id")
+
+    try:
+        entries = _all_pages(_entries_query)
     except Exception as exc:
         return {"error": f"{exc} (run migration 121?)"}
 
@@ -214,8 +230,15 @@ def trial_balance(tenant_id: str, since: Optional[str] = None, until: Optional[s
         return {"since": since, "until": until, "accounts": [],
                 "total_debit_cents": 0, "total_credit_cents": 0}
 
-    lines = (db.table("journal_lines").select("account_id,debit_cents,credit_cents")
-             .in_("journal_entry_id", entry_ids).execute().data or [])
+    # Every read here is paged/chunked: PostgREST silently caps a response at 1000 rows and a
+    # single in_() with thousands of ids overflows the URL — either way the trial balance used
+    # to come back quietly incomplete (and unbalanced) once a tenant had real volume.
+    lines: List[Dict[str, Any]] = []
+    for i in range(0, len(entry_ids), 150):
+        chunk = entry_ids[i:i + 150]
+        lines.extend(_all_pages(lambda c=chunk: db.table("journal_lines")
+                                .select("id,account_id,debit_cents,credit_cents")
+                                .in_("journal_entry_id", c).order("id")))
     accounts = {a["id"]: a for a in (db.table("commerce_accounts").select("id,code,name,type")
                 .eq("tenant_id", tenant_id).execute().data or [])}
 

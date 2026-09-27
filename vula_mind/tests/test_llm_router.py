@@ -564,3 +564,17 @@ def test_log_decision_emits_shared_envelope(tmp_path, monkeypatch):
     assert entry["schema"] == 1 and entry["system"] == "vula-llm-router"
     assert {"run_id", "task", "timestamp", "outcome", "escalated"} <= set(entry)
     assert entry["reason"] == "local_first" and entry["backend"] == "ollama/llama3.2:3b"
+
+
+def test_cloud_model_per_task(monkeypatch):
+    from config import settings
+    from core import llm_router
+    monkeypatch.setattr(settings, "model_worker_cloud", "meta-llama/llama-3.3-70b-instruct")
+    monkeypatch.setattr(settings, "cloud_model_by_task", '{"commerce_admin": "anthropic/claude-sonnet-5"}')
+    assert llm_router.cloud_model_for("commerce_admin") == "anthropic/claude-sonnet-5"
+    assert llm_router.cloud_model_for("email_admin") == "meta-llama/llama-3.3-70b-instruct"
+    monkeypatch.setattr(settings, "openrouter_api_key", "k")
+    route = llm_router.escalate_to_cloud("test", task_type="commerce_admin")
+    assert route[0] == "openrouter/anthropic/claude-sonnet-5"
+    monkeypatch.setattr(settings, "cloud_model_by_task", "{not json")
+    assert llm_router.cloud_model_for("commerce_admin") == "meta-llama/llama-3.3-70b-instruct"

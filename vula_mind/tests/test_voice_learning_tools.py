@@ -74,7 +74,9 @@ async def test_apply_voice_persona_updates_tenant_config(skill):
         patch.object(ca.service, "_client", return_value=mock_db),
         patch("vula.api.tenants.invalidate") as mock_invalidate,
     ):
-        res = await skill._apply_voice_persona(TID, "Warm and casual, short replies.")
+        preview = await skill._apply_voice_persona(TID, "Warm and casual, short replies.")
+        assert preview["preview"] is True and not mock_db.table.called
+        res = await skill._apply_voice_persona(TID, "Warm and casual, short replies.", confirm=True)
 
     assert res == {"applied": True, "persona_prompt": "Warm and casual, short replies."}
     mock_db.table.assert_called_with("vula_tenant_config")

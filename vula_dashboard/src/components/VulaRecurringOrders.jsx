@@ -4,8 +4,8 @@
  * Distinct from Vula's own SaaS plan billing (VulaSubscriptions).
  */
 import { useState, useEffect, useCallback } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
 const CAD = { weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
 const STATUS = { active: { l: "Active", c: "#22c55e" }, paused: { l: "Paused", c: "#f59e0b" }, cancelled: { l: "Cancelled", c: "#ef4444" } };

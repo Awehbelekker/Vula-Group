@@ -5,8 +5,8 @@
  * Deliberately NOT a drag-and-drop canvas — same simple-form shell as VulaAutomations.jsx.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const REPLY_TYPES = {
   free_text: { label: '💬 Free text', hint: 'Any reply is accepted as-is.' },
@@ -100,11 +100,12 @@ export default function VulaFlowBuilder({ tenantId }) {
       for (const [kw, ref] of Object.entries(branchLines)) {
         branches[kw.toLowerCase()] = parseStepRef(ref, total)
       }
-      const hasBranches = Object.keys(branches).length > 0
-      const defaultNext = parseStepRef(st.default_next, total)
-      if (hasBranches && st.default_next.trim() === '') {
-        return setError(`Step ${i + 1}: has branch rules but no fallback — set "If nothing matches" too.`)
-      }
+      // Blank means what the dropdown says — "next step" (the flow ends after the last step).
+      // It used to be sent as null, which the backend treats as "end", so every flow built with
+      // the default stopped after its first question.
+      const defaultNext = st.default_next.trim() === ''
+        ? (i + 1 < total ? i + 1 : null)
+        : parseStepRef(st.default_next, total)
       steps.push({
         prompt: st.prompt.trim(), reply_type: st.reply_type,
         ...(options ? { options } : {}), save_as: st.save_as.trim() || undefined,

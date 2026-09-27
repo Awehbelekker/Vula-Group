@@ -100,6 +100,29 @@ class ReflectionAgent:
 
         return log
 
+    def apply_feedback(self, tenant_id: str, question: str, thumbs_up: bool) -> bool:
+        """Fold an Inbox 👍/👎 (vula_reply_feedback) into the stored outcome of the run that
+        answered `question` — the same 0.4 auto / 0.6 human blend reflect() uses — so routing
+        hints favour what people rated well. Matches the tenant's most recent reflection whose
+        goal is that question; a reply with no reflection (commerce paths) is a no-op. Returns
+        True if a row was updated. Fails open."""
+        if not tenant_id or not (question or "").strip():
+            return False
+        try:
+            rows = (_client().table("vula_reflections").select("id,outcome_score")
+                    .eq("tenant_id", tenant_id).eq("goal", question.strip()[:500])
+                    .order("created_at", desc=True).limit(1).execute().data or [])
+            if not rows:
+                return False
+            prior = float(rows[0].get("outcome_score") or 0.5)
+            score = round(prior * 0.4 + (1.0 if thumbs_up else 0.0) * 0.6, 2)
+            (_client().table("vula_reflections").update({"outcome_score": score})
+             .eq("id", rows[0]["id"]).eq("tenant_id", tenant_id).execute())
+            return True
+        except Exception as exc:
+            logger.debug("reflection feedback skipped: %s", exc)
+            return False
+
     def get_routing_hints(self, tenant_id: str, goal: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
         Query stored reflection logs for similar past tasks — scoped to ONE tenant.

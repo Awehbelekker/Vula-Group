@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 
 const C = {
   bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
@@ -46,7 +46,17 @@ function TopicCard({ doc }) {
   );
 }
 
+// Two shared knowledge bases, same three endpoints each (vula/api/training.py). Seeding is a
+// platform operation (master-only on the server), so this tab lives in the Master shell.
+const KBS = {
+  construction: { base: "/v1/training", label: "SA construction",
+    blurb: "Shared SA construction knowledge — the assistant falls back to this when a construction tenant's own docs have no answer" },
+  business: { base: "/v1/training/business", label: "General SA business",
+    blurb: "Shared SA small-business knowledge (VAT, POPIA, invoicing, payroll basics) — the fallback for every tenant" },
+};
+
 export default function VulaTraining() {
+  const [kb, setKb] = useState("construction");
   const [status, setStatus] = useState(null);
   const [topics, setTopics] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -57,8 +67,8 @@ export default function VulaTraining() {
     setLoading(true);
     try {
       const [s, t] = await Promise.all([
-        fetch(`${VULA_API}/v1/training/status`).then((r) => r.json()),
-        fetch(`${VULA_API}/v1/training/topics`).then((r) => r.json()),
+        fetch(`${VULA_API}${KBS[kb].base}/status`).then((r) => r.json()),
+        fetch(`${VULA_API}${KBS[kb].base}/topics`).then((r) => r.json()),
       ]);
       setStatus(s);
       setTopics(t.topics || []);
@@ -66,7 +76,7 @@ export default function VulaTraining() {
       setStatus({ error: "API unavailable" });
     }
     setLoading(false);
-  }, []);
+  }, [kb]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
@@ -74,8 +84,9 @@ export default function VulaTraining() {
     setSeeding(true);
     setSeedMsg(null);
     try {
-      const resp = await fetch(`${VULA_API}/v1/training/seed?force=${force}`, { method: "POST" });
+      const resp = await fetch(`${VULA_API}${KBS[kb].base}/seed?force=${force}`, { method: "POST" });
       const data = await resp.json();
+      if (!resp.ok) { setSeedMsg(data.detail || `Seeding refused (HTTP ${resp.status}).`); setSeeding(false); return; }
       setSeedMsg(data.message || "Seeding started.");
       setTimeout(loadStatus, 8000);
     } catch {
@@ -98,8 +109,17 @@ export default function VulaTraining() {
             Training Knowledge Base
           </h1>
           <p style={{ fontSize: 13, color: C.muted, fontFamily: "'Source Code Pro', monospace" }}>
-            Shared SA construction knowledge — WhatsApp AI and client portal fall back to this when tenant docs have no answer
+            {KBS[kb].blurb}
           </p>
+          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+            {Object.entries(KBS).map(([id, k]) => (
+              <button key={id} onClick={() => { setKb(id); setSeedMsg(null); }} style={{
+                padding: "6px 14px", borderRadius: 6, fontSize: 12, cursor: "pointer",
+                border: `1px solid ${kb === id ? C.green : C.border}`,
+                background: kb === id ? C.green : C.surface, color: kb === id ? "#fff" : C.charcoal,
+              }}>{k.label}</button>
+            ))}
+          </div>
         </div>
 
         {/* Status card */}
@@ -120,7 +140,7 @@ export default function VulaTraining() {
             <div style={{ fontSize: 12, color: C.muted, marginTop: 2, fontFamily: "'Source Code Pro', monospace" }}>
               {loading ? "" : isSeeded
                 ? `${chunks.toLocaleString()} chunks · ${topics.length} topic documents`
-                : "Run seed to populate the shared construction KB"}
+                : `Run seed to populate the shared ${KBS[kb].label.toLowerCase()} KB`}
             </div>
           </div>
           <div style={{ display: "flex", gap: 10 }}>

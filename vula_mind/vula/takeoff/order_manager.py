@@ -46,7 +46,9 @@ from vula.takeoff.boq_generator import BOQ
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path.home() / ".vula" / "suppliers.db"
+# On the persistent data volume (/data on Railway) — ~/.vula was wiped on every deploy.
+from config import settings as _settings  # noqa: E402
+DB_PATH = _settings.data_dir / "suppliers.db"
 
 # ─── Supplier routing map ────────────────────────────────────────────────────
 # Maps BOQ trade → preferred supplier category

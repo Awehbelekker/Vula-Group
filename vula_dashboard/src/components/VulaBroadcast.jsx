@@ -7,10 +7,9 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
-const API_KEY  = import.meta.env.VITE_API_KEY  || ''
-const H = { 'Content-Type': 'application/json', ...(API_KEY ? { 'X-API-Key': API_KEY } : {}) }
+const H = { 'Content-Type': 'application/json' }  // JWT attached by lib/authFetch
 
 const TEMPLATES = [
   { id: 'weekly_fish',   label: '🐟 Weekly fish specials', hint: 'This week\'s fresh catch + prices' },
@@ -144,7 +143,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
   async function sendTest() {
     if (useApproved && !approvedName) { setError('Pick an approved template first.'); return }
     if (useApproved && approvedTpl?.header_type === 'IMAGE' && !headerImageUrl.trim()) { setError('This template has an image header — add an image URL.'); return }
-    if (!useApproved && !bodyText.trim()) { setError('Write the message first.'); return }
+    if (!useApproved) { setError('WhatsApp only allows broadcasts from an approved template — pick one, or turn this text into a new template in the 📨 Templates tab.'); return }
     if (!testPhone.trim()) { setError('Enter a phone number to test to.'); return }
     setTestMsg(''); setError(null)
     try {
@@ -241,6 +240,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
 
   // Step 2 — confirmed live send.
   async function sendBroadcast() {
+    if (!useApproved) { setError('WhatsApp only allows broadcasts from an approved template — pick one, or turn this text into a new template in the 📨 Templates tab.'); return }
     if (useApproved && approvedTpl?.header_type === 'IMAGE' && !headerImageUrl.trim()) { setError('This template has an image header — add an image URL.'); return }
     setSending(true); setError(null); setSent(false)
     try {
@@ -280,7 +280,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
         <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
           <button onClick={() => setUseApproved(false)} style={{ ...s.tplBtn, flex: 1, ...(!useApproved ? s.tplBtnActive : {}) }}>
             <span style={s.tplLabel}>💬 Free text</span>
-            <span style={s.tplHint}>Only reaches customers active in the last 24h</span>
+            <span style={s.tplHint}>Draft &amp; preview — sending needs an approved template</span>
           </button>
           <button onClick={() => setUseApproved(true)} style={{ ...s.tplBtn, flex: 1, ...(useApproved ? s.tplBtnActive : {}) }}>
             <span style={s.tplLabel}>📨 Approved template</span>
@@ -425,8 +425,9 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
         {error && <p style={s.error}>{error}</p>}
         {sent && (
           <p style={s.success}>
-            ✓ Sent to {sent.sent} recipient{sent.sent !== 1 ? 's' : ''}
-            {sent.failed ? ` · ${sent.failed} failed` : ''}.
+            {sent.queued
+              ? `✓ Sending to ${sent.recipient_count} recipients in the background (about ${Math.ceil(sent.recipient_count / 600)} min) — progress shows in the history below.`
+              : <>✓ Sent to {sent.sent} recipient{sent.sent !== 1 ? 's' : ''}{sent.failed ? ` · ${sent.failed} failed` : ''}.</>}
           </p>
         )}
 

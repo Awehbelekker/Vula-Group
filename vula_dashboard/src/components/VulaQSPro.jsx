@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
+import { VULA_API } from "../lib/authFetch";
 
 // ─── DESIGN ──────────────────────────────────────────────────────────────────
 // Aesthetic: precision instrument — graph paper grid, monospace data, blueprint blue
@@ -141,7 +142,7 @@ function LineItem({ item, onUpdate, onRemove }) {
       {/* Description */}
       <td style={{ padding: "8px 10px", minWidth: 160 }}>
         <div style={{ fontSize: 12, color: C.text, fontFamily: "system-ui", marginBottom: 3 }}>{item.description || rate.label || "Item"}</div>
-        {rate.source && <div style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace" }}>{rate.source}</div>}
+        {(rate.source || item.source) && <div style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace" }}>{rate.source || item.source}</div>}
       </td>
       {/* Market range */}
       <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.muted }}>
@@ -167,7 +168,7 @@ function LineItem({ item, onUpdate, onRemove }) {
       {/* Qty */}
       <td style={{ padding: "8px 8px" }}>
         <input type="number" value={item.qty} onChange={e => onUpdate("qty", e.target.value)} style={{ ...inp, width: 70, textAlign: "right" }} />
-        {rate.unit && <div style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{rate.unit}</div>}
+        {(rate.unit || item.unit) && <div style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{rate.unit || item.unit}</div>}
       </td>
       {/* Line total (net) */}
       <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "'DM Mono', monospace", fontSize: 12, color: C.text, fontWeight: 600 }}>
@@ -313,7 +314,7 @@ const newItem = (materialKey = "") => ({
   markup: 15,
 });
 
-export default function VulaQSPro() {
+export default function VulaQSPro({ tenantId }) {
   const [projectName, setProjectName] = useState("New Estimate");
   const [client, setClient]           = useState("");
   const [items, setItems]             = useState([newItem("drywall_ceiling_std"), newItem("tiles_porcelain_600"), newItem("hvac_split")]);
@@ -321,7 +322,18 @@ export default function VulaQSPro() {
   const [vatOn, setVatOn]             = useState(true);
   const [filterCat, setFilterCat]     = useState("All");
   const [search, setSearch]           = useState("");
-  const [lastScraped]                 = useState("15 May 2026 08:32"); // from scraper
+  // The business's own unit rates (QS Rates tab, /v1/qs/rates) — what they actually charge,
+  // listed above the static market reference so estimates start from their numbers.
+  const [ownRates, setOwnRates]       = useState([]);
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${VULA_API}/v1/qs/rates/${tenantId}`).then(r => r.json())
+      .then(d => setOwnRates(d.rates || [])).catch(() => setOwnRates([]));
+  }, [tenantId]);
+  const addOwnRate = (r) => setItems(prev => [...prev, {
+    ...newItem(), description: r.description || r.code || "Item", listPrice: r.rate ?? "",
+    unit: r.unit || "", source: `Your rate${r.code ? ` · ${r.code}` : ""}`, markup: defaultMarkup,
+  }]);
 
   const updateItem = (id, field, value) =>
     setItems(prev => prev.map(i => i.id === id ? { ...i, [field]: value } : i));
@@ -376,7 +388,7 @@ export default function VulaQSPro() {
           <input value={projectName} onChange={e => setProjectName(e.target.value)} style={{ ...inp, background: "transparent", border: "none", fontSize: 14, fontWeight: 600, color: C.text, width: 220 }} />
           <input value={client} onChange={e => setClient(e.target.value)} style={{ ...inp, background: "transparent", border: "none", fontSize: 12, color: C.muted, width: 160 }} placeholder="Client name" />
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ fontSize: 10, color: C.dim, fontFamily: "'DM Mono', monospace" }}>Rates: AECOM 2025/26 · Scraped {lastScraped}</div>
+            <div style={{ fontSize: 10, color: C.dim, fontFamily: "'DM Mono', monospace" }}>Market reference: AECOM 2025/26 (static ranges){ownRates.length ? ` · ${ownRates.length} of your own rates` : ""}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => setVatOn(!vatOn)}>
               <div style={{ width: 32, height: 17, borderRadius: 9, background: vatOn ? C.blue : C.border, position: "relative", transition: "background 0.2s" }}>
                 <div style={{ position: "absolute", top: 2, left: vatOn ? 16 : 2, width: 13, height: 13, borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
@@ -421,6 +433,15 @@ export default function VulaQSPro() {
                 </div>
               </div>
               <div style={{ maxHeight: 520, overflowY: "auto" }}>
+                {ownRates.filter(r => !search || `${r.description} ${r.code}`.toLowerCase().includes(search.toLowerCase())).map(r => (
+                  <div key={`own-${r.code || r.description}-${r.rate}`} onClick={() => addOwnRate(r)} style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", background: `${C.green}0d` }}>
+                    <div style={{ fontSize: 11, color: C.text, marginBottom: 3 }}>{r.description || r.code}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace" }}>Your rate · {r.unit}</span>
+                      <span style={{ fontSize: 10, color: C.green, fontFamily: "'DM Mono', monospace" }}>{R(r.rate || 0)}</span>
+                    </div>
+                  </div>
+                ))}
                 {filteredLibrary.map(([key, v]) => (
                   <div key={key} onClick={() => addFromLibrary(key)} style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", transition: "background 0.1s" }}
                     onMouseEnter={e => e.currentTarget.style.background = C.highlight}
@@ -522,11 +543,8 @@ export default function VulaQSPro() {
               <div style={{ marginTop: 12, padding: "10px 14px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green }} />
                 <span style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
-                  Market rates sourced from AECOM 2025/26 · Builders Warehouse · Italtile · Cashbuild · Vula Scout refreshes weekly via n8n
+                  Market ranges are a static AECOM 2025/26 reference for comparison. Your own rates (QS Rates tab) are listed first in the library.
                 </span>
-                <button style={{ marginLeft: "auto", padding: "3px 10px", background: "transparent", border: `1px solid ${C.border}`, borderRadius: 4, color: C.muted, fontSize: 10, cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
-                  Refresh rates
-                </button>
               </div>
             </div>
           </div>

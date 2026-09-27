@@ -98,6 +98,11 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     # 2026-09-23: without this column every UPDATE on commerce_suppliers fails (009's trigger
     # sets it) — found when a WhatsApp supplier-alias save failed on digg-demo.
     ("174", "commerce_suppliers", "updated_at"),
+    # 175 only relaxes NOT NULLs + backfills rows — nothing a select can probe.
+    ("176", "vula_reply_feedback", None),
+    ("177", "commerce_order_settings", "collection_enabled"),
+    ("178", "vula_eval_reports", None),
+    ("179", "vula_wa_msg_dedup", "status"),
 ]
 
 

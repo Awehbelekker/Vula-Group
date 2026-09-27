@@ -52,7 +52,9 @@ class StandardsLookupSkill(BaseSkill):
 
         context = "\n\n".join(
             f"[{c.get('filename','doc')}]: {c.get('text','')[:1800]}" for c in chunks)
-        sources = [{"type": "kb", "filename": c.get("filename", "?"),
+        # "text" is what the adversarial verifier grounds the answer against — without it the
+        # checker saw filenames only and ran blind.
+        sources = [{"type": "kb", "filename": c.get("filename", "?"), "text": (c.get("text") or "")[:900],
                     "score": round(c.get("score", 0.0), 3)} for c in chunks]
         system_msg = (
             "You are Vula, looking up standards/codes for a South African practice from the "

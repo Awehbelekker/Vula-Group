@@ -4,8 +4,8 @@
  * Backend: /v1/commerce/{tenant}/admin/finances/insights
  */
 import { useState, useEffect, useCallback } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const PERIODS = [{ d: 7, l: "7 days" }, { d: 30, l: "30 days" }, { d: 90, l: "90 days" }];

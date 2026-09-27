@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from vula.email_imap import service
@@ -41,7 +41,9 @@ class ConnectIn(BaseModel):
 
 
 @router.post("/connect")
-async def connect(body: ConnectIn) -> dict:
+async def connect(body: ConnectIn, authorization: str = Header(default="")) -> dict:
+    from vula.api.tenant_auth import check_body_tenant
+    await check_body_tenant(body.tenant_id, authorization)
     creds = {"email": body.email, "password": body.password,
              "imap_host": body.imap_host, "imap_port": body.imap_port}
     test = await service.test_connection(creds)

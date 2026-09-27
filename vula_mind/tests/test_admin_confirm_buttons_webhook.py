@@ -10,14 +10,31 @@ TID = "off-the-hook"
 PHONE = "27737815979"
 
 
+class _PendingChain:
+    """Records every .eq() filter on commerce_pending_confirmations' claim UPDATE and returns
+    the given rows only if the claim was scoped to the tapping phone."""
+    def __init__(self, rows):
+        self.rows, self.filters = rows, {}
+
+    def table(self, _name):
+        return self
+
+    def update(self, _patch):
+        return self
+
+    def eq(self, col, val):
+        self.filters[col] = val
+        return self
+
+    def gt(self, *_a):
+        return self
+
+    def execute(self):
+        return MagicMock(data=self.rows if self.filters.get("phone") == PHONE else [])
+
+
 def _mock_pending_row_chain(returned_rows):
-    """Chainable mock matching commerce_pending_confirmations'
-    update().eq().eq().eq().gt().execute() shape."""
-    m = MagicMock()
-    chain = (m.table.return_value.update.return_value
-             .eq.return_value.eq.return_value.eq.return_value.gt.return_value)
-    chain.execute.return_value = MagicMock(data=returned_rows)
-    return m
+    return _PendingChain(returned_rows)
 
 
 @pytest.mark.asyncio
@@ -159,3 +176,47 @@ async def test_handle_admin_confirm_reply_ignores_malformed_id():
     with patch("vula.commerce.service._client") as mock_client:
         await _handle_admin_confirm_reply(PHONE, "admin_confirm:", TID)  # no id after colon
     mock_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_confirm_tap_is_scoped_to_the_requesting_phone_and_keeps_caller_role():
+    from vula.api.whatsapp import _handle_admin_confirm_reply
+    import vula.api.whatsapp as wa
+
+    row = {"id": "p1", "tool_name": "update_stock",
+           "tool_args": {"product": "Hake", "quantity": 5, "_caller": {"role": "sales_rep", "name": "Sam"}}}
+    chain = _mock_pending_row_chain([row])
+    dispatch_mock = AsyncMock(return_value={"updated": "Hake"})
+
+    with (
+        patch("vula.commerce.service._client", return_value=chain),
+        patch("core.skills.commerce_admin.CommerceAdminSkill") as MockSkill,
+        patch.object(wa, "_send_reply", new=AsyncMock(return_value=True)),
+        patch("litellm.acompletion", new=AsyncMock(side_effect=RuntimeError("no cloud"))),
+        patch("vula.commerce.service.get_or_create_session", new=AsyncMock(return_value={"id": "s"})),
+        patch("vula.commerce.service.append_message", new=AsyncMock()),
+    ):
+        MockSkill.return_value._dispatch_tool = dispatch_mock
+        await _handle_admin_confirm_reply(PHONE, "admin_confirm:p1", TID)
+
+    assert chain.filters["phone"] == PHONE
+    name, args, ctx = dispatch_mock.call_args[0]
+    assert args == {"product": "Hake", "quantity": 5, "confirm": True}
+    assert ctx["caller_role"] == "sales_rep" and ctx["caller_name"] == "Sam"
+
+
+@pytest.mark.asyncio
+async def test_confirm_tap_from_another_number_applies_nothing():
+    from vula.api.whatsapp import _handle_admin_confirm_reply
+    import vula.api.whatsapp as wa
+
+    row = {"id": "p1", "tool_name": "update_stock", "tool_args": {"product": "Hake"}}
+    dispatch_mock = AsyncMock()
+    with (
+        patch("vula.commerce.service._client", return_value=_mock_pending_row_chain([row])),
+        patch("core.skills.commerce_admin.CommerceAdminSkill") as MockSkill,
+        patch.object(wa, "_send_reply", new=AsyncMock(return_value=True)),
+    ):
+        MockSkill.return_value._dispatch_tool = dispatch_mock
+        await _handle_admin_confirm_reply("27820000000", "admin_confirm:p1", TID)
+    dispatch_mock.assert_not_awaited()

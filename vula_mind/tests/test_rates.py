@@ -16,7 +16,9 @@ from vula.takeoff.construction_rates_scraper import (
     _parse_json_array,
 )
 
-client = TestClient(app)
+# /takeoff requires auth (master_auth.require_auth) — call it as a server-to-server caller would.
+from config import settings as _settings  # noqa: E402
+client = TestClient(app, headers={"X-API-Key": _settings.api_key or ""})
 
 
 # ── MaterialRate dataclass ────────────────────────────────────────────────────

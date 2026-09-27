@@ -1,0 +1,26 @@
+# Knowledge-path routing (HRMOrchestrator._route_with_reason) — deterministic, runs in CI.
+# Every misroute fixed in production belongs here, so it can't come back. Fields:
+#   prompt, expect (skill), tenant (optional; needed for supplier-history overrides), note.
+# The LLM fallback is disabled for these: they pin down what the keyword/rule layer does.
+- {prompt: "check my email", expect: email_admin}
+- {prompt: "compose an email to the supplier", expect: email_admin}
+- {prompt: "draft a reply to that email", expect: email_admin}
+- {prompt: "Draft an email to Jack Hammer about the invoices from them", expect: email_admin}
+- {prompt: "draft a fee proposal for the Bokaap job", expect: draft_admin,
+   note: "fee proposal must not be stolen by email_admin's 'draft a'"}
+- {prompt: "draft me a letter of appointment for the contractor", expect: draft_admin}
+- {prompt: "write a letter to the client about the delay", expect: draft_admin}
+- {prompt: "we need a tender invitation for the new contractor", expect: draft_admin}
+- {prompt: "Remind me to pay all the Jack Hammer invoices", expect: clickup_admin}
+- {prompt: "How much have we spent on Stage 3", expect: finance_admin}
+- {prompt: "What's left on the budget for Stage 3", expect: finance_admin}
+- {prompt: "How much is left on the budget for Stage 3", expect: finance_admin}
+- {prompt: "I want to buy 2kg of hake", expect: commerce_assistant}
+- {prompt: "What does Jack Hammer charge for cement? I want to buy some", expect: commerce_assistant}
+- {prompt: "how many seats fit in this hall", expect: calculations}
+- {prompt: "what does sans 10400 say about fire escapes", expect: standards_lookup}
+- {prompt: "What standard covers occupancy load calculations", expect: standards_lookup}
+- {prompt: "Search for the latest news on AI in South Africa", expect: web_search}
+- {prompt: "What did we discuss last time?", expect: memory_recall}
+- {prompt: "Read this PDF document", expect: file_parse}
+- {prompt: "Just tell me something", expect: reasoning, note: "no keyword -> default"}

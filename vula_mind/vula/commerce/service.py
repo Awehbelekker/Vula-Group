@@ -6,6 +6,7 @@ Prices always stored as integer cents (ZAR). Never floats.
 """
 from __future__ import annotations
 
+import asyncio
 import difflib
 import hashlib
 import logging
@@ -620,23 +621,31 @@ async def _attribute_broadcast(tenant_id: str, phone: str) -> Optional[str]:
         return None
 
 
-async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
-    items = cart.get("commerce_cart_items", [])
-    # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
-    subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
+def delivery_fee_cents(tenant_id: str, cart: dict, subtotal_cents: int) -> int:
+    """The delivery fee an order of this cart will actually be charged — the single source for
+    create_order AND every preview (view_cart, review_order), so what the customer is shown is
+    what they pay. Tenant delivery-fee rules (migration 070) override the cart's snapshotted
+    default: configured standard fee, and free delivery at/above the configured subtotal."""
     delivery = cart.get("delivery_cents", 8000)
-    # Tenant delivery-fee rules (migration 070) override the cart's snapshotted default:
-    # configured standard fee, and free delivery at/above the configured subtotal.
     try:
         from vula.commerce.order_workflow import get_order_settings
         _cfg = get_order_settings(tenant_id)
         if _cfg.get("delivery_fee_cents") is not None:
             delivery = int(_cfg["delivery_fee_cents"])
         free_over = _cfg.get("free_delivery_over_cents")
-        if free_over and subtotal >= int(free_over):
+        if free_over and subtotal_cents >= int(free_over):
             delivery = 0
     except Exception:
         pass
+    return delivery
+
+
+async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear_cart_after: bool = True) -> dict:
+    items = cart.get("commerce_cart_items", [])
+    # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
+    subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
+    # A collection (pickup) order is never charged delivery (migration 177).
+    delivery = 0 if checkout_data.get("fulfilment") == "collection" else delivery_fee_cents(tenant_id, cart, subtotal)
 
     # Discount code (migration 091) — resolved authoritatively here regardless of any
     # client-side preview, since the actual amount charged must never trust the client.
@@ -763,7 +772,46 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     ]
     _client().table("commerce_order_items").insert(order_items).execute()
 
+    # The cart is spent — convert it so the next order starts empty. WhatsApp carts are keyed
+    # by the customer's phone (one long-lived "active" cart per number), so without this the
+    # next order re-charged every item from the previous one and a repeated "yes" placed a
+    # duplicate. Never fails the order: it's already placed and the items are recorded.
+    # clear_cart_after=False: the storefront clears it only once its payment checkout exists,
+    # so a gateway failure leaves the customer's cart intact to retry.
+    if clear_cart_after:
+        try:
+            await clear_cart(cart["id"])
+        except Exception as exc:
+            logger.warning("cart %s not cleared after order %s: %s", cart.get("id"), order_id, exc)
+
     return result.data[0]
+
+
+async def expire_abandoned_online_orders(tenant_id: str, older_than_hours: int = 24) -> int:
+    """Cancel ONLINE-payment orders still unpaid after `older_than_hours` and release the stock
+    reserved for them at checkout (migration 122). Before this nothing ever expired them, so an
+    abandoned card checkout held its stock forever. COD/EFT orders are left alone — they're
+    legitimately unpaid until delivery / the transfer clears. Returns how many expired."""
+    from datetime import datetime, timedelta, timezone as _tz
+    cutoff = (datetime.now(_tz.utc) - timedelta(hours=older_than_hours)).isoformat()
+    rows = (_client().table("commerce_orders").select("id,display_id,payment_method,yoco_checkout_id")
+            .eq("tenant_id", tenant_id).eq("status", "pending_payment")
+            .lt("created_at", cutoff).limit(200).execute().data or [])
+    # Online = marked online, or a storefront order that went to a Yoco checkout (those were
+    # created without a payment_method, so matching the column alone never expired them).
+    rows = [o for o in rows if o.get("payment_method") == "online"
+            or (not o.get("payment_method") and o.get("yoco_checkout_id"))]
+    n = 0
+    for o in rows:
+        res = (_client().table("commerce_orders")
+               .update({"status": "cancelled", "updated_at": _now()})
+               .eq("id", o["id"]).eq("status", "pending_payment").execute())
+        if res.data:
+            await apply_order_stock(o["id"], restore=True)
+            n += 1
+    if n:
+        logger.info("expired %d abandoned online order(s) for %s", n, tenant_id)
+    return n
 
 
 async def list_orders(
@@ -785,6 +833,36 @@ async def list_orders(
     return result.data or []
 
 
+def orders_for_phone(tenant_id: str, phone: str, columns: str = "*",
+                     exclude_statuses: Optional[List[str]] = None, limit: int = 20) -> List[dict]:
+    """This customer's orders, newest first, matched on the last 9 phone digits.
+
+    2026-09-25 review: every caller used to load the tenant's latest 30-50 orders and filter by
+    phone in Python, so once a shop had more orders than that a returning customer's history
+    was invisible (no reorder, no saved address, "couldn't find your order"). The suffix match
+    now runs in the database; if stored numbers carry spaces/dashes that defeat it, a wider
+    Python scan (the old behaviour, 500 rows) is the fallback."""
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if len(digits) < 9:
+        return []
+    tail = digits[-9:]
+
+    def _mine(rows):
+        return [o for o in rows
+                if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(tail)]
+
+    def _q(n):
+        q = _client().table("commerce_orders").select(columns).eq("tenant_id", tenant_id)
+        if exclude_statuses:
+            q = q.not_.in_("status", exclude_statuses)
+        return q.order("created_at", desc=True).limit(n)
+
+    rows = _mine(_q(limit).ilike("customer_phone", f"%{tail}").execute().data or [])
+    if not rows:
+        rows = _mine(_q(500).execute().data or [])[:limit]
+    return rows
+
+
 async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     """Find this customer's most recent order and return its line items, for WhatsApp's
     'reorder'/'same as last time' shortcut. Matches on the last 9 digits of the phone number
@@ -794,11 +872,7 @@ async def reorder_from_last_order(tenant_id: str, phone: str) -> dict:
     digits = "".join(c for c in (phone or "") if c.isdigit())
     if not digits:
         raise ValueError("no phone number to look up")
-    orders = (_client().table("commerce_orders")
-              .select("id,display_id,customer_phone,created_at")
-              .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(50).execute().data or [])
-    mine = [o for o in orders
-            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
+    mine = orders_for_phone(tenant_id, phone, "id,display_id,customer_phone,created_at", limit=1)
     if not mine:
         raise ValueError("no previous order found to repeat")
     last = await get_order(mine[0]["id"])
@@ -912,17 +986,13 @@ async def get_customer_profile(tenant_id: str, phone: str) -> Optional[dict]:
     if not digits:
         return None
     try:
-        orders = (_client().table("commerce_orders")
-                  .select("display_id,customer_name,customer_phone,customer_email,"
-                          "delivery_address,delivery_slot,created_at")
-                  .eq("tenant_id", tenant_id)
-                  .not_.in_("status", ["cancelled", "refunded"])
-                  .order("created_at", desc=True).limit(50).execute().data or [])
+        mine = orders_for_phone(tenant_id, phone,
+                                "display_id,customer_name,customer_phone,customer_email,"
+                                "delivery_address,delivery_slot,created_at",
+                                exclude_statuses=["cancelled", "refunded"], limit=1)
     except Exception as exc:  # never block a live order on a profile lookup
         logger.warning("get_customer_profile lookup failed (tenant=%s): %s", tenant_id, exc)
         return None
-    mine = [o for o in orders
-            if "".join(c for c in (o.get("customer_phone") or "") if c.isdigit()).endswith(digits[-9:])]
     if not mine:
         return None
     last = mine[0]
@@ -1298,7 +1368,8 @@ async def get_conversation_thread(tenant_id: str, session_id: str) -> Optional[d
         "assigned_to": session.get("assigned_to"),
         "agent_note": session.get("agent_note"),
         "tags": session.get("tags") or [],
-        "messages": [{"role": m["role"], "content": m["content"], "created_at": m.get("created_at")} for m in messages],
+        "messages": [{"id": m.get("id"), "role": m["role"], "content": m["content"],
+                      "created_at": m.get("created_at")} for m in messages],
     }
 
 
@@ -1320,7 +1391,7 @@ async def get_recent_messages(tenant_id: str, session_id: str, limit: int = DEFA
     q = (
         _client()
         .table("commerce_conversation_messages")
-        .select("role,content,created_at")
+        .select("id,role,content,created_at")
         .eq("tenant_id", tenant_id)
         .eq("session_id", session_id)
     )
@@ -1519,7 +1590,7 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     return result.data[0]
 
 
-async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
+async def send_order_invoice(tenant_id: str, order_id: str, with_pay_link: bool = True) -> Optional[dict]:
     """Auto-generate an invoice for a just-placed order and WhatsApp it to the customer —
     the invoice doubles as the payment request, not a post-payment receipt. Self-contained
     and safe to call fire-and-forget: never raises, so a PDF/WhatsApp hiccup can never break
@@ -1568,25 +1639,29 @@ async def send_order_invoice(tenant_id: str, order_id: str) -> Optional[dict]:
 
     # Best-effort "Pay now" link — a connected gateway is optional, so this never blocks the
     # invoice itself from being created/sent if no provider is set up or the call fails.
-    try:
-        from vula import payments as _payments
-        api_base = "https://vula-group-production.up.railway.app"
-        row = _payments.default_provider_row(tenant_id)
-        provider = row["provider"] if row else "yoco"
-        link = await _payments.create_pay_link(
-            tenant_id, amount_cents=int(invoice["total_cents"]), reference=invoice["id"],
-            description=f"Invoice {invoice.get('invoice_number') or ''}".strip(),
-            success_url=f"{api_base}/payment/success?invoice={invoice['id']}",
-            cancel_url=f"{api_base}/payment/cancel?invoice={invoice['id']}",
-            notify_url=f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}",
-            customer={"email": invoice.get("customer_email"), "phone": phone})
-        if link and link.url:
-            _client().table("commerce_invoices").update(
-                {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id")}
-            ).eq("id", invoice["id"]).execute()
-            invoice["pay_url"] = link.url
-    except Exception as exc:
-        logger.debug("send_order_invoice: pay-link skipped for invoice %s: %s", invoice.get("id"), exc)
+    # with_pay_link=False when the order already carries its own checkout/pay link: two live
+    # links for one order let a customer pay twice.
+    if with_pay_link:
+        try:
+            from vula import payments as _payments
+            from config import settings as _cfg
+            api_base = _cfg.public_base_url.rstrip("/")
+            row = _payments.default_provider_row(tenant_id)
+            provider = row["provider"] if row else "yoco"
+            link = await _payments.create_pay_link(
+                tenant_id, amount_cents=int(invoice["total_cents"]), reference=invoice["id"],
+                description=f"Invoice {invoice.get('invoice_number') or ''}".strip(),
+                success_url=f"{api_base}/payment/success?invoice={invoice['id']}",
+                cancel_url=f"{api_base}/payment/cancel?invoice={invoice['id']}",
+                notify_url=f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}",
+                customer={"email": invoice.get("customer_email"), "phone": phone})
+            if link and link.url:
+                _client().table("commerce_invoices").update(
+                    {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id")}
+                ).eq("id", invoice["id"]).execute()
+                invoice["pay_url"] = link.url
+        except Exception as exc:
+            logger.debug("send_order_invoice: pay-link skipped for invoice %s: %s", invoice.get("id"), exc)
 
     try:
         from vula.commerce.pdf import render_invoice_pdf, merge_branding
@@ -1681,7 +1756,35 @@ async def update_invoice_status(tenant_id: str, invoice_id: str, status: str) ->
                 ledger.post_invoice_paid(tenant_id, invoice)
         except Exception as exc:
             logger.warning("ledger hook failed for invoice %s: %s", invoice_id, exc)
+        await _settle_linked_order(tenant_id, invoice)
     return invoice
+
+
+async def _settle_linked_order(tenant_id: str, invoice: dict) -> None:
+    """An order's auto-generated invoice (send_order_invoice) was paid → the order is paid too.
+
+    Before this the order stayed pending_payment: never dispatched, and the unpaid-order chase
+    kept nagging a customer who had already paid. The order row is flipped directly (NOT via
+    update_order_status) because the revenue was just posted to the ledger for the invoice —
+    posting it again for the order would double-count it. Conditional on pending_payment so a
+    repeat call is a no-op. Never raises."""
+    order_id = invoice.get("order_id")
+    if not order_id or (invoice.get("direction") or "outbound") == "inbound":
+        return
+    try:
+        res = (_client().table("commerce_orders")
+               .update({"status": "paid", "updated_at": _now()})
+               .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment")
+               .execute())
+        if not res.data:
+            return
+        o = res.data[0]
+        from vula.api.yoco import _notify_order_paid
+        await _notify_order_paid(tenant_id, o.get("display_id") or "", order_id, o.get("customer_phone"),
+                                 o.get("customer_name") or "", int(o.get("total_cents") or 0))
+    except Exception as exc:
+        logger.warning("linked order %s not settled after invoice %s paid: %s",
+                       order_id, invoice.get("id"), exc)
 
 
 async def convert_quote_to_invoice(tenant_id: str, quote_id: str,
@@ -1846,6 +1949,8 @@ async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: 
         ledger.post_invoice_payment(tenant_id, invoice, created_payment)
     except Exception as exc:
         logger.warning("ledger hook failed for invoice payment %s: %s", created_payment.get("id"), exc)
+    if new_status == "paid":
+        await _settle_linked_order(tenant_id, updated)
 
     return {**updated, "payment": created_payment, "total_paid_cents": total_paid,
             "balance_due_cents": max(0, total_due - total_paid)}
@@ -2824,9 +2929,146 @@ def _party_of(fields: Dict[str, Any]) -> Optional[str]:
     return fields.get("supplier") or fields.get("payee_name") or fields.get("customer")
 
 
+# The supplier line older extractions only wrote into the summary ("This is a tax invoice from
+# SOLID CAPE (PTY) LTD to AWEH BELEKKER T/A DIGG for ..."): 91 of digg-demo's invoices, 2026-09-27.
+_SUMMARY_PARTY_RE = re.compile(
+    r"\b(?:invoice|note|quote|estimate|receipt|statement|document)\s+from\s+(.+?)\s+"
+    r"(?:to|for|dated|totall?ing|with|listing)\b", re.IGNORECASE)
+
+
+def _summary_party(summary: str) -> Optional[str]:
+    m = _SUMMARY_PARTY_RE.search(summary or "")
+    name = m.group(1).strip(" ,.") if m else ""
+    return name if 2 <= len(name) <= 80 else None
+
+
+def _canonical_party(name: str) -> str:
+    """One display name per supplier across spelling variants: "CITY BI (PTY) LTD T/A (CITY)
+    BUILD IT" and "CITY BUILD IT" group together (trading name wins), as do "Gardens Handiman
+    Centre" and "GARDENS HANDIMAN CENTRE"."""
+    n = re.sub(r"\s+", " ", name or "").strip()
+    ta = re.search(r"\bT/A\b\s*(.+)$", n, re.IGNORECASE)
+    if ta:
+        n = ta.group(1)
+    n = re.sub(r"[()]", " ", n)
+    n = re.sub(r"\b(pty|ltd|cc|inc|limited|proprietary)\b\.?", " ", n, flags=re.IGNORECASE)
+    n = re.sub(r"\s+", " ", n).strip(" .,-")
+    return n.upper() if n else ""
+
+
+_WAMID_RE = re.compile(r"^(image|document|receipt|audio|video)-wamid\.", re.IGNORECASE)
+
+
+def _doc_ref(filename: str, fields: Optional[Dict[str, Any]] = None) -> str:
+    """A human invoice reference for a filed document: the extracted number when there is one,
+    else the number in the filename ("Inv_51934_from_Teck..." -> 51934, "POS Account Sale
+    24-225537.pdf" -> 24-225537), else "WhatsApp photo" for a Meta media-id filename (never
+    the raw "image-wamid.HBg..." id the 2026-09-26 workbook showed), else the tidied filename."""
+    f = fields or {}
+    for k in ("invoice_number", "document_number", "reference", "reference_number"):
+        if f.get(k):
+            return str(f[k])[:40]
+    name = filename or ""
+    if _WAMID_RE.match(name):
+        return "WhatsApp photo"
+    stem = re.sub(r"\.(pdf|jpe?g|png|heic|webp|docx?|xlsx?)$", "", name, flags=re.IGNORECASE)
+    m = re.search(r"(?<![A-Za-z])(INV-?\d{3,}(?:-\d+)*)", stem, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    m = (re.search(r"(?<![A-Za-z])(?:inv(?:oice)?|no)[\s_#:.-]*(\d[\d-]{1,}\d)", stem, re.IGNORECASE)
+         or re.search(r"#\s*(\d[\d-]*\d)", stem)
+         or re.search(r"(\d{2,}(?:-\d+)+|\d{4,})", stem))
+    if m:
+        return m.group(1)
+    return re.sub(r"[_]+", " ", stem).strip()[:60] or "document"
+
+
+def _export_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    """The per-document facts a spreadsheet export needs, integer cents throughout. Refunds are
+    signed negative here, so a SUM over the column equals the server total."""
+    f = r.get("fields") or {}
+    refund = _is_refund_row(r)
+    cents = _document_amount_cents(f)
+    vat = _num(f.get("vat_cents"))
+    sign = -1 if refund else 1
+    party = _party_of(f)
+    inferred = False
+    if not party:
+        party = _summary_party(r.get("summary") or "")
+        inferred = bool(party)
+    lines = []
+    for li in (f.get("line_items") or []):
+        if not isinstance(li, dict) or not str(li.get("description") or "").strip():
+            continue
+        qty = _num(li.get("quantity"))
+        unit = _num(li.get("unit_price_cents"))
+        tot = _num(li.get("total_cents"))
+        if tot is None and qty is not None and unit is not None:
+            tot = qty * unit
+        lines.append({"description": str(li["description"]).strip(), "quantity": qty,
+                      "unit_cents": int(round(unit)) if unit is not None else None,
+                      "total_cents": sign * int(round(abs(tot))) if tot is not None else None})
+    return {
+        "date": str(f.get("date") or f.get("invoice_date") or r.get("created_at") or "")[:10],
+        "ref": _doc_ref(r.get("filename") or "", f),
+        "party": _canonical_party(party or "") or "Unknown supplier",
+        "party_inferred": inferred,
+        "category": r.get("category") or "",
+        "is_refund": refund,
+        "total_cents": sign * abs(cents) if cents is not None else None,
+        "vat_cents": sign * int(round(abs(vat))) if vat is not None and cents is not None else None,
+        "lines": lines,
+        "photo": bool(_WAMID_RE.match(r.get("filename") or "")),
+    }
+
+
+def for_model(result: Any) -> Any:
+    """A tool result as a model may see it: private `_`-prefixed keys (e.g. _export_rows, every
+    fetched document for a spreadsheet) dropped. Apply wherever a result is serialised into a
+    prompt."""
+    if isinstance(result, dict):
+        return {k: v for k, v in result.items() if not str(k).startswith("_")}
+    return result
+
+
 def _pg_term(text: str) -> str:
     """Free text made safe to embed in a PostgREST or_() filter — commas/parens are its syntax."""
     return re.sub(r"[,()]", " ", text or "").strip()[:100]
+
+
+# Words that don't identify a supplier ("GARDENS HANDIMAN CENTRE" is identified by "gardens
+# handiman"), so a fuzzy mention needn't include them.
+_NAME_TAIL_WORDS = {"centre", "center", "store", "stores", "shop", "hardware", "group", "trading",
+                    "co", "company", "sa", "africa", "south", "and", "&"}
+
+
+def _fuzzy_mention(question_norm: str, name_norm: str) -> bool:
+    """True when every distinctive word of a supplier name appears, in order, as consecutive
+    words of the question — each allowed one typo's worth of difference (≥0.8). 2026-09-26
+    (digg-demo): "all invoice for gardens handyman" never matched GARDENS HANDIMAN CENTRE, fell
+    to the model, and the owner got a fabricated email result. A one-word name must be ≥5
+    letters and match at ≥0.85, so "sand" or "tile" never resolve to a supplier."""
+    sig = [w for w in name_norm.split() if w not in _NAME_TAIL_WORDS]
+    words = question_norm.split()
+    if not sig or not words:
+        return False
+    if len(sig) == 1 and (len(sig[0]) < 5):
+        return False
+    bar = 0.85 if len(sig) == 1 else 0.8
+    for i in range(len(words) - len(sig) + 1):
+        if all(difflib.SequenceMatcher(None, words[i + j], w).ratio() >= bar for j, w in enumerate(sig)):
+            return True
+    return False
+
+
+def mentions_supplier_name(question: str, names: List[str]) -> bool:
+    """`question` names one of `names` — as whole words, or a close misspelling of them."""
+    nq = _norm_name(question)
+    padded = f" {nq} "
+    for n in (_norm_name(x) for x in names):
+        if n and (f" {n} " in padded or _fuzzy_mention(nq, n)):
+            return True
+    return False
 
 
 async def _resolve_supplier_names(tenant_id: str, query: str) -> List[str]:
@@ -2850,6 +3092,13 @@ async def _resolve_supplier_names(tenant_id: str, query: str) -> List[str]:
         norms = [_norm_name(n) for n in names]
         if any(n and (n == nq or (len(n) >= 3 and f" {n} " in padded)) for n in norms):
             return names
+    for s in suppliers:
+        names = [n for n in [s.get("name")] + list(s.get("aliases") or []) if n]
+        if any(n and _fuzzy_mention(nq, _norm_name(n)) for n in names):
+            return names
+    for s in suppliers:
+        names = [n for n in [s.get("name")] + list(s.get("aliases") or []) if n]
+        norms = [_norm_name(n) for n in names]
         score = max((difflib.SequenceMatcher(None, nq, n).ratio() for n in norms if n), default=0.0)
         if score > best_score:
             best, best_score = names, score
@@ -2962,7 +3211,8 @@ def _num(v: Any) -> Optional[float]:
         return None
 
 
-def _aggregate_line_items(rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+def _aggregate_line_items(rows: List[Dict[str, Any]],
+                          cap: Optional[int] = _MATERIALS_RETURN_CAP) -> Tuple[List[Dict[str, Any]], int]:
     """Roll the invoices' extracted line_items up into one materials summary: the same item
     (normalised description) merged across lines and documents, with summed quantity and
     integer-cent spend and the number of documents it appears on. Refund rows subtract. Returns
@@ -3019,7 +3269,7 @@ def _aggregate_line_items(rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
         if units and max(units) > 1.5 * min(units):
             item["unit_price_varies"] = True
         items.append(item)
-    return items[:_MATERIALS_RETURN_CAP], len(items)
+    return (items[:cap] if cap else items), len(items)
 
 
 def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3065,8 +3315,10 @@ def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     if len(rows) >= _FILED_SEARCH_FETCH_CAP:
         notes.append(f"The search stopped at {_FILED_SEARCH_FETCH_CAP} documents — there may "
                      "be more; suggest narrowing by date or category.")
-    materials, distinct = _aggregate_line_items(rows)
+    all_materials, distinct = _aggregate_line_items(rows, cap=None)
+    materials = all_materials[:_MATERIALS_RETURN_CAP]
     if materials:
+        out["_materials_all"] = all_materials
         out["materials"] = materials
         out["materials_distinct"] = distinct
         notes.append("materials rolls up every line item across ALL matches (same item merged, "
@@ -3086,6 +3338,9 @@ def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     # result (email_admin did, at 1,800 chars — 2026-09-23) then loses surplus rows, never the
     # total, the notes or the materials roll-up.
     out["matches"] = out.pop("matches")
+    # Every fetched document (not only the first _FILED_SEARCH_RETURN_CAP) for a spreadsheet
+    # export — private: for_model() drops it before a model sees the result.
+    out["_export_rows"] = [_export_row(r) for r in rows]
     return out
 
 
@@ -3123,6 +3378,37 @@ def _core_search_term(query: str) -> str:
     words = re.findall(r"[\w'&.-]+", query or "")
     core = [w for w in words if w.lower().strip("'") not in _QUERY_FILLER]
     return " ".join(core).strip()
+
+
+# Everything an "all invoices" export request says besides a supplier name. 2026-09-26 (digg-
+# demo): "Please supply me all invoice and material with costs In a excel sheet" named no
+# supplier, the model searched its own words, and the owner got 2 unrelated documents in a
+# workbook titled "invoice and material with costs" — out of ~200 invoices from ~40 suppliers.
+_EXPORT_FILLER = _QUERY_FILLER | {
+    "in", "on", "as", "at", "by", "into", "this", "that", "these", "those", "it", "them", "my",
+    "so", "just", "only", "also", "too", "sorry", "pls", "plz", "thanks", "thank", "you", "ok",
+    "okay", "now", "again", "more", "rest", "everything", "full", "complete", "entire", "whole",
+    "send", "supply", "pull", "fetch", "share", "provide", "could", "would", "like", "want",
+    "is", "are", "be", "do", "did", "how", "much", "cost", "costs", "costing", "price", "prices",
+    "amount", "amounts", "item", "items", "line", "lines", "excel", "spreadsheet", "sheet",
+    "xlsx", "xls", "csv", "file", "files", "workbook", "break", "down", "detail", "details",
+    "detailed", "business", "company", "suppliers", "supplier", "each", "per", "every", "up",
+    "one", "copy", "format", "make", "create", "put", "together", "report",
+}
+
+
+def names_no_party(question: str) -> bool:
+    """True when `question` carries nothing but request words — no supplier, project or other
+    distinctive term. Typos of a request word ("matirial", "invoce") still count as request
+    words (difflib ≥ 0.8), so a misspelling doesn't read as a supplier name."""
+    words = [w.lower().strip("'.-") for w in re.findall(r"[A-Za-z][\w'&-]*", question or "")]
+    for w in words:
+        if not w or w in _EXPORT_FILLER or len(w) <= 2:
+            continue
+        if any(difflib.SequenceMatcher(None, w, f).ratio() >= 0.8 for f in _EXPORT_FILLER if len(f) >= 4):
+            continue
+        return False
+    return bool(words)
 
 
 def _name_patterns(core: str) -> List[str]:
@@ -3443,14 +3729,117 @@ async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
         xlsx_bytes = render_supplier_history_xlsx(result, supplier)
         if not xlsx_bytes:
             return False
-        from vula.api.whatsapp import _send_invoice_document
-        safe_name = re.sub(r"[^A-Za-z0-9]+", "_", supplier).strip("_") or "supplier"
-        return await _send_invoice_document(
-            phone, xlsx_bytes, f"{safe_name}_history.xlsx", "", tenant_id,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        return await _send_xlsx(tenant_id, phone, xlsx_bytes, supplier)
     except Exception as exc:
         logger.warning("supplier-history xlsx send failed for %s: %s", tenant_id, exc)
         return False
+
+
+async def _send_xlsx(tenant_id: str, phone: str, xlsx_bytes: bytes, label: str) -> bool:
+    from vula.api.whatsapp import _send_invoice_document
+    safe_name = re.sub(r"[^A-Za-z0-9]+", "_", _canonical_party(label) or label).strip("_") or "Supplier"
+    return await _send_invoice_document(
+        phone, xlsx_bytes, f"{safe_name.title()}_invoices_{_today_iso()}.xlsx", "", tenant_id,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def supplier_label(result: Dict[str, Any]) -> Optional[str]:
+    """The supplier a find_filed_document result is about: the resolved supplier, or the one
+    party every priced match shares. None when the matches don't agree on one — then the result
+    must not be presented (or exported) as one supplier's history, and never under the owner's
+    own search words (2026-09-26: a workbook titled "invoice and material with costs")."""
+    if result.get("resolved_supplier"):
+        return result["resolved_supplier"]
+    parties = {_canonical_party(m.get("party") or "") for m in result.get("matches") or []
+               if m.get("amount") is not None}
+    parties.discard("")
+    return next(iter(parties)) if len(parties) == 1 else None
+
+
+# "all invoices", "every invoice", "all the invoices and materials" — with names_no_party(), the
+# owner wants every supplier (Ian, 2026-09-27), not whichever few a fuzzy search happens to hit.
+_ALL_INVOICES_RE = re.compile(
+    r"\b(all|every|everything)\b[^.?!]{0,40}\binvo[a-z]*\b|\binvo[a-z]*\b[^.?!]{0,20}\b(all|every)\b",
+    re.IGNORECASE)
+_ALL_INVOICES_FETCH_CAP = 2000
+
+
+def _all_invoice_rows(tenant_id: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    page = 1000
+    while len(out) < _ALL_INVOICES_FETCH_CAP:
+        chunk = (_client().table("vula_filed_documents")
+                 .select("id,filename,category,summary,fields,created_at")
+                 .eq("tenant_id", tenant_id).eq("category", "Invoice")
+                 .order("created_at", desc=True)
+                 .range(len(out), len(out) + page - 1).execute().data or [])
+        out += chunk
+        if len(chunk) < page:
+            break
+    return out
+
+
+async def answer_all_invoices(tenant_id: str, question: str, phone: str = "") -> Optional[str]:
+    """Every filed supplier invoice, grouped by supplier, written without a model — for an
+    "all invoices" request that names no supplier. Sends the full workbook when the owner asked
+    for Excel. None when the question isn't that request (the caller carries on)."""
+    if not (_ALL_INVOICES_RE.search(question or "") and names_no_party(question)):
+        return None
+    try:
+        raw = await asyncio.to_thread(_all_invoice_rows, tenant_id)
+    except Exception as exc:
+        logger.warning("answer_all_invoices fetch failed for %s: %s", tenant_id, exc)
+        return None
+    if not raw:
+        return "I couldn't find any supplier invoices filed yet — send or forward them here and I'll file them."
+    rows = [_export_row(r) for r in raw]
+    priced = [r for r in rows if r["total_cents"] is not None]
+    total = sum(r["total_cents"] for r in priced)
+    refunds = sum(1 for r in priced if r["is_refund"])
+    groups: Dict[str, List[int]] = {}
+    for r in rows:
+        g = groups.setdefault(r["party"], [0, 0])
+        g[0] += 1
+        g[1] += r["total_cents"] or 0
+    xlsx_sent = False
+    if phone and _FILE_EXPORT_RE.search(question or ""):
+        try:
+            from vula.commerce.xlsx import render_invoices_xlsx
+            materials, _ = _aggregate_line_items(raw, cap=None)
+            data = render_invoices_xlsx(rows, "All suppliers", materials=materials, by_supplier=True)
+            xlsx_sent = bool(data) and await _send_xlsx(tenant_id, phone, data, "All suppliers")
+        except Exception as exc:
+            logger.warning("all-invoices xlsx send failed for %s: %s", tenant_id, exc)
+    head = (f"*All suppliers*: {len(rows)} invoice{'s' if len(rows) != 1 else ''} from "
+            f"{len(groups)} supplier{'s' if len(groups) != 1 else ''}, total spend *R{total / 100:,.2f}*")
+    if refunds:
+        head += f" (after {refunds} refund{'s' if refunds != 1 else ''})"
+    lines = [head + "."]
+    if _FILE_EXPORT_RE.search(question or ""):
+        lines.append("📎 Sent every invoice, line item and a materials summary as an Excel file — "
+                     "check your WhatsApp attachments." if xlsx_sent else
+                     "📎 Couldn't send the Excel file this time — the summary is below; ask again "
+                     "in a minute and I'll retry.")
+    missing = len(rows) - len(priced)
+    if missing:
+        lines.append(f"⚠️ {missing} invoice{'s have' if missing != 1 else ' has'} no amount on file "
+                     f"and {'are' if missing != 1 else 'is'} not in that total.")
+    if len(raw) >= _ALL_INVOICES_FETCH_CAP:
+        lines.append(f"⚠️ Stopped at the {_ALL_INVOICES_FETCH_CAP} most recent invoices.")
+    lines += ["", "*Biggest suppliers*"]
+    ranked = sorted(groups.items(), key=lambda kv: kv[1][1], reverse=True)
+    for name, (n, cents) in ranked[:10]:
+        lines.append(f"• {name} — {n} invoice{'s' if n != 1 else ''} — "
+                     + (f"R{cents / 100:,.2f}" if cents else "no amounts on file"))
+    if len(ranked) > 10:
+        lines.append(f"…and {len(ranked) - 10} more supplier{'s' if len(ranked) - 10 != 1 else ''}"
+                     + (" (all in the spreadsheet)." if xlsx_sent else "."))
+    lines.append("Ask for any one supplier by name for its full list and materials.")
+    return "\n".join(lines)
 
 
 def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
@@ -3539,15 +3928,33 @@ async def answer_supplier_history(tenant_id: str, question: str, phone: str = ""
 
     `phone` (the WhatsApp number to send an .xlsx to, when asked for one — see
     send_supplier_history_xlsx) is optional so this stays callable without it (e.g. tests)."""
-    padded = f" {_norm_name(question)} "
     names = await _resolve_supplier_names(tenant_id, question)
-    # Whole-word mentions only — _resolve_supplier_names also accepts a fuzzy whole-query match,
-    # which is fine for a search box but not for answering without a model.
-    if not any(n and f" {n} " in padded for n in (_norm_name(x) for x in names)):
-        return None
+    # Whole-word (or close-misspelling) mentions only — _resolve_supplier_names also accepts a
+    # fuzzy whole-query match, which is fine for a search box but not for answering without a model.
+    if not mentions_supplier_name(question, names):
+        # No supplier named: "all invoices ..." means every supplier (Ian, 2026-09-27).
+        return await answer_all_invoices(tenant_id, question, phone=phone)
     result = await find_filed_document(tenant_id, names[0], category="Invoice")
     xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question, result, names[0])
-    return format_supplier_history_reply(result, query=names[0], question=question, xlsx_sent=xlsx_sent)
+    return _with_period_note(
+        format_supplier_history_reply(result, query=names[0], question=question, xlsx_sent=xlsx_sent),
+        question)
+
+
+_PERIOD_RE = re.compile(
+    r"\b(this|last|past|previous)\s+(week|month|quarter|year)\b|\btoday\b|\byesterday\b"
+    r"|\bsince\b|\bin\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\blast\s+\d+\s+(days|weeks|months)\b", re.IGNORECASE)
+
+
+def _with_period_note(reply: Optional[str], question: str) -> Optional[str]:
+    """The filed-document total is all-time; answering "this month?" with it unlabelled read as
+    that month's spend. Say what the figure is rather than imply a period."""
+    if reply and _PERIOD_RE.search(question or ""):
+        reply += ("\n\nNote: that's the all-time total across these documents — I can't split "
+                  "supplier spend by date yet, so check the dates listed above for the period "
+                  "you asked about.")
+    return reply
 
 
 # Matches the head line format_supplier_history_reply always writes first, as it appears once
@@ -3599,7 +4006,8 @@ async def answer_supplier_history_continuation(tenant_id: str, history: str, que
     if result.get("resolved_supplier") and _norm_name(result["resolved_supplier"]) != _norm_name(supplier):
         return None
     xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question, result, supplier)
-    return format_supplier_history_reply(result, question=question, xlsx_sent=xlsx_sent)
+    return _with_period_note(format_supplier_history_reply(result, question=question, xlsx_sent=xlsx_sent),
+                             question)
 
 
 async def filed_amounts_by_filename(tenant_id: str, filenames: List[str]) -> Dict[str, Dict[str, Any]]:

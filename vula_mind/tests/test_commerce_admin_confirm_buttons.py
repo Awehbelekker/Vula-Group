@@ -117,7 +117,9 @@ async def test_run_returns_confirm_request_on_preview(skill):
     # The row actually inserted should carry the real tool + args, not just the preview text.
     inserted_row = mock_service._client.return_value.table.return_value.insert.call_args[0][0]
     assert inserted_row["tool_name"] == "update_stock"
-    assert inserted_row["tool_args"] == {"product": "Hake fillets", "quantity": 20}
+    args = dict(inserted_row["tool_args"])
+    assert set(args.pop("_caller")) == {"role", "name"}  # who asked travels with the action
+    assert args == {"product": "Hake fillets", "quantity": 20}
     assert inserted_row["tenant_id"] == TID
     assert inserted_row["phone"] == "27737815979"
 

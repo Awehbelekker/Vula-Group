@@ -14,8 +14,8 @@ import { config, VULA_PUCK_STYLES } from "../puck/config";
 import { getTenantTheme } from "../theme/tenantThemes";
 import { FONT_PAIRINGS } from "../theme/tokens";
 import VulaImageUpload from "./VulaImageUpload";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 // Every tenant gets a real, live, SSR'd storefront the instant they publish — no more "no
 // custom domain configured, previewing a Vula-hosted page" — vula_storefront serves this
 // subdomain for every tenant automatically. A tenant with a wired custom domain (storeUrl) still

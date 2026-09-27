@@ -478,9 +478,15 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
             f"for? Reply with the number (e.g. OFF-00006) or the customer's name.")
 
 
-async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str = "") -> Dict[str, Any]:
+async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str = "",
+                    auto_settle: bool = True) -> Dict[str, Any]:
     """Persist transactions and reconcile: credits → mark matching invoices paid; debits → expenses.
-    Each transaction is also allocated to a chart-of-accounts category (learned/AI) with VAT."""
+    Each transaction is also allocated to a chart-of-accounts category (learned/AI) with VAT.
+
+    auto_settle=False persists and categorises the transactions but marks NOTHING paid (no
+    invoice/order/supplier-bill/card-expense status changes, no customer notifications) — used
+    when the statement's running balances don't reconcile, i.e. at least one amount was likely
+    misread, so a "match" could settle the wrong invoice and message the wrong customer."""
     from vula.commerce import service, accounting
     db = _client()
 
@@ -596,7 +602,17 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     used_bill_ids: set = set()
     for idx, t in enumerate(txns):
         status, inv_id, order_id, worker_id, wk_project, exp_id = "unmatched", None, None, None, None, None
-        if t["direction"] == "in":
+        if not auto_settle:
+            if t["direction"] == "in":
+                unmatched_in += 1
+            else:
+                w = labour.match_worker(t, workers)
+                if w:
+                    worker_id, wk_project, status = w["id"], w.get("default_project"), "matched"
+                    matched_workers += 1
+                else:
+                    unmatched_out += 1
+        elif t["direction"] == "in":
             candidates = [i for i in invoices if i["id"] not in used_invoice_ids]
             m = _match_invoice(t, candidates)
             if m:
@@ -715,7 +731,8 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             except Exception as exc2:
                 log.debug("bank txn upsert skipped (run migration 057?): %s", exc2)
 
-    return {"parsed": len(txns), "saved": saved, "matched_invoices": matched_invoices,
+    return {"parsed": len(txns), "saved": saved, "auto_settled": auto_settle,
+            "matched_invoices": matched_invoices,
             "matched_orders": matched_orders,
             "matched_workers": matched_workers, "matched_expenses": matched_expenses,
             "needs_input": needs_input,
@@ -740,7 +757,11 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         log.warning("bank statement extraction quality check FAILED for %s (%s) — running "
                     "balances don't reconcile, at least one transaction was likely misread",
                     tenant_id, source_file)
-    result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name)
+    # A statement whose running balances don't add up has at least one misread amount — still
+    # save and categorise it for review, but don't let it settle invoices/orders or message
+    # customers "your payment was received" on the strength of a possibly-wrong figure.
+    result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
+                             auto_settle=reconciled)
     result["extraction_reconciled"] = reconciled
     log.info("bank statement reconciled for %s: %s", tenant_id, result)
     return result

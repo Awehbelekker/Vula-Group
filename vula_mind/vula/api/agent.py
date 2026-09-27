@@ -15,11 +15,10 @@ from __future__ import annotations
 import logging
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, Request, Security
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
-from config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["agent"])
@@ -27,10 +26,11 @@ router = APIRouter(tags=["agent"])
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def _require_auth(api_key: str | None = Security(_api_key_header)) -> None:
-    import secrets as _s
-    if settings.api_key and (not api_key or not _s.compare_digest(api_key, settings.api_key)):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+async def _require_auth(request: Request, api_key: str | None = Security(_api_key_header)) -> None:
+    """API key, a master login, or a signed-in member of the request's tenant (shared rule —
+    vula/api/master_auth.py::require_auth)."""
+    from vula.api.master_auth import require_auth
+    await require_auth(api_key, request)
 
 
 class AgentRequest(BaseModel):

@@ -302,3 +302,54 @@ def test_stage_pop_for_review_asks_open_question_when_no_match():
     assert "which order or invoice" in msg.lower()
     assert txn_table.inserted["proposed_match_type"] is None
     assert txn_table.inserted["proposed_match_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_unreconciled_statement_never_auto_settles():
+    """A statement whose running balances don't add up has a misread amount somewhere — it's
+    still saved for review, but must not settle invoices/orders or notify customers."""
+    from pathlib import Path
+    from vula.commerce import bank_rec
+
+    bad_txns = [
+        {"date": "2026-08-01", "description": "Deposit", "amount_cents": 10000,
+         "direction": "in", "balance_cents": 20000, "reference": None},
+        {"date": "2026-08-02", "description": "Withdrawal", "amount_cents": 5000,
+         "direction": "out", "balance_cents": 99999, "reference": None},
+    ]
+    rec = AsyncMock(return_value={"parsed": 2, "saved": 2})
+    with (
+        patch.object(bank_rec, "extract_pdf_text", return_value="statement text"),
+        patch.object(bank_rec, "get_statement_password", return_value=None),
+        patch.object(bank_rec, "extract_transactions", new=AsyncMock(return_value=bad_txns)),
+        patch.object(bank_rec, "reconcile", new=rec),
+    ):
+        await bank_rec.ingest_statement("off-the-hook", Path("fake.pdf"))
+    assert rec.await_args.kwargs["auto_settle"] is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_without_auto_settle_marks_nothing_paid():
+    from vula.commerce import bank_rec
+
+    txns = [{"date": "2026-08-01", "description": "INV-0001 Jane", "amount_cents": 50000,
+             "direction": "in", "balance_cents": None, "reference": "INV-0001"}]
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value \
+        .execute.return_value.data = [{"id": "i1", "invoice_number": "INV-0001", "customer_name": "Jane",
+                                        "total_cents": 50000, "status": "sent", "doc_type": "invoice"}]
+    upd_inv = AsyncMock()
+    with (
+        patch.object(bank_rec, "_client", return_value=db),
+        patch("vula.commerce.service._client", return_value=db),
+        patch("vula.commerce.accounting.ensure_chart", return_value=[{"code": "sales"}]),
+        patch("vula.commerce.accounting.categorize_batch",
+              new=AsyncMock(return_value=[{"account_code": "sales", "source": "ai"}])),
+        patch("vula.commerce.accounting.vat_for", return_value=0),
+        patch("vula.commerce.service.get_invoice_settings", new=AsyncMock(return_value={})),
+        patch("vula.commerce.service.update_invoice_status", new=upd_inv),
+        patch("vula.commerce.service.update_order_status", new=AsyncMock()),
+    ):
+        result = await bank_rec.reconcile("off-the-hook", txns, auto_settle=False)
+    upd_inv.assert_not_awaited()
+    assert result["matched_invoices"] == 0 and result["auto_settled"] is False

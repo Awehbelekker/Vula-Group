@@ -395,6 +395,22 @@ def generation_kwargs(model: str) -> Dict[str, Any]:
     return {**local_generation_kwargs(model), **cloud_generation_kwargs(model)}
 
 
+def cloud_model_for(task_type: Optional[str]) -> str:
+    """The OpenRouter model for this task: CLOUD_MODEL_BY_TASK's entry, else model_worker_cloud.
+    A malformed map is ignored (logged), never fatal."""
+    default = settings.model_worker_cloud or settings.model_worker
+    raw = (settings.cloud_model_by_task or "").strip()
+    if not raw or not task_type:
+        return default
+    try:
+        import json as _json
+        mapping = _json.loads(raw)
+        return str(mapping.get(task_type) or default) if isinstance(mapping, dict) else default
+    except Exception as exc:
+        logger.warning("CLOUD_MODEL_BY_TASK is not valid JSON, ignoring: %s", exc)
+        return default
+
+
 async def resolve_generation_route(
     model: Optional[str] = None,
     *,
@@ -415,7 +431,7 @@ async def resolve_generation_route(
     # "deepseek-r1:8b" locally vs "meta-llama/llama-3.3-70b" on OpenRouter. A caller-supplied
     # `model` overrides the local name only.
     local_model = model or settings.model_worker
-    cloud_model = settings.model_worker_cloud or settings.model_worker
+    cloud_model = cloud_model_for(task_type)
     run_id = run_id or str(uuid.uuid4())
     task = _task_label(task_type, messages)
     install_ollama_auth()  # ensure Ollama calls carry the CF-Access token before any generation
@@ -516,7 +532,7 @@ def escalate_to_cloud(reason: str, *, run_id: Optional[str] = None,
     caller then keeps the local answer)."""
     if not settings.openrouter_api_key:
         return None
-    cloud_model = settings.model_worker_cloud or settings.model_worker
+    cloud_model = cloud_model_for(task_type)
     _log_decision(run_id=run_id or str(uuid.uuid4()), task=task_type or "unspecified",
                   outcome="cloud", escalated=True, backend=f"openrouter/{cloud_model}", reason=reason)
     return f"openrouter/{cloud_model}", settings.openrouter_api_key, OPENROUTER_BASE

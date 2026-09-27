@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     # recorded, nothing is silently substituted.
     whatsapp_notify_template: str = ""
     whatsapp_notify_template_lang: str = "en"
+    # Inbound messages one customer number may send one tenant per minute before Vula stops
+    # running the assistant on them (one "please wait" reply per minute instead). Every Meta
+    # webhook comes from Meta's IPs, so the per-IP slowapi limit can't tell senders apart.
+    # The business's own team is exempt. 0 = off. Counted per worker process, in memory — with
+    # N web workers a sender can get up to N x this before being slowed. Deliberately not a DB
+    # counter (that would add a write to every inbound message); tighten the number instead.
+    wa_sender_rate_limit: int = 15
     vula_base_url: str = "https://app.vula.ai"
     # The dashboard's actual reachable URL — vula_base_url above is a stale placeholder (see
     # vula/api/links.py's own comment), not something to build a real customer-facing link on.
@@ -139,10 +146,6 @@ class Settings(BaseSettings):
     groq_api_key: str = ""             # fallback: https://api.groq.com/openai/v1 (whisper-large-v3)
     openai_api_key: str = ""           # fallback: transcribe via api.openai.com (whisper-1)
 
-    # ── Twilio WhatsApp (alternative to Meta — test via Twilio Sandbox) ─────────
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_whatsapp_from: str = ""   # e.g. "whatsapp:+14155238886" (sandbox number)
 
     # ── Hybrid LLM: local model (Ollama) + cloud fallback model (OpenRouter) ────
     # model_worker = local Ollama model name (used via the vula-ai.com tunnel).
@@ -153,6 +156,11 @@ class Settings(BaseSettings):
     # MODEL_EMBED). Use for accuracy-first production; the local GPU stays free
     # for embeddings.
     prefer_cloud_llm: bool = False
+    # Per-task cloud model, as JSON: {"commerce_admin": "anthropic/claude-sonnet-5",
+    # "commerce_assistant": "google/gemini-2.5-flash"} (OpenRouter model names). Any task not
+    # listed uses model_worker_cloud. Pick entries from `python -m evals.run tools` results, not
+    # reputation. An env change still needs `railway up` to take effect.
+    cloud_model_by_task: str = ""
     # Ask OpenRouter to route only to providers that neither train on nor retain prompts
     # (provider.data_collection="deny" + zdr) — tenant data leaving SA should at least not stay
     # anywhere. Applied via llm_router.cloud_generation_kwargs().
@@ -174,6 +182,10 @@ class Settings(BaseSettings):
     # ── PayFast ─────────────────────────────────────────────────────────────
     payfast_merchant_id: str = ""
     payfast_merchant_key: str = ""
+    # The passphrase set on the PayFast account (Settings -> Integration). Empty = none set.
+    # It is NOT the merchant key — the subscription link used to sign with the merchant key,
+    # which PayFast rejects.
+    payfast_passphrase: str = ""
 
     # ── Yoco (commerce payments) ─────────────────────────────────────────────
     yoco_secret_key: str = ""
@@ -252,6 +264,10 @@ class Settings(BaseSettings):
     # (the ones keywords already failed on), so it's on by default; flip off via env var if
     # it ever misbehaves, no redeploy needed.
     skill_llm_fallback_enabled: bool = True
+    # The local model that classifies a keyword-miss message (orchestrator._llm_classify_skill).
+    # Empty = model_worker_cheap_local — one the Ollama box actually serves (the old hardcoded
+    # qwen2.5:3b wasn't necessarily pulled there).
+    skill_classifier_model: str = ""
 
     @property
     def verification_policies(self) -> dict[str, str]:
@@ -272,6 +288,20 @@ class Settings(BaseSettings):
     # exception-level alerting. Set to enable — see vula/api/server.py's init for the PII-scrubbing
     # rules (never send default request bodies/local variables; tenant_id tag only).
     sentry_dsn: str = ""
+    # Fraction of requests traced for performance (0.0 = errors only, today's default). Traces
+    # carry route names and timings, never bodies (send_default_pii stays off). ~0.05 is enough
+    # to see where WhatsApp replies spend their time.
+    sentry_traces_sample_rate: float = 0.0
+    # Whether THIS process runs the ~20 background scheduler loops (reminders, syncs, campaigns,
+    # subscriptions...). Default true = today's behaviour (web process runs them behind the DB
+    # leader lock). To move them to a dedicated Railway worker: set RUN_SCHEDULED_JOBS=false on
+    # the web service and deploy the same image as a second service with it true — the leader
+    # lock that has flapped (and tripled sends) then only has one candidate.
+    run_scheduled_jobs: bool = True
+    # Embedded Signup: also POST /{phone_id}/register after connecting (a new Cloud API number
+    # can't send until registered). Off until verified live; needs the 6-digit two-step PIN.
+    whatsapp_register_on_connect: bool = False
+    whatsapp_registration_pin: str = ""
 
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

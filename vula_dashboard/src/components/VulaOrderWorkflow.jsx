@@ -3,8 +3,8 @@
  * Require owner approval before fulfilment, and choose where the fulfilment ticket goes.
  */
 import { useState, useEffect } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", accent: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
 
 export default function VulaOrderWorkflow({ tenantId }) {
@@ -66,6 +66,18 @@ export default function VulaOrderWorkflow({ tenantId }) {
           <input defaultValue={s.fulfillment_email || ""} placeholder="kitchen@…" style={field}
             onBlur={(e) => e.target.value !== (s.fulfillment_email || "") && save({ fulfillment_email: e.target.value })} />
         </label>
+      </div>
+
+      <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 16, paddingTop: 14 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.text, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!s.collection_enabled} onChange={(e) => save({ collection_enabled: e.target.checked })} />
+          Offer collection (pickup) — no delivery fee, no address needed
+        </label>
+        {s.collection_enabled && (
+          <input defaultValue={s.collection_note || ""} placeholder="Where & when to collect, e.g. Shop, 12 Main Rd — weekdays 9–5"
+            style={{ ...field, width: "100%", boxSizing: "border-box", marginTop: 8 }}
+            onBlur={(e) => e.target.value !== (s.collection_note || "") && save({ collection_note: e.target.value })} />
+        )}
       </div>
 
       <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 16, paddingTop: 14 }}>

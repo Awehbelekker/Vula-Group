@@ -130,7 +130,10 @@ async def test_assign_project_posts_to_finances_and_learns():
         patch("vula.integrations.doc_filing.learn_filing_rule", return_value=2) as mock_learn,
         patch("vula.integrations.finances.post_finance_from_doc", return_value={"id": "f1"}) as mock_post,
     ):
-        result = await assign_project("doc1", AssignIn(project="Bokaap Reno"))
+        from types import SimpleNamespace
+        # API-key/master caller: require_auth recorded no member tenant, so no extra scoping.
+        result = await assign_project("doc1", AssignIn(project="Bokaap Reno"),
+                                      SimpleNamespace(state=SimpleNamespace()))
 
     mock_learn.assert_called_once_with("digg-demo", {"amount": 1000}, "Bokaap Reno")
     mock_post.assert_called_once_with(

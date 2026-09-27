@@ -91,7 +91,6 @@ export const MERCHANT_GROUPS = [
       { id: "qspro", icon: "📐", label: "QS Pro" },
       { id: "takeoff", icon: "📏", label: "Takeoff" },
       { id: "draft", icon: "✍️", label: "AI Draft" },
-      { id: "training", icon: "📚", label: "Training KB" },
     ]},
   ]},
   { label: "Admin", items: [
@@ -139,6 +138,11 @@ export const MASTER_ZONES = [
     { label: "", items: [
       { id: "master", icon: "🛠", label: "Master" },
     ]},
+    { label: "Knowledge", items: [
+      // Shared KBs every tenant falls back to — seeding is master-only on the server, so this
+      // moved here from the tenant Estimating group (where its seed button could only 403).
+      { id: "training", icon: "📚", label: "Training KB" },
+    ]},
     { label: "Debug", items: [
       { id: "dashboard", icon: "🏠", label: "Dashboard" },
       { id: "agent", icon: "🤖", label: "Agent (test rig)" },
@@ -179,7 +183,7 @@ const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'se
   'rep-contacts', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-expense-sheet', 'rep-crm']);
 const MERCHANT_MODMAP = {
   customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
-  qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft', training: 'training',
+  qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft',
   discounts: 'products',
   onboarding: 'broadcasts',  // rides the same module key it was invisibly bundled under before the Broadcast/Onboarding split
   'email-campaigns': 'broadcasts',  // same gate as WhatsApp broadcast — both are bulk-outreach features

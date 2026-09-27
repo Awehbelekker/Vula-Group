@@ -243,6 +243,9 @@ def test_payfast_url_returns_sandbox_url_when_debug():
         mock_settings.payfast_merchant_key = "testkey"
         mock_settings.debug = True
         mock_settings.vula_base_url = "https://app.vula.ai"
+        mock_settings.public_base_url = "https://api.example.test"
+        mock_settings.dashboard_url = "https://dash.example.test"
+        mock_settings.payfast_passphrase = ""
         url = _payfast_url("tid-123", "growth", "test@test.co.za", "Jane Smith")
     assert url is not None
     assert "sandbox.payfast.co.za" in url
@@ -256,6 +259,9 @@ def test_payfast_url_contains_required_params():
         mock_settings.payfast_merchant_key = "testkey"
         mock_settings.debug = True
         mock_settings.vula_base_url = "https://app.vula.ai"
+        mock_settings.public_base_url = "https://api.example.test"
+        mock_settings.dashboard_url = "https://dash.example.test"
+        mock_settings.payfast_passphrase = ""
         url = _payfast_url("tid-abc", "business", "ceo@bigco.co.za", "John Doe")
     assert "subscription_type" in url
     assert "frequency=3" in url   # monthly
@@ -397,3 +403,18 @@ def test_login_returns_no_password_hash():
     assert resp.status_code == 200
     assert "temp_password_hash" not in resp.json()
     assert "password" not in resp.json()
+
+
+
+def test_payfast_link_notifies_the_api_and_carries_the_whole_slug():
+    """notify_url pointed at the stale dashboard host with an /api prefix, m_payment_id was a
+    truncated UUID and the signature used the merchant key as passphrase — none worked."""
+    from urllib.parse import parse_qs, urlparse
+    from vula.api.onboarding import _payfast_url
+    with patch("vula.api.onboarding.settings") as ms:
+        ms.payfast_merchant_id, ms.payfast_merchant_key, ms.debug = "1", "mk", True
+        ms.public_base_url, ms.dashboard_url, ms.payfast_passphrase = "https://api.x", "https://d.x", ""
+        url = _payfast_url("my-long-business-name-here", "starter", "a@b.co", "A B")
+    q = parse_qs(urlparse(url).query)
+    assert q["notify_url"] == ["https://api.x/v1/payfast/notify"]
+    assert q["m_payment_id"] == ["my-long-business-name-here"]

@@ -57,6 +57,11 @@ def _no_real_whatsapp_creds_by_default(monkeypatch):
     from unittest.mock import AsyncMock
 
     monkeypatch.setattr(wa_mod, "_get_tenant_wa_creds", AsyncMock(return_value=None))
+    # The per-sender flood guard is process-global; many tests post from the same number within
+    # a second of each other, so give each test a clean window.
+    wa_mod._sender_hits.clear()
+    wa_mod._sender_warned_at.clear()
+    wa_mod._sent_keys.clear()
     monkeypatch.setattr(wa_mod.settings, "whatsapp_token", "")
     monkeypatch.setattr(wa_mod.settings, "whatsapp_phone_id", "")
     # The inbound-file dedup cache (2026-09-10) is a module-level dict — a real process cache,

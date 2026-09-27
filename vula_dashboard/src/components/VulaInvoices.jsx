@@ -11,8 +11,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
 import { FONT_PAIRINGS } from '../theme/tokens'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const STATUS = {
   draft:     { label: 'Draft',      color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },

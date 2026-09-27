@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { VULA_API } from "../lib/authFetch";
 
 const TIERS = [
   {
@@ -256,7 +257,10 @@ function StepBusiness({ data, onChange, onNext, onBack }) {
 
 function StepTraining({ data, onChange, onNext, onBack }) {
   const [dragOver, setDragOver] = useState(false);
-  const [files, setFiles] = useState([]);
+  // Kept on the wizard's business state (not local), so the files are still there to upload
+  // once the workspace exists — they used to be collected here and then never sent.
+  const files = data.files || [];
+  const setFiles = (fn) => onChange("files", typeof fn === "function" ? fn(files) : fn);
 
   const addFiles = (newFiles) => setFiles(prev => [...prev, ...newFiles].slice(0, 10));
 
@@ -503,7 +507,9 @@ export default function VulaOnboarding() {
     setLoading(true);
     setError("");
     try {
-      const resp = await fetch("/api/v1/onboard", {
+      // Absolute API URL so the global auth wrapper (lib/authFetch.js) attaches the master's
+      // token — the relative /api path skipped it and the backend answered 401.
+      const resp = await fetch(`${VULA_API}/v1/onboard`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -522,6 +528,18 @@ export default function VulaOnboarding() {
         throw new Error(err.detail || `Server error ${resp.status}`);
       }
       const data = await resp.json();
+      const docs = business.files || [];
+      if (docs.length && data.workspace_slug) {
+        const fd = new FormData();
+        fd.append("tenant_id", data.workspace_slug);
+        docs.forEach(f => fd.append("files", f));
+        try {
+          const up = await fetch(`${VULA_API}/v1/onboard/documents`, { method: "POST", body: fd });
+          if (!up.ok) setError("Workspace created, but the documents didn't upload — add them from the Documents tab.");
+        } catch {
+          setError("Workspace created, but the documents didn't upload — add them from the Documents tab.");
+        }
+      }
       setWorkspaceUrl(data.workspace_url);
       if (data.payment_url) setPaymentUrl(data.payment_url);
       setStep(5);

@@ -3,8 +3,8 @@
  * First dashboard surface for vula_reminders at all — previously WhatsApp-only.
  */
 import { useState, useEffect, useCallback } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
 
 export default function VulaRepReminders({ tenantId, repPhone }) {

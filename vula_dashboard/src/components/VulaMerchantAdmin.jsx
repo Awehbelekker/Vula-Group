@@ -14,6 +14,8 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
+import { MERCHANT_GROUPS } from '../navConfig.jsx'
+import { useAuthStore } from '../store/auth'
 import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
@@ -60,14 +62,13 @@ import VulaRepExpenseSheet from './VulaRepExpenseSheet'
 import VulaRepReminders from './VulaRepReminders'
 import VulaRepCrmLookup from './VulaRepCrmLookup'
 import VulaDraft from './VulaDraft'
-import VulaTraining from './VulaTraining'
 import VulaAutomations from './VulaAutomations'
 import VulaFlowBuilder from './VulaFlowBuilder'
 // Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
 const VulaPages = lazy(() => import('./VulaPages'))
 import VulaPayments from './VulaPayments'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const STATUS_LABELS = {
   pending_payment: { label: 'Awaiting payment', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
@@ -114,6 +115,8 @@ function subtabsFor(navGroups, sectionId) {
 // with its own hand-rolled tab strip and gating, was dead code superseded by that shell takeover
 // — deleted 2026-07-21 rather than kept as an unused second nav path to drift out of sync again.)
 export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange }) {
+  // Who is connecting WhatsApp/Yoco/email — recorded as connected_by (was always blank).
+  const adminEmail = useAuthStore(st => st.user?.email) || ""
   const tab = activeTab
   const setTab = onTabChange
   // A member with a defined access list sees only those modules (+ overview). Owners/
@@ -181,7 +184,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
           {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'team'      && <VulaTeam          tenantId={tenantId} />}
-          {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail="" />}
+          {tab === 'settings'  && <VulaSettings      tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />}
         </div>
     </>
   )
@@ -336,14 +339,54 @@ function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingN
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
       {active === 'qs' && <VulaQS />}
       {active === 'qspro' && <VulaQSPro />}
-      {active === 'takeoff' && <VulaTakeoff />}
+      {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} />}
       {active === 'draft' && <VulaDraft tenantId={tenantId} />}
-      {active === 'training' && <VulaTraining />}
     </div>
   )
 }
 
 // ── Overview ─────────────────────────────────────────────────────────────────
+
+// Which sidebar section a tab lives in (subtabs are nested inside sections since the IA overhaul).
+function sectionFor(tabId) {
+  for (const g of MERCHANT_GROUPS) {
+    for (const it of g.items) {
+      if (it.id === tabId) return { section: tabId }
+      if (it.subtabs?.some(st => st.id === tabId)) return { section: it.id, subtab: tabId }
+    }
+  }
+  return { section: tabId }
+}
+
+// The go-live checklist master already had (GET /admin/setup, same computation) — shown to the
+// business itself until everything's done, each open step linking to the tab that fixes it.
+function GoLiveChecklist({ tenantId, onNavigate }) {
+  const [setup, setSetup] = useState(null)
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/setup`)
+      .then(r => (r.ok ? r.json() : null)).then(setSetup).catch(() => {})
+  }, [tenantId])
+  if (!setup || setup.done >= setup.total) return null
+  const open = setup.steps.filter(st => !st.done)
+  return (
+    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+      <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 14 }}>
+        🚀 Getting you live — {setup.done}/{setup.total} done ({setup.progress_pct}%)
+      </p>
+      <div style={{ height: 6, background: '#F0EDE5', borderRadius: 3, marginBottom: 10 }}>
+        <div style={{ width: `${setup.progress_pct}%`, height: 6, background: 'var(--accent)', borderRadius: 3 }} />
+      </div>
+      {open.map(st => (
+        <button key={st.id} onClick={() => { const n = sectionFor(st.tab || 'settings'); onNavigate && onNavigate(n.section, n.subtab) }}
+                style={{ display: 'flex', justifyContent: 'space-between', width: '100%', border: 'none',
+                         background: 'none', padding: '6px 0', cursor: 'pointer', fontSize: 13, textAlign: 'left' }}>
+          <span>☐ {st.label} <span style={{ color: '#8A8680' }}>— {st.detail}</span></span>
+          <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Do this →</span>
+        </button>
+      ))}
+    </div>
+  )
+}
 
 function OverviewTab({ tenantId, onNavigate }) {
   const [stats, setStats] = useState(null)
@@ -376,6 +419,7 @@ function OverviewTab({ tenantId, onNavigate }) {
 
   return (
     <div>
+      <GoLiveChecklist tenantId={tenantId} onNavigate={onNavigate} />
       <div style={styles.statGrid}>
         <StatCard label="Today's revenue" value={fmt(stats.today_revenue_cents)} sub={`${stats.today_orders} orders today`} accent="var(--accent, var(--accent))" />
         <StatCard label="Total revenue"   value={fmt(stats.total_revenue_cents)} sub={`${stats.total_orders} orders`} />

@@ -3,8 +3,8 @@
  * Mirrors VulaClickUpConnect: popup OAuth → backend callback → status poll.
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 export default function VulaGoogleConnect({ tenantId, tenantName }) {
   const [status, setStatus] = useState(null)

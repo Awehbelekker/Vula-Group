@@ -25,7 +25,7 @@ import logging
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, field_validator
 
 from config import settings
@@ -80,11 +80,13 @@ def _mask(key: str) -> str:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/connect", response_model=ConnectYocoResponse)
-async def connect_yoco(body: ConnectYocoRequest):
+async def connect_yoco(body: ConnectYocoRequest, authorization: str = Header(default="")):
     """
     Save and validate a tenant's Yoco API keys.
     Tests the keys with a no-op Yoco API call, then stores in Supabase.
     """
+    from vula.api.tenant_auth import check_body_tenant
+    await check_body_tenant(body.tenant_id, authorization)
     mode = "test" if body.secret_key.startswith("sk_test_") else "live"
     webhook_registered = False
     webhook_id = None

@@ -58,6 +58,13 @@ class _FakeQuery:
         self._in_filter = (key, set(values))
         return self
 
+    def order(self, *_a, **_kw):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def _matches(self, row):
         if not all(row.get(k) == v for k, v in self.filters):
             return False
@@ -73,6 +80,9 @@ class _FakeQuery:
 
     def execute(self):
         rows = [r for r in self.table.rows if self._matches(r)]
+        rng = getattr(self, "_range", None)
+        if rng:
+            rows = rows[rng[0]:rng[1] + 1]
         return _Result(rows)
 
 
@@ -279,3 +289,43 @@ def test_trial_balance_empty_when_no_entries(fake_client):
     result = ledger.trial_balance(TID)
     assert result["accounts"] == []
     assert result["total_debit_cents"] == 0
+
+
+
+def test_trial_balance_pages_past_the_1000_row_cap(fake_client, monkeypatch):
+    """PostgREST caps each response at 1000 rows; the trial balance must read them all."""
+    monkeypatch.setattr(ledger, "_all_pages", ledger._all_pages)
+    calls = []
+
+    class _Q:
+        def __init__(self, n):
+            self.n = n
+
+        def range(self, a, b):
+            calls.append((a, b))
+            self.a, self.b = a, b
+            return self
+
+        def execute(self):
+            return _Result([{"id": i} for i in range(self.a, min(self.b + 1, self.n))])
+
+    rows = ledger._all_pages(lambda: _Q(2500))
+    assert len(rows) == 2500 and calls == [(0, 999), (1000, 1999), (2000, 2999)]
+
+
+def test_paid_bill_posts_to_ledger_once(monkeypatch):
+    """A 'pending' bill (recurring/manual/scanned) reaches the ledger when marked paid."""
+    from unittest.mock import MagicMock
+    from vula.commerce import expenses
+    posted = []
+    monkeypatch.setattr(ledger, "post_expense", lambda t, e: posted.append(e["id"]))
+    q = MagicMock()
+    q.update.return_value = q
+    q.eq.return_value = q
+    q.execute.return_value = MagicMock(data=[{"id": "e1", "amount_cents": 5000, "status": "paid"}])
+    db = MagicMock()
+    db.table.return_value = q
+    monkeypatch.setattr(expenses, "_client", lambda: db)
+    expenses.set_status("t1", "e1", "paid")
+    expenses.set_status("t1", "e1", "approved")
+    assert posted == ["e1"]

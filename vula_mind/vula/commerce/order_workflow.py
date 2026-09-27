@@ -30,6 +30,8 @@ _DEFAULTS = {
     # Opening hours (migration 158). None = unconfigured: same convention as delivery_areas —
     # the assistant is told it does NOT know and must check with the team, never guess.
     "business_hours": None, "business_hours_note": None, "after_hours_message": None,
+    # Collection / pickup (migration 177) — opt-in; collection_note says where and when.
+    "collection_enabled": False, "collection_note": None,
 }
 _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfillment_whatsapp",
            "payment_methods", "eft_details",
@@ -37,7 +39,8 @@ _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfill
            "origin_lat", "origin_lng", "origin_label", "delivery_radius_km",
            "hero_tagline", "hero_subtitle", "announcements", "cutoff_time",
            "express_delivery_extra_cents", "featured_product_ids",
-           "business_hours", "business_hours_note", "after_hours_message")
+           "business_hours", "business_hours_note", "after_hours_message",
+           "collection_enabled", "collection_note")
 
 # Customer-facing labels for the payment methods.
 PAYMENT_LABELS = {"online": "Card / online payment", "cod": "Pay on delivery", "eft": "EFT / bank transfer"}
@@ -80,10 +83,20 @@ def upsert_order_settings(tenant_id: str, patch: dict) -> dict:
     db = _client()
     existing = (db.table("commerce_order_settings").select("tenant_id")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
-    if existing:
-        db.table("commerce_order_settings").update(row).eq("tenant_id", tenant_id).execute()
-    else:
-        db.table("commerce_order_settings").insert(row).execute()
+    def _write(r):
+        if existing:
+            db.table("commerce_order_settings").update(r).eq("tenant_id", tenant_id).execute()
+        else:
+            db.table("commerce_order_settings").insert(r).execute()
+    try:
+        _write(row)
+    except Exception as exc:
+        # The dashboard saves the whole settings object; before migration 177 the collection_*
+        # columns don't exist, which must not break saving everything else.
+        if not any(k in row for k in ("collection_enabled", "collection_note")):
+            raise
+        logger.warning("order settings saved without collection fields (run migration 177?): %s", exc)
+        _write({k: v for k, v in row.items() if k not in ("collection_enabled", "collection_note")})
     return get_order_settings(tenant_id)
 
 

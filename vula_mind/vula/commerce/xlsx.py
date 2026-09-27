@@ -1,16 +1,29 @@
 """vula/commerce/xlsx.py
 
-Renders a supplier spend/materials history (a find_filed_document result, the same data
-format_supplier_history_reply turns into WhatsApp text) as a real .xlsx workbook, so an
-explicit "in excel"/"spreadsheet" request can be answered with an actual file instead of the
-text-only reply. Mirrors vula/commerce/pdf.py::render_invoice_pdf's shape (a pure function
-returning bytes) and vula/takeoff/boq_export.py's styling conventions.
+Renders filed supplier invoices as a real .xlsx workbook, so an explicit "in excel" /
+"spreadsheet" request is answered with a file an accountant can work with, not only text.
+Pure functions returning bytes (the vula/commerce/pdf.py::render_invoice_pdf shape), styled like
+vula/takeoff/boq_export.py.
+
+2026-09-27 rebuild, after the workbook Ian received on 2026-09-26: its title was his question,
+the "Document" column was raw filenames and a WhatsApp media id, dates were text, there was no
+invoice number, supplier, VAT or line items, and no Materials sheet even though materials were
+asked for. The layout is now:
+
+  Summary     who/what period, invoice count, refunds, excl-VAT / VAT / total, documents with no
+              amount on file; for an all-suppliers export, spend per supplier (biggest first)
+  Invoices    one row per document: date, invoice no., supplier, type, excl VAT, VAT, total
+  Line items  every extracted line: date, invoice no., supplier, description, qty, unit, total
+  Materials   the same item merged across invoices (quantity, spend, invoices, avg unit price)
+
+Money is integer cents until it is written; refunds are negative so every SUM row equals the
+server-computed total the text reply quotes.
 """
 from __future__ import annotations
 
 import io
-import re
-from typing import Any, Dict, Optional
+from datetime import date
+from typing import Any, Dict, Iterable, List, Optional
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -19,81 +32,220 @@ from openpyxl.utils import get_column_letter
 _HEADER_FILL = PatternFill("solid", fgColor="FF2C5545")
 _HEADER_FONT = Font(bold=True, color="FFFFFFFF")
 _BOLD = Font(bold=True)
-_MONEY_FMT = 'R #,##0.00'
+_MUTED = Font(italic=True, color="FF6B6B6B")
+_MONEY_FMT = 'R #,##0.00;[Red]-R #,##0.00'
+_DATE_FMT = "yyyy-mm-dd"
 
 
-def _header_row(ws: Any, row: int, headers: list[str]) -> None:
+def _rand(cents: Optional[int]) -> Optional[float]:
+    return None if cents is None else round(int(cents) / 100, 2)
+
+
+def _as_date(s: str) -> Any:
+    try:
+        return date.fromisoformat((s or "")[:10])
+    except ValueError:
+        return s or None
+
+
+def _table(ws: Any, header_row: int, headers: List[str], widths: List[int]) -> None:
     for col, text in enumerate(headers, start=1):
-        cell = ws.cell(row=row, column=col, value=text)
+        cell = ws.cell(row=header_row, column=col, value=text)
         cell.font = _HEADER_FONT
         cell.fill = _HEADER_FILL
-        cell.alignment = Alignment(horizontal="left")
-
-
-def _autosize(ws: Any, widths: list[int]) -> None:
+        cell.alignment = Alignment(horizontal="left", vertical="center")
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
+    ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
 
 
-def render_supplier_history_xlsx(result: Dict[str, Any], supplier: str = "") -> Optional[bytes]:
-    """A supplier spend/materials find_filed_document result as .xlsx bytes — an "Invoices"
-    sheet (date, document, amount, refund flag) plus a "Materials" sheet when the result
-    carries a materials roll-up. None when there's nothing complete to export (mirrors
-    format_supplier_history_reply's own None case), so the caller can fall back to text.
-    """
-    if result.get("status") != "found" or "total_amount_cents" not in result:
+def _finish_table(ws: Any, header_row: int, last_row: int, ncols: int) -> None:
+    if last_row > header_row:
+        ws.auto_filter.ref = f"A{header_row}:{get_column_letter(ncols)}{last_row}"
+
+
+def _money(cell: Any, cents: Optional[int]) -> None:
+    cell.value = _rand(cents)
+    cell.number_format = _MONEY_FMT
+
+
+def _sum_row(ws: Any, row: int, label_col: int, money_cols: Iterable[int], first: int, last: int) -> None:
+    ws.cell(row=row, column=label_col, value="Total").font = _BOLD
+    for col in money_cols:
+        letter = get_column_letter(col)
+        cell = ws.cell(row=row, column=col, value=f"=SUM({letter}{first}:{letter}{last})" if last >= first else 0)
+        cell.number_format = _MONEY_FMT
+        cell.font = _BOLD
+
+
+def render_invoices_xlsx(rows: List[Dict[str, Any]], title: str, *,
+                         materials: Optional[List[Dict[str, Any]]] = None,
+                         by_supplier: bool = False) -> Optional[bytes]:
+    """`rows` are service._export_row dicts (date, ref, party, is_refund, total_cents,
+    vat_cents, lines, ...). `title` is the supplier's name or "All suppliers" — never the
+    owner's question. `by_supplier` adds a spend-per-supplier table to the Summary sheet.
+    None when there is nothing to export."""
+    if not rows:
         return None
-    matches = result.get("matches") or []
-    total_n = int(result.get("total_matches") or len(matches))
-    if not total_n:
-        return None
-    name = supplier or result.get("resolved_supplier") or next(
-        (m.get("party") for m in matches if m.get("party")), None) or "Supplier"
+    rows = sorted(rows, key=lambda r: (r.get("date") or "", r.get("ref") or ""), reverse=True)
+    priced = [r for r in rows if r.get("total_cents") is not None]
+    total = sum(r["total_cents"] for r in priced)
+    vat = sum(r.get("vat_cents") or 0 for r in priced)
+    refunds = [r for r in priced if r.get("is_refund")]
+    dates = sorted(r["date"] for r in rows if r.get("date"))
 
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)
+    ws = wb.active
+    ws.title = "Summary"
+    ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
+    facts = [
+        ("Period", f"{dates[0]} to {dates[-1]}" if dates else "—"),
+        ("Documents", len(rows)),
+        ("Documents with an amount", len(priced)),
+        ("Refunds / credit notes", len(refunds)),
+        ("Refunded", _rand(-sum(r["total_cents"] for r in refunds)) if refunds else 0),
+        ("Total excl. VAT", _rand(total - vat)),
+        ("VAT", _rand(vat)),
+        ("Total spend (incl. VAT, after refunds)", _rand(total)),
+        ("Generated", date.today().isoformat()),
+    ]
+    for i, (k, v) in enumerate(facts, start=3):
+        ws.cell(row=i, column=1, value=k).font = _BOLD
+        c = ws.cell(row=i, column=2, value=v)
+        if isinstance(v, float) or k in ("Refunded",):
+            c.number_format = _MONEY_FMT
+    note_row = 3 + len(facts)
+    missing = len(rows) - len(priced)
+    if missing:
+        ws.cell(row=note_row, column=1,
+                value=f"{missing} document{'s have' if missing != 1 else ' has'} no amount on file "
+                      "and {} not in these totals — see the Note column on the Invoices sheet."
+                      .format("are" if missing != 1 else "is")).font = _MUTED
+        note_row += 1
+    ws.column_dimensions["A"].width = 40
+    ws.column_dimensions["B"].width = 24
+    if by_supplier:
+        groups: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            g = groups.setdefault(r.get("party") or "Unknown supplier", {"n": 0, "cents": 0, "missing": 0})
+            g["n"] += 1
+            if r.get("total_cents") is None:
+                g["missing"] += 1
+            else:
+                g["cents"] += r["total_cents"]
+        start = note_row + 1
+        _table(ws, start, ["Supplier", "Documents", "Total spend", "Share", "No amount on file"],
+               [40, 24, 16, 10, 18])
+        ws.freeze_panes = None
+        line = start
+        for name, g in sorted(groups.items(), key=lambda kv: kv[1]["cents"], reverse=True):
+            line += 1
+            ws.cell(row=line, column=1, value=name)
+            ws.cell(row=line, column=2, value=g["n"])
+            _money(ws.cell(row=line, column=3), g["cents"])
+            share = ws.cell(row=line, column=4, value=(g["cents"] / total) if total else None)
+            share.number_format = "0.0%"
+            ws.cell(row=line, column=5, value=g["missing"] or None)
+        _sum_row(ws, line + 1, 1, [3], start + 1, line)
+        _finish_table(ws, start, line, 5)
 
-    ws = wb.create_sheet("Invoices")
-    ws.cell(row=1, column=1, value=name).font = Font(bold=True, size=14)
-    ws.cell(row=2, column=1, value=f"{total_n} document{'s' if total_n != 1 else ''}, "
-                                    f"total spend {result.get('total_amount')}")
-    _header_row(ws, 4, ["Date", "Document", "Amount", "Refund"])
-    row = 5
-    for m in matches:
-        doc_name = re.sub(r"\.(pdf|jpe?g|png)$", "", m.get("filename") or "document", flags=re.I)
-        ws.cell(row=row, column=1, value=(m.get("filed_at") or "")[:10])
-        ws.cell(row=row, column=2, value=doc_name)
-        amt_cell = ws.cell(row=row, column=3)
-        if m.get("amount") is not None:
-            amt_cell.value = float(m["amount"])
-            amt_cell.number_format = _MONEY_FMT
-        ws.cell(row=row, column=4, value="Yes" if m.get("is_refund") else "")
+    inv = wb.create_sheet("Invoices")
+    heads = ["Date", "Invoice no.", "Supplier", "Type", "Excl. VAT", "VAT", "Total", "Lines", "Note"]
+    _table(inv, 1, heads, [12, 20, 34, 10, 14, 12, 14, 7, 34])
+    row = 1
+    for r in rows:
         row += 1
-    if total_n > len(matches):
-        ws.cell(row=row, column=2,
-                value=f"…and {total_n - len(matches)} more (all included in the total)")
-        row += 1
-    total_cell = ws.cell(row=row + 1, column=2, value="Total")
-    total_cell.font = _BOLD
-    total_amt = ws.cell(row=row + 1, column=3, value=int(result["total_amount_cents"]) / 100)
-    total_amt.number_format = _MONEY_FMT
-    total_amt.font = _BOLD
-    _autosize(ws, [12, 42, 14, 9])
+        d = inv.cell(row=row, column=1, value=_as_date(r.get("date") or ""))
+        d.number_format = _DATE_FMT
+        inv.cell(row=row, column=2, value=r.get("ref"))
+        inv.cell(row=row, column=3, value=r.get("party"))
+        inv.cell(row=row, column=4, value="Refund" if r.get("is_refund") else "Invoice")
+        t, v = r.get("total_cents"), r.get("vat_cents")
+        _money(inv.cell(row=row, column=5), (t - v) if t is not None and v is not None else None)
+        _money(inv.cell(row=row, column=6), v)
+        _money(inv.cell(row=row, column=7), t)
+        inv.cell(row=row, column=8, value=len(r.get("lines") or []) or None)
+        notes = []
+        if t is None:
+            notes.append("No amount on file")
+        if r.get("photo"):
+            notes.append("WhatsApp photo")
+        if r.get("party_inferred"):
+            notes.append("Supplier read from the document summary")
+        inv.cell(row=row, column=9, value="; ".join(notes) or None)
+    _sum_row(inv, row + 1, 4, [5, 6, 7], 2, row)
+    _finish_table(inv, 1, row, len(heads))
 
-    materials = result.get("materials") or []
+    li = wb.create_sheet("Line items")
+    heads = ["Date", "Invoice no.", "Supplier", "Description", "Qty", "Unit price", "Line total"]
+    _table(li, 1, heads, [12, 20, 30, 44, 8, 13, 14])
+    row = 1
+    for r in rows:
+        for ln in r.get("lines") or []:
+            row += 1
+            d = li.cell(row=row, column=1, value=_as_date(r.get("date") or ""))
+            d.number_format = _DATE_FMT
+            li.cell(row=row, column=2, value=r.get("ref"))
+            li.cell(row=row, column=3, value=r.get("party"))
+            li.cell(row=row, column=4, value=ln.get("description"))
+            q = ln.get("quantity")
+            li.cell(row=row, column=5, value=(int(q) if q is not None and float(q).is_integer() else q))
+            _money(li.cell(row=row, column=6), ln.get("unit_cents"))
+            _money(li.cell(row=row, column=7), ln.get("total_cents"))
+    if row == 1:
+        li.cell(row=2, column=1, value="No line items were extracted from these documents.").font = _MUTED
+    else:
+        _sum_row(li, row + 1, 6, [7], 2, row)
+        _finish_table(li, 1, row, len(heads))
+
     if materials:
         ms = wb.create_sheet("Materials")
-        _header_row(ms, 1, ["Description", "Quantity", "Spend", "Check quantity"])
-        for i, it in enumerate(materials, start=2):
-            ms.cell(row=i, column=1, value=it.get("description"))
-            ms.cell(row=i, column=2, value=it.get("quantity"))
-            spend_cell = ms.cell(row=i, column=3)
-            if it.get("spend_cents") is not None:
-                spend_cell.value = int(it["spend_cents"]) / 100
-                spend_cell.number_format = _MONEY_FMT
-            ms.cell(row=i, column=4, value="⚠️" if it.get("unit_price_varies") else "")
-        _autosize(ms, [42, 12, 14, 14])
+        heads = ["Description", "Total qty", "Spend", "Invoices", "Avg unit price", "Check"]
+        _table(ms, 1, heads, [44, 10, 14, 9, 14, 34])
+        row = 1
+        for it in materials:
+            row += 1
+            ms.cell(row=row, column=1, value=it.get("description"))
+            qty = it.get("quantity")
+            ms.cell(row=row, column=2, value=qty)
+            _money(ms.cell(row=row, column=3), it.get("spend_cents"))
+            ms.cell(row=row, column=4, value=it.get("documents"))
+            unit = (it["spend_cents"] / qty) if qty and it.get("spend_cents") is not None else None
+            _money(ms.cell(row=row, column=5), int(round(unit)) if unit is not None else None)
+            checks = []
+            if it.get("unit_price_varies"):
+                checks.append("Unit price varies a lot — check the quantity")
+            if it.get("quantity_incomplete"):
+                checks.append("Some lines have no quantity")
+            if it.get("spend_incomplete"):
+                checks.append("Some lines have no price")
+            ms.cell(row=row, column=6, value="; ".join(checks) or None)
+        _sum_row(ms, row + 1, 2, [3], 2, row)
+        _finish_table(ms, 1, row, len(heads))
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def render_supplier_history_xlsx(result: Dict[str, Any], supplier: str = "") -> Optional[bytes]:
+    """A find_filed_document result for one supplier as .xlsx bytes. Uses the result's private
+    `_export_rows` (every fetched document) when present, else rebuilds rows from the listed
+    matches. None when the result isn't a complete filed-document answer."""
+    if result.get("status") != "found" or "total_amount_cents" not in result:
+        return None
+    rows = result.get("_export_rows")
+    if rows is None:
+        from vula.commerce.service import _doc_ref, _canonical_party
+        rows = []
+        for m in result.get("matches") or []:
+            amt = m.get("amount")
+            cents = int(round(float(amt) * 100)) if amt is not None else None
+            if cents is not None and m.get("is_refund"):
+                cents = -abs(cents)
+            rows.append({"date": (m.get("filed_at") or "")[:10], "ref": _doc_ref(m.get("filename") or ""),
+                         "party": _canonical_party(m.get("party") or "") or supplier,
+                         "is_refund": bool(m.get("is_refund")), "total_cents": cents,
+                         "vat_cents": None, "lines": []})
+    name = supplier or result.get("resolved_supplier") or "Supplier"
+    return render_invoices_xlsx(rows, name, materials=result.get("_materials_all") or result.get("materials"))

@@ -1,13 +1,11 @@
 """
-core/skills/google_admin.py — Google Drive + Gmail over WhatsApp/portal.
+core/skills/google_admin.py — Google Drive over WhatsApp/portal (email: see email_admin).
 
     "find the Bokaap fee proposal in my drive"      → drive_search
     "pull in that file"                              → drive_pull (downloads + files into KB)
-    "any new emails from the client?"               → gmail_list / gmail_read
-    "draft a reply confirming the site meeting"      → gmail_draft (DRAFT only — never sends)
 
-Defers (low confidence) if the tenant hasn't connected Google. Draft-only email by
-design: Vula prepares drafts; the user reviews and sends from Gmail.
+Defers (low confidence) if the tenant hasn't connected Google. Email questions go to
+email_admin (IMAP/SMTP connector); the Gmail tools were removed from this skill.
 """
 from __future__ import annotations
 
@@ -51,8 +49,8 @@ class GoogleAdminSkill(BaseSkill):
         from vula.google.credentials import get_access_token
         if not await get_access_token(inp.tenant_id):
             return SkillOutput(
-                answer="Google isn't connected yet. Connect Google Drive & Gmail in Settings, "
-                       "then I can find your files and draft emails here.",
+                answer="Google isn't connected yet. Connect Google Drive in Settings, "
+                       "then I can find your files here.",
                 skill_name=self.name, confidence=0.25)
         try:
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id)
@@ -66,10 +64,11 @@ class GoogleAdminSkill(BaseSkill):
             return SkillOutput(answer="", skill_name=self.name, confidence=0.0, error=str(exc))
 
     def _system(self) -> str:
-        return ("You are Vula, managing the user's Google Drive and Gmail.\n\n" + behaviour_preamble(agentic=True) +
-                "\nUse the tools — never invent files or emails. Email is DRAFT-ONLY: create a draft "
-                "and tell the user it's saved in Gmail for them to review and send; never claim to "
-                "have sent anything. Keep replies short and WhatsApp-friendly.")
+        # Gmail tools were removed (email goes through email_admin's IMAP/SMTP connector), so
+        # the prompt no longer promises email — it made the model offer things it couldn't do.
+        return ("You are Vula, managing the user's Google Drive.\n\n" + behaviour_preamble(agentic=True) +
+                "\nUse the tools — never invent files. For email, tell the user to ask about "
+                "their mailbox (it's handled separately). Keep replies short and WhatsApp-friendly.")
 
     async def _loop(self, history: str, question: str, tenant_id: str) -> str:
         import litellm
@@ -144,17 +143,11 @@ class GoogleAdminSkill(BaseSkill):
                 from vula.ingestion.pipeline import VulaIngestionPipeline
                 d = settings.upload_dir / tenant_id
                 d.mkdir(parents=True, exist_ok=True)
-                p: Path = d / f["name"]
+                from vula.uploads import safe_upload_path
+                p: Path = safe_upload_path(d, f["name"])
                 p.write_bytes(f["data"])
                 res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(p, source_type="document")
                 return {"filed": f["name"], "chunks": getattr(res, "chunks_stored", 0)}
-            if name == "gmail_list":
-                return {"emails": await service.gmail_list(tenant_id, args.get("query", ""))}
-            if name == "gmail_read":
-                return await service.gmail_read(tenant_id, args.get("message_id", ""))
-            if name == "gmail_draft":
-                return await service.gmail_create_draft(tenant_id, args.get("to", ""),
-                    args.get("subject", ""), args.get("body", ""))
         except GoogleNotConnected:
             return {"error": "Google not connected."}
         except Exception as exc:

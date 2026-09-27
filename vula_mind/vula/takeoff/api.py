@@ -24,11 +24,12 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import settings
+from vula.api.master_auth import authorized_tenant
 from vula.takeoff.plan_reader import PlanReader
 from vula.takeoff.boq_generator import BOQGenerator
 from vula.takeoff.order_manager import OrderManager, SupplierDatabase
@@ -75,6 +76,11 @@ async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: f
             "title": project.title_block.project_name,
             "sheets": len(project.sheets),
             "rooms": len(project.rooms),
+            # The rooms themselves — the dashboard's room schedule showed demo rooms for every
+            # real job because only the count was returned.
+            "room_list": [{"name": r.name, "area": round(r.area or 0, 1), "floor": r.floor_finish,
+                           "ceiling": r.ceiling_finish, "walls": r.wall_finish}
+                          for r in project.rooms],
             "gfa": project.gross_floor_area,
             "confidence": round(project.confidence_overall * 100, 1),
             "notes": project.extraction_notes,
@@ -206,11 +212,21 @@ async def upload_plans(
     }
 
 
+def _job_for(job_id: str, tenant_id: Optional[str]) -> Optional[dict]:
+    """The job, or None when it doesn't exist or belongs to another tenant. ?tenant_id= is how a
+    signed-in tenant member authenticates on these id-only routes (master_auth.require_auth,
+    applied to this whole router in server.py) — the job must then be that tenant's."""
+    job = _jobs.get(job_id)
+    if not job or (tenant_id and job.get("tenant_id") != tenant_id):
+        return None
+    return job
+
+
 @router.get("/{job_id}")
-async def get_job_status(job_id: str):
-    if job_id not in _jobs:
+async def get_job_status(job_id: str, request: Request, tenant_id: Optional[str] = None):
+    job = _job_for(job_id, authorized_tenant(request) or tenant_id)
+    if not job:
         raise HTTPException(404, f"Job {job_id} not found")
-    job = _jobs[job_id]
     return {
         "job_id": job_id,
         "status": job["status"],
@@ -221,8 +237,8 @@ async def get_job_status(job_id: str):
 
 
 @router.get("/{job_id}/boq")
-async def get_boq(job_id: str):
-    job = _jobs.get(job_id)
+async def get_boq(job_id: str, request: Request, tenant_id: Optional[str] = None):
+    job = _job_for(job_id, authorized_tenant(request) or tenant_id)
     if not job:
         raise HTTPException(404)
     if job["status"] not in ("complete",):
@@ -231,8 +247,8 @@ async def get_boq(job_id: str):
 
 
 @router.get("/{job_id}/orders")
-async def get_orders(job_id: str):
-    job = _jobs.get(job_id)
+async def get_orders(job_id: str, request: Request, tenant_id: Optional[str] = None):
+    job = _job_for(job_id, authorized_tenant(request) or tenant_id)
     if not job:
         raise HTTPException(404)
     if job["status"] != "complete":
@@ -245,9 +261,9 @@ async def get_orders(job_id: str):
 
 
 @router.get("/{job_id}/boq/excel")
-async def download_boq_excel(job_id: str):
+async def download_boq_excel(job_id: str, request: Request, tenant_id: Optional[str] = None):
     """Download the BOQ as a formatted Excel workbook (.xlsx)."""
-    job = _jobs.get(job_id)
+    job = _job_for(job_id, authorized_tenant(request) or tenant_id)
     if not job:
         raise HTTPException(404, "Job not found")
     if job["status"] != "complete":
@@ -264,9 +280,9 @@ async def download_boq_excel(job_id: str):
 
 
 @router.post("/{job_id}/send")
-async def send_rfqs(job_id: str, request: SendRFQRequest):
+async def send_rfqs(job_id: str, request: SendRFQRequest, http_request: Request, tenant_id: Optional[str] = None):
     """Send RFQs to suppliers. Set dry_run=false to actually send."""
-    job = _jobs.get(job_id)
+    job = _job_for(job_id, authorized_tenant(http_request) or tenant_id)
     if not job or job["status"] != "complete":
         raise HTTPException(404, "Job not found or not complete")
 

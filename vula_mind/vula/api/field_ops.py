@@ -24,11 +24,12 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from vula.api.master_auth import authorized_tenant
 from vula.api.whatsapp import _send_reply, _send_wa_template
 from vula.models.field_ops import get_field_ops_db
 
@@ -121,18 +122,27 @@ async def assign_to_project(body: ProjectAssignIn) -> dict:
     return {"id": pa.id, "project_id": pa.project_id, "contractor_id": pa.contractor_id, "role": pa.role}
 
 
+def _theirs(record, tenant_id: Optional[str]) -> bool:
+    """A record addressed by id alone belongs to the caller: ?tenant_id= is how a signed-in member
+    authenticates on these routes (master_auth.require_auth on this router, see server.py), and
+    the record must then be that tenant's. No tenant_id = API key / master, which see all."""
+    return record is not None and (not tenant_id or getattr(record, "tenant_id", None) == tenant_id)
+
+
 @router.get("/project/{project_id}/team")
-async def get_project_team(project_id: str) -> dict:
+async def get_project_team(project_id: str, request: Request, tenant_id: Optional[str] = None) -> dict:
     db = get_field_ops_db()
-    team = db.get_project_team(project_id)
+    tenant_id = authorized_tenant(request) or tenant_id
+    team = db.get_project_team(project_id, tenant_id)
     return {"project_id": project_id, "team": team}
 
 
 @router.get("/project/{project_id}/status")
-async def get_project_status(project_id: str) -> dict:
+async def get_project_status(project_id: str, request: Request, tenant_id: Optional[str] = None) -> dict:
     db = get_field_ops_db()
-    summary = db.project_status_summary(project_id)
-    tasks = db.get_tasks_for_project(project_id)
+    tenant_id = authorized_tenant(request) or tenant_id
+    summary = db.project_status_summary(project_id, tenant_id)
+    tasks = db.get_tasks_for_project(project_id, tenant_id)
     return {
         **summary,
         "tasks": [
@@ -168,15 +178,16 @@ async def create_task(body: TaskIn) -> dict:
 
 
 @router.post("/task/assign")
-async def assign_task(body: TaskAssignIn) -> dict:
+async def assign_task(body: TaskAssignIn, request: Request, tenant_id: Optional[str] = None) -> dict:
     """Assign a task to a contractor and optionally send a WhatsApp briefing."""
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     task = db.get_task(body.task_id)
-    if not task:
+    if not _theirs(task, tenant_id):
         raise HTTPException(status_code=404, detail="Task not found")
 
     contractor = db.get_contractor(body.contractor_id)
-    if not contractor:
+    if not _theirs(contractor, tenant_id or task.tenant_id):
         raise HTTPException(status_code=404, detail="Contractor not found")
 
     db.update_task_status(task.id, "in_progress")
@@ -201,11 +212,12 @@ async def assign_task(body: TaskAssignIn) -> dict:
 
 
 @router.post("/task/{task_id}/complete-request")
-async def request_completion(task_id: str, body: CompleteRequestIn) -> dict:
+async def request_completion(task_id: str, body: CompleteRequestIn, request: Request, tenant_id: Optional[str] = None) -> dict:
     """Ask the assigned contractor to confirm their task is complete."""
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     task = db.get_task(task_id)
-    if not task:
+    if not _theirs(task, tenant_id):
         raise HTTPException(status_code=404, detail="Task not found")
 
     if not task.assigned_to:
@@ -226,10 +238,11 @@ async def request_completion(task_id: str, body: CompleteRequestIn) -> dict:
 
 
 @router.get("/task/{task_id}")
-async def get_task(task_id: str) -> dict:
+async def get_task(task_id: str, request: Request, tenant_id: Optional[str] = None) -> dict:
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     task = db.get_task(task_id)
-    if not task:
+    if not _theirs(task, tenant_id):
         raise HTTPException(status_code=404, detail="Task not found")
 
     evidence = db.get_evidence(task_id)
@@ -267,7 +280,7 @@ async def start_walkthrough(body: WalkthroughStartIn) -> dict:
     db = get_field_ops_db()
 
     contractor = db.get_contractor(body.contractor_id)
-    if not contractor:
+    if not _theirs(contractor, body.tenant_id):
         raise HTTPException(status_code=404, detail="Contractor not found")
 
     wt = db.create_walkthrough(body.tenant_id, body.project_id, body.title, body.items)
@@ -290,11 +303,13 @@ async def start_walkthrough(body: WalkthroughStartIn) -> dict:
 
 
 @router.post("/walkthrough/{walkthrough_id}/approve")
-async def approve_walkthrough(walkthrough_id: str, body: WalkthroughApproveIn) -> dict:
+async def approve_walkthrough(walkthrough_id: str, body: WalkthroughApproveIn, request: Request,
+                              tenant_id: Optional[str] = None) -> dict:
     """Architect approves or rejects a walkthrough from the dashboard."""
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     wt = db.get_walkthrough(walkthrough_id)
-    if not wt:
+    if not _theirs(wt, tenant_id):
         raise HTTPException(status_code=404, detail="Walkthrough not found")
 
     new_status = "complete" if body.decision == "approved" else "pending"

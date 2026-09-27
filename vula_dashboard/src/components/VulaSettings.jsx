@@ -15,6 +15,7 @@ import VulaGoogleConnect from './VulaGoogleConnect'
 import VulaMicrosoftConnect from './VulaMicrosoftConnect'
 import VulaEmailConnect from './VulaEmailConnect'
 import { applyAccent, applyInk, applyFontPairing, FONT_PAIRINGS } from '../theme/tokens'
+import { VULA_API } from '../lib/authFetch'
 
 export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
   return (
@@ -126,7 +127,7 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
 }
 
 function BrandKitSettings({ tenantId }) {
-  const API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+  const API = VULA_API
   const [name, setName] = useState('')
   const [logoUrl, setLogoUrl] = useState('')
   const [accent, setAccent] = useState('#2C5545')
@@ -281,7 +282,7 @@ const bk = {
 }
 
 function DeliverySettings({ tenantId }) {
-  const API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+  const API = VULA_API
   const [areas, setAreas] = useState('')
   const [fee, setFee] = useState('')
   const [freeOver, setFreeOver] = useState('')
@@ -453,7 +454,7 @@ const DAYS = [
 ]
 
 function BusinessHoursSettings({ tenantId }) {
-  const API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+  const API = VULA_API
   // One row per day: { closed, open, close }. Defaults to a common SA trading week until the
   // owner's own settings load — never sent unless they hit Save.
   const [days, setDays] = useState(() => Object.fromEntries(DAYS.map(d => [d.key,
@@ -560,7 +561,7 @@ function BusinessHoursSettings({ tenantId }) {
 }
 
 function LearnedSummary({ tenantId }) {
-  const API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
+  const API = VULA_API
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')

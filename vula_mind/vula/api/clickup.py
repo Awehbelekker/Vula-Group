@@ -18,8 +18,10 @@ import logging
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
+
+from vula.api.master_auth import require_auth
 from pydantic import BaseModel
 
 from config import settings
@@ -212,7 +214,7 @@ class DefaultListIn(BaseModel):
     list_id: str
 
 
-@router.post("/default-list")
+@router.post("/default-list", dependencies=[Depends(require_auth)])
 async def set_default_list(body: DefaultListIn) -> dict:
     res = (_client().table("vula_clickup_accounts").select("list_ids")
            .eq("tenant_id", body.tenant_id).limit(1).execute())
@@ -235,7 +237,7 @@ class ConnectIn(BaseModel):
     connected_by: Optional[str] = None
 
 
-@router.post("/connect")
+@router.post("/connect", dependencies=[Depends(require_auth)])
 async def connect(body: ConnectIn) -> dict:
     _store_connection(body.tenant_id, body.api_token, body.team_id, None,
                      body.default_list_id, connected_by=body.connected_by or "")

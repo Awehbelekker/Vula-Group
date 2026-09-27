@@ -132,7 +132,8 @@ async def test_email_draft_sends_with_a_valid_address():
     creds = {"send_mode": "send"}
     with patch("core.skills.email_admin.service.send", new=AsyncMock(return_value={"sent": True})) as mock_send:
         result = await skill._dispatch(
-            "email_draft", {"to": "client@example.com", "subject": "Hi", "body": "Body"}, TENANT, creds)
+            "email_draft", {"to": "client@example.com", "subject": "Hi", "body": "Body",
+                            "confirm": True}, TENANT, creds)
     assert result == {"sent": True}
     mock_send.assert_called_once()
 

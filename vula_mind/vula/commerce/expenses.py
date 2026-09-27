@@ -505,6 +505,22 @@ def budget_warning_line(tenant_id: str, paid_by: str) -> Optional[str]:
         return None
 
 
+def post_to_ledger(tenant_id: str, expense: Optional[dict]) -> None:
+    """Post a paid expense to the general ledger. Idempotent — journal_entries is unique on
+    (tenant, source_type, source_id), so a claim already posted at creation is a no-op. Covers
+    the rows that don't go through create_claim: bills entered as 'pending' (recurring bills,
+    manual due-dated bills, scanned supplier bills) once they're actually paid, and bank debits
+    booked as expenses. Before this those never reached the ledger, so the trial balance
+    understated costs. Never raises."""
+    if not expense or not expense.get("id"):
+        return
+    try:
+        from vula.commerce import ledger
+        ledger.post_expense(tenant_id, expense)
+    except Exception as exc:
+        log.warning("ledger hook failed for expense %s: %s", expense.get("id"), exc)
+
+
 def set_status(tenant_id: str, expense_id: str, status: str) -> dict:
     patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
     if status == "reimbursed":
@@ -513,7 +529,10 @@ def set_status(tenant_id: str, expense_id: str, status: str) -> dict:
         patch["paid_at"] = _now()
     res = (_client().table("commerce_expenses").update(patch)
            .eq("tenant_id", tenant_id).eq("id", expense_id).execute())
-    return (res.data or [{}])[0]
+    row = (res.data or [{}])[0]
+    if status == "paid":
+        post_to_ledger(tenant_id, row)
+    return row
 
 
 def assign(tenant_id: str, expense_id: str, *, project: Optional[str] = None,

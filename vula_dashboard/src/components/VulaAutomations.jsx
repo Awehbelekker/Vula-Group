@@ -4,22 +4,26 @@
  * customer or the team helper. Evaluated by a backend poller every 5 minutes.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { VULA_API } from '../lib/authFetch'
 
-const VULA_API = import.meta.env.VITE_API_URL || 'https://vula-group-production.up.railway.app'
 
 const ORDER_STATUSES = ['paid', 'confirmed', 'packing', 'dispatched', 'delivered', 'cancelled']
 
 const TRIGGERS = {
   order_status: { label: '📦 Order reaches a status', hint: 'Fires once per order when it reaches the chosen status.' },
   low_stock: { label: '🔔 Product stock is low', hint: 'Fires once per product per day while stock ≤ its reorder threshold (set in Products).' },
+  abandoned_cart: { label: '🛒 Cart left without ordering', hint: 'Fires when a WhatsApp customer leaves items in their cart for 2+ hours (carts from the last 3 days only).' },
+  reorder_due: { label: '🔁 Time to reorder', hint: "Fires once for a customer whose last order was delivered 7 days ago." },
 }
 const ACTIONS = {
-  whatsapp_customer: { label: '💬 Message the customer', hint: 'Only available with the Order-status trigger.' },
+  whatsapp_customer: { label: '💬 Message the customer', hint: 'Not available with the low-stock trigger.' },
   whatsapp_team: { label: '🧑 Message the team', hint: 'Sends to whoever is set to receive help requests (Team tab).' },
 }
 const PLACEHOLDERS = {
   order_status: '{{order_id}}, {{customer_name}}, {{status}}',
   low_stock: '{{product_name}}, {{stock}}, {{threshold}}',
+  abandoned_cart: '{{customer_name}}, {{items}}',
+  reorder_due: '{{customer_name}}, {{items}}',
 }
 
 export default function VulaAutomations({ tenantId }) {
@@ -70,8 +74,8 @@ export default function VulaAutomations({ tenantId }) {
   async function create() {
     setError('')
     if (!form.message.trim()) return setError('Write the message to send.')
-    if (form.action_type === 'whatsapp_customer' && form.trigger_type !== 'order_status') {
-      return setError('Messaging the customer only works with the order-status trigger.')
+    if (form.action_type === 'whatsapp_customer' && form.trigger_type === 'low_stock') {
+      return setError("Messaging the customer doesn't work with the low-stock trigger (there's no customer).")
     }
     setSaving(true)
     const body = {

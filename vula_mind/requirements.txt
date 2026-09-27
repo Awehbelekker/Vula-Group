@@ -59,6 +59,7 @@ python-dateutil>=2.9.0
 # ── Vector Store — run separately ───────────────────────────────────────────
 # docker run -p 6333:6333 qdrant/qdrant
 litellm>=1.40.0
+pyyaml>=6.0             # evals/harness.py reads its YAML cases (Master panel model bake-off)
 orjson>=3.9            # litellm imports orjson on some paths; make it explicit so it's always present
 
 # ── Error monitoring ────────────────────────────────────────────────────────

@@ -202,7 +202,9 @@ async def test_unsubscribe_upserts_opted_out():
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
     with patch("vula.api.email_public._client", return_value=mock_db):
-        resp = await unsubscribe(tenant="off-the-hook", email="Jane@Example.com")
+        from vula.api.email_public import unsubscribe_token
+        resp = await unsubscribe(tenant="off-the-hook", email="Jane@Example.com",
+                                 t=unsubscribe_token("off-the-hook", "jane@example.com"))
 
     assert resp.status_code == 200
     mock_table.upsert.assert_called_once()
@@ -214,6 +216,6 @@ async def test_unsubscribe_upserts_opted_out():
 
 @pytest.mark.asyncio
 async def test_unsubscribe_rejects_invalid_email():
-    resp = await unsubscribe(tenant="off-the-hook", email="not-an-email")
+    resp = await unsubscribe(tenant="off-the-hook", email="not-an-email", t="")
     assert resp.status_code == 200   # still renders a page, just an error one
     assert b"Invalid" in resp.body

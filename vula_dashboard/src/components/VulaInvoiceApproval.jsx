@@ -6,8 +6,8 @@
  * or changes anything about Mark paid/Record payment in the dashboard.
  */
 import { useState, useEffect } from "react";
+import { VULA_API } from "../lib/authFetch";
 
-const VULA_API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const fmt = (c) => `R${((c || 0) / 100).toFixed(2)}`;
 
 export default function VulaInvoiceApproval({ tenant, invoiceId }) {
