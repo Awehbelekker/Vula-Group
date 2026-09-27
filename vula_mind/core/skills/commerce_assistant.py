@@ -250,11 +250,21 @@ _CHANGE_RE = re.compile(
     re.IGNORECASE)
 
 
+# Phrases that SAY there is no change ("yes please, no changes") — removed before the
+# _CHANGE_RE check, which would otherwise read their "no"/"not"/"don't" as a change request
+# and leave the customer unable to place the order at all.
+_NO_CHANGE_RE = re.compile(
+    r"\b(no|without) (changes?|problems?|worries|stress)\b|\bnothing (else|to (change|add))\b|"
+    r"\b(don'?t|do not) (change|add) anything\b|\bnot changing anything\b|"
+    r"\b(geen (veranderinge?|probleem)|niks (anders|te verander))( nie)?\b",   # Afrikaans
+    re.IGNORECASE)
+
+
 def _is_clear_confirmation(message: str) -> bool:
     """True only for a plain yes — a confirm word, no change request, and short enough to be
     an answer rather than a new instruction."""
     msg = (message or "").strip()
-    return (bool(_CONFIRM_RE.search(msg)) and not _CHANGE_RE.search(msg)
+    return (bool(_CONFIRM_RE.search(msg)) and not _CHANGE_RE.search(_NO_CHANGE_RE.sub(" ", msg))
             and len(msg.split()) <= 12)
 
 
@@ -1582,21 +1592,30 @@ class CommerceAssistantSkill(BaseSkill):
     async def _exec_reschedule_appointment(self, tenant_id: str, phone: Optional[str],
                                            args: Dict[str, Any]) -> Dict[str, Any]:
         """Move a booking: book the NEW slot first (create_booking checks availability), and
-        only once that succeeded cancel the old one — a failed move never loses the booking."""
+        only once that succeeded cancel the old one — a failed move never loses the booking.
+        A new slot that overlaps the booking itself (10:00 → 10:30 for an hour) clashes with
+        it, so on a refusal the old booking is released and the move retried once; if that
+        also fails the old booking is put back as it was."""
         from vula.bookings import service as bk
         if not (args.get("start") or "").strip():
             return {"error": "Ask the customer for the new date and time first (check_availability)."}
         chosen, reply = await self._pick_upcoming(tenant_id, phone, args, "move")
         if reply:
             return reply
-        res = await bk.create_booking(tenant_id, {
+        new_booking = {
             "service_id": chosen.get("service_id"), "service_name": chosen.get("service_name"),
             "customer_name": chosen.get("customer_name"), "customer_phone": phone,
             "start": args.get("start"), "channel": "whatsapp",
-        })
+        }
+        res = await bk.create_booking(tenant_id, new_booking)
         if res.get("error"):
-            return res   # e.g. slot taken — the original booking is untouched
-        await bk.set_status(tenant_id, chosen["id"], "cancelled")
+            await bk.set_status(tenant_id, chosen["id"], "cancelled")
+            res = await bk.create_booking(tenant_id, new_booking)
+            if res.get("error"):
+                await bk.set_status(tenant_id, chosen["id"], chosen.get("status") or "confirmed")
+                return res   # e.g. slot taken — the original booking is back as it was
+        else:
+            await bk.set_status(tenant_id, chosen["id"], "cancelled")
         b = res["booking"]
         return {"rescheduled": True, "service": b.get("service_name"), "when": b.get("start_local"),
                 "message": f"Moved to {b.get('start_local')}."}

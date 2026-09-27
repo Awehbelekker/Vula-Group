@@ -60,4 +60,35 @@ async def test_failed_reschedule_keeps_the_original_booking():
          patch("vula.bookings.service._now_utc"):
         out = await skill._exec_reschedule_appointment("t", "2782", {"start": "2026-10-02T10:00"})
     assert out == {"error": "slot taken"}
-    set_status.assert_not_awaited()
+    # released for the retry, then put back exactly as it was
+    assert [c.args for c in set_status.await_args_list] == [("t", "b1", "cancelled"), ("t", "b1", "confirmed")]
+
+
+@pytest.mark.asyncio
+async def test_failed_reschedule_restores_the_original_status():
+    skill = CommerceAssistantSkill()
+    set_status = AsyncMock()
+    pending = {**B[1], "status": "pending"}
+    with patch("vula.bookings.service.list_bookings", AsyncMock(return_value=[pending])), \
+         patch("vula.bookings.service.create_booking", AsyncMock(return_value={"error": "slot taken"})), \
+         patch("vula.bookings.service.set_status", set_status), \
+         patch("vula.bookings.service._now_utc"):
+        await skill._exec_reschedule_appointment("t", "2782", {"start": "2026-10-02T10:00"})
+    assert set_status.await_args_list[-1].args == ("t", "b1", "pending")
+
+
+@pytest.mark.asyncio
+async def test_reschedule_into_a_slot_overlapping_itself():
+    """09:00 → 09:30 for an hour-long booking clashes with the booking being moved: the first
+    attempt is refused, the old booking is released, and the retry succeeds."""
+    skill = CommerceAssistantSkill()
+    create = AsyncMock(side_effect=[{"error": "That slot is no longer available."},
+                                    {"booking": {"service_name": "Cut", "start_local": "Thu 09:30"}}])
+    set_status = AsyncMock()
+    with patch("vula.bookings.service.list_bookings", AsyncMock(return_value=[B[1]])), \
+         patch("vula.bookings.service.create_booking", create), \
+         patch("vula.bookings.service.set_status", set_status), \
+         patch("vula.bookings.service._now_utc"):
+        out = await skill._exec_reschedule_appointment("t", "2782", {"start": "2026-10-01T09:30"})
+    assert out["rescheduled"] is True and create.await_count == 2
+    set_status.assert_awaited_once_with("t", "b1", "cancelled")

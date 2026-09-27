@@ -5,7 +5,10 @@ from core.skills.commerce_assistant import _is_clear_confirmation
 
 
 @pytest.mark.parametrize("msg", ["yes", "Yes please", "confirm", "Ja", "yebo", "go ahead 👍",
-                                 "yes that's correct", "place the order"])
+                                 "yes that's correct", "place the order",
+                                 # saying there is no change is not a change request (2026-09-27)
+                                 "yes please, no changes", "yes, nothing else", "confirm, no problem",
+                                 "yes don't change anything", "ja, geen veranderinge nie"])
 def test_plain_confirmations(msg):
     assert _is_clear_confirmation(msg)
 
@@ -14,7 +17,8 @@ def test_plain_confirmations(msg):
                                  "yes, add another kilo of hake",
                                  "ja maar verander die adres",
                                  "yes wait, make it afternoon delivery",
-                                 "no", "what's the total?",
+                                 "no", "what's the total?", "no changes? add hake",
+                                 "yes no changes but remove the prawns",
                                  "yes and please also deliver to my office on Friday afternoon not the morning"])
 def test_not_a_confirmation(msg):
     assert not _is_clear_confirmation(msg)

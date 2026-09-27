@@ -258,7 +258,18 @@ async def process_due(tenant_id: Optional[str] = None) -> int:
             ).eq("id", sub["id"]).eq("next_run", sub["next_run"]).execute().data)
             if not claimed:
                 continue
-            order = await _place_order(await _repriced(sub))
+            try:
+                order = await _place_order(await _repriced(sub))
+            except Exception:
+                # The order wasn't created, so give the claim back (only if nobody has moved
+                # next_run since) — otherwise this run is silently skipped until next cadence.
+                try:
+                    _client().table("commerce_subscriptions").update(
+                        {"next_run": sub["next_run"], "last_run": sub.get("last_run"), "updated_at": _now()}
+                    ).eq("id", sub["id"]).eq("next_run", nxt.isoformat()).execute()
+                except Exception as exc:
+                    log.warning("subscription %s claim not released: %s", sub.get("id"), exc)
+                raise
             if not order:
                 continue
             await _notify(sub, order)
