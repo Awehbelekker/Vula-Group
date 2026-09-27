@@ -43,10 +43,17 @@ async def send_due_reminders(tenant_id: str) -> int:
     from vula.api import tenants as _tenants
     name = (_tenants.get_config(tenant_id).get("display_name")) or tenant_id
 
+    # STOP promises "no more reminder messages" — honour the same opt-out list broadcasts use.
+    from vula.api.commerce import _norm_phone, _suppressed_phones
+    opted_out = _suppressed_phones(tenant_id)
+
     sent = 0
     for b in rows:
         phone = (b.get("customer_phone") or "").strip()
         if not phone:
+            continue
+        if _norm_phone(phone) in opted_out:
+            log.info("booking reminder %s not sent: customer opted out", b.get("id"))
             continue
         try:
             when = bs._parse(b["start_at"]).astimezone(tz).strftime("%a %d %b at %H:%M")
