@@ -50,6 +50,9 @@ class _Q:
         self.filters.append((col, val))
         return self
 
+    def gt(self, *_a):
+        return self
+
     def in_(self, col, vals):
         self.filters.append((col, _In(vals)))
         return self

@@ -104,8 +104,8 @@ async def test_update_stock_readback_confirmed(skill, emits, monkeypatch):
     res = await skill._update_stock(TID, "hake", 20, confirm=True)
     assert res.get("verified") is True and res["stock_quantity"] == 20
     # Goes through the atomic, movement-logging RPC — not a plain product PATCH.
-    assert calls == [(TID, "p1", {"set_to": 20, "reason": "adjust", "ref_type": "whatsapp",
-                                  "actor": "whatsapp"})]
+    assert calls == [(TID, "p1", {"set_to": 20, "variant_id": None, "reason": "adjust",
+                                  "ref_type": "whatsapp", "actor": "whatsapp"})]
     assert _gate_events(emits)[0]["outcome"] == "confirmed"
 
 
