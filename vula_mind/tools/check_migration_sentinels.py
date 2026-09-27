@@ -23,6 +23,7 @@ FIRST_CHECKED = 175
 # Migrations whose effect a `select` can't observe (constraint/index/backfill-only).
 NO_PROBE = {
     "175": "relaxes NOT NULLs and backfills rows — nothing a select can probe",
+    "181": "replaces stock functions only (untracked-product fix) — no table or column to probe",
 }
 
 
