@@ -256,6 +256,17 @@ def leaked_tool_output(text: str, tool_names: Iterable[str] = ()) -> bool:
     t = text or ""
     if _LEAKED_TOOL_RE.search(t):
         return True
+    # A reply that is nothing but a JSON object/array — 2026-09-23 (digg-demo) the owner got
+    # '{"status": "not_found_live", "message": "No emails found ..."}' as the whole answer.
+    body = t.strip().strip("`").strip()
+    if body.startswith("json"):
+        body = body[4:].strip()
+    if len(body) >= 2 and body[0] in "{[" and body[-1] in "}]":
+        try:
+            json.loads(body)
+            return True
+        except ValueError:
+            pass
     return any(n and re.search(rf"\b{re.escape(n)}\s*\(", t) for n in tool_names)
 
 

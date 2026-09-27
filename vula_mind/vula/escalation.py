@@ -29,6 +29,11 @@ log = logging.getLogger(__name__)
 # speaker review to extend, same as the brief that raised this recommends.
 _NO_ANSWER = re.compile(
     r"(i (don'?t|do not) (know|have)|not sure|couldn'?t find|can'?t help|no (info|information|record)|unable to|i'?m not able"
+    # A promise that a person will follow up is a hand-off too. 2026-09-25 (off-the-hook): "I'll
+    # find out the price of Atlantic Mackerel for you and someone will get back to you" went out
+    # with no escalation — only the Afrikaans "laat ek uitvind" was here — so no one ever did.
+    r"|i'?ll (find out|check (with|on)|ask (the|our) (team|shop|owner)|confirm with)|let me (find out|check with)"
+    r"|(someone|somebody|the team|a team member)('?ll| will) (get back|contact|call|be in touch|reach out)"
     r"|ek (weet|het) nie|nie seker nie|kan nie help nie|ek sal (met die span|eers) (kyk|vra)|laat ek uitvind"
     r"|angazi|angikwazi ukusiza|ngizobuza (ithimba|abantu)"                    # isiZulu
     r"|andazi|andikwazi ukunceda|ndiza kubuza (iqela|abantu)"                 # isiXhosa

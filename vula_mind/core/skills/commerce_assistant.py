@@ -284,6 +284,32 @@ HOW_TO_ORDER_REPLY = (
     "before anything is placed.")
 
 
+# 2026-09-24 (off-the-hook): "We do not deliver to Mauritius. We deliver to these areas: ..." was
+# sent four times running — to "You deliver within the Country...", to "?" and to "Okay". Saying
+# the same thing again never helps; offer the team instead.
+REPEAT_REPLY = ("I think I've covered that one — is there anything else I can help with? "
+                "If you'd like, I can pass your question on to the team.")
+_ASSISTANT_LINE_RE = re.compile(r"^Assistant[^:\n]*:\s?", re.MULTILINE)
+_CUSTOMER_LINE_RE = re.compile(r"^Customer[^:\n]*:", re.MULTILINE)
+
+
+def _norm_reply(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+
+def _repeats_last_reply(answer: str, history: str) -> bool:
+    """True when `answer` is (near enough) the assistant's previous message, word for word."""
+    starts = list(_ASSISTANT_LINE_RE.finditer(history or ""))
+    if not starts or len(_norm_reply(answer)) < 30:
+        return False
+    rest = history[starts[-1].end():]
+    nxt = _CUSTOMER_LINE_RE.search(rest)
+    last = _norm_reply(rest[:nxt.start()] if nxt else rest)
+    new = _norm_reply(answer)
+    import difflib
+    return new == last or difflib.SequenceMatcher(None, new, last).ratio() >= 0.92
+
+
 def _wants_collection(args: Dict[str, Any]) -> bool:
     return str((args or {}).get("fulfilment") or "").strip().lower() == "collection"
 
@@ -927,6 +953,8 @@ class CommerceAssistantSkill(BaseSkill):
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
             answer = substitute_if_leaked(answer, skill=self.name, customer=True, tenant_id=inp.tenant_id,
                                           tool_names=[t["function"]["name"] for t in TOOL_SPECS])
+            if _repeats_last_reply(answer, inp.conversation_history or ""):
+                answer = REPEAT_REPLY
             confidence = 0.8 if kb_context else 0.7
             # 2026-09-26: this skill quotes prices straight to paying customers from KB context
             # (the storefront price list) but, unlike commerce_admin.py, never checked a stated
@@ -1696,6 +1724,7 @@ class CommerceAssistantSkill(BaseSkill):
         product = None
         if re.match(r"^[a-z0-9-]+$", name):
             product = await service.get_product_by_slug(tenant_id, name, statuses={"active", "unlisted"})
+        by_slug = product is not None
         candidates: List[Dict[str, Any]] = []
         if not product:
             candidates = await service.list_products(tenant_id, in_stock_only=True, statuses={"active"})
@@ -1752,12 +1781,25 @@ class CommerceAssistantSkill(BaseSkill):
         # browse/list result, to avoid sending a flood of images per message.
         if ctx is not None and product.get("image_url"):
             ctx["media_url"] = product["image_url"]
-        return {
+        out = {
             "added": f"{product['name']} ({variant_label})" if variant_label else product["name"],
             "quantity": _fmt_qty(product, qty),
             "unit_price": f"R{unit_price_cents / 100:.2f}{unit}",
             "line_total": f"R{_line_cents(qty, unit_price_cents) / 100:.2f}",
         }
+        # 2026-09-24 (off-the-hook): "Atlantic Mackerel" silently became Atlantic Mackerel
+        # Fillets (1kg) — the customer wanted the whole fish and had to come back to say so.
+        notes = []
+        if name and not by_slug and set(_name_tokens(name)) != set(_name_tokens(product.get("name") or "")):
+            notes.append(f"The customer asked for '{name}'; you added {product['name']}, the closest "
+                         "product in stock. Say so plainly and offer to remove it if it isn't what "
+                         "they wanted.")
+        if args.get("quantity") in (None, ""):
+            notes.append(f"No quantity was given, so {_fmt_qty(product, qty)} was added — confirm "
+                         "the amount with the customer.")
+        if notes:
+            out["note"] = " ".join(notes)
+        return out
 
     async def _exec_view_cart(
         self, tenant_id: str, session_id: str, phone: Optional[str]
