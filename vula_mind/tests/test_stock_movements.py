@@ -23,6 +23,14 @@ class _Res:
         self.data = data
 
 
+class _In:
+    def __init__(self, vals):
+        self.vals = set(vals)
+
+    def __eq__(self, other):
+        return other in self.vals
+
+
 class _Q:
     def __init__(self, db, table):
         self.db, self.table, self.op, self.payload, self.filters = db, table, "select", None, []
@@ -42,6 +50,10 @@ class _Q:
         self.filters.append((col, val))
         return self
 
+    def in_(self, col, vals):
+        self.filters.append((col, _In(vals)))
+        return self
+
     def order(self, *_a, **_k):
         return self
 
@@ -54,10 +66,11 @@ class _Q:
 
     def execute(self):
         rows = self.db.tables.setdefault(self.table, [])
-        hit = [r for r in rows if all(r.get(c) == v for c, v in self.filters)]
+        hit = [r for r in rows if all(v == r.get(c) for c, v in self.filters)]
         if self.op == "insert":
-            rows.append(dict(self.payload))
-            return _Res([self.payload])
+            row = {"id": f"{self.table}-{len(rows) + 1}", **self.payload}
+            rows.append(row)
+            return _Res([dict(row)])
         if self.op == "update":
             for r in hit:
                 r.update(self.payload)
@@ -83,10 +96,10 @@ class FakeDB:
 
         class _Call:
             def execute(self_inner):
-                return _Res(db._apply(params))
+                return _Res(getattr(db, "_rpc_" + name)(params))
         return _Call()
 
-    def _apply(self, p):
+    def _rpc_apply_stock_change(self, p):
         if p["p_variant_id"]:
             rows = [r for r in self.tables.get("commerce_product_variants", [])
                     if r["id"] == p["p_variant_id"] and r["tenant_id"] == p["p_tenant_id"]

@@ -1370,6 +1370,187 @@ async def admin_lookup_barcode(tenant_id: str, barcode: str = Query(...)):
     return match
 
 
+# ── Stock tab: stock-takes, receiving, quick adjust, barcodes (migrations 182/183) ──────────
+
+async def _may_apply_stock(request: Request, tenant_id: str) -> bool:
+    """Staff can count; applying a count moves the books, so only the owner, a manager, a
+    master or the server key may. Same rule as the dashboard's `full` flag (team.me): a
+    signed-in member with no vula_team_members row is the owner."""
+    from config import settings as _settings
+    import hmac
+    key = request.headers.get("x-api-key", "")
+    if _settings.api_key and key and hmac.compare_digest(key, _settings.api_key):
+        return True
+    auth = request.headers.get("authorization", "")
+    if not auth:
+        return not _settings.api_key          # dev mode with no key configured
+    from vula.api.master_auth import _verify_jwt, _role_for_user
+    user = await _verify_jwt(auth.removeprefix("Bearer ").strip())
+    if not user or not user.get("id"):
+        return False
+    if _role_for_user(user["id"]) == "master":
+        return True
+    rows = (service._client().table("vula_team_members").select("role")
+            .eq("tenant_id", tenant_id).eq("email", user.get("email") or "").limit(1).execute().data or [])
+    return not rows or rows[0].get("role") in ("owner", "manager")
+
+
+def _count_error(exc: Exception) -> HTTPException:
+    msg = str(exc)
+    return HTTPException(status_code=404 if "not found" in msg else 409, detail=msg)
+
+
+@router.get("/{tenant_id}/admin/stock/counts")
+async def admin_list_stock_counts(tenant_id: str):
+    from vula.commerce import stock_counts
+    return {"counts": await stock_counts.list_counts(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/stock/counts")
+async def admin_start_stock_count(tenant_id: str, body: dict, request: Request):
+    from vula.commerce import stock_counts
+    return await stock_counts.create_count(tenant_id, (body or {}).get("note"), _actor(request))
+
+
+@router.get("/{tenant_id}/admin/stock/counts/{count_id}")
+async def admin_review_stock_count(tenant_id: str, count_id: str):
+    from vula.commerce import stock_counts
+    try:
+        return await stock_counts.review(tenant_id, count_id)
+    except stock_counts.CountError as exc:
+        raise _count_error(exc)
+
+
+@router.post("/{tenant_id}/admin/stock/counts/{count_id}/scans")
+async def admin_stock_count_scans(tenant_id: str, count_id: str, body: dict, request: Request):
+    """A batch of scans, possibly queued offline: [{scan_id, product_id, variant_id?, add?|set?}].
+    Re-sending a batch is safe — a scan_id already recorded changes nothing."""
+    from vula.commerce import stock_counts
+    scans = (body or {}).get("scans")
+    if not isinstance(scans, list):
+        raise HTTPException(status_code=400, detail="scans must be a list")
+    return {"results": await stock_counts.record_scans(tenant_id, count_id, scans, _actor(request))}
+
+
+@router.post("/{tenant_id}/admin/stock/counts/{count_id}/apply")
+async def admin_apply_stock_count(tenant_id: str, count_id: str, request: Request):
+    from vula.commerce import stock_counts
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can apply a stock count.")
+    try:
+        return await stock_counts.apply(tenant_id, count_id, _actor(request))
+    except stock_counts.CountError as exc:
+        raise _count_error(exc)
+
+
+@router.post("/{tenant_id}/admin/stock/counts/{count_id}/cancel")
+async def admin_cancel_stock_count(tenant_id: str, count_id: str):
+    from vula.commerce import stock_counts
+    try:
+        await stock_counts.cancel(tenant_id, count_id)
+    except stock_counts.CountError as exc:
+        raise _count_error(exc)
+    return {"ok": True}
+
+
+async def _set_cost(tenant_id: str, product_id: str, variant_id: Optional[str], cost_cents) -> None:
+    """Receiving with a unit cost keeps the product's cost price current (stock-take variance
+    and margins are valued at it). Best-effort: never blocks the stock booking."""
+    try:
+        cost = int(cost_cents)
+    except (TypeError, ValueError):
+        return
+    if cost <= 0:
+        return
+    try:
+        table = "commerce_product_variants" if variant_id else "commerce_products"
+        (service._client().table(table).update({"cost_cents": cost})
+         .eq("tenant_id", tenant_id).eq("id", variant_id or product_id).execute())
+    except Exception as exc:
+        log.debug("cost price update skipped (run migration 182?): %s", exc)
+
+
+@router.post("/{tenant_id}/admin/stock/receive")
+async def admin_receive_stock(tenant_id: str, body: dict, request: Request):
+    """Book a delivery: lines = [{product_id, variant_id?, quantity, unit_cost_cents?}]. With
+    po_id the purchase order is marked received with exactly these quantities."""
+    body = body or {}
+    lines = [ln for ln in (body.get("lines") or []) if isinstance(ln, dict) and ln.get("product_id")]
+    if not lines:
+        raise HTTPException(status_code=400, detail="Nothing to receive.")
+    actor = _actor(request)
+    booked, failed = [], []
+    if body.get("po_id"):
+        po = (service._client().table("commerce_purchase_orders").select("status")
+              .eq("tenant_id", tenant_id).eq("id", str(body["po_id"])).limit(1).execute().data or [])
+        if po and po[0].get("status") == "received":
+            raise HTTPException(status_code=409, detail="That purchase order has already been received.")
+        await admin_update_po_status(tenant_id, str(body["po_id"]),
+                                     {"status": "received", "received": lines}, request)
+        booked = [ln["product_id"] for ln in lines]
+    else:
+        for ln in lines:
+            qty = int(round(float(ln.get("quantity") or 0)))
+            if qty <= 0:
+                continue
+            after = await service.adjust_stock(
+                tenant_id, ln["product_id"], variant_id=ln.get("variant_id") or None, delta=qty,
+                reason="receive", ref_type="delivery", ref_id=(body.get("reference") or None),
+                actor=actor, note=(body.get("note") or None))
+            (booked if after is not None else failed).append(ln["product_id"])
+    for ln in lines:
+        if ln["product_id"] in booked and ln.get("unit_cost_cents") is not None:
+            await _set_cost(tenant_id, ln["product_id"], ln.get("variant_id") or None, ln["unit_cost_cents"])
+    return {"received": len(booked), "failed": failed}
+
+
+@router.post("/{tenant_id}/admin/stock/adjust")
+async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
+    """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""
+    body = body or {}
+    if not body.get("product_id") or (body.get("set") is None and body.get("add") is None):
+        raise HTTPException(status_code=400, detail="product_id and set or add are required")
+    after = await service.adjust_stock(
+        tenant_id, body["product_id"], variant_id=body.get("variant_id") or None,
+        set_to=body.get("set"), delta=body.get("add") if body.get("set") is None else None,
+        reason="adjust", ref_type="scan", actor=_actor(request), note=(body.get("note") or None))
+    if after is None:
+        raise HTTPException(status_code=404, detail="product not found")
+    return {"stock_quantity": after}
+
+
+@router.get("/{tenant_id}/admin/products/{product_id}/stock-movements")
+async def admin_stock_movements(tenant_id: str, product_id: str, variant_id: Optional[str] = None,
+                                limit: int = 20):
+    return {"movements": await service.list_stock_movements(tenant_id, product_id, variant_id,
+                                                            min(max(limit, 1), 100))}
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/barcode")
+async def admin_link_barcode(tenant_id: str, product_id: str, body: dict):
+    """Link a scanned barcode that matched nothing to this product (or one of its variants),
+    so the next scan finds it. A barcode already on another item is refused, not moved."""
+    code = str((body or {}).get("barcode") or "").strip()
+    if not code or len(code) > 64:
+        raise HTTPException(status_code=400, detail="barcode is required")
+    existing = await service.find_by_barcode(tenant_id, code)
+    if existing:
+        on = existing.get("variant") or existing.get("product") or {}
+        if on.get("id") not in (product_id, (body or {}).get("variant_id")):
+            name = (existing.get("product") or {}).get("name") or "another product"
+            raise HTTPException(status_code=409, detail=f"That barcode is already on {name}.")
+        return existing
+    variant_id = (body or {}).get("variant_id")
+    table = "commerce_product_variants" if variant_id else "commerce_products"
+    q = (service._client().table(table).update({"barcode": code})
+         .eq("tenant_id", tenant_id).eq("id", variant_id or product_id))
+    if variant_id:
+        q = q.eq("product_id", product_id)
+    if not (q.execute().data or []):
+        raise HTTPException(status_code=404, detail="product not found")
+    return await service.find_by_barcode(tenant_id, code)
+
+
 # ── In-portal admin assistant (chat to Vula from the dashboard) ───────────────
 
 class AssistantRequest(BaseModel):

@@ -35,6 +35,7 @@ export const MERCHANT_GROUPS = [
     { id: "sell", icon: "📦", label: "Sell", subtabs: [
       { id: "orders", icon: "📦", label: "Orders" },
       { id: "products", icon: "🐟", label: "Products" },
+      { id: "stock", icon: "📊", label: "Stock" },
       { id: "discounts", icon: "🏷️", label: "Discounts" },
       { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
       { id: "delivery", icon: "🛵", label: "Delivery" },
@@ -185,6 +186,7 @@ const MERCHANT_MODMAP = {
   customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft',
   discounts: 'products',
+  stock: 'products',        // the Stock tab counts and receives the same products
   onboarding: 'broadcasts',  // rides the same module key it was invisibly bundled under before the Broadcast/Onboarding split
   'email-campaigns': 'broadcasts',  // same gate as WhatsApp broadcast — both are bulk-outreach features
 };
