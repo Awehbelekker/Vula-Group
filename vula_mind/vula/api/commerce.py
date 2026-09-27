@@ -19,7 +19,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from vula.api.master_auth import require_auth
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -847,7 +847,7 @@ async def admin_list_products(tenant_id: str):
 
 
 @router.patch("/{tenant_id}/admin/products/{product_id}")
-async def admin_update_product(tenant_id: str, product_id: str, body: dict):
+async def admin_update_product(tenant_id: str, product_id: str, body: dict, request: Request):
     """Patch product — everything the merchant may edit (widened for migration 073 depth:
     gallery images, sale pricing, pack/weight/serves, archive, ordering)."""
     allowed = {"in_stock", "price_cents", "name", "description", "notes",
@@ -864,6 +864,17 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict):
     # Keep the cover in sync: first gallery image becomes image_url unless explicitly set.
     if "images" in update and update["images"] and "image_url" not in update:
         update["image_url"] = update["images"][0]
+    # A stock number goes through adjust_stock (migration 182) so the change is atomic and
+    # recorded. None still means "stop tracking stock" and is written as-is.
+    if update.get("stock_quantity") is not None:
+        qty = int(update.pop("stock_quantity"))
+        update.pop("in_stock", None)       # follows the quantity
+        after = await service.adjust_stock(tenant_id, product_id, set_to=qty, reason="adjust",
+                                           ref_type="dashboard", actor=_actor(request))
+        if after is None:
+            raise HTTPException(status_code=404, detail="product not found")
+        if not update:
+            return await service.get_product(tenant_id, product_id)
     result = await service.update_product(tenant_id, product_id, update)
     return result
 
@@ -1275,6 +1286,24 @@ async def admin_generate_cooking_tips(tenant_id: str, product_id: str):
 
 # ── Product variants (migration 087, Phase 4) ─────────────────────────────────
 
+def _actor(request: Optional[Request]) -> str:
+    """Who is making a dashboard change, for the stock movement record: the signed-in user's
+    email from their token (already verified by the tenant guard before a route runs), else
+    "api" for the server key. A label only — never used for authorisation."""
+    auth = (request.headers.get("authorization", "") if request is not None else "")
+    token = auth.removeprefix("Bearer ").strip()
+    if token.count(".") == 2:
+        try:
+            import base64
+            import json as _json
+            part = token.split(".")[1]
+            claims = _json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+            return str(claims.get("email") or claims.get("sub") or "dashboard")[:120]
+        except Exception:
+            return "dashboard"
+    return "api"
+
+
 VARIANT_FIELDS = {"option_values", "sku", "barcode", "price_cents", "stock_quantity",
                   "in_stock", "sort_order", "archived", "reorder_threshold", "reorder_qty",
                   "default_supplier_id"}
@@ -1304,10 +1333,20 @@ async def admin_create_variant(tenant_id: str, product_id: str, body: dict):
 
 
 @router.patch("/{tenant_id}/admin/products/{product_id}/variants/{variant_id}")
-async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str, body: dict):
+async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str, body: dict,
+                               request: Request):
     data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
     if not data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    if data.get("stock_quantity") is not None:
+        qty = int(data.pop("stock_quantity"))
+        data.pop("in_stock", None)
+        after = await service.adjust_stock(tenant_id, product_id, variant_id=variant_id, set_to=qty,
+                                           reason="adjust", ref_type="dashboard", actor=_actor(request))
+        if after is None:
+            raise HTTPException(status_code=404, detail="variant not found")
+        if not data:
+            return {"id": variant_id, "stock_quantity": after, "in_stock": after > 0}
     try:
         return await service.update_variant(tenant_id, variant_id, data)
     except Exception as exc:
@@ -1322,13 +1361,13 @@ async def admin_delete_variant(tenant_id: str, product_id: str, variant_id: str)
 
 @router.get("/{tenant_id}/admin/products/lookup")
 async def admin_lookup_barcode(tenant_id: str, barcode: str = Query(...)):
-    """Barcode scan lookup — Smart Scanner POS prep (not yet consumed by anything; adding it
-    now means the future scanner integration is a pure consumer, not another schema change)."""
+    """Barcode scan lookup (the Stock tab's camera scanner): the product — or the variant and
+    its product — carrying this barcode. 404 when nothing does, so the scanner can offer to
+    link the barcode to a product."""
     match = await service.find_by_barcode(tenant_id, barcode)
     if not match:
-        raise HTTPException(status_code=404, detail=f"No variant found for barcode '{barcode}'")
-    product = match.pop("commerce_products", None)
-    return {"variant": match, "product": product}
+        raise HTTPException(status_code=404, detail=f"No product found for barcode '{barcode}'")
+    return match
 
 
 # ── In-portal admin assistant (chat to Vula from the dashboard) ───────────────
@@ -6146,7 +6185,7 @@ async def admin_create_purchase_order(tenant_id: str, body: dict):
 
 
 @router.patch("/{tenant_id}/admin/purchase-orders/{po_id}/status")
-async def admin_update_po_status(tenant_id: str, po_id: str, body: dict):
+async def admin_update_po_status(tenant_id: str, po_id: str, body: dict, request: Request):
     """draft → sent → received (bumps stock_quantity for every line item) | cancelled."""
     status = (body or {}).get("status")
     if status not in ("draft", "sent", "received", "cancelled"):
@@ -6162,13 +6201,20 @@ async def admin_update_po_status(tenant_id: str, po_id: str, body: dict):
         patch["sent_at"] = service._now()
     if status == "received" and po["status"] != "received":
         patch["received_at"] = service._now()
-        for it in (po.get("items") or []):
+        # 2026-09-27: was a read-modify-write on commerce_products looked up by id alone (not
+        # tenant-scoped), ignoring variants and in_stock. Now atomic, tenant-scoped, recorded,
+        # and a partial delivery can pass what actually arrived: body.received = [{product_id,
+        # variant_id?, quantity}] overrides the ordered quantities.
+        received = (body or {}).get("received")
+        lines = received if isinstance(received, list) else (po.get("items") or [])
+        for it in lines:
+            qty = int(round(float(it.get("quantity") or 0)))
+            if not it.get("product_id") or qty <= 0:
+                continue
             try:
-                prod = (db.table("commerce_products").select("stock_quantity")
-                        .eq("id", it["product_id"]).limit(1).execute().data or [None])[0]
-                if prod is not None:
-                    new_qty = (prod.get("stock_quantity") or 0) + int(it.get("quantity") or 0)
-                    db.table("commerce_products").update({"stock_quantity": new_qty}).eq("id", it["product_id"]).execute()
+                await service.adjust_stock(tenant_id, it["product_id"], variant_id=it.get("variant_id"),
+                                           delta=qty, reason="receive", ref_type="purchase_order",
+                                           ref_id=po_id, actor=_actor(request))
             except Exception as exc:
                 log.warning("PO receive stock bump failed for %s: %s", it.get("product_id"), exc)
     result = db.table("commerce_purchase_orders").update(patch).eq("tenant_id", tenant_id).eq("id", po_id).execute()

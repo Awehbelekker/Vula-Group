@@ -84,17 +84,28 @@ def _stock_service(monkeypatch, readback_qty):
     async def get_product(tid, pid):
         return {"id": "p1", "stock_quantity": readback_qty}
 
+    calls = []
+
+    async def adjust_stock(tid, pid, **kw):
+        calls.append((tid, pid, kw))
+        return kw.get("set_to")
+
+    monkeypatch.setattr(ca.service, "adjust_stock", adjust_stock)
     monkeypatch.setattr(ca.service, "get_product_by_slug", get_product_by_slug)
     monkeypatch.setattr(ca.service, "list_products", list_products)
     monkeypatch.setattr(ca.service, "update_product", update_product)
     monkeypatch.setattr(ca.service, "get_product", get_product)
+    return calls
 
 
 @pytest.mark.asyncio
 async def test_update_stock_readback_confirmed(skill, emits, monkeypatch):
-    _stock_service(monkeypatch, readback_qty=20)
+    calls = _stock_service(monkeypatch, readback_qty=20)
     res = await skill._update_stock(TID, "hake", 20, confirm=True)
     assert res.get("verified") is True and res["stock_quantity"] == 20
+    # Goes through the atomic, movement-logging RPC — not a plain product PATCH.
+    assert calls == [(TID, "p1", {"set_to": 20, "reason": "adjust", "ref_type": "whatsapp",
+                                  "actor": "whatsapp"})]
     assert _gate_events(emits)[0]["outcome"] == "confirmed"
 
 

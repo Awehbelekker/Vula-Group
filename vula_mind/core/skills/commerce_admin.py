@@ -1676,7 +1676,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))
             if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""), args.get("payment_method"), bool(args.get("confirm")))
             if name == "stock_status":       return await self._stock_status(tid, bool(args.get("low_only")))
-            if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
+            if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")), actor=ctx.get("phone"))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
             if name == "find_document":      return await self._find_document(tid, args)
             if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
@@ -1840,7 +1840,8 @@ class CommerceAdminSkill(BaseSkill):
             rows.append({"product": p["name"], "qty": qty, "in_stock": p.get("in_stock")})
         return rows or {"message": "All products well stocked." if low_only else "No products."}
 
-    async def _update_stock(self, tid: str, product_name: str, quantity: int, confirm: bool = False) -> Dict[str, Any]:
+    async def _update_stock(self, tid: str, product_name: str, quantity: int, confirm: bool = False,
+                            actor: Optional[str] = None) -> Dict[str, Any]:
         name = (product_name or "").strip()
         prod = None
         if re.match(r"^[a-z0-9-]+$", name):
@@ -1854,7 +1855,9 @@ class CommerceAdminSkill(BaseSkill):
             return {"preview": True, "product": prod["name"],
                     "current_stock": prod.get("stock_quantity"), "new_stock": int(quantity),
                     "message": "Confirm to apply (call again with confirm=true)."}
-        await service.update_product(tid, prod["id"], {"stock_quantity": int(quantity), "in_stock": int(quantity) > 0})
+        # Atomic and recorded (migration 182) — who set it, from WhatsApp.
+        await service.adjust_stock(tid, prod["id"], set_to=int(quantity), reason="adjust",
+                                   ref_type="whatsapp", actor=actor or "whatsapp")
         result = {"updated": prod["name"], "stock_quantity": int(quantity)}
         if settings.readback_verify_enabled:
             p2 = await service.get_product(tid, prod["id"])
