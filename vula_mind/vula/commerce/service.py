@@ -6,6 +6,7 @@ Prices always stored as integer cents (ZAR). Never floats.
 """
 from __future__ import annotations
 
+import asyncio
 import difflib
 import hashlib
 import logging
@@ -2928,9 +2929,146 @@ def _party_of(fields: Dict[str, Any]) -> Optional[str]:
     return fields.get("supplier") or fields.get("payee_name") or fields.get("customer")
 
 
+# The supplier line older extractions only wrote into the summary ("This is a tax invoice from
+# SOLID CAPE (PTY) LTD to AWEH BELEKKER T/A DIGG for ..."): 91 of digg-demo's invoices, 2026-09-27.
+_SUMMARY_PARTY_RE = re.compile(
+    r"\b(?:invoice|note|quote|estimate|receipt|statement|document)\s+from\s+(.+?)\s+"
+    r"(?:to|for|dated|totall?ing|with|listing)\b", re.IGNORECASE)
+
+
+def _summary_party(summary: str) -> Optional[str]:
+    m = _SUMMARY_PARTY_RE.search(summary or "")
+    name = m.group(1).strip(" ,.") if m else ""
+    return name if 2 <= len(name) <= 80 else None
+
+
+def _canonical_party(name: str) -> str:
+    """One display name per supplier across spelling variants: "CITY BI (PTY) LTD T/A (CITY)
+    BUILD IT" and "CITY BUILD IT" group together (trading name wins), as do "Gardens Handiman
+    Centre" and "GARDENS HANDIMAN CENTRE"."""
+    n = re.sub(r"\s+", " ", name or "").strip()
+    ta = re.search(r"\bT/A\b\s*(.+)$", n, re.IGNORECASE)
+    if ta:
+        n = ta.group(1)
+    n = re.sub(r"[()]", " ", n)
+    n = re.sub(r"\b(pty|ltd|cc|inc|limited|proprietary)\b\.?", " ", n, flags=re.IGNORECASE)
+    n = re.sub(r"\s+", " ", n).strip(" .,-")
+    return n.upper() if n else ""
+
+
+_WAMID_RE = re.compile(r"^(image|document|receipt|audio|video)-wamid\.", re.IGNORECASE)
+
+
+def _doc_ref(filename: str, fields: Optional[Dict[str, Any]] = None) -> str:
+    """A human invoice reference for a filed document: the extracted number when there is one,
+    else the number in the filename ("Inv_51934_from_Teck..." -> 51934, "POS Account Sale
+    24-225537.pdf" -> 24-225537), else "WhatsApp photo" for a Meta media-id filename (never
+    the raw "image-wamid.HBg..." id the 2026-09-26 workbook showed), else the tidied filename."""
+    f = fields or {}
+    for k in ("invoice_number", "document_number", "reference", "reference_number"):
+        if f.get(k):
+            return str(f[k])[:40]
+    name = filename or ""
+    if _WAMID_RE.match(name):
+        return "WhatsApp photo"
+    stem = re.sub(r"\.(pdf|jpe?g|png|heic|webp|docx?|xlsx?)$", "", name, flags=re.IGNORECASE)
+    m = re.search(r"(?<![A-Za-z])(INV-?\d{3,}(?:-\d+)*)", stem, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    m = (re.search(r"(?<![A-Za-z])(?:inv(?:oice)?|no)[\s_#:.-]*(\d[\d-]{1,}\d)", stem, re.IGNORECASE)
+         or re.search(r"#\s*(\d[\d-]*\d)", stem)
+         or re.search(r"(\d{2,}(?:-\d+)+|\d{4,})", stem))
+    if m:
+        return m.group(1)
+    return re.sub(r"[_]+", " ", stem).strip()[:60] or "document"
+
+
+def _export_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    """The per-document facts a spreadsheet export needs, integer cents throughout. Refunds are
+    signed negative here, so a SUM over the column equals the server total."""
+    f = r.get("fields") or {}
+    refund = _is_refund_row(r)
+    cents = _document_amount_cents(f)
+    vat = _num(f.get("vat_cents"))
+    sign = -1 if refund else 1
+    party = _party_of(f)
+    inferred = False
+    if not party:
+        party = _summary_party(r.get("summary") or "")
+        inferred = bool(party)
+    lines = []
+    for li in (f.get("line_items") or []):
+        if not isinstance(li, dict) or not str(li.get("description") or "").strip():
+            continue
+        qty = _num(li.get("quantity"))
+        unit = _num(li.get("unit_price_cents"))
+        tot = _num(li.get("total_cents"))
+        if tot is None and qty is not None and unit is not None:
+            tot = qty * unit
+        lines.append({"description": str(li["description"]).strip(), "quantity": qty,
+                      "unit_cents": int(round(unit)) if unit is not None else None,
+                      "total_cents": sign * int(round(abs(tot))) if tot is not None else None})
+    return {
+        "date": str(f.get("date") or f.get("invoice_date") or r.get("created_at") or "")[:10],
+        "ref": _doc_ref(r.get("filename") or "", f),
+        "party": _canonical_party(party or "") or "Unknown supplier",
+        "party_inferred": inferred,
+        "category": r.get("category") or "",
+        "is_refund": refund,
+        "total_cents": sign * abs(cents) if cents is not None else None,
+        "vat_cents": sign * int(round(abs(vat))) if vat is not None and cents is not None else None,
+        "lines": lines,
+        "photo": bool(_WAMID_RE.match(r.get("filename") or "")),
+    }
+
+
+def for_model(result: Any) -> Any:
+    """A tool result as a model may see it: private `_`-prefixed keys (e.g. _export_rows, every
+    fetched document for a spreadsheet) dropped. Apply wherever a result is serialised into a
+    prompt."""
+    if isinstance(result, dict):
+        return {k: v for k, v in result.items() if not str(k).startswith("_")}
+    return result
+
+
 def _pg_term(text: str) -> str:
     """Free text made safe to embed in a PostgREST or_() filter — commas/parens are its syntax."""
     return re.sub(r"[,()]", " ", text or "").strip()[:100]
+
+
+# Words that don't identify a supplier ("GARDENS HANDIMAN CENTRE" is identified by "gardens
+# handiman"), so a fuzzy mention needn't include them.
+_NAME_TAIL_WORDS = {"centre", "center", "store", "stores", "shop", "hardware", "group", "trading",
+                    "co", "company", "sa", "africa", "south", "and", "&"}
+
+
+def _fuzzy_mention(question_norm: str, name_norm: str) -> bool:
+    """True when every distinctive word of a supplier name appears, in order, as consecutive
+    words of the question — each allowed one typo's worth of difference (≥0.8). 2026-09-26
+    (digg-demo): "all invoice for gardens handyman" never matched GARDENS HANDIMAN CENTRE, fell
+    to the model, and the owner got a fabricated email result. A one-word name must be ≥5
+    letters and match at ≥0.85, so "sand" or "tile" never resolve to a supplier."""
+    sig = [w for w in name_norm.split() if w not in _NAME_TAIL_WORDS]
+    words = question_norm.split()
+    if not sig or not words:
+        return False
+    if len(sig) == 1 and (len(sig[0]) < 5):
+        return False
+    bar = 0.85 if len(sig) == 1 else 0.8
+    for i in range(len(words) - len(sig) + 1):
+        if all(difflib.SequenceMatcher(None, words[i + j], w).ratio() >= bar for j, w in enumerate(sig)):
+            return True
+    return False
+
+
+def mentions_supplier_name(question: str, names: List[str]) -> bool:
+    """`question` names one of `names` — as whole words, or a close misspelling of them."""
+    nq = _norm_name(question)
+    padded = f" {nq} "
+    for n in (_norm_name(x) for x in names):
+        if n and (f" {n} " in padded or _fuzzy_mention(nq, n)):
+            return True
+    return False
 
 
 async def _resolve_supplier_names(tenant_id: str, query: str) -> List[str]:
@@ -2954,6 +3092,13 @@ async def _resolve_supplier_names(tenant_id: str, query: str) -> List[str]:
         norms = [_norm_name(n) for n in names]
         if any(n and (n == nq or (len(n) >= 3 and f" {n} " in padded)) for n in norms):
             return names
+    for s in suppliers:
+        names = [n for n in [s.get("name")] + list(s.get("aliases") or []) if n]
+        if any(n and _fuzzy_mention(nq, _norm_name(n)) for n in names):
+            return names
+    for s in suppliers:
+        names = [n for n in [s.get("name")] + list(s.get("aliases") or []) if n]
+        norms = [_norm_name(n) for n in names]
         score = max((difflib.SequenceMatcher(None, nq, n).ratio() for n in norms if n), default=0.0)
         if score > best_score:
             best, best_score = names, score
@@ -3066,7 +3211,8 @@ def _num(v: Any) -> Optional[float]:
         return None
 
 
-def _aggregate_line_items(rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+def _aggregate_line_items(rows: List[Dict[str, Any]],
+                          cap: Optional[int] = _MATERIALS_RETURN_CAP) -> Tuple[List[Dict[str, Any]], int]:
     """Roll the invoices' extracted line_items up into one materials summary: the same item
     (normalised description) merged across lines and documents, with summed quantity and
     integer-cent spend and the number of documents it appears on. Refund rows subtract. Returns
@@ -3123,7 +3269,7 @@ def _aggregate_line_items(rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
         if units and max(units) > 1.5 * min(units):
             item["unit_price_varies"] = True
         items.append(item)
-    return items[:_MATERIALS_RETURN_CAP], len(items)
+    return (items[:cap] if cap else items), len(items)
 
 
 def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3169,8 +3315,10 @@ def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     if len(rows) >= _FILED_SEARCH_FETCH_CAP:
         notes.append(f"The search stopped at {_FILED_SEARCH_FETCH_CAP} documents — there may "
                      "be more; suggest narrowing by date or category.")
-    materials, distinct = _aggregate_line_items(rows)
+    all_materials, distinct = _aggregate_line_items(rows, cap=None)
+    materials = all_materials[:_MATERIALS_RETURN_CAP]
     if materials:
+        out["_materials_all"] = all_materials
         out["materials"] = materials
         out["materials_distinct"] = distinct
         notes.append("materials rolls up every line item across ALL matches (same item merged, "
@@ -3190,6 +3338,9 @@ def _filed_rows_result(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     # result (email_admin did, at 1,800 chars — 2026-09-23) then loses surplus rows, never the
     # total, the notes or the materials roll-up.
     out["matches"] = out.pop("matches")
+    # Every fetched document (not only the first _FILED_SEARCH_RETURN_CAP) for a spreadsheet
+    # export — private: for_model() drops it before a model sees the result.
+    out["_export_rows"] = [_export_row(r) for r in rows]
     return out
 
 
@@ -3227,6 +3378,37 @@ def _core_search_term(query: str) -> str:
     words = re.findall(r"[\w'&.-]+", query or "")
     core = [w for w in words if w.lower().strip("'") not in _QUERY_FILLER]
     return " ".join(core).strip()
+
+
+# Everything an "all invoices" export request says besides a supplier name. 2026-09-26 (digg-
+# demo): "Please supply me all invoice and material with costs In a excel sheet" named no
+# supplier, the model searched its own words, and the owner got 2 unrelated documents in a
+# workbook titled "invoice and material with costs" — out of ~200 invoices from ~40 suppliers.
+_EXPORT_FILLER = _QUERY_FILLER | {
+    "in", "on", "as", "at", "by", "into", "this", "that", "these", "those", "it", "them", "my",
+    "so", "just", "only", "also", "too", "sorry", "pls", "plz", "thanks", "thank", "you", "ok",
+    "okay", "now", "again", "more", "rest", "everything", "full", "complete", "entire", "whole",
+    "send", "supply", "pull", "fetch", "share", "provide", "could", "would", "like", "want",
+    "is", "are", "be", "do", "did", "how", "much", "cost", "costs", "costing", "price", "prices",
+    "amount", "amounts", "item", "items", "line", "lines", "excel", "spreadsheet", "sheet",
+    "xlsx", "xls", "csv", "file", "files", "workbook", "break", "down", "detail", "details",
+    "detailed", "business", "company", "suppliers", "supplier", "each", "per", "every", "up",
+    "one", "copy", "format", "make", "create", "put", "together", "report",
+}
+
+
+def names_no_party(question: str) -> bool:
+    """True when `question` carries nothing but request words — no supplier, project or other
+    distinctive term. Typos of a request word ("matirial", "invoce") still count as request
+    words (difflib ≥ 0.8), so a misspelling doesn't read as a supplier name."""
+    words = [w.lower().strip("'.-") for w in re.findall(r"[A-Za-z][\w'&-]*", question or "")]
+    for w in words:
+        if not w or w in _EXPORT_FILLER or len(w) <= 2:
+            continue
+        if any(difflib.SequenceMatcher(None, w, f).ratio() >= 0.8 for f in _EXPORT_FILLER if len(f) >= 4):
+            continue
+        return False
+    return bool(words)
 
 
 def _name_patterns(core: str) -> List[str]:
@@ -3547,14 +3729,117 @@ async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
         xlsx_bytes = render_supplier_history_xlsx(result, supplier)
         if not xlsx_bytes:
             return False
-        from vula.api.whatsapp import _send_invoice_document
-        safe_name = re.sub(r"[^A-Za-z0-9]+", "_", supplier).strip("_") or "supplier"
-        return await _send_invoice_document(
-            phone, xlsx_bytes, f"{safe_name}_history.xlsx", "", tenant_id,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        return await _send_xlsx(tenant_id, phone, xlsx_bytes, supplier)
     except Exception as exc:
         logger.warning("supplier-history xlsx send failed for %s: %s", tenant_id, exc)
         return False
+
+
+async def _send_xlsx(tenant_id: str, phone: str, xlsx_bytes: bytes, label: str) -> bool:
+    from vula.api.whatsapp import _send_invoice_document
+    safe_name = re.sub(r"[^A-Za-z0-9]+", "_", _canonical_party(label) or label).strip("_") or "Supplier"
+    return await _send_invoice_document(
+        phone, xlsx_bytes, f"{safe_name.title()}_invoices_{_today_iso()}.xlsx", "", tenant_id,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def supplier_label(result: Dict[str, Any]) -> Optional[str]:
+    """The supplier a find_filed_document result is about: the resolved supplier, or the one
+    party every priced match shares. None when the matches don't agree on one — then the result
+    must not be presented (or exported) as one supplier's history, and never under the owner's
+    own search words (2026-09-26: a workbook titled "invoice and material with costs")."""
+    if result.get("resolved_supplier"):
+        return result["resolved_supplier"]
+    parties = {_canonical_party(m.get("party") or "") for m in result.get("matches") or []
+               if m.get("amount") is not None}
+    parties.discard("")
+    return next(iter(parties)) if len(parties) == 1 else None
+
+
+# "all invoices", "every invoice", "all the invoices and materials" — with names_no_party(), the
+# owner wants every supplier (Ian, 2026-09-27), not whichever few a fuzzy search happens to hit.
+_ALL_INVOICES_RE = re.compile(
+    r"\b(all|every|everything)\b[^.?!]{0,40}\binvo[a-z]*\b|\binvo[a-z]*\b[^.?!]{0,20}\b(all|every)\b",
+    re.IGNORECASE)
+_ALL_INVOICES_FETCH_CAP = 2000
+
+
+def _all_invoice_rows(tenant_id: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    page = 1000
+    while len(out) < _ALL_INVOICES_FETCH_CAP:
+        chunk = (_client().table("vula_filed_documents")
+                 .select("id,filename,category,summary,fields,created_at")
+                 .eq("tenant_id", tenant_id).eq("category", "Invoice")
+                 .order("created_at", desc=True)
+                 .range(len(out), len(out) + page - 1).execute().data or [])
+        out += chunk
+        if len(chunk) < page:
+            break
+    return out
+
+
+async def answer_all_invoices(tenant_id: str, question: str, phone: str = "") -> Optional[str]:
+    """Every filed supplier invoice, grouped by supplier, written without a model — for an
+    "all invoices" request that names no supplier. Sends the full workbook when the owner asked
+    for Excel. None when the question isn't that request (the caller carries on)."""
+    if not (_ALL_INVOICES_RE.search(question or "") and names_no_party(question)):
+        return None
+    try:
+        raw = await asyncio.to_thread(_all_invoice_rows, tenant_id)
+    except Exception as exc:
+        logger.warning("answer_all_invoices fetch failed for %s: %s", tenant_id, exc)
+        return None
+    if not raw:
+        return "I couldn't find any supplier invoices filed yet — send or forward them here and I'll file them."
+    rows = [_export_row(r) for r in raw]
+    priced = [r for r in rows if r["total_cents"] is not None]
+    total = sum(r["total_cents"] for r in priced)
+    refunds = sum(1 for r in priced if r["is_refund"])
+    groups: Dict[str, List[int]] = {}
+    for r in rows:
+        g = groups.setdefault(r["party"], [0, 0])
+        g[0] += 1
+        g[1] += r["total_cents"] or 0
+    xlsx_sent = False
+    if phone and _FILE_EXPORT_RE.search(question or ""):
+        try:
+            from vula.commerce.xlsx import render_invoices_xlsx
+            materials, _ = _aggregate_line_items(raw, cap=None)
+            data = render_invoices_xlsx(rows, "All suppliers", materials=materials, by_supplier=True)
+            xlsx_sent = bool(data) and await _send_xlsx(tenant_id, phone, data, "All suppliers")
+        except Exception as exc:
+            logger.warning("all-invoices xlsx send failed for %s: %s", tenant_id, exc)
+    head = (f"*All suppliers*: {len(rows)} invoice{'s' if len(rows) != 1 else ''} from "
+            f"{len(groups)} supplier{'s' if len(groups) != 1 else ''}, total spend *R{total / 100:,.2f}*")
+    if refunds:
+        head += f" (after {refunds} refund{'s' if refunds != 1 else ''})"
+    lines = [head + "."]
+    if _FILE_EXPORT_RE.search(question or ""):
+        lines.append("📎 Sent every invoice, line item and a materials summary as an Excel file — "
+                     "check your WhatsApp attachments." if xlsx_sent else
+                     "📎 Couldn't send the Excel file this time — the summary is below; ask again "
+                     "in a minute and I'll retry.")
+    missing = len(rows) - len(priced)
+    if missing:
+        lines.append(f"⚠️ {missing} invoice{'s have' if missing != 1 else ' has'} no amount on file "
+                     f"and {'are' if missing != 1 else 'is'} not in that total.")
+    if len(raw) >= _ALL_INVOICES_FETCH_CAP:
+        lines.append(f"⚠️ Stopped at the {_ALL_INVOICES_FETCH_CAP} most recent invoices.")
+    lines += ["", "*Biggest suppliers*"]
+    ranked = sorted(groups.items(), key=lambda kv: kv[1][1], reverse=True)
+    for name, (n, cents) in ranked[:10]:
+        lines.append(f"• {name} — {n} invoice{'s' if n != 1 else ''} — "
+                     + (f"R{cents / 100:,.2f}" if cents else "no amounts on file"))
+    if len(ranked) > 10:
+        lines.append(f"…and {len(ranked) - 10} more supplier{'s' if len(ranked) - 10 != 1 else ''}"
+                     + (" (all in the spreadsheet)." if xlsx_sent else "."))
+    lines.append("Ask for any one supplier by name for its full list and materials.")
+    return "\n".join(lines)
 
 
 def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
@@ -3643,12 +3928,12 @@ async def answer_supplier_history(tenant_id: str, question: str, phone: str = ""
 
     `phone` (the WhatsApp number to send an .xlsx to, when asked for one — see
     send_supplier_history_xlsx) is optional so this stays callable without it (e.g. tests)."""
-    padded = f" {_norm_name(question)} "
     names = await _resolve_supplier_names(tenant_id, question)
-    # Whole-word mentions only — _resolve_supplier_names also accepts a fuzzy whole-query match,
-    # which is fine for a search box but not for answering without a model.
-    if not any(n and f" {n} " in padded for n in (_norm_name(x) for x in names)):
-        return None
+    # Whole-word (or close-misspelling) mentions only — _resolve_supplier_names also accepts a
+    # fuzzy whole-query match, which is fine for a search box but not for answering without a model.
+    if not mentions_supplier_name(question, names):
+        # No supplier named: "all invoices ..." means every supplier (Ian, 2026-09-27).
+        return await answer_all_invoices(tenant_id, question, phone=phone)
     result = await find_filed_document(tenant_id, names[0], category="Invoice")
     xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question, result, names[0])
     return _with_period_note(

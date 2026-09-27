@@ -22,8 +22,8 @@ from config import settings
 from core.llm_router import is_local_model, resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, tool_source, unverified_prices,
-    wrong_arithmetic,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, substitute_if_leaked, tool_source,
+    unverified_prices, wrong_arithmetic,
 )
 from vula.commerce import service
 
@@ -267,6 +267,21 @@ def _is_clear_confirmation(message: str) -> bool:
     msg = (message or "").strip()
     return (bool(_CONFIRM_RE.search(msg)) and not _CHANGE_RE.search(_NO_CHANGE_RE.sub(" ", msg))
             and len(msg.split()) <= 12)
+
+
+# 2026-09-25 (off-the-hook): "How do I add product to my cart" got "I can't answer that" — the
+# model refused a question about the shop's own ordering. It has one right answer, so it's given
+# without a model.
+_HOW_TO_ORDER_RE = re.compile(
+    r"\bhow\s+(do|can|would|should)\s+i\s+(add|order|buy|place|put|get|check\s*out|pay)\b"
+    r"(?![^?.!]*\b(track|cancel|refund|return|change)\b)|"
+    r"\bhow\s+(does|do)\s+(ordering|the\s+cart|this|it)\s+work\b",
+    re.IGNORECASE)
+HOW_TO_ORDER_REPLY = (
+    "Easy — just tell me what you'd like and how much, e.g. \"2kg hake and 1kg prawns\". "
+    "I'll add it to your cart and show you the total. Say \"view cart\" anytime to check it, "
+    "and \"place order\" when you're ready — I'll confirm delivery or collection and payment "
+    "before anything is placed.")
 
 
 def _wants_collection(args: Dict[str, Any]) -> bool:
@@ -874,6 +889,8 @@ class CommerceAssistantSkill(BaseSkill):
 
     # ── Entry point ──────────────────────────────────────────────────────────
     async def run(self, inp: SkillInput) -> SkillOutput:
+        if _HOW_TO_ORDER_RE.search(inp.question or "") and not _is_booking_focused(inp.tenant_id):
+            return SkillOutput(answer=HOW_TO_ORDER_REPLY, skill_name=self.name, confidence=0.95)
         ctx = {
             "tenant_id": inp.tenant_id,
             "session_id": (
@@ -908,6 +925,8 @@ class CommerceAssistantSkill(BaseSkill):
             if not answer:
                 raise RuntimeError("empty answer from agent loop")
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
+            answer = substitute_if_leaked(answer, skill=self.name, customer=True, tenant_id=inp.tenant_id,
+                                          tool_names=[t["function"]["name"] for t in TOOL_SPECS])
             confidence = 0.8 if kb_context else 0.7
             # 2026-09-26: this skill quotes prices straight to paying customers from KB context
             # (the storefront price list) but, unlike commerce_admin.py, never checked a stated

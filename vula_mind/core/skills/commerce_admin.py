@@ -35,7 +35,7 @@ from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
-    need_info_message, tool_source, unverified_prices, wrong_arithmetic,
+    need_info_message, substitute_if_leaked, tool_source, unverified_prices, wrong_arithmetic,
 )
 from vula.commerce import service
 
@@ -1177,9 +1177,17 @@ async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any]
     if tool != "find_document" or not isinstance(result, dict):
         return None
     if looks_like_supplier_history_question(question or ""):
-        supplier = result.get("resolved_supplier") or (args or {}).get("query") or ""
-        xlsx_sent = await service.send_supplier_history_xlsx(tenant_id, phone, question or "",
-                                                              result, supplier)
+        # Never label (or name the file) after the model's own search words — 2026-09-26.
+        supplier = service.supplier_label(result)
+        if not supplier:
+            everything = await service.answer_all_invoices(tenant_id, question or "", phone=phone)
+            if everything:
+                return everything
+            q = (args or {}).get("query") or ""
+            supplier = "" if service.names_no_party(q) else q
+        xlsx_sent = (await service.send_supplier_history_xlsx(tenant_id, phone, question or "",
+                                                               result, supplier)
+                     if supplier else False)
         return service.format_supplier_history_reply(
             result, query=(args or {}).get("query") or "", question=question or "",
             xlsx_sent=xlsx_sent)
@@ -1247,6 +1255,8 @@ class CommerceAdminSkill(BaseSkill):
             # 2026-08-22: a real WhatsApp reply was ~1000 literal '!' characters, sent straight
             # to the owner — nothing caught it. See core.llm_router.looks_degenerate.
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
+            answer = substitute_if_leaked(answer, skill=self.name, tenant_id=inp.tenant_id,
+                                          tool_names=[t["function"]["name"] for t in tools])
             # 2026-08-31: a real transcript showed a specific price (R129.90/m²) stated with
             # total confidence that appeared nowhere in what lookup_business_info actually
             # returned — the adversarial verifier had that same text as grounding and still
@@ -1518,7 +1528,7 @@ class CommerceAdminSkill(BaseSkill):
                         return direct
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content": (
-                        f"[tool {name} returned]:{fence('TOOL_RESULT', json.dumps(result, default=str))}\n"
+                        f"[tool {name} returned]:{fence('TOOL_RESULT', json.dumps(service.for_model(result), default=str))}\n"
                         "Reply to the owner in plain, short WhatsApp language using this data. "
                         "Do not output JSON or tool calls."
                     )})
@@ -1588,7 +1598,7 @@ class CommerceAdminSkill(BaseSkill):
                     return direct
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "name": tc.function.name,
-                                 "content": fence('TOOL_RESULT', json.dumps(result, default=str))})
+                                 "content": fence('TOOL_RESULT', json.dumps(service.for_model(result), default=str))})
 
         # Final pass — force a plain-language answer (no tools available now).
         # 2026-08-22: a real transcript showed this exact call fabricate a full "I've created an
@@ -1622,7 +1632,7 @@ class CommerceAdminSkill(BaseSkill):
                 model=model,
                 messages=[
                     {"role": "system", "content": "Summarise this data for a shop owner in short, plain WhatsApp language. No JSON."},
-                    {"role": "user", "content": fence('TOOL_RESULT', json.dumps(result, default=str))},
+                    {"role": "user", "content": fence('TOOL_RESULT', json.dumps(service.for_model(result), default=str))},
                 ],
                 temperature=0.2, max_tokens=400, api_key=api_key, api_base=api_base,
                 **generation_kwargs(model),

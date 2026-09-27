@@ -22,7 +22,7 @@ from core.llm_router import (
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
-    need_info_message, tool_source, unverified_prices, wrong_arithmetic,
+    need_info_message, substitute_if_leaked, tool_source, unverified_prices, wrong_arithmetic,
 )
 from vula.email_imap import service
 from vula.email_imap.credentials import get_email_creds
@@ -161,7 +161,9 @@ _RESULT_CAP_BY_TOOL = {"find_document": 9000}
 
 def _fenced_result(name: str, result: Any) -> str:
     """A tool result, capped per tool and fenced as untrusted content for the prompt."""
-    return fence('EMAIL_TOOL_RESULT', json.dumps(result, default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
+    from vula.commerce.service import for_model
+    return fence('EMAIL_TOOL_RESULT',
+                 json.dumps(for_model(result), default=str)[:_RESULT_CAP_BY_TOOL.get(name, _RESULT_CAP)])
 
 
 async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any,
@@ -185,9 +187,19 @@ async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any]
     if tool != "find_document" or not isinstance(result, dict):
         return None
     if looks_like_supplier_history_question(question or ""):
-        from vula.commerce.service import format_supplier_history_reply, send_supplier_history_xlsx
-        supplier = result.get("resolved_supplier") or (args or {}).get("query") or ""
-        xlsx_sent = await send_supplier_history_xlsx(tenant_id, phone, question or "", result, supplier)
+        from vula.commerce.service import (answer_all_invoices, format_supplier_history_reply,
+                                           names_no_party, send_supplier_history_xlsx,
+                                           supplier_label)
+        # Never label (or name the file) after the model's own search words — 2026-09-26.
+        supplier = supplier_label(result)
+        if not supplier:
+            everything = await answer_all_invoices(tenant_id, question or "", phone=phone)
+            if everything:
+                return everything
+            q = (args or {}).get("query") or ""
+            supplier = "" if names_no_party(q) else q
+        xlsx_sent = (await send_supplier_history_xlsx(tenant_id, phone, question or "", result, supplier)
+                     if supplier else False)
         return format_supplier_history_reply(result, query=(args or {}).get("query") or "",
                                              question=question or "", xlsx_sent=xlsx_sent)
     if not tenant_id or not history:
@@ -258,6 +270,9 @@ class EmailAdminSkill(BaseSkill):
             answer = await self._loop(inp.conversation_history, inp.question, inp.tenant_id,
                                       creds or {}, phone=phone, sources=collected_sources)
             answer = substitute_if_degenerate(answer or "", skill=self.name, tenant_id=inp.tenant_id)
+            if (answer or "").strip():
+                answer = substitute_if_leaked(answer, skill=self.name, tenant_id=inp.tenant_id,
+                                              tool_names=[t["function"]["name"] for t in TOOL_SPECS])
             if not (answer or "").strip():
                 return SkillOutput(answer=reply_or_fallback(answer, skill=self.name),
                                    skill_name=self.name, confidence=0.2)

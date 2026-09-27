@@ -104,8 +104,11 @@ async def test_local_model_calls_use_the_shared_context_and_a_timeout():
 
 
 def test_filed_rows_result_puts_the_summary_before_the_list():
-    from vula.commerce.service import _filed_rows_result
-    out = _filed_rows_result([{"id": "a", "fields": {"total_cents": 100}}])
+    from vula.commerce.service import _filed_rows_result, for_model
+    full = _filed_rows_result([{"id": "a", "fields": {"total_cents": 100}}])
+    assert full["_export_rows"][0]["total_cents"] == 100   # the private export payload
+    out = for_model(full)                                  # what a model is shown
+    assert not any(k.startswith("_") for k in out)
     keys = list(out)
     assert keys[-1] == "matches"
     assert keys.index("total_amount") < keys.index("matches")
