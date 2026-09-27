@@ -37,6 +37,7 @@ from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
 from config import settings
+from vula import durable
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["draft"])
@@ -182,7 +183,8 @@ class DraftResponse(BaseModel):
 # ── Draft history store ────────────────────────────────────────────────────────
 
 class DraftStore:
-    """SQLite log of generated drafts per tenant."""
+    """Log of generated drafts per tenant: a local SQLite cache, written through to Supabase
+    vula_drafts (migration 180) — the SQLite file alone was wiped on every Railway deploy."""
 
     def __init__(self) -> None:
         self._db = settings.data_dir / "drafts.db"
@@ -216,8 +218,16 @@ class DraftStore:
                 (draft_id, tenant_id, doc_type, brief[:500], content, word_count, model, sources),
             )
             conn.commit()
+        durable.upsert("vula_drafts", {
+            "draft_id": draft_id, "tenant_id": tenant_id, "doc_type": doc_type,
+            "brief": brief[:500], "content": content, "word_count": word_count,
+            "model": model, "sources": sources}, on_conflict="draft_id")
 
     def list_tenant(self, tenant_id: str, limit: int = 20) -> List[dict]:
+        rows = durable.select("vula_drafts", "draft_id,doc_type,brief,word_count,created_at",
+                              order="created_at", desc=True, limit=limit, tenant_id=tenant_id)
+        if rows is not None:
+            return [{**r, "brief": (r.get("brief") or "")[:100]} for r in rows]
         with sqlite3.connect(self._db) as conn:
             rows = conn.execute(
                 "SELECT draft_id,doc_type,brief,word_count,created_at FROM drafts "
@@ -233,7 +243,8 @@ class DraftStore:
                 "SELECT * FROM drafts WHERE draft_id=?", (draft_id,)
             ).fetchone()
         if not row:
-            return None
+            found = durable.select("vula_drafts", limit=1, draft_id=draft_id)
+            return found[0] if found else None
         return {"draft_id": row[0], "tenant_id": row[1], "doc_type": row[2],
                 "brief": row[3], "content": row[4], "word_count": row[5],
                 "model": row[6], "sources": row[7], "created_at": row[8]}

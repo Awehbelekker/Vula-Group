@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from config import settings
 from vula.api.master_auth import authorized_tenant
+from vula import durable
 from vula.takeoff.plan_reader import PlanReader
 from vula.takeoff.boq_generator import BOQGenerator
 from vula.takeoff.order_manager import OrderManager, SupplierDatabase
@@ -43,8 +44,30 @@ router = APIRouter(tags=["takeoff"])
 UPLOAD_DIR = settings.takeoff_upload_dir
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# In-memory job store (replace with Redis in production)
+# In-memory job store, written through to Supabase vula_takeoff_jobs (migration 180): memory alone
+# lost every job on each Railway deploy, so a finished BOQ 404'd the moment the service restarted.
 _jobs: Dict[str, dict] = {}
+_DONE = ("complete", "failed")
+
+
+def _save_job(job_id: str) -> None:
+    job = _jobs.get(job_id)
+    if job:
+        durable.upsert("vula_takeoff_jobs", {"id": job_id, "tenant_id": job.get("tenant_id"),
+                                             "status": job.get("status"), "state": job},
+                       on_conflict="id")
+
+
+def _load_job(job_id: str) -> Optional[dict]:
+    rows = durable.select("vula_takeoff_jobs", "state", limit=1, id=job_id)
+    if not rows or not isinstance(rows[0].get("state"), dict):
+        return None
+    job = rows[0]["state"]
+    if job.get("status") not in _DONE:
+        # The process that was working on it is gone — say so rather than "in progress" forever.
+        job["status"], job["error"] = "failed", "Interrupted by a server restart — please upload the plans again."
+    _jobs[job_id] = job
+    return job
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
@@ -70,6 +93,7 @@ async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: f
     """Full pipeline: read → BOQ → orders. Runs in background."""
     try:
         _jobs[job_id]["status"] = "reading_plans"
+        _save_job(job_id)
         reader = PlanReader(tenant_id=tenant_id)
         project = await reader.read(file_path)
         _jobs[job_id]["project"] = {
@@ -87,11 +111,13 @@ async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: f
         }
 
         _jobs[job_id]["status"] = "generating_boq"
+        _save_job(job_id)
         generator = BOQGenerator(project, tenant_id=tenant_id, markup=markup)
         boq = await generator.generate()
         _jobs[job_id]["boq"] = boq.to_dict()
 
         _jobs[job_id]["status"] = "building_orders"
+        _save_job(job_id)
         order_mgr = OrderManager(boq, tenant_id=tenant_id)
         package = order_mgr.build_orders()
         _jobs[job_id]["orders"] = {
@@ -115,11 +141,13 @@ async def _process_plans(job_id: str, file_path: Path, tenant_id: str, markup: f
         }
         _jobs[job_id]["order_summary"] = order_mgr.order_summary_text(package)
         _jobs[job_id]["status"] = "complete"
+        _save_job(job_id)
 
     except Exception as e:
         logger.error(f"Takeoff job {job_id} failed: {e}")
         _jobs[job_id]["status"] = "failed"
         _jobs[job_id]["error"] = str(e)
+        _save_job(job_id)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -202,6 +230,7 @@ async def upload_plans(
         "file_path": str(file_path),
     }
 
+    _save_job(job_id)
     background_tasks.add_task(_process_plans, job_id, file_path, tenant_id, markup)
 
     return {
@@ -216,7 +245,7 @@ def _job_for(job_id: str, tenant_id: Optional[str]) -> Optional[dict]:
     """The job, or None when it doesn't exist or belongs to another tenant. ?tenant_id= is how a
     signed-in tenant member authenticates on these id-only routes (master_auth.require_auth,
     applied to this whole router in server.py) — the job must then be that tenant's."""
-    job = _jobs.get(job_id)
+    job = _jobs.get(job_id) or _load_job(job_id)
     if not job or (tenant_id and job.get("tenant_id") != tenant_id):
         return None
     return job

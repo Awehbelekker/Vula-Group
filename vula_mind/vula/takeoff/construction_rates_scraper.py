@@ -235,6 +235,10 @@ class RateExtractor:
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 
+_RATE_COLS = ("key", "label", "unit", "low", "high", "mid", "source", "scraped_at", "prev_mid",
+              "change_pct", "notes")
+
+
 class RatesDatabase:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
@@ -278,6 +282,15 @@ class RatesDatabase:
         except sqlite3.OperationalError:
             pass
         conn.commit()
+        # 2026-09-27: the file is wiped on every Railway deploy (no volume attached), so rates
+        # scraped weekly vanished until the next scrape. Rates are written through to Supabase
+        # (vula_material_rates, migration 180) and reloaded here when the local copy is empty.
+        if not conn.execute("SELECT 1 FROM material_rates LIMIT 1").fetchone():
+            from vula import durable
+            for r in durable.select("vula_material_rates") or []:
+                conn.execute("INSERT OR REPLACE INTO material_rates VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                             tuple(r.get(c) for c in _RATE_COLS))
+            conn.commit()
         conn.close()
 
     def upsert(self, rate: MaterialRate) -> str:
@@ -306,6 +319,11 @@ class RatesDatabase:
                 status = "updated"
 
         conn.commit()
+        if status != "unchanged":
+            row = conn.execute("SELECT * FROM material_rates WHERE key=?", (rate.key,)).fetchone()
+            if row:
+                from vula import durable
+                durable.upsert("vula_material_rates", dict(zip(_RATE_COLS, row)), on_conflict="key")
         conn.close()
         return status
 
@@ -337,6 +355,11 @@ class RatesDatabase:
         )
         conn.commit()
         conn.close()
+        from vula import durable
+        durable.upsert("vula_material_rate_log", {
+            "source": catalogue.source_name, "url": catalogue.source_url, "status": catalogue.status,
+            "rates_extracted": len(catalogue.rates), "scraped_at": catalogue.scraped_at,
+            "error": catalogue.error})
 
     def get_source_status(self) -> List[Dict]:
         """The most recent scrape_log entry per source — admin visibility into which sources

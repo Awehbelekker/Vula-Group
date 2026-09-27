@@ -154,6 +154,11 @@ class LocalTenantDB:
                 (tenant_id, normalised, label, role),
             )
             conn.commit()
+        # Written through to Supabase — the lookup below already falls back to this table, but
+        # nothing ever wrote to it, and the SQLite file is wiped on every Railway deploy.
+        from vula import durable
+        durable.upsert("vula_tenant_phones", {"tenant_id": tenant_id, "phone": normalised,
+                                              "label": label, "role": role}, on_conflict="phone")
 
     def remove_phone(self, phone: str) -> None:
         """Deregister a phone number."""
@@ -161,6 +166,8 @@ class LocalTenantDB:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM tenant_phones WHERE phone = ?", (normalised,))
             conn.commit()
+        from vula import durable
+        durable.delete("vula_tenant_phones", phone=normalised)
 
     def phones(self, tenant_id: str) -> list[dict]:
         """Return all registered numbers for a tenant."""
@@ -169,6 +176,11 @@ class LocalTenantDB:
                 "SELECT phone, label, role FROM tenant_phones WHERE tenant_id = ? ORDER BY id",
                 (tenant_id,),
             ).fetchall()
+        if not rows:
+            from vula import durable
+            cloud = durable.select("vula_tenant_phones", "phone,label,role", order="id", tenant_id=tenant_id)
+            if cloud:
+                return [{"phone": r["phone"], "label": r.get("label"), "role": r["role"]} for r in cloud]
         return [{"phone": r[0], "label": r[1], "role": r[2]} for r in rows]
 
     def lookup_by_phone(self, phone: str) -> Optional[str]:
