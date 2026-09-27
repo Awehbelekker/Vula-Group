@@ -185,7 +185,8 @@ async def test_order_refund_auto_refund_success_updates_tracking_and_notifies():
 
     assert result["status"] == "refunded"
     assert result["refund"] == {"gateway": "yoco", "status": "pending", "amount_cents": 15000}
-    mock_refund.assert_awaited_once_with("off-the-hook", "co_123", 15000)
+    mock_refund.assert_awaited_once_with("off-the-hook", "co_123", 15000,
+                                         idempotency_key="refund-order-order1-15000")
     patch_body = mock_table.update.call_args.args[0]
     assert patch_body["refund_status"] == "pending"
     assert patch_body["yoco_refund_id"] == "rf_1"
@@ -258,7 +259,8 @@ async def test_credit_note_auto_refund_success():
 
     assert result["credit_note"] == cn
     assert result["refund"] == {"gateway": "yoco", "status": "pending", "amount_cents": 8000}
-    mock_refund.assert_awaited_once_with("off-the-hook", "co_999", 8000)
+    # Keyed per credit note: a second, equal partial credit note is a second refund.
+    mock_refund.assert_awaited_once_with("off-the-hook", "co_999", 8000, idempotency_key="refund-cn-cn1")
 
 
 @pytest.mark.asyncio

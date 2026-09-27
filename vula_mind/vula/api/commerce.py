@@ -543,52 +543,69 @@ async def create_checkout(tenant_id: str, body: CheckoutRequest):
     if not items:
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    # Create order in Supabase
+    # Create order in Supabase. The cart is only emptied once the payment checkout exists —
+    # if the gateway is down the customer keeps their cart and can simply try again.
     try:
-        order = await service.create_order(tenant_id, cart, body.model_dump())
+        order = await service.create_order(
+            tenant_id, cart, {**body.model_dump(), "payment_method": "online"}, clear_cart_after=False)
     except service.OutOfStockError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+    async def _abandon(detail_status: int, detail: str):
+        """The checkout couldn't be created: cancel this order and release its stock so the
+        retry doesn't leave a stranded pending order holding stock, then report the error."""
+        try:
+            await service.update_order_status(order["id"], "cancelled")
+            await service.apply_order_stock(order["id"], restore=True)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not release abandoned checkout order %s: %s", order.get("id"), exc)
+        raise HTTPException(status_code=detail_status, detail=detail)
 
     # Resolve Yoco credentials — per-tenant from Supabase, env var fallback
     from vula.api.yoco import _get_tenant_yoco_creds
     yoco_creds = await _get_tenant_yoco_creds(tenant_id)
     if not yoco_creds or not yoco_creds.get("secret_key"):
-        raise HTTPException(
-            status_code=503,
-            detail=f"Payment gateway not configured for {tenant_id}. "
-                   f"Connect Yoco in Vula Admin.",
-        )
+        await _abandon(503, f"Payment gateway not configured for {tenant_id}. Connect Yoco in Vula Admin.")
     yoco_secret = yoco_creds["secret_key"]
 
     from vula.api import tenants as _tenants
     store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            "https://payments.yoco.com/api/checkouts",
-            headers={"Authorization": f"Bearer {yoco_secret}", "Content-Type": "application/json"},
-            json={
-                "amount": order["total_cents"],
-                "currency": "ZAR",
-                "successUrl": f"{store_url}/payment/success?order={order['id']}",
-                "cancelUrl": f"{store_url}/payment/cancel?order={order['id']}",
-                "failureUrl": f"{store_url}/payment/failed?order={order['id']}",
-                "metadata": {
-                    "order_id": order["id"],
-                    "display_id": order["display_id"],
-                    "tenant_id": tenant_id,
-                    "customer_phone": body.customer_phone,
-                    "customer_name": body.customer_name,
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "https://payments.yoco.com/api/checkouts",
+                headers={"Authorization": f"Bearer {yoco_secret}", "Content-Type": "application/json"},
+                json={
+                    "amount": order["total_cents"],
+                    "currency": "ZAR",
+                    "successUrl": f"{store_url}/payment/success?order={order['id']}",
+                    "cancelUrl": f"{store_url}/payment/cancel?order={order['id']}",
+                    "failureUrl": f"{store_url}/payment/failed?order={order['id']}",
+                    "metadata": {
+                        "order_id": order["id"],
+                        "display_id": order["display_id"],
+                        "tenant_id": tenant_id,
+                        "customer_phone": body.customer_phone,
+                        "customer_name": body.customer_name,
+                    },
                 },
-            },
-        )
+            )
+    except httpx.HTTPError as exc:
+        log.error("Yoco checkout request failed: %s", exc)
+        await _abandon(502, "Payment gateway error — please try again")
 
     if not resp.is_success:
         log.error("Yoco checkout failed: %s", resp.text)
-        raise HTTPException(status_code=502, detail="Payment gateway error — please try again")
+        await _abandon(502, "Payment gateway error — please try again")
 
     yoco_data = resp.json()
     await service.update_order_status(order["id"], "pending_payment", yoco_checkout_id=yoco_data["id"])
+    # Only now is the cart spent (see create_order's clear_cart_after).
+    try:
+        await service.clear_cart(cart["id"])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cart %s not cleared after checkout %s: %s", cart.get("id"), order.get("id"), exc)
 
     # Fire-and-forget — the customer is waiting to be redirected to pay, so PDF render +
     # WhatsApp media upload (a couple of seconds) must not sit in this response's critical
@@ -716,7 +733,10 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
         if body.get("auto_refund") and checkout_id:
             amount = int(body.get("amount_cents") or order.get("total_cents") or 0)
             from vula.api.yoco import refund_yoco_payment
-            result = await refund_yoco_payment(tenant_id, checkout_id, amount)
+            # An order is refunded once: the same order + amount again is a double-click or
+            # retry and must not move money twice.
+            result = await refund_yoco_payment(tenant_id, checkout_id, amount,
+                                               idempotency_key=f"refund-order-{order_id}-{amount}")
             now = service._now()
             if result.get("ok"):
                 refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
@@ -4016,7 +4036,11 @@ async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict =
             refund_result = {"gateway": "yoco", "status": "failed", "detail": "Nothing to refund."}
         else:
             from vula.api.yoco import refund_yoco_payment
-            result = await refund_yoco_payment(tenant_id, checkout_id, amount)
+            # One key per credit note: two partial credit notes of the same amount on one
+            # invoice are two refunds. The default checkout+amount key would make Yoco replay
+            # the first and move no money, while we recorded the second as pending.
+            result = await refund_yoco_payment(tenant_id, checkout_id, amount,
+                                               idempotency_key=f"refund-cn-{cn.get('id') or invoice_id}")
             now = service._now()
             if result.get("ok"):
                 refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}

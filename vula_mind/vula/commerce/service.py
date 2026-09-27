@@ -639,7 +639,7 @@ def delivery_fee_cents(tenant_id: str, cart: dict, subtotal_cents: int) -> int:
     return delivery
 
 
-async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
+async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear_cart_after: bool = True) -> dict:
     items = cart.get("commerce_cart_items", [])
     # int(round(...)) so per-kg quantities (e.g. 1.5) resolve to exact cents.
     subtotal = sum(int(round(i["quantity"] * i["unit_price_cents"])) for i in items)
@@ -775,10 +775,13 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict) -> dict:
     # by the customer's phone (one long-lived "active" cart per number), so without this the
     # next order re-charged every item from the previous one and a repeated "yes" placed a
     # duplicate. Never fails the order: it's already placed and the items are recorded.
-    try:
-        await clear_cart(cart["id"])
-    except Exception as exc:
-        logger.warning("cart %s not cleared after order %s: %s", cart.get("id"), order_id, exc)
+    # clear_cart_after=False: the storefront clears it only once its payment checkout exists,
+    # so a gateway failure leaves the customer's cart intact to retry.
+    if clear_cart_after:
+        try:
+            await clear_cart(cart["id"])
+        except Exception as exc:
+            logger.warning("cart %s not cleared after order %s: %s", cart.get("id"), order_id, exc)
 
     return result.data[0]
 
@@ -790,9 +793,13 @@ async def expire_abandoned_online_orders(tenant_id: str, older_than_hours: int =
     legitimately unpaid until delivery / the transfer clears. Returns how many expired."""
     from datetime import datetime, timedelta, timezone as _tz
     cutoff = (datetime.now(_tz.utc) - timedelta(hours=older_than_hours)).isoformat()
-    rows = (_client().table("commerce_orders").select("id,display_id")
-            .eq("tenant_id", tenant_id).eq("status", "pending_payment").eq("payment_method", "online")
+    rows = (_client().table("commerce_orders").select("id,display_id,payment_method,yoco_checkout_id")
+            .eq("tenant_id", tenant_id).eq("status", "pending_payment")
             .lt("created_at", cutoff).limit(200).execute().data or [])
+    # Online = marked online, or a storefront order that went to a Yoco checkout (those were
+    # created without a payment_method, so matching the column alone never expired them).
+    rows = [o for o in rows if o.get("payment_method") == "online"
+            or (not o.get("payment_method") and o.get("yoco_checkout_id"))]
     n = 0
     for o in rows:
         res = (_client().table("commerce_orders")
