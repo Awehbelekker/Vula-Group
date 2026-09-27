@@ -538,6 +538,13 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         log.debug("reconcile: order load skipped: %s", exc)
         orders = []
 
+    # Card-machine settlement summaries (whatsapp._analyze_document "Settlement Statement"):
+    # their net payout is what lands in the bank, so an otherwise unexplained credit of exactly
+    # that amount a few days later is card sales. Allocation only — nothing is marked paid, and
+    # a settlement whose figures weren't found in its own text is never used.
+    settlements = _load_settlements(db, tenant_id)
+    used_settlements: set = set()
+
     # Casual-labour workers to recognise payments to (by bank account / name).
     from vula.commerce import labour
     workers = labour.list_workers(tenant_id)
@@ -596,7 +603,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     batch_cats = await accounting.categorize_batch(tenant_id, txns, accounts)
 
     matched_invoices, unmatched_in, unmatched_out, saved, matched_workers, needs_input = 0, 0, 0, 0, 0, 0
-    matched_expenses, matched_orders, matched_bills = 0, 0, 0
+    matched_expenses, matched_orders, matched_bills, card_settlements = 0, 0, 0, 0
     used_invoice_ids: set = set()
     used_order_ids: set = set()
     used_bill_ids: set = set()
@@ -690,6 +697,14 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             if e and e.get("account_code") in acc_map:
                 code, cat_src = e["account_code"], "receipt"
                 accounting.learn_category_rule(tenant_id, t, code)
+        if (not code and t["direction"] == "in" and not (inv_id or order_id)
+                and "sales" in acc_map):
+            st = _match_settlement(t, [x for x in settlements if x["id"] not in used_settlements])
+            if st:
+                code, cat_src = "sales", "settlement"
+                used_settlements.add(st["id"])
+                card_settlements += 1
+                unmatched_in = max(0, unmatched_in - 1)
         if not code:
             cat = batch_cats[idx]
             code, cat_src = cat["account_code"], cat["source"]
@@ -735,8 +750,55 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             "matched_invoices": matched_invoices,
             "matched_orders": matched_orders,
             "matched_workers": matched_workers, "matched_expenses": matched_expenses,
-            "needs_input": needs_input,
+            "needs_input": needs_input, "card_settlements": card_settlements,
             "unmatched_credits": unmatched_in, "unmatched_debits": unmatched_out}
+
+
+def _load_settlements(db, tenant_id: str) -> List[Dict[str, Any]]:
+    """Filed settlement summaries from the last ~4 months with a verified net payout."""
+    from datetime import date, timedelta
+    try:
+        rows = (db.table("vula_filed_documents").select("id,fields,created_at")
+                .eq("tenant_id", tenant_id).eq("category", "Settlement Statement")
+                .gte("created_at", (date.today() - timedelta(days=120)).isoformat())
+                .limit(1000).execute().data or [])
+    except Exception as exc:
+        log.debug("reconcile: settlement load skipped: %s", exc)
+        return []
+    out = []
+    for r in rows:
+        f = r.get("fields") or {}
+        if f.get("_unverified_figures"):
+            continue
+        try:
+            net = int(f.get("net_cents"))
+        except (TypeError, ValueError):
+            continue
+        if net > 0 and f.get("date"):
+            out.append({"id": r["id"], "net_cents": net, "date": str(f["date"])[:10],
+                        "provider": f.get("provider")})
+    return out
+
+
+def _match_settlement(t: Dict[str, Any], settlements: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The settlement whose net payout equals this credit, dated on or up to 5 days before it.
+    Only a single candidate counts — two identical payouts in the window are left for the owner."""
+    from datetime import date as _date
+    try:
+        td = _date.fromisoformat(str(t.get("date"))[:10])
+    except ValueError:
+        return None
+    hits = []
+    for s_ in settlements:
+        if s_["net_cents"] != int(t.get("amount_cents") or 0):
+            continue
+        try:
+            gap = (td - _date.fromisoformat(s_["date"])).days
+        except ValueError:
+            continue
+        if 0 <= gap <= 5:
+            hits.append(s_)
+    return hits[0] if len(hits) == 1 else None
 
 
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,

@@ -1553,6 +1553,34 @@ async def admin_update_costs(tenant_id: str, body: dict):
     return {"updated": updated}
 
 
+@router.get("/{tenant_id}/admin/documents/reread")
+async def admin_reread_status(tenant_id: str):
+    """How many filed PDFs a re-read could fill in, and the last run's progress."""
+    from vula.commerce import reread
+    try:
+        n = len(reread.candidates(tenant_id))
+    except Exception as exc:
+        log.debug("reread candidates failed: %s", exc)
+        n = 0
+    return {"candidates": n, "status": reread.status_for(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/documents/reread")
+async def admin_reread_documents(tenant_id: str, request: Request):
+    """Re-read documents missing data (uncategorised "Email attachment" PDFs, invoices/quotes
+    with no amount or supplier) in the background. Owner/manager — it spends model calls."""
+    from vula.commerce import reread
+    from vula.commerce.background_tasks import run_background
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can start a re-read.")
+    if reread.status_for(tenant_id).get("running"):
+        return {"started": False, "status": reread.status_for(tenant_id)}
+    n = len(reread.candidates(tenant_id))
+    if n:
+        run_background(tenant_id, "reread_documents", reread.reread_missing(tenant_id))
+    return {"started": bool(n), "candidates": n}
+
+
 @router.post("/{tenant_id}/admin/stock/adjust")
 async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
     """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""

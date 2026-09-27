@@ -3229,6 +3229,11 @@ _DOC_CATEGORIES = [
     # scan, since the thing worth extracting (a street-sign address) is exactly the small/
     # angled/distant text the OCR-text pipeline is unreliable on.
     "Site / Building Photo",
+    # 2026-09-27: a card machine's settlement summary (Yoco/bank merchant payout — "Your
+    # settlement summary") is real sales income. Off the Hook's arrive daily by email and all
+    # failed to categorise ("Email attachment"). Its net figure is what lands in the bank, so
+    # bank_rec allocates that credit to sales instead of leaving it unexplained.
+    "Settlement Statement",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
@@ -3442,6 +3447,13 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     'string|null, "payee_branch_code": string|null, "payee_account_number": '
                     'string|null, "amount_cents": integer|null, "reference": string|null, '
                     '"trace_id": string|null, "date": "YYYY-MM-DD"|null} - money in CENTS. '
+                    "For Settlement Statement (a card machine / merchant acquirer's settlement "
+                    "or payout summary — card sales paid INTO the business's bank), fields MUST "
+                    'use this exact shape: {"provider": string|null, "merchant_id": string|null, '
+                    '"date": "YYYY-MM-DD"|null, "gross_cents": integer|null, "fees_cents": '
+                    'integer|null, "net_cents": integer|null, "transaction_count": integer|null} '
+                    "— date is the settlement/payout date, net_cents the amount paid out, money "
+                    "in CENTS. "
                     "For Site / Building Photo (a photo of a building's exterior/signage, not a "
                     "document held up to the camera), fields MUST use this exact shape: "
                     '{"address": string|null, "business_name": string|null, "notes": '
@@ -3504,7 +3516,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     return True
                 if ungrounded_figures(flds, text):
                     return True
-            elif cat == "Proof of Payment" and ungrounded_figures(flds, text):
+            elif cat in ("Proof of Payment", "Settlement Statement") and ungrounded_figures(flds, text):
                 return True
             return False
 
@@ -3567,7 +3579,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         # Even after escalation a money figure may still not be traceable to the text. Don't
         # drop the read — flag it, so filing routes it to owner review instead of booking it
         # silently (the caller checks fields["_unverified_figures"]).
-        if result and result.get("category") in (_FINANCIAL_DOC_CATEGORIES | {"Proof of Payment"}):
+        if result and result.get("category") in (_FINANCIAL_DOC_CATEGORIES
+                                                 | {"Proof of Payment", "Settlement Statement"}):
             missing = ungrounded_figures(result.get("fields") or {}, text)
             if missing:
                 logger.warning("Doc analyze: %s has %d figure(s) not found in its text: %s",
