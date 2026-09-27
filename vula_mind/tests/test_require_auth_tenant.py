@@ -77,7 +77,9 @@ def test_draft_by_id_is_scoped_to_the_member_tenant(monkeypatch):
     from vula.api import draft
     monkeypatch.setattr(draft._store, "get",
                         lambda did: {"id": did, "tenant_id": "tenant-a", "doc_type": "letter"})
-    assert (asyncio.run(draft.get_draft("d1", tenant_id="tenant-a"))["id"]) == "d1"
+    from types import SimpleNamespace
+    req = SimpleNamespace(state=SimpleNamespace())          # API key / master: no member tenant
+    assert (asyncio.run(draft.get_draft("d1", req, tenant_id="tenant-a"))["id"]) == "d1"
     with pytest.raises(HTTPException) as e:
-        asyncio.run(draft.get_draft("d1", tenant_id="tenant-b"))
+        asyncio.run(draft.get_draft("d1", req, tenant_id="tenant-b"))
     assert e.value.status_code == 404

@@ -26,9 +26,10 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from vula.api.master_auth import authorized_tenant
 from vula.api.whatsapp import _send_reply, _send_wa_template
 from vula.models.field_ops import get_field_ops_db
 
@@ -129,15 +130,17 @@ def _theirs(record, tenant_id: Optional[str]) -> bool:
 
 
 @router.get("/project/{project_id}/team")
-async def get_project_team(project_id: str, tenant_id: Optional[str] = None) -> dict:
+async def get_project_team(project_id: str, request: Request, tenant_id: Optional[str] = None) -> dict:
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     team = db.get_project_team(project_id, tenant_id)
     return {"project_id": project_id, "team": team}
 
 
 @router.get("/project/{project_id}/status")
-async def get_project_status(project_id: str, tenant_id: Optional[str] = None) -> dict:
+async def get_project_status(project_id: str, request: Request, tenant_id: Optional[str] = None) -> dict:
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     summary = db.project_status_summary(project_id, tenant_id)
     tasks = db.get_tasks_for_project(project_id, tenant_id)
     return {
@@ -175,9 +178,10 @@ async def create_task(body: TaskIn) -> dict:
 
 
 @router.post("/task/assign")
-async def assign_task(body: TaskAssignIn, tenant_id: Optional[str] = None) -> dict:
+async def assign_task(body: TaskAssignIn, request: Request, tenant_id: Optional[str] = None) -> dict:
     """Assign a task to a contractor and optionally send a WhatsApp briefing."""
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     task = db.get_task(body.task_id)
     if not _theirs(task, tenant_id):
         raise HTTPException(status_code=404, detail="Task not found")
@@ -208,9 +212,10 @@ async def assign_task(body: TaskAssignIn, tenant_id: Optional[str] = None) -> di
 
 
 @router.post("/task/{task_id}/complete-request")
-async def request_completion(task_id: str, body: CompleteRequestIn, tenant_id: Optional[str] = None) -> dict:
+async def request_completion(task_id: str, body: CompleteRequestIn, request: Request, tenant_id: Optional[str] = None) -> dict:
     """Ask the assigned contractor to confirm their task is complete."""
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     task = db.get_task(task_id)
     if not _theirs(task, tenant_id):
         raise HTTPException(status_code=404, detail="Task not found")
@@ -233,8 +238,9 @@ async def request_completion(task_id: str, body: CompleteRequestIn, tenant_id: O
 
 
 @router.get("/task/{task_id}")
-async def get_task(task_id: str, tenant_id: Optional[str] = None) -> dict:
+async def get_task(task_id: str, request: Request, tenant_id: Optional[str] = None) -> dict:
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     task = db.get_task(task_id)
     if not _theirs(task, tenant_id):
         raise HTTPException(status_code=404, detail="Task not found")
@@ -297,10 +303,11 @@ async def start_walkthrough(body: WalkthroughStartIn) -> dict:
 
 
 @router.post("/walkthrough/{walkthrough_id}/approve")
-async def approve_walkthrough(walkthrough_id: str, body: WalkthroughApproveIn,
+async def approve_walkthrough(walkthrough_id: str, body: WalkthroughApproveIn, request: Request,
                               tenant_id: Optional[str] = None) -> dict:
     """Architect approves or rejects a walkthrough from the dashboard."""
     db = get_field_ops_db()
+    tenant_id = authorized_tenant(request) or tenant_id
     wt = db.get_walkthrough(walkthrough_id)
     if not _theirs(wt, tenant_id):
         raise HTTPException(status_code=404, detail="Walkthrough not found")

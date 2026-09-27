@@ -13,10 +13,10 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel
 
-from vula.api.master_auth import require_auth
+from vula.api.master_auth import authorized_tenant, require_auth
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["documents"])
@@ -95,14 +95,15 @@ class AssignIn(BaseModel):
 
 
 @router.post("/{doc_id}/assign-project", dependencies=[Depends(require_auth)])
-async def assign_project(doc_id: str, body: AssignIn) -> dict:
+async def assign_project(doc_id: str, body: AssignIn, request: Request) -> dict:
     """Manually file a document under a project (and attach to ClickUp if mapped)."""
     try:
         res = _client().table("vula_filed_documents").select("*").eq("id", doc_id).limit(1).execute()
         rows = res.data or []
     except Exception as exc:
         return {"error": str(exc)}
-    if not rows or (body.tenant_id and rows[0].get("tenant_id") != body.tenant_id):
+    scope = authorized_tenant(request) or body.tenant_id
+    if not rows or (scope and rows[0].get("tenant_id") != scope):
         return {"error": "Document not found."}
     doc = rows[0]
 

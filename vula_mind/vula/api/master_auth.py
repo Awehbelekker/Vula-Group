@@ -130,11 +130,22 @@ async def require_auth(api_key: str | None = Security(_api_key_header),
         if tenant:
             from vula.api.tenant_auth import is_tenant_member
             if await is_tenant_member(auth_header, tenant):
+                # Routes that address records by id alone scope them to this tenant (see
+                # authorized_tenant) — whichever of path, query or body named it.
+                request.state.auth_tenant = tenant
                 return
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or missing API key. Set X-API-Key header or sign in.",
     )
+
+
+def authorized_tenant(request: Request | None) -> str:
+    """The tenant require_auth let this request through as a MEMBER of, or "" when it passed on
+    the API key or a master login (which see every tenant). Id-only routes must scope the
+    record to this — it is set however the request named the tenant (path, query or body), so
+    a member can't pass the check via the body and then read another tenant's record."""
+    return getattr(getattr(request, "state", None), "auth_tenant", "") or ""
 
 
 async def _request_tenant(request: Request | None) -> str:
