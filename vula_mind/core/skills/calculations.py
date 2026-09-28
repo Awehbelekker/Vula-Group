@@ -70,9 +70,11 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "lookup_rate",
-        "description": "Look up the tenant's OWN unit rate (ZAR) for a material/work item from "
-                       "their QS rate library, for cost calculations. Returns matching rates with "
-                       "unit. Use before computing any cost — never assume a market rate.",
+        "description": "Look up the tenant's OWN unit rate (ZAR) for a material/work item: "
+                       "their QS rate library first, then rates learned from their own invoices, "
+                       "quotes, BOQs and labour payments (marked learned, with a source). Returns "
+                       "matching rates with unit. Use before computing any cost — never assume a "
+                       "market rate. Say where a learned rate came from when you use it.",
         "parameters": {"type": "object", "properties": {
             "description": {"type": "string", "description": "e.g. 'brick wall' or 'acoustic panel'"},
         }, "required": ["description"]},

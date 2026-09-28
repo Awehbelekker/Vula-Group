@@ -70,15 +70,27 @@ def upsert_worker(tenant_id: str, body: Dict[str, Any]) -> dict:
     if body.get("id"):
         db.table("commerce_workers").update(row).eq("tenant_id", tenant_id).eq("id", body["id"]).execute()
         row["id"] = body["id"]
+        _refresh_price_book(tenant_id)
         return row
     row["id"] = str(uuid4())
     res = db.table("commerce_workers").insert(row).execute()
+    _refresh_price_book(tenant_id)
     return (res.data or [row])[0]
+
+
+def _refresh_price_book(tenant_id: str) -> None:
+    """A worker's day rate is a labour rate in the price book (vula/commerce/price_book.py)."""
+    try:
+        from vula.commerce.price_book import record_worker_rates
+        record_worker_rates(tenant_id)
+    except Exception as exc:
+        log.debug("price book worker refresh skipped: %s", exc)
 
 
 def delete_worker(tenant_id: str, worker_id: str) -> None:
     _client().table("commerce_workers").update({"active": False, "updated_at": _now()}) \
         .eq("tenant_id", tenant_id).eq("id", worker_id).execute()
+    _refresh_price_book(tenant_id)
 
 
 # ── Matching a bank debit to a worker ─────────────────────────────────────────

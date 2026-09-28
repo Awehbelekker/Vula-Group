@@ -773,17 +773,43 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
         # Learned rules (from past corrections) win — they're high-confidence by definition.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
+        try:        # a project named in the document beats a learned rule (see whatsapp.py)
+            from vula.api.tenants import uses_projects as _up
+            if _up(tenant_id):
+                from vula.integrations.project_resolver import resolve as _resolve
+                _named = _resolve(tenant_id, {}, hint)
+                if _named and _named.get("kind") == "named" and (match or {}).get("project") != _named["project"]:
+                    match = {"project": _named["project"], "clickup_list_id": None,
+                             "confidence": _named["confidence"], "ambiguous": False}
+        except Exception as exc:
+            logger.debug("named-project check (email) skipped: %s", exc)
         # Auto-file on ANY non-ambiguous match with a resolved project — not just the old
         # "high" string, which silently discarded a real (if less certain) project guess and
         # asked a human unnecessarily. Only a genuine absence of signal, or an unresolved tie
         # between multiple plausible projects (match.get("ambiguous")), should ask.
         confident = bool(match and not match.get("ambiguous") and match.get("project"))
+        if not confident:
+            # Same evidence as the WhatsApp path: the project named in the document, the bank
+            # payment that settled it, the supplier's usual project (project_resolver).
+            try:
+                from vula.api.tenants import uses_projects as _uses_projects
+                from vula.integrations.project_resolver import resolve, AUTO_FILE
+                if _uses_projects(tenant_id):
+                    r = resolve(tenant_id, fields, hint)
+                    if r and r.get("project") and r["confidence"] >= AUTO_FILE:
+                        match = {"project": r["project"], "clickup_list_id": None,
+                                 "confidence": r["confidence"], "ambiguous": False}
+                        confident = True
+            except Exception as exc:
+                logger.debug("project resolver (email) skipped: %s", exc)
 
         # Only auto-file on a CONFIDENT match. Anything weaker (no match, or a single
         # coincidental token) → ask the team on WhatsApp rather than risk mis-filing.
         # Unless this was already handled as a payment confirmation above — "which project?"
         # is the wrong question for a POP, and the owner's already been told either way.
-        ask = not confident and not payment_matched
+        from vula.api.tenants import uses_projects
+        # A commerce business has no projects to ask about (Off the Hook, 2026-09-28).
+        ask = not confident and not payment_matched and uses_projects(tenant_id)
         if not confident:
             match = None
         # file_document() does what this used to hand-roll, plus the two things it was

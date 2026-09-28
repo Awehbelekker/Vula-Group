@@ -192,6 +192,21 @@ def enabled_modules(tenant_id: str) -> list:
     return _effective_modules(get_config(tenant_id))
 
 
+def uses_projects(tenant_id: str) -> bool:
+    """Does this business work in projects (jobs/sites)? Only when it has the `projects`
+    module. 2026-09-28 (Ian): "DIGG has projects because it's construction; Off the Hook is
+    a pure commerce business — client-to-client deals, not projects." Off the Hook had 262 of
+    its 264 documents stuck as "which project?". Unknown/failed lookup → True, the behaviour
+    before this existed."""
+    try:
+        cfg = get_config(tenant_id)
+    except Exception:
+        return True
+    if not cfg:
+        return True
+    return "projects" in _effective_modules(cfg)
+
+
 def _public(cfg: dict) -> dict:
     """Storefront/dashboard-safe subset (no internal columns)."""
     return {

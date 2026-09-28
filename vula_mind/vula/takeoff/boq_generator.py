@@ -31,7 +31,7 @@ import math
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from vula.takeoff.plan_reader import ExtractedProject
 
@@ -188,6 +188,11 @@ class RateLookup:
 
 # ─── BOQ Generator ────────────────────────────────────────────────────────────
 
+def _unit_key(unit) -> str:
+    u = str(unit or "").strip().lower().replace("²", "2").replace("³", "3")
+    return {"sqm": "m2", "no": "each", "nr": "each", "item": "each", "ea": "each"}.get(u, u)
+
+
 class BOQGenerator:
     """
     Generates a complete BOQ from an ExtractedProject.
@@ -205,7 +210,37 @@ class BOQGenerator:
         self.tenant_id = tenant_id
         self.markup = markup
         self.rates = RateLookup()
+        self._own: Optional[list] = None
         self._id = 0
+
+    def _own_rate(self, rate_key: str, unit: str) -> Optional[tuple]:
+        """The tenant's own rate for this item, before any platform or market rate: its QS rate
+        library, then rates learned from its own invoices/quotes/BOQs (vula/api/qs.search_rates).
+        2026-09-28: Takeoff priced every job from scraped market rates and a built-in table even
+        for a tenant with ~1,000 priced lines of its own on file. Matched conservatively — every
+        word of the rate key in the rate's description, and the same unit — so a loose match
+        never replaces a market rate with the wrong item's price."""
+        if not self.tenant_id or self.tenant_id == "default":
+            return None
+        if self._own is None:
+            try:
+                from vula.api.qs import search_rates
+                self._own = search_rates(self.tenant_id, "", limit=3000)
+            except Exception:
+                self._own = []
+        words = [w for w in rate_key.lower().split("_") if len(w) >= 3]
+        want = _unit_key(unit)
+        for r in self._own:
+            desc = (r.get("description") or "").lower()
+            if words and all(w in desc for w in words) and _unit_key(r.get("unit")) == want:
+                rate = float(r.get("rate") or 0)
+                if rate <= 0:
+                    continue
+                low = (r.get("low_cents") or rate * 100) / 100
+                high = (r.get("high_cents") or rate * 100) / 100
+                source = r.get("source") if r.get("learned") else f"Your rate{' · ' + r['source'] if r.get('source') else ''}"
+                return low, high, rate, source
+        return None
 
     def _next_id(self, prefix: str) -> str:
         self._id += 1
@@ -213,8 +248,12 @@ class BOQGenerator:
 
     def _item(self, trade, description, unit, qty, rate_key,
               confidence=85, notes="", specialist=False) -> BOQItem:
-        low, high, _, source = self.rates.get(rate_key)
-        mid = (low + high) / 2
+        own = self._own_rate(rate_key, unit)
+        if own:
+            low, high, mid, source = own
+        else:
+            low, high, _, source = self.rates.get(rate_key)
+            mid = (low + high) / 2
         return BOQItem(
             id=self._next_id(trade[:3].upper()),
             trade=trade,

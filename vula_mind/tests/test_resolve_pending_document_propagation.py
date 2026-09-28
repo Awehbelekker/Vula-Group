@@ -75,7 +75,7 @@ async def test_resolving_a_boq_propagates_project_and_bridges_contract_value():
     assert result["filed"] is True
     assert updates["vula_filed_documents"]["project"] == "Porterfield"
     assert updates["commerce_invoices"]["project"] == "Porterfield"
-    mock_boq.assert_called_once_with(TID, "Porterfield", 24055353)
+    mock_boq.assert_called_once_with(TID, "Porterfield", 24055353, sections=None)
 
 
 @pytest.mark.asyncio

@@ -332,7 +332,7 @@ export default function VulaQSPro({ tenantId }) {
   }, [tenantId]);
   const addOwnRate = (r) => setItems(prev => [...prev, {
     ...newItem(), description: r.description || r.code || "Item", listPrice: r.rate ?? "",
-    unit: r.unit || "", source: `Your rate${r.code ? ` · ${r.code}` : ""}`, markup: defaultMarkup,
+    unit: r.unit || "", source: r.learned ? (r.source || "Learned from your documents") : `Your rate${r.code ? ` · ${r.code}` : ""}`, markup: defaultMarkup,
   }]);
 
   const updateItem = (id, field, value) =>
@@ -388,7 +388,7 @@ export default function VulaQSPro({ tenantId }) {
           <input value={projectName} onChange={e => setProjectName(e.target.value)} style={{ ...inp, background: "transparent", border: "none", fontSize: 14, fontWeight: 600, color: C.text, width: 220 }} />
           <input value={client} onChange={e => setClient(e.target.value)} style={{ ...inp, background: "transparent", border: "none", fontSize: 12, color: C.muted, width: 160 }} placeholder="Client name" />
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ fontSize: 10, color: C.dim, fontFamily: "'DM Mono', monospace" }}>Market reference: AECOM 2025/26 (static ranges){ownRates.length ? ` · ${ownRates.length} of your own rates` : ""}</div>
+            <div style={{ fontSize: 10, color: C.dim, fontFamily: "'DM Mono', monospace" }}>Market reference: AECOM 2025/26 (static ranges){ownRates.length ? ` · ${ownRates.length} of your own rates (incl. learned from your documents)` : ""}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => setVatOn(!vatOn)}>
               <div style={{ width: 32, height: 17, borderRadius: 9, background: vatOn ? C.blue : C.border, position: "relative", transition: "background 0.2s" }}>
                 <div style={{ position: "absolute", top: 2, left: vatOn ? 16 : 2, width: 13, height: 13, borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
@@ -433,11 +433,11 @@ export default function VulaQSPro({ tenantId }) {
                 </div>
               </div>
               <div style={{ maxHeight: 520, overflowY: "auto" }}>
-                {ownRates.filter(r => !search || `${r.description} ${r.code}`.toLowerCase().includes(search.toLowerCase())).map(r => (
+                {ownRates.filter(r => !search || `${r.description} ${r.code || ""}`.toLowerCase().includes(search.toLowerCase())).slice(0, search ? 200 : 40).map(r => (
                   <div key={`own-${r.code || r.description}-${r.rate}`} onClick={() => addOwnRate(r)} style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", background: `${C.green}0d` }}>
                     <div style={{ fontSize: 11, color: C.text, marginBottom: 3 }}>{r.description || r.code}</div>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace" }}>Your rate · {r.unit}</span>
+                      <span style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace" }} title={r.source || ""}>{r.learned ? `From your documents (${r.observations}) · ${r.unit}` : `Your rate · ${r.unit}`}</span>
                       <span style={{ fontSize: 10, color: C.green, fontFamily: "'DM Mono', monospace" }}>{R(r.rate || 0)}</span>
                     </div>
                   </div>

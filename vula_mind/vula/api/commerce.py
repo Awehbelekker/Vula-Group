@@ -1581,6 +1581,55 @@ async def admin_reread_documents(tenant_id: str, request: Request):
     return {"started": bool(n), "candidates": n}
 
 
+@router.get("/{tenant_id}/admin/documents/sort-projects")
+async def admin_sort_projects_preview(tenant_id: str):
+    """What "which project?" documents Vula can place itself, and why — nothing written."""
+    from vula.api.tenants import uses_projects
+    from vula.integrations.project_resolver import sort_pending
+    if not uses_projects(tenant_id):
+        return {"waiting": 0, "would_file": 0, "filed": 0, "still_ask": 0, "by_project": {},
+                "by_reason": {}, "sample": []}
+    return sort_pending(tenant_id, apply=False)
+
+
+@router.post("/{tenant_id}/admin/documents/sort-projects")
+async def admin_sort_projects_apply(tenant_id: str, request: Request):
+    """File the waiting documents Vula can place confidently (named in the document, paid by a
+    payment on a project, or the supplier's usual project). Owner/manager."""
+    from vula.integrations.project_resolver import sort_pending
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can do this.")
+    include = request.query_params.get("include_suggested") in ("1", "true", "yes")
+    return sort_pending(tenant_id, apply=True, include_suggested=include)
+
+
+@router.get("/{tenant_id}/admin/documents/learn")
+async def admin_learn_status(tenant_id: str):
+    """What the price book holds, and the last "Learn from history" run's progress."""
+    from vula.commerce import price_book, reread
+    try:
+        book = price_book.summary(tenant_id)
+    except Exception as exc:
+        log.debug("price book summary failed: %s", exc)
+        book = {}
+    return {"price_book": book, "status": reread.learn_status(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/documents/learn")
+async def admin_learn_from_history(tenant_id: str, request: Request):
+    """Learn from everything already filed (re-read what's missing, read BOQs in full, build the
+    price book from every invoice/quote/BOQ line and the workers' day rates). Owner/manager —
+    it spends model calls on the re-read. Nothing is booked."""
+    from vula.commerce import reread
+    from vula.commerce.background_tasks import run_background
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can start this.")
+    if reread.learn_status(tenant_id).get("running") or reread.status_for(tenant_id).get("running"):
+        return {"started": False, "status": reread.learn_status(tenant_id)}
+    run_background(tenant_id, "learn_from_history", reread.learn_from_history(tenant_id))
+    return {"started": True}
+
+
 @router.post("/{tenant_id}/admin/stock/adjust")
 async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
     """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""
@@ -2509,7 +2558,8 @@ async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
     async def _run():
         try:
             return await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
-                                                   source_file=body.filename or "upload.pdf")
+                                                   source_file=body.filename or "upload.pdf",
+                                                   trusted=True)
         finally:
             try:
                 os.unlink(tmp)
@@ -2579,7 +2629,7 @@ async def admin_bank_statement_from_upload(tenant_id: str, body: dict):
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"no uploaded file named {fname}")
     _statement_job(tenant_id, bank_rec.ingest_statement(
-        tenant_id, path, source_file=fname))
+        tenant_id, path, source_file=fname, trusted=True))
     return {"processing": True, "note": "Reconciling — check the Bank tab in a few minutes."}
 
 
@@ -2812,6 +2862,21 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
     if body.action == "match" and body.invoice_id:
         await service.update_invoice_status(tenant_id, body.invoice_id, "paid")
         patch = {"matched_invoice_id": body.invoice_id, "match_status": "matched"}
+        # A payment matched to a bill is for that bill's project, and the other way round —
+        # so job costing sees it whichever side was allocated first.
+        try:
+            inv = (db.table("commerce_invoices").select("project").eq("tenant_id", tenant_id)
+                   .eq("id", body.invoice_id).limit(1).execute().data or [{}])[0]
+            if inv.get("project") and not txn.get("project"):
+                patch["project"] = inv["project"]
+            elif txn.get("project") and not inv.get("project"):
+                (db.table("commerce_invoices").update({"project": txn["project"]})
+                 .eq("tenant_id", tenant_id).eq("id", body.invoice_id).execute())
+                (db.table("vula_filed_documents").update({"project": txn["project"], "status": "filed"})
+                 .eq("tenant_id", tenant_id).eq("commerce_invoice_id", body.invoice_id)
+                 .eq("status", "pending_project").execute())
+        except Exception as exc:
+            log.debug("project carry-over on match skipped: %s", exc)
     elif body.action == "match" and body.order_id:
         orows = (db.table("commerce_orders").select("id,display_id,customer_name,customer_phone,total_cents")
                  .eq("tenant_id", tenant_id).eq("id", body.order_id).limit(1).execute().data or [])
@@ -3214,6 +3279,128 @@ async def admin_assign_worker(tenant_id: str, txn_id: str, body: AssignWorkerIn)
          "categorized_by": "owner", "match_status": "matched"}).eq("id", txn_id).execute()
     accounting.learn_category_rule(tenant_id, txn, "casual_labour")   # so similar payments auto-file
     return {"ok": True, "worker": w.get("name"), "project": w.get("default_project")}
+
+
+class AllocateIn(BaseModel):
+    project: Optional[str] = None
+    trade: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/{txn_id}/allocate")
+async def admin_allocate_txn(tenant_id: str, txn_id: str, body: AllocateIn):
+    """Put a bank line on a project (and trade) — job costing reads it — and LEARN it, so the
+    next statement's lines from the same payee are allocated the same way."""
+    from vula.commerce import allocation
+    db = service._client()
+    rows = (db.table("commerce_bank_transactions").select("*")
+            .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    project = service.canonical_project(tenant_id, body.project) if body.project else None
+    trade = (body.trade or "").strip() or None
+    (db.table("commerce_bank_transactions").update({"project": project, "trade": trade})
+     .eq("tenant_id", tenant_id).eq("id", txn_id).execute())
+    if project:
+        allocation.learn(tenant_id, rows[0].get("description"), project, trade,
+                         payee=rows[0].get("payee"))
+    return {"ok": True, "project": project, "trade": trade}
+
+
+@router.post("/{tenant_id}/admin/bank/statement/sheet")
+async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Request):
+    """Import a statement spreadsheet that's already categorised (xlsx/csv), keeping its
+    categories. {file_base64, filename, preview?: bool, project_map?: {sheet label: project}}.
+    preview=true only reads it and suggests how its project labels map onto this business's
+    projects; the import saves the lines (owner-allocated) and learns the allocations."""
+    import base64
+    import tempfile
+    from pathlib import Path
+    from vula.commerce import statement_sheet
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can import a statement.")
+    body = body or {}
+    name = Path((body.get("filename") or "statement.xlsx").replace("\\", "/")).name
+    if not name.lower().endswith((".xlsx", ".xlsm", ".csv")):
+        raise HTTPException(status_code=400, detail="Send an .xlsx or .csv statement.")
+    try:
+        data = base64.b64decode(body.get("file_base64") or "")
+    except Exception:
+        raise HTTPException(status_code=400, detail="file_base64 is not valid base64")
+    if not data:
+        raise HTTPException(status_code=400, detail="file_base64 is required")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / name
+        path.write_bytes(data)
+        if body.get("preview"):
+            return statement_sheet.preview(tenant_id, path)
+        result = statement_sheet.import_sheet(tenant_id, path, body.get("project_map") or {},
+                                              source_file=name,
+                                              replace_existing=bool(body.get("replace_existing")))
+    if not result["parsed"]:
+        raise HTTPException(status_code=400, detail="No statement lines found — the sheet needs "
+                            "Date, Description and Money In/Money Out (or Amount) columns.")
+    return result
+
+
+@router.get("/{tenant_id}/admin/projects/costing")
+async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
+    """Job costing from the bank: per project received / cost by trade / cost-plus fee target /
+    overhead share / profit, plus the business's overheads (vula/commerce/job_costing.py)."""
+    from vula.commerce import job_costing
+    res = job_costing.costing(tenant_id, since=since)
+    res["fee_default_pct"] = job_costing.terms(tenant_id)["*"]
+    return res
+
+
+class ProjectTermsIn(BaseModel):
+    project: str = "*"
+    fee_pct: float
+
+
+@router.post("/{tenant_id}/admin/projects/terms")
+async def admin_project_terms(tenant_id: str, body: ProjectTermsIn, request: Request):
+    """Set a project's cost-plus fee % (project "*" = the business default)."""
+    from vula.commerce import job_costing
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can set fees.")
+    if not 0 <= body.fee_pct <= 100:
+        raise HTTPException(status_code=400, detail="fee_pct must be 0–100")
+    job_costing.set_fee(tenant_id, body.project or "*", body.fee_pct)
+    return {"ok": True, "project": body.project or "*", "fee_pct": body.fee_pct}
+
+
+@router.get("/{tenant_id}/admin/projects/price-advice")
+async def admin_price_advice(tenant_id: str, item: str, quantity: Optional[float] = None,
+                             unit: Optional[str] = None, project: Optional[str] = None):
+    from vula.commerce import job_costing
+    return job_costing.price_advice(tenant_id, item, quantity, unit, project)
+
+
+@router.get("/{tenant_id}/admin/crosscheck")
+async def admin_cross_check(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    """Documents ↔ books ↔ bank: bills not in the books, bills not paid (with the likely bank
+    payment), payments with no document, unpaid sales invoices, unexplained money in."""
+    from vula.commerce import cross_check
+    rep = cross_check.report(tenant_id, since, until)
+    rep["text"] = cross_check.summary_text(rep)
+    return rep
+
+
+@router.post("/{tenant_id}/admin/crosscheck/book-unbooked")
+async def admin_book_unbooked(tenant_id: str, request: Request):
+    """Book filed bills/quotes that have a verified total but never reached the books."""
+    from vula.commerce import cross_check
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can book these.")
+    return await cross_check.book_unbooked(tenant_id)
+
+
+@router.get("/{tenant_id}/admin/reports/vat-scenario")
+async def admin_vat_scenario(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    """VAT in vs out per month from real tax invoices — and, when not registered, what it would
+    be if the business were, plus 12-month sales against the registration threshold."""
+    from vula.commerce import cross_check
+    return cross_check.vat(tenant_id, since, until)
 
 
 @router.get("/{tenant_id}/admin/reports/labour")

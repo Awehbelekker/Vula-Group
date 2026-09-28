@@ -106,6 +106,8 @@ async def assign_project(doc_id: str, body: AssignIn, request: Request) -> dict:
     if not rows or (scope and rows[0].get("tenant_id") != scope):
         return {"error": "Document not found."}
     doc = rows[0]
+    from vula.commerce.service import canonical_project
+    body.project = canonical_project(doc["tenant_id"], body.project) or body.project
 
     clickup_list_id, clickup_task_id = body.clickup_list_id, None
     if body.clickup_list_id and doc.get("file_url"):
@@ -132,6 +134,26 @@ async def assign_project(doc_id: str, body: AssignIn, request: Request) -> dict:
         }).eq("id", doc_id).execute()
     except Exception as exc:
         return {"error": str(exc)}
+
+    # The committed bill/quote and the document's prices follow the document, and a BoQ sets
+    # the project's contract value — as resolve_pending_document does for the WhatsApp answer.
+    if doc.get("commerce_invoice_id"):
+        try:
+            (_client().table("commerce_invoices").update({"project": body.project})
+             .eq("tenant_id", doc["tenant_id"]).eq("id", doc["commerce_invoice_id"]).execute())
+        except Exception as exc:
+            log.warning("project → commerce_invoices (assign) failed: %s", exc)
+    if (doc.get("category") or "") == "Bill of Quantities (BOQ)":
+        total_cents = (doc.get("fields") or {}).get("total_cents")
+        if total_cents:
+            from vula.commerce.service import upsert_project_boq
+            upsert_project_boq(doc["tenant_id"], body.project, int(total_cents),
+                               sections=(doc.get("fields") or {}).get("sections") or None)
+    try:
+        from vula.commerce.price_book import set_project
+        set_project(doc["tenant_id"], doc_id, body.project)
+    except Exception as exc:
+        log.debug("price book project (assign) skipped: %s", exc)
 
     # Same two follow-ups the WhatsApp-reply resolution path already does (doc_filing.py's
     # resolve_pending_document) — this dashboard path was missing both, so a document assigned

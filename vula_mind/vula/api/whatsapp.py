@@ -3082,6 +3082,18 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # with a resolved project auto-files — this used to auto-file on ANY truthy match,
         # including a single coincidental token, with no ambiguity check at all.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
+        # A project NAMED in the document beats a learned rule or a loose ClickUp overlap
+        # (2026-09-28: the Atlantis deposit invoice was filed under HPC by a learned rule).
+        try:
+            from vula.api.tenants import uses_projects as _up
+            if _up(tenant_id):
+                from vula.integrations.project_resolver import resolve as _resolve
+                _named = _resolve(tenant_id, {}, hint)
+                if _named and _named.get("kind") == "named" and (match or {}).get("project") != _named["project"]:
+                    match = {"project": _named["project"], "clickup_list_id": None,
+                             "confidence": _named["confidence"], "ambiguous": False}
+        except Exception as exc:
+            logger.debug("named-project check skipped: %s", exc)
         # 2026-08-08 fix: confidence >= 0.6 required, not just "some project, not ambiguous".
         # The weakest tier — match_project()'s canonical-register substring fallback, confidence
         # 0.5, explicitly "no separate ambiguity check" (doc_filing.py:126-138) — used to count
@@ -3093,7 +3105,34 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # still auto-files with no added friction — only the weak fallback now asks.
         confident = bool(match and not match.get("ambiguous") and match.get("project")
                          and (match.get("confidence") or 0) >= 0.6)
-        if confident:
+        from vula.api.tenants import uses_projects
+        resolved = None
+        if not confident and uses_projects(tenant_id):
+            # The evidence a person would use (2026-09-28, Ian): the project named in the
+            # document, the bank payment that settled it, the supplier's usual project.
+            try:
+                from vula.integrations.project_resolver import resolve, AUTO_FILE
+                resolved = resolve(tenant_id, fields, hint)
+                if resolved and resolved.get("project") and resolved["confidence"] >= AUTO_FILE:
+                    match = {"project": resolved["project"], "clickup_list_id": None,
+                             "confidence": resolved["confidence"], "ambiguous": False}
+                    confident = True
+                elif resolved and resolved.get("candidates") and not (match or {}).get("candidates"):
+                    match = {"project": None, "ambiguous": True, "candidates": resolved["candidates"]}
+                elif resolved and resolved.get("project") and not (match or {}).get("candidates"):
+                    match = {"project": None, "ambiguous": True, "candidates": [resolved["project"]]}
+            except Exception as exc:
+                logger.debug("project resolver skipped: %s", exc)
+        if not uses_projects(tenant_id):
+            # A commerce business (Off the Hook): no projects — file it, never ask.
+            row = await file_document(
+                tenant_id, filename=result.filename, data=data, content_type=ctype,
+                category=category, summary=summary, fields=fields, doc_id=result.doc_id,
+                source=source, filed_by=phone, status="filed", customer_phone=customer_phone,
+            )
+            note = ""
+            match, confident = None, False
+        elif confident:
             row = await file_document(
                 tenant_id, filename=result.filename, data=data, content_type=ctype,
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,
@@ -3102,6 +3141,8 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 customer_phone=customer_phone,
             )
             note = f"📂 Filed under *{match['project']}*."
+            if resolved and resolved.get("reason") and resolved.get("project") == match["project"]:
+                note += f" ({resolved['reason']} — wrong? change it in Documents.)"
             if row.get("clickup_task_id"):
                 note += " Added to ClickUp."
         else:
@@ -3113,7 +3154,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 customer_phone=customer_phone,
             )
             candidates = match.get("candidates") if match else None
-            if candidates:
+            if candidates and len(candidates) == 1:
+                note = (f"📂 Is this for *{candidates[0]}*? Reply 'yes', another project name, "
+                        f"or 'skip'.")
+            elif candidates:
                 note = ("📂 That could be more than one project — " + " / ".join(candidates) +
                         ". Reply with the exact project name (or 'skip').")
             else:
@@ -3429,6 +3473,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
     except Exception as exc:
         logger.debug("Doc analyze: deterministic parse skipped for %s: %s", filename, exc)
 
+    full_text = text
     text = text[:6000]
 
     # 2. One LLM call → category + summary + structured fields
@@ -3452,7 +3497,10 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     '"due_date": "YYYY-MM-DD"|null, "total_cents": integer|null, '
                     '"vat_cents": integer|null, "confidence": "high"|"medium"|"low", '
                     '"line_items": [{"description": string, "quantity": number, '
-                    '"unit_price_cents": integer|null, "total_cents": integer|null}]} — money in '
+                    '"unit": string|null, "unit_price_cents": integer|null, '
+                    '"total_cents": integer|null, "section": string|null}]} — unit as written '
+                    '(m2, m, each, day, bag…), section = the BOQ/trade heading the line sits '
+                    'under (null on an invoice); money in '
                     "CENTS (Rands × 100), never Rand floats — this is the same shape/units the "
                     "Smart Scanner already uses, so both pipelines can be verified and booked the "
                     "same way. For Business Card, fields MUST use this exact shape: "
@@ -3603,10 +3651,91 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 logger.warning("Doc analyze: %s has %d figure(s) not found in its text: %s",
                                filename, len(missing), [m["rand"] for m in missing])
                 result.setdefault("fields", {})["_unverified_figures"] = missing
+        if result and result.get("category") == "Bill of Quantities (BOQ)":
+            result = await _complete_boq_lines(result, local_path, full_text, filename)
+        if result:
+            # Labels a person would put on it — "Variation — over BOQ", "Back-charge"
+            # (vula/integrations/doc_labels.py, deterministic).
+            try:
+                from vula.integrations.doc_labels import labels_for
+                labels = labels_for(result.get("category") or "", result.get("summary") or "",
+                                    result.get("fields") or {}, filename)
+                if labels:
+                    result.setdefault("fields", {})["labels"] = labels
+            except Exception as exc:
+                logger.debug("document labels skipped: %s", exc)
         return result
     except Exception as exc:
         logger.warning("Doc analyze setup failed for %s: %s", filename, exc)
         return None
+
+
+async def _complete_boq_lines(result: dict, local_path, full_text: str, filename: str) -> dict:
+    """A BOQ's every line, not the handful the one-shot read returns. 2026-09-28, real
+    digg-demo data: the R1.35M "HPC Cape Town Extra air.xlsx" came through as 4 lines and the
+    HPC Interior BOQ as 0 — the read above sees 6,000 characters and a summary-sized list.
+    A spreadsheet is read row by row (vula/ingestion/boq_sheet.py, no LLM). A longer PDF/text
+    BOQ gets its remaining text read in chunks for line items only; a chunk's line is kept only
+    when its figures appear in that chunk's text (ungrounded_figures). Best-effort: any failure
+    leaves the result as it was."""
+    fields = result.get("fields") or {}
+    try:
+        from vula.ingestion import boq_sheet
+        if str(local_path or "").lower().endswith(boq_sheet.SHEET_SUFFIXES):
+            lines = boq_sheet.parse(local_path)
+            if lines:
+                result["fields"] = boq_sheet.apply_to_fields(fields, lines)
+                logger.info("BOQ sheet %s: %d lines read from the sheet", filename, len(lines))
+            return result
+        if len(full_text or "") <= 6000:
+            return result
+        extra = await _boq_lines_from_text(full_text[6000:6000 + 6000 * 8], filename)
+        if extra:
+            seen = {(str(li.get("description") or "").strip().lower(), li.get("total_cents"))
+                    for li in fields.get("line_items") or [] if isinstance(li, dict)}
+            merged = list(fields.get("line_items") or [])
+            merged += [li for li in extra
+                       if (str(li.get("description") or "").strip().lower(), li.get("total_cents")) not in seen]
+            result["fields"] = {**fields, "line_items": merged,
+                                "sections": boq_sheet.section_budgets(merged)}
+            logger.info("BOQ %s: %d more lines read past the first page of text", filename, len(extra))
+    except Exception as exc:
+        logger.debug("BOQ line completion skipped for %s: %s", filename, exc)
+    return result
+
+
+async def _boq_lines_from_text(text: str, filename: str) -> list:
+    import json as _json
+    import litellm
+    from core.llm_router import resolve_cheap_route
+    from vula.commerce.extraction_quality import ungrounded_figures
+    model, api_key, api_base = await resolve_cheap_route()
+    out: list = []
+    for i in range(0, len(text), 6000):
+        chunk = text[i:i + 6000]
+        try:
+            resp = await litellm.acompletion(model=model, temperature=0, max_tokens=1800,
+                api_key=api_key, api_base=api_base, messages=[
+                    {"role": "system", "content":
+                        "This is part of a Bill of Quantities. Return STRICT JSON only: "
+                        '{"line_items": [{"description": string, "quantity": number|null, '
+                        '"unit": string|null, "unit_price_cents": integer|null, '
+                        '"total_cents": integer|null, "section": string|null}]} — every priced '
+                        "line on this text, money in CENTS (Rands × 100), section = the heading "
+                        "the line sits under. Skip subtotals, totals and carried-forward lines. "
+                        "Never invent a line or a figure."},
+                    {"role": "user", "content": f"Filename: {filename}\n\n{chunk}\n\nJSON:"}])
+            raw = (resp.choices[0].message.content or "").replace("```json", "").replace("```", "")
+            a, b = raw.find("{"), raw.rfind("}")
+            data = _json.loads(raw[a:b + 1]) if a >= 0 and b > a else {}
+        except Exception as exc:
+            logger.debug("BOQ chunk read failed for %s: %s", filename, exc)
+            continue
+        for li in data.get("line_items") or []:
+            if (isinstance(li, dict) and li.get("description")
+                    and not ungrounded_figures({"line_items": [li]}, chunk)):
+                out.append(li)
+    return out
 
 
 def _friendly_document_name(category: str, fields: dict, original_filename: str) -> str:
@@ -3622,6 +3751,11 @@ def _friendly_document_name(category: str, fields: dict, original_filename: str)
             or fields.get("company") or fields.get("business_name") or "")
     ident = re.sub(r"[^A-Za-z0-9 ]+", "", ident).strip()
     label = category.split(" / ")[0].split(" (")[0].strip()  # "Quote / Estimate" -> "Quote"
+    labels = fields.get("labels") or []
+    if any(str(x).startswith("Variation") for x in labels):
+        label = "Variation (over BOQ)"          # the label goes in the file's name too
+    elif "Back-charge" in labels:
+        label = "Back-charge"
     base = f"{label} - {ident}" if ident else label
     base = re.sub(r"\s+", " ", base).strip()
     ts = _dt.now().strftime("%Y%m%d-%H%M")

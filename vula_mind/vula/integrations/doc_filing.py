@@ -149,8 +149,41 @@ _ACCOUNT_SIGNAL_KEYS = (("account_number", "account"), ("account", "account"),
                         ("beneficiary_account", "account"), ("reference", "reference"))
 
 
-def _signals_from(fields: dict) -> list:
-    """Extract (signal_type, normalised_value) learning signals from a doc's fields."""
+def _own_names(tenant_id: Optional[str]) -> set:
+    """The business's own name(s), normalised — never a filing signal. 2026-09-28, digg-demo:
+    every document DIGG itself issues (a deposit invoice to Atlantis Foods, the Breco Seafoods
+    budget, council plans for Tamboerskloof) carries "supplier: DIGG"; a rule learned once as
+    "digg → HPC_Bokaap" then filed all of them under HPC."""
+    if not tenant_id:
+        return set()
+    from vula.commerce.service import _canonical_party
+    names = {tenant_id, tenant_id.replace("-demo", "").replace("-", " ")}
+    try:
+        from vula.api.tenants import get_config
+        cfg = get_config(tenant_id) or {}
+        for k in ("display_name", "legal_name", "business_name"):
+            if cfg.get(k):
+                names.add(str(cfg[k]))
+    except Exception:
+        pass
+    out = set()
+    for n in names:
+        key = _canonical_party(n)
+        if key and len(key) >= 3:
+            out.add(key)
+            out.add(key.split()[0])
+    return out
+
+
+def _is_own(party: str, own: set) -> bool:
+    from vula.commerce.service import _canonical_party
+    key = _canonical_party(party)
+    return bool(key) and (key in own or key.split()[0] in own)
+
+
+def _signals_from(fields: dict, tenant_id: Optional[str] = None) -> list:
+    """Extract (signal_type, normalised_value) learning signals from a doc's fields. The
+    business's own name is never one (see _own_names)."""
     from vula.commerce.party import resolve_party_name
 
     out, seen = [], set()
@@ -164,6 +197,8 @@ def _signals_from(fields: dict) -> list:
     # 'payer' excluded — usually the tenant's own name (who paid), not who sent the document,
     # and would pollute learned rules with a signal that matches almost every doc.
     party = resolve_party_name(fields, exclude=("payer",))
+    if party and tenant_id and _is_own(party, _own_names(tenant_id)):
+        party = None
     if party:
         val = party.lower()
         if len(val) >= 3 and val not in seen:
@@ -176,7 +211,7 @@ def learn_filing_rule(tenant_id: str, fields: dict, project: str) -> int:
     if not project or not fields:
         return 0
     n = 0
-    for stype, val in _signals_from(fields):
+    for stype, val in _signals_from(fields, tenant_id):
         try:
             existing = (_client().table("vula_filing_rules").select("id,hits")
                         .eq("tenant_id", tenant_id).eq("signal", val).eq("project", project)
@@ -211,7 +246,7 @@ def lookup_learned_project(tenant_id: str, fields: dict) -> Optional[dict]:
     — so the caller asks instead of guessing, offering the payee's own history as quick-reply
     options.
     """
-    sigs = [v for _, v in _signals_from(fields)]
+    sigs = [v for _, v in _signals_from(fields, tenant_id)]
     if not sigs:
         return None
     try:
@@ -347,6 +382,9 @@ async def file_document(
     exception; check_document_quota itself fails open on a metering read error.
     """
     from vula.commerce.plan_limits import PlanLimitError, check_document_quota
+    if project:
+        from vula.commerce.service import canonical_project
+        project = canonical_project(tenant_id, project)
     try:
         check_document_quota(tenant_id)
     except PlanLimitError as exc:
@@ -373,6 +411,7 @@ async def file_document(
             except Exception as exc:
                 logger.debug("Duplicate doc update skipped: %s", exc)
             dup["duplicate"] = True
+            _record_prices(tenant_id, {**dup, "category": category, "fields": fields or {}})
             return dup
 
     file_url = None
@@ -446,7 +485,20 @@ async def file_document(
                     row = existing[0]
         except Exception as exc2:
             logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc2)
+    _record_prices(tenant_id, row)
     return row
+
+
+def _record_prices(tenant_id: str, row: dict) -> None:
+    """Every priced line on a filed invoice/quote/BOQ goes into the tenant's price book
+    (vula/commerce/price_book.py) — the QS rates learn from the documents. Never blocks filing."""
+    if not row.get("id"):
+        return
+    try:
+        from vula.commerce.price_book import record_from_document
+        record_from_document(tenant_id, row)
+    except Exception as exc:
+        logger.debug("price book record skipped: %s", exc)
 
 
 async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Optional[dict]:
@@ -492,6 +544,20 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         return {"skipped": True, "filename": doc.get("filename")}
 
     match = match_project(tenant_id, text)
+    # "yes" to "Is this for *HPC Bokaap*?" — the question project_resolver suggested; work the
+    # same suggestion out again from the document rather than storing it.
+    if text.strip().lower().rstrip(".!") in ("yes", "y", "yep", "ja", "yes please", "correct", "that's right"):
+        try:
+            from vula.integrations.project_resolver import resolve
+            r = resolve(tenant_id, doc.get("fields") or {},
+                        f"{doc.get('filename') or ''} {doc.get('summary') or ''}")
+            suggested = (r or {}).get("project") or (
+                (r or {}).get("candidates")[0] if len((r or {}).get("candidates") or []) == 1 else None)
+            if suggested:
+                match = {"project": suggested, "clickup_list_id": None, "confidence": 1.0,
+                         "ambiguous": False}
+        except Exception as exc:
+            logger.debug("yes-to-suggestion skipped: %s", exc)
     # A match with no `project` (either no candidate at all, or an unresolved tie between
     # several plausible projects — match.get("ambiguous")) is treated identically: re-ask
     # rather than silently filing under a null project.
@@ -540,6 +606,11 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         }).eq("id", doc["id"]).execute()
     except Exception as exc:
         logger.warning("Pending doc update failed: %s", exc)
+    try:
+        from vula.commerce.price_book import set_project
+        set_project(tenant_id, doc["id"], match["project"])
+    except Exception as exc:
+        logger.debug("price book project skipped: %s", exc)
 
     # 2026-08-12 fix — the financial record already committed by commit_inbound_document (at
     # filing time, when the project wasn't yet known) never had its `project` updated once the
@@ -562,7 +633,8 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
                 total_cents = (doc.get("fields") or {}).get("total_cents")
                 if total_cents:
                     from vula.commerce.service import upsert_project_boq
-                    upsert_project_boq(tenant_id, match["project"], int(total_cents))
+                    upsert_project_boq(tenant_id, match["project"], int(total_cents),
+                                       sections=(doc.get("fields") or {}).get("sections") or None)
             except Exception as exc:
                 logger.debug("BoQ bridge (resolve) skipped: %s", exc)
 

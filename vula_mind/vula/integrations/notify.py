@@ -23,6 +23,7 @@ EVENTS = (
     "low_stock",
     "procurement_done",   # a procurement/stock-ordering ClickUp task was marked complete
     "window_nudge",       # keep-WhatsApp-window-open check-in (migration 112) — default-on, see whatsapp.py
+    "project_margin",     # weekly: a project below its fee or at a loss (vula/commerce/job_costing.py)
 )
 
 
@@ -110,6 +111,7 @@ _EVENT_KEYWORDS = {
     "low_stock": ("low stock", "stock alert"),
     "help_request": ("help request", "escalation"),
     "procurement_done": ("procurement", "stock ordering", "stock order"),
+    "project_margin": ("project check", "project margin", "project profit"),
 }
 # Deliberately requires more than a bare trigger word so this never shadows the exact-match
 # POPIA opt-out phrases ("stop", "unsubscribe" alone) handled earlier in the WhatsApp pipeline.
