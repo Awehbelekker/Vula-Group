@@ -35,7 +35,8 @@ from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
-    need_info_message, substitute_if_leaked, tool_source, unverified_prices, wrong_arithmetic,
+    need_info_message, substitute_if_leaked, substitute_if_unbacked_claim, tool_source,
+    unverified_prices, wrong_arithmetic,
 )
 from vula.commerce import service
 
@@ -1273,6 +1274,8 @@ class CommerceAdminSkill(BaseSkill):
             answer = substitute_if_degenerate(answer, skill=self.name, tenant_id=inp.tenant_id)
             answer = substitute_if_leaked(answer, skill=self.name, tenant_id=inp.tenant_id,
                                           tool_names=[t["function"]["name"] for t in tools])
+            answer = substitute_if_unbacked_claim(answer, collected_sources, skill=self.name,
+                                                  tenant_id=inp.tenant_id)
             # 2026-08-31: a real transcript showed a specific price (R129.90/m²) stated with
             # total confidence that appeared nowhere in what lookup_business_info actually
             # returned — the adversarial verifier had that same text as grounding and still

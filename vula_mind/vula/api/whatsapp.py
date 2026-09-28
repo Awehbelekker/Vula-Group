@@ -1838,17 +1838,34 @@ async def _handle_image_or_video(
     handled = False
     if not expense_intent:
         handled = await _handle_media(phone, media_id, caption, msg_id)
-    # An UNCAPTIONED photo from a rep that wasn't a receipt: read it and ASK, don't file mute.
+    # An UNCAPTIONED photo from a rep: a receipt/slip goes to the books like a captioned one;
+    # anything else is read and the rep is ASKED, never filed mute. 2026-09-28, gerflor: a rep
+    # sent 7 fuel slips with no caption — each was described and answered "save as contact / log
+    # a meeting / file against a project?", nothing was booked, and two replies claimed "I have
+    # filed the receipt". Contractors already had this receipt probe (_handle_media); reps didn't.
     if (not handled and msg_type == "image" and not caption.strip()
             and route_tenant and await _sender_is_sales_rep(phone, route_tenant)):
+        try:
+            probe = await _download_document(media_id, route_tenant, f"receipt-{msg_id}.jpg", "image/jpeg")
+            is_receipt = bool(probe and await _is_receipt_photo(probe))
+        except Exception as exc:
+            logger.debug("rep receipt probe skipped: %s", exc)
+            is_receipt = False
+        if is_receipt:
+            logger.info("rep photo detected as RECEIPT → expenses (%s)", phone)
+            await _handle_document_ingest(phone, media_id, f"receipt-{msg_id}.jpg", "image/jpeg",
+                                         route_tenant_id=route_tenant, content_sha=content_sha,
+                                         route_mode=route_mode)
+            return
         description = await _describe_photo_for_rep(media_id)
         if description:
             prompt = (
                 f"[The rep sent this photo with no caption. "
                 f"What's in the photo: {description}]\n\n"
                 f"Tell them briefly what you can see, then ask what they'd like done with it — "
-                f"save it as a contact, log a meeting, file it against a project — unless one is "
-                f"obviously right, in which case do that and say so. "
+                f"save it as a contact, log a meeting, file it against a project, or log it as an "
+                f"expense — unless one is obviously right, in which case do that with the tool and "
+                f"say so. Never say something was saved or filed unless a tool did it. "
                 f"Never invent details that aren't visible in the photo."
             )
             if await _run_commerce_admin(phone, prompt, route_tenant):
