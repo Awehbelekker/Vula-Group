@@ -211,26 +211,56 @@ class RateExtractor:
                                         status="parse_failed",
                                         error=f"unparseable JSON in response: {raw[:200]!r}")
 
-            rates = []
-            for item in items:
-                if not item.get("label") or not item.get("low"):
-                    continue
-                key = re.sub(r"[^a-z0-9]", "_", item["label"].lower())[:40]
-                rates.append(MaterialRate(
-                    key=key,
-                    label=item.get("label", ""),
-                    unit=item.get("unit", "m²"),
-                    low=float(item.get("low", 0)),
-                    high=float(item.get("high", item.get("low", 0))),
-                    source=source_name,
-                    notes=item.get("notes", ""),
-                ))
-
-            return ScrapedCatalogue(source_name=source_name, source_url=url, rates=rates)
+            return ScrapedCatalogue(source_name=source_name, source_url=url,
+                                    rates=_rates_from_items(items, source_name))
 
         except (json.JSONDecodeError, Exception) as e:
             logger.error(f"Rate extraction failed for {source_name}: {e}")
             return ScrapedCatalogue(source_name=source_name, source_url=url, status="parse_failed", error=str(e))
+
+
+def _num(value) -> Optional[float]:
+    """A price the model returned — a number, or a string like "R1 200,50" — else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = re.sub(r"[^0-9.,]", "", value)
+        # A lone comma followed by 1-2 digits is a decimal comma ("1200,50"); any other comma
+        # groups thousands ("1,200").
+        if "." not in cleaned and re.fullmatch(r"\d+,\d{1,2}", cleaned):
+            cleaned = cleaned.replace(",", ".")
+        try:
+            return float(cleaned.replace(",", "")) if cleaned else None
+        except ValueError:
+            return None
+    return None
+
+
+def _rates_from_items(items: list, source_name: str) -> List["MaterialRate"]:
+    """Rows the model extracted → MaterialRates. A row with no usable low price is skipped on
+    its own; "high": null means a single price (high = low). 2026-09-28, production: one
+    "high": null row made float(None) raise and threw away AECOM's whole catalogue."""
+    rates = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("label"):
+            continue
+        low = _num(item.get("low"))
+        if not low or low <= 0:
+            continue
+        high = _num(item.get("high"))
+        key = re.sub(r"[^a-z0-9]", "_", str(item["label"]).lower())[:40]
+        rates.append(MaterialRate(
+            key=key,
+            label=str(item["label"]),
+            unit=item.get("unit") or "m²",
+            low=low,
+            high=high if high and high >= low else low,
+            source=source_name,
+            notes=item.get("notes") or "",
+        ))
+    return rates
 
 
 # ─── Database ─────────────────────────────────────────────────────────────────

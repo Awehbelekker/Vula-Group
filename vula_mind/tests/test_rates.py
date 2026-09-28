@@ -276,3 +276,26 @@ def test_rates_changed_only_filter():
     assert resp.status_code == 200
     data = resp.json()
     assert "rates" in data
+
+
+# ── 2026-09-28, production: "high": null threw away AECOM's whole catalogue ─────
+
+def test_a_null_high_keeps_the_row_and_the_rest_of_the_catalogue():
+    from vula.takeoff.construction_rates_scraper import _rates_from_items
+    rates = _rates_from_items([
+        {"label": "Cement 50kg", "unit": "bag", "low": 95, "high": None},
+        {"label": "Face brick", "unit": "no", "low": "R4,50", "high": "6.20"},
+        {"label": "Rebar Y12", "unit": "tonne", "low": "R18 500", "high": 21000},
+        {"label": "No price", "low": None},
+        {"label": "Words", "low": "on request"},
+        "not a row",
+    ], "AECOM 2025/26")
+    got = {r.label: (r.low, r.high) for r in rates}
+    assert got == {"Cement 50kg": (95.0, 95.0), "Face brick": (4.5, 6.2), "Rebar Y12": (18500.0, 21000.0)}
+    assert {r.source for r in rates} == {"AECOM 2025/26"}
+
+
+def test_a_high_below_low_is_treated_as_a_single_price():
+    from vula.takeoff.construction_rates_scraper import _rates_from_items
+    (r,) = _rates_from_items([{"label": "Sand", "low": 450, "high": 45}], "x")
+    assert (r.low, r.high) == (450.0, 450.0)
