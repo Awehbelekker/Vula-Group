@@ -198,6 +198,21 @@ async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[
                 except Exception as exc:
                     log.warning("BOQ re-read of %s failed: %s", row.get("id"), exc)
                     st["failed"] += 1
+        st["step"] = "labelling variations"
+        st["labelled"] = 0
+        from vula.integrations.doc_labels import labels_for
+        for row in rows:
+            f = row.get("fields") or {}
+            labels = labels_for(row.get("category") or "", row.get("summary") or "", f, row.get("filename") or "")
+            if labels and labels != (f.get("labels") or []):
+                f = {**f, "labels": labels}
+                row["fields"] = f
+                try:
+                    (service._client().table("vula_filed_documents").update({"fields": f})
+                     .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
+                    st["labelled"] += 1
+                except Exception as exc:
+                    log.debug("label update failed for %s: %s", row.get("id"), exc)
         st["step"] = "building the price book"
         for row in rows:
             st["priced_lines"] += price_book.record_from_document(tenant_id, row)

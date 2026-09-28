@@ -121,3 +121,40 @@ def test_the_months_main_project_is_only_a_suggestion(db):
     assert dry["would_file"] == 0 and dry["suggested_by_month"] == {"HPC Bokaap": 1}
     assert pr.sort_pending(TID, apply=True)["filed"] == 0                    # never on its own
     assert pr.sort_pending(TID, apply=True, include_suggested=True)["filed"] == 1
+
+
+# ── variations over the BOQ, and the business's own documents (2026-09-28, DIGG chats) ──
+
+def test_variations_and_back_charges_are_labelled():
+    from vula.integrations.doc_labels import labels_for, VARIATION, BACK_CHARGE
+    vo = labels_for("Quote / Estimate", "This document is a variation claim for additional works not "
+                    "included in the original drawings for the HPC Fit-Out project", {}, "Quote 20260928-1337.pdf")
+    assert vo == [VARIATION]
+    bc = labels_for("Quote / Estimate", "This document outlines additional costs incurred due to errors or "
+                    "delays caused by Storeplay, totaling R5,800.00 for skirtings, additional tiler day", {}, "")
+    assert bc == [VARIATION, BACK_CHARGE]
+    plain = labels_for("Invoice", "This is a tax invoice from Gardens Handiman Centre for cement and sand", {}, "")
+    assert plain == []
+    assert labels_for("Drawing / Plan", "additional works", {}, "") == []
+
+
+def test_the_label_goes_in_the_file_name():
+    from vula.api.whatsapp import _friendly_document_name
+    name = _friendly_document_name("Quote / Estimate", {"labels": ["Variation — over BOQ"]}, "x.pdf")
+    assert name.startswith("Variation (over BOQ) ") and name.endswith(".pdf")
+
+
+def test_the_businesss_own_name_is_never_a_filing_signal(db, monkeypatch):
+    from vula.integrations import doc_filing
+    monkeypatch.setattr("vula.api.tenants.get_config", lambda tid: {"display_name": "DIGG"})
+    assert doc_filing._signals_from({"supplier": "DIGG"}, TID) == []
+    assert doc_filing._signals_from({"supplier": "DiGG (Pty) Ltd"}, TID) == []
+    assert doc_filing._signals_from({"supplier": "Solid Cape"}, TID) == [("supplier", "solid cape")]
+    # the Breco estimate / Atlantis deposit invoice DIGG issued: no supplier clue, no month guess
+    assert pr.resolve(TID, {"supplier": "DIGG", "date": "2026-09-28"}, "Budget estimate Breco Seafoods") is None
+
+
+def test_a_place_name_alone_is_not_a_project(db):
+    # 17 Jordaan Street, Bo-Kaap is another client's block of flats, not HPC Bokaap
+    assert pr.resolve(TID, {}, "Fire and Rescue: Block of Flats at 17 Jordaan Street, Bo-Kaap") is None
+    assert pr.resolve(TID, {}, "HPC fit-out variation")["project"] == "HPC Bokaap"

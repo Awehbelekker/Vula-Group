@@ -149,8 +149,41 @@ _ACCOUNT_SIGNAL_KEYS = (("account_number", "account"), ("account", "account"),
                         ("beneficiary_account", "account"), ("reference", "reference"))
 
 
-def _signals_from(fields: dict) -> list:
-    """Extract (signal_type, normalised_value) learning signals from a doc's fields."""
+def _own_names(tenant_id: Optional[str]) -> set:
+    """The business's own name(s), normalised — never a filing signal. 2026-09-28, digg-demo:
+    every document DIGG itself issues (a deposit invoice to Atlantis Foods, the Breco Seafoods
+    budget, council plans for Tamboerskloof) carries "supplier: DIGG"; a rule learned once as
+    "digg → HPC_Bokaap" then filed all of them under HPC."""
+    if not tenant_id:
+        return set()
+    from vula.commerce.service import _canonical_party
+    names = {tenant_id, tenant_id.replace("-demo", "").replace("-", " ")}
+    try:
+        from vula.api.tenants import get_config
+        cfg = get_config(tenant_id) or {}
+        for k in ("display_name", "legal_name", "business_name"):
+            if cfg.get(k):
+                names.add(str(cfg[k]))
+    except Exception:
+        pass
+    out = set()
+    for n in names:
+        key = _canonical_party(n)
+        if key and len(key) >= 3:
+            out.add(key)
+            out.add(key.split()[0])
+    return out
+
+
+def _is_own(party: str, own: set) -> bool:
+    from vula.commerce.service import _canonical_party
+    key = _canonical_party(party)
+    return bool(key) and (key in own or key.split()[0] in own)
+
+
+def _signals_from(fields: dict, tenant_id: Optional[str] = None) -> list:
+    """Extract (signal_type, normalised_value) learning signals from a doc's fields. The
+    business's own name is never one (see _own_names)."""
     from vula.commerce.party import resolve_party_name
 
     out, seen = [], set()
@@ -164,6 +197,8 @@ def _signals_from(fields: dict) -> list:
     # 'payer' excluded — usually the tenant's own name (who paid), not who sent the document,
     # and would pollute learned rules with a signal that matches almost every doc.
     party = resolve_party_name(fields, exclude=("payer",))
+    if party and tenant_id and _is_own(party, _own_names(tenant_id)):
+        party = None
     if party:
         val = party.lower()
         if len(val) >= 3 and val not in seen:
@@ -176,7 +211,7 @@ def learn_filing_rule(tenant_id: str, fields: dict, project: str) -> int:
     if not project or not fields:
         return 0
     n = 0
-    for stype, val in _signals_from(fields):
+    for stype, val in _signals_from(fields, tenant_id):
         try:
             existing = (_client().table("vula_filing_rules").select("id,hits")
                         .eq("tenant_id", tenant_id).eq("signal", val).eq("project", project)
@@ -211,7 +246,7 @@ def lookup_learned_project(tenant_id: str, fields: dict) -> Optional[dict]:
     — so the caller asks instead of guessing, offering the payee's own history as quick-reply
     options.
     """
-    sigs = [v for _, v in _signals_from(fields)]
+    sigs = [v for _, v in _signals_from(fields, tenant_id)]
     if not sigs:
         return None
     try:

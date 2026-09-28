@@ -66,16 +66,17 @@ def _projects(tenant_id: str) -> List[Dict[str, Any]]:
         p["ids"].add(_key(p["name"]))
         if numbers.get(p["name"]):
             p["ids"].add(_key(numbers[p["name"]]))
-    # A distinctive word (≥3 chars, not generic) that belongs to only one project identifies it:
-    # "hpc" (HPC Bokaap / HPC_Bokaap), "porterfield", "sporty", "atlantis".
+    # A project's LEAD word identifies it when no other project shares it: "hpc" (HPC Bokaap /
+    # HPC_Bokaap / HPC001), "porterfield", "sporty", "atlantis". Only the lead word — a trailing
+    # place name ("bokaap") also appears on other jobs in that suburb (17 Jordaan Street,
+    # Bo-Kaap is a different client's block of flats).
     word_owner: Dict[str, set] = {}
     for p in names.values():
         for ident in p["ids"]:
-            for w in ident.split():
-                w2 = re.sub(r"\d+$", "", w)          # hpc001 → hpc
-                for cand in {w, w2}:
-                    if len(cand) >= 3 and cand not in _GENERIC and not cand.isdigit():
-                        word_owner.setdefault(cand, set()).add(p["name"])
+            lead = next((w for w in ident.split() if not w.isdigit() and w not in _GENERIC), "")
+            for cand in {lead, re.sub(r"\d+$", "", lead)}:     # hpc001 → hpc
+                if len(cand) >= 3 and cand not in _GENERIC:
+                    word_owner.setdefault(cand, set()).add(p["name"])
     for p in names.values():
         p["words"] = {w for w, owners in word_owner.items() if owners == {p["name"]}}
     return list(names.values())
@@ -128,6 +129,9 @@ def _by_supplier(tenant_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, A
     party = resolve_party_name(fields or {}, exclude=("payer",))
     if not party:
         return None
+    from vula.integrations.doc_filing import _is_own, _own_names
+    if _is_own(party, _own_names(tenant_id)):
+        return None                    # the business's own documents say nothing about the job
     pkey = _canonical_party(party)
     first = (pkey.split() or [""])[0]
     if len(first) < 3:
@@ -185,7 +189,13 @@ def resolve(tenant_id: str, fields: Optional[Dict[str, Any]], text: str = "") ->
     candidates = named or [by_key[k] for k in (usual or {}).get("candidates", []) if k in by_key]
     if candidates:
         return {"project": None, "ambiguous": True, "candidates": candidates, "confidence": 0.0}
-    busy = _month_project(tenant_id, fields)
+    from vula.commerce.party import resolve_party_name
+    from vula.integrations.doc_filing import _is_own, _own_names
+    party = resolve_party_name(fields, exclude=("payer",))
+    own_doc = bool(party) and _is_own(party, _own_names(tenant_id))
+    # The business's own documents (its estimates, deposit invoices, council plans) are often
+    # for a NEW job — "most of this month was HPC" says nothing about them.
+    busy = None if own_doc else _month_project(tenant_id, fields)
     if busy:
         # Not proof — a suggestion the owner confirms (never auto-filed).
         return {"project": busy["project"], "confidence": 0.5, "kind": "month",

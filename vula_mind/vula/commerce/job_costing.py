@@ -157,6 +157,12 @@ def costing(tenant_id: str, since: Optional[str] = None, txns: Optional[List[Dic
             "unallocated_trade_cents": d["trades"].get("Not yet allocated to a trade", 0),
             "trades": trades, "first": d["first"], "last": d["last"],
         })
+    variations = _variations(tenant_id)
+    from vula.commerce.service import project_key
+    for p in projects:
+        v = variations.get(project_key(p["project"]))
+        if v:
+            p["variations"] = v
     projects.sort(key=lambda x: -x["cost_cents"])
     overhead_total = sum(overhead_m.values())
     project_spend = sum(p["cost_cents"] for p in projects)
@@ -173,6 +179,43 @@ def costing(tenant_id: str, since: Optional[str] = None, txns: Optional[List[Dic
         "business_result_cents": sum(p["fee_earned_cents"] for p in projects) - overhead_total,
         "since": since,
     }
+
+
+def _variations(tenant_id: str) -> Dict[str, Dict[str, Any]]:
+    """Per project: documents labelled "Variation — over BOQ" (vula/integrations/doc_labels.py) —
+    what the business claims from its client for extra work, and extra costs suppliers charged
+    it. Ian, 2026-09-28: these are "over and above the projected BOQ"."""
+    from vula.commerce.ledger import _all_pages
+    from vula.commerce.service import project_key
+    from vula.integrations.doc_filing import _is_own, _own_names
+    from vula.integrations.doc_labels import is_variation
+
+    def make():
+        return (_client().table("vula_filed_documents").select("id,project,fields,filename")
+                .eq("tenant_id", tenant_id).in_("category", ["Invoice", "Quote / Estimate"]))
+    try:
+        rows = _all_pages(make)
+    except Exception as exc:
+        log.debug("variations read skipped: %s", exc)
+        return {}
+    own = _own_names(tenant_id)
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        f = r.get("fields") or {}
+        if not r.get("project") or not is_variation(f):
+            continue
+        try:
+            cents = int(f.get("total_cents") or 0)
+        except (TypeError, ValueError):
+            cents = 0
+        v = out.setdefault(project_key(r["project"]), {"documents": 0, "claimed_cents": 0, "extra_cost_cents": 0})
+        v["documents"] += 1
+        sup = f.get("supplier")
+        if not sup or _is_own(sup, own):
+            v["claimed_cents"] += cents        # the business's own claim to its client
+        else:
+            v["extra_cost_cents"] += cents     # a supplier charging for extra work
+    return out
 
 
 def _r(cents: Optional[int]) -> str:
@@ -213,6 +256,9 @@ def project_profit(tenant_id: str, project: Optional[str] = None) -> Dict[str, A
                 f"{_r(p['profit_cents'])} — {p['status']}. Biggest costs: {top}."
                 + (f" {_r(p['unallocated_trade_cents'])} of its cost isn't allocated to a trade yet."
                    if p["unallocated_trade_cents"] else "")
+                + (f" Variations over the BOQ: {p['variations']['documents']} document(s) — claimed from the "
+                   f"client {_r(p['variations']['claimed_cents'])}, extra costs from suppliers "
+                   f"{_r(p['variations']['extra_cost_cents'])}." if p.get("variations") else "")
                 + " Received counts money in the bank so far — a certificate not yet paid isn't in it.")
         return {"project": p, "text": text}
     lines = [f"• {p['project']}: received {_r(p['received_cents'])}, cost {_r(p['cost_cents'])}, "

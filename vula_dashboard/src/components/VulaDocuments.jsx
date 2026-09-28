@@ -190,6 +190,9 @@ function DocTile({ doc, projects, onAssign, onOpenImage }) {
           {doc.filename}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
+          {(doc.fields?.labels || []).map((l) => (
+            <span key={l} style={{ fontSize: 9.5, fontWeight: 700, color: "#fff", background: "#B7791F", padding: "2px 6px", borderRadius: 4, marginRight: 4 }}>{l}</span>
+          ))}
           {doc.category && (
             <span style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, background: C.surfaceAlt, padding: "2px 6px", borderRadius: 4 }}>{doc.category}</span>
           )}

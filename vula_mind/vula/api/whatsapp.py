@@ -3082,6 +3082,18 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # with a resolved project auto-files — this used to auto-file on ANY truthy match,
         # including a single coincidental token, with no ambiguity check at all.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
+        # A project NAMED in the document beats a learned rule or a loose ClickUp overlap
+        # (2026-09-28: the Atlantis deposit invoice was filed under HPC by a learned rule).
+        try:
+            from vula.api.tenants import uses_projects as _up
+            if _up(tenant_id):
+                from vula.integrations.project_resolver import resolve as _resolve
+                _named = _resolve(tenant_id, {}, hint)
+                if _named and _named.get("kind") == "named" and (match or {}).get("project") != _named["project"]:
+                    match = {"project": _named["project"], "clickup_list_id": None,
+                             "confidence": _named["confidence"], "ambiguous": False}
+        except Exception as exc:
+            logger.debug("named-project check skipped: %s", exc)
         # 2026-08-08 fix: confidence >= 0.6 required, not just "some project, not ambiguous".
         # The weakest tier — match_project()'s canonical-register substring fallback, confidence
         # 0.5, explicitly "no separate ambiguity check" (doc_filing.py:126-138) — used to count
@@ -3641,6 +3653,17 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 result.setdefault("fields", {})["_unverified_figures"] = missing
         if result and result.get("category") == "Bill of Quantities (BOQ)":
             result = await _complete_boq_lines(result, local_path, full_text, filename)
+        if result:
+            # Labels a person would put on it — "Variation — over BOQ", "Back-charge"
+            # (vula/integrations/doc_labels.py, deterministic).
+            try:
+                from vula.integrations.doc_labels import labels_for
+                labels = labels_for(result.get("category") or "", result.get("summary") or "",
+                                    result.get("fields") or {}, filename)
+                if labels:
+                    result.setdefault("fields", {})["labels"] = labels
+            except Exception as exc:
+                logger.debug("document labels skipped: %s", exc)
         return result
     except Exception as exc:
         logger.warning("Doc analyze setup failed for %s: %s", filename, exc)
@@ -3728,6 +3751,11 @@ def _friendly_document_name(category: str, fields: dict, original_filename: str)
             or fields.get("company") or fields.get("business_name") or "")
     ident = re.sub(r"[^A-Za-z0-9 ]+", "", ident).strip()
     label = category.split(" / ")[0].split(" (")[0].strip()  # "Quote / Estimate" -> "Quote"
+    labels = fields.get("labels") or []
+    if any(str(x).startswith("Variation") for x in labels):
+        label = "Variation (over BOQ)"          # the label goes in the file's name too
+    elif "Back-charge" in labels:
+        label = "Back-charge"
     base = f"{label} - {ident}" if ident else label
     base = re.sub(r"\s+", " ", base).strip()
     ts = _dt.now().strftime("%Y%m%d-%H%M")

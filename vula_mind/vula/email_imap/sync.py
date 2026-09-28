@@ -773,6 +773,16 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
         # Learned rules (from past corrections) win — they're high-confidence by definition.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
+        try:        # a project named in the document beats a learned rule (see whatsapp.py)
+            from vula.api.tenants import uses_projects as _up
+            if _up(tenant_id):
+                from vula.integrations.project_resolver import resolve as _resolve
+                _named = _resolve(tenant_id, {}, hint)
+                if _named and _named.get("kind") == "named" and (match or {}).get("project") != _named["project"]:
+                    match = {"project": _named["project"], "clickup_list_id": None,
+                             "confidence": _named["confidence"], "ambiguous": False}
+        except Exception as exc:
+            logger.debug("named-project check (email) skipped: %s", exc)
         # Auto-file on ANY non-ambiguous match with a resolved project — not just the old
         # "high" string, which silently discarded a real (if less certain) project guess and
         # asked a human unnecessarily. Only a genuine absence of signal, or an unresolved tie

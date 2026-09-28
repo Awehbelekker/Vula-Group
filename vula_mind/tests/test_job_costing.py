@@ -317,3 +317,19 @@ def test_the_sheet_can_replace_pdf_lines_for_its_dates_and_allocates_the_rest(db
     assert byid["p2"]["match_status"] == "matched"                     # matched work untouched
     assert byid["p3"]["project"] == "HPC Bokaap"                      # June line allocated by "hpc"
     assert out["also_allocated"] >= 1
+
+
+def test_variations_are_counted_per_project(db, tmp_path, monkeypatch):
+    _import(db, tmp_path)
+    monkeypatch.setattr("vula.api.tenants.get_config", lambda tid: {"display_name": "DIGG"})
+    db.tables.setdefault("vula_filed_documents", []).extend([
+        {"id": "v1", "tenant_id": TID, "category": "Quote / Estimate", "project": "HPC Bokaap",
+         "fields": {"supplier": None, "total_cents": 3433533, "labels": ["Variation — over BOQ"]}},
+        {"id": "v2", "tenant_id": TID, "category": "Invoice", "project": "HPC Bokaap",
+         "fields": {"supplier": "Storeplay", "total_cents": 580000, "labels": ["Variation — over BOQ", "Back-charge"]}},
+        {"id": "v3", "tenant_id": TID, "category": "Invoice", "project": "HPC Bokaap",
+         "fields": {"supplier": "Solid Cape", "total_cents": 999}},
+    ])
+    hpc = next(p for p in job_costing.costing(TID)["projects"] if p["project"] == "HPC Bokaap")
+    assert hpc["variations"] == {"documents": 2, "claimed_cents": 3433533, "extra_cost_cents": 580000}
+    assert "Variations over the BOQ: 2 document(s)" in job_costing.project_profit(TID, "hpc")["text"]

@@ -116,6 +116,8 @@ export default function VulaJobCosting({ tenantId }) {
             {feeEdit[p.project] !== undefined &&
               <button onClick={() => saveFee(p.project)} style={{ ...inp, cursor: "pointer", background: C.green, color: "#fff", border: "none" }}>Save</button>}
             {p.unallocated_trade_cents > 0 && <span style={{ color: C.amber }}>{R(p.unallocated_trade_cents)} not yet allocated to a trade</span>}
+            {p.variations && <span style={{ color: C.amber }} title="Documents labelled 'Variation — over BOQ'">
+              Variations over BOQ: {p.variations.documents} · claimed {R(p.variations.claimed_cents)} · extra costs {R(p.variations.extra_cost_cents)}</span>}
           </div>
           {open === p.project && (
             <div style={{ marginTop: 8 }}>
