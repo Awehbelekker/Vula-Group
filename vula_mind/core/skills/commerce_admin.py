@@ -777,6 +777,33 @@ REMINDER_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
 ]
+# 2026-09-28 (DIGG): the QS agent's figures — job costing from the bank (received / cost by
+# trade / overhead share / profit vs the cost-plus fee) and pricing advice from what the business
+# actually paid (vula/commerce/job_costing.py). Read-only; every number comes from the tool.
+PROJECT_TOOLS = [
+    {"type": "function", "function": {
+        "name": "project_profit",
+        "description": "How a project (job) is doing money-wise, from the bank: received, cost by "
+                       "trade, the cost-plus fee it should earn, its share of overheads, and profit "
+                       "— or every project's headline when no project is named. Use for 'how is "
+                       "HPC doing', 'are we losing money on X', 'where did the money go on Y'. "
+                       "Quote the returned text; never compute these figures yourself.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "Project name as the user said it; omit for all."}}}}},
+    {"type": "function", "function": {
+        "name": "price_advice",
+        "description": "What to charge for an item or piece of work so the job makes its fee: the "
+                       "business's actual paid cost for it (from its invoices), plus overheads, plus "
+                       "the fee %, and whether past quotes under-priced it. Use for 'what should I "
+                       "charge for 120 m2 ceiling', 'how must I price tiling labour'. Quote the "
+                       "returned text; the price is advice, the owner decides.",
+        "parameters": {"type": "object", "properties": {
+            "item": {"type": "string", "description": "The item/work, e.g. 'ceiling board', 'tiling labour'."},
+            "quantity": {"type": "number"},
+            "unit": {"type": "string", "description": "m2, m, each, day… if the user said one."},
+            "project": {"type": "string"}},
+            "required": ["item"]}}},
+]
 SUBSCRIPTION_TOOLS = [
     {"type": "function", "function": {
         "name": "create_subscription",
@@ -872,7 +899,7 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
-                   + AUTOMATION_TOOLS)
+                   + AUTOMATION_TOOLS + PROJECT_TOOLS)
 
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
@@ -1078,7 +1105,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + PROJECT_TOOLS)  # always on
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):
@@ -1104,6 +1131,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
+    "project_profit": "finances", "price_advice": "finances",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -1763,6 +1791,13 @@ class CommerceAdminSkill(BaseSkill):
             if name == "calculate": return self._calculate(args)
             if name in ("remember_rule", "list_rules", "forget_rule"):
                 return self._rule_tool(name, tid, args, ctx)
+            if name == "project_profit":
+                from vula.commerce.job_costing import project_profit
+                return project_profit(tid, args.get("project") or None)
+            if name == "price_advice":
+                from vula.commerce.job_costing import price_advice
+                return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),
+                                    args.get("unit") or None, args.get("project") or None)
             if name == "create_reminder":    return await self._create_reminder(tid, args, ctx)
             if name == "list_reminders":     return await self._list_reminders(tid, args, ctx)
             if name == "complete_reminder":  return await self._complete_reminder(tid, args, ctx)

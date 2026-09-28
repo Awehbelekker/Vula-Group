@@ -2321,9 +2321,9 @@ def canonical_project(tenant_id: str, name: Optional[str]) -> Optional[str]:
         return raw or None
     try:
         db = _client()
-        for r in (db.table("vula_projects").select("name").eq("tenant_id", tenant_id)
+        for r in (db.table("vula_projects").select("name,number").eq("tenant_id", tenant_id)
                   .limit(500).execute().data or []):
-            if project_key(r.get("name")) == key:
+            if key in (project_key(r.get("name")), project_key(r.get("number"))):
                 return r["name"]
         used = (db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id)
                 .ilike("project", key.split()[0] + "%").limit(2000).execute().data or [])

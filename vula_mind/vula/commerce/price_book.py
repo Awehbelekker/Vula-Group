@@ -267,6 +267,7 @@ def rollup(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         counts = Counter(r.get("source_kind") for r in obs)
         suppliers = {(r.get("supplier") or "").strip().lower() for r in obs if r.get("supplier")}
         rate = int(round(median(prices)))
+        quoted = [int(r["unit_price_cents"]) for r in obs if r.get("source_kind") not in _PAID]
         parts = [f"{n} {k.replace('_', ' ')}{'s' if n > 1 else ''}" for k, n in counts.most_common()]
         out.append({
             "description": latest.get("description"), "unit": unit or "each",
@@ -281,6 +282,9 @@ def rollup(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "source": (f"Learned from {', '.join(parts)}"
                        + (f", last {latest.get('observed_on')}" if latest.get("observed_on") else "")),
             "learned": True,
+            # What it was priced at (quotes/BOQs) when it has also been paid — the under-quote
+            # signal job_costing.price_advice reports.
+            "quoted_cents": int(round(median(quoted))) if paid and quoted else None,
         })
     out.sort(key=lambda r: (-r["observations"], r["description"] or ""))
     return out

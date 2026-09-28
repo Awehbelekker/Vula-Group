@@ -21,6 +21,7 @@ export default function VulaBankRec({ tenantId }) {
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [noProject, setNoProject] = useState(false);
 
   const load = useCallback(async () => {
     const [s, t, inv, ord, acc, wk] = await Promise.all([
@@ -54,6 +55,42 @@ export default function VulaBankRec({ tenantId }) {
     load();
   };
   const workerName = (id) => (workers.find(w => w.id === id) || {}).name;
+
+  // Project + trade per line (job costing reads it; Vula learns it for the next statement).
+  const allocate = async (id, project, trade) => {
+    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${id}/allocate`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: project || null, trade: trade || null }),
+    }).catch(() => {});
+    load();
+  };
+  const projectNames = [...new Set(txns.map(t => t.project).filter(Boolean))].sort();
+
+  // A statement already categorised in a spreadsheet: preview → confirm project names → import.
+  const [sheet, setSheet] = useState(null);   // { b64, name, preview, map }
+  const pickSheet = async (file) => {
+    if (!file) return;
+    const b64 = await new Promise((res) => { const rd = new FileReader(); rd.onload = () => res(String(rd.result).split(",").pop()); rd.readAsDataURL(file); });
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/statement/sheet`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_base64: b64, filename: file.name, preview: true }),
+    }).then(r => r.json()).catch(() => ({ detail: "network" }));
+    if (r.detail || r.error) return flash(r.detail || r.error);
+    const map = {};
+    (r.projects || []).forEach(p => { map[p.label] = p.suggested || p.label; });
+    setSheet({ b64, name: file.name, preview: r, map });
+  };
+  const importSheet = async () => {
+    setBusy(true);
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/statement/sheet`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_base64: sheet.b64, filename: sheet.name, project_map: sheet.map }),
+    }).then(r => r.json()).catch(() => ({ detail: "network" }));
+    setBusy(false);
+    if (r.detail || r.error) return flash(r.detail || r.error);
+    flash(`Imported ${r.saved} of ${r.parsed} lines ✓ — project costs are in Finances.`);
+    setSheet(null); load();
+  };
   useEffect(() => { load(); }, [load]);
 
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 4000); };
@@ -141,19 +178,43 @@ export default function VulaBankRec({ tenantId }) {
           {busy ? "Working…" : "⬆ Upload statement"}
           <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={e => upload(e.target.files[0])} disabled={busy} />
         </label>
+        <label style={{ ...btn, cursor: "pointer" }} title="A statement you've already categorised in Excel — categories, projects and trades are kept">
+          ⬆ Import categorised sheet
+          <input type="file" accept=".xlsx,.xlsm,.csv" style={{ display: "none" }} onChange={e => pickSheet(e.target.files[0])} disabled={busy} />
+        </label>
         <button style={btn} onClick={recategorize} disabled={busy} title="Re-run the AI over everything still unallocated">🔁 Re-run AI</button>
         <button style={btn} onClick={reviewOnWhatsApp} title="Vula asks you about each unallocated item on WhatsApp — reply to allocate">📲 Review on WhatsApp</button>
         {msg && <span style={{ fontSize: 12, color: C.green, width: "100%" }}>{msg}</span>}
       </div>
 
+      {sheet && (
+        <div style={{ ...card, flexDirection: "column", alignItems: "stretch", marginTop: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{sheet.name}: {sheet.preview.lines} lines, {sheet.preview.first} – {sheet.preview.last} · in {R(sheet.preview.money_in_cents)} · out {R(sheet.preview.money_out_cents)}</div>
+          <div style={{ fontSize: 12, color: C.muted, margin: "4px 0 6px" }}>Which of your projects is each one? (Vula suggested; change a name to merge it with an existing project.)</div>
+          {(sheet.preview.projects || []).map(p => (
+            <div key={p.label} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12.5, marginBottom: 4 }}>
+              <span style={{ minWidth: 140 }}>{p.label} <span style={{ color: C.muted }}>({p.lines} lines · out {R(p.out)} · in {R(p.in)})</span></span>
+              <span>→</span>
+              <input list="bank-projects" value={sheet.map[p.label] || ""} style={{ ...input, fontSize: 12, padding: "4px 8px" }}
+                onChange={e => setSheet({ ...sheet, map: { ...sheet.map, [p.label]: e.target.value } })} />
+            </div>))}
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <button style={{ ...btn, ...btnOn }} disabled={busy} onClick={importSheet}>{busy ? "Importing…" : "Import"}</button>
+            <button style={btn} onClick={() => setSheet(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      <datalist id="bank-projects">{projectNames.map(p => <option key={p} value={p} />)}</datalist>
+
       {/* Filter + transactions */}
       <div style={{ display: "flex", gap: 6, margin: "16px 0 8px" }}>
         {[["", "All"], ["needs_input", "Needs input"], ["unmatched", "To review"], ["matched", "Matched"], ["ignored", "Ignored"]].map(([v, l]) => (
-          <button key={v} onClick={() => setFilter(v)} style={{ ...chip, ...(filter === v ? chipOn : {}) }}>{l}</button>
+          <button key={v} onClick={() => { setFilter(v); setNoProject(false); }} style={{ ...chip, ...(filter === v && !noProject ? chipOn : {}) }}>{l}</button>
         ))}
+        <button onClick={() => { setFilter(""); setNoProject(true); }} style={{ ...chip, ...(noProject ? chipOn : {}) }} title="Materials and labour paid but not put on a project yet">Not on a project</button>
       </div>
       {txns.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No transactions yet — upload a statement or wait for the weekly email.</div>
-        : txns.map(t => (
+        : txns.filter(t => !noProject || (t.direction === "out" && !t.project && ["cost_of_sales", "casual_labour"].includes(t.account_code))).map(t => (
           <div key={t.id} style={card}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>
@@ -171,6 +232,18 @@ export default function VulaBankRec({ tenantId }) {
                     <option value="">— category —</option>
                     {accounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
                   </select>
+                )}
+                {!t.worker_id && (
+                  <>
+                    <input list="bank-projects" defaultValue={t.project || ""} placeholder="project"
+                      title={t.direction === "in" ? "Money in on a project, e.g. a payment certificate" : "Which project this was spent on"}
+                      onBlur={e => e.target.value !== (t.project || "") && allocate(t.id, e.target.value, t.trade)}
+                      style={{ ...input, fontSize: 11, padding: "3px 6px", width: 120 }} />
+                    {t.direction === "out" && (
+                      <input defaultValue={t.trade || ""} placeholder="trade"
+                        onBlur={e => e.target.value !== (t.trade || "") && allocate(t.id, t.project, e.target.value)}
+                        style={{ ...input, fontSize: 11, padding: "3px 6px", width: 120 }} />)}
+                  </>
                 )}
                 {t.direction === "out" && workers.length > 0 && (
                   t.worker_id

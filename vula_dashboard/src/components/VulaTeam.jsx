@@ -35,6 +35,7 @@ const EVENTS = [
   ["help_request", "Help requests (agent escalations)"],
   ["procurement_done", "Procurement done"],
   ["invoice_overdue_escalated", "Overdue invoice escalations (14+ days)"],
+  ["project_margin", "Project check (weekly: jobs below their fee)"],
 ];
 const ROLES = ["owner", "manager", "bookkeeper", "staff", "sales_rep"];
 // Friendly display label per role — the stored value stays the plain enum (used by the

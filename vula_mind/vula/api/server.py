@@ -699,6 +699,8 @@ async def _daily_commerce_jobs_loop() -> None:
                 try:
                     await _process_overdue_invoices(tid)
                     await _process_stock_alerts(tid)   # throttled to once/day internally
+                    from vula.commerce.job_costing import weekly_alert
+                    await weekly_alert(tid)            # throttled to once/week internally
                 except Exception as exc:
                     log.debug("daily commerce job failed for %s: %s", tid, exc)
         except Exception as exc:

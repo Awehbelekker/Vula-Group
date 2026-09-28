@@ -3243,6 +3243,100 @@ async def admin_assign_worker(tenant_id: str, txn_id: str, body: AssignWorkerIn)
     return {"ok": True, "worker": w.get("name"), "project": w.get("default_project")}
 
 
+class AllocateIn(BaseModel):
+    project: Optional[str] = None
+    trade: Optional[str] = None
+
+
+@router.post("/{tenant_id}/admin/bank/transactions/{txn_id}/allocate")
+async def admin_allocate_txn(tenant_id: str, txn_id: str, body: AllocateIn):
+    """Put a bank line on a project (and trade) — job costing reads it — and LEARN it, so the
+    next statement's lines from the same payee are allocated the same way."""
+    from vula.commerce import allocation
+    db = service._client()
+    rows = (db.table("commerce_bank_transactions").select("*")
+            .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    project = service.canonical_project(tenant_id, body.project) if body.project else None
+    trade = (body.trade or "").strip() or None
+    (db.table("commerce_bank_transactions").update({"project": project, "trade": trade})
+     .eq("tenant_id", tenant_id).eq("id", txn_id).execute())
+    if project:
+        allocation.learn(tenant_id, rows[0].get("description"), project, trade,
+                         payee=rows[0].get("payee"))
+    return {"ok": True, "project": project, "trade": trade}
+
+
+@router.post("/{tenant_id}/admin/bank/statement/sheet")
+async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Request):
+    """Import a statement spreadsheet that's already categorised (xlsx/csv), keeping its
+    categories. {file_base64, filename, preview?: bool, project_map?: {sheet label: project}}.
+    preview=true only reads it and suggests how its project labels map onto this business's
+    projects; the import saves the lines (owner-allocated) and learns the allocations."""
+    import base64
+    import tempfile
+    from pathlib import Path
+    from vula.commerce import statement_sheet
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can import a statement.")
+    body = body or {}
+    name = Path((body.get("filename") or "statement.xlsx").replace("\\", "/")).name
+    if not name.lower().endswith((".xlsx", ".xlsm", ".csv")):
+        raise HTTPException(status_code=400, detail="Send an .xlsx or .csv statement.")
+    try:
+        data = base64.b64decode(body.get("file_base64") or "")
+    except Exception:
+        raise HTTPException(status_code=400, detail="file_base64 is not valid base64")
+    if not data:
+        raise HTTPException(status_code=400, detail="file_base64 is required")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / name
+        path.write_bytes(data)
+        if body.get("preview"):
+            return statement_sheet.preview(tenant_id, path)
+        result = statement_sheet.import_sheet(tenant_id, path, body.get("project_map") or {},
+                                              source_file=name)
+    if not result["parsed"]:
+        raise HTTPException(status_code=400, detail="No statement lines found — the sheet needs "
+                            "Date, Description and Money In/Money Out (or Amount) columns.")
+    return result
+
+
+@router.get("/{tenant_id}/admin/projects/costing")
+async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
+    """Job costing from the bank: per project received / cost by trade / cost-plus fee target /
+    overhead share / profit, plus the business's overheads (vula/commerce/job_costing.py)."""
+    from vula.commerce import job_costing
+    res = job_costing.costing(tenant_id, since=since)
+    res["fee_default_pct"] = job_costing.terms(tenant_id)["*"]
+    return res
+
+
+class ProjectTermsIn(BaseModel):
+    project: str = "*"
+    fee_pct: float
+
+
+@router.post("/{tenant_id}/admin/projects/terms")
+async def admin_project_terms(tenant_id: str, body: ProjectTermsIn, request: Request):
+    """Set a project's cost-plus fee % (project "*" = the business default)."""
+    from vula.commerce import job_costing
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can set fees.")
+    if not 0 <= body.fee_pct <= 100:
+        raise HTTPException(status_code=400, detail="fee_pct must be 0–100")
+    job_costing.set_fee(tenant_id, body.project or "*", body.fee_pct)
+    return {"ok": True, "project": body.project or "*", "fee_pct": body.fee_pct}
+
+
+@router.get("/{tenant_id}/admin/projects/price-advice")
+async def admin_price_advice(tenant_id: str, item: str, quantity: Optional[float] = None,
+                             unit: Optional[str] = None, project: Optional[str] = None):
+    from vula.commerce import job_costing
+    return job_costing.price_advice(tenant_id, item, quantity, unit, project)
+
+
 @router.get("/{tenant_id}/admin/reports/labour")
 async def admin_report_labour(tenant_id: str, since: Optional[str] = None,
                               until: Optional[str] = None, project: Optional[str] = None):

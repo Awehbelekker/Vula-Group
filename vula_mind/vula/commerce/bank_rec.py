@@ -585,7 +585,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     protected: Dict[tuple, dict] = {}
     try:
         for r in (db.table("commerce_bank_transactions")
-                  .select("txn_date,amount_cents,description,account_code,vat_cents,vat_treatment,categorized_by")
+                  .select("txn_date,amount_cents,description,account_code,vat_cents,vat_treatment,categorized_by,project,trade")
                   .eq("tenant_id", tenant_id)
                   # 'merchant' joins these because it reflects a decided merchant profile —
                   # often the owner's own once-per-merchant answer — and must survive a
@@ -597,6 +597,11 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                        (r.get("description") or ""))] = r
     except Exception:
         pass
+
+    # Owner allocations learned from earlier statements (project + trade per counterparty).
+    from vula.commerce import allocation
+    alloc_rules = allocation.load_rules(tenant_id)
+    canon: Dict[str, Optional[str]] = {}
 
     # Categorise the whole statement up front — batched cloud calls with direction-aware
     # account lists (fast + consistent; per-line small-model calls misfiled suppliers).
@@ -729,6 +734,18 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             "vat_treatment": (acc_map.get(code) or {}).get("vat_treatment"), "categorized_by": cat_src,
             "worker_id": worker_id, "project": wk_project,
         }
+        # Project/trade: an owner's earlier allocation of this very line wins, then the
+        # worker's default project, then a clear learned rule (vula/commerce/allocation.py).
+        s_project, s_trade = allocation.suggest(alloc_rules, t.get("description"))
+        project = (prior or {}).get("project") or wk_project or s_project
+        trade = (prior or {}).get("trade") or s_trade
+        if project:
+            if project not in canon:
+                from vula.commerce.service import canonical_project
+                canon[project] = canonical_project(tenant_id, project)
+            row["project"] = canon[project]
+        if trade:
+            row["trade"] = trade
         try:
             db.table("commerce_bank_transactions").upsert(
                 row, on_conflict="tenant_id,txn_date,amount_cents,description").execute()
@@ -737,7 +754,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
             # 058/059/074 columns may not exist yet (account_code/vat/worker_id/project/matched_order_id)
             # — retry with core columns only.
             for k in ("account_code", "vat_cents", "vat_treatment", "categorized_by", "worker_id",
-                     "project", "matched_order_id"):
+                     "project", "matched_order_id", "trade"):
                 row.pop(k, None)
             try:
                 db.table("commerce_bank_transactions").upsert(

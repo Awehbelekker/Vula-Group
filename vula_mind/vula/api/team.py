@@ -154,7 +154,7 @@ async def me(tenant: str, email: str = "") -> dict:
 
 
 _EVENTS = ("which_project", "followup_digest", "payment_received", "new_invoice", "new_order",
-          "low_stock", "help_request", "procurement_done")
+          "low_stock", "help_request", "procurement_done", "project_margin")
 
 
 @router.get("/{tenant}/audit")
