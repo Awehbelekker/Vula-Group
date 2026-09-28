@@ -312,6 +312,9 @@ async def weekly_alert(tenant_id: str, force: bool = False) -> Optional[str]:
     key = f"{week[0]}-{week[1]}"
     if not force and _last_alert.get(tenant_id) == key:
         return None
+    from vula.api.tenants import uses_projects
+    if not uses_projects(tenant_id):
+        return None           # a shop has no projects to check
     res = costing(tenant_id, since=(date.today() - timedelta(days=180)).isoformat())
     bad = [p for p in res["projects"] if p["status"] != "on track"]
     unalloc = res["unallocated_project_spend_cents"]

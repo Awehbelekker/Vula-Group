@@ -1105,7 +1105,16 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
-             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS + PROJECT_TOOLS)  # always on
+             + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
+    # Job costing only for a business that works in projects (DIGG), not a shop (Off the Hook);
+    # pricing advice (paid cost + overheads + margin) is useful to both.
+    try:
+        from vula.api.tenants import uses_projects
+        with_projects = uses_projects(tenant_id)
+    except Exception:
+        with_projects = True
+    tools += [t for t in PROJECT_TOOLS
+              if with_projects or t["function"]["name"] != "project_profit"]
     if message and _is_pure_create_invoice_request(message):
         tools = [t for t in tools if t["function"]["name"] != "find_document"]
     elif message and _is_spend_history_request(message):

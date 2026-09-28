@@ -123,7 +123,7 @@ export default function VulaCrossCheck({ tenantId }) {
       </Section>
 
       <Section title="Money in not matched to an invoice" count={rep.money_in_unmatched_lines} open={open === "i"} onToggle={() => toggle("i")}>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{R(rep.money_in_unmatched_cents)} received without an invoice in Vula. For project work, bill through Vula (Finances › progress claims) so payments can be matched.</div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{R(rep.money_in_unmatched_cents)} received without an invoice or order in Vula. Invoice through Vula (or progress claims, for project work) so payments can be matched.</div>
         {rep.unexplained_in_sample.map(t => (
           <div key={t.txn_id} style={row}><span style={{ flex: "1 1 200px" }}>{t.description}</span><span style={{ color: C.muted }}>{t.txn_date}</span><b>{R(t.amount_cents)}</b></div>))}
       </Section>

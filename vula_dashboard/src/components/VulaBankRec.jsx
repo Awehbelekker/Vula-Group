@@ -22,6 +22,15 @@ export default function VulaBankRec({ tenantId }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [noProject, setNoProject] = useState(false);
+  // Project/trade allocation only for a business that works in projects (the `projects`
+  // module — DIGG), not a shop like Off the Hook.
+  const [hasProjects, setHasProjects] = useState(false);
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${VULA_API}/v1/tenants/${tenantId}`).then(r => r.json())
+      .then(d => setHasProjects((d.modules || d.tenant?.modules || []).includes("projects")))
+      .catch(() => setHasProjects(false));
+  }, [tenantId]);
 
   const load = useCallback(async () => {
     const [s, t, inv, ord, acc, wk] = await Promise.all([
@@ -190,7 +199,7 @@ export default function VulaBankRec({ tenantId }) {
       {sheet && (
         <div style={{ ...card, flexDirection: "column", alignItems: "stretch", marginTop: 12 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{sheet.name}: {sheet.preview.lines} lines, {sheet.preview.first} – {sheet.preview.last} · in {R(sheet.preview.money_in_cents)} · out {R(sheet.preview.money_out_cents)}</div>
-          <div style={{ fontSize: 12, color: C.muted, margin: "4px 0 6px" }}>Which of your projects is each one? (Vula suggested; change a name to merge it with an existing project.)</div>
+          {(sheet.preview.projects || []).length > 0 && <div style={{ fontSize: 12, color: C.muted, margin: "4px 0 6px" }}>Which of your projects is each one? (Vula suggested; change a name to merge it with an existing project.)</div>}
           {(sheet.preview.projects || []).map(p => (
             <div key={p.label} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12.5, marginBottom: 4 }}>
               <span style={{ minWidth: 140 }}>{p.label} <span style={{ color: C.muted }}>({p.lines} lines · out {R(p.out)} · in {R(p.in)})</span></span>
@@ -211,7 +220,7 @@ export default function VulaBankRec({ tenantId }) {
         {[["", "All"], ["needs_input", "Needs input"], ["unmatched", "To review"], ["matched", "Matched"], ["ignored", "Ignored"]].map(([v, l]) => (
           <button key={v} onClick={() => { setFilter(v); setNoProject(false); }} style={{ ...chip, ...(filter === v && !noProject ? chipOn : {}) }}>{l}</button>
         ))}
-        <button onClick={() => { setFilter(""); setNoProject(true); }} style={{ ...chip, ...(noProject ? chipOn : {}) }} title="Materials and labour paid but not put on a project yet">Not on a project</button>
+        {hasProjects && <button onClick={() => { setFilter(""); setNoProject(true); }} style={{ ...chip, ...(noProject ? chipOn : {}) }} title="Materials and labour paid but not put on a project yet">Not on a project</button>}
       </div>
       {txns.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No transactions yet — upload a statement or wait for the weekly email.</div>
         : txns.filter(t => !noProject || (t.direction === "out" && !t.project && ["cost_of_sales", "casual_labour"].includes(t.account_code))).map(t => (
@@ -233,7 +242,7 @@ export default function VulaBankRec({ tenantId }) {
                     {accounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
                   </select>
                 )}
-                {!t.worker_id && (
+                {hasProjects && !t.worker_id && (
                   <>
                     <input list="bank-projects" defaultValue={t.project || ""} placeholder="project"
                       title={t.direction === "in" ? "Money in on a project, e.g. a payment certificate" : "Which project this was spent on"}

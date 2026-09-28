@@ -32,7 +32,14 @@ export default function VulaJobCosting({ tenantId }) {
   const [ask, setAsk] = useState({ item: "", quantity: "", unit: "" });
   const [advice, setAdvice] = useState(null);
 
+  const [hasProjects, setHasProjects] = useState(null);
   const base = `${VULA_API}/v1/commerce/${tenantId}/admin/projects`;
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${VULA_API}/v1/tenants/${tenantId}`).then(r => r.json())
+      .then(d => setHasProjects((d.modules || d.tenant?.modules || []).includes("projects")))
+      .catch(() => setHasProjects(false));
+  }, [tenantId]);
   const load = useCallback(async () => {
     if (!tenantId) return;
     try { setData(await (await fetch(`${base}/costing`)).json()); } catch { setData(null); }
@@ -55,7 +62,7 @@ export default function VulaJobCosting({ tenantId }) {
     try { setAdvice(await (await fetch(`${base}/price-advice?${q}`)).json()); } catch { setAdvice(null); }
   };
 
-  if (!data) return null;
+  if (!data || !hasProjects) return null;   // job costing is for project businesses (DIGG)
   const projects = data.projects || [];
 
   return (

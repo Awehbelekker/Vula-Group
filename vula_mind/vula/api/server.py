@@ -558,7 +558,10 @@ async def _send_pending_project_nudge(only_tenant: str | None = None,
         return
     from vula.commerce import service as _cs
 
+    from vula.api.tenants import uses_projects
     for tenant_id in ([only_tenant] if only_tenant else await _commerce_tenant_ids()):
+        if not uses_projects(tenant_id):
+            continue          # no projects in this business — nothing to assign
         phones = _commerce_notify_phones(tenant_id)
         if not phones:
             continue

@@ -229,3 +229,29 @@ def test_identical_lines_on_one_day_are_both_kept(db, tmp_path):
     statement_sheet.import_sheet(TID, path)
     statement_sheet.import_sheet(TID, path)
     assert sorted(r["description"] for r in db.tables["commerce_bank_transactions"]) == ["PAY", "PAY (2)"]
+
+
+# ── a shop has no projects (Ian, 2026-09-28: "Off the Hook is pure commerce… not projects") ──
+
+def test_only_a_project_business_uses_projects(monkeypatch):
+    from vula.api import tenants
+    cfgs = {"digg-demo": {"modules": ["invoices", "projects", "finances"]},
+            "off-the-hook": {"modules": ["products", "orders", "invoices"]}}
+    monkeypatch.setattr(tenants, "get_config", lambda tid: cfgs.get(tid))
+    assert tenants.uses_projects("digg-demo") is True
+    assert tenants.uses_projects("off-the-hook") is False
+    assert tenants.uses_projects("unknown") is True          # no config → old behaviour
+
+    import core.skills.commerce_admin as ca
+    monkeypatch.setattr(tenants, "enabled_modules", lambda tid: (cfgs.get(tid) or {}).get("modules", []))
+    names = lambda tid: {t["function"]["name"] for t in ca._tools_for(tid)}   # noqa: E731
+    assert {"project_profit", "price_advice"} <= names("digg-demo")
+    assert "project_profit" not in names("off-the-hook") and "price_advice" in names("off-the-hook")
+
+
+@pytest.mark.asyncio
+async def test_no_weekly_project_check_for_a_shop(db, tmp_path, monkeypatch):
+    _import(db, tmp_path)
+    monkeypatch.setattr("vula.api.tenants.uses_projects", lambda tid: False)
+    job_costing._last_alert.pop(TID, None)
+    assert await job_costing.weekly_alert(TID) is None

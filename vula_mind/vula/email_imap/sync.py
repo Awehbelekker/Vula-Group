@@ -783,7 +783,9 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         # coincidental token) → ask the team on WhatsApp rather than risk mis-filing.
         # Unless this was already handled as a payment confirmation above — "which project?"
         # is the wrong question for a POP, and the owner's already been told either way.
-        ask = not confident and not payment_matched
+        from vula.api.tenants import uses_projects
+        # A commerce business has no projects to ask about (Off the Hook, 2026-09-28).
+        ask = not confident and not payment_matched and uses_projects(tenant_id)
         if not confident:
             match = None
         # file_document() does what this used to hand-roll, plus the two things it was

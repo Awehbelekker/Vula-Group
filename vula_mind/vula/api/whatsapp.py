@@ -3093,7 +3093,17 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # still auto-files with no added friction — only the weak fallback now asks.
         confident = bool(match and not match.get("ambiguous") and match.get("project")
                          and (match.get("confidence") or 0) >= 0.6)
-        if confident:
+        from vula.api.tenants import uses_projects
+        if not uses_projects(tenant_id):
+            # A commerce business (Off the Hook): no projects — file it, never ask.
+            row = await file_document(
+                tenant_id, filename=result.filename, data=data, content_type=ctype,
+                category=category, summary=summary, fields=fields, doc_id=result.doc_id,
+                source=source, filed_by=phone, status="filed", customer_phone=customer_phone,
+            )
+            note = ""
+            match, confident = None, False
+        elif confident:
             row = await file_document(
                 tenant_id, filename=result.filename, data=data, content_type=ctype,
                 category=category, summary=summary, fields=fields, doc_id=result.doc_id,
