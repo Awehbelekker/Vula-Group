@@ -16,6 +16,7 @@ the same answer. "BWH" bought for three different jobs stays unallocated for the
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -35,6 +36,36 @@ def _client():
     return service._client()
 
 
+_NOISE = {"wage", "wages", "salary", "salaries", "payroll", "staff", "pay", "run", "transfer",
+          "send", "payment", "pmt", "to", "from", "the", "and", "ref", "fnb", "app", "rtc", "payshap",
+          "account", "off", "us", "on", "eft", "immediate", "internet", "banking", "digital",
+          "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+          "week", "weekly", "month", "monthly"}
+_WAGE_WORDS = re.compile(r"\b(wages?|salar(y|ies)|payroll|staff pay|pay ?run)\b", re.IGNORECASE)
+
+
+def is_own_wages(tenant_id: str, description: Optional[str], payee: Optional[str] = None) -> bool:
+    """The business paying its OWN people — "DIGG WAGE", "DIGG SALARIES", or a transfer that
+    names only the business itself. Ian, 2026-09-28 (the default he chose): that's a running
+    cost shared across the month's projects, never one job's cost and never a project clue.
+    Site workers ("NELITHO WAGES") and payments naming a project stay direct project costs."""
+    text = f"{payee or ''} {description or ''}"
+    try:
+        from vula.integrations.doc_filing import _own_names
+        own = {w for n in _own_names(tenant_id) for w in re.findall(r"[a-z0-9]+", n.lower())
+               if len(w) >= 3 and w != "demo"}
+    except Exception:
+        return False
+    words = set(re.findall(r"[a-z]+", text.lower()))
+    if not own or not (words & own):
+        return False
+    # Real digg-demo lines: "FNB App Payment To Nelitho Wages Digg Wage" — "Digg Wage" is the
+    # reference DIGG puts on its SITE WORKER's pay (Nelitho, HPC labour). Only a line that names
+    # nobody but the business itself is its own people's pay; a named person or project wins.
+    other = words - own - _NOISE
+    return not other and bool(_WAGE_WORDS.search(text) or words & {"send", "transfer"})
+
+
 def signals(description: Optional[str], payee: Optional[str] = None) -> List[Tuple[str, str]]:
     from vula.commerce.merchants import merchant_key
     key = merchant_key(payee or description) or merchant_key(description)
@@ -52,6 +83,8 @@ def learn(tenant_id: str, description: Optional[str], project: Optional[str],
     """Remember that a line like this goes to this project/trade (one more hit)."""
     if not project and not trade:
         return
+    if is_own_wages(tenant_id, description, payee):
+        return            # the business's own wages are a running cost, not one job's
     db = _client()
     now = datetime.now(timezone.utc).isoformat()
     for stype, sig in signals(description, payee):

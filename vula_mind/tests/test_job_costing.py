@@ -333,3 +333,31 @@ def test_variations_are_counted_per_project(db, tmp_path, monkeypatch):
     hpc = next(p for p in job_costing.costing(TID)["projects"] if p["project"] == "HPC Bokaap")
     assert hpc["variations"] == {"documents": 2, "claimed_cents": 3433533, "extra_cost_cents": 580000}
     assert "Variations over the BOQ: 2 document(s)" in job_costing.project_profit(TID, "hpc")["text"]
+
+
+# ── DIGG's own wages are a shared running cost (Ian's default, 2026-09-28) ──────
+
+def test_own_wages_are_overhead_and_never_a_project_clue(db, monkeypatch):
+    monkeypatch.setattr("vula.api.tenants.get_config", lambda tid: {"display_name": "DIGG"})
+    assert allocation.is_own_wages(TID, "DIGG WAGE")
+    assert allocation.is_own_wages(TID, "DIGG SALARIES SEP")
+    assert allocation.is_own_wages(TID, "SEND DIGG")
+    assert not allocation.is_own_wages(TID, "NELITHO WAGES")          # a site worker
+    # real FNB lines: "Digg Wage" is DIGG's reference on its site worker's pay → project labour
+    assert not allocation.is_own_wages(TID, "FNB App Payment To Nelitho Wages Digg Wage")
+    assert not allocation.is_own_wages(TID, "FNB App Payment To Hpc Cleaner Digg")
+    assert allocation.is_own_wages(TID, "FNB App Payment To Digg Wage")
+    assert not allocation.is_own_wages(TID, "DIGG Reimbursement HPC")  # names more than DIGG
+    allocation.learn(TID, "DIGG WAGE", "HPC Bokaap", "Labour")
+    allocation.learn(TID, "DIGG WAGE", "HPC Bokaap", "Labour")
+    assert allocation.suggest(allocation.load_rules(TID), "DIGG WAGE") == (None, None)
+
+    db.tables["commerce_bank_transactions"] = [
+        {"id": "a", "tenant_id": TID, "txn_date": "2026-08-05", "description": "HPC DOORS",
+         "amount_cents": 900000, "direction": "out", "account_code": "cost_of_sales", "project": "HPC Bokaap"},
+        {"id": "b", "tenant_id": TID, "txn_date": "2026-08-06", "description": "DIGG WAGE",
+         "amount_cents": 100000, "direction": "out", "account_code": "casual_labour", "project": None},
+    ]
+    res = job_costing.costing(TID)
+    assert res["overheads_cents"] == 100000 and res["unallocated_project_spend_cents"] == 0
+    assert res["projects"][0]["overhead_share_cents"] == 100000

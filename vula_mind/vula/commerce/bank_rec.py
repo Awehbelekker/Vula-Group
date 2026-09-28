@@ -712,6 +712,10 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                 used_settlements.add(st["id"])
                 card_settlements += 1
                 unmatched_in = max(0, unmatched_in - 1)
+        own_wages = (t["direction"] == "out" and not worker_id
+                     and allocation.is_own_wages(tenant_id, t.get("description")))
+        if not code and own_wages and "wages" in acc_map:
+            code, cat_src = "wages", "rule"      # a running cost shared across the projects
         if not code:
             cat = batch_cats[idx]
             code, cat_src = cat["account_code"], cat["source"]
@@ -738,7 +742,8 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         }
         # Project/trade: an owner's earlier allocation of this very line wins, then the
         # worker's default project, then a clear learned rule (vula/commerce/allocation.py).
-        s_project, s_trade = allocation.suggest(alloc_rules, t.get("description"))
+        s_project, s_trade = ((None, None) if own_wages
+                              else allocation.suggest(alloc_rules, t.get("description")))
         project = (prior or {}).get("project") or wk_project or s_project
         trade = (prior or {}).get("trade") or s_trade
         if project:

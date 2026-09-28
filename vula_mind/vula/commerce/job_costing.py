@@ -81,6 +81,14 @@ def set_fee(tenant_id: str, project: str, fee_pct: float) -> None:
         on_conflict="tenant_id,project").execute()
 
 
+def _own_wages(tenant_id: str, t: Dict[str, Any]) -> bool:
+    try:
+        from vula.commerce.allocation import is_own_wages
+        return is_own_wages(tenant_id, t.get("description"), t.get("payee"))
+    except Exception:
+        return False
+
+
 def _is_overhead(t: Dict[str, Any]) -> bool:
     code = t.get("account_code") or "other_expense"
     return (t.get("direction") == "out" and not t.get("project")
@@ -117,6 +125,9 @@ def costing(tenant_id: str, since: Optional[str] = None, txns: Optional[List[Dic
                 d["cost"] += cents
                 d["trades"][_trade(t)] += cents
                 proj_out_m[month][p] += cents
+        elif (t.get("direction") == "out" and t.get("account_code") in _PROJECT_COST
+              and _own_wages(tenant_id, t)):
+            overhead_m[month] += cents    # "DIGG WAGE": the business's own people — shared
         elif t.get("direction") == "out" and (t.get("account_code") in _PROJECT_COST):
             unallocated += cents          # bought for "a job" — which one isn't known yet
             unallocated_lines += 1
