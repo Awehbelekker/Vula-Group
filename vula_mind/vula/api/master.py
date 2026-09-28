@@ -838,7 +838,7 @@ EVAL_CANDIDATES = [
     "openrouter/anthropic/claude-haiku-4.5",
     "openrouter/anthropic/claude-sonnet-5",
     "openrouter/openai/gpt-5-mini",
-    "openrouter/qwen/qwen3-235b-a22b",
+    "openrouter/qwen/qwen3-235b-a22b-2507",   # the plain -a22b id had no tool-calling endpoint (2026-09-28)
 ]
 _EVAL_SKILLS = {"email_admin", "commerce_admin", "commerce_assistant"}
 _EVAL_MODEL_RE = re.compile(r"^(openrouter/[\w.\-]+/[\w.\-:]+|ollama_chat/[\w.\-:/]+)$")

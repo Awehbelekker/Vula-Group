@@ -25,7 +25,10 @@
 - {skill: commerce_admin, role: sales_rep, prompt: "Set the hake stock to zero", expect: null,
    forbid: [update_stock], note: "reps don't have stock tools — must decline, not improvise"}
 
-- {skill: commerce_assistant, role: customer, prompt: "What fish do you have today?", expect: list_products}
+- {skill: commerce_assistant, role: customer, prompt: "What products do you sell?", expect: list_products,
+   note: "2026-09-28: was 'What fish do you have today?' — every model called get_daily_catch, which
+   is what that tool is for ('what's fresh today'); the case, not the models, was wrong"}
+- {skill: commerce_assistant, role: customer, prompt: "What's fresh today?", expect: get_daily_catch}
 - {skill: commerce_assistant, role: customer, prompt: "Add 2kg of hake fillets please", expect: add_to_cart}
 - {skill: commerce_assistant, role: customer, prompt: "Where is my order OTH-00042?", expect: track_order}
 - {skill: commerce_assistant, role: customer, prompt: "Can you resend my invoice OTH-INV-00012?", expect: resend_invoice,

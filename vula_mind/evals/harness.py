@@ -136,7 +136,15 @@ async def run_one(model: str, case: ToolCase) -> Dict[str, Any]:
 async def run_tools(model: str, skill: Optional[str] = None) -> Dict[str, Any]:
     cases = [ToolCase(**{k: v for k, v in c.items() if k in ToolCase.__dataclass_fields__})
              for c in load("tool_choice.yaml") if not skill or c["skill"] == skill]
-    rows = [await run_one(model, c) for c in cases]
+    rows = []
+    for c in cases:
+        rows.append(await run_one(model, c))
+        # 2026-09-28: qwen3-235b ran all 35 cases into the same "NotFoundError" (no provider
+        # serves that id with tool calling) — 35 identical errors instead of one clear answer.
+        # The first case failing that way means none of the rest can pass either.
+        if len(rows) == 1 and "NotFoundError" in str(rows[0].get("error") or ""):
+            raise RuntimeError("OpenRouter has no tool-calling endpoint for this model id — "
+                               "pick another id from openrouter.ai/models (filter: tools).")
     secs = [r["secs"] for r in rows if "error" not in r]
     costs = [r["cost_usd"] for r in rows if r.get("cost_usd") is not None]
     return {
