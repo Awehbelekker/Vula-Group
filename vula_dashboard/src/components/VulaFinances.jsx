@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 import VulaJobCosting from "./VulaJobCosting";
+import VulaCrossCheck from "./VulaCrossCheck";
 
 const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
 const rand = (n) => "R" + (Number(n) || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
@@ -126,6 +127,7 @@ export default function VulaFinances({ tenantId }) {
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Money in/out per project — built from invoices & payments Vula files. Payments are matched to invoices, not guessed.</p>
 
       <VulaJobCosting tenantId={tenantId} />
+      <VulaCrossCheck tenantId={tenantId} />
 
       <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
         <div style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>

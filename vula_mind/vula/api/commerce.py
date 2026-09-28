@@ -3337,6 +3337,33 @@ async def admin_price_advice(tenant_id: str, item: str, quantity: Optional[float
     return job_costing.price_advice(tenant_id, item, quantity, unit, project)
 
 
+@router.get("/{tenant_id}/admin/crosscheck")
+async def admin_cross_check(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    """Documents ↔ books ↔ bank: bills not in the books, bills not paid (with the likely bank
+    payment), payments with no document, unpaid sales invoices, unexplained money in."""
+    from vula.commerce import cross_check
+    rep = cross_check.report(tenant_id, since, until)
+    rep["text"] = cross_check.summary_text(rep)
+    return rep
+
+
+@router.post("/{tenant_id}/admin/crosscheck/book-unbooked")
+async def admin_book_unbooked(tenant_id: str, request: Request):
+    """Book filed bills/quotes that have a verified total but never reached the books."""
+    from vula.commerce import cross_check
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can book these.")
+    return await cross_check.book_unbooked(tenant_id)
+
+
+@router.get("/{tenant_id}/admin/reports/vat-scenario")
+async def admin_vat_scenario(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
+    """VAT in vs out per month from real tax invoices — and, when not registered, what it would
+    be if the business were, plus 12-month sales against the registration threshold."""
+    from vula.commerce import cross_check
+    return cross_check.vat(tenant_id, since, until)
+
+
 @router.get("/{tenant_id}/admin/reports/labour")
 async def admin_report_labour(tenant_id: str, since: Optional[str] = None,
                               until: Optional[str] = None, project: Optional[str] = None):
