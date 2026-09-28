@@ -19,7 +19,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from vula.api.master_auth import require_auth
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -847,7 +847,7 @@ async def admin_list_products(tenant_id: str):
 
 
 @router.patch("/{tenant_id}/admin/products/{product_id}")
-async def admin_update_product(tenant_id: str, product_id: str, body: dict):
+async def admin_update_product(tenant_id: str, product_id: str, body: dict, request: Request):
     """Patch product — everything the merchant may edit (widened for migration 073 depth:
     gallery images, sale pricing, pack/weight/serves, archive, ordering)."""
     allowed = {"in_stock", "price_cents", "name", "description", "notes",
@@ -864,6 +864,17 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict):
     # Keep the cover in sync: first gallery image becomes image_url unless explicitly set.
     if "images" in update and update["images"] and "image_url" not in update:
         update["image_url"] = update["images"][0]
+    # A stock number goes through adjust_stock (migration 182) so the change is atomic and
+    # recorded. None still means "stop tracking stock" and is written as-is.
+    if update.get("stock_quantity") is not None:
+        qty = int(update.pop("stock_quantity"))
+        update.pop("in_stock", None)       # follows the quantity
+        after = await service.adjust_stock(tenant_id, product_id, set_to=qty, reason="adjust",
+                                           ref_type="dashboard", actor=_actor(request))
+        if after is None:
+            raise HTTPException(status_code=404, detail="product not found")
+        if not update:
+            return await service.get_product(tenant_id, product_id)
     result = await service.update_product(tenant_id, product_id, update)
     return result
 
@@ -1275,6 +1286,24 @@ async def admin_generate_cooking_tips(tenant_id: str, product_id: str):
 
 # ── Product variants (migration 087, Phase 4) ─────────────────────────────────
 
+def _actor(request: Optional[Request]) -> str:
+    """Who is making a dashboard change, for the stock movement record: the signed-in user's
+    email from their token (already verified by the tenant guard before a route runs), else
+    "api" for the server key. A label only — never used for authorisation."""
+    auth = (request.headers.get("authorization", "") if request is not None else "")
+    token = auth.removeprefix("Bearer ").strip()
+    if token.count(".") == 2:
+        try:
+            import base64
+            import json as _json
+            part = token.split(".")[1]
+            claims = _json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+            return str(claims.get("email") or claims.get("sub") or "dashboard")[:120]
+        except Exception:
+            return "dashboard"
+    return "api"
+
+
 VARIANT_FIELDS = {"option_values", "sku", "barcode", "price_cents", "stock_quantity",
                   "in_stock", "sort_order", "archived", "reorder_threshold", "reorder_qty",
                   "default_supplier_id"}
@@ -1304,10 +1333,20 @@ async def admin_create_variant(tenant_id: str, product_id: str, body: dict):
 
 
 @router.patch("/{tenant_id}/admin/products/{product_id}/variants/{variant_id}")
-async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str, body: dict):
+async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str, body: dict,
+                               request: Request):
     data = {k: v for k, v in (body or {}).items() if k in VARIANT_FIELDS}
     if not data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    if data.get("stock_quantity") is not None:
+        qty = int(data.pop("stock_quantity"))
+        data.pop("in_stock", None)
+        after = await service.adjust_stock(tenant_id, product_id, variant_id=variant_id, set_to=qty,
+                                           reason="adjust", ref_type="dashboard", actor=_actor(request))
+        if after is None:
+            raise HTTPException(status_code=404, detail="variant not found")
+        if not data:
+            return {"id": variant_id, "stock_quantity": after, "in_stock": after > 0}
     try:
         return await service.update_variant(tenant_id, variant_id, data)
     except Exception as exc:
@@ -1322,13 +1361,271 @@ async def admin_delete_variant(tenant_id: str, product_id: str, variant_id: str)
 
 @router.get("/{tenant_id}/admin/products/lookup")
 async def admin_lookup_barcode(tenant_id: str, barcode: str = Query(...)):
-    """Barcode scan lookup — Smart Scanner POS prep (not yet consumed by anything; adding it
-    now means the future scanner integration is a pure consumer, not another schema change)."""
+    """Barcode scan lookup (the Stock tab's camera scanner): the product — or the variant and
+    its product — carrying this barcode. 404 when nothing does, so the scanner can offer to
+    link the barcode to a product."""
     match = await service.find_by_barcode(tenant_id, barcode)
     if not match:
-        raise HTTPException(status_code=404, detail=f"No variant found for barcode '{barcode}'")
-    product = match.pop("commerce_products", None)
-    return {"variant": match, "product": product}
+        raise HTTPException(status_code=404, detail=f"No product found for barcode '{barcode}'")
+    return match
+
+
+# ── Stock tab: stock-takes, receiving, quick adjust, barcodes (migrations 182/183) ──────────
+
+async def _may_apply_stock(request: Request, tenant_id: str) -> bool:
+    """Staff can count; applying a count moves the books, so only the owner, a manager, a
+    master or the server key may. Same rule as the dashboard's `full` flag (team.me): a
+    signed-in member with no vula_team_members row is the owner."""
+    from config import settings as _settings
+    import hmac
+    key = request.headers.get("x-api-key", "")
+    if _settings.api_key and key and hmac.compare_digest(key, _settings.api_key):
+        return True
+    auth = request.headers.get("authorization", "")
+    if not auth:
+        return not _settings.api_key          # dev mode with no key configured
+    from vula.api.master_auth import _verify_jwt, _role_for_user
+    user = await _verify_jwt(auth.removeprefix("Bearer ").strip())
+    if not user or not user.get("id"):
+        return False
+    if _role_for_user(user["id"]) == "master":
+        return True
+    rows = (service._client().table("vula_team_members").select("role")
+            .eq("tenant_id", tenant_id).eq("email", user.get("email") or "").limit(1).execute().data or [])
+    return not rows or rows[0].get("role") in ("owner", "manager")
+
+
+def _count_error(exc: Exception) -> HTTPException:
+    msg = str(exc)
+    return HTTPException(status_code=404 if "not found" in msg else 409, detail=msg)
+
+
+@router.get("/{tenant_id}/admin/stock/counts")
+async def admin_list_stock_counts(tenant_id: str):
+    from vula.commerce import stock_counts
+    return {"counts": await stock_counts.list_counts(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/stock/counts")
+async def admin_start_stock_count(tenant_id: str, body: dict, request: Request):
+    from vula.commerce import stock_counts
+    return await stock_counts.create_count(tenant_id, (body or {}).get("note"), _actor(request))
+
+
+@router.get("/{tenant_id}/admin/stock/counts/{count_id}")
+async def admin_review_stock_count(tenant_id: str, count_id: str):
+    from vula.commerce import stock_counts
+    try:
+        return await stock_counts.review(tenant_id, count_id)
+    except stock_counts.CountError as exc:
+        raise _count_error(exc)
+
+
+@router.post("/{tenant_id}/admin/stock/counts/{count_id}/scans")
+async def admin_stock_count_scans(tenant_id: str, count_id: str, body: dict, request: Request):
+    """A batch of scans, possibly queued offline: [{scan_id, product_id, variant_id?, add?|set?}].
+    Re-sending a batch is safe — a scan_id already recorded changes nothing."""
+    from vula.commerce import stock_counts
+    scans = (body or {}).get("scans")
+    if not isinstance(scans, list):
+        raise HTTPException(status_code=400, detail="scans must be a list")
+    return {"results": await stock_counts.record_scans(tenant_id, count_id, scans, _actor(request))}
+
+
+@router.post("/{tenant_id}/admin/stock/counts/{count_id}/apply")
+async def admin_apply_stock_count(tenant_id: str, count_id: str, request: Request):
+    from vula.commerce import stock_counts
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can apply a stock count.")
+    try:
+        return await stock_counts.apply(tenant_id, count_id, _actor(request))
+    except stock_counts.CountError as exc:
+        raise _count_error(exc)
+
+
+@router.post("/{tenant_id}/admin/stock/counts/{count_id}/cancel")
+async def admin_cancel_stock_count(tenant_id: str, count_id: str):
+    from vula.commerce import stock_counts
+    try:
+        await stock_counts.cancel(tenant_id, count_id)
+    except stock_counts.CountError as exc:
+        raise _count_error(exc)
+    return {"ok": True}
+
+
+async def _set_cost(tenant_id: str, product_id: str, variant_id: Optional[str], cost_cents) -> None:
+    """Receiving with a unit cost keeps the product's cost price current (stock-take variance
+    and margins are valued at it). Best-effort: never blocks the stock booking."""
+    try:
+        cost = int(cost_cents)
+    except (TypeError, ValueError):
+        return
+    if cost <= 0:
+        return
+    try:
+        table = "commerce_product_variants" if variant_id else "commerce_products"
+        (service._client().table(table).update({"cost_cents": cost})
+         .eq("tenant_id", tenant_id).eq("id", variant_id or product_id).execute())
+    except Exception as exc:
+        log.debug("cost price update skipped (run migration 182?): %s", exc)
+
+
+@router.post("/{tenant_id}/admin/stock/receive")
+async def admin_receive_stock(tenant_id: str, body: dict, request: Request):
+    """Book a delivery: lines = [{product_id, variant_id?, quantity, unit_cost_cents?}]. With
+    po_id the purchase order is marked received with exactly these quantities."""
+    body = body or {}
+    lines = [ln for ln in (body.get("lines") or []) if isinstance(ln, dict) and ln.get("product_id")]
+    if not lines:
+        raise HTTPException(status_code=400, detail="Nothing to receive.")
+    actor = _actor(request)
+    booked, failed = [], []
+    if body.get("po_id"):
+        po = (service._client().table("commerce_purchase_orders").select("status")
+              .eq("tenant_id", tenant_id).eq("id", str(body["po_id"])).limit(1).execute().data or [])
+        if po and po[0].get("status") == "received":
+            raise HTTPException(status_code=409, detail="That purchase order has already been received.")
+        await admin_update_po_status(tenant_id, str(body["po_id"]),
+                                     {"status": "received", "received": lines}, request)
+        booked = [ln["product_id"] for ln in lines]
+    else:
+        for ln in lines:
+            qty = int(round(float(ln.get("quantity") or 0)))
+            if qty <= 0:
+                continue
+            after = await service.adjust_stock(
+                tenant_id, ln["product_id"], variant_id=ln.get("variant_id") or None, delta=qty,
+                reason="receive", ref_type="delivery", ref_id=(body.get("reference") or None),
+                actor=actor, note=(body.get("note") or None))
+            (booked if after is not None else failed).append(ln["product_id"])
+    for ln in lines:
+        if ln["product_id"] in booked and ln.get("unit_cost_cents") is not None:
+            await _set_cost(tenant_id, ln["product_id"], ln.get("variant_id") or None, ln["unit_cost_cents"])
+    return {"received": len(booked), "failed": failed}
+
+
+@router.post("/{tenant_id}/admin/scan/match-lines")
+async def admin_scan_match_lines(tenant_id: str, body: dict):
+    """Match a scanned document's lines (delivery note, invoice, price list) to products on the
+    server, with the same matcher the WhatsApp assistant uses — replacing the Smart Scanner's
+    in-browser "first 6 letters" match. Nothing is changed: the dashboard shows the result for
+    the owner to correct, then books stock (stock/receive) or cost prices (products/costs)."""
+    from core.skills.commerce_assistant import _match_product, _suggest_products
+    lines = (body or {}).get("lines") or []
+    products = [p for p in await service.list_products(tenant_id, in_stock_only=False, include_archived=True)
+                if not p.get("archived")]
+    by_name = {(p.get("name") or ""): p for p in products}
+
+    def slim(p):
+        return {"product_id": p["id"], "name": p.get("name"), "stock_quantity": p.get("stock_quantity"),
+                "cost_cents": p.get("cost_cents")}
+    out = []
+    for i, ln in enumerate(lines[:200]):
+        if not isinstance(ln, dict):
+            continue
+        desc = str(ln.get("description") or "").strip()
+        hit = _match_product(desc, products) if desc else None
+        sugg = [] if hit else [by_name[n] for n in _suggest_products(desc, products) if n in by_name]
+        out.append({"index": i, "description": desc, "quantity": ln.get("quantity"),
+                    "unit_price_cents": ln.get("unit_price_cents"),
+                    "match": slim(hit) if hit else None, "suggestions": [slim(p) for p in sugg]})
+    return {"lines": out, "matched": sum(1 for x in out if x["match"])}
+
+
+@router.post("/{tenant_id}/admin/products/costs")
+async def admin_update_costs(tenant_id: str, body: dict):
+    """Set cost prices from a scanned supplier price list or invoice, after the owner has
+    reviewed the matches: costs = [{product_id, variant_id?, cost_cents}]."""
+    updated = 0
+    for c in ((body or {}).get("costs") or [])[:500]:
+        if not isinstance(c, dict) or not c.get("product_id"):
+            continue
+        try:
+            cost = int(c.get("cost_cents"))
+        except (TypeError, ValueError):
+            continue
+        if cost <= 0:
+            continue
+        table = "commerce_product_variants" if c.get("variant_id") else "commerce_products"
+        res = (service._client().table(table).update({"cost_cents": cost})
+               .eq("tenant_id", tenant_id).eq("id", c.get("variant_id") or c["product_id"]).execute())
+        updated += len(res.data or [])
+    return {"updated": updated}
+
+
+@router.get("/{tenant_id}/admin/documents/reread")
+async def admin_reread_status(tenant_id: str):
+    """How many filed PDFs a re-read could fill in, and the last run's progress."""
+    from vula.commerce import reread
+    try:
+        n = len(reread.candidates(tenant_id))
+    except Exception as exc:
+        log.debug("reread candidates failed: %s", exc)
+        n = 0
+    return {"candidates": n, "status": reread.status_for(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/documents/reread")
+async def admin_reread_documents(tenant_id: str, request: Request):
+    """Re-read documents missing data (uncategorised "Email attachment" PDFs, invoices/quotes
+    with no amount or supplier) in the background. Owner/manager — it spends model calls."""
+    from vula.commerce import reread
+    from vula.commerce.background_tasks import run_background
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can start a re-read.")
+    if reread.status_for(tenant_id).get("running"):
+        return {"started": False, "status": reread.status_for(tenant_id)}
+    n = len(reread.candidates(tenant_id))
+    if n:
+        run_background(tenant_id, "reread_documents", reread.reread_missing(tenant_id))
+    return {"started": bool(n), "candidates": n}
+
+
+@router.post("/{tenant_id}/admin/stock/adjust")
+async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
+    """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""
+    body = body or {}
+    if not body.get("product_id") or (body.get("set") is None and body.get("add") is None):
+        raise HTTPException(status_code=400, detail="product_id and set or add are required")
+    after = await service.adjust_stock(
+        tenant_id, body["product_id"], variant_id=body.get("variant_id") or None,
+        set_to=body.get("set"), delta=body.get("add") if body.get("set") is None else None,
+        reason="adjust", ref_type="scan", actor=_actor(request), note=(body.get("note") or None))
+    if after is None:
+        raise HTTPException(status_code=404, detail="product not found")
+    return {"stock_quantity": after}
+
+
+@router.get("/{tenant_id}/admin/products/{product_id}/stock-movements")
+async def admin_stock_movements(tenant_id: str, product_id: str, variant_id: Optional[str] = None,
+                                limit: int = 20):
+    return {"movements": await service.list_stock_movements(tenant_id, product_id, variant_id,
+                                                            min(max(limit, 1), 100))}
+
+
+@router.post("/{tenant_id}/admin/products/{product_id}/barcode")
+async def admin_link_barcode(tenant_id: str, product_id: str, body: dict):
+    """Link a scanned barcode that matched nothing to this product (or one of its variants),
+    so the next scan finds it. A barcode already on another item is refused, not moved."""
+    code = str((body or {}).get("barcode") or "").strip()
+    if not code or len(code) > 64:
+        raise HTTPException(status_code=400, detail="barcode is required")
+    existing = await service.find_by_barcode(tenant_id, code)
+    if existing:
+        on = existing.get("variant") or existing.get("product") or {}
+        if on.get("id") not in (product_id, (body or {}).get("variant_id")):
+            name = (existing.get("product") or {}).get("name") or "another product"
+            raise HTTPException(status_code=409, detail=f"That barcode is already on {name}.")
+        return existing
+    variant_id = (body or {}).get("variant_id")
+    table = "commerce_product_variants" if variant_id else "commerce_products"
+    q = (service._client().table(table).update({"barcode": code})
+         .eq("tenant_id", tenant_id).eq("id", variant_id or product_id))
+    if variant_id:
+        q = q.eq("product_id", product_id)
+    if not (q.execute().data or []):
+        raise HTTPException(status_code=404, detail="product not found")
+    return await service.find_by_barcode(tenant_id, code)
 
 
 # ── In-portal admin assistant (chat to Vula from the dashboard) ───────────────
@@ -5923,7 +6220,7 @@ async def admin_smart_scan(tenant_id: str, body: ScanRequest):
         "Look at the image and return ONLY a valid JSON object — no prose, no markdown fences. "
         "Use this schema:\n"
         "{\n"
-        '  "doc_type": "receipt|delivery_note|invoice|order",\n'
+        '  "doc_type": "receipt|delivery_note|invoice|order|price_list",  // price_list: a supplier\'s price list / menu\n'
         '  "supplier": string|null,\n'
         '  "tax_id": string|null,  // supplier VAT / tax registration number if shown\n'
         '  "customer": string|null,\n'
@@ -6146,7 +6443,7 @@ async def admin_create_purchase_order(tenant_id: str, body: dict):
 
 
 @router.patch("/{tenant_id}/admin/purchase-orders/{po_id}/status")
-async def admin_update_po_status(tenant_id: str, po_id: str, body: dict):
+async def admin_update_po_status(tenant_id: str, po_id: str, body: dict, request: Request):
     """draft → sent → received (bumps stock_quantity for every line item) | cancelled."""
     status = (body or {}).get("status")
     if status not in ("draft", "sent", "received", "cancelled"):
@@ -6162,13 +6459,20 @@ async def admin_update_po_status(tenant_id: str, po_id: str, body: dict):
         patch["sent_at"] = service._now()
     if status == "received" and po["status"] != "received":
         patch["received_at"] = service._now()
-        for it in (po.get("items") or []):
+        # 2026-09-27: was a read-modify-write on commerce_products looked up by id alone (not
+        # tenant-scoped), ignoring variants and in_stock. Now atomic, tenant-scoped, recorded,
+        # and a partial delivery can pass what actually arrived: body.received = [{product_id,
+        # variant_id?, quantity}] overrides the ordered quantities.
+        received = (body or {}).get("received")
+        lines = received if isinstance(received, list) else (po.get("items") or [])
+        for it in lines:
+            qty = int(round(float(it.get("quantity") or 0)))
+            if not it.get("product_id") or qty <= 0:
+                continue
             try:
-                prod = (db.table("commerce_products").select("stock_quantity")
-                        .eq("id", it["product_id"]).limit(1).execute().data or [None])[0]
-                if prod is not None:
-                    new_qty = (prod.get("stock_quantity") or 0) + int(it.get("quantity") or 0)
-                    db.table("commerce_products").update({"stock_quantity": new_qty}).eq("id", it["product_id"]).execute()
+                await service.adjust_stock(tenant_id, it["product_id"], variant_id=it.get("variant_id"),
+                                           delta=qty, reason="receive", ref_type="purchase_order",
+                                           ref_id=po_id, actor=_actor(request))
             except Exception as exc:
                 log.warning("PO receive stock bump failed for %s: %s", it.get("product_id"), exc)
     result = db.table("commerce_purchase_orders").update(patch).eq("tenant_id", tenant_id).eq("id", po_id).execute()

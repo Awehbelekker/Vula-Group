@@ -5,7 +5,9 @@
  * AI extracts structured data, then one tap turns it into an action.
  *
  *   📷 Snap a supplier receipt  → auto-creates an EXPENSE
- *   📦 Snap a delivery note     → updates STOCK quantities
+ *   📦 Snap a delivery note     → lines matched to products on the server, reviewed, then
+ *                                 booked into STOCK (recorded as 'receive' movements)
+ *   💲 Snap a supplier price list → proposes COST PRICE updates for matched products
  *   🧾 Snap an invoice           → pre-fills an INVOICE
  *   📝 Snap a handwritten order  → pre-fills an ORDER
  *
@@ -23,6 +25,7 @@ const DOC_TYPES = [
   { id: 'receipt',       label: '🧾 Supplier receipt', hint: '→ creates an expense' },
   { id: 'delivery_note', label: '📦 Delivery note',    hint: '→ updates stock' },
   { id: 'invoice',       label: '📄 Invoice',          hint: '→ pre-fills invoice' },
+  { id: 'price_list',    label: '💲 Price list',       hint: '→ updates cost prices' },
 ]
 
 export default function VulaSmartScanner({ tenantId, products = [], onExpenseCreated, onStockUpdated }) {
@@ -36,6 +39,8 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [suppliers, setSuppliers] = useState([])
+  const [lineMatches, setLineMatches] = useState(null)       // server-matched line items
+  const [stockMsg, setStockMsg] = useState('')
   const fileRef = useRef(null)
 
   // Load known suppliers for payment-terms hints
@@ -73,6 +78,7 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
       const d = await r.json()
       if (!d.ok) throw new Error(d.detail || 'Scan failed')
       setResult(d.extracted)
+      loadLineMatches(d.extracted)
 
       // Auto-preview the payment terms / due date from commit endpoint
       if (d.extracted?.total_cents > 0) {
@@ -116,35 +122,59 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
     return commitToBooks()  // redirect to smart commit
   }
 
-  async function applyStockUpdates() {
-    setSaving(true)
+  // Lines matched to products on the server (the WhatsApp assistant's matcher) — replaced an
+  // in-browser "first 6 letters" match that PATCHed stock_quantity = old + qty per line: it
+  // matched the wrong product, lost concurrent changes, ignored errors and variants.
+  async function loadLineMatches(extracted) {
+    setLineMatches(null)
+    const lines = extracted?.line_items || []
+    if (!lines.length) return
     try {
-      // Match each line item to a product by fuzzy name and increment stock
-      for (const item of (result.line_items || [])) {
-        const match = products.find(p =>
-          p.name.toLowerCase().includes((item.description || '').toLowerCase().slice(0, 6)) ||
-          (item.description || '').toLowerCase().includes(p.name.toLowerCase().slice(0, 6))
-        )
-        if (match) {
-          const newQty = (match.stock_quantity || 0) + Math.round(item.quantity || 0)
-          await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${match.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stock_quantity: newQty, in_stock: true }),
-          })
-        }
-      }
-      setSaved(true)
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/scan/match-lines`, {
+        method: 'POST', headers: H, body: JSON.stringify({ lines }) })
+      const d = await r.json()
+      setLineMatches((d.lines || []).map(l => ({ ...l, product_id: l.match?.product_id || '',
+        qty: Math.max(0, Math.round(Number(l.quantity) || 0)), include: !!l.match })))
+    } catch { setLineMatches([]) }
+  }
+
+  const updateLine = (i, patch) => setLineMatches(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l))
+
+  async function bookStock() {
+    const lines = (lineMatches || []).filter(l => l.include && l.product_id && l.qty > 0)
+      .map(l => ({ product_id: l.product_id, quantity: l.qty,
+                   ...(l.unit_price_cents ? { unit_cost_cents: l.unit_price_cents } : {}) }))
+    if (!lines.length) { setError('Tick at least one matched line with a quantity.'); return }
+    setSaving(true); setError(null)
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/stock/receive`, {
+        method: 'POST', headers: H,
+        body: JSON.stringify({ lines, reference: result?.reference || result?.supplier || null }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.detail || 'Could not book stock')
+      setStockMsg(`📦 Booked ${d.received} line${d.received === 1 ? '' : 's'} into stock${d.failed?.length ? ` — ${d.failed.length} failed` : ''}.`)
+      setLineMatches(null)
       onStockUpdated?.()
-    } catch {
-      setError('Could not update stock')
-    } finally {
-      setSaving(false)
-    }
+    } catch (err) { setError(err.message || 'Could not update stock') } finally { setSaving(false) }
+  }
+
+  async function updateCosts() {
+    const costs = (lineMatches || []).filter(l => l.include && l.product_id && l.unit_price_cents > 0)
+      .map(l => ({ product_id: l.product_id, cost_cents: l.unit_price_cents }))
+    if (!costs.length) { setError('No ticked line has both a product and a unit price.'); return }
+    setSaving(true); setError(null)
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/costs`, {
+        method: 'POST', headers: H, body: JSON.stringify({ costs }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.detail || 'Could not update cost prices')
+      setStockMsg(`💲 Updated the cost price of ${d.updated} product${d.updated === 1 ? '' : 's'}.`)
+      setLineMatches(null)
+    } catch (err) { setError(err.message) } finally { setSaving(false) }
   }
 
   function reset() {
-    setPreview(null); setResult(null); setError(null); setSaved(false)
+    setPreview(null); setResult(null); setError(null); setSaved(false); setLineMatches(null); setStockMsg('')
     if (fileRef.current) fileRef.current.value = ''
   }
 
@@ -277,16 +307,46 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
 
           {/* Action buttons by detected type */}
           <div style={s.actions}>
-            {(detectedType === 'receipt' || detectedType === 'invoice' || detectedType === 'delivery_note' || result.total_cents != null) && (
+            {detectedType !== 'price_list' && (detectedType === 'receipt' || detectedType === 'invoice' || detectedType === 'delivery_note' || result.total_cents != null) && (
               <button onClick={commitToBooks} disabled={saving} style={s.btnPrimary}>
                 {saving ? 'Saving to books…' : `📊 Commit to books${result.total_cents ? ` (${fmt(result.total_cents)})` : ''}`}
               </button>
             )}
-            {(result.line_items?.length > 0) && (
-              <button onClick={applyStockUpdates} disabled={saving} style={s.btnSecondary}>
-                {saving ? 'Updating…' : '📦 Also update stock'}
+            {lineMatches?.length > 0 && (
+              <div style={s.lineItems}>
+                <p style={s.lineHeader}>Match lines to your products ({lineMatches.filter(l => l.match).length}/{lineMatches.length} found)</p>
+                {lineMatches.map((l, i) => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '20px 1fr 64px', gap: 6, alignItems: 'center', padding: '4px 0', fontSize: 12, fontFamily: 'system-ui' }}>
+                    <input type="checkbox" checked={l.include} onChange={e => updateLine(i, { include: e.target.checked })} />
+                    <div>
+                      <div style={{ color: '#8A8680' }}>{l.description}{l.unit_price_cents ? ` · ${fmt(l.unit_price_cents)} each` : ''}</div>
+                      <select value={l.product_id} onChange={e => updateLine(i, { product_id: e.target.value, include: !!e.target.value })}
+                              style={{ width: '100%', fontSize: 12, padding: 3 }}>
+                        <option value="">— not in my products —</option>
+                        {l.match && <option value={l.match.product_id}>{l.match.name}</option>}
+                        {l.suggestions.map(p => <option key={p.product_id} value={p.product_id}>Did you mean: {p.name}</option>)}
+                        {products.filter(p => !p.archived && p.id !== l.match?.product_id && !l.suggestions.some(x => x.product_id === p.id))
+                          .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    {detectedType !== 'price_list' && (
+                      <input type="number" min="0" value={l.qty} onChange={e => updateLine(i, { qty: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                             style={{ width: 60, fontSize: 12, padding: 3 }} />)}
+                  </div>
+                ))}
+              </div>
+            )}
+            {lineMatches?.length > 0 && detectedType !== 'price_list' && (
+              <button onClick={bookStock} disabled={saving} style={s.btnSecondary}>
+                {saving ? 'Booking…' : '📦 Book ticked lines into stock'}
               </button>
             )}
+            {lineMatches?.some(l => l.unit_price_cents > 0) && (
+              <button onClick={updateCosts} disabled={saving} style={s.btnSecondary}>
+                {saving ? 'Updating…' : '💲 Update cost prices from this document'}
+              </button>
+            )}
+            {stockMsg && <div style={{ fontSize: 13, fontFamily: 'system-ui', color: '#16a34a' }}>{stockMsg}</div>}
           </div>
         </div>
       )}

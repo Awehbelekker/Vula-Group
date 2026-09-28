@@ -113,13 +113,29 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "update_stock",
-        "description": "Set a product's stock quantity by name or slug. Without confirm=true, "
+        "description": "Set a product's stock quantity by name or slug — or, with add, add "
+                       "(positive) or remove (negative) that many instead. Without confirm=true, "
                        "returns a preview (current vs. new quantity) instead of applying it — "
                        "only pass confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "product": {"type": "string"}, "quantity": {"type": "integer"},
+            "add": {"type": "integer", "description": "Add (e.g. 3) or remove (e.g. -2) instead of setting."},
             "confirm": {"type": "boolean"}},
-            "required": ["product", "quantity"]},
+            "required": ["product"]},
+    }},
+    {"type": "function", "function": {
+        "name": "receive_stock",
+        "description": "Book a delivery into stock: each line is a product and how many arrived "
+                       "(optionally the unit cost in rands, which updates the cost price). Without "
+                       "confirm=true, returns a preview of matched and unmatched lines — only pass "
+                       "confirm=true after the owner has explicitly said to go ahead.",
+        "parameters": {"type": "object", "properties": {
+            "lines": {"type": "array", "items": {"type": "object", "properties": {
+                "product": {"type": "string"}, "quantity": {"type": "number"},
+                "unit_cost_rands": {"type": "number"}}, "required": ["product", "quantity"]}},
+            "reference": {"type": "string", "description": "Delivery note / invoice number."},
+            "confirm": {"type": "boolean"}},
+            "required": ["lines"]},
     }},
     {"type": "function", "function": {
         "name": "outstanding_invoices",
@@ -1084,7 +1100,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "reimbursement_balance": "finances", "add_expense": "finances",
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
-    "stock_status": "products", "update_stock": "products",
+    "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
@@ -1676,7 +1692,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "recent_orders":      return await self._recent_orders(tid, args.get("status"), args.get("limit", 10))
             if name == "update_order_status": return await self._update_order_status(tid, args.get("order_id", ""), args.get("status", ""), args.get("payment_method"), bool(args.get("confirm")))
             if name == "stock_status":       return await self._stock_status(tid, bool(args.get("low_only")))
-            if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity", 0), bool(args.get("confirm")))
+            if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity"), bool(args.get("confirm")), actor=ctx.get("phone"), add=args.get("add"), product_id=args.get("product_id"), variant_id=args.get("variant_id"))
+            if name == "receive_stock":      return await self._receive_stock(tid, args.get("lines") or [], args.get("reference"), bool(args.get("confirm")), actor=ctx.get("phone"))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
             if name == "find_document":      return await self._find_document(tid, args)
             if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
@@ -1840,33 +1857,119 @@ class CommerceAdminSkill(BaseSkill):
             rows.append({"product": p["name"], "qty": qty, "in_stock": p.get("in_stock")})
         return rows or {"message": "All products well stocked." if low_only else "No products."}
 
-    async def _update_stock(self, tid: str, product_name: str, quantity: int, confirm: bool = False) -> Dict[str, Any]:
+    async def _update_stock(self, tid: str, product_name: str, quantity: Optional[int], confirm: bool = False,
+                            actor: Optional[str] = None, add: Optional[int] = None,
+                            product_id: Optional[str] = None, variant_id: Optional[str] = None) -> Dict[str, Any]:
+        """Set (quantity) or add/remove (add) stock. product_id/variant_id are not offered to the
+        model — they come from a scanned barcode (WhatsApp photo → lookup), so the Confirm tap
+        applies to exactly the item that was scanned rather than a re-match by name."""
         name = (product_name or "").strip()
         prod = None
-        if re.match(r"^[a-z0-9-]+$", name):
+        if product_id:
+            prod = await service.get_product(tid, product_id)
+        if not prod and name and re.match(r"^[a-z0-9-]+$", name):
             prod = await service.get_product_by_slug(tid, name)
-        if not prod:
+        if not prod and name:
             candidates = await service.list_products(tid, in_stock_only=False)
             prod = next((p for p in candidates if name.lower() in p["name"].lower()), None)
         if not prod:
             return {"error": f"No product matching '{name}'."}
+        if quantity is None and add is None:
+            return {"error": "Say what to set the stock to, or how many to add or remove."}
+        label = product_name if (variant_id and product_name) else prod["name"]
+        current = prod.get("stock_quantity")
+        if variant_id:
+            current = next((v.get("stock_quantity") for v in (prod.get("commerce_product_variants") or [])
+                            if v.get("id") == variant_id), current)
+        use_add = quantity is None
+        target = max(0, int(current or 0) + int(add)) if use_add else int(quantity)
         if not confirm:
-            return {"preview": True, "product": prod["name"],
-                    "current_stock": prod.get("stock_quantity"), "new_stock": int(quantity),
-                    "message": "Confirm to apply (call again with confirm=true)."}
-        await service.update_product(tid, prod["id"], {"stock_quantity": int(quantity), "in_stock": int(quantity) > 0})
-        result = {"updated": prod["name"], "stock_quantity": int(quantity)}
-        if settings.readback_verify_enabled:
+            out = {"preview": True, "product": label, "current_stock": current, "new_stock": target,
+                   "message": "Confirm to apply (call again with confirm=true)."}
+            if use_add:
+                out["change"] = f"{int(add):+d}"
+            return out
+        # Atomic and recorded (migration 182) — who set it, from WhatsApp. An add goes in as a
+        # delta so a sale landing between preview and confirm isn't overwritten.
+        kw = {"delta": int(add)} if use_add else {"set_to": int(quantity)}
+        after = await service.adjust_stock(tid, prod["id"], variant_id=variant_id, reason="adjust",
+                                           ref_type="whatsapp", actor=actor or "whatsapp", **kw)
+        expected = after if use_add else int(quantity)
+        result = {"updated": label, "stock_quantity": expected}
+        if settings.readback_verify_enabled and not variant_id:
             p2 = await service.get_product(tid, prod["id"])
             observed = (p2 or {}).get("stock_quantity")
-            ok = p2 is not None and observed is not None and int(observed) == int(quantity)
+            ok = (p2 is not None and observed is not None and expected is not None
+                  and int(observed) == int(expected))
             _readback_gate(tid, "update_stock", ok,
-                           {"product_id": prod["id"], "stock_quantity": int(quantity)},
+                           {"product_id": prod["id"], "stock_quantity": expected},
                            {"stock_quantity": observed})
             if not ok:
-                return {"error": f"Stock update for {prod['name']} did not persist — the product "
+                return {"error": f"Stock update for {label} did not persist — the product "
                                  f"still shows {observed if observed is not None else 'unknown'}. Not confirmed."}
             result["verified"] = True
+        elif after is not None:
+            result["verified"] = True       # the RPC's own returned row is the read-back
+        return result
+
+    async def _receive_stock(self, tid: str, lines: List[Dict[str, Any]], reference: Optional[str],
+                             confirm: bool = False, actor: Optional[str] = None) -> Dict[str, Any]:
+        """Book a delivery (a delivery-note photo, or the owner listing what arrived). Lines are
+        matched with the customer assistant's product matcher; anything unmatched is reported,
+        never guessed, and only matched lines are booked."""
+        from core.skills.commerce_assistant import _match_product, _suggest_products
+        candidates = await service.list_products(tid, in_stock_only=False)
+        matched, unmatched = [], []
+        for ln in lines or []:
+            if not isinstance(ln, dict):
+                continue
+            want = str(ln.get("product") or "").strip()
+            try:
+                qty = int(round(float(ln.get("quantity") or 0)))
+            except (TypeError, ValueError):
+                qty = 0
+            prod = None
+            if ln.get("product_id"):
+                prod = next((p for p in candidates if p["id"] == ln["product_id"]), None)
+            prod = prod or _match_product(want, candidates)
+            if not prod or qty <= 0:
+                sugg = _suggest_products(want, candidates) if not prod else []
+                unmatched.append(want + (f" (did you mean {', '.join(sugg)}?)" if sugg else "")
+                                 + (" — no quantity" if prod else ""))
+                continue
+            matched.append((prod, qty, ln.get("unit_cost_rands")))
+        if not matched:
+            return {"error": "None of those lines matched a product in the shop, so nothing was booked.",
+                    "not_matched": unmatched}
+        if not confirm:
+            out = {"preview": True,
+                   "receiving": "; ".join(f"{q} × {p['name']} (now {p.get('stock_quantity') if p.get('stock_quantity') is not None else 'untracked'})"
+                                          for p, q, _ in matched),
+                   "reference": reference,
+                   "message": "Confirm to book these into stock (call again with confirm=true)."}
+            if unmatched:
+                out["not_matched"] = "; ".join(unmatched) + " — not booked"
+            return out
+        booked, failed = [], []
+        for prod, qty, cost in matched:
+            after = await service.adjust_stock(tid, prod["id"], delta=qty, reason="receive",
+                                               ref_type="whatsapp", ref_id=(reference or None),
+                                               actor=actor or "whatsapp")
+            if after is None:
+                failed.append(prod["name"])
+                continue
+            booked.append(f"{prod['name']} +{qty} → {after}")
+            try:
+                if cost is not None and float(cost) > 0:
+                    service._client().table("commerce_products").update(
+                        {"cost_cents": int(round(float(cost) * 100))}).eq("tenant_id", tid).eq("id", prod["id"]).execute()
+            except Exception as exc:
+                logger.debug("cost price update skipped: %s", exc)
+        result: Dict[str, Any] = {"booked": booked, "verified": bool(booked)}
+        if failed:
+            result["failed"] = failed
+        if unmatched:
+            result["not_booked"] = unmatched
         return result
 
     async def _outstanding_invoices(self, tid: str) -> Dict[str, Any]:

@@ -209,6 +209,16 @@ class SupplierDatabase:
                      s.discount_pct, int(s.preferred), s.notes)
                 )
             conn.commit()
+        # 2026-09-27: the file is wiped on every Railway deploy (no volume attached), which reset
+        # every supplier edit to the defaults above. Edits are written through to Supabase
+        # (vula_takeoff_suppliers, migration 180) and re-applied here on every start.
+        from vula import durable
+        for r in durable.select("vula_takeoff_suppliers") or []:
+            conn.execute("INSERT OR REPLACE INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,?)",
+                         (r["id"], r.get("name"), r.get("category"), r.get("email"), r.get("whatsapp"),
+                          r.get("contact_name"), r.get("discount_pct") or 0, int(bool(r.get("preferred"))),
+                          r.get("notes"), r.get("tenant_id") or "default"))
+        conn.commit()
         conn.close()
 
     def get_by_category(self, category: str, tenant_id: str = "default") -> List[Supplier]:
@@ -235,17 +245,30 @@ class SupplierDatabase:
               int(supplier.preferred), supplier.notes, tenant_id))
         conn.commit()
         conn.close()
+        from vula import durable
+        durable.upsert("vula_takeoff_suppliers", {
+            "id": supplier.id, "tenant_id": tenant_id, "name": supplier.name,
+            "category": supplier.category, "email": supplier.email, "whatsapp": supplier.whatsapp,
+            "contact_name": supplier.contact_name, "discount_pct": supplier.discount_pct,
+            "preferred": bool(supplier.preferred), "notes": supplier.notes}, on_conflict="id")
 
-    def save_po(self, po: PurchaseOrder, project_name: str):
+    def save_po(self, po: PurchaseOrder, project_name: str, tenant_id: str = "default"):
+        lines = [{"desc": ln.description, "qty": ln.qty, "unit": ln.unit, "total": ln.estimated_total}
+                 for ln in po.lines]
+        created = datetime.now().isoformat()
         conn = sqlite3.connect(self.db_path)
         conn.execute("""
             INSERT OR REPLACE INTO purchase_orders VALUES (?,?,?,?,?,?,?,?,?)
         """, (po.po_number, project_name, po.supplier.id, po.status,
-              po.estimated_total, po.quote_received, po.sent_at,
-              json.dumps([{"desc": ln.description, "qty": ln.qty, "unit": ln.unit, "total": ln.estimated_total} for ln in po.lines]),
-              datetime.now().isoformat()))
+              po.estimated_total, po.quote_received, po.sent_at, json.dumps(lines), created))
         conn.commit()
         conn.close()
+        from vula import durable
+        durable.upsert("vula_takeoff_orders", {
+            "po_number": po.po_number, "tenant_id": tenant_id, "project_name": project_name,
+            "supplier_id": po.supplier.id, "status": po.status,
+            "estimated_total": po.estimated_total, "quote_received": po.quote_received,
+            "sent_at": po.sent_at, "lines": lines}, on_conflict="tenant_id,po_number")
 
     def _row_to_supplier(self, row) -> Supplier:
         return Supplier(
@@ -321,7 +344,7 @@ class OrderManager:
             )
             self._po_counter += 1
             package.orders.append(po)
-            self.db.save_po(po, self.boq.project_name)
+            self.db.save_po(po, self.boq.project_name, self.tenant_id)
 
         logger.info(f"Order package built: {len(package.orders)} POs, "
                     f"estimated total R{package.total_estimated:,.0f}, "
@@ -345,7 +368,7 @@ class OrderManager:
 
             po.status = "sent" if sent else "draft"
             po.sent_at = datetime.now().isoformat()
-            self.db.save_po(po, package.project_name)
+            self.db.save_po(po, package.project_name, self.tenant_id)
             results.append({"po": po.po_number, "supplier": po.supplier.name, "status": po.status})
 
         return results

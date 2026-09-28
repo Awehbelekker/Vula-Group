@@ -24,6 +24,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import json
+import time
 import re
 from typing import Any, Dict, Optional
 
@@ -1824,6 +1826,12 @@ async def _handle_image_or_video(
         effective_text = f"{caption}\n\n[What's in the photo: {description}]" if description else caption
         if await _run_commerce_admin(phone, effective_text, route_tenant):
             return
+    # Owner/staff photo about stock (caption says count/stock/received/delivery…) → barcode or
+    # label lookup, or a delivery note booked through receive_stock's Confirm button.
+    if (msg_type == "image" and route_mode == "commerce" and route_tenant and caption.strip()
+            and _STOCK_CAPTION_RE.search(caption) and _is_tenant_owner(route_tenant, phone)):
+        if await _handle_stock_photo(phone, media_id, caption, route_tenant):
+            return
     # An explicit receipt/expense caption routes to the books even for a contractor.
     cap_l = (caption or "").lower()
     expense_intent = any(k in cap_l for k in _EXPENSE_WORDS)
@@ -2337,7 +2345,9 @@ async def _handle_document_ingest(
                     scan_msg = "\n\n" + reply
                 elif fin and dtp == "delivery_note":
                     scan_msg = ("\n\n📦 That's a *delivery note* — filed with your documents "
-                                "(no money booked). I'll match it against the supplier's invoice.")
+                                "(no money booked). I'll match it against the supplier's invoice. "
+                                "To book it into stock, send the photo again with the caption "
+                                "*received*.")
                 elif fin and dtp == "menu" and any(k in (filename or "").lower() for k in _EXPENSE_WORDS):
                     scan_msg = ("\n\n⚠️ That looks like a *menu/price list*, not a receipt — "
                                 "nothing was booked.")
@@ -3219,6 +3229,11 @@ _DOC_CATEGORIES = [
     # scan, since the thing worth extracting (a street-sign address) is exactly the small/
     # angled/distant text the OCR-text pipeline is unreliable on.
     "Site / Building Photo",
+    # 2026-09-27: a card machine's settlement summary (Yoco/bank merchant payout — "Your
+    # settlement summary") is real sales income. Off the Hook's arrive daily by email and all
+    # failed to categorise ("Email attachment"). Its net figure is what lands in the bank, so
+    # bank_rec allocates that credit to sales instead of leaving it unexplained.
+    "Settlement Statement",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
@@ -3432,6 +3447,13 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     'string|null, "payee_branch_code": string|null, "payee_account_number": '
                     'string|null, "amount_cents": integer|null, "reference": string|null, '
                     '"trace_id": string|null, "date": "YYYY-MM-DD"|null} - money in CENTS. '
+                    "For Settlement Statement (a card machine / merchant acquirer's settlement "
+                    "or payout summary — card sales paid INTO the business's bank), fields MUST "
+                    'use this exact shape: {"provider": string|null, "merchant_id": string|null, '
+                    '"date": "YYYY-MM-DD"|null, "gross_cents": integer|null, "fees_cents": '
+                    'integer|null, "net_cents": integer|null, "transaction_count": integer|null} '
+                    "— date is the settlement/payout date, net_cents the amount paid out, money "
+                    "in CENTS. "
                     "For Site / Building Photo (a photo of a building's exterior/signage, not a "
                     "document held up to the camera), fields MUST use this exact shape: "
                     '{"address": string|null, "business_name": string|null, "notes": '
@@ -3494,7 +3516,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     return True
                 if ungrounded_figures(flds, text):
                     return True
-            elif cat == "Proof of Payment" and ungrounded_figures(flds, text):
+            elif cat in ("Proof of Payment", "Settlement Statement") and ungrounded_figures(flds, text):
                 return True
             return False
 
@@ -3557,7 +3579,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         # Even after escalation a money figure may still not be traceable to the text. Don't
         # drop the read — flag it, so filing routes it to owner review instead of booking it
         # silently (the caller checks fields["_unverified_figures"]).
-        if result and result.get("category") in (_FINANCIAL_DOC_CATEGORIES | {"Proof of Payment"}):
+        if result and result.get("category") in (_FINANCIAL_DOC_CATEGORIES
+                                                 | {"Proof of Payment", "Settlement Statement"}):
             missing = ungrounded_figures(result.get("fields") or {}, text)
             if missing:
                 logger.warning("Doc analyze: %s has %d figure(s) not found in its text: %s",
@@ -4393,6 +4416,200 @@ async def _describe_photo_for_rep(media_id: str) -> str:
     except Exception as exc:
         logger.debug("photo description failed for rep media_id=%s: %s", media_id, exc)
         return ""
+
+
+# ── Stock by photo (owner/staff): barcode or label → lookup + count; delivery note → receive ──
+# 2026-09-27 (barcode stock counting). A staff photo captioned "count"/"stock"/"received"/
+# "delivery" used to be filed as a document; a delivery note was filed "no money booked" and
+# never reached stock. Every stock change here still goes through commerce_admin's own
+# update_stock / receive_stock preview and the Confirm button — nothing moves on a photo alone,
+# and a count is never guessed from a shelf photo.
+_STOCK_CAPTION_RE = re.compile(
+    r"\b(stock|count(ed|ing)?|how many|received?|receiving|deliver(y|ed)|delivery note|"
+    r"barcode|scan|stock-?take)\b", re.I)
+_STOCK_FOCUS: Dict[tuple, dict] = {}     # (tenant, phone) → the item a label photo just found
+_STOCK_FOCUS_TTL = 15 * 60
+_STOCK_REPLY_RE = re.compile(r"^\s*(?P<sign>[+-])?\s*(?P<n>\d{1,6})\s*$")
+
+
+async def _read_stock_photo(media_id: str) -> Optional[dict]:
+    """ONE cloud-vision call → {kind, barcodes, product_text, supplier, reference, lines}. kind is
+    barcode_label | delivery_note | shelf | other. None when the photo couldn't be read."""
+    try:
+        data = await _download_media_bytes(media_id)
+        if not data:
+            return None
+        from core.llm_router import resolve_cloud_vision_route
+        route = resolve_cloud_vision_route()
+        if not route:
+            return None
+        model, api_key, api_base = route
+        import base64
+        import litellm
+        litellm.drop_params = True
+        resp = await litellm.acompletion(
+            model=model, temperature=0, max_tokens=900, api_key=api_key, api_base=api_base,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": (
+                    "A shop's staff member sent this photo about STOCK. Reply with JSON only:\n"
+                    '{"kind": "barcode_label" | "delivery_note" | "shelf" | "other",\n'
+                    ' "barcodes": [digits of every barcode number printed under a barcode],\n'
+                    ' "product_text": "product name/size exactly as printed on a label, else empty",\n'
+                    ' "supplier": "", "reference": "delivery note or invoice number, else empty",\n'
+                    ' "lines": [{"description": "...", "quantity": number, "unit_price_rands": number or null}]}\n'
+                    "lines only for a delivery note / invoice: every item line with the quantity "
+                    "delivered. Copy text and digits exactly; never guess a value that isn't printed, "
+                    "and never estimate how many items are on a shelf.")},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:image/jpeg;base64,{base64.b64encode(data).decode()}"}},
+            ]}])
+        raw = (resp.choices[0].message.content or "").strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        out = json.loads(m.group(0)) if m else None
+        return out if isinstance(out, dict) else None
+    except Exception as exc:
+        logger.debug("stock photo read failed for media_id=%s: %s", media_id, exc)
+        return None
+
+
+async def _ask_admin_confirm(phone: str, tenant_id: str, tool_name: str, args: dict,
+                             preview: dict, caller_role: Optional[str] = None) -> None:
+    """Store a commerce_admin tool call as a pending confirmation (migration 146) and send the
+    Confirm/Cancel buttons — the same row and buttons the agent's own previews use, so the tap
+    re-dispatches exactly this call through _handle_admin_confirm_reply."""
+    from core.skills.commerce_admin import _preview_summary
+    from vula.commerce import service as commerce_service
+    summary = _preview_summary(preview)
+    row = {"tenant_id": tenant_id, "phone": phone, "skill_name": "commerce_admin",
+           "tool_name": tool_name, "summary": summary,
+           "tool_args": {**args, "_caller": {"role": caller_role, "name": None}}}
+    try:
+        ins = commerce_service._client().table("commerce_pending_confirmations").insert(row).execute()
+        pending_id = ins.data[0]["id"] if ins.data else None
+    except Exception as exc:
+        logger.warning("pending-confirmation insert failed (run migration 146?): %s", exc)
+        pending_id = None
+    if not pending_id:
+        await _send_reply(phone, summary + "\n\nI couldn't set up the Confirm button just now — "
+                                           "please try again in a moment.", tenant_id)
+        return
+    await _send_confirm_request(phone, tenant_id, {"id": pending_id, "summary": summary})
+
+
+def _staff_role(tenant_id: str, phone: str) -> Optional[str]:
+    try:
+        from core.skills.commerce_admin import _member_access
+        return None if _member_access(tenant_id, phone) is None else "staff"
+    except Exception:
+        return None
+
+
+async def _handle_stock_photo(phone: str, media_id: str, caption: str, tenant_id: str) -> bool:
+    """Owner/staff stock photo. True when it was handled (a reply was sent)."""
+    from core.skills.commerce_admin import CommerceAdminSkill, _member_access
+    access = _member_access(tenant_id, phone)
+    if access is not None and "products" not in access and "stock" not in access:
+        return False                        # not allowed to touch stock → normal photo handling
+    read = await _read_stock_photo(media_id)
+    if not read:
+        await _send_reply(phone, "I couldn't read that photo. Try again closer up and in good "
+                                 "light — or use Sell › Stock in the dashboard to scan with the "
+                                 "phone camera.", tenant_id)
+        return True
+    kind = str(read.get("kind") or "").lower()
+    lines = [ln for ln in (read.get("lines") or []) if isinstance(ln, dict) and ln.get("description")]
+    skill = CommerceAdminSkill()
+
+    if kind == "delivery_note" or lines:
+        if not lines:
+            await _send_reply(phone, "That looks like a delivery note, but I couldn't read its item "
+                                     "lines. Send a clearer photo, or tell me what arrived "
+                                     "(e.g. \"received 10 hake, 5 prawns\").", tenant_id)
+            return True
+        args = {"lines": [{"product": str(ln.get("description"))[:120], "quantity": ln.get("quantity"),
+                           **({"unit_cost_rands": ln["unit_price_rands"]}
+                              if isinstance(ln.get("unit_price_rands"), (int, float)) else {})}
+                          for ln in lines[:60]],
+                "reference": (str(read.get("reference") or "").strip()[:60] or None)}
+        preview = await skill._receive_stock(tenant_id, args["lines"], args["reference"], confirm=False,
+                                             actor=phone)
+        if not preview.get("preview"):
+            nm = preview.get("not_matched") or []
+            await _send_reply(phone, "I read the delivery note but none of its lines matched a product "
+                                     "in your shop, so nothing was booked."
+                              + ("\n\nLines I read:\n• " + "\n• ".join(nm[:15]) if nm else ""), tenant_id)
+            return True
+        await _ask_admin_confirm(phone, tenant_id, "receive_stock", args, preview, _staff_role(tenant_id, phone))
+        return True
+
+    if kind == "barcode_label" or read.get("barcodes") or read.get("product_text"):
+        from vula.commerce import service as commerce_service
+        codes = [re.sub(r"\D", "", str(c)) for c in (read.get("barcodes") or [])]
+        codes += re.findall(r"\b\d{8,14}\b", caption or "")
+        hit = None
+        for code in [c for c in codes if len(c) >= 6]:
+            hit = await commerce_service.find_by_barcode(tenant_id, code)
+            if hit:
+                break
+        if not hit and read.get("product_text"):
+            from core.skills.commerce_assistant import _match_product
+            cands = await commerce_service.list_products(tenant_id, in_stock_only=False)
+            prod = _match_product(str(read["product_text"]), cands)
+            hit = {"product": prod, "variant": None} if prod else None
+        if not hit or not hit.get("product"):
+            shown = ", ".join(c for c in codes if c) or (read.get("product_text") or "the label")
+            await _send_reply(phone, f"I read {shown}, but it isn't linked to a product in your shop "
+                                     "yet. In the dashboard, open Sell › Stock, scan it and pick the "
+                                     "product — after that a photo finds it.", tenant_id)
+            return True
+        prod, var = hit["product"], hit.get("variant")
+        name = prod.get("name") or "That product"
+        if var and isinstance(var.get("option_values"), dict):
+            name += " — " + " / ".join(str(v) for v in var["option_values"].values())
+        qty = (var or prod).get("stock_quantity")
+        _STOCK_FOCUS[(tenant_id, phone)] = {"product_id": prod["id"], "variant_id": (var or {}).get("id"),
+                                            "name": name, "at": time.time()}
+        await _send_reply(phone, f"*{name}* — in stock: {qty if qty is not None else 'not tracked yet'}.\n\n"
+                                 "Reply with the count (e.g. 12), or +3 / -2 to add or remove.", tenant_id)
+        return True
+
+    await _send_reply(phone, "I can read barcodes, labels and delivery notes, but I won't guess how "
+                             "many items are in a photo. Send the count (e.g. \"hake 12\"), a photo "
+                             "of the barcode, or use Sell › Stock in the dashboard to scan items.",
+                      tenant_id)
+    return True
+
+
+async def _maybe_stock_followup(phone: str, text: str, tenant_id: str) -> bool:
+    """A bare number / +N / -N right after a label photo: the count for that item. Goes to
+    update_stock's preview and the Confirm button, pinned to the scanned item's id."""
+    key = (tenant_id, phone)
+    focus = _STOCK_FOCUS.get(key)
+    if not focus:
+        return False
+    if time.time() - focus["at"] > _STOCK_FOCUS_TTL:
+        _STOCK_FOCUS.pop(key, None)
+        return False
+    m = _STOCK_REPLY_RE.match(text or "")
+    if not m:
+        return False
+    _STOCK_FOCUS.pop(key, None)
+    n = int(m.group("n"))
+    args = {"product": focus["name"], "product_id": focus["product_id"], "variant_id": focus["variant_id"]}
+    if m.group("sign"):
+        args["add"] = n if m.group("sign") == "+" else -n
+    else:
+        args["quantity"] = n
+    from core.skills.commerce_admin import CommerceAdminSkill
+    skill = CommerceAdminSkill()
+    preview = await skill._update_stock(tenant_id, focus["name"], args.get("quantity"), confirm=False,
+                                        actor=phone, add=args.get("add"), product_id=focus["product_id"],
+                                        variant_id=focus["variant_id"])
+    if not preview.get("preview"):
+        await _send_reply(phone, preview.get("error") or "I couldn't find that item any more.", tenant_id)
+        return True
+    await _ask_admin_confirm(phone, tenant_id, "update_stock", args, preview, _staff_role(tenant_id, phone))
+    return True
 
 
 async def _scan_financial_photo(photo_path: str) -> Optional[dict]:
@@ -5982,6 +6199,8 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
             # staff they can do this any time) rather than sending "menu" to the LLM agent.
             if await _send_staff_capability_menu(phone, tenant_id):
                 return
+        if await _maybe_stock_followup(phone, text, tenant_id):
+            return
         if await _run_commerce_admin(phone, text, tenant_id, detected_lang=detected_lang):
             return
         # Admin agent failed. This used to fall through to the CUSTOMER shopping assistant, so
@@ -6470,23 +6689,7 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         return False
 
     if output.confirm_request:
-        # Real reply buttons instead of a plain-text "reply yes to confirm" — see
-        # core.skills.commerce_admin.ConfirmationRequired / _send_wa_buttons.
-        cr = output.confirm_request
-        number = _wa_number(phone)
-        creds = await _get_tenant_wa_creds(tenant_id)
-        sent = False
-        if creds:
-            sent = await _send_wa_buttons(
-                creds, number, cr["summary"],
-                [{"id": f"admin_confirm:{cr['id']}", "title": cr.get("confirm_label") or "Confirm"},
-                 {"id": f"admin_cancel:{cr['id']}", "title": cr.get("cancel_label") or "Cancel"}],
-            )
-        if not sent:
-            # No creds resolved, or the Graph API call failed — fall back to plain text rather
-            # than leaving the owner with nothing at all; the pending row is still there so a
-            # typed "yes" still works via the normal free-text path on the next turn.
-            await _send_reply(phone, f"{cr['summary']}\n\nReply 'yes' to confirm.", tenant_id)
+        await _send_confirm_request(phone, tenant_id, output.confirm_request)
     else:
         await _send_reply(phone, output.answer, tenant_id)
     if session_id:
@@ -6497,6 +6700,26 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
         except Exception:
             pass
     return True
+
+
+async def _send_confirm_request(phone: str, tenant_id: str, cr: dict) -> None:
+    """Real reply buttons instead of a plain-text "reply yes to confirm" — see
+    core.skills.commerce_admin.ConfirmationRequired / _send_wa_buttons. cr = {id, summary,
+    confirm_label?, cancel_label?}; a tap lands in _handle_admin_confirm_reply."""
+    number = _wa_number(phone)
+    creds = await _get_tenant_wa_creds(tenant_id)
+    sent = False
+    if creds:
+        sent = await _send_wa_buttons(
+            creds, number, cr["summary"],
+            [{"id": f"admin_confirm:{cr['id']}", "title": cr.get("confirm_label") or "Confirm"},
+             {"id": f"admin_cancel:{cr['id']}", "title": cr.get("cancel_label") or "Cancel"}],
+        )
+    if not sent:
+        # No creds resolved, or the Graph API call failed — fall back to plain text rather
+        # than leaving the owner with nothing at all; the pending row is still there so a
+        # typed "yes" still works via the normal free-text path on the next turn.
+        await _send_reply(phone, f"{cr['summary']}\n\nReply 'yes' to confirm.", tenant_id)
 
 
 async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str) -> None:

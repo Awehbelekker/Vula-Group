@@ -250,6 +250,53 @@ async def update_variant_stock(variant_id: str, quantity_delta: int) -> None:
     ).execute()
 
 
+async def adjust_stock(tenant_id: str, product_id: str, *, variant_id: Optional[str] = None,
+                       delta: Optional[int] = None, set_to: Optional[int] = None,
+                       reason: str = "adjust", ref_type: Optional[str] = None,
+                       ref_id: Optional[str] = None, actor: Optional[str] = None,
+                       note: Optional[str] = None) -> Optional[int]:
+    """The one way stock changes outside checkout reservations (migration 182): sets (set_to) or
+    adds (delta) stock for a product or one of its variants and records the movement, in one
+    database statement — so two people counting or receiving at once never overwrite each
+    other. Returns the quantity after, or None when the product/variant isn't this tenant's.
+    An untracked product becomes tracked the moment it's counted or received."""
+    if set_to is None and delta is None:
+        raise ValueError("adjust_stock needs delta or set_to")
+    res = _client().rpc("apply_stock_change", {
+        "p_tenant_id": tenant_id, "p_product_id": product_id, "p_variant_id": variant_id,
+        "p_delta": int(delta) if delta is not None else None,
+        "p_set": int(set_to) if set_to is not None else None,
+        "p_reason": reason, "p_ref_type": ref_type, "p_ref_id": ref_id,
+        "p_actor": actor, "p_note": note,
+    }).execute()
+    data = res.data
+    if isinstance(data, list):
+        data = data[0] if data else None
+    return int(data) if data is not None else None
+
+
+async def list_stock_movements(tenant_id: str, product_id: str, variant_id: Optional[str] = None,
+                               limit: int = 20) -> List[dict]:
+    q = (_client().table("commerce_stock_movements").select("*")
+         .eq("tenant_id", tenant_id).eq("product_id", product_id))
+    if variant_id:
+        q = q.eq("variant_id", variant_id)
+    return q.order("created_at", desc=True).limit(limit).execute().data or []
+
+
+def _record_movement(tenant_id: str, product_id: str, variant_id: Optional[str], delta: int,
+                     reason: str, ref_type: str, ref_id: str) -> None:
+    """Movement row for a change already applied by another race-safe RPC (order sales/refunds
+    use decrement_*). Best-effort: the stock change itself has already happened."""
+    try:
+        _client().table("commerce_stock_movements").insert({
+            "tenant_id": tenant_id, "product_id": product_id, "variant_id": variant_id,
+            "delta": int(delta), "reason": reason, "ref_type": ref_type, "ref_id": ref_id,
+            "actor": "system"}).execute()
+    except Exception as exc:
+        logger.debug("stock movement log skipped (run migration 182?): %s", exc)
+
+
 class OutOfStockError(ValueError):
     """Raised by create_order when one or more items can't be reserved.
 
@@ -346,6 +393,8 @@ async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
                 await update_variant_stock(vid, delta)
             else:
                 await update_product_stock(tenant_id, pid, delta)
+            _record_movement(tenant_id, pid, vid, -delta,
+                             "refund" if restore else "sale", "order", order_id)
         except Exception as exc:
             logger.warning("stock adjust failed for product %s variant %s (order %s): %s",
                            pid, vid, order_id, exc)
@@ -1148,12 +1197,26 @@ async def delete_variant(tenant_id: str, variant_id: str) -> None:
 
 
 async def find_by_barcode(tenant_id: str, barcode: str) -> Optional[dict]:
-    """Barcode scan lookup (Smart Scanner POS prep) — returns the variant plus its parent
-    product, or None if nothing matches."""
+    """Barcode scan lookup: {"product": ..., "variant": ... or None}, or None if nothing matches.
+    A product's own barcode (migration 182) is checked first, then its variants' (087)."""
+    code = (barcode or "").strip()
+    if not code:
+        return None
+    try:
+        prod = (_client().table("commerce_products").select("*")
+                .eq("tenant_id", tenant_id).eq("barcode", code).limit(1).execute().data or [])
+    except Exception as exc:   # column arrives with migration 182
+        logger.debug("product barcode lookup skipped: %s", exc)
+        prod = []
+    if prod:
+        return {"product": prod[0], "variant": None}
     result = (_client().table("commerce_product_variants")
               .select("*, commerce_products(*)")
-              .eq("tenant_id", tenant_id).eq("barcode", barcode).limit(1).execute())
-    return result.data[0] if result.data else None
+              .eq("tenant_id", tenant_id).eq("barcode", code).limit(1).execute())
+    if not result.data:
+        return None
+    variant = dict(result.data[0])
+    return {"product": variant.pop("commerce_products", None), "variant": variant}
 
 
 async def update_order_status(order_id: str, status: str, yoco_checkout_id: Optional[str] = None,

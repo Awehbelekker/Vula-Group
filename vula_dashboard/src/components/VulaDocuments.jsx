@@ -467,6 +467,53 @@ function DriveImport({ tenantId, onImported }) {
   );
 }
 
+// Filed PDFs whose first read failed ("Email attachment") or that have no amount/supplier —
+// re-analysed in the background with today's pipeline (vula/commerce/reread.py). Fills in
+// the fields only; nothing is booked.
+function RereadMissing({ tenantId }) {
+  const [info, setInfo] = useState(null);
+  const [msg, setMsg] = useState("");
+  const load = useCallback(() => {
+    if (!tenantId.trim()) return;
+    fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/documents/reread`)
+      .then((r) => r.json()).then(setInfo).catch(() => setInfo(null));
+  }, [tenantId]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!info?.status?.running) return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [info?.status?.running, load]);
+  const st = info?.status || {};
+  if (!info || (!info.candidates && !st.total)) return null;
+  const start = async () => {
+    setMsg("");
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/documents/reread`, { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsg(d.detail || "Could not start the re-read."); return; }
+    setMsg(d.started ? `Re-reading ${d.candidates} document${d.candidates === 1 ? "" : "s"} in the background…` : "A re-read is already running.");
+    load();
+  };
+  const cats = Object.entries(st.categories || {}).map(([k, v]) => `${v} ${k}`).join(", ");
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>🔁 Documents missing data</h3>
+      <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 10px" }}>
+        {info.candidates} filed PDF{info.candidates === 1 ? "" : "s"} couldn't be read properly the first time (no category, amount or supplier).
+        Vula can read them again — it fills in the details; nothing is booked.
+      </p>
+      {st.running
+        ? <div style={{ fontSize: 13, color: C.text }}>Reading… {st.done}/{st.total}</div>
+        : <button onClick={start} disabled={!info.candidates} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 13 }}>Re-read them</button>}
+      {!st.running && st.total > 0 && (
+        <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
+          Last run: {st.fixed} of {st.total} filled in{cats ? ` (${cats})` : ""}{st.stock_sheets ? `, ${st.stock_sheets} stock sheet${st.stock_sheets === 1 ? "" : "s"}` : ""}{st.failed ? `, ${st.failed} couldn't be opened` : ""}.
+        </div>)}
+      {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
 export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }) {
   const [tenantId, setTenantId] = useState(propTenantId || "default");
   useEffect(() => { if (propTenantId) setTenantId(propTenantId); }, [propTenantId]);
@@ -541,7 +588,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
             const fd2 = new FormData();
             fd2.append("tenant_id", tenantId.trim());
             fd2.append("file", item.file);
-            const r = await fetch(`${VULA_API}/ingest`, { method: "POST", headers, body: fd2 });
+            const r = await fetch(`${VULA_API}/ingest`, { method: "POST", body: fd2 });
             setQueue((q) => q.map((x) => x.name === item.name
               ? { ...x, status: r.ok ? "queued" : "error" } : x));
           } catch {
@@ -598,6 +645,8 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
 
       {/* Google Drive import — search-based (see component comment for why not a folder browser) */}
       <DriveImport tenantId={tenantId} onImported={() => setLibraryKey((k) => k + 1)} />
+
+      <RereadMissing tenantId={tenantId} />
 
       {/* Filed documents — durable copies, modern grid+lightbox, filterable (project/customer/
           category/date/search). key bump forces a reload after a media upload lands. */}
