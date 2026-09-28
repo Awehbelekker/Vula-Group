@@ -227,6 +227,29 @@ def account_for(line: Dict[str, Any], project: Optional[str]) -> str:
     return "other_expense"
 
 
+def _existing_in_period(tenant_id: str, first: Optional[str], last: Optional[str]) -> List[Dict[str, Any]]:
+    """Bank lines Vula already holds for the sheet's dates that came from somewhere else (weekly
+    PDF statements), not yet matched to anything — what the sheet would double-count."""
+    if not first or not last:
+        return []
+    from vula.commerce.ledger import _all_pages
+    from vula.commerce.service import _client
+
+    def make():
+        return (_client().table("commerce_bank_transactions")
+                .select("id,source_file,match_status,matched_invoice_id,matched_expense_id,matched_order_id")
+                .eq("tenant_id", tenant_id).gte("txn_date", first).lte("txn_date", last))
+    try:
+        rows = _all_pages(make)
+    except Exception as exc:
+        log.debug("existing-lines read skipped: %s", exc)
+        return []
+    return [r for r in rows
+            if not str(r.get("source_file") or "").lower().endswith((".xlsx", ".xlsm", ".csv"))
+            and r.get("match_status") not in ("matched", "ignored")
+            and not (r.get("matched_invoice_id") or r.get("matched_expense_id") or r.get("matched_order_id"))]
+
+
 def preview(tenant_id: str, path: Path) -> Dict[str, Any]:
     lines = parse(path)
     labels = sorted({p for p in (project_label(li) for li in lines) if p})
@@ -237,9 +260,12 @@ def preview(tenant_id: str, path: Path) -> Dict[str, Any]:
             s = sums.setdefault(p, {"in": 0, "out": 0, "lines": 0})
             s[li["direction"]] += li["amount_cents"]
             s["lines"] += 1
-    return {"lines": len(lines),
-            "first": min((li["date"] for li in lines), default=None),
-            "last": max((li["date"] for li in lines), default=None),
+    first = min((li["date"] for li in lines), default=None)
+    last = max((li["date"] for li in lines), default=None)
+    return {"lines": len(lines), "first": first, "last": last,
+            # Lines Vula already has for these dates (from PDF statements) — importing on top
+            # would count that money twice; import with replace_existing to set them aside.
+            "existing_lines_in_period": len(_existing_in_period(tenant_id, first, last)),
             "money_in_cents": sum(li["amount_cents"] for li in lines if li["direction"] == "in"),
             "money_out_cents": sum(li["amount_cents"] for li in lines if li["direction"] == "out"),
             "projects": [{"label": p, "suggested": s, **sums[p]}
@@ -247,7 +273,7 @@ def preview(tenant_id: str, path: Path) -> Dict[str, Any]:
 
 
 def import_sheet(tenant_id: str, path: Path, project_map: Optional[Dict[str, Optional[str]]] = None,
-                 source_file: str = "statement.xlsx") -> Dict[str, Any]:
+                 source_file: str = "statement.xlsx", replace_existing: bool = False) -> Dict[str, Any]:
     """Save the sheet's lines with their allocations. `project_map` maps a sheet label to the
     tenant's project name (from preview); an unmapped label is used as written."""
     from vula.commerce import accounting, allocation
@@ -255,6 +281,19 @@ def import_sheet(tenant_id: str, path: Path, project_map: Optional[Dict[str, Opt
     lines = parse(path)
     project_map = project_map or {}
     db = _client()
+    set_aside = 0
+    if replace_existing and lines:
+        # The sheet is the complete, categorised record for its dates: the unmatched PDF-read
+        # lines for the same dates are set aside (match_status 'ignored' — reversible, nothing
+        # deleted) so no rand is counted twice.
+        first, last = min(li["date"] for li in lines), max(li["date"] for li in lines)
+        for r in _existing_in_period(tenant_id, first, last):
+            try:
+                (db.table("commerce_bank_transactions").update({"match_status": "ignored"})
+                 .eq("tenant_id", tenant_id).eq("id", r["id"]).execute())
+                set_aside += 1
+            except Exception as exc:
+                log.warning("could not set aside bank line %s: %s", r.get("id"), exc)
     acc_map = {a["code"]: a for a in accounting.ensure_chart(tenant_id)}
     vat_reg = accounting.is_vat_registered(tenant_id)
     saved, failed, projects = 0, 0, {}
@@ -299,4 +338,7 @@ def import_sheet(tenant_id: str, path: Path, project_map: Optional[Dict[str, Opt
         if project:
             projects[project] = projects.get(project, 0) + 1
             allocation.learn(tenant_id, li["description"], project, trade, payee=li.get("payee"))
-    return {"parsed": len(lines), "saved": saved, "failed": failed, "projects": projects}
+    # What the sheet taught now allocates the other lines Vula holds (earlier/later statements).
+    also_allocated = allocation.apply_to_existing(tenant_id) if projects else 0
+    return {"parsed": len(lines), "saved": saved, "failed": failed, "projects": projects,
+            "set_aside": set_aside, "also_allocated": also_allocated}

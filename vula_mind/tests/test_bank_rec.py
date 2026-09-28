@@ -138,7 +138,7 @@ async def test_ingest_statement_flags_extraction_reconciled_in_result():
          "direction": "out", "balance_cents": 99999, "reference": None},
     ]
     with (
-        patch.object(bank_rec, "extract_pdf_text", return_value="statement text"),
+        patch.object(bank_rec, "extract_pdf_text", return_value="Capitec Bank Account Statement Opening Balance R100.00"),
         patch.object(bank_rec, "get_statement_password", return_value=None),
         patch.object(bank_rec, "extract_transactions", new=AsyncMock(return_value=bad_txns)),
         patch.object(bank_rec, "reconcile", new=AsyncMock(return_value={"parsed": 2, "saved": 2})),
@@ -319,7 +319,7 @@ async def test_unreconciled_statement_never_auto_settles():
     ]
     rec = AsyncMock(return_value={"parsed": 2, "saved": 2})
     with (
-        patch.object(bank_rec, "extract_pdf_text", return_value="statement text"),
+        patch.object(bank_rec, "extract_pdf_text", return_value="Capitec Bank Account Statement Opening Balance R100.00"),
         patch.object(bank_rec, "get_statement_password", return_value=None),
         patch.object(bank_rec, "extract_transactions", new=AsyncMock(return_value=bad_txns)),
         patch.object(bank_rec, "reconcile", new=rec),

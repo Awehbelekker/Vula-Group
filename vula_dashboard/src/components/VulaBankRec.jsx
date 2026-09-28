@@ -87,17 +87,17 @@ export default function VulaBankRec({ tenantId }) {
     if (r.detail || r.error) return flash(r.detail || r.error);
     const map = {};
     (r.projects || []).forEach(p => { map[p.label] = p.suggested || p.label; });
-    setSheet({ b64, name: file.name, preview: r, map });
+    setSheet({ b64, name: file.name, preview: r, map, replace: (r.existing_lines_in_period || 0) > 0 });
   };
   const importSheet = async () => {
     setBusy(true);
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/statement/sheet`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ file_base64: sheet.b64, filename: sheet.name, project_map: sheet.map }),
+      body: JSON.stringify({ file_base64: sheet.b64, filename: sheet.name, project_map: sheet.map, replace_existing: !!sheet.replace }),
     }).then(r => r.json()).catch(() => ({ detail: "network" }));
     setBusy(false);
     if (r.detail || r.error) return flash(r.detail || r.error);
-    flash(`Imported ${r.saved} of ${r.parsed} lines ✓ — project costs are in Finances.`);
+    flash(`Imported ${r.saved} of ${r.parsed} lines ✓${r.set_aside ? ` · ${r.set_aside} earlier lines for the same dates set aside` : ""}.`);
     setSheet(null); load();
   };
   useEffect(() => { load(); }, [load]);
@@ -207,6 +207,11 @@ export default function VulaBankRec({ tenantId }) {
               <input list="bank-projects" value={sheet.map[p.label] || ""} style={{ ...input, fontSize: 12, padding: "4px 8px" }}
                 onChange={e => setSheet({ ...sheet, map: { ...sheet.map, [p.label]: e.target.value } })} />
             </div>))}
+          {sheet.preview.existing_lines_in_period > 0 && (
+            <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "flex-start", marginTop: 6 }}>
+              <input type="checkbox" checked={!!sheet.replace} onChange={e => setSheet({ ...sheet, replace: e.target.checked })} />
+              <span>Vula already has {sheet.preview.existing_lines_in_period} bank lines for {sheet.preview.first} – {sheet.preview.last} (read from PDF statements). Set them aside and use this sheet instead, so nothing is counted twice. They're kept, not deleted.</span>
+            </label>)}
           <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
             <button style={{ ...btn, ...btnOn }} disabled={busy} onClick={importSheet}>{busy ? "Importing…" : "Import"}</button>
             <button style={btn} onClick={() => setSheet(null)}>Cancel</button>

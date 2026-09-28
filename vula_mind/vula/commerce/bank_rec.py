@@ -818,9 +818,37 @@ def _match_settlement(t: Dict[str, Any], settlements: List[Dict[str, Any]]) -> O
     return hits[0] if len(hits) == 1 else None
 
 
+_BANK_NAMES = re.compile(
+    r"\b(capitec|first national bank|fnb|standard bank|absa|nedbank|investec|tyme ?bank|"
+    r"discovery bank|african bank|bidvest bank|old mutual|bank zero)\b", re.IGNORECASE)
+_BALANCE_WORDS = re.compile(r"\b(opening|closing) balance\b|balance brought forward|"
+                            r"\bbank statement\b|\baccount statement\b", re.IGNORECASE)
+_NOT_OUR_BANK = re.compile(
+    r"accounts? receivable|statement of account|activity statement|customer statement|"
+    r"\btax invoice\b|\binvoice (no|number|#)|\bamount due\b|\bageing\b|\baged\b|"
+    r"\b(30|60|90|120)\s*days\b|remittance advice|\breceipt (no|number)\b", re.IGNORECASE)
+
+
+def looks_like_own_bank_statement(text: str) -> bool:
+    """Is this the business's OWN bank account statement — not a supplier's statement of
+    account, an invoice or a receipt with the word "statement" on it? 2026-09-28: every emailed
+    PDF with "statement" in its name/subject went through ingest_statement, so 121 of
+    digg-demo's 372 "bank" lines came from suppliers' Accounts Receivable Statements, DOW004's
+    statement, a SportyBet activity statement, invoices and receipts — R664k in and R538k out
+    that never touched DIGG's bank. A real statement names the bank and shows balances; a
+    supplier statement shows an amount due, ageing columns or invoice numbers."""
+    head = (text or "")[:6000]
+    bankish = bool(_BANK_NAMES.search(head)) and bool(_BALANCE_WORDS.search(head))
+    if _NOT_OUR_BANK.search(head) and not bankish:
+        return False
+    return bool(_BANK_NAMES.search(head) or _BALANCE_WORDS.search(head))
+
+
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,
-                           source_file: str = "") -> Dict[str, Any]:
-    """Full pipeline: decrypt (stored ID password if not given) → parse → reconcile."""
+                           source_file: str = "", trusted: bool = False) -> Dict[str, Any]:
+    """Full pipeline: decrypt (stored ID password if not given) → parse → reconcile.
+    `trusted`: the owner uploaded it as their bank statement (dashboard) — skip the check that
+    an automatically-detected PDF (email/WhatsApp) really is their own bank statement."""
     pwd = password if password is not None else get_statement_password(tenant_id)
     try:
         text = extract_pdf_text(Path(pdf_path), pwd)
@@ -828,6 +856,11 @@ async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[st
         return {"error": f"could not read statement (wrong password?): {exc}"}
     if not text.strip():
         return {"error": "no readable text in the statement (scanned image?)"}
+    if not trusted and not looks_like_own_bank_statement(text):
+        log.info("%s: %s is not the business's own bank statement — filed only, no bank lines",
+                 tenant_id, source_file)
+        return {"error": "not a bank statement of this business (supplier statement/invoice?)",
+                "not_bank_statement": True}
     txns = await extract_transactions(text)
     if not txns:
         return {"error": "no transactions found in the statement"}

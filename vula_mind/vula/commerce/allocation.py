@@ -105,3 +105,39 @@ def suggest(rules: List[Dict], description: Optional[str],
         if stype == "merchant":
             trade = trade or hit.get("trade")
     return project, trade
+
+
+def apply_to_existing(tenant_id: str) -> int:
+    """Put already-saved, unallocated bank lines on a project wherever a learned rule is clear
+    (e.g. after a statement sheet taught "HPC …" → HPC Bokaap). Returns how many were set."""
+    from vula.commerce.ledger import _all_pages
+    rules = load_rules(tenant_id)
+    if not rules:
+        return 0
+    db = _client()
+
+    def make():
+        return (db.table("commerce_bank_transactions")
+                .select("id,description,payee,project,trade,match_status")
+                .eq("tenant_id", tenant_id).is_("project", "null"))
+    try:
+        rows = _all_pages(make)
+    except Exception as exc:
+        log.debug("apply allocations skipped: %s", exc)
+        return 0
+    n = 0
+    for r in rows:
+        if r.get("match_status") == "ignored":
+            continue
+        project, trade = suggest(rules, r.get("description"), r.get("payee"))
+        if not project:
+            continue
+        patch = {"project": project}
+        if trade and not r.get("trade"):
+            patch["trade"] = trade
+        try:
+            db.table("commerce_bank_transactions").update(patch).eq("tenant_id", tenant_id).eq("id", r["id"]).execute()
+            n += 1
+        except Exception as exc:
+            log.debug("allocation apply failed for %s: %s", r.get("id"), exc)
+    return n

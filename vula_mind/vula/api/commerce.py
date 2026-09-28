@@ -2536,7 +2536,8 @@ async def admin_bank_statement(tenant_id: str, body: BankStatementIn):
     async def _run():
         try:
             return await bank_rec.ingest_statement(tenant_id, Path(tmp), password=body.password,
-                                                   source_file=body.filename or "upload.pdf")
+                                                   source_file=body.filename or "upload.pdf",
+                                                   trusted=True)
         finally:
             try:
                 os.unlink(tmp)
@@ -2606,7 +2607,7 @@ async def admin_bank_statement_from_upload(tenant_id: str, body: dict):
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"no uploaded file named {fname}")
     _statement_job(tenant_id, bank_rec.ingest_statement(
-        tenant_id, path, source_file=fname))
+        tenant_id, path, source_file=fname, trusted=True))
     return {"processing": True, "note": "Reconciling — check the Bank tab in a few minutes."}
 
 
@@ -3296,7 +3297,8 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
         if body.get("preview"):
             return statement_sheet.preview(tenant_id, path)
         result = statement_sheet.import_sheet(tenant_id, path, body.get("project_map") or {},
-                                              source_file=name)
+                                              source_file=name,
+                                              replace_existing=bool(body.get("replace_existing")))
     if not result["parsed"]:
         raise HTTPException(status_code=400, detail="No statement lines found — the sheet needs "
                             "Date, Description and Money In/Money Out (or Amount) columns.")

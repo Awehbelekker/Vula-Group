@@ -26,6 +26,10 @@ class _Q(_BaseQ):
         self.filters.append((col, _Gte(val)))
         return self
 
+    def lte(self, col, val):
+        self.filters.append((col, _Lte(val)))
+        return self
+
     def is_(self, col, val):
         self.filters.append((col, None))
         return self
@@ -48,6 +52,14 @@ class _Gte:
 
     def __eq__(self, other):
         return other is not None and str(other) >= self.v
+
+
+class _Lte:
+    def __init__(self, v):
+        self.v = v
+
+    def __eq__(self, other):
+        return other is not None and str(other) <= self.v
 
 
 class FakeDB(_BaseDB):
@@ -255,3 +267,45 @@ async def test_no_weekly_project_check_for_a_shop(db, tmp_path, monkeypatch):
     monkeypatch.setattr("vula.api.tenants.uses_projects", lambda tid: False)
     job_costing._last_alert.pop(TID, None)
     assert await job_costing.weekly_alert(TID) is None
+
+
+# ── only the business's own bank statement becomes bank lines (2026-09-28) ─────
+
+def test_supplier_statements_and_invoices_are_not_bank_statements():
+    from vula.commerce.bank_rec import looks_like_own_bank_statement
+    capitec = ("Capitec Bank  Account Statement  Opening Balance R156,069.73  "
+               "13/07/2026 HPC DOORS -27,292.48  Closing Balance R1,968.69")
+    fnb = "FIRST NATIONAL BANK  Cheque Account  Balance brought forward  NELITHO WAGES 12,500.00"
+    supplier = ("SOLID CAPE (PTY) LTD  Statement of Account  Account: DIG003  Current 30 Days 60 Days "
+                "90 Days  Amount Due R77,513.00")
+    ar = "Accounts Receivable Statements  Customer: DIGG  Invoice No 113651  Balance R1,062.34"
+    receipt = "Receipt No 2493-1665-2943  Total R23.00  Thank you"
+    assert looks_like_own_bank_statement(capitec) and looks_like_own_bank_statement(fnb)
+    assert not looks_like_own_bank_statement(supplier)
+    assert not looks_like_own_bank_statement(ar)
+    assert not looks_like_own_bank_statement(receipt)
+
+
+def test_the_sheet_can_replace_pdf_lines_for_its_dates_and_allocates_the_rest(db, tmp_path):
+    rows = db.tables.setdefault("commerce_bank_transactions", [])
+    rows += [
+        {"id": "p1", "tenant_id": TID, "txn_date": "2026-07-20", "description": "HPC DOORS", "amount_cents": 2729248,
+         "direction": "out", "source_file": "20 Jul 2026 - (Free).pdf", "match_status": "unmatched", "project": None},
+        {"id": "p4", "tenant_id": TID, "txn_date": "2026-07-21", "description": "BWH x3 (separate lines)",
+         "amount_cents": 109140, "direction": "out", "source_file": "20 Jul 2026 - (Free).pdf",
+         "match_status": "unmatched", "project": None},
+        {"id": "p2", "tenant_id": TID, "txn_date": "2026-07-18", "description": "matched one", "amount_cents": 100,
+         "direction": "in", "source_file": "x.pdf", "match_status": "matched", "project": None},
+        {"id": "p3", "tenant_id": TID, "txn_date": "2026-06-30", "description": "HPC SKIPS", "amount_cents": 560000,
+         "direction": "out", "source_file": "30 Jun 2026 - (Free).pdf", "match_status": "unmatched", "project": None},
+    ]
+    path = _sheet(tmp_path / "s.xlsx")
+    assert statement_sheet.preview(TID, path)["existing_lines_in_period"] == 2     # p1, p4
+    out = statement_sheet.import_sheet(TID, path, {"HPC001": "HPC Bokaap"}, replace_existing=True)
+    byid = {r["id"]: r for r in db.tables["commerce_bank_transactions"]}
+    assert out["set_aside"] == 2 and byid["p4"]["match_status"] == "ignored"      # PDF-only line set aside
+    # the identical line (same date, amount, description) simply becomes the sheet's line
+    assert (byid["p1"]["match_status"], byid["p1"]["project"]) == ("unmatched", "HPC Bokaap")
+    assert byid["p2"]["match_status"] == "matched"                     # matched work untouched
+    assert byid["p3"]["project"] == "HPC Bokaap"                      # June line allocated by "hpc"
+    assert out["also_allocated"] >= 1
