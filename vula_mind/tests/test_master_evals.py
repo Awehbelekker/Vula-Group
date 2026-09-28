@@ -147,3 +147,31 @@ async def test_pending_migrations_sql_is_empty_when_all_applied():
          patch("vula.api.master._probe_migrations", return_value=[{"migration": "176", "applied": True}]):
         out = await master.master_pending_migrations_sql()
     assert out == {"migrations": [], "sql": ""}
+
+
+@pytest.mark.asyncio
+async def test_a_run_cut_off_by_a_restart_reports_it(monkeypatch):
+    """2026-09-28: the first bake-off started 23s before a deploy replaced the container; all
+    six rows said "running" forever. A running row from before this process booted, or older
+    than 90 minutes, is shown and saved as failed with a press-Run-again message."""
+    from datetime import datetime, timedelta, timezone
+    boot = datetime(2026, 9, 28, 8, 22, 40, tzinfo=timezone.utc)
+    monkeypatch.setattr(master, "_PROCESS_STARTED", boot)
+    rows = [
+        {"id": "old", "model": "openrouter/a/b", "status": "running", "created_at": "2026-09-28T08:22:15+00:00"},
+        {"id": "new", "model": "openrouter/a/c", "status": "running",
+         "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": "ancient", "model": "openrouter/a/d", "status": "running",
+         "created_at": (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()},
+        {"id": "done", "model": "openrouter/a/e", "status": "done", "created_at": "2026-09-28T08:00:00+00:00"},
+    ]
+    db = MagicMock()
+    db.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value.data = rows
+    with patch("vula.api.master._client", return_value=db):
+        out = await master.master_eval_reports()
+    got = {r["id"]: (r["status"], r["error"]) for r in out["reports"]}
+    assert got["old"] == ("failed", master._EVAL_INTERRUPTED)
+    assert got["ancient"] == ("failed", master._EVAL_INTERRUPTED)
+    assert got["new"] == ("running", None) and got["done"] == ("done", None)
+    saved = [c.args[0] for c in db.table.return_value.update.call_args_list]
+    assert len(saved) == 2 and all(s["status"] == "failed" for s in saved)

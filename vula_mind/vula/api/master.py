@@ -936,6 +936,24 @@ async def _run_eval_batch(jobs: list, skill: Optional[str]) -> None:
             log.error("eval report %s not saved: %s", job_id, exc)
 
 
+# A run lives in this process's background task, so one still "running" that was started before
+# this process booted was cut off by a restart (2026-09-28: Ian's first bake-off started 23s
+# before the #84 deploy replaced the container, and all six rows said "running" forever).
+_PROCESS_STARTED = datetime.now(timezone.utc)
+_EVAL_STALE_AFTER = timedelta(minutes=90)
+_EVAL_INTERRUPTED = "Interrupted by a server restart — press Run again."
+
+
+def _orphaned(row: dict, now: datetime) -> bool:
+    if row.get("status") != "running":
+        return False
+    try:
+        started = datetime.fromisoformat(str(row.get("created_at")).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return started < _PROCESS_STARTED or now - started > _EVAL_STALE_AFTER
+
+
 @router.get("/evals/reports")
 async def master_eval_reports(limit: int = 30) -> dict:
     """Latest runs, newest first, with the headline numbers pulled out of each report."""
@@ -944,6 +962,16 @@ async def master_eval_reports(limit: int = 30) -> dict:
                 .order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
     except Exception as exc:  # noqa: BLE001
         return {"reports": [], "error": f"{exc} (run migration 178?)"}
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        if _orphaned(r, now):
+            r.update(status="failed", error=_EVAL_INTERRUPTED)
+            try:
+                (_client().table("vula_eval_reports")
+                 .update({"status": "failed", "error": _EVAL_INTERRUPTED, "finished_at": now.isoformat()})
+                 .eq("id", r["id"]).eq("status", "running").execute())
+            except Exception as exc:  # noqa: BLE001
+                log.debug("orphaned eval row %s not updated: %s", r.get("id"), exc)
     out = []
     for r in rows:
         rep = r.get("report") or {}
