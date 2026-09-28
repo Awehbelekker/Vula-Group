@@ -512,9 +512,10 @@ BOOKING_TOOLS = [
     {"type": "function", "function": {
         "name": "create_booking",
         "description": "Book an appointment: start time (YYYY-MM-DDTHH:MM), customer name/phone, "
-                       "optional service. Without confirm=true, returns a preview instead of "
-                       "booking it — only pass confirm=true after the owner has explicitly said "
-                       "to go ahead.",
+                       "optional service. Call it as soon as the owner asks to book someone — "
+                       "without confirm=true it only returns a preview (with Confirm buttons), "
+                       "which IS the check with the owner, and it checks the slot is free. Only "
+                       "pass confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
             "start": {"type": "string"}, "customer_name": {"type": "string"},
             "customer_phone": {"type": "string"}, "service": {"type": "string"},

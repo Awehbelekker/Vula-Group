@@ -45,3 +45,28 @@ async def test_tool_layer_fails_forbidden_and_unoffered_tools():
          patch("litellm.completion_cost", return_value=0.0):
         report = await harness.run_tools("openrouter/fake", skill="commerce_admin")
     assert report["passed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_model_with_no_tool_endpoint_stops_after_one_case():
+    """2026-09-28: qwen3-235b produced 35 identical NotFoundErrors; one is enough."""
+    calls = []
+
+    async def not_found(**kw):
+        calls.append(1)
+        raise type("NotFoundError", (Exception,), {})("OpenrouterException - No endpoints found")
+    with patch("litellm.acompletion", not_found):
+        with pytest.raises(RuntimeError, match="no tool-calling endpoint"):
+            await harness.run_tools("openrouter/fake")
+    assert len(calls) == 1
+
+
+def test_the_customer_assistant_knows_todays_date():
+    """2026-09-28 bake-off: every model failed "What times are free on Thursday?" — the booking
+    tools need a YYYY-MM-DD date and the customer prompt never said what today is."""
+    from datetime import datetime, timedelta, timezone
+    from core.skills.commerce_assistant import CommerceAssistantSkill
+    today = datetime.now(timezone(timedelta(hours=2))).strftime("%A, %d %B %Y")
+    for booking_focused in (False, True):
+        prompt = CommerceAssistantSkill()._system_prompt("eval-sandbox", "", booking_focused=booking_focused)
+        assert f"Today is {today}" in prompt

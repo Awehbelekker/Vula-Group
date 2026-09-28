@@ -831,8 +831,9 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
         "function": {
             "name": "list_availability",
             "description": (
-                "Show free appointment slots for a given date. Call this when a customer wants to "
-                "book and has named (or you've agreed) a day. Returns open times they can pick from."
+                "Show free appointment slots for a given date. Call this when a customer asks what "
+                "times are free, or wants to book and has named a day (\"Thursday\" — work out the "
+                "date from today's date). Returns open times they can pick from."
             ),
             "parameters": {
                 "type": "object",
@@ -879,8 +880,10 @@ BOOKING_TOOL_SPECS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "reschedule_appointment",
-            "description": "Move one of the customer's upcoming appointments to a new time (check "
-                           "availability first). If they have more than one, this returns a "
+            "description": "Move one of the customer's upcoming appointments to a new time — "
+                           "call this directly when they ask to move/reschedule; it checks the "
+                           "new slot is free itself (no need to list availability first, and "
+                           "never cancel + rebook). If they have more than one, this returns a "
                            "numbered list — ask which, then call again with choice. The old "
                            "booking is only cancelled once the new slot is confirmed.",
             "parameters": {"type": "object", "properties": {
@@ -1061,6 +1064,17 @@ class CommerceAssistantSkill(BaseSkill):
                 )
         except Exception:
             pass
+
+        # 2026-09-28 model bake-off: every model — Gemini, Llama, Claude, GPT — failed "What
+        # times are free on Thursday?" and "move my Friday appointment to Saturday at 10" the
+        # same way: the booking tools need a YYYY-MM-DD date and this prompt never said what
+        # today is, so the model could only ask the customer. commerce_admin has had this line
+        # since 2026-08; the dates it produces are still checked by the booking service.
+        from datetime import datetime, timedelta, timezone
+        sa_now = datetime.now(timezone(timedelta(hours=2)))   # South Africa: UTC+2, no DST
+        lang_block += (f"\n\nToday is {sa_now.strftime('%A, %d %B %Y')} (South African time). "
+                       "Turn a day the customer names (\"Thursday\", \"tomorrow\") into its "
+                       "YYYY-MM-DD date yourself when calling a tool — don't ask them for it.")
 
         persona_block = ""
         try:
