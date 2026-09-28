@@ -285,6 +285,59 @@ def substitute_if_leaked(answer: str, *, skill: str, customer: bool = False,
     return LEAKED_CUSTOMER_FALLBACK if customer else LEAKED_OWNER_FALLBACK
 
 
+# 2026-09-28, gerflor: a rep's receipt photo got "I can see a receipt … I have filed the
+# receipt." with no tool call at all — nothing was filed or booked. "Verified, not reported":
+# a first-person claim that something was saved/filed/booked must be backed by a state-changing
+# tool that succeeded in the same turn, else the claim is replaced with an honest line.
+_ACTION_CLAIM_RE = re.compile(
+    r"\b(?:I(?:'ve| have)|I've now|I have now|(?:it|this|that|the \w+) (?:has|have) been)\s+"
+    r"(?:just\s+|now\s+|successfully\s+)?"
+    r"(?:filed|saved|logged|recorded|booked|created|added|sent|updated|captured|stored|submitted)\b",
+    re.I)
+_MUTATING_PREFIXES = ("add_", "create_", "update_", "record_", "log_", "save_", "send_", "file_",
+                      "assign_", "set_", "mark_", "receive_", "apply_", "cancel_", "delete_",
+                      "link_", "book_", "submit_", "draft_", "schedule_", "approve_", "complete_",
+                      "configure_", "convert_", "forget_", "learn_", "remember_", "upsert_",
+                      "reschedule_", "generate_")
+UNBACKED_ACTION_NOTE = ("I haven't saved or filed anything yet — tell me what you'd like done "
+                        "with it (for example: log it as an expense) and I'll do it.")
+
+
+def _succeeded_mutation(sources: Iterable[Dict[str, Any]]) -> bool:
+    for s_ in sources or []:
+        if not isinstance(s_, dict) or s_.get("type") != "tool":
+            continue
+        if not str(s_.get("name") or "").startswith(_MUTATING_PREFIXES):
+            continue
+        text = str(s_.get("text") or "")
+        if '"preview": true' in text or '"error"' in text:
+            continue
+        return True
+    return False
+
+
+def unbacked_action_claim(answer: str, sources: Iterable[Dict[str, Any]]) -> bool:
+    """The answer says something was saved/filed/booked, but no state-changing tool succeeded."""
+    return bool(answer and _ACTION_CLAIM_RE.search(answer)) and not _succeeded_mutation(sources)
+
+
+def substitute_if_unbacked_claim(answer: str, sources: Iterable[Dict[str, Any]], *, skill: str,
+                                 tenant_id: Optional[str] = None) -> str:
+    """Drop the sentence(s) claiming an action that never happened and say so instead."""
+    if not unbacked_action_claim(answer, sources):
+        return answer
+    logger.warning("unbacked action claim replaced, skill=%s tenant=%s", skill, tenant_id)
+    try:
+        from core.reasoning_telemetry import emit
+        emit(system="vula-unbacked-action-claim", task=skill, outcome="substituted", escalated=False,
+             tenant_id=tenant_id, extra={"length": len(answer or "")})
+    except Exception:
+        pass
+    sentences = re.split(r"(?<=[.!?])\s+", answer.strip())
+    kept = " ".join(x for x in sentences if not _ACTION_CLAIM_RE.search(x)).strip()
+    return f"{kept}\n\n{UNBACKED_ACTION_NOTE}" if kept else UNBACKED_ACTION_NOTE
+
+
 def tool_source(name: str, result: Any) -> Dict[str, Any]:
     if isinstance(result, dict):   # private export payloads (e.g. _export_rows) aren't evidence
         result = {k: v for k, v in result.items() if not str(k).startswith("_")}
