@@ -514,6 +514,52 @@ function RereadMissing({ tenantId }) {
   );
 }
 
+// Documents waiting on "which project?" that Vula can place itself (2026-09-28): the project
+// named in the document, the bank payment that settled it, or the supplier's usual project.
+function SortIntoProjects({ tenantId }) {
+  const [info, setInfo] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const load = useCallback(() => {
+    if (!tenantId.trim()) return;
+    fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/documents/sort-projects`)
+      .then((r) => r.json()).then(setInfo).catch(() => setInfo(null));
+  }, [tenantId]);
+  useEffect(() => { load(); }, [load]);
+  if (!info || !info.waiting) return null;
+  const REASON = { named: "named in the document", paid: "paid by a payment on that project", usual_supplier: "the supplier's usual project", month: "that month's main project" };
+  const apply = async (withSuggested) => {
+    setBusy(true); setMsg("");
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/documents/sort-projects${withSuggested ? "?include_suggested=1" : ""}`, { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    setMsg(r.ok ? `Filed ${d.filed} document${d.filed === 1 ? "" : "s"} into projects.` : (d.detail || "Could not file them."));
+    load();
+  };
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>📂 Documents waiting for a project</h3>
+      <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 8px" }}>
+        {info.waiting} waiting. Vula can place {info.would_file} itself
+        {Object.keys(info.by_reason || {}).length ? " — " + Object.entries(info.by_reason).map(([k, v]) => `${v} ${REASON[k] || k}`).join(", ") : ""}.
+        {info.still_ask ? ` ${info.still_ask} have no clear clue and stay for you to answer.` : ""}
+      </p>
+      {Object.keys(info.by_project || {}).length > 0 && (
+        <div style={{ fontSize: 12.5, color: C.text, marginBottom: 8 }}>
+          {Object.entries(info.by_project).map(([p, n]) => `${p}: ${n}`).join(" · ")}
+        </div>)}
+      {info.would_file > 0 && <button disabled={busy} onClick={() => apply(false)} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 13 }}>{busy ? "Filing…" : `File these ${info.would_file}`}</button>}
+      {Object.keys(info.suggested_by_month || {}).length > 0 && (
+        <div style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>
+          No clue in the document itself, but most of that month's project spend went to one project:{" "}
+          {Object.entries(info.suggested_by_month).map(([p, n]) => `${n} → ${p}`).join(" · ")}.{" "}
+          <button disabled={busy} onClick={() => apply(true)} style={{ padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 12 }}>File those too</button>
+        </div>)}
+      {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
 // "Learn from history" (2026-09-28): one run over everything already filed — re-read what's
 // missing, read every BOQ in full, and put every priced invoice/quote/BOQ line and the workers'
 // day rates into the price book the QS Rates, Quick Cost, QS Pro and Takeoff read.
@@ -698,6 +744,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
       {/* Google Drive import — search-based (see component comment for why not a folder browser) */}
       <DriveImport tenantId={tenantId} onImported={() => setLibraryKey((k) => k + 1)} />
 
+      <SortIntoProjects tenantId={tenantId} />
       <LearnFromHistory tenantId={tenantId} />
       <RereadMissing tenantId={tenantId} />
 

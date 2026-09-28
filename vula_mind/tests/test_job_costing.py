@@ -51,7 +51,11 @@ class _Gte:
         self.v = v
 
     def __eq__(self, other):
-        return other is not None and str(other) >= self.v
+        if other is None:
+            return False
+        if isinstance(self.v, (int, float)):
+            return float(other) >= self.v
+        return str(other) >= self.v
 
 
 class _Lte:
@@ -59,7 +63,11 @@ class _Lte:
         self.v = v
 
     def __eq__(self, other):
-        return other is not None and str(other) <= self.v
+        if other is None:
+            return False
+        if isinstance(self.v, (int, float)):
+            return float(other) <= self.v
+        return str(other) <= self.v
 
 
 class FakeDB(_BaseDB):

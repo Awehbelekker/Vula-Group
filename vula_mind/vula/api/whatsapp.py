@@ -3094,6 +3094,23 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         confident = bool(match and not match.get("ambiguous") and match.get("project")
                          and (match.get("confidence") or 0) >= 0.6)
         from vula.api.tenants import uses_projects
+        resolved = None
+        if not confident and uses_projects(tenant_id):
+            # The evidence a person would use (2026-09-28, Ian): the project named in the
+            # document, the bank payment that settled it, the supplier's usual project.
+            try:
+                from vula.integrations.project_resolver import resolve, AUTO_FILE
+                resolved = resolve(tenant_id, fields, hint)
+                if resolved and resolved.get("project") and resolved["confidence"] >= AUTO_FILE:
+                    match = {"project": resolved["project"], "clickup_list_id": None,
+                             "confidence": resolved["confidence"], "ambiguous": False}
+                    confident = True
+                elif resolved and resolved.get("candidates") and not (match or {}).get("candidates"):
+                    match = {"project": None, "ambiguous": True, "candidates": resolved["candidates"]}
+                elif resolved and resolved.get("project") and not (match or {}).get("candidates"):
+                    match = {"project": None, "ambiguous": True, "candidates": [resolved["project"]]}
+            except Exception as exc:
+                logger.debug("project resolver skipped: %s", exc)
         if not uses_projects(tenant_id):
             # A commerce business (Off the Hook): no projects — file it, never ask.
             row = await file_document(
@@ -3112,6 +3129,8 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 customer_phone=customer_phone,
             )
             note = f"📂 Filed under *{match['project']}*."
+            if resolved and resolved.get("reason") and resolved.get("project") == match["project"]:
+                note += f" ({resolved['reason']} — wrong? change it in Documents.)"
             if row.get("clickup_task_id"):
                 note += " Added to ClickUp."
         else:
@@ -3123,7 +3142,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 customer_phone=customer_phone,
             )
             candidates = match.get("candidates") if match else None
-            if candidates:
+            if candidates and len(candidates) == 1:
+                note = (f"📂 Is this for *{candidates[0]}*? Reply 'yes', another project name, "
+                        f"or 'skip'.")
+            elif candidates:
                 note = ("📂 That could be more than one project — " + " / ".join(candidates) +
                         ". Reply with the exact project name (or 'skip').")
             else:

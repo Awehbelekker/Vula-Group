@@ -1581,6 +1581,28 @@ async def admin_reread_documents(tenant_id: str, request: Request):
     return {"started": bool(n), "candidates": n}
 
 
+@router.get("/{tenant_id}/admin/documents/sort-projects")
+async def admin_sort_projects_preview(tenant_id: str):
+    """What "which project?" documents Vula can place itself, and why — nothing written."""
+    from vula.api.tenants import uses_projects
+    from vula.integrations.project_resolver import sort_pending
+    if not uses_projects(tenant_id):
+        return {"waiting": 0, "would_file": 0, "filed": 0, "still_ask": 0, "by_project": {},
+                "by_reason": {}, "sample": []}
+    return sort_pending(tenant_id, apply=False)
+
+
+@router.post("/{tenant_id}/admin/documents/sort-projects")
+async def admin_sort_projects_apply(tenant_id: str, request: Request):
+    """File the waiting documents Vula can place confidently (named in the document, paid by a
+    payment on a project, or the supplier's usual project). Owner/manager."""
+    from vula.integrations.project_resolver import sort_pending
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can do this.")
+    include = request.query_params.get("include_suggested") in ("1", "true", "yes")
+    return sort_pending(tenant_id, apply=True, include_suggested=include)
+
+
 @router.get("/{tenant_id}/admin/documents/learn")
 async def admin_learn_status(tenant_id: str):
     """What the price book holds, and the last "Learn from history" run's progress."""
@@ -2840,6 +2862,21 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
     if body.action == "match" and body.invoice_id:
         await service.update_invoice_status(tenant_id, body.invoice_id, "paid")
         patch = {"matched_invoice_id": body.invoice_id, "match_status": "matched"}
+        # A payment matched to a bill is for that bill's project, and the other way round —
+        # so job costing sees it whichever side was allocated first.
+        try:
+            inv = (db.table("commerce_invoices").select("project").eq("tenant_id", tenant_id)
+                   .eq("id", body.invoice_id).limit(1).execute().data or [{}])[0]
+            if inv.get("project") and not txn.get("project"):
+                patch["project"] = inv["project"]
+            elif txn.get("project") and not inv.get("project"):
+                (db.table("commerce_invoices").update({"project": txn["project"]})
+                 .eq("tenant_id", tenant_id).eq("id", body.invoice_id).execute())
+                (db.table("vula_filed_documents").update({"project": txn["project"], "status": "filed"})
+                 .eq("tenant_id", tenant_id).eq("commerce_invoice_id", body.invoice_id)
+                 .eq("status", "pending_project").execute())
+        except Exception as exc:
+            log.debug("project carry-over on match skipped: %s", exc)
     elif body.action == "match" and body.order_id:
         orows = (db.table("commerce_orders").select("id,display_id,customer_name,customer_phone,total_cents")
                  .eq("tenant_id", tenant_id).eq("id", body.order_id).limit(1).execute().data or [])

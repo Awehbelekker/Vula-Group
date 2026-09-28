@@ -778,6 +778,20 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         # asked a human unnecessarily. Only a genuine absence of signal, or an unresolved tie
         # between multiple plausible projects (match.get("ambiguous")), should ask.
         confident = bool(match and not match.get("ambiguous") and match.get("project"))
+        if not confident:
+            # Same evidence as the WhatsApp path: the project named in the document, the bank
+            # payment that settled it, the supplier's usual project (project_resolver).
+            try:
+                from vula.api.tenants import uses_projects as _uses_projects
+                from vula.integrations.project_resolver import resolve, AUTO_FILE
+                if _uses_projects(tenant_id):
+                    r = resolve(tenant_id, fields, hint)
+                    if r and r.get("project") and r["confidence"] >= AUTO_FILE:
+                        match = {"project": r["project"], "clickup_list_id": None,
+                                 "confidence": r["confidence"], "ambiguous": False}
+                        confident = True
+            except Exception as exc:
+                logger.debug("project resolver (email) skipped: %s", exc)
 
         # Only auto-file on a CONFIDENT match. Anything weaker (no match, or a single
         # coincidental token) → ask the team on WhatsApp rather than risk mis-filing.

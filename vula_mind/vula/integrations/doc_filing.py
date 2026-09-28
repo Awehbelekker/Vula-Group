@@ -509,6 +509,20 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         return {"skipped": True, "filename": doc.get("filename")}
 
     match = match_project(tenant_id, text)
+    # "yes" to "Is this for *HPC Bokaap*?" — the question project_resolver suggested; work the
+    # same suggestion out again from the document rather than storing it.
+    if text.strip().lower().rstrip(".!") in ("yes", "y", "yep", "ja", "yes please", "correct", "that's right"):
+        try:
+            from vula.integrations.project_resolver import resolve
+            r = resolve(tenant_id, doc.get("fields") or {},
+                        f"{doc.get('filename') or ''} {doc.get('summary') or ''}")
+            suggested = (r or {}).get("project") or (
+                (r or {}).get("candidates")[0] if len((r or {}).get("candidates") or []) == 1 else None)
+            if suggested:
+                match = {"project": suggested, "clickup_list_id": None, "confidence": 1.0,
+                         "ambiguous": False}
+        except Exception as exc:
+            logger.debug("yes-to-suggestion skipped: %s", exc)
     # A match with no `project` (either no candidate at all, or an unresolved tie between
     # several plausible projects — match.get("ambiguous")) is treated identically: re-ask
     # rather than silently filing under a null project.

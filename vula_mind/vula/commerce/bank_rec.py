@@ -516,7 +516,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
     try:
         supplier_bills = (db.table("commerce_invoices")
                           .select("id,invoice_number,supplier,total_cents,status,doc_type,"
-                                  "direction,vat_cents,paid_at")
+                                  "direction,vat_cents,paid_at,project")
                           .eq("tenant_id", tenant_id).eq("direction", "inbound")
                           .in_("status", ["draft", "sent", "overdue", "part_paid"])
                           .limit(2000).execute().data or [])
@@ -680,6 +680,8 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
                         try:
                             await service.update_invoice_status(tenant_id, bm["id"], "paid")
                             inv_id, status = bm["id"], "matched"
+                            # the payment is for the bill's project (job costing)
+                            wk_project = wk_project or bm.get("project")
                             used_bill_ids.add(bm["id"])
                             matched_bills += 1
                         except Exception as exc:
