@@ -1581,6 +1581,33 @@ async def admin_reread_documents(tenant_id: str, request: Request):
     return {"started": bool(n), "candidates": n}
 
 
+@router.get("/{tenant_id}/admin/documents/learn")
+async def admin_learn_status(tenant_id: str):
+    """What the price book holds, and the last "Learn from history" run's progress."""
+    from vula.commerce import price_book, reread
+    try:
+        book = price_book.summary(tenant_id)
+    except Exception as exc:
+        log.debug("price book summary failed: %s", exc)
+        book = {}
+    return {"price_book": book, "status": reread.learn_status(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/documents/learn")
+async def admin_learn_from_history(tenant_id: str, request: Request):
+    """Learn from everything already filed (re-read what's missing, read BOQs in full, build the
+    price book from every invoice/quote/BOQ line and the workers' day rates). Owner/manager —
+    it spends model calls on the re-read. Nothing is booked."""
+    from vula.commerce import reread
+    from vula.commerce.background_tasks import run_background
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can start this.")
+    if reread.learn_status(tenant_id).get("running") or reread.status_for(tenant_id).get("running"):
+        return {"started": False, "status": reread.learn_status(tenant_id)}
+    run_background(tenant_id, "learn_from_history", reread.learn_from_history(tenant_id))
+    return {"started": True}
+
+
 @router.post("/{tenant_id}/admin/stock/adjust")
 async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
     """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""

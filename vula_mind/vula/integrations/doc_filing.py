@@ -347,6 +347,9 @@ async def file_document(
     exception; check_document_quota itself fails open on a metering read error.
     """
     from vula.commerce.plan_limits import PlanLimitError, check_document_quota
+    if project:
+        from vula.commerce.service import canonical_project
+        project = canonical_project(tenant_id, project)
     try:
         check_document_quota(tenant_id)
     except PlanLimitError as exc:
@@ -373,6 +376,7 @@ async def file_document(
             except Exception as exc:
                 logger.debug("Duplicate doc update skipped: %s", exc)
             dup["duplicate"] = True
+            _record_prices(tenant_id, {**dup, "category": category, "fields": fields or {}})
             return dup
 
     file_url = None
@@ -446,7 +450,20 @@ async def file_document(
                     row = existing[0]
         except Exception as exc2:
             logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc2)
+    _record_prices(tenant_id, row)
     return row
+
+
+def _record_prices(tenant_id: str, row: dict) -> None:
+    """Every priced line on a filed invoice/quote/BOQ goes into the tenant's price book
+    (vula/commerce/price_book.py) — the QS rates learn from the documents. Never blocks filing."""
+    if not row.get("id"):
+        return
+    try:
+        from vula.commerce.price_book import record_from_document
+        record_from_document(tenant_id, row)
+    except Exception as exc:
+        logger.debug("price book record skipped: %s", exc)
 
 
 async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Optional[dict]:
@@ -540,6 +557,11 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         }).eq("id", doc["id"]).execute()
     except Exception as exc:
         logger.warning("Pending doc update failed: %s", exc)
+    try:
+        from vula.commerce.price_book import set_project
+        set_project(tenant_id, doc["id"], match["project"])
+    except Exception as exc:
+        logger.debug("price book project skipped: %s", exc)
 
     # 2026-08-12 fix — the financial record already committed by commit_inbound_document (at
     # filing time, when the project wasn't yet known) never had its `project` updated once the
@@ -562,7 +584,8 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
                 total_cents = (doc.get("fields") or {}).get("total_cents")
                 if total_cents:
                     from vula.commerce.service import upsert_project_boq
-                    upsert_project_boq(tenant_id, match["project"], int(total_cents))
+                    upsert_project_boq(tenant_id, match["project"], int(total_cents),
+                                       sections=(doc.get("fields") or {}).get("sections") or None)
             except Exception as exc:
                 logger.debug("BoQ bridge (resolve) skipped: %s", exc)
 

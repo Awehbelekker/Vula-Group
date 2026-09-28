@@ -2304,6 +2304,41 @@ async def delete_supplier(tenant_id: str, supplier_id: str) -> None:
     )
 
 
+def project_key(name: Optional[str]) -> str:
+    """Case/space/underscore/dash-insensitive identity of a project name."""
+    return re.sub(r"[\W_]+", " ", (name or "").lower()).strip()
+
+
+def canonical_project(tenant_id: str, name: Optional[str]) -> Optional[str]:
+    """The one spelling a project is filed under. 2026-09-28, real digg-demo data: "HPC Bokaap"
+    (109 documents) and "HPC_Bokaap" (72), "PORTERFIELD" and "Porterfield" — each project's
+    documents and costs split across spellings, so cost-to-date and the price book's per-project
+    view saw half a job. A name matching a vula_projects row (ignoring case, spaces, _ and -)
+    becomes that row's name; else the spelling already used most on filed documents; else as given."""
+    raw = (name or "").strip()
+    key = project_key(raw)
+    if not key:
+        return raw or None
+    try:
+        db = _client()
+        for r in (db.table("vula_projects").select("name").eq("tenant_id", tenant_id)
+                  .limit(500).execute().data or []):
+            if project_key(r.get("name")) == key:
+                return r["name"]
+        used = (db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id)
+                .ilike("project", key.split()[0] + "%").limit(2000).execute().data or [])
+        counts: Dict[str, int] = {}
+        for r in used:
+            p = r.get("project")
+            if p and project_key(p) == key:
+                counts[p] = counts.get(p, 0) + 1
+        if counts:
+            return max(counts.items(), key=lambda kv: kv[1])[0]
+    except Exception as exc:
+        logger.debug("canonical_project lookup skipped: %s", exc)
+    return raw
+
+
 def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
                        title: Optional[str] = None, source_job: Optional[str] = None,
                        sections: Optional[list] = None) -> None:
@@ -2511,7 +2546,8 @@ async def commit_inbound_document(
         # doc_filing.resolve_pending_document does the same bridge for the (common) case where
         # the project is only resolved later via the "which project?" WhatsApp answer.
         if is_boq and project:
-            upsert_project_boq(tenant_id, project, total_cents)
+            upsert_project_boq(tenant_id, project, total_cents,
+                               sections=extracted.get("sections") or None)
     else:
         # Reimbursable inference (2026-08-08 fix) — this insert used to omit the key entirely,
         # silently defaulting to the column's `false` regardless of what the document itself

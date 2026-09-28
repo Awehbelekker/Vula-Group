@@ -263,6 +263,7 @@ def setup_checklist(tenant_id: str) -> dict:
         vat = None
     vat_set = bool(vat) and vat.get("vat_registered") is not None
 
+    learned = _count("vula_price_observations", tenant_id=tenant_id)
     team_n = _count("vula_team_members", tenant_id=tenant_id, active=True)
     orders_n = _count("commerce_orders", tenant_id=tenant_id)
     pages_n = _count("vula_pages", tenant_id=tenant_id)
@@ -287,6 +288,13 @@ def setup_checklist(tenant_id: str) -> dict:
         {"id": "knowledge", "label": "Products & knowledge", "done": products > 0 or docs > 0,
          "tab": "products" if products or not docs else "documents",
          "detail": f"{products} product(s), {docs} document(s)"},
+        # 2026-09-28: a business onboarded with its old documents should have them analysed
+        # (price book, BOQs in full) — not just filed. Documents › "Learn from history".
+        {"id": "history", "label": "History analysed", "tab": "documents",
+         "done": docs == 0 or learned > 0,
+         "detail": (f"{learned}{'+' if learned >= 50 else ''} priced lines learned" if learned
+                    else ("no documents yet" if docs == 0
+                          else "documents filed but not analysed — Documents › Learn from history"))},
         {"id": "storefront", "label": "Storefront pages", "tab": "pages",
          "done": pages_n > 0 or bool(cfg.get("store_url")),
          "detail": cfg.get("store_url") or f"{pages_n} page(s)"},

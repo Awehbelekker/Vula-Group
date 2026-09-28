@@ -38,7 +38,7 @@ def _missing_money(row: dict) -> bool:
 def candidates(tenant_id: str, limit: int = 200) -> List[dict]:
     """Filed PDFs that are uncategorised or a money document missing its amount/supplier."""
     rows = (service._client().table("vula_filed_documents")
-            .select("id,category,filename,file_url,fields,summary,doc_id")
+            .select("id,category,filename,file_url,fields,summary,doc_id,project,created_at")
             .eq("tenant_id", tenant_id).in_("category", ["Email attachment", *_MONEY])
             .order("created_at", desc=True).limit(2000).execute().data or [])
     out = [r for r in rows
@@ -98,6 +98,12 @@ async def reread_missing(tenant_id: str, limit: int = 60) -> Dict[str, Any]:
                           "summary": analysis.get("summary") or row.get("summary"),
                           "fields": analysis.get("fields") or {}})
                  .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
+                try:
+                    from vula.commerce.price_book import record_from_document
+                    record_from_document(tenant_id, {**row, "category": analysis["category"],
+                                                     "fields": analysis.get("fields") or {}})
+                except Exception as exc:
+                    log.debug("reread price book skipped: %s", exc)
                 status["fixed"] += 1
                 cats = status["categories"]
                 cats[analysis["category"]] = cats.get(analysis["category"], 0) + 1
@@ -111,3 +117,97 @@ async def reread_missing(tenant_id: str, limit: int = 60) -> Dict[str, Any]:
 
 def status_for(tenant_id: str) -> Dict[str, Any]:
     return dict(_STATUS.get(tenant_id) or {"running": False})
+
+
+# ── Learn from history (2026-09-28) ───────────────────────────────────────────
+# Ian: "a lot of data is given and so little used — concerning if we onboard a client and pull
+# in old data and it's not analysed." One run over everything already filed: re-read what's
+# missing (above), read every BOQ in full (spreadsheets row by row, long PDFs past the first
+# page of text), put every priced line into the price book, add the casual workers' day rates,
+# and report what was learned. Nothing is booked into the books.
+
+_LEARN: Dict[str, Dict[str, Any]] = {}
+_BOQ = "Bill of Quantities (BOQ)"
+
+
+def learn_status(tenant_id: str) -> Dict[str, Any]:
+    return dict(_LEARN.get(tenant_id) or {"running": False})
+
+
+def _money_rows(tenant_id: str) -> List[dict]:
+    from vula.commerce.ledger import _all_pages
+    from vula.commerce.price_book import SOURCE_KIND
+
+    def make():
+        return (service._client().table("vula_filed_documents")
+                .select("id,tenant_id,category,filename,file_url,fields,summary,project,created_at")
+                .eq("tenant_id", tenant_id).in_("category", list(SOURCE_KIND))
+                .order("created_at", desc=True))
+    return _all_pages(make)
+
+
+async def _reread_boq(tenant_id: str, row: dict) -> bool:
+    """Read one filed BOQ in full. True when it now has more lines than before."""
+    from vula.ingestion import boq_sheet
+    name = (row.get("filename") or "").lower()
+    if not row.get("file_url") or not name.endswith(boq_sheet.SHEET_SUFFIXES + (".pdf",)):
+        return False
+    fields = row.get("fields") or {}
+    before = len(fields.get("line_items") or [])
+    data = await _download(row["file_url"])
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / Path(row["filename"]).name
+        path.write_bytes(data)
+        if name.endswith(boq_sheet.SHEET_SUFFIXES):
+            new_fields = boq_sheet.apply_to_fields(fields, boq_sheet.parse(path))
+        else:
+            from vula.api.whatsapp import _complete_boq_lines
+            from vula.ingestion.pipeline import VulaIngestionPipeline
+            pages = await VulaIngestionPipeline(tenant_id=tenant_id).parser.parse(path)
+            text = "\n".join(t for _, t in (pages or [])).strip()
+            done = await _complete_boq_lines({"category": _BOQ, "fields": fields}, path, text,
+                                             row["filename"])
+            new_fields = done.get("fields") or fields
+    if len(new_fields.get("line_items") or []) <= before:
+        return False
+    (service._client().table("vula_filed_documents").update({"fields": new_fields})
+     .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
+    row["fields"] = new_fields
+    if row.get("project") and new_fields.get("sections"):
+        service.upsert_project_boq(tenant_id, row["project"], int(new_fields.get("total_cents") or 0),
+                                   sections=new_fields["sections"])
+    return True
+
+
+async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[str, Any]:
+    from vula.commerce import price_book
+    st = _LEARN[tenant_id] = {"running": True, "step": "re-reading documents missing data",
+                              "reread_fixed": 0, "boqs_completed": 0, "documents": 0,
+                              "priced_lines": 0, "labour_rates": 0, "failed": 0}
+    try:
+        if reread_first and candidates(tenant_id):
+            r = await reread_missing(tenant_id)
+            st["reread_fixed"] = r.get("fixed", 0)
+        st["step"] = "reading BOQs in full"
+        rows = _money_rows(tenant_id)
+        for row in rows:
+            if row.get("category") == _BOQ:
+                try:
+                    if await _reread_boq(tenant_id, row):
+                        st["boqs_completed"] += 1
+                except Exception as exc:
+                    log.warning("BOQ re-read of %s failed: %s", row.get("id"), exc)
+                    st["failed"] += 1
+        st["step"] = "building the price book"
+        for row in rows:
+            st["priced_lines"] += price_book.record_from_document(tenant_id, row)
+            st["documents"] += 1
+        st["labour_rates"] = price_book.record_worker_rates(tenant_id)
+        st["summary"] = price_book.summary(tenant_id)
+        st["still_unread"] = len(candidates(tenant_id))
+        st["step"] = "done"
+    except Exception as exc:
+        log.warning("learn from history failed for %s: %s", tenant_id, exc)
+        st["error"] = str(exc)
+    st["running"] = False
+    return dict(st)

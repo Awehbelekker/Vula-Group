@@ -514,6 +514,58 @@ function RereadMissing({ tenantId }) {
   );
 }
 
+// "Learn from history" (2026-09-28): one run over everything already filed — re-read what's
+// missing, read every BOQ in full, and put every priced invoice/quote/BOQ line and the workers'
+// day rates into the price book the QS Rates, Quick Cost, QS Pro and Takeoff read.
+function LearnFromHistory({ tenantId }) {
+  const [info, setInfo] = useState(null);
+  const [msg, setMsg] = useState("");
+  const load = useCallback(() => {
+    if (!tenantId.trim()) return;
+    fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/documents/learn`)
+      .then((r) => r.json()).then(setInfo).catch(() => setInfo(null));
+  }, [tenantId]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!info?.status?.running) return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [info?.status?.running, load]);
+  if (!info) return null;
+  const st = info.status || {};
+  const book = info.price_book || {};
+  const start = async () => {
+    setMsg("");
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId.trim()}/admin/documents/learn`, { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsg(d.detail || "Could not start."); return; }
+    setMsg(d.started ? "Learning from your documents in the background — this can take a few minutes…" : "Already running.");
+    load();
+  };
+  const n = (v) => Number(v || 0).toLocaleString("en-ZA");
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>📚 Learn from your documents</h3>
+      <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 10px" }}>
+        Every priced line on your invoices, quotes and BOQs, and your workers' day rates, become rates you can price from (QS Rates, Quick Cost, QS Pro, Takeoff). Your own rates are never changed. Nothing is booked.
+      </p>
+      {book.items > 0 && (
+        <div style={{ fontSize: 13, color: C.text, marginBottom: 10 }}>
+          Price book: <b>{n(book.items)}</b> items from {n(book.priced_lines)} priced lines · {n(book.suppliers)} suppliers · {n(book.labour_rates)} labour rates · {n(book.projects)} projects
+        </div>)}
+      {st.running
+        ? <div style={{ fontSize: 13, color: C.text }}>Working… {st.step}</div>
+        : <button onClick={start} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 13 }}>Learn from history</button>}
+      {!st.running && st.step === "done" && (
+        <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
+          Last run: {n(st.documents)} documents read, {n(st.priced_lines)} priced lines{st.boqs_completed ? `, ${st.boqs_completed} BOQ${st.boqs_completed === 1 ? "" : "s"} read in full` : ""}{st.reread_fixed ? `, ${st.reread_fixed} re-read and filled in` : ""}{st.still_unread ? `, ${st.still_unread} still unreadable` : ""}.
+        </div>)}
+      {st.error && <div style={{ fontSize: 12.5, color: "#C0392B", marginTop: 8 }}>Stopped: {st.error}</div>}
+      {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
 export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }) {
   const [tenantId, setTenantId] = useState(propTenantId || "default");
   useEffect(() => { if (propTenantId) setTenantId(propTenantId); }, [propTenantId]);
@@ -646,6 +698,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
       {/* Google Drive import — search-based (see component comment for why not a folder browser) */}
       <DriveImport tenantId={tenantId} onImported={() => setLibraryKey((k) => k + 1)} />
 
+      <LearnFromHistory tenantId={tenantId} />
       <RereadMissing tenantId={tenantId} />
 
       {/* Filed documents — durable copies, modern grid+lightbox, filterable (project/customer/

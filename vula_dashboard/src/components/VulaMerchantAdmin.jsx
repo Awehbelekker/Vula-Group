@@ -339,8 +339,8 @@ function EstimatingSection({ tenantId, subtabs, pendingSubtab, onConsumePendingN
   return (
     <div>
       <SectionTabs tabs={tabs} active={active} onChange={setActive} />
-      {active === 'qs' && <VulaQS />}
-      {active === 'qspro' && <VulaQSPro />}
+      {active === 'qs' && <VulaQS tenantId={tenantId} />}
+      {active === 'qspro' && <VulaQSPro tenantId={tenantId} />}
       {active === 'takeoff' && <VulaTakeoff tenantId={tenantId} />}
       {active === 'draft' && <VulaDraft tenantId={tenantId} />}
     </div>

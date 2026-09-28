@@ -104,7 +104,7 @@ async def test_boq_commit_bridges_total_to_project_boq_when_project_known():
             TID, extracted, auto_commit=True, project="Porterfield", is_boq=True)
 
     assert result["committed"] is True
-    mock_upsert_boq.assert_called_once_with(TID, "Porterfield", 24055353)
+    mock_upsert_boq.assert_called_once_with(TID, "Porterfield", 24055353, sections=None)
 
 
 @pytest.mark.asyncio

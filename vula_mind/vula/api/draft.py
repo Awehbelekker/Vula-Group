@@ -286,7 +286,7 @@ async def _retrieve_context(tenant_id: str, brief: str, doc_type: str,
     if doc_type == "fee_proposal":
         try:
             from vula.api.qs import search_rates
-            rate_rows = search_rates(tenant_id, query="", limit=15)
+            rate_rows = search_rates(tenant_id, query="", limit=15, include_learned=False)
             if rate_rows:
                 rate_lines = "\n".join(
                     f"- {r.get('description', '')}: R{r.get('rate', '?')} per {r.get('unit', '')}"
