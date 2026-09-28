@@ -70,3 +70,14 @@ def test_the_customer_assistant_knows_todays_date():
     for booking_focused in (False, True):
         prompt = CommerceAssistantSkill()._system_prompt("eval-sandbox", "", booking_focused=booking_focused)
         assert f"Today is {today}" in prompt
+
+
+def test_owner_and_rep_prompts_say_a_preview_is_the_confirmation():
+    """2026-09-28 bake-off: "Book Sarah in for a consult on Tuesday at 2pm" — Gemini Flash (and
+    Haiku, GPT-5 mini) asked in text instead of calling create_booking, following "show the
+    details and wait for a clear yes". A confirm-flag tool's preview IS that step (Confirm/Cancel
+    buttons), so both prompts now say to call it without confirm."""
+    from core.skills.commerce_admin import CommerceAdminSkill
+    for role in ("owner", "sales_rep"):
+        prompt = CommerceAdminSkill()._system_prompt("eval-sandbox", role=role, name="Eval")
+        assert "create_booking" in prompt and "Confirm/Cancel" in prompt, role
