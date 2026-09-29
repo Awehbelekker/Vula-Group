@@ -756,6 +756,25 @@ async def _programme_briefs_loop() -> None:
         await _asyncio.sleep(600)
 
 
+async def _master_digest_loop() -> None:
+    """Monday 07:00–11:00 SAST: the weekly tenant-health email to TEAM_EMAIL
+    (vula/master_digest.py). Checks every 15 minutes; the send is marked once per ISO week in
+    vula_admin_audit, so restarts and second workers don't resend."""
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    await _asyncio.sleep(240)
+    while True:
+        try:
+            from vula import master_digest as _md
+            if _md.due(_dt.now(_md.SAST)):
+                res = await _md.send()
+                if res.get("sent"):
+                    log.info("master digest sent for %s", res.get("week"))
+        except Exception as exc:
+            log.warning("master digest loop error: %s", exc)
+        await _asyncio.sleep(900)
+
+
 async def _hourly_customer_jobs_loop() -> None:
     """Hourly, per tenant: WhatsApp reminders for bookings in the next 24h (send_due_reminders
     existed but only ran if something called POST /v1/bookings/{t}/jobs/reminders — nothing
@@ -1345,6 +1364,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))

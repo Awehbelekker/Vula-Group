@@ -56,6 +56,10 @@ async def me(identity: dict = Depends(require_master)):
 
 @router.get("/tenants")
 async def master_tenants():
+    return tenant_overview()
+
+
+def tenant_overview() -> dict:
     """Joined view: configured tenants (vula_tenant_config) + signup/billing state
     (vula_tenants, matched on tenant_id) + login count (vula_tenant_users)."""
     db = _client()
@@ -613,6 +617,24 @@ def _migration_files(numbers: list[str]) -> list:
     for num in sorted(set(numbers), key=lambda n: int(n) if n.isdigit() else 0):
         files.extend(sorted(_MIGRATIONS_DIR.glob(f"{num}_*.sql")))
     return files
+
+
+@router.get("/digest")
+async def master_digest_preview():
+    """The weekly tenant-health email, as it would go out now (text + data)."""
+    import asyncio
+    from vula import master_digest
+    d = await asyncio.to_thread(master_digest.build)
+    return {**d, "text": master_digest.render_text(d)}
+
+
+@router.post("/digest/send")
+async def master_digest_send(identity: dict = Depends(require_master)):
+    """Send the weekly digest now (to TEAM_EMAIL), even if this week's already went."""
+    from vula import master_digest
+    res = await master_digest.send(force=True)
+    audit(identity, "master_digest_send_now", **{k: v for k, v in res.items() if v is not None})
+    return res
 
 
 @router.get("/migrations/pending-sql")
