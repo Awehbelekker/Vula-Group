@@ -743,7 +743,7 @@ async def reconcile(tenant_id: str, txns: List[Dict[str, Any]], source_file: str
         # Project/trade: an owner's earlier allocation of this very line wins, then the
         # worker's default project, then a clear learned rule (vula/commerce/allocation.py).
         s_project, s_trade = ((None, None) if own_wages
-                              else allocation.suggest(alloc_rules, t.get("description")))
+                              else allocation.suggest(alloc_rules, t.get("description"), None, tenant_id))
         project = (prior or {}).get("project") or wk_project or s_project
         trade = (prior or {}).get("trade") or s_trade
         if project:

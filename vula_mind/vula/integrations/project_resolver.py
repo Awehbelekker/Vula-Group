@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 AUTO_FILE = 0.7
 _GENERIC = {"project", "projects", "site", "the", "and", "house", "phase", "centre", "center",
             "building", "office", "new", "old", "unit", "street", "road", "avenue", "ave", "tv",
-            "pty", "ltd", "cc", "digg"}
+            "pty", "ltd", "cc"}
 
 
 def _client():
@@ -71,11 +71,16 @@ def _projects(tenant_id: str) -> List[Dict[str, Any]]:
     # place name ("bokaap") also appears on other jobs in that suburb (17 Jordaan Street,
     # Bo-Kaap is a different client's block of flats).
     word_owner: Dict[str, set] = {}
+    try:        # the business's own name ("digg") never identifies one of its projects
+        from vula.integrations.doc_filing import _own_names
+        own = {w.lower() for n in _own_names(tenant_id) for w in n.split()}
+    except Exception:
+        own = set()
     for p in names.values():
         for ident in p["ids"]:
             lead = next((w for w in ident.split() if not w.isdigit() and w not in _GENERIC), "")
             for cand in {lead, re.sub(r"\d+$", "", lead)}:     # hpc001 → hpc
-                if len(cand) >= 3 and cand not in _GENERIC:
+                if len(cand) >= 3 and cand not in _GENERIC and cand not in own:
                     word_owner.setdefault(cand, set()).add(p["name"])
     for p in names.values():
         p["words"] = {w for w, owners in word_owner.items() if owners == {p["name"]}}

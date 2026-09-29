@@ -37,7 +37,8 @@ export default function VulaJobCosting({ tenantId }) {
   useEffect(() => {
     if (!tenantId) return;
     fetch(`${VULA_API}/v1/tenants/${tenantId}`).then(r => r.json())
-      .then(d => setHasProjects((d.modules || d.tenant?.modules || []).includes("projects")))
+      .then(d => { const t = d.tenant || d; const p = t.profile;   // the backend's tenant profile decides
+        setHasProjects(p ? !!p.uses_projects : (t.modules || []).includes("projects")); })
       .catch(() => setHasProjects(false));
   }, [tenantId]);
   const load = useCallback(async () => {

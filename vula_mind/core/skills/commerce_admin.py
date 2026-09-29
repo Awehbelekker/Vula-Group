@@ -910,6 +910,11 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
 _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
                    + BOOKING_TOOLS + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
 
+# Tools in the always-on set that only mean something to a business that sells products
+# (Off the Hook), never to a project business (DIGG) or a rep (Gerflor) — see tenant_profile.
+_SHOP_ONLY_TOOLS = {"recent_orders", "update_order_status", "create_manual_order", "stock_status",
+                    "update_stock", "receive_stock", "preview_broadcast", "sales_summary"}
+
 
 # 2026-08-16: keyword pre-filter for _tools_for's gated groups — added alongside the purchase-
 # order/quote/discount/payment tools above, which pushed the flat per-call tool count past 45
@@ -1106,6 +1111,13 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
              + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
+    try:
+        from vula.api.tenants import tenant_profile
+        profile = tenant_profile(tenant_id)
+    except Exception:
+        profile = {"known": False}
+    if profile.get("known") and not profile.get("sells_products"):
+        tools = [t for t in tools if t["function"]["name"] not in _SHOP_ONLY_TOOLS]
     # Job costing only for a business that works in projects (DIGG), not a shop (Off the Hook);
     # pricing advice (paid cost + overheads + margin) is useful to both.
     try:

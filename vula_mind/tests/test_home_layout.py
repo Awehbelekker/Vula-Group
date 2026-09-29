@@ -7,8 +7,11 @@ from fastapi import HTTPException
 from vula.api import tenants
 
 CFG = {
-    "digg-demo": {"tenant_id": "digg-demo", "modules": ["projects", "commerce"]},
-    "off-the-hook": {"tenant_id": "off-the-hook", "modules": ["commerce"]},
+    "digg-demo": {"tenant_id": "digg-demo", "business_type": "services",
+                  "modules": ["invoices", "projects", "documents", "finances"]},
+    "off-the-hook": {"tenant_id": "off-the-hook", "business_type": "food",
+                     "modules": ["products", "orders", "payments", "invoices"]},
+    "gerflor": {"tenant_id": "gerflor", "business_type": "rep", "modules": ["crm", "followups"]},
 }
 
 
@@ -54,6 +57,8 @@ async def test_default_home_follows_the_business(db):
     assert "jobcosting" in digg["cards"] and "sales" not in digg["cards"] and not digg["custom"]
     assert "sales" in oth["cards"] and "jobcosting" not in oth["cards"]
     assert set(digg["available"]) >= set(digg["cards"]) | set(oth["cards"])
+    rep = await tenants.get_home_layout("gerflor")          # a sales rep: no sales, no projects
+    assert not {"sales", "trend", "jobcosting"} & set(rep["cards"])
 
 
 @pytest.mark.asyncio

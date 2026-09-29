@@ -164,6 +164,8 @@ def _own_names(tenant_id: Optional[str]) -> set:
         for k in ("display_name", "legal_name", "business_name"):
             if cfg.get(k):
                 names.add(str(cfg[k]))
+        # the other names it goes by (migration 187): "Aweh Be Lekker t/a DIGG Collection"
+        names.update(str(a) for a in (cfg.get("aliases") or []) if a)
     except Exception:
         pass
     out = set()

@@ -1012,6 +1012,7 @@ async def test_admin_rag_path_calls_owner_correction_capture_for_admin_role():
         patch("vula.commerce.service", bridge_service),
         patch("vula.api.whatsapp._maybe_capture_owner_correction",
               new=AsyncMock(return_value=None)) as mock_correction,
+        patch("vula.api.whatsapp._caller_identity", return_value=("Judy", "owner")),
     ):
         await _handle_message("27645755210", "what standards apply here?", "wamid.5",
                               route_tenant_id="digg-demo")
@@ -1019,6 +1020,39 @@ async def test_admin_rag_path_calls_owner_correction_capture_for_admin_role():
     mock_correction.assert_called_once()
     assert mock_correction.call_args[0][0] == "digg-demo"
     assert mock_correction.call_args[0][3] == "what standards apply here?"
+
+
+@pytest.mark.asyncio
+async def test_a_stranger_on_a_dedicated_line_never_teaches_vula():
+    """2026-09-29: every sender on a dedicated line gets role "admin" (the number identifies
+    the tenant), so a member of the public's reply could be captured as an owner correction
+    and learned. Only a known team member's can."""
+    from vula.api.whatsapp import _handle_message
+
+    mock_history_db = MagicMock()
+    mock_history_db.save = MagicMock()
+    mock_history_db.format_for_prompt = MagicMock(return_value="")
+    with (
+        patch("vula.api.whatsapp._maybe_helper_escalation_answer", new=AsyncMock(return_value=False)),
+        patch("vula.api.whatsapp._maybe_allocate_pending_expense", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._maybe_bank_review_answer", new=AsyncMock(return_value=None)),
+        patch("vula.integrations.notify.handle_preference_command", return_value=None),
+        patch("vula.integrations.doc_filing.resolve_pending_document", new=AsyncMock(return_value=None)),
+        patch("vula.api.whatsapp._active_project_for_phone", return_value=None),
+        patch("vula.chat.history.get_db", return_value=mock_history_db),
+        patch("vula.api.whatsapp._rag_reply", new=AsyncMock(return_value="Here's the answer.")),
+        patch("vula.api.whatsapp._maybe_escalate_and_learn",
+              new=AsyncMock(side_effect=lambda tid, ph, txt, reply, conf, caller_role=None: reply)),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock(return_value=True)),
+        patch("vula.commerce.service", _commerce_service_mock()),
+        patch("vula.api.whatsapp._maybe_capture_owner_correction",
+              new=AsyncMock(return_value=None)) as mock_correction,
+        patch("vula.api.whatsapp._caller_identity", return_value=(None, None)),
+    ):
+        await _handle_message("27820000000", "no, that's wrong", "wamid.6",
+                              route_tenant_id="digg-demo")
+
+    mock_correction.assert_not_called()
 
 
 # ── research write-up offer (depth pass, 2026-09-17) ──────────────────────────────

@@ -230,10 +230,29 @@ class HRMOrchestrator:
         except Exception:
             return False
 
+    def _sells_products(self, tenant_id: str | None) -> bool:
+        """False only when the tenant's profile is known and it sells nothing (DIGG, a project
+        business; Gerflor, a rep) — their "stock"/"order" questions are about their own work,
+        not the customer shop assistant. Unknown tenant or any failure → True (old behaviour)."""
+        if not tenant_id:
+            return True
+        try:
+            from vula.api.tenants import tenant_profile
+            p = tenant_profile(tenant_id)
+            return (not p.get("known")) or bool(p.get("sells_products"))
+        except Exception:
+            return True
+
     def _keyword_skill(self, prompt: str, tenant_id: str | None = None) -> str | None:
         """The keyword-table match only — None if nothing matched."""
         lower = prompt.lower()
+        sells = None
         for skill_name, keywords in SKILL_KEYWORDS.items():
+            if skill_name == "commerce_assistant":
+                if sells is None:
+                    sells = self._sells_products(tenant_id)
+                if not sells:
+                    continue
             if any(kw in lower for kw in keywords):
                 return skill_name
             if skill_name == "architecture_planning" and self._architecture_weak_ok(tenant_id):

@@ -338,6 +338,11 @@ def _slugify(text: str) -> str:
 def _map_business_type(industry: str | None) -> str:
     """Map free-text industry → a control-plane business_type (drives default modules)."""
     s = (industry or "").lower()
+    # A business that represents a brand's products (Gerflor's Western Cape rep): checked first,
+    # since "flooring agency" would otherwise read as professional services.
+    if any(k in s for k in ("sales rep", "representative", "rep for", "agency for", "distributor",
+                            "sales agent", "brand rep")):
+        return "rep"
     if any(k in s for k in ("food", "restaurant", "takeaway", "cafe", "catering", "seafood", "butcher", "bakery")):
         return "food"
     if any(k in s for k in ("retail", "shop", "store", "ecommerce", "e-commerce", "boutique", "fashion", "goods", "apparel")):
@@ -387,14 +392,17 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
     # 1. Always write to local SQLite tenant registry (works with no cloud deps)
     from vula.models.tenants import get_tenant_db
     local_db = get_tenant_db()
+    # The operational tenant id is the SLUG — the key of vula_tenant_config, the Qdrant
+    # collection, every commerce table. 2026-09-29: this registry used to get the billing UUID,
+    # so a phone lookup returned an id with no config (no modules, uses_projects, "unknown").
     local_db.upsert(
-        tenant_id=tenant_id,
+        tenant_id=slug,
         company_name=req.company_name,
         whatsapp=whatsapp_normalised,
         email=str(req.email),
         plan=req.plan,
     )
-    logger.info("Tenant provisioned locally: %s (%s)", tenant_id, req.company_name)
+    logger.info("Tenant provisioned locally: %s (%s)", slug, req.company_name)
 
     # 2. Sync to Supabase when configured (optional — degrades gracefully)
     _PLACEHOLDER = "your-project.supabase.co"
@@ -529,7 +537,7 @@ async def onboard_client(
     )
 
     return OnboardingResponse(
-        tenant_id=record["tenant_id"],
+        tenant_id=record["workspace_slug"],     # the operational id, not the billing UUID
         workspace_slug=record["workspace_slug"],
         workspace_url=record["workspace_url"],
         temp_password=temp_password,
@@ -612,7 +620,7 @@ async def login(req: LoginRequest) -> dict:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     return {
-        "tenant_id": tenant["tenant_id"],
+        "tenant_id": tenant.get("workspace_slug") or tenant["tenant_id"],
         "company_name": tenant.get("company_name", ""),
         "contact_name": tenant.get("contact_name", ""),
         "email": tenant.get("email", ""),
@@ -625,7 +633,14 @@ async def login(req: LoginRequest) -> dict:
 
 @router.get("/tenant/{tenant_id}/status")
 async def tenant_status(tenant_id: str) -> dict:
-    rows = await _supabase.select("vula_tenants", {"tenant_id": tenant_id})
+    # The onboarding response now gives the slug (the operational id); older clients hold the
+    # billing UUID. Accept either — slug first (a slug is never a valid UUID).
+    rows = await _supabase.select("vula_tenants", {"workspace_slug": tenant_id})
+    if not rows:
+        try:
+            rows = await _supabase.select("vula_tenants", {"tenant_id": tenant_id})
+        except Exception:
+            rows = []
     if not rows:
         raise HTTPException(status_code=404, detail="Tenant not found")
     t = rows[0]

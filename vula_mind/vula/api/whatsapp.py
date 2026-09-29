@@ -1340,9 +1340,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         # If phone is completely unknown, reply once and stop
         if not tenant_id and not contractor:
             await _send_reply(phone, (
-                "Hi! I'm Vula, your construction AI. "
+                "Hi! I'm Vula, a business assistant. "
                 "I couldn't find an account linked to this number. "
-                "Contact your site manager to get set up."
+                "Ask the business you work with to add you to their team."
             ))
             return
 
@@ -1489,14 +1489,17 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     project_id = _active_project_for_phone(phone)
     thread_key = f"{phone}:{project_id}" if project_id else phone
 
-    if role == "admin":
-        await _maybe_capture_owner_correction(tenant_id, phone, thread_key, text)
-
     # Who is actually messaging — resolved BEFORE the history is formatted, because the answer
     # decides how that history labels them. Everyone reaching this branch is staff/admin on
     # this tenant's own line, so an unmatched lookup still isn't a customer; it just means we
     # can't name them, and the generic label stays.
     caller_name, caller_role = _caller_identity(tenant_id, phone)
+
+    # Only a known team member teaches Vula corrections. On a dedicated line every sender gets
+    # role "admin" (the number identifies the tenant), so before 2026-09-29 a member of the
+    # public's reply could be captured as an "owner correction" and learned.
+    if role == "admin" and _is_insider(caller_role):
+        await _maybe_capture_owner_correction(tenant_id, phone, thread_key, text)
     user_label = "Client"
     if _is_insider(caller_role):
         who = f"{caller_name} ({caller_role})" if caller_name else str(caller_role)
@@ -5309,8 +5312,15 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 conversation_history=conversation_history,
             )
 
+        # The shared training KB is SA construction standards & rates — only a fallback for a
+        # business that works in projects, never a seafood shop's or a rep's answer.
+        try:
+            from vula.api.tenants import uses_projects as _up
+            construction_ok = _up(tenant_id)
+        except Exception:
+            construction_ok = True
         training = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
-        training_sources = await training.query(question, top_k=3)
+        training_sources = await training.query(question, top_k=3) if construction_ok else []
         if training_sources:
             logger.info("Falling back to training KB for tenant %s", tenant_id)
             return await training.answer(
@@ -6560,10 +6570,24 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         # 2026-09-18: this used to close with a seafood in-joke ("No fish were harmed...") sent
         # to every tenant's owner regardless of vertical — an architecture firm or a clinic got
         # the same fish joke Off The Hook did. Generic sign-off instead.
+        # What lands here depends on the business (2026-09-29): DIGG's owner was promised
+        # "delivery briefings, low-stock nudges, order chases" it would never get.
+        try:
+            from vula.api.tenants import tenant_profile
+            prof = tenant_profile(tenant_id)
+        except Exception:
+            prof = {"sells_products": True}
+        if prof.get("is_rep_business"):
+            lands = "follow-up reminders, meeting notes, expense slips and product questions"
+        elif prof.get("uses_projects"):
+            lands = "project documents, supplier invoices, job-costing alerts and day-to-day questions"
+        elif prof.get("sells_products"):
+            lands = "delivery briefings, low-stock nudges, order chases and day-to-day questions"
+        else:
+            lands = "reminders, documents and day-to-day questions"
         msg = (f"Hey {first_name}! 👋 Welcome to Vula — you're all set up as the owner/team "
-               f"member for *{shop_name}* here on WhatsApp. This is where your delivery "
-               f"briefings, low-stock nudges, order chases and day-to-day questions land from "
-               f"now on.{dash_line}")
+               f"member for *{shop_name}* here on WhatsApp. This is where your {lands} land "
+               f"from now on.{dash_line}")
         await _send_reply(phone, msg, tenant_id)
         logger.info("Sent owner welcome to %s (%s)", phone, tenant_id)
         await _send_staff_capability_menu(phone, tenant_id)

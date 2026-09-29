@@ -94,6 +94,13 @@ async def master_update_tenant(tenant_id: str, body: dict,
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
+    from vula.api import tenants as _t
+    if "business_type" in patch:
+        if patch["business_type"] not in _t.BUSINESS_TYPES:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown business_type (one of {sorted(_t.BUSINESS_TYPES)})")
+    if "modules" in patch:
+        patch["modules"] = _t.valid_modules(patch["modules"])
     res = (_client().table("vula_tenant_config").update(patch)
            .eq("tenant_id", tenant_id).execute())
     if not res.data:
@@ -301,6 +308,14 @@ def setup_checklist(tenant_id: str) -> dict:
         {"id": "golive", "label": "First order through", "done": orders_n > 0, "tab": "orders",
          "detail": f"{orders_n} order(s)"},
     ]
+    # Only the steps that apply to this business (2026-09-29): a project business (DIGG) or a
+    # rep (Gerflor) was scored against "Storefront pages" and "First order through" it will
+    # never have. A step with no module requirement applies to everyone.
+    from vula.api.tenants import _effective_modules
+    mods = set(_effective_modules(cfg))
+    needs = {"payments": {"orders", "payments"}, "storefront": {"pages"}, "golive": {"orders"},
+             "vat": {"invoices", "finances", "orders"}}
+    steps = [st for st in steps if not needs.get(st["id"]) or (needs[st["id"]] & mods)]
     done = sum(1 for s in steps if s["done"])
     return {"tenant_id": tenant_id, "display_name": cfg.get("display_name"),
             "steps": steps, "done": done, "total": len(steps),

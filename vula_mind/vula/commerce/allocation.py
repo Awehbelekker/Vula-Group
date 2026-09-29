@@ -27,7 +27,7 @@ _MIN_HITS = 2
 _DOMINANCE = 0.8
 # First words that name no project ("send andries…", "pay", "payment to…").
 _GENERIC_PREFIX = {"send", "pay", "payment", "transfer", "fnb", "absa", "cash", "atm", "debit",
-                   "credit", "card", "int", "interest", "fee", "fees", "reimbursement", "digg",
+                   "credit", "card", "int", "interest", "fee", "fees", "reimbursement",
                    "yoco", "home", "salary", "wages", "the"}
 
 
@@ -66,14 +66,27 @@ def is_own_wages(tenant_id: str, description: Optional[str], payee: Optional[str
     return not other and bool(_WAGE_WORDS.search(text) or words & {"send", "transfer"})
 
 
-def signals(description: Optional[str], payee: Optional[str] = None) -> List[Tuple[str, str]]:
+def _own_words(tenant_id: Optional[str]) -> set:
+    """The business's own name words (from its profile + aliases) — "digg" on DIGG's lines —
+    never a project clue. Replaces a hardcoded "digg" in the generic list."""
+    if not tenant_id:
+        return set()
+    try:
+        from vula.integrations.doc_filing import _own_names
+        return {w.lower() for n in _own_names(tenant_id) for w in n.split()}
+    except Exception:
+        return set()
+
+
+def signals(description: Optional[str], payee: Optional[str] = None,
+            tenant_id: Optional[str] = None) -> List[Tuple[str, str]]:
     from vula.commerce.merchants import merchant_key
     key = merchant_key(payee or description) or merchant_key(description)
     out: List[Tuple[str, str]] = []
     if key:
         out.append(("merchant", key))
         first = key.split()[0]
-        if len(first) >= 3 and first not in _GENERIC_PREFIX:
+        if len(first) >= 3 and first not in _GENERIC_PREFIX and first not in _own_words(tenant_id):
             out.append(("prefix", first))
     return out
 
@@ -87,7 +100,7 @@ def learn(tenant_id: str, description: Optional[str], project: Optional[str],
         return            # the business's own wages are a running cost, not one job's
     db = _client()
     now = datetime.now(timezone.utc).isoformat()
-    for stype, sig in signals(description, payee):
+    for stype, sig in signals(description, payee, tenant_id):
         p, t = project, (trade if stype == "merchant" else None)
         if stype == "prefix" and not p:
             continue
@@ -127,10 +140,10 @@ def _decide(rules: List[Dict], stype: str, sig: str) -> Optional[Dict]:
 
 
 def suggest(rules: List[Dict], description: Optional[str],
-            payee: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+            payee: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     """(project, trade) for a line from learned rules, or (None, None) when not clear."""
     project = trade = None
-    for stype, sig in signals(description, payee):
+    for stype, sig in signals(description, payee, tenant_id):
         hit = _decide(rules, stype, sig)
         if not hit:
             continue
@@ -162,7 +175,7 @@ def apply_to_existing(tenant_id: str) -> int:
     for r in rows:
         if r.get("match_status") == "ignored":
             continue
-        project, trade = suggest(rules, r.get("description"), r.get("payee"))
+        project, trade = suggest(rules, r.get("description"), r.get("payee"), tenant_id)
         if not project:
             continue
         patch = {"project": project}

@@ -92,10 +92,12 @@ async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user
     if own_tenants:
         raise HTTPException(status_code=409, detail="This account already has a workspace.")
 
-    preset = BUSINESS_TYPES.get(body.business_type or "other", BUSINESS_TYPES["other"])
+    from vula.api.tenants import valid_business_type
+    btype = valid_business_type(body.business_type)
+    preset = BUSINESS_TYPES[btype]
     row = {
         "tenant_id": slug, "display_name": body.display_name or slug,
-        "business_type": body.business_type or "other",
+        "business_type": btype,
         "modules": preset["modules"], "plan": "starter",
         "status": "active", "updated_at": _now(),
     }
@@ -135,7 +137,7 @@ async def signup(body: SignupIn, user: dict = Depends(require_authenticated_user
     try:
         from vula.commerce.background_tasks import run_background
         from vula.commerce.starter_kb import seed_starter_kb
-        run_background(slug, "starter_kb_seed", seed_starter_kb(slug, body.business_type or "other"))
+        run_background(slug, "starter_kb_seed", seed_starter_kb(slug, btype))
     except Exception as exc:
         log.debug("starter_kb seeding skipped for %s: %s", slug, exc)
 

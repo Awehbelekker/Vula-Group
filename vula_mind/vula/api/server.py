@@ -334,6 +334,19 @@ async def _commerce_tenant_ids() -> list[str]:
     return ["off-the-hook"]
 
 
+async def _active_tenant_ids() -> list[str]:
+    """Every active tenant — for jobs that aren't about a WhatsApp shop (the pending-project
+    nudge used to loop over _commerce_tenant_ids, i.e. tenants with `orders`, then require
+    projects: DIGG has projects but no orders, so it reached nobody)."""
+    try:
+        from vula.api import tenants as _t
+        rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+        return [r["tenant_id"] for r in rows if r.get("tenant_id") and _t.is_active(r["tenant_id"])]
+    except Exception as exc:
+        log.debug("active tenant list fetch failed: %s", exc)
+        return []
+
+
 def _commerce_notify_phones(tenant_id: str) -> list[str]:
     """WhatsApp numbers for this tenant's owner/operations staff — DB-driven (vula_team_members)
     with the static _TENANT_TEAM map as fallback, same source of truth as order-paid alerts."""
@@ -559,7 +572,7 @@ async def _send_pending_project_nudge(only_tenant: str | None = None,
     from vula.commerce import service as _cs
 
     from vula.api.tenants import uses_projects
-    for tenant_id in ([only_tenant] if only_tenant else await _commerce_tenant_ids()):
+    for tenant_id in ([only_tenant] if only_tenant else await _active_tenant_ids()):
         if not uses_projects(tenant_id):
             continue          # no projects in this business — nothing to assign
         phones = _commerce_notify_phones(tenant_id)
@@ -697,11 +710,12 @@ async def _daily_commerce_jobs_loop() -> None:
             rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
             for r in rows:
                 tid = r.get("tenant_id")
-                if not tid:
+                if not tid or not _t.is_active(tid):       # a suspended tenant gets no jobs
                     continue
                 try:
                     await _process_overdue_invoices(tid)
-                    await _process_stock_alerts(tid)   # throttled to once/day internally
+                    if _t.tenant_profile(tid).get("sells_products"):
+                        await _process_stock_alerts(tid)   # throttled to once/day internally
                     from vula.commerce.job_costing import weekly_alert
                     await weekly_alert(tid)            # throttled to once/week internally
                 except Exception as exc:
