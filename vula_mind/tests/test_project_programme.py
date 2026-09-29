@@ -84,6 +84,9 @@ class _Q:
         rows = self.db.setdefault(self.name, [])
         hit = [r for r in rows if all(f(r) for f in self.f)]
         if self.op == "insert":
+            import uuid
+            for r in self.payload:
+                r.setdefault("id", uuid.uuid4().hex)        # as Postgres does
             rows.extend(dict(r) for r in self.payload)
             return type("R", (), {"data": self.payload})()
         if self.op == "update":
@@ -303,3 +306,91 @@ def test_which_clickup_lists_are_the_programme(monkeypatch):
 def test_start_programme_command(text, want, monkeypatch):
     monkeypatch.setattr(pp, "running_projects", lambda _t: ["Belladonna", "HPC Bokaap"])
     assert pp.parse_start_programme(text, "digg-demo") == want
+
+
+# ── Judy sets it up herself on WhatsApp (her voice note, 29 Sep) ──────────────
+
+VOICE_NOTE = ("Linear approach, so input data is ClickUp for project program or any Gantt. It's a four-week "
+              "program, very tight, and connected to cost, so need to track that daily. We also need to task "
+              "the staff, as per setup in ClickUp … what is the tasks due for the day per room. For costing, "
+              "we signed cost revision 10, and that was the invoice that was made out to the client. All "
+              "project costs need to be managed against that. Any variation to it need to be flagged with a "
+              "variation order.")
+
+REV10_NO_RECEPTION = dict(REV10, total_cents=48313900)
+
+
+@pytest.fixture
+def digg_docs(db, monkeypatch):
+    db.t["vula_filed_documents"] += [
+        {"id": "rev10nr", "tenant_id": "digg-demo", "project": "ATLANTIS FOODS", "fields": REV10_NO_RECEPTION,
+         "filename": "Atlantis_Foods_Paarden_Island_Office_Cost_Estimate_Rev10_No_Reception.pdf",
+         "created_at": "2026-09-07T19:40:34+00:00"},
+        {"id": "rev07", "tenant_id": "digg-demo", "project": "ATLANTIS FOODS", "fields": REV10,
+         "filename": "Atlantis_Foods_Paarden_Island_Office_Cost_Estimate_Rev07 (1).pdf",
+         "created_at": "2026-09-02T10:29:24+00:00"},
+        {"id": "hpc10", "tenant_id": "digg-demo", "project": "HPC Bokaap", "fields": REV10,
+         "filename": "HPC_Estimate_Rev10.pdf", "created_at": "2026-08-01T10:00:00+00:00"}]
+    db.t["vula_projects"] = [{"tenant_id": "digg-demo", "name": n, "status": "active"}
+                             for n in ("HPC Bokaap", "Porterfield", "Breco Seafoods", "Belladonna",
+                                       "Atlantis Paarden Eiland")]
+    monkeypatch.setattr("vula.integrations.doc_filing._clickup_candidates", lambda _t: [
+        ("a1", "Team Space / ATLANTIS FOODS / Atlantis Branch — Interior Design & Concept"),
+        ("a2", "Team Space / ATLANTIS FOODS / Paarden Island Branch — Legalisation & Council Submissions"),
+        ("b1", "Team Space / Belladonna / Work Programme")])
+    return db
+
+
+def test_her_words_find_the_project_and_the_signed_document(digg_docs):
+    assert pp.find_project("digg-demo", "Atlantis Paarden Island project") == "Atlantis Paarden Eiland"
+    assert pp.find_project("digg-demo", "belladonna") == "Belladonna"
+    docs = pp.find_baseline_documents("digg-demo", "Atlantis Paarden Eiland", "cost revision 10")
+    assert [d["id"] for d in docs] == ["rev10", "rev10nr"]          # not Rev07, not HPC's Rev10
+
+
+def test_the_plan_says_what_will_happen_and_offers_both_rev10s(digg_docs):
+    plan = pp.plan_setup("digg-demo", {"project": "Atlantis Paarden Island", "programme_from": "clickup",
+                                       "baseline_document": "cost revision 10"})
+    assert plan["project"] == "Atlantis Paarden Eiland" and not plan["create"]
+    assert [o["doc_id"] for o in plan["options"]] == ["rev10", "rev10nr"]
+    text = pp.plan_text(plan)
+    assert "no programme list" in text                       # ClickUp has only design + council lists
+    assert "R593,022 incl. VAT" in text and "R483,139 incl. VAT" in text
+    assert "variation order" in text and "Nothing changes until you confirm" in text
+
+
+def test_a_paarden_island_programme_list_in_the_client_folder_is_found(digg_docs, monkeypatch):
+    monkeypatch.setattr("vula.integrations.doc_filing._clickup_candidates", lambda _t: [
+        ("a2", "Team Space / ATLANTIS FOODS / Paarden Island Branch — Legalisation & Council Submissions"),
+        ("a3", "Team Space / ATLANTIS FOODS / Paarden Island Branch — Work Programme")])
+    assert [l for l, _ in pp.clickup_programme_lists("digg-demo", "Atlantis Paarden Eiland")] == ["a3"]
+
+
+@pytest.mark.asyncio
+async def test_confirming_locks_the_baseline_and_says_so(digg_docs):
+    got = await pp.apply_setup("digg-demo", {"project": "Atlantis Paarden Eiland", "baseline_doc_id": "rev10"})
+    assert "✅ Cost baseline locked" in got["reply"] and "R515,671 excl. VAT" in got["reply"]
+    assert pp.baseline("digg-demo", "Atlantis Paarden Eiland")["baseline_locked"]
+    assert not got["problems"]
+
+
+@pytest.mark.asyncio
+async def test_only_the_owner_can_set_up_and_the_buttons_offer_each_document(digg_docs, monkeypatch):
+    from vula.api import whatsapp as wa
+    monkeypatch.setattr(pp, "read_setup_instruction", AsyncMock(return_value={
+        "is_project_setup": True, "project": "Atlantis Paarden Island", "programme_from": "clickup",
+        "baseline_document": "cost revision 10"}))
+    monkeypatch.setattr(wa, "_caller_identity", lambda t, p: ("Sipho", "staff"))
+    assert not await wa._maybe_project_setup("27820000001", VOICE_NOTE, "digg-demo")
+    monkeypatch.setattr(wa, "_caller_identity", lambda t, p: ("Judy", "owner"))
+    monkeypatch.setattr(wa, "_get_tenant_wa_creds", AsyncMock(return_value={"phone_id": "x", "token": "y"}))
+    sent = AsyncMock(return_value=True)
+    monkeypatch.setattr(wa, "_send_wa_buttons", sent)
+    monkeypatch.setattr(wa, "_send_reply", AsyncMock(return_value=True))
+    assert await wa._maybe_project_setup("27827077080", VOICE_NOTE, "digg-demo")
+    pending = digg_docs.t["commerce_pending_confirmations"]
+    assert [r["tool_args"]["baseline_doc_id"] for r in pending] == ["rev10", "rev10nr"]
+    assert all(r["tool_name"] == "setup_project" and r["phone"] == "27827077080" for r in pending)
+    titles = [b["title"] for b in sent.call_args.args[3]]
+    assert titles == ["R593,022 signed", "R483,139 (no recep.)", "Cancel"]
+    assert "baseline_locked" not in str(digg_docs.t.get("vula_project_boq"))   # nothing changed yet

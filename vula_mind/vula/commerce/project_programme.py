@@ -607,10 +607,17 @@ def clickup_programme_lists(tenant_id: str, project: str) -> List[tuple]:
     Reception") counts as the programme. Design, procurement and council lists never do."""
     from vula.commerce.service import project_key
     from vula.integrations.doc_filing import _clickup_candidates, _project_label
-    mine = [(lid, name) for lid, name in _clickup_candidates(tenant_id)
-            if project_key(_project_label(name)) == project_key(project)]
     leaf = lambda n: str(n).split("/")[-1].strip()
-    named = [(lid, n) for lid, n in mine if _PROGRAMME_LIST.search(leaf(n)) and not _NOT_PROGRAMME.search(leaf(n))]
+    everything = _clickup_candidates(tenant_id)
+    mine = [(lid, name) for lid, name in everything
+            if project_key(_project_label(name)) == project_key(project)]
+    # A programme list for this project inside a client's folder: "ATLANTIS FOODS / Paarden
+    # Island Branch — Work Programme" is Atlantis Paarden Eiland's (words close enough, eiland ~ island).
+    want = [w for w in _words(project) if len(w) >= 5]
+    by_words = [(lid, n) for lid, n in everything if (lid, n) not in mine and want
+                and sum(any(_close(w, x) for x in _words(leaf(n))) for w in want) >= min(2, len(want))]
+    named = [(lid, n) for lid, n in mine + by_words
+             if _PROGRAMME_LIST.search(leaf(n)) and not _NOT_PROGRAMME.search(leaf(n))]
     if named:
         return named
     rooms = [(lid, n) for lid, n in mine if not _NOT_PROGRAMME.search(leaf(n))]
@@ -718,3 +725,198 @@ def parse_start_programme(text: str, tenant_id: str) -> Optional[str]:
     from vula.commerce.service import project_key
     want = project_key(m.group("project"))
     return next((p for p in running_projects(tenant_id) if project_key(p) == want), None)
+
+
+# ── Judy sets a project up herself, on WhatsApp ──────────────────────────────
+# 2026-09-29 (Ian): "I want Judy to instruct it directly from WhatsApp." Her own words (a voice
+# note): "input data is ClickUp for the project programme … a four-week programme … task the
+# staff … we signed cost revision 10 … all project costs managed against that … any variation
+# flagged with a variation order." Vula reads that, works out the project, the ClickUp programme
+# and the signed document, and asks her to confirm exactly that — nothing changes until she taps.
+
+_SETUP_HINT = re.compile(
+    r"\b(programme|program|gantt|click\s?up|baseline|cost\s+(revision|rev|estimate)|rev(ision)?\s*\.?\s*\d+|"
+    r"variation\s+order|tasks?\s+(due|for the day)|task the staff)\b", re.IGNORECASE)
+
+_SETUP_PROMPT = (
+    "You read an instruction a construction business owner sent on WhatsApp. Return STRICT JSON only: "
+    '{"is_project_setup": bool, "project": string|null, "programme_from": "clickup"|"document"|null, '
+    '"baseline_document": string|null, "new_project": bool}. is_project_setup is true ONLY when the '
+    "owner is telling you how a project must be run or tracked (its programme, its cost baseline, daily "
+    "staff tasks, variation orders) — false for a question or anything else. project = the project "
+    "exactly as named (null if not named). baseline_document = the words used for the signed cost "
+    "document (e.g. \"cost revision 10\"). new_project = the owner says the project is new or starting."
+)
+
+
+async def read_setup_instruction(text: str, history: str = "") -> Optional[Dict[str, Any]]:
+    if len(text or "") < 20 or not _SETUP_HINT.search(text or ""):
+        return None
+    import litellm
+    from core.llm_router import resolve_cheap_route
+    from core.prompt_safety import fence
+    model, api_key, api_base = await resolve_cheap_route()
+    try:
+        resp = await litellm.acompletion(
+            model=model, api_key=api_key, api_base=api_base, temperature=0, max_tokens=300,
+            messages=[{"role": "system", "content": _SETUP_PROMPT},
+                      {"role": "user", "content": (fence("EARLIER_MESSAGES", history[-1500:]) + "\n" if history else "")
+                       + fence("OWNER_MESSAGE", text) + "\nJSON:"}])
+        body = (resp.choices[0].message.content or "")
+        a, b = body.find("{"), body.rfind("}")
+        data = json.loads(body[a:b + 1]) if a >= 0 and b > a else {}
+    except Exception as exc:
+        log.debug("setup instruction read failed: %s", exc)
+        return None
+    return data if isinstance(data, dict) and data.get("is_project_setup") else None
+
+
+def _words(s: str) -> List[str]:
+    from vula.commerce.service import project_key
+    generic = {"project", "projects", "the", "and", "office", "branch", "phase", "foods", "food", "build"}
+    return [w for w in project_key(s).split() if len(w) >= 4 and w not in generic]
+
+
+def _close(a: str, b: str) -> bool:
+    from difflib import SequenceMatcher
+    return a == b or (len(a) >= 5 and SequenceMatcher(None, a, b).ratio() >= 0.8)   # eiland ~ island
+
+
+def find_project(tenant_id: str, named: str) -> Optional[str]:
+    """The registered project the owner means — "Atlantis Paarden Island" is "Atlantis Paarden Eiland"."""
+    from vula.commerce.service import project_key
+    projects = running_projects(tenant_id)
+    exact = [p for p in projects if project_key(p) == project_key(named)]
+    if exact:
+        return exact[0]
+    want = _words(named)
+    scored = sorted(((sum(any(_close(w, x) for x in _words(p)) for w in want), p) for p in projects), reverse=True)
+    if scored and scored[0][0] and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+        return scored[0][1]
+    return None
+
+
+def _rev_number(ref: str) -> Optional[str]:
+    m = re.search(r"\brev(?:ision)?\.?\s*0*(\d+)", ref or "", re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def find_baseline_documents(tenant_id: str, project: str, ref: str) -> List[Dict[str, Any]]:
+    """Filed priced documents matching the owner's words ("cost revision 10" → *Rev10*), the
+    project's own first (its words in the filename), newest first."""
+    rev = _rev_number(ref)
+    try:
+        rows = (_client().table("vula_filed_documents").select("id,filename,project,category,fields,created_at")
+                .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(2000).execute().data or [])
+    except Exception as exc:
+        log.debug("baseline candidates read skipped: %s", exc)
+        return []
+    words = _words(project)
+    out = []
+    for r in rows:
+        name = (r.get("filename") or "")
+        f = r.get("fields") or {}
+        if not (f.get("line_items") and f.get("total_cents")):
+            continue
+        if rev and not re.search(rf"rev(?:ision)?[\s_.-]*0*{rev}(?!\d)", name, re.IGNORECASE):
+            continue
+        if not rev and not all(w in name.lower() for w in _words(ref)[:2]):
+            continue
+        hit = sum(any(_close(w, x) for x in _words(name.replace("_", " "))) for w in words)
+        out.append((hit, r))
+    best = max((h for h, _ in out), default=0)
+    return [r for h, r in out if h == best][:3]
+
+
+def plan_setup(tenant_id: str, intent: Dict[str, Any]) -> Dict[str, Any]:
+    """What Vula would do, in plain words, before anything changes."""
+    named = (intent.get("project") or "").strip()
+    project = find_project(tenant_id, named) if named else active_programme_project(tenant_id)
+    plan: Dict[str, Any] = {"project": project, "named": named, "create": False, "lines": [], "options": []}
+    if not project:
+        if named and intent.get("new_project"):
+            plan.update(project=named.title() if named.islower() else named, create=True)
+            plan["lines"].append(f"Register *{plan['project']}* as a new project.")
+        else:
+            plan["question"] = (f"Which project is this for? I don't have a project called '{named}'."
+                                if named else "Which project is this for?")
+            return plan
+    project = plan["project"]
+    if intent.get("programme_from") in ("clickup", None):
+        lists = [] if plan["create"] else clickup_programme_lists(tenant_id, project)
+        if lists:
+            plan["programme"] = "clickup"
+            plan["lines"].append("Run the programme from ClickUp ("
+                                 + ", ".join(str(n).split("/")[-1].strip() for _, n in lists)
+                                 + "): every morning at 06:00 each person gets their tasks for the day per "
+                                 "room, and you get the day's work and anything overdue.")
+        elif intent.get("programme_from") == "clickup":
+            plan["lines"].append(f"ClickUp has no programme list for *{project}* yet — add a list named "
+                                 "'Work Programme' in its folder (or send me the Gantt) and I'll start the "
+                                 "daily tasks from it.")
+    ref = (intent.get("baseline_document") or "").strip()
+    if ref:
+        docs = find_baseline_documents(tenant_id, project, ref)
+        if not docs:
+            plan["lines"].append(f"I couldn't find '{ref}' in your documents — send it to me and I'll use it.")
+        for d in docs:
+            b = baseline_sections(d.get("fields") or {})
+            plan["options"].append({"doc_id": d["id"], "filename": d.get("filename"),
+                                    "total_incl_cents": b["total_incl_cents"],
+                                    "total_excl_cents": b["total_excl_cents"],
+                                    "sections": len(b["sections"])})
+        if plan["options"]:
+            plan["lines"].append(
+                "Lock the signed cost document as the *only* cost baseline — every cost is tracked "
+                "against it, and anything outside it is flagged for a variation order.")
+    return plan
+
+
+def plan_text(plan: Dict[str, Any]) -> str:
+    head = f"📋 *{plan['project']}* — here's what I'll set up:"
+    body = "\n".join(f"{i}. {line}" for i, line in enumerate(plan["lines"], 1))
+    opts = plan["options"]
+    if len(opts) > 1:
+        body += "\n\nWhich document did you sign?\n" + "\n".join(
+            f"• {o['filename']} — {_r(o['total_incl_cents'])} incl. VAT" for o in opts)
+    elif opts:
+        body += f"\n\nSigned document: {opts[0]['filename']} — {_r(opts[0]['total_incl_cents'])} incl. VAT."
+    return f"{head}\n\n{body}\n\nNothing changes until you confirm."
+
+
+async def apply_setup(tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Runs after the owner taps Confirm (commerce_admin 'setup_project'). Each step is read back;
+    the reply says only what actually happened."""
+    project = args["project"]
+    done, problems = [], []
+    if args.get("create"):
+        try:
+            _client().table("vula_projects").insert({"tenant_id": tenant_id, "name": project,
+                                                     "status": "active", "created_by": "whatsapp"}).execute()
+        except Exception as exc:
+            problems.append(f"couldn't register the project ({exc})")
+        if project in running_projects(tenant_id):
+            done.append(f"✅ *{project}* registered as a project.")
+    if args.get("baseline_doc_id"):
+        try:
+            b = set_baseline(tenant_id, project, args["baseline_doc_id"])
+            done.append(f"✅ Cost baseline locked: {b['document']} — {_r(b['total_excl_cents'])} excl. VAT "
+                        f"({_r(b['total_incl_cents'])} incl.), {len(b['sections'])} budget lines. Later "
+                        "estimates won't replace it; anything outside it is flagged for a variation order.")
+        except Exception as exc:
+            problems.append(f"the baseline didn't save ({exc})")
+    if args.get("programme") == "clickup":
+        try:
+            got = await import_from_clickup(tenant_id, project)
+            if got.get("error"):
+                problems.append(got["error"])
+            else:
+                done.append(f"✅ Programme read from ClickUp: {got['tasks']} task(s), {got['start']} to "
+                            f"{got['end']}. Daily tasks go out at 06:00; ClickUp is re-read each morning.")
+                if got.get("needs_number"):
+                    done.append("📱 I need a WhatsApp number for: " + ", ".join(got["needs_number"])
+                                + ". Send *add staff <name> <number> <trade>* for each.")
+        except Exception as exc:
+            problems.append(f"the ClickUp programme couldn't be read ({exc})")
+    reply = "\n\n".join(done + [f"⚠️ Not done: {p}" for p in problems]) or "Nothing was changed."
+    return {"reply": reply, "done": len(done), "problems": problems}

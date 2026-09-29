@@ -1457,6 +1457,8 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # they get their programme tasks each morning (vula/commerce/project_programme.py).
     try:
         from vula.commerce import project_programme as _pp
+        if await _maybe_project_setup(phone, text, tenant_id):
+            return
         _prog = _pp.parse_start_programme(text, tenant_id)
         if _prog and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin"):
             got = await _pp.import_from_clickup(tenant_id, _prog, notify=False)
@@ -4697,6 +4699,59 @@ async def _read_stock_photo(media_id: str) -> Optional[dict]:
         return None
 
 
+async def _maybe_project_setup(phone: str, text: str, tenant_id: str) -> bool:
+    """The owner telling Vula how a project must run — its ClickUp programme, the signed cost
+    document to manage it against, daily staff tasks (2026-09-29, Judy's voice note on Atlantis
+    Paarden Eiland). Vula shows exactly what it will do, with Confirm buttons — one per candidate
+    document when more than one matches ("Rev10" / "Rev10 No Reception") — and changes nothing
+    until a tap (vula/commerce/project_programme.py). True when handled."""
+    role = _caller_identity(tenant_id, phone)[1] or ""
+    if role not in ("owner", "manager", "admin"):
+        return False
+    from vula.commerce import project_programme as _pp
+    intent = await _pp.read_setup_instruction(text)
+    if not intent:
+        return False
+    import asyncio as _aio
+    plan = await _aio.to_thread(_pp.plan_setup, tenant_id, intent)
+    if plan.get("question"):
+        await _send_reply(phone, plan["question"] + " Tell me the project and I'll set it up.", tenant_id)
+        return True
+    if not plan["lines"]:
+        return False
+    summary = _pp.plan_text(plan)
+    base = {"project": plan["project"], "create": plan["create"], "programme": plan.get("programme"),
+            "_caller": {"role": role, "name": None}}
+    choices = plan["options"] or [None]
+    rows = []
+    from vula.commerce import service as commerce_service
+    for opt in choices[:2]:
+        args = {**base, "baseline_doc_id": (opt or {}).get("doc_id")}
+        try:
+            ins = commerce_service._client().table("commerce_pending_confirmations").insert({
+                "tenant_id": tenant_id, "phone": phone, "skill_name": "commerce_admin",
+                "tool_name": "setup_project", "summary": summary, "tool_args": args}).execute()
+            rows.append((ins.data[0]["id"], opt))
+        except Exception as exc:
+            logger.warning("project setup confirmation insert failed: %s", exc)
+    if not rows:
+        await _send_reply(phone, summary + "\n\nI couldn't set up the Confirm button just now — "
+                                           "please try again in a moment.", tenant_id)
+        return True
+    if len(rows) == 1:
+        await _send_confirm_request(phone, tenant_id, {"id": rows[0][0], "summary": summary,
+                                                       "confirm_label": "Confirm set-up"})
+        return True
+    creds = await _get_tenant_wa_creds(tenant_id)
+    buttons = [{"id": f"admin_confirm:{pid}", "title": f"{_pp._r(o['total_incl_cents'])} " +
+                ("(no recep.)" if "no_reception" in (o["filename"] or "").lower() else "signed")}
+               for pid, o in rows]
+    buttons.append({"id": f"admin_cancel:{rows[0][0]}", "title": "Cancel"})
+    if not (creds and await _send_wa_buttons(creds, _wa_number(phone), summary, buttons)):
+        await _send_reply(phone, summary + "\n\nI couldn't show the buttons — please try again.", tenant_id)
+    return True
+
+
 async def _ask_admin_confirm(phone: str, tenant_id: str, tool_name: str, args: dict,
                              preview: dict, caller_role: Optional[str] = None) -> None:
     """Store a commerce_admin tool call as a pending confirmation (migration 146) and send the
@@ -7015,6 +7070,11 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
     except Exception as exc:
         logger.warning("admin confirm re-dispatch failed: %s", exc)
         await _send_reply(phone, "Something went wrong applying that — please try again.", tenant_id)
+        return
+
+    # A tool that already wrote its own verified reply (setup_project) is sent as-is.
+    if isinstance(result, dict) and isinstance(result.get("reply"), str) and result["reply"].strip():
+        await _send_reply(phone, result["reply"], tenant_id)
         return
 
     # Summarise the raw tool result into plain WhatsApp language — same established pattern as

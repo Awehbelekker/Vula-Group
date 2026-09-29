@@ -1798,6 +1798,13 @@ class CommerceAdminSkill(BaseSkill):
                 return await draft_letter(args, tid, ctx.get("phone") or "")
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
+            if name == "setup_project":
+                # Only ever reached from the owner's Confirm tap on a plan Vula showed them
+                # (vula/api/whatsapp.py::_maybe_project_setup) — never offered to the model.
+                if (ctx.get("caller_role") or "") not in ("owner", "manager", "admin") or not args.get("confirm"):
+                    return {"error": "Only the owner or a manager can set up a project."}
+                from vula.commerce.project_programme import apply_setup
+                return await apply_setup(tid, args)
             if name == "configure_call_sheet": return await self._configure_call_sheet(tid, args, ctx)
             if name == "view_call_sheet":     return await self._view_call_sheet(tid, ctx)
             if name == "update_call_sheet":   return await self._update_call_sheet(tid, args, ctx)
