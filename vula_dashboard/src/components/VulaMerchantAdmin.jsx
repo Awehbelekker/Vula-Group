@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
-import { SectionTabs, toast, confirmDialog, Skeleton } from './ui/index.jsx'
+import { SectionTabs, toast, confirmDialog, Skeleton, ErrorCard } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { MERCHANT_GROUPS } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
@@ -401,7 +401,7 @@ const HOME_CARD_LABELS = {
   checklist: 'Go-live checklist',
   attention: 'Needs attention',
   sales: 'Sales today & totals',
-  trend: 'Revenue — last 7 days',
+  trend: 'Revenue / money in — 7 days',
   jobcosting: 'Job costing (projects)',
   crosscheck: 'Cross-check & VAT',
   customers: 'Customer service',
@@ -508,14 +508,18 @@ function OverviewTab({ tenantId, onNavigate }) {
 
   const s = stats || {}
   const fmt = cents => `R${(Number(cents || 0) / 100).toLocaleString('en-ZA', { maximumFractionDigits: 0 })}`
-  const series = s.daily_revenue || []
-  const weekOrders = series.reduce((sum, d) => sum + (d.orders || 0), 0)
+  const orderSeries = s.daily_revenue || []
+  const weekOrders = orderSeries.reduce((sum, d) => sum + (d.orders || 0), 0)
+  // A shop that sells face to face (Off the Hook: card machine + EFT, hardly any online orders)
+  // sees its takings from the bank instead of R0 from online orders.
+  const bankLed = (s.total_orders || 0) < 5 && (s.bank_in_30d_cents || 0) > 0
+  const series = bankLed ? (s.daily_bank_in || []) : orderSeries
   const aov = s.total_orders ? s.total_revenue_cents / s.total_orders : 0
   // { section, subtab } pairs now that Orders/Invoices/Products live nested inside Sell/Money —
   // was a flat `tab` id before the IA overhaul (2026-07-22).
   const alerts = [
     { show: s.open_escalations > 0,     label: 'Customer waiting on you', value: s.open_escalations,   hint: (s.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), section: 'inbox', color: 'var(--danger)' },
-    { show: s.to_dispatch > 0,          label: 'To dispatch',      value: s.to_dispatch,                hint: 'orders ready to send', section: 'sell',  subtab: 'orders',   color: '#8b5cf6' },
+    { show: s.to_dispatch > 0,          label: 'To dispatch',      value: s.to_dispatch,                hint: 'orders ready to send', section: 'sell',  subtab: 'orders',   color: 'var(--info)' },
     { show: s.pending_payment > 0,      label: 'Awaiting payment', value: s.pending_payment,            hint: 'unpaid orders',        section: 'sell',  subtab: 'orders',   color: 'var(--warn)' },
     { show: s.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(s.invoice_overdue_cents), hint: 'chase these',          section: 'money', subtab: 'invoices', color: 'var(--danger)' },
     { show: s.low_stock_count > 0,      label: 'Low stock',        value: s.low_stock_count,            hint: 'items running out',    section: 'sell',  subtab: 'products', color: 'var(--danger)' },
@@ -523,14 +527,20 @@ function OverviewTab({ tenantId, onNavigate }) {
 
   const cards = {
     checklist: () => <GoLiveChecklist tenantId={tenantId} onNavigate={onNavigate} />,
-    sales: () => stats ? (
+    sales: () => !stats ? <ErrorCard what="sales figures" /> : bankLed ? (
       <div style={styles.statGrid}>
-        <StatCard label="Today's revenue" value={fmt(s.today_revenue_cents)} sub={`${s.today_orders} orders today`} accent="var(--accent, var(--accent))" />
+        <StatCard label="Money in — 7 days" value={fmt(s.bank_in_7d_cents)} sub="card + EFT, from your bank" accent="var(--accent)" />
+        <StatCard label="Money in — 30 days" value={fmt(s.bank_in_30d_cents)} sub={s.bank_in_last_date ? `bank lines up to ${s.bank_in_last_date}` : 'from your bank'} />
+        <StatCard label="Online orders" value={s.total_orders || 0} sub={`${fmt(s.total_revenue_cents)} through WhatsApp/web`} accent="var(--info)" />
+        <StatCard label="Invoices owed" value={fmt(s.invoice_outstanding_cents)} sub={s.invoice_overdue_cents ? `${fmt(s.invoice_overdue_cents)} overdue` : 'none overdue'} accent={s.invoice_overdue_cents ? 'var(--danger)' : 'var(--muted)'} />
+      </div>) : (
+      <div style={styles.statGrid}>
+        <StatCard label="Today's revenue" value={fmt(s.today_revenue_cents)} sub={`${s.today_orders} orders today`} accent="var(--accent)" />
         <StatCard label="Total revenue"   value={fmt(s.total_revenue_cents)} sub={`${s.total_orders} orders`} />
         <StatCard label="Avg order value" value={fmt(aov)}                   sub="per paid order" accent="var(--info)" />
-        <StatCard label="This week"       value={weekOrders}                 sub="orders (7 days)" accent="#8b5cf6" />
-      </div>) : <p style={styles.error}>Could not load sales figures.</p>,
-    trend: () => <TrendChart series={series} fmt={fmt} />,
+        <StatCard label="This week"       value={weekOrders}                 sub="orders (7 days)" accent="var(--accent-2)" />
+      </div>),
+    trend: () => <TrendChart series={series} fmt={fmt} title={bankLed ? 'Money in — last 7 days (bank)' : 'Revenue — last 7 days'} />,
     customers: () => <VulaCSMetrics tenantId={tenantId} />,
     jobcosting: () => <VulaJobCosting tenantId={tenantId} />,
     crosscheck: () => <VulaCrossCheck tenantId={tenantId} />,
@@ -597,13 +607,13 @@ function OverviewTab({ tenantId, onNavigate }) {
   )
 }
 
-function TrendChart({ series, fmt }) {
+function TrendChart({ series, fmt, title = 'Revenue — last 7 days' }) {
   if (!series.length) return null
   const max = Math.max(1, ...series.map(d => d.revenue_cents))
   const dayName = iso => new Date(iso).toLocaleDateString('en-ZA', { weekday: 'short' })
   return (
     <div style={ovS.chartCard}>
-      <p style={ovS.sectionLabel}>Revenue — last 7 days</p>
+      <p style={ovS.sectionLabel}>{title}</p>
       <div style={ovS.bars}>
         {series.map(d => (
           <div key={d.date} style={ovS.barCol} title={`${d.date}: ${fmt(d.revenue_cents)} · ${d.orders} orders`}>
@@ -625,7 +635,7 @@ const ovS = {
   bars: { display: 'flex', alignItems: 'flex-end', gap: 10, height: 120 },
   barCol: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, height: '100%' },
   barWrap: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' },
-  bar: { width: '100%', background: 'linear-gradient(180deg, var(--accent), #3d7a5f)', borderRadius: '4px 4px 0 0', minHeight: 2 },
+  bar: { width: '100%', background: 'linear-gradient(180deg, var(--accent), var(--accent-2))', borderRadius: '4px 4px 0 0', minHeight: 2 },
   barLabel: { fontSize: 11, color: 'var(--muted)' },
   chartFoot: { fontSize: 11, color: 'var(--faint)', margin: '10px 0 0', textAlign: 'right' },
   alertRow: { display: 'flex', gap: 10, flexWrap: 'wrap' },

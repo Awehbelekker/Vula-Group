@@ -3655,6 +3655,31 @@ async def admin_stats(tenant_id: str):
         series.append({"date": d, "revenue_cents": sum(o["total_cents"] for o in day_orders),
                        "orders": len(day_orders)})
 
+    # Money in from the bank (2026-09-29): Off the Hook sells face to face — 1 online order ever,
+    # 742 bank lines — so an orders-only Home showed R0. Card settlements and EFT deposits are its
+    # real takings. Sales-like credits only (not transfers, loans, refunds or set-aside lines).
+    bank_series, bank_in_7d, bank_in_30d, bank_last = [], 0, 0, None
+    try:
+        since = (today_d - _td(days=30)).isoformat()
+        rows = (db.table("commerce_bank_transactions")
+                .select("txn_date,amount_cents,category,match_status")
+                .eq("tenant_id", tenant_id).eq("direction", "in").gte("txn_date", since)
+                .limit(5000).execute().data or [])
+        rows = [r for r in rows if r.get("match_status") != "ignored"
+                and (r.get("category") or "") not in ("other_income", "transfer", "loan", "owner_contribution")]
+        by_day: dict = {}
+        for r in rows:
+            d = str(r.get("txn_date") or "")[:10]
+            by_day[d] = by_day.get(d, 0) + abs(int(r.get("amount_cents") or 0))
+        week = {(today_d - _td(days=i)).isoformat() for i in range(7)}
+        bank_in_7d = sum(v for d, v in by_day.items() if d in week)
+        bank_in_30d = sum(by_day.values())
+        bank_last = max(by_day) if by_day else None
+        bank_series = [{"date": (today_d - _td(days=i)).isoformat(),
+                        "revenue_cents": by_day.get((today_d - _td(days=i)).isoformat(), 0)} for i in range(6, -1, -1)]
+    except Exception as exc:
+        log.debug("bank money-in stats skipped for %s: %s", tenant_id, exc)
+
     try:
         low_stock = await service.get_low_stock_products(tenant_id, threshold=5)
         low_stock_count = len(low_stock)
@@ -3709,6 +3734,10 @@ async def admin_stats(tenant_id: str):
         "invoice_paid_month_cents": invoice_paid_month,
         "low_stock_count": low_stock_count,
         "daily_revenue": series,
+        "bank_in_7d_cents": bank_in_7d,
+        "bank_in_30d_cents": bank_in_30d,
+        "bank_in_last_date": bank_last,
+        "daily_bank_in": bank_series,
         "open_escalations": open_escalations,
         "oldest_escalation": oldest_escalation,
         "knowledge": knowledge,

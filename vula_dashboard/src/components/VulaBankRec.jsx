@@ -163,7 +163,7 @@ export default function VulaBankRec({ tenantId }) {
     <div style={{ color: C.text }}>
       <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0 2px" }}>🏦 Bank reconciliation</h4>
       <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>
-        Vula reads your weekly Capitec statement (and payment-confirmation emails) and matches deposits to invoices or orders paid by EFT (marks them paid), flagging the rest. No accounting software needed.
+        Vula reads your bank statements (and payment-confirmation emails) and matches deposits to invoices or orders paid by EFT (marks them paid), flagging the rest. No accounting software needed.
       </p>
 
       {/* Summary */}

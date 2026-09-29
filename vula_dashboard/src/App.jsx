@@ -102,6 +102,7 @@ export default function App() {
   const [masterZone, setMasterZone] = useState("platform");   // Platform Ops vs Vula's Business sidebar zone
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
+  const [tenantProfile, setTenantProfile] = useState(null); // what kind of business (tenants.tenant_profile)
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
   const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
@@ -186,8 +187,8 @@ export default function App() {
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
-      .then((d) => setTenantModules(d.modules || d.tenant?.modules || []))
-      .catch(() => setTenantModules([]));
+      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); })
+      .catch(() => { setTenantModules(null); setTenantProfile(null); });
   }, [user, role, tenantId, setMember]);
 
   // Real Inbox badge (P0.4): count of open escalations waiting on a human — polled per
@@ -267,7 +268,7 @@ export default function App() {
   if (role === "owner" || role === "staff") {
     const tenantName = brand?.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
     const groups = withInboxBadge(filterGroups(MERCHANT_GROUPS,
-      merchantVisible({ full, access, modules: tenantModules })), openEscalations);
+      merchantVisible({ full, access, modules: tenantModules, profile: tenantProfile })), openEscalations);
     return (
       <div>
         <VulaShell

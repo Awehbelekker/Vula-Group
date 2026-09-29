@@ -9,40 +9,44 @@ import { VULA_API } from "../lib/authFetch";
 const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
 export default function VulaRepHome({ tenantId, repPhone, onNavigate }) {
-  const [reminders, setReminders] = useState([]);
+  const [reminders, setReminders] = useState(null);   // null = still loading
   const [callSheet, setCallSheet] = useState(null);
 
   const load = useCallback(async () => {
     if (!tenantId || !repPhone) return;
     const rParams = new URLSearchParams({ created_by: repPhone, status: "open" });
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/reminders?${rParams}`)
-      .then((r) => r.json()).then((d) => setReminders(d.reminders || [])).catch(() => {});
+      .then((r) => r.json()).then((d) => setReminders(d.reminders || [])).catch(() => setReminders([]));
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/call-sheet?rep_phone=${encodeURIComponent(repPhone)}`)
       .then((r) => r.json()).then((d) => setCallSheet(d)).catch(() => {});
   }, [tenantId, repPhone]);
   useEffect(() => { load(); }, [load]);
 
-  const overdue = reminders.filter((r) => r.due_at && new Date(r.due_at) < new Date());
-  const upcoming = reminders.filter((r) => !r.due_at || new Date(r.due_at) >= new Date());
+  const list = reminders || [];
+  const overdue = list.filter((r) => r.due_at && new Date(r.due_at) < new Date());
+  const upcoming = list.filter((r) => !r.due_at || new Date(r.due_at) >= new Date());
 
-  const Card = ({ title, children, onClick }) => (
-    <div onClick={onClick} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
-      padding: 16, marginBottom: 14, cursor: onClick ? "pointer" : "default" }}>
-      <div style={{ fontWeight: 700, color: C.text, marginBottom: 8 }}>{title}</div>
-      {children}
-    </div>
-  );
+  // A real button when it goes somewhere (keyboard + screen reader reachable), a plain card otherwise.
+  const Card = ({ title, children, onClick }) => {
+    const style = { display: "block", width: "100%", textAlign: "left", font: "inherit", color: "inherit",
+      background: C.surface, border: `1px solid ${C.border}`, borderRadius: "var(--r-card)",
+      padding: 16, marginBottom: 14, cursor: onClick ? "pointer" : "default" };
+    const body = <><div style={{ fontWeight: 700, color: C.text, marginBottom: 8 }}>{title}</div>{children}</>;
+    return onClick ? <button type="button" onClick={onClick} style={style}>{body}</button> : <div style={style}>{body}</div>;
+  };
 
   return (
     <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>My Work</h1>
+      <h2 className="vula-display" style={{ fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: "0 0 4px" }}>Today</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Your own contacts, call sheet, reminders, and bookings — nothing tenant-wide.</p>
 
-      <Card title={`⏰ Reminders (${reminders.length} open)`} onClick={() => onNavigate?.("my-work", "rep-reminders")}>
+      <Card title={reminders === null ? "⏰ Reminders" : `⏰ Reminders (${list.length} open)`} onClick={() => onNavigate?.("my-work", "rep-reminders")}>
         {overdue.length > 0 && <div style={{ fontSize: 13, color: "var(--danger)", marginBottom: 4 }}>{overdue.length} overdue</div>}
-        {reminders.length === 0
+        {reminders === null
+          ? <div style={{ fontSize: 13, color: C.muted }}>Loading…</div>
+          : list.length === 0
           ? <div style={{ fontSize: 13, color: C.muted }}>Nothing due — nice.</div>
-          : reminders.slice(0, 3).map((r) => (
+          : list.slice(0, 3).map((r) => (
               <div key={r.id} style={{ fontSize: 13, color: C.text, padding: "3px 0" }}>• {r.text}</div>
             ))}
       </Card>
