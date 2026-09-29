@@ -279,34 +279,23 @@ async def test_agent_runner_passes_the_real_tenant_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_recall_passes_the_request_tenant_id(monkeypatch):
-    """core/skills/memory_recall.py echoes routing-hint text straight into a customer-facing
-    answer — confirm it's fenced to the requesting tenant, not global."""
+async def test_memory_recall_answers_through_reasoning_never_raw_context(monkeypatch):
+    """2026-09-29 (Judy, digg-demo): "Are you ok?" got back "Relevant knowledge: [conv_…]: …" —
+    memory_recall returned the search hits as the reply. It now hands the question (with the
+    request's tenant) to the reasoning skill, which writes the answer."""
     from core.skills.memory_recall import MemoryRecallSkill
-    from core.skills.base import SkillInput
+    from core.skills.base import SkillInput, SkillOutput
+    seen = {}
 
-    captured = {}
-
-    class _FakeAgent:
-        def get_routing_hints(self, tenant_id, goal, limit=5):
-            captured["tenant_id"] = tenant_id
-            return []
-
-    monkeypatch.setattr("core.memory.reflection.ReflectionAgent", lambda: _FakeAgent())
-
-    class _FakePipeline:
-        def __init__(self, tenant_id):
-            pass
-
-        async def query(self, question, top_k=5):
-            return []
-
-    monkeypatch.setattr("vula.ingestion.pipeline.VulaIngestionPipeline", _FakePipeline)
-
-    skill = MemoryRecallSkill()
-    await skill.run(SkillInput(question="remember what we discussed", tenant_id="digg"))
-
-    assert captured["tenant_id"] == "digg"
+    async def fake_run(self, inp):
+        seen["tenant_id"] = inp.tenant_id
+        return SkillOutput(answer="I'm here — what can I help with?", skill_name="reasoning",
+                           confidence=0.8)
+    monkeypatch.setattr("core.skills.reasoning.ReasoningSkill.run", fake_run)
+    out = await MemoryRecallSkill().run(SkillInput(question="Are you ok?", tenant_id="digg"))
+    assert seen["tenant_id"] == "digg"
+    assert out.answer == "I'm here — what can I help with?" and out.skill_name == "memory_recall"
+    assert "Relevant knowledge" not in out.answer
 
 
 def test_reflection_log_defaults_to_default_tenant_when_unset():

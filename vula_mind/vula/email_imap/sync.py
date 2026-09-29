@@ -770,7 +770,11 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         from vula.integrations.doc_filing import (file_document, match_project, project_examples,
                                                   lookup_learned_project)
         field_text = " ".join(str(v) for v in fields.values() if isinstance(v, (str, int, float)))
-        hint = f"{em.get('subject','')} {em.get('from','')} {summary or ''} {field_text} {em.get('body','')}"
+        # The attachment's own evidence only: its name, what's in it, and the email subject. Not
+        # the email body — a forwarded thread or signature mentions other jobs, and one
+        # "Atlantis" in a quoted reply filed Bo-Kaap council letters and an Echium parking
+        # drawing under ATLANTIS FOODS (2026-09-28). Nor the sender: Judy forwards everything.
+        hint = f"{em.get('subject','')} {att['name']} {summary or ''} {field_text}"
         # Learned rules (from past corrections) win — they're high-confidence by definition.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
         try:        # a project named in the document beats a learned rule (see whatsapp.py)
@@ -787,7 +791,9 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         # "high" string, which silently discarded a real (if less certain) project guess and
         # asked a human unnecessarily. Only a genuine absence of signal, or an unresolved tie
         # between multiple plausible projects (match.get("ambiguous")), should ask.
-        confident = bool(match and not match.get("ambiguous") and match.get("project"))
+        # Same bar as the WhatsApp path (>= 0.6): the register-substring fallback (0.5) is a guess.
+        confident = bool(match and not match.get("ambiguous") and match.get("project")
+                         and (match.get("confidence") or 0) >= 0.6)
         if not confident:
             # Same evidence as the WhatsApp path: the project named in the document, the bank
             # payment that settled it, the supplier's usual project (project_resolver).
