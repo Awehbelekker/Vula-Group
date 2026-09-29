@@ -631,6 +631,38 @@ function HealthPanel({ onError, onViewDetail }) {
           ))}
         </div>
       )}
+
+      <WeeklyDigestCard onError={onError} />
+    </div>
+  )
+}
+
+/* The Monday tenant-health email (vula/master_digest.py) — preview it, or send it now. */
+function WeeklyDigestCard({ onError }) {
+  const [text, setText] = useState(null)
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <h4 style={{ ...h4, margin: 0 }}>📬 Weekly digest</h4>
+        <span style={{ fontSize: 12, color: C.muted }}>Emailed to TEAM_EMAIL every Monday morning.</span>
+        <button style={{ ...miniBtn, marginLeft: 'auto' }} disabled={busy} onClick={async () => {
+          setBusy(true)
+          try { setText((await authFetch('/v1/master/digest')).text) } catch (e) { onError(e.message) }
+          setBusy(false)
+        }}>Preview</button>
+        <button style={miniBtn} disabled={busy} onClick={async () => {
+          setBusy(true)
+          try {
+            const r = await authFetch('/v1/master/digest/send', { method: 'POST' })
+            setMsg(r.sent ? 'Sent.' : `Not sent: ${r.reason}`)
+          } catch (e) { onError(e.message) }
+          setBusy(false)
+        }}>Send now</button>
+      </div>
+      {msg && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{msg}</div>}
+      {text && <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'inherit' }}>{text}</pre>}
     </div>
   )
 }
