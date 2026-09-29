@@ -22,7 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from vula.api.master_auth import require_master
+from vula.api.master_auth import require_auth, require_master
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["tenants"])
@@ -374,3 +374,52 @@ async def patch_tenant(tenant_id: str, body: TenantPatch,
     except Exception:
         pass
     return {"tenant": _public(get_config(tenant_id, fresh=True))}
+
+
+# ── Home: the cards each business chooses (2026-09-29) ────────────────────────
+# Ian: tenants had no way to "customise what they want to view". Home was built for online
+# orders, so a project business (DIGG) saw mostly zeros. The dashboard renders these ids in
+# this order (VulaMerchantAdmin OverviewTab); unknown ids are dropped, so an old saved layout
+# never breaks the page.
+HOME_CARDS = ("checklist", "attention", "sales", "trend", "jobcosting", "crosscheck",
+              "customers", "assistant")
+_HOME_DEFAULT_SHOP = ["checklist", "attention", "sales", "trend", "customers", "assistant"]
+_HOME_DEFAULT_PROJECTS = ["checklist", "attention", "jobcosting", "crosscheck", "assistant"]
+
+
+def home_default(tenant_id: str) -> list:
+    return list(_HOME_DEFAULT_PROJECTS if uses_projects(tenant_id) else _HOME_DEFAULT_SHOP)
+
+
+def _clean_cards(cards) -> list:
+    out = []
+    for c in cards or []:
+        if isinstance(c, str) and c in HOME_CARDS and c not in out:
+            out.append(c)
+    return out
+
+
+@router.get("/{tenant_id}/home", dependencies=[Depends(require_auth)])
+async def get_home_layout(tenant_id: str) -> dict:
+    saved = (get_config(tenant_id).get("home_layout") or {})
+    cards = _clean_cards(saved.get("cards") if isinstance(saved, dict) else None)
+    default = home_default(tenant_id)
+    return {"cards": cards or default, "default": default, "custom": bool(cards),
+            "available": list(HOME_CARDS)}
+
+
+class HomeLayoutIn(BaseModel):
+    cards: Optional[list] = None      # None or [] → back to the default
+
+
+@router.put("/{tenant_id}/home", dependencies=[Depends(require_auth)])
+async def put_home_layout(tenant_id: str, body: HomeLayoutIn) -> dict:
+    cards = _clean_cards(body.cards)
+    try:
+        (_client().table("vula_tenant_config")
+         .update({"home_layout": {"cards": cards} if cards else None, "updated_at": _now()})
+         .eq("tenant_id", tenant_id).execute())
+    except Exception as exc:
+        raise HTTPException(503, f"Could not save the Home layout (run migration 186?): {exc}")
+    _CACHE.pop(tenant_id, None)
+    return await get_home_layout(tenant_id)

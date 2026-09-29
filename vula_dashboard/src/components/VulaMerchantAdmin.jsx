@@ -53,6 +53,8 @@ import VulaReports from './VulaReports'
 import VulaOrderWorkflow from './VulaOrderWorkflow'
 import VulaClientOnboarding from './VulaClientOnboarding'
 import VulaCSMetrics from './VulaCSMetrics'
+import VulaJobCosting from './VulaJobCosting'
+import VulaCrossCheck from './VulaCrossCheck'
 import VulaQS from './VulaQS'
 import VulaQSPro from './VulaQSPro'
 import VulaTakeoff from './VulaTakeoff'
@@ -390,9 +392,60 @@ function GoLiveChecklist({ tenantId, onNavigate }) {
   )
 }
 
+// Home cards (2026-09-29, Ian: tenants had no way to "customise what they want to view").
+// Each business picks which cards it sees and in what order — GET/PUT /v1/tenants/{t}/home,
+// default by business type (a project business gets job costing, a shop gets sales).
+const HOME_CARD_LABELS = {
+  checklist: 'Go-live checklist',
+  attention: 'Needs attention',
+  sales: 'Sales today & totals',
+  trend: 'Revenue — last 7 days',
+  jobcosting: 'Job costing (projects)',
+  crosscheck: 'Cross-check & VAT',
+  customers: 'Customer service',
+  assistant: 'Your assistant & knowledge',
+}
+
+function HomeCustomiser({ layout, onSave, onCancel }) {
+  const [cards, setCards] = useState(layout.cards)
+  const hidden = (layout.available || []).filter(c => !cards.includes(c))
+  const move = (i, d) => {
+    const next = [...cards]; const j = i + d
+    if (j < 0 || j >= next.length) return
+    ;[next[i], next[j]] = [next[j], next[i]]; setCards(next)
+  }
+  const btn = { border: '1px solid #DDD8CE', background: '#fff', borderRadius: 6, padding: '3px 9px', cursor: 'pointer', fontSize: 12 }
+  return (
+    <div style={{ ...ovS.chartCard, marginTop: 0, marginBottom: 16 }}>
+      <p style={ovS.sectionLabel}>Customise Home</p>
+      <p style={{ fontSize: 12.5, color: '#8A8680', margin: '0 0 10px' }}>Choose the cards your business sees, in your order. Everyone on your team sees the same Home.</p>
+      {cards.map((c, i) => (
+        <div key={c} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #ECE8DF', fontSize: 13 }}>
+          <span style={{ flex: 1 }}>{HOME_CARD_LABELS[c] || c}</span>
+          <button style={btn} onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move up">↑</button>
+          <button style={btn} onClick={() => move(i, 1)} disabled={i === cards.length - 1} aria-label="Move down">↓</button>
+          <button style={btn} onClick={() => setCards(cards.filter(x => x !== c))}>Hide</button>
+        </div>))}
+      {hidden.length > 0 && (
+        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8A8680' }}>Add:</span>
+          {hidden.map(c => <button key={c} style={btn} onClick={() => setCards([...cards, c])}>+ {HOME_CARD_LABELS[c] || c}</button>)}
+        </div>)}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+        <button onClick={() => onSave(cards)} style={{ ...btn, background: 'var(--accent)', color: '#fff', border: 'none', padding: '7px 14px' }}>Save</button>
+        <button onClick={() => onSave([])} style={{ ...btn, padding: '7px 14px' }}>Reset to default</button>
+        <button onClick={onCancel} style={{ ...btn, padding: '7px 14px' }}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 function OverviewTab({ tenantId, onNavigate }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [layout, setLayout] = useState(null)
+  const [editing, setEditing] = useState(false)
+  const [saveErr, setSaveErr] = useState('')
 
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/stats`)
@@ -400,62 +453,76 @@ function OverviewTab({ tenantId, onNavigate }) {
       .then(setStats)
       .catch(() => {})
       .finally(() => setLoading(false))
+    fetch(`${VULA_API}/v1/tenants/${tenantId}/home`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setLayout(d && Array.isArray(d.cards) ? d : null))
+      .catch(() => setLayout(null))
   }, [tenantId])
 
-  if (loading) return <p style={styles.loading}>Loading…</p>
-  if (!stats) return <p style={styles.error}>Could not load stats.</p>
+  const saveLayout = async (cards) => {
+    setSaveErr('')
+    try {
+      const r = await fetch(`${VULA_API}/v1/tenants/${tenantId}/home`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cards }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { setSaveErr(d.detail || 'Could not save.'); return }
+      setLayout(d); setEditing(false)
+    } catch { setSaveErr('Could not save.') }
+  }
 
+  if (loading) return <p style={styles.loading}>Loading…</p>
+
+  const s = stats || {}
   const fmt = cents => `R${(Number(cents || 0) / 100).toLocaleString('en-ZA', { maximumFractionDigits: 0 })}`
-  const series = stats.daily_revenue || []
-  const weekOrders = series.reduce((s, d) => s + (d.orders || 0), 0)
-  const aov = stats.total_orders ? stats.total_revenue_cents / stats.total_orders : 0
+  const series = s.daily_revenue || []
+  const weekOrders = series.reduce((sum, d) => sum + (d.orders || 0), 0)
+  const aov = s.total_orders ? s.total_revenue_cents / s.total_orders : 0
   // { section, subtab } pairs now that Orders/Invoices/Products live nested inside Sell/Money —
   // was a flat `tab` id before the IA overhaul (2026-07-22).
   const alerts = [
-    { show: stats.open_escalations > 0,     label: 'Customer waiting on you', value: stats.open_escalations,   hint: (stats.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), section: 'inbox', color: '#C0392B' },
-    { show: stats.to_dispatch > 0,          label: 'To dispatch',      value: stats.to_dispatch,                hint: 'orders ready to send', section: 'sell',  subtab: 'orders',   color: '#8b5cf6' },
-    { show: stats.pending_payment > 0,      label: 'Awaiting payment', value: stats.pending_payment,            hint: 'unpaid orders',        section: 'sell',  subtab: 'orders',   color: '#f59e0b' },
-    { show: stats.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(stats.invoice_overdue_cents), hint: 'chase these',          section: 'money', subtab: 'invoices', color: '#C0392B' },
-    { show: stats.low_stock_count > 0,      label: 'Low stock',        value: stats.low_stock_count,            hint: 'items running out',    section: 'sell',  subtab: 'products', color: '#C0392B' },
+    { show: s.open_escalations > 0,     label: 'Customer waiting on you', value: s.open_escalations,   hint: (s.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), section: 'inbox', color: '#C0392B' },
+    { show: s.to_dispatch > 0,          label: 'To dispatch',      value: s.to_dispatch,                hint: 'orders ready to send', section: 'sell',  subtab: 'orders',   color: '#8b5cf6' },
+    { show: s.pending_payment > 0,      label: 'Awaiting payment', value: s.pending_payment,            hint: 'unpaid orders',        section: 'sell',  subtab: 'orders',   color: '#f59e0b' },
+    { show: s.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(s.invoice_overdue_cents), hint: 'chase these',          section: 'money', subtab: 'invoices', color: '#C0392B' },
+    { show: s.low_stock_count > 0,      label: 'Low stock',        value: s.low_stock_count,            hint: 'items running out',    section: 'sell',  subtab: 'products', color: '#C0392B' },
   ].filter(a => a.show)
 
-  return (
-    <div>
-      <GoLiveChecklist tenantId={tenantId} onNavigate={onNavigate} />
+  const cards = {
+    checklist: () => <GoLiveChecklist tenantId={tenantId} onNavigate={onNavigate} />,
+    sales: () => stats ? (
       <div style={styles.statGrid}>
-        <StatCard label="Today's revenue" value={fmt(stats.today_revenue_cents)} sub={`${stats.today_orders} orders today`} accent="var(--accent, var(--accent))" />
-        <StatCard label="Total revenue"   value={fmt(stats.total_revenue_cents)} sub={`${stats.total_orders} orders`} />
-        <StatCard label="Avg order value" value={fmt(aov)}                        sub="per paid order" accent="#2B5797" />
-        <StatCard label="This week"       value={weekOrders}                      sub="orders (7 days)" accent="#8b5cf6" />
-      </div>
-
-      <TrendChart series={series} fmt={fmt} />
-
-      <VulaCSMetrics tenantId={tenantId} />
-
-      {alerts.length > 0 ? (
-        <div style={{ marginTop: 18 }}>
-          <p style={ovS.sectionLabel}>Needs attention</p>
-          <div style={ovS.alertRow}>
-            {alerts.map(a => (
-              <button key={a.label} onClick={() => onNavigate && onNavigate(a.section, a.subtab)} style={ovS.alertCard}>
-                <span style={{ ...ovS.alertValue, color: a.color }}>{a.value}</span>
-                <span style={ovS.alertLabel}>{a.label}</span>
-                <span style={ovS.alertHint}>{a.hint} →</span>
-              </button>
-            ))}
-          </div>
+        <StatCard label="Today's revenue" value={fmt(s.today_revenue_cents)} sub={`${s.today_orders} orders today`} accent="var(--accent, var(--accent))" />
+        <StatCard label="Total revenue"   value={fmt(s.total_revenue_cents)} sub={`${s.total_orders} orders`} />
+        <StatCard label="Avg order value" value={fmt(aov)}                   sub="per paid order" accent="#2B5797" />
+        <StatCard label="This week"       value={weekOrders}                 sub="orders (7 days)" accent="#8b5cf6" />
+      </div>) : <p style={styles.error}>Could not load sales figures.</p>,
+    trend: () => <TrendChart series={series} fmt={fmt} />,
+    customers: () => <VulaCSMetrics tenantId={tenantId} />,
+    jobcosting: () => <VulaJobCosting tenantId={tenantId} />,
+    crosscheck: () => <VulaCrossCheck tenantId={tenantId} />,
+    attention: () => alerts.length > 0 ? (
+      <div style={{ marginTop: 18 }}>
+        <p style={ovS.sectionLabel}>Needs attention</p>
+        <div style={ovS.alertRow}>
+          {alerts.map(a => (
+            <button key={a.label} onClick={() => onNavigate && onNavigate(a.section, a.subtab)} style={ovS.alertCard}>
+              <span style={{ ...ovS.alertValue, color: a.color }}>{a.value}</span>
+              <span style={ovS.alertLabel}>{a.label}</span>
+              <span style={ovS.alertHint}>{a.hint} →</span>
+            </button>
+          ))}
         </div>
-      ) : (
-        <p style={{ ...ovS.sectionLabel, marginTop: 18 }}>✓ All caught up — nothing needs attention right now.</p>
-      )}
-
-      {/* Glass-box AI + knowledge — what the assistant did and knows (UI overhaul P3) */}
+      </div>
+    ) : (
+      <p style={{ ...ovS.sectionLabel, marginTop: 18 }}>✓ All caught up — nothing needs attention right now.</p>
+    ),
+    // Glass-box AI + knowledge — what the assistant did and knows (UI overhaul P3)
+    assistant: () => (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14, marginTop: 18 }}>
-        {(stats.agent_recent || []).length > 0 && (
+        {(s.agent_recent || []).length > 0 && (
           <div style={ovS.chartCard}>
             <p style={ovS.sectionLabel}>🧠 Your assistant, recently <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ float: 'right', border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>Watch it work →</button></p>
-            {(stats.agent_recent || []).map((a, i) => (
+            {(s.agent_recent || []).map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid #ECE8DF', alignItems: 'center' }}>
                 <span style={{ fontFamily: 'monospace', fontSize: 11.5, color: 'var(--accent)' }}>{a.tool}</span>
                 <span style={{ marginLeft: 'auto', color: '#8A8680', fontSize: 11 }}>{String(a.at || '').slice(11, 16)}</span>
@@ -463,17 +530,32 @@ function OverviewTab({ tenantId, onNavigate }) {
             ))}
           </div>
         )}
-        {stats.knowledge && (stats.knowledge.learned_answers > 0 || stats.knowledge.taught > 0) && (
+        {s.knowledge && (s.knowledge.learned_answers > 0 || s.knowledge.taught > 0) && (
           <div style={ovS.chartCard}>
             <p style={ovS.sectionLabel}>📚 Knowledge pulling through</p>
             <div style={{ display: 'flex', gap: 18, fontSize: 13 }}>
-              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{stats.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>learned answers</div></div>
-              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{stats.knowledge.taught}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>taught by you</div></div>
+              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>learned answers</div></div>
+              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.taught}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>taught by you</div></div>
             </div>
             <p style={{ fontSize: 11.5, color: '#8A8680', margin: '10px 0 0' }}>Everything the assistant knows is visible and editable in the <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11.5, padding: 0, fontWeight: 600 }}>Agent tab</button>.</p>
           </div>
         )}
       </div>
+    ),
+  }
+  // No saved layout reachable (older backend, network) → the Home as it always was.
+  const order = (layout?.cards || ['checklist', 'sales', 'trend', 'customers', 'attention', 'assistant'])
+    .filter(c => cards[c])
+
+  return (
+    <div>
+      {layout && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          {!editing && <button onClick={() => setEditing(true)} style={{ border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12.5, cursor: 'pointer', fontWeight: 600 }}>⚙ Customise Home</button>}
+        </div>)}
+      {editing && layout && <HomeCustomiser layout={layout} onSave={saveLayout} onCancel={() => setEditing(false)} />}
+      {saveErr && <p style={styles.error}>{saveErr}</p>}
+      {order.map(c => <div key={c}>{cards[c]()}</div>)}
     </div>
   )
 }
