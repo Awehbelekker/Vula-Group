@@ -2104,7 +2104,7 @@ class CommerceAssistantSkill(BaseSkill):
         )
 
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="commerce_assistant")
         try:
             resp = await litellm.acompletion(
                 model=model,
@@ -2209,7 +2209,7 @@ class CommerceAssistantSkill(BaseSkill):
     async def _synthesize_research_answer(self, topic: str, grounding: str, source: str) -> Dict[str, Any]:
         import litellm
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="commerce_assistant")
         try:
             resp = await litellm.acompletion(
                 model=model, temperature=0.3, max_tokens=250, api_key=api_key, api_base=api_base,
@@ -2659,7 +2659,7 @@ class CommerceAssistantSkill(BaseSkill):
         import litellm
 
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="commerce_assistant")
 
         catalog = ""
         if not ctx.get("booking_focused"):

@@ -1529,7 +1529,7 @@ class CommerceAdminSkill(BaseSkill):
         # and defaults to None so every existing direct-call test keeps working unchanged.
         import litellm
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="commerce_admin")
         # The admin agent has a rich toolset with nested arguments (invoices, subscriptions). Small
         # local models emit malformed tool args, so prefer the cloud model for reliable structured
         # tool-calling. Low volume (owner-only) → cost is fine. Falls back to local if no cloud key.
@@ -2906,7 +2906,7 @@ class CommerceAdminSkill(BaseSkill):
         try:
             import litellm
             litellm.drop_params = True
-            model, api_key, api_base = await resolve_generation_route()
+            model, api_key, api_base = await resolve_generation_route(task_type="commerce_admin")
             resp = await litellm.acompletion(
                 model=model, temperature=0.1, max_tokens=500, api_key=api_key, api_base=api_base,
                 messages=[
@@ -3293,7 +3293,7 @@ class CommerceAdminSkill(BaseSkill):
             import litellm
             from core.llm_router import resolve_generation_route
             litellm.drop_params = True
-            model, api_key, api_base = await resolve_generation_route()
+            model, api_key, api_base = await resolve_generation_route(task_type="commerce_admin")
             system = (
                 "You are a competitive-intelligence researcher. Using ONLY the web results "
                 "given, produce a short brief (under 300 words) with three sections: "
@@ -3572,7 +3572,7 @@ class CommerceAdminSkill(BaseSkill):
             import json
             import litellm
             litellm.drop_params = True
-            model, api_key, api_base = await resolve_generation_route()
+            model, api_key, api_base = await resolve_generation_route(task_type="commerce_admin")
             resp = await litellm.acompletion(
                 model=model, temperature=0.4, max_tokens=900, api_key=api_key, api_base=api_base,
                 messages=[

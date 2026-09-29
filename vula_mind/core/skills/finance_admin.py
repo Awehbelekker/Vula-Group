@@ -222,7 +222,7 @@ class FinanceAdminSkill(BaseSkill):
         from config import settings
         from core.llm_router import escalate_to_cloud, looks_unreliable, compute_confidence
         litellm.drop_params = True
-        route = await resolve_generation_route()
+        route = await resolve_generation_route(task_type="finance_admin")
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system(lang)}]
         if history:
             messages.append({"role": "user", "content": f"(Conversation so far)\n{history}"})

@@ -126,7 +126,7 @@ class WebSearchSkill(BaseSkill):
             from core.llm_router import resolve_generation_route
             from core.prompt_safety import fence, UNTRUSTED_CONTENT_RULE
             litellm.drop_params = True
-            model, api_key, api_base = await resolve_generation_route()
+            model, api_key, api_base = await resolve_generation_route(task_type="web_search")
 
             context_block = "\n\n---\n\n".join(contexts)[:6000]
             # Price/product research gets a fuller, structured breakdown.

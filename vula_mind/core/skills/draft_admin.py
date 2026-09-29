@@ -302,7 +302,7 @@ class DraftAdminSkill(BaseSkill):
         import litellm
         from config import settings
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="draft_admin")
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system()}]
         if history:
             messages.append({"role": "user", "content": f"(Conversation so far)\n{history}"})
