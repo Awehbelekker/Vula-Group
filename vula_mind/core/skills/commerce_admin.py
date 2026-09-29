@@ -1172,17 +1172,12 @@ def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
     if not phone:
         return None
     try:
-        digits = re.sub(r"\D", "", phone)
-        target = "27" + digits[1:] if digits.startswith("0") else digits
-        rows = (service._client().table("vula_team_members").select("whatsapp,role,access")
-                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
-        for r in rows:
-            d = re.sub(r"\D", "", r.get("whatsapp") or "")
-            d = "27" + d[1:] if d.startswith("0") else d
-            if d and d == target:
-                if (r.get("role") or "").lower() in _FULL_ACCESS_ROLES:
-                    return None
-                return list(r.get("access") or []) or None
+        from vula import team_index
+        r = team_index.member_for_phone(tenant_id, phone)
+        if r:
+            if (r.get("role") or "").lower() in _FULL_ACCESS_ROLES:
+                return None
+            return list(r.get("access") or []) or None
     except Exception as exc:
         logger.debug("member access lookup skipped: %s", exc)
     return None

@@ -812,12 +812,8 @@ def _caller_identity(tenant_id: str, phone: str) -> tuple[Optional[str], Optiona
     caller treats as "ordinary customer" — exactly the behaviour before this existed.
     """
     try:
-        from vula.commerce import service as commerce_service
-        target = _digits_za(phone)
-        rows = (commerce_service._client().table("vula_team_members")
-                .select("name,whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
-                .execute().data or [])
-        match = next((r for r in rows if _digits_za(r.get("whatsapp") or "") == target), None)
+        from vula import team_index
+        match = team_index.member_for_phone(tenant_id, phone)
         if match:
             return match.get("name"), match.get("role")
     except Exception as exc:
@@ -6494,10 +6490,8 @@ def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
 
     target = _digits(phone)
     try:
-        from vula.commerce import service as commerce_service
-        rows = (commerce_service._client().table("vula_team_members")
-                .select("whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
-                .execute().data or [])
+        from vula import team_index
+        rows = team_index.active_members(tenant_id)
         if rows:
             return any(_digits(r.get("whatsapp") or "") == target
                        and (r.get("role") or "") in _ADMIN_AGENT_ROLES for r in rows)
@@ -6797,16 +6791,10 @@ async def _sender_is_sales_rep(phone: str, tenant_id: str) -> bool:
     awareness at all, so a rep captioning a photo "log as meeting" fell through to generic
     document filing instead of reaching commerce_admin/log_meeting."""
     try:
-        from vula.commerce import service as _commerce_service
-
-        def _digits(p: str) -> str:
-            n = "".join(ch for ch in (p or "") if ch.isdigit())
-            return "27" + n[1:] if n.startswith("0") else n
-        target = _digits(phone)
-        rep_rows = (_commerce_service._client().table("vula_team_members")
-                   .select("whatsapp").eq("tenant_id", tenant_id).eq("role", "sales_rep")
-                   .eq("active", True).execute().data or [])
-        return any(_digits(r.get("whatsapp") or "") == target for r in rep_rows)
+        from vula import team_index
+        target = team_index.digits_za(phone)
+        return any(r.get("role") == "sales_rep" and team_index.digits_za(r.get("whatsapp") or "") == target
+                   for r in team_index.active_members(tenant_id))
     except Exception as exc:
         logger.debug("sales_rep routing check skipped: %s", exc)
         return False

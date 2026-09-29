@@ -610,8 +610,9 @@ async def test_sales_rep_gate_still_runs_when_nothing_pending():
     from vula.api.whatsapp import _handle_message
 
     mock_table = MagicMock()
-    mock_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = \
-        MagicMock(data=[{"whatsapp": "27645755210"}])
+    # One shared team read (vula.team_index): tenant + active, role checked in Python.
+    mock_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = \
+        MagicMock(data=[{"whatsapp": "27645755210", "role": "sales_rep"}])
     mock_db = MagicMock()
     mock_db.table.return_value = mock_table
 

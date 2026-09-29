@@ -1606,9 +1606,10 @@ async def admin_sort_projects_apply(tenant_id: str, request: Request):
 @router.get("/{tenant_id}/admin/documents/learn")
 async def admin_learn_status(tenant_id: str):
     """What the price book holds, and the last "Learn from history" run's progress."""
+    import asyncio
     from vula.commerce import price_book, reread
     try:
-        book = price_book.summary(tenant_id)
+        book = await asyncio.to_thread(price_book.summary, tenant_id)
     except Exception as exc:
         log.debug("price book summary failed: %s", exc)
         book = {}
@@ -3403,6 +3404,7 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
     categories. {file_base64, filename, preview?: bool, project_map?: {sheet label: project}}.
     preview=true only reads it and suggests how its project labels map onto this business's
     projects; the import saves the lines (owner-allocated) and learns the allocations."""
+    import asyncio
     import base64
     import tempfile
     from pathlib import Path
@@ -3423,10 +3425,11 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
         path = Path(tmp) / name
         path.write_bytes(data)
         if body.get("preview"):
-            return statement_sheet.preview(tenant_id, path)
-        result = statement_sheet.import_sheet(tenant_id, path, body.get("project_map") or {},
-                                              source_file=name,
-                                              replace_existing=bool(body.get("replace_existing")))
+            return await asyncio.to_thread(statement_sheet.preview, tenant_id, path)
+        # Off the event loop: the import writes every line and re-applies allocation rules.
+        result = await asyncio.to_thread(
+            statement_sheet.import_sheet, tenant_id, path, body.get("project_map") or {},
+            source_file=name, replace_existing=bool(body.get("replace_existing")))
     if not result["parsed"]:
         raise HTTPException(status_code=400, detail="No statement lines found — the sheet needs "
                             "Date, Description and Money In/Money Out (or Amount) columns.")
@@ -3437,9 +3440,11 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
 async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
     """Job costing from the bank: per project received / cost by trade / cost-plus fee target /
     overhead share / profit, plus the business's overheads (vula/commerce/job_costing.py)."""
+    import asyncio
     from vula.commerce import job_costing
-    res = job_costing.costing(tenant_id, since=since)
-    res["fee_default_pct"] = job_costing.terms(tenant_id)["*"]
+    # Off the event loop: costing pages through every bank line (PR B, 2026-09-29).
+    res = await asyncio.to_thread(job_costing.costing, tenant_id, since=since)
+    res["fee_default_pct"] = (await asyncio.to_thread(job_costing.terms, tenant_id))["*"]
     return res
 
 
@@ -3463,16 +3468,18 @@ async def admin_project_terms(tenant_id: str, body: ProjectTermsIn, request: Req
 @router.get("/{tenant_id}/admin/projects/price-advice")
 async def admin_price_advice(tenant_id: str, item: str, quantity: Optional[float] = None,
                              unit: Optional[str] = None, project: Optional[str] = None):
+    import asyncio
     from vula.commerce import job_costing
-    return job_costing.price_advice(tenant_id, item, quantity, unit, project)
+    return await asyncio.to_thread(job_costing.price_advice, tenant_id, item, quantity, unit, project)
 
 
 @router.get("/{tenant_id}/admin/crosscheck")
 async def admin_cross_check(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
     """Documents ↔ books ↔ bank: bills not in the books, bills not paid (with the likely bank
     payment), payments with no document, unpaid sales invoices, unexplained money in."""
+    import asyncio
     from vula.commerce import cross_check
-    rep = cross_check.report(tenant_id, since, until)
+    rep = await asyncio.to_thread(cross_check.report, tenant_id, since, until)
     rep["text"] = cross_check.summary_text(rep)
     return rep
 
@@ -3490,8 +3497,9 @@ async def admin_book_unbooked(tenant_id: str, request: Request):
 async def admin_vat_scenario(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
     """VAT in vs out per month from real tax invoices — and, when not registered, what it would
     be if the business were, plus 12-month sales against the registration threshold."""
+    import asyncio
     from vula.commerce import cross_check
-    return cross_check.vat(tenant_id, since, until)
+    return await asyncio.to_thread(cross_check.vat, tenant_id, since, until)
 
 
 @router.get("/{tenant_id}/admin/reports/labour")
