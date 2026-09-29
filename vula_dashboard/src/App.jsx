@@ -24,6 +24,7 @@ import VulaReports from "./components/VulaReports";
 import VulaPayments from "./components/VulaPayments";
 import VulaMasterPanel from "./components/VulaMasterPanel";
 import { VULA_API, authFetch } from "./lib/authFetch";
+import { promptDialog } from "./components/ui/index.jsx";
 import VulaSubscriptions from "./components/VulaSubscriptions";
 import VulaTraining from "./components/VulaTraining";
 import VulaFieldOps from "./components/VulaFieldOps";
@@ -371,14 +372,16 @@ export default function App() {
       >
         <div style={{ padding: "4px 0 24px" }}>
           <ActiveComponent tenantId={effectiveTenantId} tenantName={effectiveTenantId}
-            onOpenTenant={(tid) => {
-              // Optional, non-blocking — a support/reproduction reason for the audit trail
-              // (vula_admin_audit + the tenant's own vula_merchant_audit). Cancelling the
-              // prompt still opens the tenant; this records WHY, it never gates the view
-              // itself (that's already granted via is_tenant_member for any master).
-              const reason = (window.prompt(
-                "Optional — why are you opening this tenant's workspace? (e.g. \"support ticket #123\")",
-                "") || "").trim();
+            onOpenTenant={async (tid) => {
+              // An optional support reason for the audit trail (vula_admin_audit + the tenant's
+              // own vula_merchant_audit); blank is fine. 2026-09-29: an in-app dialog instead of
+              // window.prompt, and Cancel now really cancels (it used to open the tenant anyway).
+              const name = masterTenants.find((t) => t.id === tid)?.label || tid;
+              const answer = await promptDialog(
+                `You'll see ${name}'s workspace as its owner does. Anything you change is real and is recorded.\n\nWhy are you opening it? (optional — e.g. "support ticket #123")`,
+                { title: `Open ${name}`, confirmLabel: "Open workspace" });
+              if (answer === null) return;
+              const reason = answer.trim();
               setImpersonateReason(reason);
               authFetch(`/v1/master/tenants/${tid}/impersonate`, {
                 method: "POST",
