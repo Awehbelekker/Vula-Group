@@ -725,6 +725,37 @@ async def _daily_commerce_jobs_loop() -> None:
         await _asyncio.sleep(86400)  # daily
 
 
+async def _programme_briefs_loop() -> None:
+    """06:00 SAST every day: each site person gets today's programme tasks per room, and the
+    owner the day's work, overdue items, cost against the signed baseline and variations needing
+    a VO (vula/commerce/project_programme.py). Checks every 10 minutes; each send carries a
+    per-day idem key, so a restart or a second worker never sends twice."""
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    await _asyncio.sleep(200)
+    done: set = set()                          # (tenant, day) already briefed by this worker
+    while True:
+        try:
+            from vula.commerce import project_programme as _pp
+            now = _dt.now(_pp.SAST)
+            if 6 <= now.hour < 9:
+                from vula.api import tenants as _t
+                rows = _t._client().table("vula_tenant_config").select("tenant_id").execute().data or []
+                for r in rows:
+                    tid = r.get("tenant_id")
+                    if (not tid or (tid, now.date()) in done or not _t.is_active(tid)
+                            or not _t.tenant_profile(tid).get("uses_projects")):
+                        continue
+                    try:
+                        await _pp.morning_briefs(tid)
+                        done.add((tid, now.date()))
+                    except Exception as exc:
+                        log.warning("programme briefs failed for %s: %s", tid, exc)
+        except Exception as exc:
+            log.warning("programme briefs loop error: %s", exc)
+        await _asyncio.sleep(600)
+
+
 async def _hourly_customer_jobs_loop() -> None:
     """Hourly, per tenant: WhatsApp reminders for bookings in the next 24h (send_due_reminders
     existed but only ran if something called POST /v1/bookings/{t}/jobs/reminders — nothing
@@ -1313,6 +1344,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_recurring_bills_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))

@@ -1453,6 +1453,26 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         await _send_reply(phone, "You have read-only access. Contact your admin to upgrade.", tenant_id)
         return
 
+    # ── "add staff <name> <number> <trade>" — the owner gives a site person's WhatsApp number so
+    # they get their programme tasks each morning (vula/commerce/project_programme.py).
+    try:
+        from vula.commerce import project_programme as _pp
+        _staff = _pp.parse_add_staff(text)
+        if _staff and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin"):
+            _proj = _pp.active_programme_project(tenant_id)
+            if not _proj:
+                await _send_reply(phone, "There's no programme loaded yet — send the programme "
+                                  "(PDF or Excel) filed to the project first.", tenant_id=tenant_id)
+                return
+            got = _pp.add_site_staff(tenant_id, _proj, _staff["name"], _staff["phone"], _staff["trade"])
+            await _send_reply(
+                phone, f"✅ Added *{got['name']}* ({got['phone']}) to *{_proj}* — "
+                f"{got['tasks']} programme task(s) are theirs, sent to them each morning at 06:00.",
+                tenant_id=tenant_id)
+            return
+    except Exception as exc:
+        logger.warning("add staff failed: %s", exc)
+
     # ── Pending document filing: if a doc is awaiting a project, treat this
     # message as the answer (file it + attach to ClickUp), else fall through.
     try:

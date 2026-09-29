@@ -3448,6 +3448,63 @@ async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
     return res
 
 
+class ProjectBaselineIn(BaseModel):
+    project: str
+    document: str           # filed document id, KB doc id, or part of its filename
+
+
+@router.post("/{tenant_id}/admin/projects/baseline")
+async def admin_project_baseline(tenant_id: str, body: ProjectBaselineIn, request: Request):
+    """Make a signed estimate the project's only cost baseline (locked; later estimates never
+    replace it). Owner/manager. Read back before it's reported."""
+    import asyncio
+    from vula.commerce import project_programme
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can set the baseline.")
+    try:
+        return await asyncio.to_thread(project_programme.set_baseline, tenant_id, body.project, body.document)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/projects/programme")
+async def admin_project_programme(tenant_id: str, body: ProjectBaselineIn, request: Request):
+    """Read a filed programme / Gantt (PDF, Excel, CSV) into the project's daily tasks."""
+    from vula.commerce import project_programme
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can load the programme.")
+    doc = project_programme.find_document(tenant_id, body.document)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"No filed document matches '{body.document}'.")
+    return await project_programme.import_and_report(tenant_id, body.project, doc, notify=False)
+
+
+class SiteStaffIn(BaseModel):
+    project: str
+    name: str
+    phone: str
+    trade: str = ""
+
+
+@router.post("/{tenant_id}/admin/projects/site-staff")
+async def admin_project_site_staff(tenant_id: str, body: SiteStaffIn, request: Request):
+    import asyncio
+    from vula.commerce import project_programme
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can add site staff.")
+    return await asyncio.to_thread(project_programme.add_site_staff, tenant_id, body.project,
+                                   body.name, body.phone, body.trade)
+
+
+@router.get("/{tenant_id}/admin/projects/today")
+async def admin_project_today(tenant_id: str, day: Optional[str] = None):
+    """Preview this morning's messages (staff tasks per room, the owner's summary) — nothing sent."""
+    from datetime import date as _date
+    from vula.commerce import project_programme
+    d = _date.fromisoformat(day) if day else None
+    return await project_programme.morning_briefs(tenant_id, d, send=False)
+
+
 class ProjectTermsIn(BaseModel):
     project: str = "*"
     fee_pct: float

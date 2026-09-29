@@ -2341,7 +2341,7 @@ def canonical_project(tenant_id: str, name: Optional[str]) -> Optional[str]:
 
 def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
                        title: Optional[str] = None, source_job: Optional[str] = None,
-                       sections: Optional[list] = None) -> None:
+                       sections: Optional[list] = None, force: bool = False) -> None:
     """Persist a project's BoQ/contract value — same upsert shape as the manual dashboard
     endpoint (vula/api/projects.py's set_project_boq), reused here so a real filed BoQ document
     can populate it automatically instead of only via manual dashboard entry. 2026-08-12: a real
@@ -2362,6 +2362,19 @@ def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
     }
     if sections is not None:
         row["sections"] = sections
+    # A signed baseline (migration 188, project_programme.set_baseline) is the only document the
+    # project's costs are managed against — a later estimate or BOQ filed for the same project
+    # never replaces it (2026-09-29, Judy: "input data only, that one document").
+    if not force:
+        try:
+            cur = (_client().table("vula_project_boq").select("baseline_locked")
+                   .eq("tenant_id", tenant_id).eq("project", project).limit(1).execute().data or [])
+            if isinstance(cur, list) and cur and isinstance(cur[0], dict) \
+                    and cur[0].get("baseline_locked") is True:
+                logger.info("BOQ for %s/%s is a locked baseline — not replaced", tenant_id, project)
+                return
+        except Exception as exc:
+            logger.debug("baseline lock check skipped (run migration 188?): %s", exc)
     try:
         _client().table("vula_project_boq").upsert(row, on_conflict="tenant_id,project").execute()
     except Exception as exc:

@@ -513,7 +513,25 @@ async def file_document(
         except Exception as exc2:
             logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc2)
     _record_prices(tenant_id, row)
+    _maybe_read_programme(tenant_id, row)
     return row
+
+
+def _maybe_read_programme(tenant_id: str, row: dict) -> None:
+    """A programme / Gantt filed for a project that runs against a signed baseline becomes that
+    project's daily tasks (vula/commerce/project_programme.py). Background; never blocks filing."""
+    if not (row.get("id") and row.get("project") and row.get("status") == "filed"
+            and row.get("category") == "Programme / Schedule"):
+        return
+    try:
+        from vula.commerce import project_programme
+        from vula.commerce.background_tasks import run_background
+        b = project_programme.baseline(tenant_id, row["project"])
+        if b and b.get("baseline_locked"):
+            run_background(tenant_id, "programme_import",
+                           project_programme.import_and_report(tenant_id, row["project"], row))
+    except Exception as exc:
+        logger.debug("programme read skipped: %s", exc)
 
 
 def _record_prices(tenant_id: str, row: dict) -> None:

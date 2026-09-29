@@ -1,0 +1,234 @@
+"""Judy (DIGG), 29 Sep voice note: run Atlantis Foods from its programme — a tight four-week job —
+against the signed Cost Estimate Rev10; staff get their tasks for the day per room on WhatsApp;
+anything outside Rev10 is flagged for a variation order. Rev10 figures are the real filed ones."""
+from datetime import date
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from vula.commerce import project_programme as pp
+
+REV10 = {"total_cents": 59302200, "vat_cents": 7735100, "line_items": [
+    {"description": "Reception (12m²)", "total_cents": 7644000},
+    {"description": "Seating area (20m²)", "total_cents": 1360000},
+    {"description": "Small Meeting Room A (10m²)", "total_cents": 6223400},
+    {"description": "Small Meeting Room B (10m²)", "total_cents": 4634800},
+    {"description": "Main Boardroom (47m²)", "total_cents": 8822500},
+    {"description": "New Office A (10m²)", "total_cents": 2777500},
+    {"description": "New Office B (10m²)", "total_cents": 2777500},
+    {"description": "Open Plan (33m²)", "total_cents": 1254000},
+    {"description": "Bathrooms (8m²)", "total_cents": 0},
+    {"description": "Coffee station (4m²)", "total_cents": 0},
+    {"description": "Preliminaries & General (P&Gs;) — 4 weeks × R18,000/week", "total_cents": 7200000}]}
+
+
+class _Q:
+    def __init__(self, db, name):
+        self.db, self.name, self.f, self.op, self.payload = db, name, [], "select", None
+        self._limit = None
+
+    def select(self, *_a):
+        return self
+
+    def eq(self, k, v):
+        self.f.append(lambda r: r.get(k) == v)
+        return self
+
+    def ilike(self, k, pat):
+        needle = pat.strip("%").lower()
+        self.f.append(lambda r: needle in str(r.get(k) or "").lower())
+        return self
+
+    def gte(self, k, v):
+        self.f.append(lambda r: str(r.get(k) or "") >= v)
+        return self
+
+    def in_(self, k, vals):
+        self.f.append(lambda r: r.get(k) in vals)
+        return self
+
+    @property
+    def not_(self):
+        outer = self
+
+        class _N:
+            def in_(self, k, vals):
+                outer.f.append(lambda r: r.get(k) not in vals)
+                return outer
+        return _N()
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    def insert(self, rows):
+        self.op, self.payload = "insert", rows if isinstance(rows, list) else [rows]
+        return self
+
+    def update(self, patch):
+        self.op, self.payload = "update", patch
+        return self
+
+    def upsert(self, row, on_conflict=None, **_k):
+        self.op, self.payload, self.key = "upsert", row, (on_conflict or "").split(",")
+        return self
+
+    def delete(self):
+        self.op = "delete"
+        return self
+
+    def execute(self):
+        rows = self.db.setdefault(self.name, [])
+        hit = [r for r in rows if all(f(r) for f in self.f)]
+        if self.op == "insert":
+            rows.extend(dict(r) for r in self.payload)
+            return type("R", (), {"data": self.payload})()
+        if self.op == "update":
+            for r in hit:
+                r.update(self.payload)
+            return type("R", (), {"data": hit})()
+        if self.op == "upsert":
+            same = [r for r in rows if all(r.get(k) == self.payload.get(k) for k in self.key)]
+            if same:
+                same[0].update(self.payload)
+            else:
+                rows.append(dict(self.payload))
+            return type("R", (), {"data": [self.payload]})()
+        if self.op == "delete":
+            for r in hit:
+                rows.remove(r)
+            return type("R", (), {"data": hit})()
+        return type("R", (), {"data": [dict(r) for r in hit[: self._limit or None]]})()
+
+
+class _DB:
+    def __init__(self):
+        self.t = {}
+
+    def table(self, name):
+        return _Q(self.t, name)
+
+
+@pytest.fixture
+def db(monkeypatch):
+    d = _DB()
+    d.t["vula_filed_documents"] = [
+        {"id": "rev10", "tenant_id": "digg-demo", "doc_id": "cfa45f7875425861", "project": "ATLANTIS FOODS",
+         "filename": "Atlantis_Foods_Paarden_Island_Office_Cost_Estimate_Rev10.pdf", "fields": REV10,
+         "created_at": "2026-09-07T19:40:47+00:00"}]
+    monkeypatch.setattr("vula.commerce.service._client", lambda: d)
+    monkeypatch.setattr("vula.commerce.service.canonical_project", lambda _t, n: n)
+    return d
+
+
+def test_rev10_becomes_per_room_budgets_that_add_up_to_the_signed_total():
+    b = pp.baseline_sections(REV10)
+    assert b["total_excl_cents"] == 51567100 and b["total_incl_cents"] == 59302200
+    assert sum(s["budget_cents"] for s in b["sections"]) == 51567100
+    rooms = [s["section"] for s in b["sections"]]
+    assert rooms[:3] == ["Reception", "Seating area", "Small Meeting Room A"]
+    pg = next(s for s in b["sections"] if s.get("pg_weeks"))
+    assert (pg["pg_weeks"], pg["pg_week_cents"]) == (4, 1800000)
+    assert b["sections"][-1] == {"section": pp.REMAINDER, "budget_cents": 51567100 - 42693700}
+
+
+def test_the_signed_baseline_is_locked_and_a_later_estimate_never_replaces_it(db):
+    from vula.commerce.service import upsert_project_boq
+    got = pp.set_baseline("digg-demo", "ATLANTIS FOODS", "Rev10.pdf")
+    assert got["document"].endswith("Rev10.pdf") and got["total_excl_cents"] == 51567100
+    row = pp.baseline("digg-demo", "ATLANTIS FOODS")
+    assert row["baseline_locked"] and row["baseline_doc_id"] == "rev10" and row["total_cents"] == 51567100
+    upsert_project_boq("digg-demo", "ATLANTIS FOODS", 99900000, title="Rev11 draft", sections=[])
+    assert pp.baseline("digg-demo", "ATLANTIS FOODS")["total_cents"] == 51567100
+
+
+def test_a_programme_read_in_the_wrong_year_is_put_right():
+    tasks = pp.normalise_tasks([
+        {"task": "Skim and paint walls", "room": "Reception", "trade": "Painters", "assignee": "Sipho",
+         "start": "2020-10-05", "end": "2020-10-07"},
+        {"task": "", "room": "Open Plan"},
+        {"task": "Lay carpet tiles", "room": None, "start": "2026-10-20", "end": "2026-10-16"}], 2026)
+    assert tasks[0]["start"] == "2026-10-05" and tasks[0]["end"] == "2026-10-07"
+    assert len(tasks) == 2 and tasks[1]["room"] == "General"
+    assert (tasks[1]["start"], tasks[1]["end"]) == ("2026-10-16", "2026-10-20")
+
+
+def test_import_links_named_staff_and_lists_who_needs_a_number(db, monkeypatch):
+    monkeypatch.setattr(pp, "_people", lambda _t: [
+        {"id": "c1", "name": "Sipho Ndlovu", "phone": "27820000001", "kind": "site"},
+        {"id": None, "name": "Judy Downing", "phone": "27827077080", "kind": "team"}])
+    tasks = pp.normalise_tasks([
+        {"task": "Skim and paint walls", "room": "Reception", "trade": "Painters", "assignee": "Sipho",
+         "start": "2026-10-05", "end": "2026-10-07"},
+        {"task": "Tile splashback", "room": "Coffee station", "trade": "Tilers", "assignee": "Edison",
+         "start": "2026-10-06", "end": "2026-10-06"}], 2026)
+    doc = {"id": "gantt1", "filename": "Atlantis Programme.pdf"}
+    got = pp.import_programme("digg-demo", "ATLANTIS FOODS", doc, tasks)
+    assert got["tasks"] == 2 and got["needs_number"] == ["Edison"]
+    assert got["rooms"] == ["Coffee station", "Reception"]
+    rows = {r["title"]: r for r in db.t["vula_field_tasks"]}
+    assert rows["Skim and paint walls"]["assigned_to"] == "c1" and rows["Skim and paint walls"]["room"] == "Reception"
+    # a newer programme replaces the open tasks, and never duplicates them
+    pp.import_programme("digg-demo", "ATLANTIS FOODS", doc, tasks[:1])
+    assert len(db.t["vula_field_tasks"]) == 1
+
+
+def test_today_per_room_and_overdue():
+    tasks = [
+        {"title": "Skim walls", "room": "Reception", "start_date": "2026-10-05", "due_date": "2026-10-07", "status": "pending"},
+        {"title": "Paint ceiling", "room": "Main Boardroom", "start_date": "2026-10-06", "due_date": "2026-10-06", "status": "pending"},
+        {"title": "Strip out", "room": "Open Plan", "start_date": "2026-10-01", "due_date": "2026-10-03", "status": "pending"},
+        {"title": "Demolish wall", "room": "Open Plan", "start_date": "2026-10-01", "due_date": "2026-10-02", "status": "complete"}]
+    plan = pp.day_plan(tasks, date(2026, 10, 6))
+    assert [t["title"] for t in plan["today"]] == ["Paint ceiling", "Skim walls"]
+    assert [t["title"] for t in plan["overdue"]] == ["Strip out"]
+    msg = pp.staff_message("Sipho Ndlovu", "ATLANTIS FOODS", date(2026, 10, 6), plan["today"])
+    assert "Morning Sipho" in msg and "*Main Boardroom*\n• Paint ceiling" in msg and "DONE" in msg
+
+
+def test_owner_summary_flags_cost_time_and_variations():
+    plan = {"today": [{"title": "Skim walls", "room": "Reception", "assignee_name": "Sipho"}],
+            "overdue": [{"title": "Strip out", "room": "Open Plan", "assignee_name": "Edison"}]}
+    cost = {"budget_cents": 51567100, "spent_cents": 38000000, "left_cents": 13567100, "over": False,
+            "spent_pct": 74, "programme_pct": 50, "days_left": 14,
+            "pg": {"weeks_in": 5, "weeks": 4, "over_time": True, "week_cents": 1800000},
+            "variations": [{"filename": "Quote extra bulkhead.pdf", "amount_cents": 1250000, "vo": None}]}
+    msg = pp.owner_message("ATLANTIS FOODS", date(2026, 10, 6), plan, cost, ["Edison"])
+    assert "Overdue — 1" in msg and "Strip out — Edison" in msg
+    assert "R515,671 baseline excl. VAT" in msg and "Spending ahead of the programme" in msg
+    assert "week 5 of 4 priced" in msg and "R18,000" in msg
+    assert "Needs a variation order" in msg and "Quote extra bulkhead.pdf — R12,500" in msg
+    assert "add staff" in msg
+
+
+@pytest.mark.parametrize("text,want", [
+    ("add staff Sipho Ndlovu 082 000 0001 painter", {"name": "Sipho Ndlovu", "phone": "0820000001", "trade": "painter"}),
+    ("Add site staff Edison 27710000000", {"name": "Edison", "phone": "27710000000", "trade": ""}),
+    ("Can you add staff to the programme?", None),
+])
+def test_add_staff_command(text, want):
+    assert pp.parse_add_staff(text) == want
+
+
+@pytest.mark.asyncio
+async def test_morning_briefs_send_once_per_person_per_day(db, monkeypatch):
+    db.t["vula_field_tasks"] = [
+        {"tenant_id": "digg-demo", "project_id": "ATLANTIS FOODS", "source": "programme", "title": "Skim walls",
+         "room": "Reception", "start_date": "2026-10-05", "due_date": "2026-10-07", "status": "pending",
+         "assigned_to": "c1", "assignee_name": "Sipho"},
+        {"tenant_id": "digg-demo", "project_id": "ATLANTIS FOODS", "source": "programme", "title": "Tile splashback",
+         "room": "Coffee station", "start_date": "2026-10-06", "due_date": "2026-10-06", "status": "pending",
+         "assigned_to": "", "assignee_name": "Edison"}]
+    monkeypatch.setattr(pp, "_people", lambda _t: [{"id": "c1", "name": "Sipho", "phone": "27820000001", "kind": "site"}])
+    monkeypatch.setattr(pp, "_owners", lambda _t: ["27827077080"])
+    monkeypatch.setattr(pp, "cost_position", lambda *a, **k: None)
+    send = AsyncMock(return_value=True)
+    with patch("vula.api.whatsapp._send_reply", send):
+        out = await pp.morning_briefs("digg-demo", date(2026, 10, 6))
+    keys = sorted(c.kwargs["idem_key"] for c in send.call_args_list)
+    assert keys == ["programme-owner:ATLANTIS FOODS:2026-10-06:27827077080",
+                    "programme:ATLANTIS FOODS:2026-10-06:27820000001"]
+    assert "Edison" in out["projects"][0]["owner"]            # no number yet → owner is told
