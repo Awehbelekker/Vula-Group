@@ -7,7 +7,7 @@
 import { useState, useEffect } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", text: "var(--text)", muted: "var(--muted)" };
 
 export default function VulaClientOnboarding({ tenantId }) {
   const [stats, setStats] = useState(null);
@@ -37,9 +37,9 @@ export default function VulaClientOnboarding({ tenantId }) {
   if (!stats) return null;
   const field = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 };
   const btn = (bg) => ({ padding: "9px 14px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600,
-    color: "#fff", background: bg, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 });
+    color: String(bg).includes("accent") ? "var(--on-accent)" : "var(--bg)", background: bg, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 });
   const Stat = ({ label, val, color }) => (
-    <div style={{ flex: "1 1 90px", background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+    <div style={{ flex: "1 1 90px", background: "var(--bg)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
       <div style={{ fontSize: 22, fontWeight: 700, color: color || C.text }}>{val ?? 0}</div>
       <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase" }}>{label}</div>
     </div>
@@ -49,7 +49,7 @@ export default function VulaClientOnboarding({ tenantId }) {
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontWeight: 700, color: C.text }}>Client onboarding</span>
-        {msg && <span style={{ fontSize: 12, color: msg.startsWith("⚠️") ? "#B23B3B" : "#2C7A4B" }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12, color: msg.startsWith("⚠️") ? "#B23B3B" : "var(--ok)" }}>{msg}</span>}
       </div>
       <p style={{ fontSize: 12, color: C.muted, margin: "2px 0 12px" }}>
         Introduce the WhatsApp line to your existing clients in small batches. They reply to opt in and
@@ -58,11 +58,11 @@ export default function VulaClientOnboarding({ tenantId }) {
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
         <Stat label="Total" val={stats.total} />
-        <Stat label="Not sent" val={stats.invited} color="#8A8680" />
+        <Stat label="Not sent" val={stats.invited} color="var(--muted)" />
         <Stat label="Awaiting reply" val={stats.awaiting_reply} color="#B8860B" />
         <Stat label="In progress" val={stats.in_progress} color="#B8860B" />
-        <Stat label="Opted in" val={stats.opted_in} color="#2C7A4B" />
-        <Stat label="Complete" val={stats.complete} color="#2C7A4B" />
+        <Stat label="Opted in" val={stats.opted_in} color="var(--ok)" />
+        <Stat label="Complete" val={stats.complete} color="var(--ok)" />
         <Stat label="Opted out" val={stats.opted_out} color="#B23B3B" />
       </div>
 
@@ -71,7 +71,7 @@ export default function VulaClientOnboarding({ tenantId }) {
           <span style={{ fontSize: 11, color: C.muted, textTransform: "uppercase" }}>Preview to my number</span>
           <input value={test} onChange={(e) => setTest(e.target.value)} placeholder="27821234567" style={field} />
         </label>
-        <button disabled={busy || !test} style={btn("#6B7280")}
+        <button disabled={busy || !test} style={btn("var(--muted)")}
           onClick={() => send({ test_phone: test }, "Sending test")}>Send test</button>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: 12 }}>

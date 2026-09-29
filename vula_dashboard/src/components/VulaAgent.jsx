@@ -33,7 +33,7 @@ export default function VulaAgent({ tenantId: tenantIdProp }) {
   return (
     <div style={{ padding: "24px", maxWidth: 900, margin: "0 auto" }}>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Vula Agent</h2>
-      <p style={{ color: "#8A8680", marginBottom: 24 }}>
+      <p style={{ color: "var(--muted)", marginBottom: 24 }}>
         Multi-agent reasoning — routes your question to the right skill, runs parallel branches, merges the best answer
       </p>
 
@@ -58,7 +58,7 @@ export default function VulaAgent({ tenantId: tenantIdProp }) {
       </div>
 
       {error && (
-        <div style={{ background: "#FEE", border: "1px solid #FCC", borderRadius: 8, padding: 12, color: "#900", marginBottom: 16 }}>
+        <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-soft)", borderRadius: 8, padding: 12, color: "#900", marginBottom: 16 }}>
           {error}
         </div>
       )}
@@ -75,7 +75,7 @@ export default function VulaAgent({ tenantId: tenantIdProp }) {
           </div>
 
           <div style={{
-            background: "#F7F4EE", border: "1px solid #DDD8CE", borderRadius: 8,
+            background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8,
             padding: 20, whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6,
             marginBottom: 16,
           }}>
@@ -83,7 +83,7 @@ export default function VulaAgent({ tenantId: tenantIdProp }) {
           </div>
 
           {result.sources?.length > 0 && (
-            <details style={{ fontSize: 13, color: "#8A8680" }}>
+            <details style={{ fontSize: 13, color: "var(--muted)" }}>
               <summary style={{ cursor: "pointer", fontWeight: 600 }}>
                 {result.sources.length} sources
               </summary>
@@ -103,19 +103,19 @@ export default function VulaAgent({ tenantId: tenantIdProp }) {
 function Chip({ label, value }) {
   return (
     <span style={{
-      background: "#FFF", border: "1px solid #DDD8CE", borderRadius: 20,
-      padding: "4px 12px", fontSize: 12, color: "#1E1E1E",
+      background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20,
+      padding: "4px 12px", fontSize: 12, color: "var(--ink)",
     }}>
-      <span style={{ color: "#8A8680" }}>{label}:</span> <strong>{value}</strong>
+      <span style={{ color: "var(--muted)" }}>{label}:</span> <strong>{value}</strong>
     </span>
   );
 }
 
-const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, color: "#1E1E1E", marginBottom: 6 };
+const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--ink)", marginBottom: 6 };
 const inputStyle = {
-  width: "100%", padding: "10px 12px", border: "1px solid #DDD8CE",
+  width: "100%", padding: "10px 12px", border: "1px solid var(--border)",
   borderRadius: 6, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box",
-  background: "#FFF", outline: "none",
+  background: "var(--surface)", outline: "none",
 };
 const btnStyle = (disabled) => ({
   background: disabled ? "#C5C0B8" : "var(--accent)",

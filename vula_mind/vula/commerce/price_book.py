@@ -312,15 +312,40 @@ def drift(manual: Dict[str, Any], learned: Dict[str, Any], threshold: float = 0.
             "source": learned.get("source")}
 
 
-def summary(tenant_id: str) -> Dict[str, Any]:
-    """What the price book holds — for the "what Vula learned" report."""
-    rows = _fetch(tenant_id)
-    items = rollup(rows)
-    return {
+_SUMMARY_TTL = 20.0
+_summary_cache: Dict[str, tuple] = {}
+
+
+def summary(tenant_id: str, fresh: bool = False) -> Dict[str, Any]:
+    """What the price book holds — for the "what Vula learned" report.
+
+    2026-09-29 (PR B): the Documents "Learn" card polls this every 5s while a run is going, and it
+    used to load every observation with all twelve columns and roll them up into rates just to
+    count them. Now it reads the five columns the counts need, and the answer is reused for 20s.
+    """
+    import time
+    now = time.monotonic()
+    hit = _summary_cache.get(tenant_id)
+    if hit and not fresh and now - hit[0] < _SUMMARY_TTL:
+        return dict(hit[1])
+    from vula.commerce.ledger import _all_pages
+    try:
+        rows = _all_pages(lambda: (_client().table(_TABLE)
+                                   .select("norm_key,unit,kind,supplier,project")
+                                   .eq("tenant_id", tenant_id)))
+    except Exception as exc:
+        log.debug("price book summary read failed (run migration 184?): %s", exc)
+        rows = []
+    kinds: Dict[tuple, Counter] = {}
+    for r in rows:
+        kinds.setdefault((r.get("norm_key"), r.get("unit")), Counter())[r.get("kind")] += 1
+    out = {
         "priced_lines": len(rows),
-        "items": len(items),
-        "labour_rates": sum(1 for i in items if i["kind"] == "labour"),
+        "items": len(kinds),
+        "labour_rates": sum(1 for c in kinds.values() if c.most_common(1)[0][0] == "labour"),
         "suppliers": len({(r.get("supplier") or "").lower() for r in rows if r.get("supplier")}),
         "projects": len({r["project"] for r in rows if r.get("project")}),
         "as_of": datetime.utcnow().isoformat(timespec="seconds"),
     }
+    _summary_cache[tenant_id] = (now, out)
+    return dict(out)

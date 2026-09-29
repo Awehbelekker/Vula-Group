@@ -272,8 +272,8 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
           {commitPreview && !saved && (
             <div style={{
               margin: '12px 0', padding: '12px 16px',
-              background: commitPreview.days_until_due < 0 ? '#FEF2F2'
-                        : commitPreview.days_until_due <= 7 ? '#FFFBEB' : '#F0FDF4',
+              background: commitPreview.days_until_due < 0 ? 'var(--danger-soft)'
+                        : commitPreview.days_until_due <= 7 ? '#FFFBEB' : 'var(--ok-soft)',
               border: `1px solid ${commitPreview.days_until_due < 0 ? '#FCA5A5'
                         : commitPreview.days_until_due <= 7 ? '#FCD34D' : '#86EFAC'}`,
               borderRadius: 8, fontSize: 13,
@@ -316,10 +316,10 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
               <div style={s.lineItems}>
                 <p style={s.lineHeader}>Match lines to your products ({lineMatches.filter(l => l.match).length}/{lineMatches.length} found)</p>
                 {lineMatches.map((l, i) => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '20px 1fr 64px', gap: 6, alignItems: 'center', padding: '4px 0', fontSize: 12, fontFamily: 'system-ui' }}>
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '20px 1fr 64px', gap: 6, alignItems: 'center', padding: '4px 0', fontSize: 12}}>
                     <input type="checkbox" checked={l.include} onChange={e => updateLine(i, { include: e.target.checked })} />
                     <div>
-                      <div style={{ color: '#8A8680' }}>{l.description}{l.unit_price_cents ? ` · ${fmt(l.unit_price_cents)} each` : ''}</div>
+                      <div style={{ color: 'var(--muted)' }}>{l.description}{l.unit_price_cents ? ` · ${fmt(l.unit_price_cents)} each` : ''}</div>
                       <select value={l.product_id} onChange={e => updateLine(i, { product_id: e.target.value, include: !!e.target.value })}
                               style={{ width: '100%', fontSize: 12, padding: 3 }}>
                         <option value="">— not in my products —</option>
@@ -346,7 +346,7 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
                 {saving ? 'Updating…' : '💲 Update cost prices from this document'}
               </button>
             )}
-            {stockMsg && <div style={{ fontSize: 13, fontFamily: 'system-ui', color: '#16a34a' }}>{stockMsg}</div>}
+            {stockMsg && <div style={{ fontSize: 13, color: 'var(--ok)' }}>{stockMsg}</div>}
           </div>
         </div>
       )}
@@ -355,7 +355,7 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
       {saved && committed && (
         <div style={s.savedCard}>
           <p style={{ ...s.savedText, fontSize: 14 }}>{committed.message}</p>
-          <p style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
             {committed.kb_chunks_added > 0 && `📚 ${committed.kb_chunks_added} knowledge chunks added · `}
             Saved as {committed.record_type}
           </p>
@@ -383,32 +383,32 @@ function Field({ label, value, accent }) {
 
 const s = {
   intro:        { marginBottom: 16 },
-  h3:           { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: '0 0 4px' },
-  sub:          { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0, lineHeight: 1.5 },
+  h3:           { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub:          { fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.5 },
   chips:        { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 },
-  chip:         { padding: '6px 12px', borderRadius: 20, border: '1px solid #DDD8CE', background: '#fff', cursor: 'pointer', fontSize: 12, fontFamily: 'system-ui', color: '#8A8680' },
+  chip:         { padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12, color: 'var(--muted)' },
   chipActive:   { background: 'var(--accent, var(--accent))', color: '#fff', border: '1px solid var(--accent, var(--accent))' },
-  captureBtn:   { display: 'block', textAlign: 'center', padding: '32px 16px', border: '2px dashed var(--accent, var(--accent))', borderRadius: 12, cursor: 'pointer', fontSize: 16, fontFamily: 'system-ui', fontWeight: 600, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.04)' },
-  hint:         { textAlign: 'center', fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', margin: '8px 0 0' },
+  captureBtn:   { display: 'block', textAlign: 'center', padding: '32px 16px', border: '2px dashed var(--accent, var(--accent))', borderRadius: 12, cursor: 'pointer', fontSize: 16, fontWeight: 600, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.04)' },
+  hint:         { textAlign: 'center', fontSize: 12, color: 'var(--muted)', margin: '8px 0 0' },
   previewWrap:  { position: 'relative', marginBottom: 16 },
-  previewImg:   { width: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 8, border: '1px solid #DDD8CE', background: '#fff' },
-  scanningOverlay: { position: 'absolute', inset: 0, background: 'rgba(247,244,238,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui', fontSize: 15, fontWeight: 600, color: 'var(--accent, var(--accent))', borderRadius: 8 },
+  previewImg:   { width: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)' },
+  scanningOverlay: { position: 'absolute', inset: 0, background: 'rgba(247,244,238,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 600, color: 'var(--accent, var(--accent))', borderRadius: 8 },
   retakeBtn:    { position: 'absolute', top: 8, right: 8, padding: '4px 10px', background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' },
-  errorBox:     { background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B', borderRadius: 6, padding: '10px 14px', fontSize: 13, fontFamily: 'system-ui', marginBottom: 12 },
-  resultCard:   { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 16 },
+  errorBox:     { background: 'var(--danger-soft)', border: '1px solid var(--danger-soft)', color: 'var(--danger)', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
+  resultCard:   { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 },
   resultHeader: { marginBottom: 12 },
-  detectedBadge:{ fontFamily: 'system-ui', fontSize: 11, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.1)', padding: '4px 10px', borderRadius: 12, fontWeight: 600 },
+  detectedBadge:{ fontSize: 11, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.1)', padding: '4px 10px', borderRadius: 12, fontWeight: 600 },
   fieldGrid:    { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 12 },
   field:        { display: 'flex', flexDirection: 'column', gap: 2 },
-  fieldLabel:   { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
-  fieldValue:   { fontFamily: 'system-ui', fontSize: 14, color: '#1E1E1E', fontWeight: 500 },
-  lineItems:    { borderTop: '1px solid #EDE9DF', paddingTop: 10, marginBottom: 12 },
-  lineHeader:   { fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, color: '#1E1E1E', margin: '0 0 6px' },
-  lineRow:      { display: 'flex', justifyContent: 'space-between', fontFamily: 'system-ui', fontSize: 12, color: '#444', padding: '3px 0' },
-  lineQty:      { color: '#8A8680' },
+  fieldLabel:   { fontSize: 11, color: 'var(--muted)' },
+  fieldValue:   { fontSize: 14, color: 'var(--ink)', fontWeight: 500 },
+  lineItems:    { borderTop: '1px solid var(--border-soft)', paddingTop: 10, marginBottom: 12 },
+  lineHeader:   { fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '0 0 6px' },
+  lineRow:      { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text)', padding: '3px 0' },
+  lineQty:      { color: 'var(--muted)' },
   actions:      { display: 'flex', flexDirection: 'column', gap: 8 },
-  btnPrimary:   { padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  btnSecondary: { padding: '12px', background: 'transparent', color: 'var(--accent, var(--accent))', border: '1px solid var(--accent, var(--accent))', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  btnPrimary:   { padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'},
+  btnSecondary: { padding: '12px', background: 'transparent', color: 'var(--accent, var(--accent))', border: '1px solid var(--accent, var(--accent))', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'},
   savedCard:    { background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10, padding: 20, textAlign: 'center' },
-  savedText:    { fontFamily: 'system-ui', fontSize: 15, fontWeight: 600, color: '#16a34a', margin: '0 0 12px' },
+  savedText:    { fontSize: 15, fontWeight: 600, color: 'var(--ok)', margin: '0 0 12px' },
 }

@@ -7,6 +7,7 @@
  * used by the handful of features that only make sense against one mailbox (the AI email
  * skill's default, bank-statement password handling).
  */
+import { toast, confirmDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback } from 'react'
 import { VULA_API } from '../lib/authFetch'
 
@@ -58,7 +59,7 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
   }
 
   const disconnect = async (accountId) => {
-    if (!confirm('Disconnect this mailbox?')) return
+    if (!(await confirmDialog('Disconnect this mailbox?', { danger: true, confirmLabel: 'Yes' }))) return
     setBusyAccountId(accountId)
     await fetch(`${VULA_API}/v1/email/disconnect/${tenantId}/${accountId}`, { method: 'DELETE' })
     setBusyAccountId(null)
@@ -76,10 +77,10 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
     setBusyAccountId(accountId)
     await fetch(`${VULA_API}/v1/email/backfill/${tenantId}?account_id=${accountId}`, { method: 'POST' })
     setBusyAccountId(null)
-    alert('Backfill started in the background — check Contacts/Documents in a few minutes.')
+    toast('Backfill started in the background — check Contacts/Documents in a few minutes.')
   }
 
-  const inp = { width: '100%', padding: '9px 11px', border: '1px solid #2a2a2a', borderRadius: 6, fontSize: 13, color: '#f5f2ec', background: '#0a0a0a', boxSizing: 'border-box' }
+  const inp = { width: '100%', padding: '9px 11px', border: '1px solid var(--text)', borderRadius: 6, fontSize: 13, color: 'var(--surface-alt)', background: 'var(--ink)', boxSizing: 'border-box' }
 
   return (
     <div style={styles.card}>
@@ -87,7 +88,7 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
         <div style={styles.icon}>✉️</div>
         <div><h3 style={styles.title}>Email (IMAP / SMTP)</h3>
           <p style={styles.subtitle}>Connect as many mailboxes as you need — admin@, sales@, a personal Gmail…</p></div>
-        <span style={{ ...styles.badge, color: accounts.length ? '#22c55e' : '#6b7280',
+        <span style={{ ...styles.badge, color: accounts.length ? 'var(--ok)' : 'var(--muted)',
           background: accounts.length ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)' }}>
           {accounts.length ? `${accounts.length} connected` : 'None connected'}</span>
       </div>
@@ -159,20 +160,20 @@ export default function VulaEmailConnect({ tenantId, adminEmail }) {
 }
 
 const styles = {
-  card: { background: '#111111', border: '1px solid #2a2a2a', borderRadius: 8, padding: 24, maxWidth: 480 },
+  card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, maxWidth: 480 },
   header: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 },
-  icon: { fontSize: 32 }, title: { margin: 0, color: '#f5f2ec', fontSize: 18, fontWeight: 600 },
-  subtitle: { margin: '2px 0 0', color: '#6b7280', fontSize: 13 },
+  icon: { fontSize: 32 }, title: { margin: 0, color: 'var(--ink)', fontSize: 18, fontWeight: 600 },
+  subtitle: { margin: '2px 0 0', color: 'var(--muted)', fontSize: 13 },
   badge: { marginLeft: 'auto', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
-  acctRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid #1a1a1a' },
-  primaryBadge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: '#C4861A', background: 'rgba(196,134,26,0.15)', padding: '2px 6px', borderRadius: 4 },
-  label: { color: '#6b7280', fontSize: 13 }, value: { color: '#f5f2ec', fontSize: 13, fontWeight: 500 },
-  subvalue: { color: '#6b7280', fontSize: 11.5, marginTop: 2 },
-  desc: { color: '#9ca3af', fontSize: 13, lineHeight: 1.5, margin: '0 0 12px' },
-  errorBox: { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 10 },
-  btn: { background: '#C4861A', color: '#fff', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', width: '100%' },
-  btnDisabled: { background: '#2a2a2a', color: '#6b7280', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
-  btnCancel: { background: 'transparent', color: '#6b7280', border: '1px solid #2a2a2a', borderRadius: 6, padding: '12px 18px', fontSize: 13, cursor: 'pointer' },
-  btnSmall: { background: 'transparent', color: '#9ca3af', border: '1px solid #2a2a2a', borderRadius: 6, padding: '5px 10px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap' },
-  btnDangerSmall: { background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '5px 10px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap' },
+  acctRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--border-soft)' },
+  primaryBadge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--warn)', background: 'rgba(196,134,26,0.15)', padding: '2px 6px', borderRadius: 4 },
+  label: { color: 'var(--muted)', fontSize: 13 }, value: { color: 'var(--ink)', fontSize: 13, fontWeight: 500 },
+  subvalue: { color: 'var(--muted)', fontSize: 11.5, marginTop: 2 },
+  desc: { color: 'var(--faint)', fontSize: 13, lineHeight: 1.5, margin: '0 0 12px' },
+  errorBox: { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--danger)', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 10 },
+  btn: { background: 'var(--warn)', color: 'var(--bg)', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', width: '100%' },
+  btnDisabled: { background: 'var(--surface-alt)', color: 'var(--muted)', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
+  btnCancel: { background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 6, padding: '12px 18px', fontSize: 13, cursor: 'pointer' },
+  btnSmall: { background: 'transparent', color: 'var(--faint)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap' },
+  btnDangerSmall: { background: 'transparent', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '5px 10px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap' },
 }

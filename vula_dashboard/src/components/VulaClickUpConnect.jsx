@@ -61,11 +61,16 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
   const handleConnect = useCallback(async () => {
     setLoading(true)
     setError(null)
+    // Open the window NOW, inside the tap: a window opened after an `await` isn't a user action
+    // any more, and phones and Safari silently block it (2026-09-29, Judy couldn't reconnect).
+    // If it's blocked anyway, go to ClickUp in this tab; the callback brings her back.
+    const popup = window.open('', 'clickup-oauth', 'width=620,height=760')
     try {
       const r = await fetch(`${VULA_API}/v1/clickup/authorize-url?tenant_id=${encodeURIComponent(tenantId)}`)
       const d = await r.json()
       if (!d.url) throw new Error(d.error || 'ClickUp app not configured.')
-      window.open(d.url, 'clickup-oauth', 'width=620,height=760')
+      if (popup && !popup.closed) popup.location.href = d.url
+      else { window.location.href = d.url; return }
       // Poll for ~90s while the user authorises in the popup.
       let ticks = 0
       pollRef.current = setInterval(() => {
@@ -73,6 +78,7 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
         if (++ticks > 30 || status === 'connected') clearInterval(pollRef.current)
       }, 3000)
     } catch (err) {
+      if (popup && !popup.closed) popup.close()
       setError(err.message)
     } finally {
       setLoading(false)
@@ -169,10 +175,10 @@ function SyncHealthRow({ lastSyncedAt, lastSyncStatus, lastSyncError }) {
   return (
     <div style={{ ...styles.infoRow, borderBottom: 'none' }}>
       <span style={styles.label}>Sync</span>
-      <span style={{ ...styles.value, color: failing ? '#ef4444' : styles.value.color }}>
+      <span style={{ ...styles.value, color: failing ? 'var(--danger)' : styles.value.color }}>
         {failing ? `Failing — ${_timeAgo(lastSyncedAt)}` : `Last synced ${_timeAgo(lastSyncedAt)}`}
         {failing && lastSyncError && (
-          <span style={{ display: 'block', fontSize: 11, color: '#ef4444', fontWeight: 400, marginTop: 2 }}>
+          <span style={{ display: 'block', fontSize: 11, color: 'var(--danger)', fontWeight: 400, marginTop: 2 }}>
             {String(lastSyncError).slice(0, 120)}
           </span>
         )}
@@ -183,30 +189,30 @@ function SyncHealthRow({ lastSyncedAt, lastSyncStatus, lastSyncError }) {
 
 function StatusBadge({ status }) {
   const configs = {
-    connected: { label: 'Connected', color: '#22c55e', bg: 'rgba(34,197,94,0.15)' },
-    error: { label: 'Error', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
-    not_connected: { label: 'Not connected', color: '#6b7280', bg: 'rgba(107,114,128,0.15)' },
+    connected: { label: 'Connected', color: 'var(--ok)', bg: 'rgba(34,197,94,0.15)' },
+    error: { label: 'Error', color: 'var(--danger)', bg: 'rgba(239,68,68,0.15)' },
+    not_connected: { label: 'Not connected', color: 'var(--muted)', bg: 'rgba(107,114,128,0.15)' },
   }
   const c = configs[status] || configs.not_connected
   return <span style={{ ...styles.badge, color: c.color, background: c.bg }}>{c.label}</span>
 }
 
 const styles = {
-  card: { background: '#111111', border: '1px solid #2a2a2a', borderRadius: 8, padding: 24, maxWidth: 480 },
+  card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, maxWidth: 480 },
   header: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 },
   icon: { fontSize: 32 },
-  title: { margin: 0, color: '#f5f2ec', fontSize: 18, fontWeight: 600 },
-  subtitle: { margin: '2px 0 0', color: '#6b7280', fontSize: 13 },
+  title: { margin: 0, color: 'var(--ink)', fontSize: 18, fontWeight: 600 },
+  subtitle: { margin: '2px 0 0', color: 'var(--muted)', fontSize: 13 },
   badge: { marginLeft: 'auto', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 },
-  connectedInfo: { background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: 6, padding: 16, marginBottom: 16 },
-  infoRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1a1a1a' },
-  label: { color: '#6b7280', fontSize: 13 },
-  value: { color: '#f5f2ec', fontSize: 13, fontWeight: 500 },
-  select: { background: '#0a0a0a', color: '#f5f2ec', border: '1px solid #2a2a2a', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 240 },
-  description: { color: '#9ca3af', fontSize: 14, lineHeight: 1.6, margin: '0 0 16px' },
-  errorBox: { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
+  connectedInfo: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: 16, marginBottom: 16 },
+  infoRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-soft)' },
+  label: { color: 'var(--muted)', fontSize: 13 },
+  value: { color: 'var(--ink)', fontSize: 13, fontWeight: 500 },
+  select: { background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 240 },
+  description: { color: 'var(--muted)', fontSize: 14, lineHeight: 1.6, margin: '0 0 16px' },
+  errorBox: { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--danger)', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
   btn: { background: '#7B68EE', color: '#fff', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', width: '100%' },
-  btnDisabled: { background: '#2a2a2a', color: '#6b7280', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
-  btnGhost: { background: 'transparent', color: '#9ca3af', border: '1px solid #2a2a2a', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' },
-  hint: { color: '#4b5563', fontSize: 12, marginTop: 10, textAlign: 'center' },
+  btnDisabled: { background: 'var(--surface-alt)', color: 'var(--muted)', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
+  btnGhost: { background: 'transparent', color: 'var(--faint)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' },
+  hint: { color: 'var(--muted)', fontSize: 12, marginTop: 10, textAlign: 'center' },
 }

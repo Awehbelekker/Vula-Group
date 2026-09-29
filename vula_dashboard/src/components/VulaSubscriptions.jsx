@@ -3,10 +3,10 @@ import { VULA_API } from "../lib/authFetch";
 
 
 const C = {
-  bg: "#F7F4EE", surface: "#FFFFFF", surfaceAlt: "#F0EDE5",
-  border: "#DDD8CE", green: "var(--accent)", greenLight: "#3D7260",
-  amber: "#D97706", red: "#DC2626", blue: "#1D4ED8",
-  charcoal: "#1E1E1E", text: "#2A2A2A", muted: "#8A8680",
+  bg: "var(--bg)", surface: "var(--surface)", surfaceAlt: "var(--surface-alt)",
+  border: "var(--border)", green: "var(--accent)", greenLight: "var(--accent-dark)",
+  amber: "var(--warn)", red: "var(--danger)", blue: "#1D4ED8",
+  charcoal: "var(--ink)", text: "var(--text)", muted: "var(--muted)",
 };
 
 const PLAN_PRICE = { starter: 1500, growth: 3500, business: 7500 };
@@ -18,7 +18,7 @@ function daysUntil(isoDate) {
 }
 
 function subState(t) {
-  if (t.paid) return { label: "Paid", color: C.green, priority: 0 };
+  if (t.paid) return { label: "Paid", color: 'var(--ok)', priority: 0 };
   const d = daysUntil(t.trial_ends);
   if (d === null) return { label: "Unknown", color: C.muted, priority: 4 };
   if (d < 0) return { label: "Expired", color: C.red, priority: 1 };
@@ -36,7 +36,7 @@ function StatCard({ label, value, sub, color = C.green }) {
       <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, fontFamily: "'Source Code Pro', monospace", marginBottom: 8 }}>
         {label}
       </div>
-      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 36, fontWeight: 700, color, lineHeight: 1 }}>
+      <div style={{ fontFamily: "var(--font-display)", fontSize: 36, fontWeight: 700, color, lineHeight: 1 }}>
         {value}
       </div>
       {sub && <div style={{ fontSize: 11, color: C.muted, marginTop: 6, fontFamily: "'Source Code Pro', monospace" }}>{sub}</div>}
@@ -67,8 +67,8 @@ function TenantRow({ t, selected, onSelect }) {
     <div
       onClick={() => onSelect(selected ? null : t)}
       style={{
-        background: selected ? `${C.green}06` : C.surface,
-        border: `1px solid ${selected ? C.green + "40" : C.border}`,
+        background: selected ? `color-mix(in srgb, ${C.green} 2%, transparent)` : C.surface,
+        border: `1px solid ${selected ? `color-mix(in srgb, ${C.green} 25%, transparent)` : C.border}`,
         borderRadius: 10, padding: "14px 20px",
         cursor: "pointer", transition: "all 0.15s",
       }}
@@ -77,7 +77,7 @@ function TenantRow({ t, selected, onSelect }) {
 
         {/* Company + contact */}
         <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 17, color: C.charcoal, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 17, color: C.charcoal, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {t.company_name}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{t.contact_name}</div>
@@ -87,7 +87,7 @@ function TenantRow({ t, selected, onSelect }) {
         <span style={{
           padding: "3px 10px", borderRadius: 6,
           background: planColor + "14", color: planColor,
-          border: `1px solid ${planColor}30`,
+          border: `1px solid color-mix(in srgb, ${planColor} 19%, transparent)`,
           fontSize: 10, fontWeight: 700,
           fontFamily: "'Source Code Pro', monospace",
           letterSpacing: "0.06em", textTransform: "uppercase",
@@ -99,8 +99,8 @@ function TenantRow({ t, selected, onSelect }) {
         {/* Subscription state */}
         <span style={{
           padding: "3px 10px", borderRadius: 6,
-          background: state.color + "14", color: state.color,
-          border: `1px solid ${state.color}30`,
+          background: `color-mix(in srgb, ${state.color} 8%, transparent)`, color: state.color,
+          border: `1px solid color-mix(in srgb, ${state.color} 19%, transparent)`,
           fontSize: 10, fontWeight: 600,
           fontFamily: "'Source Code Pro', monospace",
           flexShrink: 0,
@@ -130,7 +130,7 @@ function TenantRow({ t, selected, onSelect }) {
           <Detail label="Email" value={t.email} />
           <Detail label="WhatsApp" value={t.whatsapp || "Not provided"} />
           <Detail label="Trial ends" value={t.trial_ends ? t.trial_ends.slice(0, 10) : "—"} />
-          <Detail label="Payment" value={t.paid ? "Paid ✓" : "Unpaid"} color={t.paid ? C.green : C.amber} />
+          <Detail label="Payment" value={t.paid ? "Paid ✓" : "Unpaid"} color={t.paid ? 'var(--ok)' : C.amber} />
           <Detail label="Status" value={t.status} />
           <Detail label="Signup" value={t.created_at ? new Date(t.created_at).toLocaleDateString("en-ZA") : "—"} />
         </div>
@@ -143,7 +143,7 @@ function Detail({ label, value, color }) {
   return (
     <div>
       <div style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, fontFamily: "'Source Code Pro', monospace", marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 13, color: color ?? C.text, fontFamily: "system-ui" }}>{value}</div>
+      <div style={{ fontSize: 13, color: color ?? C.text}}>{value}</div>
     </div>
   );
 }
@@ -207,19 +207,19 @@ export default function VulaSubscriptions() {
     { title: "Expired — needs reactivation", color: C.red, filter: (t) => !t.paid && (daysUntil(t.trial_ends) ?? 1) < 0 },
     { title: "Expiring in 3 days", color: C.red, filter: (t) => { const d = daysUntil(t.trial_ends); return !t.paid && d !== null && d >= 0 && d <= 3; } },
     { title: "Expiring this week", color: C.amber, filter: (t) => { const d = daysUntil(t.trial_ends); return !t.paid && d !== null && d > 3 && d <= 7; } },
-    { title: "Active paid subscribers", color: C.green, filter: (t) => t.paid },
+    { title: "Active paid subscribers", color: 'var(--ok)', filter: (t) => t.paid },
     { title: "On trial — healthy", color: C.muted, filter: (t) => { const d = daysUntil(t.trial_ends); return !t.paid && d !== null && d > 7; } },
   ];
 
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap');`}</style>
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px", fontFamily: "system-ui" }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px"}}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 28 }}>
           <div>
-            <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 32, fontWeight: 700, color: C.charcoal, marginBottom: 4 }}>
+            <h1 style={{ fontFamily: "var(--font-display)", fontSize: 32, fontWeight: 700, color: C.charcoal, marginBottom: 4 }}>
               Subscriptions
             </h1>
             <p style={{ fontSize: 13, color: C.muted, fontFamily: "'Source Code Pro', monospace" }}>
@@ -243,7 +243,7 @@ export default function VulaSubscriptions() {
 
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 28 }}>
-          <StatCard label="Monthly Recurring Revenue" value={`R${(mrr / 1000).toFixed(1)}k`} sub={`${paid.length} paid client${paid.length !== 1 ? "s" : ""}`} color={C.green} />
+          <StatCard label="Monthly Recurring Revenue" value={`R${(mrr / 1000).toFixed(1)}k`} sub={`${paid.length} paid client${paid.length !== 1 ? "s" : ""}`} color={'var(--ok)'} />
           <StatCard label="Total Tenants" value={tenants.length} sub="all plans" />
           <StatCard label="Expiring Soon" value={soonCount} sub="within 7 days" color={soonCount > 0 ? C.amber : C.muted} />
           <StatCard label="Expired" value={expiredCount} sub="needs follow-up" color={expiredCount > 0 ? C.red : C.muted} />
@@ -258,7 +258,7 @@ export default function VulaSubscriptions() {
               style={{
                 padding: "6px 18px", borderRadius: 20,
                 border: `1px solid ${view === v.id ? C.green : C.border}`,
-                background: view === v.id ? `${C.green}12` : C.surface,
+                background: view === v.id ? `color-mix(in srgb, ${C.green} 7%, transparent)` : C.surface,
                 color: view === v.id ? C.green : C.muted,
                 fontSize: 12, cursor: "pointer",
                 fontFamily: "'Source Code Pro', monospace",
@@ -271,7 +271,7 @@ export default function VulaSubscriptions() {
 
         {/* Error */}
         {error && (
-          <div style={{ padding: 20, borderRadius: 10, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 13, color: "#991B1B", marginBottom: 20 }}>
+          <div style={{ padding: 20, borderRadius: 10, background: "var(--danger-soft)", border: "1px solid var(--danger-soft)", fontSize: 13, color: "var(--danger)", marginBottom: 20 }}>
             <strong>Could not load:</strong> {error}
           </div>
         )}
@@ -298,7 +298,7 @@ export default function VulaSubscriptions() {
             {tenants.length === 0 && (
               <div style={{ textAlign: "center", padding: 60, background: C.surface, borderRadius: 12, border: `1px solid ${C.border}` }}>
                 <div style={{ fontSize: 32, marginBottom: 12 }}>💳</div>
-                <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: C.charcoal, marginBottom: 8 }}>No tenants yet</div>
+                <div style={{ fontFamily: "var(--font-display)", fontSize: 20, color: C.charcoal, marginBottom: 8 }}>No tenants yet</div>
                 <p style={{ fontSize: 13, color: C.muted }}>Onboard your first client to see subscription data here.</p>
               </div>
             )}

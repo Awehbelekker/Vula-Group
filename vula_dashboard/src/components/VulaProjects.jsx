@@ -9,14 +9,14 @@ import { VULA_API } from "../lib/authFetch";
 
 
 const C = {
-  bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "var(--accent)", amber: "#C4861A", red: "#C0392B",
-  text: "#2A2A2A", muted: "#8A8680", surfaceAlt: "#F0EDE5",
+  bg: "var(--bg)", surface: "var(--surface)", border: "var(--border)",
+  green: "var(--accent)", amber: "var(--warn)", red: "var(--danger)",
+  text: "var(--text)", muted: "var(--muted)", surfaceAlt: "var(--surface-alt)",
 };
-const STATUS_COLOR = { active: C.green, on_hold: C.amber, complete: C.muted };
+const STATUS_COLOR = { active: 'var(--ok)', on_hold: C.amber, complete: C.muted };
 
 const inp = { width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, color: C.text, background: C.surface, boxSizing: "border-box" };
-const btn = { padding: "8px 14px", background: C.green, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" };
+const btn = { padding: "8px 14px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" };
 const btnGhost = { padding: "6px 12px", background: C.surface, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, cursor: "pointer" };
 
 export default function VulaProjects({ tenantId }) {
@@ -86,7 +86,7 @@ export default function VulaProjects({ tenantId }) {
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: "24px" }}>
-      <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>Projects</h1>
+      <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>Projects</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 20px" }}>Projects, the master code library, and your professional team — one command centre.</p>
 
       <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -174,7 +174,7 @@ export default function VulaProjects({ tenantId }) {
           )}
         </div>
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 24 }}>Powered by Vula</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 24 }}>Powered by Vula</p>
     </div>
   );
 }

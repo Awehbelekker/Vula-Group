@@ -6,6 +6,7 @@
  * - Filter by month, export to CSV
  */
 
+import { confirmDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback } from 'react'
 import { VULA_API } from '../lib/authFetch'
 
@@ -13,8 +14,8 @@ import { VULA_API } from '../lib/authFetch'
 const CATEGORIES = ['stock', 'delivery', 'packaging', 'marketing', 'equipment', 'staff', 'rent', 'utilities', 'other']
 
 const CAT_COLORS = {
-  stock: '#2DAAB5', delivery: '#8b5cf6', packaging: '#f59e0b', marketing: '#ef4444',
-  equipment: '#0ea5e9', staff: '#10b981', rent: '#6366f1', utilities: '#ec4899', other: '#6b7280',
+  stock: '#2DAAB5', delivery: '#8b5cf6', packaging: 'var(--warn)', marketing: 'var(--danger)',
+  equipment: '#0ea5e9', staff: 'var(--ok)', rent: '#6366f1', utilities: '#ec4899', other: 'var(--muted)',
 }
 
 export default function VulaBudget({ tenantId, stats }) {
@@ -75,7 +76,7 @@ export default function VulaBudget({ tenantId, stats }) {
   }
 
   async function cancelRecurring(id) {
-    if (!window.confirm('Stop this recurring bill? Past expenses it already created stay on the books.')) return
+    if (!(await confirmDialog('Stop this recurring bill? Past expenses it already created stay on the books.', { danger: true, confirmLabel: 'Yes' }))) return
     await fetch(`${VULA_API}/v1/recurring-bills/${tenantId}/${id}/status`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'cancelled' }),
@@ -138,11 +139,11 @@ export default function VulaBudget({ tenantId, stats }) {
           <p style={s.sumLabel}>Total revenue</p>
         </div>
         <div style={s.sumCard}>
-          <p style={{ ...s.sumValue, color: '#ef4444' }}>{fmt(total)}</p>
+          <p style={{ ...s.sumValue, color: 'var(--danger)' }}>{fmt(total)}</p>
           <p style={s.sumLabel}>Expenses ({month})</p>
         </div>
         <div style={s.sumCard}>
-          <p style={{ ...s.sumValue, color: profit >= 0 ? '#16a34a' : '#ef4444' }}>{fmt(profit)}</p>
+          <p style={{ ...s.sumValue, color: profit >= 0 ? 'var(--ok)' : 'var(--danger)' }}>{fmt(profit)}</p>
           <p style={s.sumLabel}>Gross profit</p>
         </div>
       </div>
@@ -158,7 +159,7 @@ export default function VulaBudget({ tenantId, stats }) {
             <div key={e.id} style={s.dueRow}>
               <div style={{ flex: 1 }}>
                 <span style={s.dueDesc}>{e.description || e.supplier || 'Expense'}</span>
-                <span style={{ ...s.dueMeta, color: e._over ? '#ef4444' : '#8A8680' }}>
+                <span style={{ ...s.dueMeta, color: e._over ? 'var(--danger)' : 'var(--muted)' }}>
                   {e._over ? '⚠ overdue' : 'due'} {e.due_date}{e.supplier ? ` · ${e.supplier}` : ''}
                 </span>
               </div>
@@ -175,7 +176,7 @@ export default function VulaBudget({ tenantId, stats }) {
           <span style={s.dueTitle}>🔁 Recurring bills</span>
           <button onClick={() => setShowAddRecurring(!showAddRecurring)} style={s.smallAddBtn}>+ Add</button>
         </div>
-        <p style={{ ...s.dueMeta, color: '#8A8680', margin: '0 0 8px' }}>
+        <p style={{ ...s.dueMeta, color: 'var(--muted)', margin: '0 0 8px' }}>
           Rent, utilities, software — Vula creates the expense automatically ahead of each due date.
         </p>
         {showAddRecurring && (
@@ -199,7 +200,7 @@ export default function VulaBudget({ tenantId, stats }) {
                 onChange={e => setRForm({ ...rForm, amount: e.target.value })} style={s.input} required />
             </div>
             <div style={s.formRow}>
-              <label style={{ ...s.dueMeta, color: '#8A8680', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <label style={{ ...s.dueMeta, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 Next due
                 <input type="date" value={rForm.next_due}
                   onChange={e => setRForm({ ...rForm, next_due: e.target.value })} style={s.input} required />
@@ -214,7 +215,7 @@ export default function VulaBudget({ tenantId, stats }) {
           <div key={b.id} style={s.dueRow}>
             <div style={{ flex: 1 }}>
               <span style={s.dueDesc}>{b.description}</span>
-              <span style={{ ...s.dueMeta, color: '#8A8680' }}>
+              <span style={{ ...s.dueMeta, color: 'var(--muted)' }}>
                 {b.cadence} · next {b.next_due}{b.supplier ? ` · ${b.supplier}` : ''}
               </span>
             </div>
@@ -228,7 +229,7 @@ export default function VulaBudget({ tenantId, stats }) {
       {Object.keys(byCat).length > 0 && (
         <div style={s.catBar}>
           {Object.entries(byCat).map(([cat, amt]) => (
-            <div key={cat} style={{ flex: amt, background: CAT_COLORS[cat] || '#6b7280', height: 8 }} title={`${cat}: ${fmt(amt)}`} />
+            <div key={cat} style={{ flex: amt, background: CAT_COLORS[cat] || 'var(--muted)', height: 8 }} title={`${cat}: ${fmt(amt)}`} />
           ))}
         </div>
       )}
@@ -254,7 +255,7 @@ export default function VulaBudget({ tenantId, stats }) {
             <input placeholder="Supplier (optional)" value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })} style={s.input} />
             <input placeholder="Amount (R)" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} style={s.input} required />
           </div>
-          <label style={{ ...s.dueMeta, color: '#8A8680', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label style={{ ...s.dueMeta, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
             Due date (optional — leave blank if already paid)
             <input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} style={s.input} />
           </label>
@@ -264,10 +265,10 @@ export default function VulaBudget({ tenantId, stats }) {
 
       {/* Expense list */}
       {loading ? <p style={s.muted}>Loading…</p> : expenses.length === 0 ? (
-        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: '#FFFFFF', border: '1px solid #DDD8CE', borderRadius: 12, padding: 32 }}>
+        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 32 }}>
           <div style={{ fontSize: 32, marginBottom: 10 }}>💰</div>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', marginBottom: 6 }}>Start tracking spend</div>
-          <p style={{ fontSize: 13, color: '#8A8680', lineHeight: 1.55, margin: '0 0 16px' }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>Start tracking spend</div>
+          <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, margin: '0 0 16px' }}>
             Log your first expense to see budget-vs-actual by category. Fastest way: snap a receipt
             with the <b>Smart Scanner</b> and Vula fills it in for you.
           </p>
@@ -294,35 +295,35 @@ export default function VulaBudget({ tenantId, stats }) {
 
 const s = {
   summary:    { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 12 },
-  sumCard:    { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '14px 12px', textAlign: 'center' },
-  sumValue:   { fontFamily: "'Cormorant Garamond', serif", fontSize: 22, fontWeight: 700, margin: '0 0 2px' },
-  sumLabel:   { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: 0 },
+  sumCard:    { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 12px', textAlign: 'center' },
+  sumValue:   { fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, margin: '0 0 2px' },
+  sumLabel:   { fontSize: 11, color: 'var(--muted)', margin: 0 },
   catBar:     { display: 'flex', borderRadius: 4, overflow: 'hidden', marginBottom: 16, gap: 1 },
-  duePanel:   { background: '#fff', border: '1px solid #F0D6A8', borderRadius: 10, padding: 14, marginBottom: 16 },
+  duePanel:   { background: 'var(--surface)', border: '1px solid #F0D6A8', borderRadius: 10, padding: 14, marginBottom: 16 },
   dueHead:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  dueTitle:   { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: '#1E1E1E' },
-  dueTotal:   { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: '#E8B86E' },
+  dueTitle:   { fontSize: 13, fontWeight: 700, color: 'var(--ink)' },
+  dueTotal:   { fontSize: 15, fontWeight: 700, color: '#E8B86E' },
   dueRow:     { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #F5F0E6' },
-  dueDesc:    { display: 'block', fontFamily: 'system-ui', fontSize: 13, fontWeight: 500, color: '#1E1E1E' },
-  dueMeta:    { display: 'block', fontFamily: 'system-ui', fontSize: 11 },
-  dueAmt:     { fontFamily: 'system-ui', fontSize: 14, fontWeight: 700, color: '#1E1E1E' },
-  payBtn:     { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  smallAddBtn:{ padding: '5px 10px', background: 'transparent', color: 'var(--accent, var(--accent))', border: '1px solid var(--accent, var(--accent))', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  dueDesc:    { display: 'block', fontSize: 13, fontWeight: 500, color: 'var(--ink)' },
+  dueMeta:    { display: 'block', fontSize: 11 },
+  dueAmt:     { fontSize: 14, fontWeight: 700, color: 'var(--ink)' },
+  payBtn:     { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer'},
+  smallAddBtn:{ padding: '5px 10px', background: 'transparent', color: 'var(--accent, var(--accent))', border: '1px solid var(--accent, var(--accent))', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer'},
   controls:   { display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' },
-  monthInput: { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13 },
-  addBtn:     { padding: '7px 14px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
-  exportBtn:  { padding: '7px 12px', background: 'transparent', color: '#8A8680', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', marginLeft: 'auto' },
-  addForm:    { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: 14, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
+  monthInput: { padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 },
+  addBtn:     { padding: '7px 14px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontWeight: 600 },
+  exportBtn:  { padding: '7px 12px', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, cursor: 'pointer', marginLeft: 'auto' },
+  addForm:    { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   formRow:    { display: 'flex', gap: 8 },
-  select:     { flex: 1, padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13 },
-  input:      { flex: 1, padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, boxSizing: 'border-box' },
-  saveBtn:    { padding: '9px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  select:     { flex: 1, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 },
+  input:      { flex: 1, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' },
+  saveBtn:    { padding: '9px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer'},
   list:       { display: 'flex', flexDirection: 'column', gap: 6 },
-  expRow:     { display: 'flex', alignItems: 'center', gap: 10, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px' },
+  expRow:     { display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' },
   catDot:     { width: 10, height: 10, borderRadius: '50%', flexShrink: 0 },
-  expDesc:    { display: 'block', fontFamily: 'system-ui', fontSize: 13, fontWeight: 500, color: '#1E1E1E' },
-  expMeta:    { display: 'block', fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
-  expAmt:     { fontFamily: 'system-ui', fontSize: 14, fontWeight: 700, color: '#ef4444' },
-  delBtn:     { background: 'transparent', border: 'none', color: '#B5B0A8', fontSize: 18, cursor: 'pointer', lineHeight: 1 },
-  muted:      { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '24px 0' },
+  expDesc:    { display: 'block', fontSize: 13, fontWeight: 500, color: 'var(--ink)' },
+  expMeta:    { display: 'block', fontSize: 11, color: 'var(--muted)' },
+  expAmt:     { fontSize: 14, fontWeight: 700, color: 'var(--danger)' },
+  delBtn:     { background: 'transparent', border: 'none', color: 'var(--faint)', fontSize: 18, cursor: 'pointer', lineHeight: 1 },
+  muted:      { color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '24px 0' },
 }

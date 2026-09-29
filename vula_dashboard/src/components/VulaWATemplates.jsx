@@ -3,14 +3,15 @@
  * for the templates Vula needs to message people outside the 24h conversation window (proactive
  * notifications, opt-in campaigns). Backend: /v1/commerce/{tenant}/admin/wa-templates.
  */
+import { confirmDialog } from './ui/index.jsx'
 import { useEffect, useState } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", amber: "#B7791F", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const api = (t, p, opts) => fetch(`${VULA_API}/v1/commerce/${t}/admin${p}`, opts).then(r => r.json());
 
 const STATUS = {
-  APPROVED: { label: "Approved", color: C.green },
+  APPROVED: { label: "Approved", color: 'var(--ok)' },
   PENDING: { label: "Pending review", color: C.amber },
   REJECTED: { label: "Rejected", color: C.red },
   UNKNOWN: { label: "Unknown", color: C.muted },
@@ -33,14 +34,14 @@ export default function VulaWATemplates({ tenantId }) {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [tenantId]);
 
   const remove = async (name) => {
-    if (!window.confirm(`Delete template "${name}"? This can't be undone.`)) return;
+    if (!(await confirmDialog(`Delete template "${name}"? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return;
     const r = await api(tenantId, `/wa-templates/${name}`, { method: "DELETE" }).catch(() => ({ error: "network" }));
     flash(r.error || `Deleted "${name}".`);
     load();
   };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text, maxWidth: 900 }}>
+    <div style={{ color: C.text, maxWidth: 900 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0" }}>📨 WhatsApp templates</h4>
         <span style={{ fontSize: 12.5, color: C.muted }}>
@@ -187,8 +188,8 @@ function AddForm({ tenantId, onDone, flash }) {
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 };
 const btn = { padding: "7px 13px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const miniBtn = { padding: "3px 9px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, fontSize: 11.5, cursor: "pointer" };
-const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text, fontFamily: "system-ui" };
+const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text};
 const th = { padding: "8px 10px", fontWeight: 600, whiteSpace: "nowrap" };
 const td = { padding: "8px 10px", verticalAlign: "top" };

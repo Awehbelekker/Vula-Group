@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
 export default function VulaRepCrmContacts({ tenantId, repPhone }) {
   const [contacts, setContacts] = useState([]);
@@ -57,8 +57,8 @@ export default function VulaRepCrmContacts({ tenantId, repPhone }) {
         </div>
         <input placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}
                style={{ ...inputStyle, width: "100%", marginTop: 8 }} />
-        {msg && <div style={{ fontSize: 12.5, color: "#A23B2D", marginTop: 8 }}>{msg}</div>}
-        <button onClick={save} style={{ marginTop: 10, padding: "8px 16px", background: C.green, color: "#fff",
+        {msg && <div style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 8 }}>{msg}</div>}
+        <button onClick={save} style={{ marginTop: 10, padding: "8px 16px", background: C.green, color: "var(--on-accent)",
                  border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Save contact</button>
       </div>
 

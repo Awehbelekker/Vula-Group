@@ -3,10 +3,11 @@
  * Load day/week workers (name/ID/bank/rate/project); Vula recognises their payments off the bank
  * statement and files them as casual labour. Backend: /v1/commerce/{tenant}/admin/workers + reports/labour.
  */
+import { confirmDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const blank = { name: "", id_number: "", bank_account: "", phone: "", rate_rands: "", rate_period: "daily", type: "casual", default_project: "" };
 
@@ -42,13 +43,13 @@ export default function VulaLabour({ tenantId }) {
 
   const edit = (w) => { setF({ ...blank, ...w, rate_rands: w.rate_cents ? (w.rate_cents / 100).toString() : "" }); setEditing(true); };
   const remove = async (id) => {
-    if (!window.confirm("Remove this worker from the active register?")) return;
+    if (!(await confirmDialog("Remove this worker from the active register?", { danger: true, confirmLabel: 'Yes' }))) return;
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/workers/${id}`, { method: "DELETE" }).catch(() => {});
     load();
   };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text, maxWidth: 760 }}>
+    <div style={{ color: C.text, maxWidth: 760 }}>
       <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0 2px" }}>👷 Casual labour</h4>
       <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>
         Load a worker once — Vula recognises their payments on the bank statement, files them as casual labour, and costs them to the project. Your accountant gets the record for PAYE/UIF; Vula doesn't file returns.
@@ -124,6 +125,6 @@ const Row = ({ a, b }) => (
 
 const card = { display: "flex", alignItems: "center", gap: 10, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8 };
 const btn = { padding: "7px 14px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const miniBtn = { padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
-const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text, fontFamily: "system-ui" };
+const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text};

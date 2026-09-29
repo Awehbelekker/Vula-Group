@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from vula.api.tenant_auth import require_tenant_actor
 from vula.api import merchant_audit
+from vula import team_index as _team_index
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["team"])
@@ -73,6 +74,7 @@ async def add_member(tenant: str, body: MemberIn,
     try:
         res = _client().table("vula_team_members").upsert(
             row, on_conflict="tenant_id,whatsapp").execute()
+        _team_index.invalidate(tenant)
         merchant_audit.audit(tenant, identity, "member_added",
                              name=row.get("name"), email=row.get("email"), role=row.get("role"))
         return {"member": (res.data or [row])[0]}
@@ -114,6 +116,7 @@ async def update_member(tenant: str, member_id: str, body: MemberPatch,
         _client().table("vula_team_members").update(patch).eq("id", member_id).eq("tenant_id", tenant).execute()
     except Exception as exc:
         return {"error": str(exc)}
+    _team_index.invalidate(tenant)
 
     login_revoked = False
     if patch.get("active") is False:
@@ -130,6 +133,7 @@ async def remove_member(tenant: str, member_id: str,
                         identity: dict = Depends(require_tenant_actor)) -> dict:
     try:
         _client().table("vula_team_members").delete().eq("id", member_id).eq("tenant_id", tenant).execute()
+        _team_index.invalidate(tenant)
         merchant_audit.audit(tenant, identity, "member_removed", member_id=member_id)
     except Exception:
         pass

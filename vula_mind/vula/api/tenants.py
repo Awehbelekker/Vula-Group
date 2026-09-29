@@ -22,7 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from vula.api.master_auth import require_master
+from vula.api.master_auth import require_auth, require_master
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["tenants"])
@@ -76,9 +76,24 @@ BUSINESS_TYPES: dict[str, dict] = {
     "health":   {"label": "Health / Wellness / Bookings",
                  "modules": ["bookings", "invoices", "crm", "followups", "broadcasts", "marketing",
                              "inbox", "reports", "pages", "team"]},
+    # 2026-09-29: a sales-rep business (Gerflor Western Cape): no products or orders of its own,
+    # no projects — contacts, follow-ups, product knowledge and expense slips.
+    "rep":      {"label": "Sales rep / Agency (represents a brand)",
+                 "modules": ["crm", "followups", "documents", "team", "reports"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team"]},
 }
+
+
+def valid_business_type(bt: Optional[str]) -> str:
+    """A known business type or "other" — signup used to store any free-text string, which then
+    matched no preset and no routing rule."""
+    bt = (bt or "").strip().lower()
+    return bt if bt in BUSINESS_TYPES else "other"
+
+
+def valid_modules(mods) -> list:
+    return [m for m in (mods or []) if isinstance(m, str) and m in MODULES]
 
 
 def _client():
@@ -100,15 +115,20 @@ def get_config(tenant_id: str, fresh: bool = False) -> dict:
     """Operational config for a tenant (cached). Empty dict if none / table missing."""
     if not fresh:
         hit = _CACHE.get(tenant_id)
-        if hit and (time.time() - hit[0]) < _TTL:
+        if isinstance(hit, tuple) and (time.time() - hit[0]) < _TTL:
             return hit[1]
     try:
         rows = (_client().table("vula_tenant_config").select("*")
                 .eq("tenant_id", tenant_id).limit(1).execute().data or [])
-        cfg = rows[0] if rows else {}
+        cfg = rows[0] if isinstance(rows, list) and rows else {}
+        if not isinstance(cfg, dict):
+            cfg = {}
     except Exception as exc:
-        log.debug("tenant_config read skipped (run migration 040?): %s", exc)
-        cfg = {}
+        # Never cache a failed read: a Supabase blip would otherwise make a real tenant look
+        # unconfigured (no modules, every tool, uses_projects) for the whole TTL.
+        log.debug("tenant_config read failed (run migration 040?): %s", exc)
+        hit = _CACHE.get(tenant_id)
+        return hit[1] if isinstance(hit, tuple) else {}
     _CACHE[tenant_id] = (time.time(), cfg)
     return cfg
 
@@ -207,6 +227,50 @@ def uses_projects(tenant_id: str) -> bool:
     return "projects" in _effective_modules(cfg)
 
 
+# ── Tenant profile: ONE answer to "what kind of business is this?" (2026-09-29) ──────────────
+# Before this, six signals decided tenant behaviour separately (business_type, modules,
+# uses_projects, a hardcoded WhatsApp route map, four role sets, hardcoded tenant ids) and they
+# contradicted each other: Gerflor (a flooring sales rep) was typed "trades" and got architecture
+# routing, the construction starter KB and a shop Home; DIGG's owner was offered order/stock
+# tools. Callers ask the profile instead of re-deriving it.
+_SELLS = {"products", "orders"}
+
+
+def tenant_profile(tenant_id: str) -> dict:
+    cfg = get_config(tenant_id) or {}
+    mods = _effective_modules(cfg) if cfg else []
+    btype = (cfg.get("business_type") or "other") if cfg else None
+    aliases = [a for a in (cfg.get("aliases") or []) if isinstance(a, str) and a.strip()]
+    return {
+        "tenant_id": tenant_id,
+        "known": bool(cfg),
+        "display_name": cfg.get("display_name") or display_name(tenant_id),
+        "business_type": btype,
+        "modules": mods,
+        "uses_projects": uses_projects(tenant_id),
+        "sells_products": bool(_SELLS & set(mods)) if cfg else True,
+        "is_rep_business": btype == "rep",
+        "aliases": aliases,
+        "description": cfg.get("description") or "",
+    }
+
+
+def what_i_do(tenant_id: str) -> str:
+    """One line a customer or new staff member can be told — built from the profile, never
+    another tenant's pitch ("I'm Vula, your construction AI" used to go to everyone)."""
+    p = tenant_profile(tenant_id)
+    name = p["display_name"]
+    if p["description"]:
+        return f"{name} — {p['description']}"
+    if p["is_rep_business"]:
+        return f"{name}: product information, samples, pricing questions and follow-ups."
+    if p["uses_projects"]:
+        return f"{name}: projects, documents, quotes and invoices."
+    if p["sells_products"]:
+        return f"{name}: products, orders, delivery and payments."
+    return f"{name}: questions, bookings and follow-ups."
+
+
 def _public(cfg: dict) -> dict:
     """Storefront/dashboard-safe subset (no internal columns)."""
     return {
@@ -215,6 +279,7 @@ def _public(cfg: dict) -> dict:
         "store_url": cfg.get("store_url"), "modules": _effective_modules(cfg),
         "default_payment_provider": cfg.get("default_payment_provider"),
         "status": cfg.get("status"),
+        "profile": tenant_profile(cfg["tenant_id"]) if cfg.get("tenant_id") else None,
     }
 
 
@@ -277,6 +342,50 @@ async def ai_spend(days: int = 14) -> dict:
     }
 
 
+def tenant_for_host(host: str) -> Optional[str]:
+    """Which business a dashboard address belongs to, so the login page shows its brand before
+    anyone signs in. Checks, in order: the tenant's own `domains`; its store's host with an
+    admin./app./dashboard. prefix (admin.offthehook.co.za → offthehook.co.za); then
+    <slug>.vula-ai.com. None for the apex, master or preview hosts."""
+    h = (host or "").strip().lower().split(":")[0]
+    if not h:
+        return None
+    bare = h
+    for pre in ("admin.", "app.", "dashboard.", "www."):
+        if bare.startswith(pre):
+            bare = bare[len(pre):]
+            break
+    try:
+        rows = _client().table("vula_tenant_config").select("tenant_id,domains,store_url").limit(500).execute().data or []
+    except Exception as exc:
+        log.debug("tenant_for_host lookup failed: %s", exc)
+        rows = []
+    for r in rows:
+        doms = {str(d).lower().strip() for d in (r.get("domains") or []) if d}
+        if h in doms or bare in doms:
+            return r["tenant_id"]
+    import re as _re
+    for r in rows:
+        store = _re.sub(r"^https?://", "", (r.get("store_url") or "").lower()).split("/")[0]
+        store = store[4:] if store.startswith("www.") else store
+        if store and store == bare and h != bare:          # only the admin./app. host, not the shop
+            return r["tenant_id"]
+    if bare.endswith(".vula-ai.com"):
+        slug = bare[: -len(".vula-ai.com")]
+        ids = {r["tenant_id"] for r in rows}
+        for cand in (slug, f"{slug}-demo"):
+            if cand in ids:
+                return cand
+    return None
+
+
+@router.get("/by-domain")
+async def get_tenant_by_domain(host: str) -> dict:
+    """Public: the tenant a dashboard hostname belongs to (no secrets — just the id), for a
+    branded login page."""
+    return {"tenant_id": tenant_for_host(host)}
+
+
 @router.get("/{tenant_id}")
 async def get_tenant(tenant_id: str) -> dict:
     cfg = get_config(tenant_id, fresh=True)
@@ -299,10 +408,11 @@ class TenantIn(BaseModel):
 async def create_tenant(body: TenantIn, identity: dict = Depends(require_master)) -> dict:
     """Seed a tenant from a business type — modules auto-enabled from the preset. Master-only
     (verified JWT) since 2026-07-16 — was previously open to any caller."""
-    preset = BUSINESS_TYPES.get(body.business_type or "other", BUSINESS_TYPES["other"])
+    btype = valid_business_type(body.business_type)
+    preset = BUSINESS_TYPES[btype]
     row = {
         "tenant_id": body.tenant_id, "display_name": body.display_name or body.tenant_id,
-        "business_type": body.business_type or "other", "store_url": body.store_url,
+        "business_type": btype, "store_url": body.store_url,
         "modules": preset["modules"], "plan": body.plan or "starter",
         "status": "active", "updated_at": _now(),
     }
@@ -331,7 +441,7 @@ async def create_tenant(body: TenantIn, identity: dict = Depends(require_master)
             from vula.commerce.background_tasks import run_background
             from vula.commerce.starter_kb import seed_starter_kb
             run_background(body.tenant_id, "starter_kb_seed",
-                            seed_starter_kb(body.tenant_id, body.business_type or "other"))
+                            seed_starter_kb(body.tenant_id, btype))
         except Exception as exc:
             log.debug("starter_kb seeding skipped for %s: %s", body.tenant_id, exc)
     try:
@@ -374,3 +484,61 @@ async def patch_tenant(tenant_id: str, body: TenantPatch,
     except Exception:
         pass
     return {"tenant": _public(get_config(tenant_id, fresh=True))}
+
+
+# ── Home: the cards each business chooses (2026-09-29) ────────────────────────
+# Ian: tenants had no way to "customise what they want to view". Home was built for online
+# orders, so a project business (DIGG) saw mostly zeros. The dashboard renders these ids in
+# this order (VulaMerchantAdmin OverviewTab); unknown ids are dropped, so an old saved layout
+# never breaks the page.
+HOME_CARDS = ("today", "checklist", "attention", "sales", "trend", "jobcosting", "crosscheck",
+              "customers", "assistant")
+_HOME_DEFAULT_SHOP = ["checklist", "attention", "sales", "trend", "customers", "assistant"]
+_HOME_DEFAULT_PROJECTS = ["checklist", "attention", "jobcosting", "crosscheck", "assistant"]
+_HOME_DEFAULT_REP = ["today", "checklist", "attention", "assistant"]
+_HOME_DEFAULT_GENERAL = ["checklist", "attention", "crosscheck", "assistant"]
+
+
+def home_default(tenant_id: str) -> list:
+    p = tenant_profile(tenant_id)
+    if p["is_rep_business"]:
+        return list(_HOME_DEFAULT_REP)
+    if p["uses_projects"]:
+        return list(_HOME_DEFAULT_PROJECTS)
+    if p["sells_products"]:
+        return list(_HOME_DEFAULT_SHOP)
+    return list(_HOME_DEFAULT_GENERAL)
+
+
+def _clean_cards(cards) -> list:
+    out = []
+    for c in cards or []:
+        if isinstance(c, str) and c in HOME_CARDS and c not in out:
+            out.append(c)
+    return out
+
+
+@router.get("/{tenant_id}/home", dependencies=[Depends(require_auth)])
+async def get_home_layout(tenant_id: str) -> dict:
+    saved = (get_config(tenant_id).get("home_layout") or {})
+    cards = _clean_cards(saved.get("cards") if isinstance(saved, dict) else None)
+    default = home_default(tenant_id)
+    return {"cards": cards or default, "default": default, "custom": bool(cards),
+            "available": list(HOME_CARDS)}
+
+
+class HomeLayoutIn(BaseModel):
+    cards: Optional[list] = None      # None or [] → back to the default
+
+
+@router.put("/{tenant_id}/home", dependencies=[Depends(require_auth)])
+async def put_home_layout(tenant_id: str, body: HomeLayoutIn) -> dict:
+    cards = _clean_cards(body.cards)
+    try:
+        (_client().table("vula_tenant_config")
+         .update({"home_layout": {"cards": cards} if cards else None, "updated_at": _now()})
+         .eq("tenant_id", tenant_id).execute())
+    except Exception as exc:
+        raise HTTPException(503, f"Could not save the Home layout (run migration 186?): {exc}")
+    _CACHE.pop(tenant_id, None)
+    return await get_home_layout(tenant_id)

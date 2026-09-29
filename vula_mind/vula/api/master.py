@@ -81,7 +81,68 @@ async def master_tenants():
             "trial_ends": s.get("trial_ends"), "signup_email": s.get("email"),
             "logins": user_counts.get(c["tenant_id"], 0),
         })
+    signals = _tenant_signals(db, [t["tenant_id"] for t in out])
+    for t in out:
+        t.update(signals.get(t["tenant_id"], {}))
+        t.update(_health(t))
     return {"tenants": out}
+
+
+_DORMANT_DAYS = 30
+
+
+def _tenant_signals(db, tenant_ids: list) -> dict:
+    """Per tenant: WhatsApp status, open escalations, last customer/owner message. Each signal is
+    best-effort — a missing table leaves it out rather than failing the Tenants list."""
+    out: dict = {tid: {} for tid in tenant_ids}
+    try:
+        for r in db.table("vula_whatsapp_accounts").select("tenant_id,status").execute().data or []:
+            if r.get("tenant_id") in out and out[r["tenant_id"]].get("whatsapp") != "connected":
+                out[r["tenant_id"]]["whatsapp"] = r.get("status") or "unknown"
+    except Exception as exc:
+        log.debug("tenant signals: whatsapp skipped: %s", exc)
+    try:
+        for r in (db.table("vula_escalations").select("tenant_id").eq("status", "open")
+                  .limit(2000).execute().data or []):
+            if r.get("tenant_id") in out:
+                out[r["tenant_id"]]["open_escalations"] = out[r["tenant_id"]].get("open_escalations", 0) + 1
+    except Exception as exc:
+        log.debug("tenant signals: escalations skipped: %s", exc)
+    for tid in tenant_ids:
+        try:
+            last = (db.table("commerce_conversation_messages").select("created_at")
+                    .eq("tenant_id", tid).eq("role", "user").order("created_at", desc=True)
+                    .limit(1).execute().data or [])
+            out[tid]["last_activity"] = last[0]["created_at"] if last else None
+        except Exception as exc:
+            log.debug("tenant signals: last activity skipped for %s: %s", tid, exc)
+    return out
+
+
+def _health(t: dict) -> dict:
+    """A traffic light per tenant for the Tenants list, with the reasons behind it."""
+    from datetime import datetime, timezone
+    if t.get("active") is False:
+        return {"health": "off", "health_reasons": ["Suspended"]}
+    red, amber = [], []
+    if "whatsapp" in t and t["whatsapp"] != "connected":
+        red.append(f"WhatsApp {t['whatsapp']}")
+    elif "whatsapp" not in t:
+        amber.append("No WhatsApp number")
+    if t.get("open_escalations"):
+        amber.append(f"{t['open_escalations']} unanswered question(s) for the team")
+    if "last_activity" in t:
+        last = t.get("last_activity")
+        try:
+            days = (datetime.now(timezone.utc)
+                    - datetime.fromisoformat(str(last).replace("Z", "+00:00"))).days if last else None
+        except ValueError:
+            days = None
+        if days is None or days >= _DORMANT_DAYS:
+            amber.append("No messages in 30 days" if last else "No messages yet")
+            t["dormant"] = True
+    return {"health": "red" if red else ("amber" if amber else "green"),
+            "health_reasons": red + amber, "dormant": bool(t.get("dormant"))}
 
 
 @router.patch("/tenants/{tenant_id}")
@@ -94,6 +155,13 @@ async def master_update_tenant(tenant_id: str, body: dict,
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if not patch:
         raise HTTPException(status_code=400, detail=f"nothing to update (allowed: {sorted(allowed)})")
+    from vula.api import tenants as _t
+    if "business_type" in patch:
+        if patch["business_type"] not in _t.BUSINESS_TYPES:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown business_type (one of {sorted(_t.BUSINESS_TYPES)})")
+    if "modules" in patch:
+        patch["modules"] = _t.valid_modules(patch["modules"])
     res = (_client().table("vula_tenant_config").update(patch)
            .eq("tenant_id", tenant_id).execute())
     if not res.data:
@@ -301,6 +369,14 @@ def setup_checklist(tenant_id: str) -> dict:
         {"id": "golive", "label": "First order through", "done": orders_n > 0, "tab": "orders",
          "detail": f"{orders_n} order(s)"},
     ]
+    # Only the steps that apply to this business (2026-09-29): a project business (DIGG) or a
+    # rep (Gerflor) was scored against "Storefront pages" and "First order through" it will
+    # never have. A step with no module requirement applies to everyone.
+    from vula.api.tenants import _effective_modules
+    mods = set(_effective_modules(cfg))
+    needs = {"payments": {"orders", "payments"}, "storefront": {"pages"}, "golive": {"orders"},
+             "vat": {"invoices", "finances", "orders"}}
+    steps = [st for st in steps if not needs.get(st["id"]) or (needs[st["id"]] & mods)]
     done = sum(1 for s in steps if s["done"])
     return {"tenant_id": tenant_id, "display_name": cfg.get("display_name"),
             "steps": steps, "done": done, "total": len(steps),
@@ -619,7 +695,9 @@ async def master_usage(days: int = 14):
         t["seat_count"] = seat_counts.get(tid, 0)
         t["seat_cap"] = SEAT_LIMITS.get(plan, 2)
 
-    return {"since": since, "per_tenant": per_tenant, "ai_daily": ai}
+    from config import settings as _settings
+    return {"since": since, "per_tenant": per_tenant, "ai_daily": ai,
+            "usd_zar_rate": float(getattr(_settings, "usd_zar_rate", 18.0) or 18.0)}
 
 
 # ── Users & access ────────────────────────────────────────────────────────────

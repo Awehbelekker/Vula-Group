@@ -59,7 +59,7 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
   return (
     <div style={{ padding: "24px", maxWidth: 900, margin: "0 auto" }}>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Vula Draft</h2>
-      <p style={{ color: "#8A8680", marginBottom: 24 }}>
+      <p style={{ color: "var(--muted)", marginBottom: 24 }}>
         Generate professional construction documents in seconds
       </p>
 
@@ -114,7 +114,7 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
       </div>
 
       {error && (
-        <div style={{ background: "#FEE", border: "1px solid #FCC", borderRadius: 8, padding: 12, color: "#900", marginBottom: 16 }}>
+        <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-soft)", borderRadius: 8, padding: 12, color: "#900", marginBottom: 16 }}>
           {error}
         </div>
       )}
@@ -122,7 +122,7 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
       {result && (
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ fontSize: 13, color: "#8A8680" }}>
+            <div style={{ fontSize: 13, color: "var(--muted)" }}>
               {result.word_count} words · {result.sources_used} KB sources · {result.document_label}
             </div>
             <button onClick={copyToClipboard} style={{ ...btnStyle(false), padding: "6px 16px", fontSize: 13 }}>
@@ -130,7 +130,7 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
             </button>
           </div>
           <pre style={{
-            background: "#F7F4EE", border: "1px solid #DDD8CE", borderRadius: 8,
+            background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8,
             padding: 20, whiteSpace: "pre-wrap", fontFamily: "inherit",
             fontSize: 14, lineHeight: 1.6, maxHeight: 600, overflowY: "auto"
           }}>
@@ -142,15 +142,15 @@ export default function VulaDraft({ tenantId: tenantIdProp }) {
   );
 }
 
-const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, color: "#1E1E1E", marginBottom: 6 };
+const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--ink)", marginBottom: 6 };
 const inputStyle = {
-  width: "100%", padding: "10px 12px", border: "1px solid #DDD8CE",
+  width: "100%", padding: "10px 12px", border: "1px solid var(--border)",
   borderRadius: 6, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box",
-  background: "#FFF", outline: "none",
+  background: "var(--surface)", outline: "none",
 };
 const btnStyle = (disabled) => ({
-  background: disabled ? "#C5C0B8" : "var(--accent)",
-  color: "#FFF", border: "none", borderRadius: 6,
+  background: disabled ? "var(--faint)" : "var(--accent)",
+  color: disabled ? "var(--bg)" : "var(--on-accent)", border: "none", borderRadius: 6,
   padding: "12px 24px", fontSize: 15, fontWeight: 600,
   cursor: disabled ? "not-allowed" : "pointer", width: "100%",
 });

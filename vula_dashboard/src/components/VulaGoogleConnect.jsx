@@ -80,25 +80,25 @@ export default function VulaGoogleConnect({ tenantId, tenantName }) {
 }
 
 function StatusBadge({ status }) {
-  const c = { connected: { l: 'Connected', c: '#22c55e', b: 'rgba(34,197,94,0.15)' },
-    error: { l: 'Error', c: '#ef4444', b: 'rgba(239,68,68,0.15)' },
-    not_connected: { l: 'Not connected', c: '#6b7280', b: 'rgba(107,114,128,0.15)' } }[status] || { l: 'Not connected', c: '#6b7280', b: 'rgba(107,114,128,0.15)' }
+  const c = { connected: { l: 'Connected', c: 'var(--ok)', b: 'rgba(34,197,94,0.15)' },
+    error: { l: 'Error', c: 'var(--danger)', b: 'rgba(239,68,68,0.15)' },
+    not_connected: { l: 'Not connected', c: 'var(--muted)', b: 'rgba(107,114,128,0.15)' } }[status] || { l: 'Not connected', c: 'var(--muted)', b: 'rgba(107,114,128,0.15)' }
   return <span style={{ ...styles.badge, color: c.c, background: c.b }}>{c.l}</span>
 }
 
 const styles = {
-  card: { background: '#111111', border: '1px solid #2a2a2a', borderRadius: 8, padding: 24, maxWidth: 480 },
+  card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, maxWidth: 480 },
   header: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 },
-  icon: { fontSize: 32 }, title: { margin: 0, color: '#f5f2ec', fontSize: 18, fontWeight: 600 },
-  subtitle: { margin: '2px 0 0', color: '#6b7280', fontSize: 13 },
+  icon: { fontSize: 32 }, title: { margin: 0, color: 'var(--ink)', fontSize: 18, fontWeight: 600 },
+  subtitle: { margin: '2px 0 0', color: 'var(--muted)', fontSize: 13 },
   badge: { marginLeft: 'auto', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 },
-  connectedInfo: { background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: 6, padding: 16, marginBottom: 16 },
-  infoRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1a1a1a' },
-  label: { color: '#6b7280', fontSize: 13 }, value: { color: '#f5f2ec', fontSize: 13, fontWeight: 500 },
-  description: { color: '#9ca3af', fontSize: 14, lineHeight: 1.6, margin: '0 0 16px' },
-  errorBox: { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
+  connectedInfo: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: 16, marginBottom: 16 },
+  infoRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-soft)' },
+  label: { color: 'var(--muted)', fontSize: 13 }, value: { color: 'var(--ink)', fontSize: 13, fontWeight: 500 },
+  description: { color: 'var(--muted)', fontSize: 14, lineHeight: 1.6, margin: '0 0 16px' },
+  errorBox: { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--danger)', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
   btn: { background: '#4285F4', color: '#fff', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', width: '100%' },
-  btnDisabled: { background: '#2a2a2a', color: '#6b7280', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
-  btnGhost: { background: 'transparent', color: '#9ca3af', border: '1px solid #2a2a2a', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' },
-  hint: { color: '#4b5563', fontSize: 12, marginTop: 10, textAlign: 'center' },
+  btnDisabled: { background: 'var(--surface-alt)', color: 'var(--muted)', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
+  btnGhost: { background: 'transparent', color: 'var(--faint)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' },
+  hint: { color: 'var(--muted)', fontSize: 12, marginTop: 10, textAlign: 'center' },
 }

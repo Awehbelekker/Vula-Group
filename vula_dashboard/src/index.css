@@ -5,11 +5,13 @@
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Source+Code+Pro:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
 
 :root {
-  /* Brand (overridden per tenant via JS) */
-  --accent: #2C5545;
-  --accent-dark: #234436;
-  --accent-soft: rgba(44, 85, 69, 0.10);
-  --on-accent: #FFFFFF;
+  /* Brand — from the tenant's brand kit via applyBrand() (theme/tokens.js), which sets the
+     --brand-* variables. Defaults are Vula's own brand. */
+  --accent: var(--brand-accent, #2C5545);
+  --accent-dark: var(--brand-accent-dark, #234436);
+  --accent-soft: var(--brand-accent-soft, rgba(44, 85, 69, 0.10));
+  --on-accent: var(--brand-on-accent, #FFFFFF);
+  --accent-2: var(--brand-accent-2, var(--accent-dark));
 
   /* Neutrals */
   --bg: #F7F4EE;
@@ -17,22 +19,29 @@
   --surface-alt: #F0EDE5;
   --border: #DDD8CE;
   --border-soft: #ECE8DF;
-  --ink: #1E1E1E;
+  --ink: var(--brand-ink, #1E1E1E);
   --text: #2A2A2A;
-  --muted: #8A8680;
+  --muted: #6E6A63;          /* AA on cream (was #8A8680, ~3.3:1) */
+  --faint: #8A8680;          /* decorative only — never for text you need to read */
 
-  /* Status */
-  --ok: #2C5545;
-  --warn: #C4861A;
+  /* Status — FIXED, never the brand colour: "Paid" is green for every business (DIGG's
+     charcoal accent turned it black), "Overdue" is red. */
+  --ok: #2E7D4F;
+  --ok-soft: rgba(46, 125, 79, 0.12);
+  --warn: #B7791F;
+  --warn-soft: rgba(183, 121, 31, 0.12);
   --danger: #A23B2D;
+  --danger-soft: rgba(162, 59, 45, 0.10);
   --info: #2B5797;
+  --info-soft: rgba(43, 87, 151, 0.10);
 
   /* Typography */
   --font-display: 'Cormorant Garamond', Georgia, serif;
   --font-body: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'Source Code Pro', ui-monospace, monospace;
+  --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13.5px; --fs-md: 15px; --fs-lg: 20px; --fs-xl: 28px;
 
-  /* Radii */
+  /* Radii — the brand's corner style (data-corners on <html>) */
   --r-card: 12px;
   --r-input: 9px;
   --r-pill: 999px;
@@ -42,8 +51,48 @@
   --shadow-md: 0 4px 16px rgba(30, 30, 30, 0.08);
   --shadow-lg: 0 12px 40px rgba(30, 30, 30, 0.14);
 
-  /* Spacing scale */
+  /* Spacing scale — the brand's density (data-density on <html>) */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+
+  /* Motion */
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --t-fast: 150ms;
+  --t-med: 220ms;
+  color-scheme: light;
+}
+:root[data-corners="soft"]  { --r-card: 8px; --r-input: 6px; }
+:root[data-corners="sharp"] { --r-card: 3px; --r-input: 2px; --r-pill: 4px; }
+:root[data-density="compact"] { --s1: 3px; --s2: 6px; --s3: 9px; --s4: 12px; --s5: 18px; --s6: 24px; --s7: 36px; --fs-base: 13px; }
+
+/* Dark mode: follows the phone (Auto), or pinned by the person (data-theme on <html>). The
+   brand accent switches to its lifted dark-mode variant so a charcoal/navy brand stays legible. */
+:root[data-theme="dark"] {
+  --accent: var(--brand-accent-dm, #7FB89E);
+  --accent-dark: var(--brand-accent-dark-dm, #95C7B0);
+  --accent-soft: var(--brand-accent-soft-dm, rgba(127, 184, 158, 0.16));
+  --on-accent: var(--brand-on-accent-dm, #111110);
+  --accent-2: var(--brand-accent-2-dm, var(--accent-dark));
+  --bg: #121211; --surface: #1C1C1A; --surface-alt: #252522; --border: #34322E; --border-soft: #2A2926;
+  --ink: #F2EFE8; --text: #E6E2DA; --muted: #A8A39A; --faint: #6F6B64;
+  --ok: #5FBF8A; --ok-soft: rgba(95, 191, 138, 0.14); --warn: #E0A33A; --warn-soft: rgba(224, 163, 58, 0.14);
+  --danger: #E0705F; --danger-soft: rgba(224, 112, 95, 0.14); --info: #7FA6E0; --info-soft: rgba(127, 166, 224, 0.14);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4); --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45); --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: var(--brand-accent-dm, #7FB89E);
+    --accent-dark: var(--brand-accent-dark-dm, #95C7B0);
+    --accent-soft: var(--brand-accent-soft-dm, rgba(127, 184, 158, 0.16));
+    --on-accent: var(--brand-on-accent-dm, #111110);
+    --accent-2: var(--brand-accent-2-dm, var(--accent-dark));
+    --bg: #121211; --surface: #1C1C1A; --surface-alt: #252522; --border: #34322E; --border-soft: #2A2926;
+    --ink: #F2EFE8; --text: #E6E2DA; --muted: #A8A39A; --faint: #6F6B64;
+    --ok: #5FBF8A; --ok-soft: rgba(95, 191, 138, 0.14); --warn: #E0A33A; --warn-soft: rgba(224, 163, 58, 0.14);
+    --danger: #E0705F; --danger-soft: rgba(224, 112, 95, 0.14); --info: #7FA6E0; --info-soft: rgba(127, 166, 224, 0.14);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4); --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45); --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -67,6 +116,22 @@ input, select, textarea { font-family: var(--font-body); }
 .vula-fade-up { animation: vulaFadeUp 0.4s ease-out both; }
 .vula-slide-in { animation: vulaSlideIn 0.3s ease-out both; }
 
+/* Shared primitives (components/ui) */
+.vula-skeleton { background: linear-gradient(90deg, var(--surface-alt) 25%, var(--border-soft) 37%, var(--surface-alt) 63%); background-size: 400% 100%; animation: vulaShimmer 1.4s ease infinite; }
+@keyframes vulaShimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+.vula-row-click:hover { background: var(--surface-alt); }
+.vula-input:focus { outline: none; border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-soft); }
+button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+@media (max-width: 860px) {
+  /* one scrolling row of tabs instead of 2-3 wrapped rows */
+  .vula-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .vula-tabs::-webkit-scrollbar { display: none; }
+  .vula-tabs button { min-height: 38px; }
+  /* 16px form text: iOS zooms the page into any smaller field on focus */
+  input, select, textarea { font-size: 16px !important; }
+}
+@media (prefers-reduced-motion: reduce) { .vula-skeleton { animation: none; } .vula-fade-up, .vula-slide-in { animation: none; } }
+
 /* Thin, branded scrollbars + focus rings */
 ::-webkit-scrollbar { height: 8px; width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
@@ -76,16 +141,22 @@ input, select, textarea { font-family: var(--font-body); }
 .vshell { display: grid; grid-template-columns: 244px 1fr; min-height: 100vh; background: var(--bg); }
 .vshell-side { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; z-index: 300; }
 .vshell-brand { display: flex; align-items: center; gap: 10px; padding: 16px 14px 13px; border-bottom: 1px solid var(--border-soft); }
-.vshell-logo { width: 40px; height: 40px; border-radius: 10px; background: var(--accent); color: var(--on-accent, #fff); display: flex; align-items: center; justify-content: center; font-size: 19px; flex: none; }
-.vshell-logoimg { max-width: 96px; max-height: 42px; width: auto; height: auto; object-fit: contain; flex: none; }
+.vshell-logo { width: 40px; height: 40px; border-radius: var(--r-card); background: var(--accent); color: var(--on-accent, #fff); display: flex; align-items: center; justify-content: center; font-size: 19px; flex: none; }
+/* The logo's size follows the brand kit's one setting (data-logo-size on <html>). */
+:root { --logo-h: 38px; --logo-w: 150px; }
+:root[data-logo-size="sm"] { --logo-h: 30px; --logo-w: 120px; }
+:root[data-logo-size="lg"] { --logo-h: 48px; --logo-w: 180px; }
+:root[data-logo-size="xl"] { --logo-h: 58px; --logo-w: 208px; }
+.vshell-logoimg { max-width: var(--logo-w); max-height: var(--logo-h); width: auto; height: auto; object-fit: contain; flex: none; }
+.vula-login-logo { max-height: calc(var(--logo-h) * 2.2); max-width: min(100%, calc(var(--logo-w) * 1.8)); width: auto; height: auto; object-fit: contain; }
 .vshell-brandtext b { font-family: var(--font-display); font-size: 16px; color: var(--ink); display: block; line-height: 1.15; letter-spacing: -0.01em; }
 .vshell-brandtext span { font-size: 10px; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
 .vshell-zone-switch { display: flex; gap: 3px; padding: 10px 9px 0; }
-.vshell-zone-btn { flex: 1; padding: 6px 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--muted); font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: var(--font-body); transition: background .15s, color .15s, border-color .15s; }
+.vshell-zone-btn { flex: 1; padding: 6px 4px; border: 1px solid var(--border); border-radius: var(--r-input); background: var(--surface); color: var(--muted); font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: var(--font-body); transition: background .15s, color .15s, border-color .15s; }
 .vshell-zone-btn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent, #fff); }
 .vshell-nav { padding: 8px 9px 4px; flex: 1; }
 .vshell-grp { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); padding: 13px 8px 4px; }
-.vshell-it { display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 8px; font-size: 13px; color: var(--text); border: none; background: none; width: 100%; text-align: left; cursor: pointer; font-family: var(--font-body); transition: background .15s; }
+.vshell-it { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: var(--r-input); font-size: 13px; color: var(--text); border: none; background: none; width: 100%; text-align: left; cursor: pointer; font-family: var(--font-body); transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
 .vshell-it:hover { background: var(--surface-alt); }
 .vshell-it.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .vshell-ic { width: 20px; text-align: center; flex: none; }
@@ -97,7 +168,10 @@ input, select, textarea { font-family: var(--font-body); }
 .vshell-top h1 { font-family: var(--font-display); font-size: 20px; font-weight: 600; color: var(--ink); margin: 0; letter-spacing: -0.01em; }
 .vshell-topright { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .vshell-user { font-size: 12px; color: var(--muted); }
-.vshell-signout { padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; font-family: var(--font-body); }
+.vshell-theme { width: 34px; height: 34px; border: 1px solid var(--border); border-radius: var(--r-pill); background: transparent; color: var(--text); font-size: 15px; cursor: pointer; transition: background var(--t-fast) var(--ease); }
+.vshell-theme:hover { background: var(--surface-alt); }
+.vshell-top { -webkit-backdrop-filter: saturate(160%) blur(10px); backdrop-filter: saturate(160%) blur(10px); background: color-mix(in srgb, var(--surface) 86%, transparent); }
+.vshell-signout { padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--r-input); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; font-family: var(--font-body); }
 .vshell-content { padding: 0; min-width: 0; }
 .vshell-burger { display: none; }
 .vshell-scrim { display: none; }
@@ -117,4 +191,98 @@ input, select, textarea { font-family: var(--font-body); }
   .vshell-scrim { display: block; position: fixed; inset: 0; background: rgba(20,20,18,.35); z-index: 290; }
   .vshell-top { padding: 12px 14px; }
   .vshell-user { display: none; }
+  /* thumbs, not cursors: 42px targets, and the burger clears the iPhone home bar */
+  .vshell-it { min-height: 42px; font-size: 14px; }
+  .vshell-burger { bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .vshell-signout, .vshell-theme { min-height: 38px; }
+}
+
+/* ── Home: glass cards (2026-09-29, Ian: "a true glass feel, actually bending the light and the
+   background"). Behind the cards: slow-drifting accent-coloured light and a faint texture, so
+   there is something to refract. Each card frosts and tints what's behind it, catches a
+   highlight on its top edge, and — on Chromium — bends the background at its edges like a slab
+   of glass (SVG displacement map per card, GlassCard.jsx). Safari/Firefox
+   get the frosted glass without the bending; reduced motion stops the drift; reduced
+   transparency makes the cards solid. */
+.vula-home { position: relative; isolation: isolate; }
+.vula-home-bg {
+  position: absolute; inset: -12px; z-index: -1; border-radius: 20px; pointer-events: none;
+  background:
+    radial-gradient(38% 32% at 14% 18%, color-mix(in srgb, var(--accent) 70%, transparent), transparent 70%),
+    radial-gradient(34% 40% at 86% 26%, color-mix(in srgb, var(--accent-2) 55%, transparent), transparent 70%),
+    radial-gradient(42% 36% at 58% 82%, color-mix(in srgb, var(--accent-2) 35%, var(--bg)), transparent 70%),
+    radial-gradient(30% 28% at 30% 62%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 70%),
+    radial-gradient(26% 24% at 78% 58%, color-mix(in srgb, var(--accent) 25%, transparent), transparent 70%),
+    repeating-linear-gradient(135deg, color-mix(in srgb, var(--ink) 8%, transparent) 0 1px, transparent 1px 20px);
+  background-size: 160% 160%, 160% 160%, 160% 160%, 160% 160%, 160% 160%, auto;
+  background-position: 0% 0%, 100% 0%, 50% 100%, 0% 100%, 100% 100%, 0 0;
+  animation: vula-drift 32s ease-in-out infinite alternate;
+}
+@keyframes vula-drift {
+  0%   { background-position: 0% 0%, 100% 0%, 50% 100%, 0% 100%, 100% 100%, 0 0; }
+  100% { background-position: 60% 40%, 40% 70%, 0% 30%, 80% 20%, 20% 60%, 40px 40px; }
+}
+.vula-glass {
+  position: relative; border-radius: 18px; padding: 16px; margin-top: 16px; overflow: hidden;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.1));
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(255, 255, 255, 0.25),
+              inset 1px 0 0 rgba(255, 255, 255, 0.35), 0 12px 32px rgba(20, 40, 30, 0.12);
+  -webkit-backdrop-filter: blur(14px) saturate(170%);
+  backdrop-filter: blur(14px) saturate(170%);
+}
+.vula-glass.refract { backdrop-filter: var(--vula-bend) blur(3px) saturate(175%) brightness(1.04); }
+.vula-glass:first-child { margin-top: 0; }
+/* a card with nothing to show (two rules: a browser without :has() must still hide :empty) */
+.vula-glass:empty { display: none; }
+.vula-glass:not(:has(> :not(svg))) { display: none; }
+/* the light catching the pane: bright top-left, a faint return bottom-right */
+.vula-glass::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(118deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0) 26%,
+                              rgba(255, 255, 255, 0) 74%, rgba(255, 255, 255, 0.22) 100%);
+  mix-blend-mode: soft-light;
+}
+/* a card's own white box becomes the glass; its tiles become lighter glass */
+.vula-glass > * {
+  position: relative; z-index: 1;
+  background: transparent !important; border-color: transparent !important;
+  box-shadow: none !important; margin: 0 !important;
+}
+.vula-glass .vula-tile, .vula-glass .vula-panel {
+  background: rgba(255, 255, 255, 0.45) !important;
+  border: 1px solid rgba(255, 255, 255, 0.55) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
+}
+.vula-glass.dark {
+  background: linear-gradient(135deg, rgba(14, 59, 46, 0.78), rgba(20, 80, 61, 0.6));
+  border-color: rgba(255, 255, 255, 0.28); color: #EAF3EF;
+}
+/* Glass in dark mode: a smoky pane instead of a milky one. */
+:root[data-theme="dark"] .vula-glass:not(.dark) {
+  background: linear-gradient(135deg, rgba(40, 40, 37, 0.62), rgba(28, 28, 26, 0.42));
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .vula-glass .vula-tile, :root[data-theme="dark"] .vula-glass .vula-panel {
+  background: rgba(255, 255, 255, 0.05) !important; border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: none !important;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .vula-glass:not(.dark) {
+    background: linear-gradient(135deg, rgba(40, 40, 37, 0.62), rgba(28, 28, 26, 0.42));
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 12px 32px rgba(0, 0, 0, 0.4);
+  }
+  :root:not([data-theme="light"]) .vula-glass .vula-tile, :root:not([data-theme="light"]) .vula-glass .vula-panel {
+    background: rgba(255, 255, 255, 0.05) !important; border-color: rgba(255, 255, 255, 0.1) !important;
+    box-shadow: none !important;
+  }
+}
+/* The bend costs a filter per card: skip it on touch devices (phones) — frost + light stay. */
+@media (pointer: coarse) { .vula-glass.refract { backdrop-filter: blur(14px) saturate(170%); } }
+@media (prefers-reduced-motion: reduce) { .vula-home-bg { animation: none; } }
+@media (prefers-reduced-transparency: reduce) {
+  .vula-glass, .vula-glass.refract { -webkit-backdrop-filter: none; backdrop-filter: none; background: #fff; }
+  .vula-glass.dark { background: #14503D; }
 }

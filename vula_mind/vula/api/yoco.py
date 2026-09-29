@@ -44,10 +44,8 @@ def _tenant_team(tenant_id: str) -> list[tuple[str, str, str]]:
     needs no code change; falls back to the static map. Owners/managers/operations
     and anyone who opted into an order notify event."""
     try:
-        from vula.commerce import service as cs
-        rows = (cs._client().table("vula_team_members")
-                .select("name,whatsapp,role,notify,active")
-                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
+        from vula import team_index
+        rows = team_index.active_members(tenant_id)
         team = []
         for r in rows:
             phone = (r.get("whatsapp") or "").strip()

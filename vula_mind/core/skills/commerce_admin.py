@@ -519,6 +519,7 @@ BOOKING_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "start": {"type": "string"}, "customer_name": {"type": "string"},
             "customer_phone": {"type": "string"}, "service": {"type": "string"},
+            "location": {"type": "string", "description": "Where the meeting is, if said (site, office address)."},
             "confirm": {"type": "boolean"}},
             "required": ["start", "customer_name"]}}},
     {"type": "function", "function": {
@@ -910,6 +911,11 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
 _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
                    + BOOKING_TOOLS + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
 
+# Tools in the always-on set that only mean something to a business that sells products
+# (Off the Hook), never to a project business (DIGG) or a rep (Gerflor) — see tenant_profile.
+_SHOP_ONLY_TOOLS = {"recent_orders", "update_order_status", "create_manual_order", "stock_status",
+                    "update_stock", "receive_stock", "preview_broadcast", "sales_summary"}
+
 
 # 2026-08-16: keyword pre-filter for _tools_for's gated groups — added alongside the purchase-
 # order/quote/discount/payment tools above, which pushed the flat per-call tool count past 45
@@ -1106,6 +1112,13 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
     # the tools, so owners were told something the agent then couldn't do.
     tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
              + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
+    try:
+        from vula.api.tenants import tenant_profile
+        profile = tenant_profile(tenant_id)
+    except Exception:
+        profile = {"known": False}
+    if profile.get("known") and not profile.get("sells_products"):
+        tools = [t for t in tools if t["function"]["name"] not in _SHOP_ONLY_TOOLS]
     # Job costing only for a business that works in projects (DIGG), not a shop (Off the Hook);
     # pricing advice (paid cost + overheads + margin) is useful to both.
     try:
@@ -1159,17 +1172,12 @@ def _member_access(tenant_id: str, phone: Optional[str]) -> Optional[List[str]]:
     if not phone:
         return None
     try:
-        digits = re.sub(r"\D", "", phone)
-        target = "27" + digits[1:] if digits.startswith("0") else digits
-        rows = (service._client().table("vula_team_members").select("whatsapp,role,access")
-                .eq("tenant_id", tenant_id).eq("active", True).execute().data or [])
-        for r in rows:
-            d = re.sub(r"\D", "", r.get("whatsapp") or "")
-            d = "27" + d[1:] if d.startswith("0") else d
-            if d and d == target:
-                if (r.get("role") or "").lower() in _FULL_ACCESS_ROLES:
-                    return None
-                return list(r.get("access") or []) or None
+        from vula import team_index
+        r = team_index.member_for_phone(tenant_id, phone)
+        if r:
+            if (r.get("role") or "").lower() in _FULL_ACCESS_ROLES:
+                return None
+            return list(r.get("access") or []) or None
     except Exception as exc:
         logger.debug("member access lookup skipped: %s", exc)
     return None
@@ -1774,7 +1782,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_product":     return await self._update_product(tid, args)
             if name == "booking_availability": return await self._booking_availability(tid, args.get("date", ""))
             if name == "list_bookings":      return await self._list_bookings(tid, args.get("status"))
-            if name == "create_booking":     return await self._create_booking(tid, args)
+            if name == "create_booking":     return await self._create_booking(tid, args, ctx)
             if name == "cancel_booking":     return await self._cancel_booking(tid, args.get("booking_id", ""), bool(args.get("confirm")))
             if name == "generate_marketing": return await self._generate_marketing(tid, args)
             if name == "create_subscription": return await self._create_subscription(tid, args)
@@ -1790,6 +1798,13 @@ class CommerceAdminSkill(BaseSkill):
                 return await draft_letter(args, tid, ctx.get("phone") or "")
             if name == "create_contact":     return await self._create_contact(tid, args, ctx)
             if name == "log_meeting":        return await self._log_meeting(tid, args, ctx)
+            if name == "setup_project":
+                # Only ever reached from the owner's Confirm tap on a plan Vula showed them
+                # (vula/api/whatsapp.py::_maybe_project_setup) — never offered to the model.
+                if (ctx.get("caller_role") or "") not in ("owner", "manager", "admin") or not args.get("confirm"):
+                    return {"error": "Only the owner or a manager can set up a project."}
+                from vula.commerce.project_programme import apply_setup
+                return await apply_setup(tid, args)
             if name == "configure_call_sheet": return await self._configure_call_sheet(tid, args, ctx)
             if name == "view_call_sheet":     return await self._view_call_sheet(tid, ctx)
             if name == "update_call_sheet":   return await self._update_call_sheet(tid, args, ctx)
@@ -2680,7 +2695,7 @@ class CommerceAdminSkill(BaseSkill):
             {"id": b["id"], "when": b.get("start_at"), "service": b.get("service_name"),
              "customer": b.get("customer_name")} for b in rows[:15]]}
 
-    async def _create_booking(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _create_booking(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         from vula.bookings import service as bk
         svc_id, svc_name = None, (args.get("service") or "").strip()
         if svc_name:
@@ -2695,7 +2710,10 @@ class CommerceAdminSkill(BaseSkill):
         res = await bk.create_booking(tid, {
             "service_id": svc_id, "service_name": svc_name or None,
             "customer_name": args.get("customer_name"), "customer_phone": args.get("customer_phone"),
-            "start": args.get("start"), "channel": "dashboard"})
+            "start": args.get("start"), "channel": "dashboard",
+            # a rep's booking goes in the rep's own diary (their "today" list), not the shop's
+            "booked_by": (ctx or {}).get("phone") if (ctx or {}).get("caller_role") == "sales_rep" else None,
+            "location": args.get("location")})
         if res.get("error"):
             return res
         return {"booked": True, "when": res["booking"].get("start_local"), "service": res["booking"].get("service_name")}

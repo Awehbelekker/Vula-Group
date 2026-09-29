@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const api = (t, p, opts) => fetch(`${VULA_API}/v1/commerce/${t}/admin${p}`, opts).then(r => r.json());
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -41,7 +41,7 @@ export default function VulaScheduledJobs({ tenantId }) {
   };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text, maxWidth: 860 }}>
+    <div style={{ color: C.text, maxWidth: 860 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0" }}>⏰ Scheduled messages</h4>
         <span style={{ fontSize: 12.5, color: C.muted }}>
@@ -139,5 +139,5 @@ function JobCard({ job, templates, onSave }) {
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 };
 const btn = { padding: "7px 13px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
-const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text, fontFamily: "system-ui" };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
+const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text};

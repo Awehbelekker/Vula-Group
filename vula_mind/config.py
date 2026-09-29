@@ -256,6 +256,9 @@ class Settings(BaseSettings):
     # so the only cost of more headroom is a few extra seconds before the reply, not a webhook
     # timeout/retry risk.
     verification_checker_timeout_s: float = 15.0       # hard cap on the adversarial pass
+    # Rand per US dollar for showing AI/infra costs in R on Master › Usage (display only — billing
+    # and spend caps stay in USD, which is what the providers charge). Env: USD_ZAR_RATE.
+    usd_zar_rate: float = 18.0
     verification_checker_max_tokens: int = 300
     readback_verify_enabled: bool = True              # admin mutating-tool read-back gate
 

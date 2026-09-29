@@ -5,8 +5,8 @@
  */
 
 const C = {
-  bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "var(--accent)", muted: "#8A8680", text: "#1E1E1E",
+  bg: "var(--bg)", surface: "var(--surface)", border: "var(--border)",
+  green: "var(--accent)", muted: "var(--muted)", text: "var(--ink)",
 };
 
 export default function VulaPrivacy({ view = "privacy" }) {
@@ -252,7 +252,7 @@ function Terms() {
 }
 
 const style = {
-  body: { fontFamily: "system-ui", color: C.text, lineHeight: 1.6 },
+  body: { color: C.text, lineHeight: 1.6 },
   h1: { fontSize: 26, fontWeight: 700, color: C.text, margin: "0 0 4px" },
   h2: { fontSize: 17, fontWeight: 600, color: C.green, margin: "28px 0 8px" },
   meta: { fontSize: 13, color: C.muted, margin: "0 0 24px" },

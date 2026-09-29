@@ -23,10 +23,10 @@ import { SectionTabs } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { ManageTenantRow } from './VulaMasterPanel'
 
-const C = { surface: '#FFFFFF', border: '#DDD8CE', green: 'var(--accent)', red: '#A23B2D', amber: '#B7791F', text: '#2A2A2A', muted: '#8A8680', alt: '#F0EDE5' }
+const C = { surface: 'var(--surface)', border: 'var(--border)', green: 'var(--accent)', red: 'var(--danger)', amber: 'var(--warn)', text: 'var(--text)', muted: 'var(--muted)', alt: 'var(--surface-alt)' }
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }
 const btn = { padding: '7px 13px', border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: 'pointer' }
-const btnOn = { background: C.green, color: '#fff', borderColor: C.green }
+const btnOn = { background: C.green, color: 'var(--on-accent)', borderColor: C.green }
 const table = { width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }
 const th = { padding: '8px 10px', fontWeight: 600, whiteSpace: 'nowrap' }
 const td = { padding: '8px 10px', verticalAlign: 'top' }
@@ -45,7 +45,7 @@ export default function VulaMasterTenantDetail({ tenantId, onOpenTenant, onBack 
   const [err, setErr] = useState('')
 
   return (
-    <div style={{ fontFamily: 'system-ui', color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
+    <div style={{ color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         {onBack && <button onClick={onBack} style={btn}>← Tenants</button>}
         <h3 style={{ margin: 0, fontSize: 18, fontFamily: 'monospace' }}>{tenantId}</h3>
@@ -99,8 +99,8 @@ function TenantOverviewTab({ tenantId, onError }) {
       <div style={{ display: 'flex', gap: 14, fontSize: 12.5, marginBottom: 10, flexWrap: 'wrap' }}>
         <span><b>{tenant.display_name || tenant.tenant_id}</b></span>
         <span style={{ color: C.muted }}>{tenant.business_type || '—'}</span>
-        <span style={{ color: tenant.paid ? C.green : C.amber, fontWeight: 600 }}>{tenant.paid ? 'Paid' : (tenant.signup_status || '—')}</span>
-        <span style={{ color: tenant.active === false ? C.red : C.green, fontWeight: 600 }}>{tenant.active === false ? 'Suspended' : 'Active'}</span>
+        <span style={{ color: tenant.paid ? 'var(--ok)' : C.amber, fontWeight: 600 }}>{tenant.paid ? 'Paid' : (tenant.signup_status || '—')}</span>
+        <span style={{ color: tenant.active === false ? C.red : 'var(--ok)', fontWeight: 600 }}>{tenant.active === false ? 'Suspended' : 'Active'}</span>
         <span style={{ color: C.muted }}>{tenant.logins} logins</span>
       </div>
       <ManageTenantRow tenant={tenant} registry={registry} onSave={save} />

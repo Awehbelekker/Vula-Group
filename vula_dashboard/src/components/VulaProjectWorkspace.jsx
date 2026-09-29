@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import VulaProjectBoard from "./VulaProjectBoard";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { bg: "var(--bg)", surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const P = (t, p) => `${VULA_API}/v1/projects/${t}/${p}`;
 
 export default function VulaProjectWorkspace({ tenantId }) {
@@ -107,7 +107,7 @@ export default function VulaProjectWorkspace({ tenantId }) {
             {projects.length === 0 && <option>No projects yet</option>}
             {projects.map((p) => <option key={p} value={p}>{p.replace(/_/g, " ")}</option>)}
           </select>
-          <button onClick={newThread} style={{ width: "100%", marginTop: 8, padding: "7px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>＋ New chat</button>
+          <button onClick={newThread} style={{ width: "100%", marginTop: 8, padding: "7px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>＋ New chat</button>
         </div>
         <div style={{ overflowY: "auto", flex: 1 }}>
           {threads.map((t) => (
@@ -143,7 +143,7 @@ export default function VulaProjectWorkspace({ tenantId }) {
             </div>
             <div style={{ padding: 14, borderTop: `1px solid ${C.border}`, background: C.surface, display: "flex", gap: 8 }}>
               <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder={`Message ${project.replace(/_/g, " ")}…`} style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 13.5 }} />
-              <button onClick={send} disabled={busy} style={{ padding: "10px 18px", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Send</button>
+              <button onClick={send} disabled={busy} style={{ padding: "10px 18px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>Send</button>
             </div>
           </>
         )}
@@ -155,12 +155,12 @@ export default function VulaProjectWorkspace({ tenantId }) {
           <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", marginBottom: 5 }}>Project brief</div>
           <textarea value={brief} onChange={(e) => { setBrief(e.target.value); setBriefDirty(true); }} placeholder="Custom instructions for this project — scope, client preferences, key facts…"
             style={{ width: "100%", minHeight: 80, padding: 9, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12.5, resize: "vertical", boxSizing: "border-box" }} />
-          {briefDirty && <button onClick={saveBrief} style={{ marginTop: 6, padding: "5px 12px", background: C.green, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>Save brief</button>}
+          {briefDirty && <button onClick={saveBrief} style={{ marginTop: 6, padding: "5px 12px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>Save brief</button>}
 
           <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", margin: "18px 0 6px" }}>To-dos</div>
           <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
             <input value={newTask} onChange={(e) => setNewTask(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addTask()} placeholder="Add a to-do…" style={{ flex: 1, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12.5 }} />
-            <button onClick={addTask} style={{ padding: "6px 10px", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, cursor: "pointer" }}>+</button>
+            <button onClick={addTask} style={{ padding: "6px 10px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 7, fontSize: 12, cursor: "pointer" }}>+</button>
           </div>
           {tasks.map((t) => (
             <div key={t.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "5px 0", fontSize: 12.5 }}>
@@ -169,7 +169,7 @@ export default function VulaProjectWorkspace({ tenantId }) {
               {t.clickup_task_id && <span title="Synced to ClickUp" style={{ fontSize: 10, color: "#7B68EE" }}>CU</span>}
             </div>
           ))}
-          <p style={{ fontSize: 10.5, color: "#B5B0A8", marginTop: 18, textAlign: "center" }}>This chat is scoped to {project.replace(/_/g, " ")}</p>
+          <p style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 18, textAlign: "center" }}>This chat is scoped to {project.replace(/_/g, " ")}</p>
         </div>
       )}
     </div>

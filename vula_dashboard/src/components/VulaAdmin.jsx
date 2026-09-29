@@ -3,17 +3,17 @@ import { VULA_API } from "../lib/authFetch";
 
 
 const COLORS = {
-  bg: "#F7F4EE",
-  surface: "#FFFFFF",
-  surfaceAlt: "#F0EDE5",
-  border: "#DDD8CE",
+  bg: "var(--bg)",
+  surface: "var(--surface)",
+  surfaceAlt: "var(--surface-alt)",
+  border: "var(--border)",
   green: "var(--accent)",
-  greenLight: "#3D7260",
-  amber: "#C4861A",
-  charcoal: "#1E1E1E",
-  text: "#2A2A2A",
-  muted: "#8A8680",
-  mutedLight: "#B5B0A8",
+  greenLight: "var(--accent-dark)",
+  amber: "var(--warn)",
+  charcoal: "var(--ink)",
+  text: "var(--text)",
+  muted: "var(--muted)",
+  mutedLight: "var(--faint)",
 };
 
 const PLAN_COLORS = {
@@ -26,7 +26,7 @@ function Badge({ children, color = COLORS.green }) {
   return (
     <span style={{
       display: "inline-block", padding: "2px 10px",
-      background: `${color}18`, color,
+      background: `color-mix(in srgb, ${color} 9%, transparent)`, color,
       borderRadius: 20, fontSize: 11,
       fontFamily: "'Source Code Pro', monospace",
       letterSpacing: "0.05em", fontWeight: 500,
@@ -35,7 +35,7 @@ function Badge({ children, color = COLORS.green }) {
 }
 
 function StatusDot({ status }) {
-  const color = status === "active" ? "#22C55E" : status === "provisioning" ? COLORS.amber : COLORS.muted;
+  const color = status === "active" ? "var(--ok)" : status === "provisioning" ? COLORS.amber : COLORS.muted;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "inline-block" }} />
@@ -65,10 +65,10 @@ function SignupCard({ signup }) {
       {/* Row */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <div style={{ flex: "0 0 auto" }}>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, color: COLORS.charcoal, fontWeight: 600 }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 18, color: COLORS.charcoal, fontWeight: 600 }}>
             {signup.company_name}
           </div>
-          <div style={{ fontSize: 12, color: COLORS.muted, fontFamily: "system-ui" }}>
+          <div style={{ fontSize: 12, color: COLORS.muted}}>
             {signup.contact_name}
           </div>
         </div>
@@ -83,7 +83,7 @@ function SignupCard({ signup }) {
 
         {daysLeft !== null && (
           <span style={{
-            fontSize: 11, color: daysLeft < 7 ? "#EF4444" : COLORS.muted,
+            fontSize: 11, color: daysLeft < 7 ? "var(--danger)" : COLORS.muted,
             fontFamily: "'Source Code Pro', monospace",
           }}>
             {daysLeft}d trial left
@@ -120,7 +120,7 @@ function Detail({ label, value }) {
       <div style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.muted, fontFamily: "'Source Code Pro', monospace", marginBottom: 4 }}>
         {label}
       </div>
-      <div style={{ fontSize: 13, color: COLORS.text, fontFamily: "system-ui" }}>{value}</div>
+      <div style={{ fontSize: 13, color: COLORS.text}}>{value}</div>
     </div>
   );
 }
@@ -135,7 +135,7 @@ function StatCard({ label, value, sub, color = COLORS.green }) {
       <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: COLORS.muted, fontFamily: "'Source Code Pro', monospace", marginBottom: 8 }}>
         {label}
       </div>
-      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 36, fontWeight: 700, color, lineHeight: 1 }}>
+      <div style={{ fontFamily: "var(--font-display)", fontSize: 36, fontWeight: 700, color, lineHeight: 1 }}>
         {value}
       </div>
       {sub && <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 4, fontFamily: "'Source Code Pro', monospace" }}>{sub}</div>}
@@ -181,12 +181,12 @@ export default function VulaAdmin() {
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap');
       `}</style>
 
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px", fontFamily: "system-ui" }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 24px"}}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 28 }}>
           <div>
-            <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 32, fontWeight: 700, color: COLORS.charcoal, marginBottom: 4 }}>
+            <h1 style={{ fontFamily: "var(--font-display)", fontSize: 32, fontWeight: 700, color: COLORS.charcoal, marginBottom: 4 }}>
               Client Signups
             </h1>
             <p style={{ fontSize: 13, color: COLORS.muted, fontFamily: "'Source Code Pro', monospace" }}>
@@ -225,7 +225,7 @@ export default function VulaAdmin() {
               style={{
                 padding: "6px 16px", borderRadius: 20,
                 border: `1px solid ${filter === f ? COLORS.green : COLORS.border}`,
-                background: filter === f ? `${COLORS.green}12` : COLORS.surface,
+                background: filter === f ? `color-mix(in srgb, ${COLORS.green} 7%, transparent)` : COLORS.surface,
                 color: filter === f ? COLORS.green : COLORS.muted,
                 fontSize: 12, cursor: "pointer",
                 fontFamily: "'Source Code Pro', monospace",
@@ -241,8 +241,8 @@ export default function VulaAdmin() {
         {error && (
           <div style={{
             padding: 20, borderRadius: 10,
-            background: "#FEF2F2", border: "1px solid #FECACA",
-            fontSize: 13, color: "#991B1B",
+            background: "var(--danger-soft)", border: "1px solid var(--danger-soft)",
+            fontSize: 13, color: "var(--danger)",
             marginBottom: 20,
           }}>
             <strong>Could not load signups:</strong> {error}
@@ -267,7 +267,7 @@ export default function VulaAdmin() {
             border: `1px solid ${COLORS.border}`,
           }}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
-            <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: COLORS.charcoal, marginBottom: 8 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 20, color: COLORS.charcoal, marginBottom: 8 }}>
               {filter === "all" ? "No signups yet" : `No ${filter} clients`}
             </div>
             <p style={{ fontSize: 13, color: COLORS.muted, maxWidth: 360, margin: "0 auto" }}>

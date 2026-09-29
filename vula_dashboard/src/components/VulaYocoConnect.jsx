@@ -6,6 +6,7 @@
  * Backend validates against Yoco and optionally registers webhook automatically.
  */
 
+import { toast, confirmDialog } from './ui/index.jsx'
 import { useState, useEffect } from 'react'
 import { VULA_API } from '../lib/authFetch'
 
@@ -80,7 +81,7 @@ export default function VulaYocoConnect({ tenantId, tenantName, adminEmail }) {
       const resp = await fetch(`${VULA_API}/v1/yoco/test/${tenantId}`, { method: 'POST' })
       const data = await resp.json()
       if (!data.ok) setError(`Test failed: HTTP ${data.status_code}`)
-      else { setError(null); alert('✓ Yoco keys valid') }
+      else { setError(null); toast('✓ Yoco keys valid') }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -89,7 +90,7 @@ export default function VulaYocoConnect({ tenantId, tenantName, adminEmail }) {
   }
 
   async function handleDisconnect() {
-    if (!confirm(`Disconnect Yoco for ${tenantName}? Pending checkouts will fail.`)) return
+    if (!(await confirmDialog(`Disconnect Yoco for ${tenantName}? Pending checkouts will fail.`, { danger: true, confirmLabel: 'Yes' }))) return
     setLoading(true)
     await fetch(`${VULA_API}/v1/yoco/disconnect/${tenantId}`, { method: 'DELETE' })
     setStatus('not_connected')
@@ -112,7 +113,7 @@ export default function VulaYocoConnect({ tenantId, tenantName, adminEmail }) {
         <div style={styles.connectedInfo}>
           <div style={styles.infoRow}>
             <span style={styles.label}>Mode</span>
-            <span style={{ ...styles.value, color: account.mode === 'live' ? '#22c55e' : '#f59e0b' }}>
+            <span style={{ ...styles.value, color: account.mode === 'live' ? 'var(--ok)' : 'var(--warn)' }}>
               {account.mode === 'live' ? '🟢 LIVE' : '🟡 TEST'}
             </span>
           </div>
@@ -122,7 +123,7 @@ export default function VulaYocoConnect({ tenantId, tenantName, adminEmail }) {
           </div>
           <div style={styles.infoRow}>
             <span style={styles.label}>Webhook</span>
-            <span style={{ ...styles.value, color: account.webhook_registered ? '#22c55e' : '#f59e0b' }}>
+            <span style={{ ...styles.value, color: account.webhook_registered ? 'var(--ok)' : 'var(--warn)' }}>
               {account.webhook_registered ? '✓ Registered' : '⚠ Manual setup needed'}
             </span>
           </div>
@@ -203,11 +204,11 @@ function StatusBadge({ status, mode }) {
   const configs = {
     connected: {
       label: mode === 'test' ? 'Test mode' : 'Live',
-      color: mode === 'test' ? '#f59e0b' : '#22c55e',
+      color: mode === 'test' ? 'var(--warn)' : 'var(--ok)',
       bg: mode === 'test' ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)',
     },
-    error: { label: 'Error', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
-    not_connected: { label: 'Not connected', color: '#6b7280', bg: 'rgba(107,114,128,0.15)' },
+    error: { label: 'Error', color: 'var(--danger)', bg: 'rgba(239,68,68,0.15)' },
+    not_connected: { label: 'Not connected', color: 'var(--muted)', bg: 'rgba(107,114,128,0.15)' },
   }
   const c = configs[status] || configs.not_connected
   return <span style={{ ...styles.badge, color: c.color, background: c.bg }}>{c.label}</span>
@@ -215,8 +216,8 @@ function StatusBadge({ status, mode }) {
 
 const styles = {
   card: {
-    background: '#111111',
-    border: '1px solid #2a2a2a',
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
     borderRadius: 8,
     padding: 24,
     maxWidth: 480,
@@ -224,54 +225,54 @@ const styles = {
   },
   header: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 },
   icon: { fontSize: 32 },
-  title: { margin: 0, color: '#f5f2ec', fontSize: 18, fontWeight: 600 },
-  subtitle: { margin: '2px 0 0', color: '#6b7280', fontSize: 13 },
+  title: { margin: 0, color: 'var(--ink)', fontSize: 18, fontWeight: 600 },
+  subtitle: { margin: '2px 0 0', color: 'var(--muted)', fontSize: 13 },
   badge: { marginLeft: 'auto', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 },
   connectedInfo: {
-    background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: 6,
+    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6,
     padding: 16, marginBottom: 16,
   },
   infoRow: {
     display: 'flex', justifyContent: 'space-between',
-    padding: '6px 0', borderBottom: '1px solid #1a1a1a',
+    padding: '6px 0', borderBottom: '1px solid var(--border-soft)',
   },
-  label: { color: '#6b7280', fontSize: 13 },
-  value: { color: '#f5f2ec', fontSize: 13, fontWeight: 500 },
-  description: { color: '#9ca3af', fontSize: 13, lineHeight: 1.6, margin: 0 },
-  link: { color: '#C4861A', textDecoration: 'underline' },
+  label: { color: 'var(--muted)', fontSize: 13 },
+  value: { color: 'var(--ink)', fontSize: 13, fontWeight: 500 },
+  description: { color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: 0 },
+  link: { color: 'var(--warn)', textDecoration: 'underline' },
   formLabel: {
-    display: 'block', color: '#9ca3af', fontSize: 12, marginBottom: 4, fontWeight: 500,
+    display: 'block', color: 'var(--faint)', fontSize: 12, marginBottom: 4, fontWeight: 500,
   },
   input: {
     width: '100%', padding: '10px 12px', borderRadius: 6,
-    background: '#0a0a0a', border: '1px solid #2a2a2a',
-    color: '#f5f2ec', fontSize: 13, fontFamily: 'monospace',
+    background: 'var(--surface)', border: '1px solid var(--border)',
+    color: 'var(--ink)', fontSize: 13, fontFamily: 'monospace',
     boxSizing: 'border-box',
   },
   checkboxLabel: {
     display: 'flex', alignItems: 'center', gap: 8,
-    color: '#9ca3af', fontSize: 13, cursor: 'pointer',
+    color: 'var(--faint)', fontSize: 13, cursor: 'pointer',
   },
   errorBox: {
     background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
-    color: '#ef4444', borderRadius: 6, padding: '10px 14px',
+    color: 'var(--danger)', borderRadius: 6, padding: '10px 14px',
     fontSize: 13, marginBottom: 12,
   },
   btn: {
-    background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6,
+    background: 'var(--ok)', color: 'var(--bg)', border: 'none', borderRadius: 6,
     padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', flex: 1,
   },
   btnDisabled: {
-    background: '#2a2a2a', color: '#6b7280', border: 'none', borderRadius: 6,
+    background: 'var(--surface-alt)', color: 'var(--muted)', border: 'none', borderRadius: 6,
     padding: '10px 20px', fontSize: 14, cursor: 'not-allowed', flex: 1,
   },
   btnGhost: {
-    background: 'transparent', color: '#9ca3af',
-    border: '1px solid #2a2a2a', borderRadius: 6,
+    background: 'transparent', color: 'var(--faint)',
+    border: '1px solid var(--border)', borderRadius: 6,
     padding: '8px 16px', fontSize: 13, cursor: 'pointer',
   },
   btnDanger: {
-    background: 'transparent', color: '#ef4444',
+    background: 'transparent', color: 'var(--danger)',
     border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6,
     padding: '8px 16px', fontSize: 13, cursor: 'pointer',
   },

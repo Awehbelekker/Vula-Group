@@ -68,8 +68,12 @@ def _no_real_whatsapp_creds_by_default(monkeypatch):
     # but between tests it would let one test's filename claim suppress the next test's identical
     # upload. Clear it per test.
     wa_mod._media_claims_local.clear()
+    # The team cache (vula.team_index) is process-wide; each test mocks its own team table.
+    from vula import team_index
+    team_index.invalidate()
     yield
     wa_mod._media_claims_local.clear()
+    team_index.invalidate()
 
 
 @pytest.fixture

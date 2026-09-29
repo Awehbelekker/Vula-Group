@@ -6,8 +6,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { downloadCsv } from "../lib/csv";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", surfaceAlt: "#F0EDE5" };
-const KIND = { internal: { label: "Co-worker", color: "var(--accent)" }, supplier: { label: "Supplier", color: "#C4861A" }, client: { label: "Client", color: "#2B5797" }, external: { label: "External", color: "#8A8680" } };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", surfaceAlt: "var(--surface-alt)" };
+const KIND = { internal: { label: "Co-worker", color: "var(--accent)" }, supplier: { label: "Supplier", color: "var(--warn)" }, client: { label: "Client", color: "var(--info)" }, external: { label: "External", color: "var(--muted)" } };
 const KINDS = ["internal", "client", "supplier", "external"];
 
 function parseCsv(text) {
@@ -81,7 +81,7 @@ export default function VulaContacts({ tenantId }) {
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div>
-          <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Contacts</h1>
+          <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Contacts</h1>
           <p style={{ fontSize: 13, color: C.muted, margin: 0 }}>Your email directory — co-workers, clients & suppliers. (Buyers who order/message you live in 👥 Customers.)</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -95,13 +95,13 @@ export default function VulaContacts({ tenantId }) {
           <button onClick={() => fileRef.current?.click()} disabled={importing} style={{ padding: "9px 14px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", color: C.text }}>
             {importing ? "Importing…" : "📥 Import CSV"}
           </button>
-          <button onClick={syncNow} disabled={syncing} style={{ padding: "9px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <button onClick={syncNow} disabled={syncing} style={{ padding: "9px 16px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             {syncing ? "Syncing…" : "↻ Sync now"}
           </button>
         </div>
       </div>
       {msg && <p style={{ fontSize: 12, color: C.green, marginTop: 8 }}>{msg}</p>}
-      <p style={{ fontSize: 11, color: "#B5B0A8", marginTop: -4 }}>CSV columns: name, email, kind (internal/client/supplier/external — optional, defaults to external)</p>
+      <p style={{ fontSize: 11, color: "var(--faint)", marginTop: -4 }}>CSV columns: name, email, kind (internal/client/supplier/external — optional, defaults to external)</p>
 
       <div style={{ display: "flex", gap: 6, margin: "16px 0", flexWrap: "wrap" }}>
         {[["all", `All · ${contacts.length}`], ["internal", `Co-workers · ${counts.internal || 0}`], ["client", `Clients · ${counts.client || 0}`], ["supplier", `Suppliers · ${counts.supplier || 0}`], ["external", `External · ${counts.external || 0}`]].map(([id, label]) => (
@@ -124,7 +124,7 @@ export default function VulaContacts({ tenantId }) {
           </div>
         ))}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 22 }}>Powered by Vula · auto-synced every 15 min</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}>Powered by Vula · auto-synced every 15 min</p>
     </div>
   );
 }

@@ -138,6 +138,8 @@ async def create_user(tenant: str, body: CreateUserIn,
                 db.table("vula_team_members").update(row).eq("id", ex[0]["id"]).execute()
             else:
                 db.table("vula_team_members").insert(row).execute()
+            from vula import team_index
+            team_index.invalidate(tenant)
         except Exception as exc:
             log.debug("team_members upsert skipped: %s", exc)
 

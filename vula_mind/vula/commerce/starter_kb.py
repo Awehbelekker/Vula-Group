@@ -58,6 +58,14 @@ STARTER_SLOTS: Dict[str, List[Dict[str, str]]] = {
         {"category": "Booking Policy", "topic": "Booking, cancellation, and rescheduling policy."},
         {"category": "Health & Safety Policy", "topic": "Health & safety / hygiene practices."},
     ],
+    "rep": [
+        {"category": "General Document",
+         "topic": "How to request samples, pricing and a site visit from the rep — what to send "
+                  "(project, area in m², product range) and typical response times."},
+        {"category": "General Document",
+         "topic": "A short FAQ on the product ranges represented: where they are used, lead times "
+                  "and how stock availability is checked."},
+    ],
     "other": [
         {"category": "General Document",
          "topic": "A short FAQ covering common questions a customer might ask this business."},

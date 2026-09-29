@@ -30,6 +30,20 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 _HEADER_FILL = PatternFill("solid", fgColor="FF2C5545")
+# The business's brand colour for header rows (2026-09-29) — per call, so two tenants' exports
+# rendering at once never share one. Unset → Vula green.
+from contextvars import ContextVar
+_fill_var: ContextVar = ContextVar("xlsx_header_fill", default=None)
+
+
+def _fill_for(accent: Optional[str]):
+    import re as _re
+    a = (accent or "").lstrip("#")
+    if _re.fullmatch(r"[0-9a-fA-F]{6}", a):
+        r, g, b = (int(a[i:i + 2], 16) for i in (0, 2, 4))
+        if (0.299 * r + 0.587 * g + 0.114 * b) / 255 <= 0.62:   # white header text must read
+            return PatternFill("solid", fgColor="FF" + a.upper())
+    return None
 _HEADER_FONT = Font(bold=True, color="FFFFFFFF")
 _BOLD = Font(bold=True)
 _MUTED = Font(italic=True, color="FF6B6B6B")
@@ -52,7 +66,7 @@ def _table(ws: Any, header_row: int, headers: List[str], widths: List[int]) -> N
     for col, text in enumerate(headers, start=1):
         cell = ws.cell(row=header_row, column=col, value=text)
         cell.font = _HEADER_FONT
-        cell.fill = _HEADER_FILL
+        cell.fill = _fill_var.get() or _HEADER_FILL
         cell.alignment = Alignment(horizontal="left", vertical="center")
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
@@ -80,7 +94,17 @@ def _sum_row(ws: Any, row: int, label_col: int, money_cols: Iterable[int], first
 
 def render_invoices_xlsx(rows: List[Dict[str, Any]], title: str, *,
                          materials: Optional[List[Dict[str, Any]]] = None,
-                         by_supplier: bool = False) -> Optional[bytes]:
+                         by_supplier: bool = False, accent: Optional[str] = None) -> Optional[bytes]:
+    token = _fill_var.set(_fill_for(accent))
+    try:
+        return _render_invoices_xlsx(rows, title, materials=materials, by_supplier=by_supplier)
+    finally:
+        _fill_var.reset(token)
+
+
+def _render_invoices_xlsx(rows: List[Dict[str, Any]], title: str, *,
+                          materials: Optional[List[Dict[str, Any]]] = None,
+                          by_supplier: bool = False) -> Optional[bytes]:
     """`rows` are service._export_row dicts (date, ref, party, is_refund, total_cents,
     vat_cents, lines, ...). `title` is the supplier's name or "All suppliers" — never the
     owner's question. `by_supplier` adds a spend-per-supplier table to the Summary sheet.
@@ -228,7 +252,8 @@ def render_invoices_xlsx(rows: List[Dict[str, Any]], title: str, *,
     return buf.getvalue()
 
 
-def render_supplier_history_xlsx(result: Dict[str, Any], supplier: str = "") -> Optional[bytes]:
+def render_supplier_history_xlsx(result: Dict[str, Any], supplier: str = "",
+                                 accent: Optional[str] = None) -> Optional[bytes]:
     """A find_filed_document result for one supplier as .xlsx bytes. Uses the result's private
     `_export_rows` (every fetched document) when present, else rebuilds rows from the listed
     matches. None when the result isn't a complete filed-document answer."""
@@ -248,4 +273,5 @@ def render_supplier_history_xlsx(result: Dict[str, Any], supplier: str = "") -> 
                          "is_refund": bool(m.get("is_refund")), "total_cents": cents,
                          "vat_cents": None, "lines": []})
     name = supplier or result.get("resolved_supplier") or "Supplier"
-    return render_invoices_xlsx(rows, name, materials=result.get("_materials_all") or result.get("materials"))
+    return render_invoices_xlsx(rows, name, materials=result.get("_materials_all") or result.get("materials"),
+                                accent=accent)

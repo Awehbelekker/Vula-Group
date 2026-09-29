@@ -6,6 +6,7 @@
  * HAND BACK to the bot when done. Auto-refreshes so new messages appear.
  */
 
+import { promptDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { VULA_API } from '../lib/authFetch'
 
@@ -176,7 +177,7 @@ function Thread({ tenantId, sessionId, onBack }) {
     if (!m.id) return
     let correction = null
     if (rating === 'down') {
-      correction = window.prompt('What should the assistant have said? (optional — it will learn this)') || null
+      correction = await promptDialog('What should the assistant have said? (optional — it will learn this)') || null
     }
     const question = [...msgs.slice(0, i)].reverse().find(x => x.role === 'user')?.content || null
     try {
@@ -325,45 +326,45 @@ function Thread({ tenantId, sessionId, onBack }) {
 
 const s = {
   intro:       { marginBottom: 14 },
-  h3:          { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 4px' },
-  sub:         { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
-  muted:       { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '24px 0' },
+  h3:          { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub:         { fontSize: 13, color: 'var(--muted)', margin: 0 },
+  muted:       { color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '24px 0' },
   list:        { display: 'flex', flexDirection: 'column', gap: 6 },
-  row:         { display: 'flex', alignItems: 'center', gap: 12, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: '12px 14px', cursor: 'pointer', width: '100%' },
-  avatar:      { width: 38, height: 38, borderRadius: '50%', background: 'var(--accent, #2C5545)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui', fontWeight: 700, fontSize: 15, flexShrink: 0 },
+  row:         { display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', cursor: 'pointer', width: '100%' },
+  avatar:      { width: 38, height: 38, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, flexShrink: 0 },
   rowTop:      { display: 'flex', justifyContent: 'space-between', gap: 8 },
-  name:        { fontFamily: 'system-ui', fontSize: 14, fontWeight: 600, color: '#1E1E1E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  time:        { fontFamily: 'system-ui', fontSize: 11, color: '#B5B0A8', flexShrink: 0 },
-  preview:     { fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  pausedBadge: { fontFamily: 'system-ui', fontSize: 11, fontWeight: 600, color: '#b45309', background: 'rgba(245,158,11,0.15)', padding: '3px 8px', borderRadius: 10, flexShrink: 0 },
+  name:        { fontSize: 14, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  time:        { fontSize: 11, color: 'var(--faint)', flexShrink: 0 },
+  preview:     { fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  pausedBadge: { fontSize: 11, fontWeight: 600, color: 'var(--warn)', background: 'rgba(245,158,11,0.15)', padding: '3px 8px', borderRadius: 10, flexShrink: 0 },
   escWrap:     { background: 'rgba(180,83,9,0.06)', border: '1px solid rgba(180,83,9,0.25)', borderRadius: 10, padding: 12, marginBottom: 14 },
-  escHeader:   { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: '#b45309', marginBottom: 8 },
+  escHeader:   { fontSize: 13, fontWeight: 700, color: 'var(--warn)', marginBottom: 8 },
   escList:     { display: 'flex', flexDirection: 'column', gap: 8 },
-  escRow:      { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px' },
+  escRow:      { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' },
   escTop:      { display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 },
-  escQuestion: { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', marginBottom: 8, lineHeight: 1.4 },
+  escQuestion: { fontSize: 13, color: 'var(--ink)', marginBottom: 8, lineHeight: 1.4 },
   escInputRow: { display: 'flex', gap: 6 },
-  escInput:    { flex: 1, padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, boxSizing: 'border-box' },
-  escSendBtn:  { padding: '7px 12px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0 },
-  escDismissBtn: { padding: '7px 10px', background: 'transparent', color: '#8A8680', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0 },
+  escInput:    { flex: 1, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' },
+  escSendBtn:  { padding: '7px 12px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0 },
+  escDismissBtn: { padding: '7px 10px', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, cursor: 'pointer', flexShrink: 0 },
   threadWrap:  { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 190px)', minHeight: 420 },
-  threadHeader:{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10, borderBottom: '1px solid #EDE9DF' },
-  backBtn:     { padding: '6px 12px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680', flexShrink: 0 },
-  threadSub:   { display: 'block', fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
-  takeOverBtn: { padding: '8px 14px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0 },
-  handBackBtn: { padding: '8px 14px', background: 'transparent', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0 },
-  pausedNote:  { fontFamily: 'system-ui', fontSize: 12, color: '#b45309', background: 'rgba(245,158,11,0.1)', borderRadius: 6, padding: '8px 12px', margin: '10px 0 0' },
+  threadHeader:{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10, borderBottom: '1px solid var(--border-soft)' },
+  backBtn:     { padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, cursor: 'pointer', color: 'var(--muted)', flexShrink: 0 },
+  threadSub:   { display: 'block', fontSize: 11, color: 'var(--muted)' },
+  takeOverBtn: { padding: '8px 14px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', flexShrink: 0 },
+  handBackBtn: { padding: '8px 14px', background: 'transparent', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', flexShrink: 0 },
+  pausedNote:  { fontSize: 12, color: 'var(--warn)', background: 'rgba(245,158,11,0.1)', borderRadius: 6, padding: '8px 12px', margin: '10px 0 0' },
   thread:      { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 2px' },
   msgRow:      { display: 'flex' },
-  bubble:      { maxWidth: '78%', padding: '9px 13px', borderRadius: 13, fontFamily: 'system-ui', fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 2 },
-  inBubble:    { background: '#fff', color: '#1E1E1E', border: '1px solid #DDD8CE', borderBottomLeftRadius: 4 },
-  outBubble:   { background: 'var(--accent-soft, rgba(44,85,69,0.10))', color: '#1E1E1E', borderBottomRightRadius: 4 },
-  roleTag:     { fontSize: 10, fontWeight: 700, color: '#8A8680', letterSpacing: '0.04em' },
-  metaRow:     { display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid #EDE9DF', marginBottom: 4 },
-  metaInput:   { flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: '#3A3A3A' },
+  bubble:      { maxWidth: '78%', padding: '9px 13px', borderRadius: 13, fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 2 },
+  inBubble:    { background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)', borderBottomLeftRadius: 4 },
+  outBubble:   { background: 'var(--accent-soft, rgba(44,85,69,0.10))', color: 'var(--ink)', borderBottomRightRadius: 4 },
+  roleTag:     { fontSize: 10, fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.04em' },
+  metaRow:     { display: 'flex', gap: 6, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border-soft)', marginBottom: 4 },
+  metaInput:   { flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, color: 'var(--text)' },
   cannedRow:   { display: 'flex', gap: 6, flexWrap: 'wrap', paddingTop: 10 },
-  cannedChip:  { padding: '5px 10px', background: '#F3F1EA', border: '1px solid #DDD8CE', borderRadius: 14, fontSize: 12, color: '#3A3A3A', cursor: 'pointer', fontFamily: 'system-ui' },
-  inputRow:    { display: 'flex', gap: 8, paddingTop: 10, borderTop: '1px solid #EDE9DF' },
-  input:       { flex: 1, padding: '11px 14px', border: '1px solid #DDD8CE', borderRadius: 8, fontFamily: 'system-ui', fontSize: 14, boxSizing: 'border-box' },
-  sendBtn:     { padding: '11px 20px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  cannedChip:  { padding: '5px 10px', background: '#F3F1EA', border: '1px solid var(--border)', borderRadius: 14, fontSize: 12, color: 'var(--text)', cursor: 'pointer'},
+  inputRow:    { display: 'flex', gap: 8, paddingTop: 10, borderTop: '1px solid var(--border-soft)' },
+  input:       { flex: 1, padding: '11px 14px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, boxSizing: 'border-box' },
+  sendBtn:     { padding: '11px 20px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'},
 }

@@ -29,25 +29,25 @@ export default class ErrorBoundary extends Component {
     return (
       <div style={{
         minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 24, fontFamily: "system-ui", background: "#F7F4EE", color: "#1E1E1E",
+        padding: 24, background: "var(--bg)", color: "var(--ink)",
       }}>
         <div style={{
-          maxWidth: 480, background: "#FFFFFF", border: "1px solid #DDD8CE", borderRadius: 12,
+          maxWidth: 480, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12,
           padding: 24, boxShadow: "0 4px 16px rgba(30,30,30,0.08)",
         }}>
           <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Something broke</h2>
-          <p style={{ margin: "0 0 12px", fontSize: 13.5, color: "#2A2A2A" }}>
+          <p style={{ margin: "0 0 12px", fontSize: 13.5, color: "var(--text)" }}>
             This screen hit an unexpected error and can't render. Reloading usually fixes it —
             if it keeps happening, tell Ian what you clicked right before this showed up.
           </p>
           <pre style={{
-            margin: "0 0 16px", fontSize: 11.5, color: "#A23B2D", background: "#F0EDE5",
+            margin: "0 0 16px", fontSize: 11.5, color: "var(--danger)", background: "var(--surface-alt)",
             padding: 10, borderRadius: 8, overflowX: "auto", whiteSpace: "pre-wrap",
           }}>{String(this.state.error?.message || this.state.error)}</pre>
           <button
             onClick={() => { this.setState({ error: null }); window.location.reload(); }}
             style={{
-              padding: "8px 16px", border: "none", borderRadius: 6, background: "#2C5545",
+              padding: "8px 16px", border: "none", borderRadius: 6, background: "var(--accent)",
               color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer",
             }}
           >

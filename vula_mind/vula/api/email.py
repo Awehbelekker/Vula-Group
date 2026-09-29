@@ -86,6 +86,49 @@ _FOOTER = """          </table>
 </html>"""
 
 
+def _brand_parts(brand: dict | None, fallback_name: str) -> tuple[str, str, str]:
+    """(header, footer, accent) for an email a BUSINESS sends its own customer — an invoice,
+    quote or data export — in that business's brand kit (name, logo, colour), not Vula's
+    ("Vula Group / Your AI is ready." used to head every tenant's invoice email). Vula's own
+    emails to its customers (welcome, trial, receipt) keep _HEADER/_FOOTER."""
+    import html as _h
+    import re as _re
+    b = brand or {}
+    accent = b.get("accent_color") or "#2C5545"
+    if not _re.fullmatch(r"#?[0-9a-fA-F]{6}", accent):
+        accent = "#2C5545"
+    accent = accent if accent.startswith("#") else f"#{accent}"
+    r, g, bl = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
+    on = "#1E1E1E" if (0.299 * r + 0.587 * g + 0.114 * bl) / 255 > 0.62 else "#FFFFFF"
+    name = _h.escape(b.get("name") or fallback_name or "")
+    logo = b.get("logo_url") or ""
+    from vula.commerce.brand_sizes import logo_px
+    lh, lw = logo_px("email", b.get("logo_size"))
+    title = (f'<img src="{_h.escape(logo)}" alt="{name}" style="max-height:{lh}px;max-width:{lw}px;'
+             f'display:block;background:#fff;border-radius:6px;padding:4px;">' if logo.startswith("https://")
+             else f'<p style="margin:0;color:{on};font-size:22px;font-weight:700;letter-spacing:-0.3px;">{name}</p>')
+    tagline = _h.escape(b.get("tagline") or "")
+    header = (_HEADER.split('<tr><td style="background:#2C5545;padding:32px 40px;">')[0]
+              + f'<tr><td style="background:{accent};padding:28px 40px;">{title}'
+              + (f'<p style="margin:6px 0 0;color:{on};opacity:.8;font-size:13px;">{tagline}</p>' if tagline else "")
+              + """</td></tr>
+        <tr><td style="padding:40px;">
+          <table width="100%" cellpadding="0" cellspacing="0">""")
+    footer = ("""          </table>
+        </td></tr>
+        <tr><td style="background:#F7F4EE;padding:20px 40px;border-top:1px solid #DDD8CE;">
+          <p style="margin:0;font-size:12px;color:#6E6A63;line-height:1.6;">"""
+              + f"Questions? Just reply to this email.<br>{name}"
+              + """ · <span style="color:#8A8680;">sent with Vula</span></p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>""")
+    return header, footer, accent
+
+
 def _welcome_html(
     first_name: str,
     company_name: str,
@@ -391,6 +434,7 @@ async def send_invoice_email(
     pdf_bytes: bytes,
     tenant_name: str = "Vula Group",
     approval_link: str = "",
+    brand: dict | None = None,
 ) -> bool:
     """Email an invoice/quote PDF to a customer as an attachment.
 
@@ -422,17 +466,20 @@ async def send_invoice_email(
         f"Please find attached your {doc_label.lower()} <strong>{number}</strong> "
         f"for <strong>{total}</strong>. {when}"
     )
+    header, footer, accent = _brand_parts(brand, tenant_name)
+    _r, _g, _b = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
+    on = "#1E1E1E" if (0.299 * _r + 0.587 * _g + 0.114 * _b) / 255 > 0.62 else "#fff"
     approval_html = (
         '<tr><td style="padding:0 0 16px">'
         f'<a href="{approval_link}" style="display:inline-block;padding:10px 20px;'
-        'background:#2C5545;color:#fff;border-radius:6px;text-decoration:none;'
+        f'background:{accent};color:{on};border-radius:6px;text-decoration:none;'
         'font-size:14px;font-weight:600;">Review &amp; approve this invoice</a>'
         "</td></tr>"
     ) if approval_link else ""
     approval_text = f"\n\nReview and approve this invoice: {approval_link}" if approval_link else ""
 
     html = (
-        _HEADER
+        header
         + '<tr><td style="padding:0 0 16px">'
         + f'<p style="margin:0;font-size:20px;font-weight:700;color:#2A2A2A;">Hi {customer},</p>'
         + '<p style="margin:8px 0 0;font-size:14px;color:#5A5A5A;line-height:1.6;">'
@@ -443,7 +490,7 @@ async def send_invoice_email(
         + '<p style="font-size:13px;color:#5A5A5A;line-height:1.6;">'
         + f"Thank you for your business.<br>{tenant_name}"
         + "</p></td></tr>"
-        + _FOOTER
+        + footer
     )
     text = (
         f"Hi {customer},\n\n"
@@ -458,14 +505,16 @@ async def send_invoice_email(
     return await _send(to, subject, html, text, attachments=attachments)
 
 
-async def send_data_export_email(to: str, tenant_name: str, pdf_bytes: bytes) -> bool:
+async def send_data_export_email(to: str, tenant_name: str, pdf_bytes: bytes,
+                                 brand: dict | None = None) -> bool:
     """POPIA "send me my data" export (vula/api/data_export.py) — a PDF summary of the
     requester's own chat history and orders/invoices for one tenant, emailed as an attachment.
     Email (not WhatsApp) chosen deliberately: cleaner for a larger payload, and "we've emailed it
     to the address on file" doubles as identity confirmation."""
     subject = f"{tenant_name} — your data export"
+    header, footer, _accent = _brand_parts(brand, tenant_name)
     html = (
-        _HEADER
+        header
         + '<tr><td style="padding:0 0 16px">'
         + '<p style="margin:0;font-size:20px;font-weight:700;color:#2A2A2A;">Your data export</p>'
         + '<p style="margin:8px 0 0;font-size:14px;color:#5A5A5A;line-height:1.6;">'
@@ -476,7 +525,7 @@ async def send_data_export_email(to: str, tenant_name: str, pdf_bytes: bytes) ->
         + '<tr><td><p style="font-size:13px;color:#5A5A5A;line-height:1.6;">'
           "Questions about this export, or want it deleted? Reply to this email."
           "</p></td></tr>"
-        + _FOOTER
+        + footer
     )
     text = (
         f"Attached is a copy of the data {tenant_name} holds on your account: your "

@@ -1,3 +1,4 @@
+import { toast } from './ui/index.jsx'
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { VULA_API } from "../lib/authFetch";
 
@@ -114,23 +115,23 @@ function calcSACAPFee(value, complexity) {
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const C = {
-  bg: "#F5F2EB",
-  card: "#FFFFFF",
-  border: "#E0DAD0",
-  green: "#2D5A3D",
-  greenLight: "#3D7A52",
-  amber: "#C4861A",
-  text: "#1A1A1A",
-  muted: "#6B6560",
-  light: "#8A857E",
-  red: "#C0392B",
-  highlight: "#FFF8EE",
+  bg: "var(--bg)",
+  card: "var(--surface)",
+  border: "var(--border)",
+  green: "var(--accent)",
+  greenLight: "var(--accent-dark)",
+  amber: "var(--warn)",
+  text: "var(--ink)",
+  muted: "var(--muted)",
+  light: "var(--muted)",
+  red: "var(--danger)",
+  highlight: "var(--warn-soft)",
 };
 
 const inp = {
   width: "100%", padding: "10px 12px", borderRadius: 6,
   border: `1px solid ${C.border}`, fontSize: 13,
-  background: "#FAFAF8", color: C.text, outline: "none",
+  background: "var(--bg)", color: C.text, outline: "none",
   fontFamily: "'DM Mono', monospace", boxSizing: "border-box",
 };
 
@@ -144,9 +145,9 @@ const lbl = {
 function Section({ title, badge, children }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, marginBottom: 20, overflow: "hidden" }}>
-      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, background: "#FAFAF8" }}>
-        <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 16, fontWeight: 700, color: C.text }}>{title}</span>
-        {badge && <span style={{ padding: "2px 8px", borderRadius: 10, background: `${C.green}15`, color: C.green, fontSize: 10, fontFamily: "'DM Mono', monospace" }}>{badge}</span>}
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, background: "var(--bg)" }}>
+        <span style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700, color: C.text }}>{title}</span>
+        {badge && <span style={{ padding: "2px 8px", borderRadius: 10, background: `color-mix(in srgb, ${C.green} 8%, transparent)`, color: C.green, fontSize: 10, fontFamily: "'DM Mono', monospace" }}>{badge}</span>}
       </div>
       <div style={{ padding: 20 }}>{children}</div>
     </div>
@@ -286,7 +287,7 @@ export default function VulaQS({ tenantId }) {
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: ${C.bg}; }
-        input:focus, select:focus { border-color: ${C.green} !important; box-shadow: 0 0 0 2px ${C.green}20; }
+        input:focus, select:focus { border-color: ${C.green} !important; box-shadow: 0 0 0 2px color-mix(in srgb, ${C.green} 13%, transparent); }
         input[type=range] { accent-color: ${C.green}; }
       `}</style>
 
@@ -294,9 +295,9 @@ export default function VulaQS({ tenantId }) {
 
         {/* Header */}
         <div style={{ background: C.green, padding: "18px 28px", display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 36, height: 36, background: "rgba(255,255,255,0.15)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: "#fff", fontWeight: 700 }}>V</div>
+          <div style={{ width: 36, height: 36, background: "rgba(255,255,255,0.15)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-display)", fontSize: 20, color: "#fff", fontWeight: 700 }}>V</div>
           <div>
-            <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: "#fff", fontWeight: 700 }}>Vula QS</div>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 20, color: "#fff", fontWeight: 700 }}>Vula QS</div>
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.65)", letterSpacing: "0.12em", fontFamily: "'DM Mono', monospace" }}>CONSTRUCTION COST ESTIMATOR · DIGG</div>
           </div>
           <div style={{ marginLeft: "auto", fontSize: 11, color: "rgba(255,255,255,0.5)", fontFamily: "'DM Mono', monospace" }}>AECOM 2025/26 · SACAP BN672</div>
@@ -372,7 +373,7 @@ export default function VulaQS({ tenantId }) {
                 </div>
               </div>
 
-              <div style={{ padding: "10px 14px", background: `${C.green}10`, borderRadius: 6, fontSize: 12, color: C.green, fontFamily: "'DM Mono', monospace" }}>
+              <div style={{ padding: "10px 14px", background: `color-mix(in srgb, ${C.green} 6%, transparent)`, borderRadius: 6, fontSize: 12, color: C.green, fontFamily: "'DM Mono', monospace" }}>
                 AECOM 2025/26 range: {calc.rateRange} · Your rate: {R(calc.baseRate)}/m²
               </div>
             </Section>
@@ -437,7 +438,7 @@ export default function VulaQS({ tenantId }) {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
-                    <tr style={{ background: "#F0EDE5" }}>
+                    <tr style={{ background: "var(--surface-alt)" }}>
                       {["Supplier", "Category", "List Cost (R)", "Discount %", "Net Cost", ""].map(h => (
                         <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.08em", color: C.muted, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                       ))}
@@ -479,7 +480,7 @@ export default function VulaQS({ tenantId }) {
                 + Add Supplier
               </button>
               {calc.hasSupplierData && (
-                <div style={{ marginTop: 10, padding: "8px 12px", background: `${C.amber}15`, borderRadius: 6, fontSize: 11, color: C.amber, fontFamily: "'DM Mono', monospace" }}>
+                <div style={{ marginTop: 10, padding: "8px 12px", background: `color-mix(in srgb, ${C.amber} 8%, transparent)`, borderRadius: 6, fontSize: 11, color: C.amber, fontFamily: "'DM Mono', monospace" }}>
                   ✓ Using supplier totals ({R(calc.supplierTotal)}) instead of AECOM m² rate
                 </div>
               )}
@@ -537,12 +538,12 @@ export default function VulaQS({ tenantId }) {
               </div>
 
               {/* Totals */}
-              <div style={{ marginTop: 20, padding: 16, background: `${C.green}08`, border: `1px solid ${C.green}30`, borderRadius: 8 }}>
+              <div style={{ marginTop: 20, padding: 16, background: `color-mix(in srgb, ${C.green} 3%, transparent)`, border: `1px solid color-mix(in srgb, ${C.green} 19%, transparent)`, borderRadius: 8 }}>
                 <Row label="Subtotal (excl. VAT)" value={R(calc.grandSubtotal)} bold />
                 {includeVAT && <Row label="VAT (15%)" value={R(calc.vatAmt)} />}
-                <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0 0", marginTop: 8, borderTop: `2px solid ${C.green}40` }}>
-                  <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: C.green }}>Total Project Cost</span>
-                  <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 24, fontWeight: 700, color: C.green }}>{R(calc.grandTotal)}</span>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0 0", marginTop: 8, borderTop: `2px solid color-mix(in srgb, ${C.green} 25%, transparent)` }}>
+                  <span style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: C.green }}>Total Project Cost</span>
+                  <span style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 700, color: C.green }}>{R(calc.grandTotal)}</span>
                 </div>
                 <div style={{ fontSize: 11, color: C.light, fontFamily: "'DM Mono', monospace", marginTop: 6 }}>
                   {R(calc.grandTotal / area)}/m² all-in · Your margin: {R(calc.markupAmt)} ({pct(markupPct)})
@@ -572,8 +573,8 @@ export default function VulaQS({ tenantId }) {
                   <div>Council: {R(calc.councilFee)}</div>
                   {includeVAT && <div>VAT: {R(calc.vatAmt)}</div>}
                 </div>
-                <div style={{ marginTop: 10, padding: "10px 12px", background: C.highlight, borderRadius: 6, border: `1px solid ${C.amber}30` }}>
-                  <strong style={{ color: C.green, fontSize: 16, fontFamily: "'Cormorant Garamond', serif" }}>
+                <div style={{ marginTop: 10, padding: "10px 12px", background: C.highlight, borderRadius: 6, border: `1px solid color-mix(in srgb, ${C.amber} 19%, transparent)` }}>
+                  <strong style={{ color: C.green, fontSize: 16, fontFamily: "var(--font-display)" }}>
                     Total: {R(calc.grandTotal)} {includeVAT ? "incl. VAT" : "excl. VAT"}
                   </strong>
                 </div>
@@ -587,16 +588,16 @@ export default function VulaQS({ tenantId }) {
                 onClick={() => {
                   const text = `VULA QS ESTIMATE\n${projectName}${clientName ? ` — ${clientName}` : ""}\n${"─".repeat(40)}\nArea: ${area}m²\nBuild type: ${AECOM_RATES[rateKey]?.label}\nRate: ${R(calc.baseRate)}/m²\n\nConstruction: ${R(calc.effectiveConstruction)}\nMarkup (${pct(markupPct)}): ${R(calc.markupAmt)}\nSACAPFee: ${R(calc.sacapFee)}\nPM (${pmMonths}mo): ${R(calc.pmTotal)}\nPA fee: ${R(calc.paTotal)}\nCouncil: ${R(calc.councilFee)}\n${includeVAT ? `VAT: ${R(calc.vatAmt)}\n` : ""}${"─".repeat(40)}\nTOTAL: ${R(calc.grandTotal)} ${includeVAT ? "incl. VAT" : "excl. VAT"}\n\nRates: AECOM 2025/26 · SACAP BN672 · CoCT tariff`;
                   navigator.clipboard?.writeText(text).catch(() => {});
-                  alert("Copied to clipboard — paste into your quote document.");
+                  toast("Copied to clipboard — paste into your quote document.");
                 }}
-                style={{ marginTop: 14, width: "100%", padding: "11px 0", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}
+                style={{ marginTop: 14, width: "100%", padding: "11px 0", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}
               >
                 Copy Quote Summary
               </button>
             </Section>
 
             {/* Disclaimer */}
-            <div style={{ padding: "12px 16px", background: "#FFF8EE", border: `1px solid ${C.amber}30`, borderRadius: 8, fontSize: 11, color: C.light, fontFamily: "'DM Mono', monospace", lineHeight: 1.6 }}>
+            <div style={{ padding: "12px 16px", background: "var(--warn-soft)", border: `1px solid color-mix(in srgb, ${C.amber} 19%, transparent)`, borderRadius: 8, fontSize: 11, color: C.light, fontFamily: "'DM Mono', monospace", lineHeight: 1.6 }}>
               ⚠️ This is a preliminary estimate for budgeting purposes. Rates sourced from AECOM Africa Cost Guide 2025/26 and SACAP Board Notice 672 (2024). Final costs must be confirmed by a registered Quantity Surveyor. VAT, escalation, and site-specific conditions may alter the final figure materially.
             </div>
           </div>

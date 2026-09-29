@@ -1606,9 +1606,10 @@ async def admin_sort_projects_apply(tenant_id: str, request: Request):
 @router.get("/{tenant_id}/admin/documents/learn")
 async def admin_learn_status(tenant_id: str):
     """What the price book holds, and the last "Learn from history" run's progress."""
+    import asyncio
     from vula.commerce import price_book, reread
     try:
-        book = price_book.summary(tenant_id)
+        book = await asyncio.to_thread(price_book.summary, tenant_id)
     except Exception as exc:
         log.debug("price book summary failed: %s", exc)
         book = {}
@@ -1921,6 +1922,97 @@ async def admin_complete_reminder(tenant_id: str, reminder_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="reminder not found")
     return {"completed": True}
+
+
+# ── A rep's day: today's appointments, and minutes on each meeting (2026-09-29) ─────────────
+# Ian: "sales reps need their appointments for the day and a notes button / minutes on the
+# meeting." Minutes go through the same log_meeting pipeline a WhatsApp voice note uses —
+# summary + attendees + action items (each a real reminder), filed against the contact, added
+# to the call sheet, and the meeting-minutes PDF sent to the rep's WhatsApp.
+
+def _rep_digits(p: Optional[str]) -> str:
+    d = re.sub(r"\D", "", p or "")
+    return "27" + d[1:] if d.startswith("0") else d
+
+
+@router.get("/{tenant_id}/admin/rep/today")
+async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None):
+    from vula.bookings import service as bk
+    rep = _rep_digits(rep_phone) or None
+    day = await bk.list_day(tenant_id, date, booked_by=rep)
+    notes = []
+    try:
+        a, b, _ = await bk.day_bounds_utc(tenant_id, date)
+        q = (service._client().table("vula_filed_documents")
+             .select("id,summary,fields,created_at,customer_phone,filed_by")
+             .eq("tenant_id", tenant_id).eq("category", "meeting_notes")
+             .gte("created_at", a).lt("created_at", b))
+        if rep:
+            q = q.eq("filed_by", rep)
+        for r in q.order("created_at", desc=True).limit(50).execute().data or []:
+            f = r.get("fields") or {}
+            notes.append({"id": r["id"], "summary": r.get("summary"), "booking_id": f.get("booking_id"),
+                          "action_items": f.get("action_items") or [], "created_at": r.get("created_at")})
+    except Exception as exc:
+        log.debug("rep meeting notes read skipped: %s", exc)
+    noted = {n["booking_id"] for n in notes if n.get("booking_id")}
+    for ap in day["appointments"]:
+        ap["has_minutes"] = ap.get("id") in noted
+    return {**day, "notes": notes}
+
+
+@router.post("/{tenant_id}/admin/rep/appointments")
+async def admin_rep_add_appointment(tenant_id: str, body: dict):
+    """A rep books a client meeting into their own diary from the dashboard."""
+    from vula.bookings import service as bk
+    rep = _rep_digits((body or {}).get("rep_phone")) or None
+    if not (body or {}).get("start") or not (body or {}).get("customer_name"):
+        raise HTTPException(status_code=400, detail="Who is the meeting with, and when?")
+    res = await bk.create_booking(tenant_id, {
+        "customer_name": body.get("customer_name"), "customer_phone": _rep_digits(body.get("customer_phone")) or None,
+        "start": body.get("start"), "duration_min": int(body.get("duration_min") or 60),
+        "service_name": body.get("title") or "Meeting", "notes": body.get("notes"),
+        "location": body.get("location"), "booked_by": rep, "channel": "dashboard"})
+    if res.get("error"):
+        raise HTTPException(status_code=409, detail=res["error"])
+    return res
+
+
+@router.post("/{tenant_id}/admin/meetings")
+async def admin_log_meeting(tenant_id: str, body: dict):
+    """Minutes on a meeting, typed or dictated in the dashboard."""
+    from core.skills.commerce_admin import CommerceAdminSkill
+    notes = ((body or {}).get("notes") or "").strip()
+    if len(notes) < 3:
+        raise HTTPException(status_code=400, detail="Write what happened in the meeting first.")
+    rep = _rep_digits(body.get("rep_phone"))
+    booking = None
+    if body.get("booking_id"):
+        try:
+            rows = (service._client().table("commerce_bookings").select("id,customer_name,customer_phone,service_name")
+                    .eq("tenant_id", tenant_id).eq("id", body["booking_id"]).limit(1).execute().data or [])
+            booking = rows[0] if rows else None
+        except Exception as exc:
+            log.debug("meeting booking lookup skipped: %s", exc)
+    who = body.get("contact") or (booking or {}).get("customer_phone") or (booking or {}).get("customer_name") or ""
+    result = await CommerceAdminSkill()._log_meeting(
+        tenant_id, {"notes": notes, "contact_name_or_phone": who},
+        {"tenant_id": tenant_id, "phone": rep, "caller_role": "sales_rep"})
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=result["error"])
+    if booking:
+        try:     # the meeting happened: mark it done and link the minutes to it
+            db = service._client()
+            rows = (db.table("vula_filed_documents").select("id,fields").eq("tenant_id", tenant_id)
+                    .eq("category", "meeting_notes").eq("filed_by", rep)
+                    .order("created_at", desc=True).limit(1).execute().data or [])
+            if rows:
+                f = {**(rows[0].get("fields") or {}), "booking_id": booking["id"]}
+                db.table("vula_filed_documents").update({"fields": f}).eq("id", rows[0]["id"]).execute()
+            db.table("commerce_bookings").update({"status": "completed"}).eq("tenant_id", tenant_id).eq("id", booking["id"]).execute()
+        except Exception as exc:
+            log.debug("linking minutes to booking skipped: %s", exc)
+    return result
 
 
 @router.get("/{tenant_id}/admin/call-sheet")
@@ -3312,6 +3404,7 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
     categories. {file_base64, filename, preview?: bool, project_map?: {sheet label: project}}.
     preview=true only reads it and suggests how its project labels map onto this business's
     projects; the import saves the lines (owner-allocated) and learns the allocations."""
+    import asyncio
     import base64
     import tempfile
     from pathlib import Path
@@ -3332,10 +3425,11 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
         path = Path(tmp) / name
         path.write_bytes(data)
         if body.get("preview"):
-            return statement_sheet.preview(tenant_id, path)
-        result = statement_sheet.import_sheet(tenant_id, path, body.get("project_map") or {},
-                                              source_file=name,
-                                              replace_existing=bool(body.get("replace_existing")))
+            return await asyncio.to_thread(statement_sheet.preview, tenant_id, path)
+        # Off the event loop: the import writes every line and re-applies allocation rules.
+        result = await asyncio.to_thread(
+            statement_sheet.import_sheet, tenant_id, path, body.get("project_map") or {},
+            source_file=name, replace_existing=bool(body.get("replace_existing")))
     if not result["parsed"]:
         raise HTTPException(status_code=400, detail="No statement lines found — the sheet needs "
                             "Date, Description and Money In/Money Out (or Amount) columns.")
@@ -3346,10 +3440,71 @@ async def admin_bank_statement_sheet(tenant_id: str, body: dict, request: Reques
 async def admin_project_costing(tenant_id: str, since: Optional[str] = None):
     """Job costing from the bank: per project received / cost by trade / cost-plus fee target /
     overhead share / profit, plus the business's overheads (vula/commerce/job_costing.py)."""
+    import asyncio
     from vula.commerce import job_costing
-    res = job_costing.costing(tenant_id, since=since)
-    res["fee_default_pct"] = job_costing.terms(tenant_id)["*"]
+    # Off the event loop: costing pages through every bank line (PR B, 2026-09-29).
+    res = await asyncio.to_thread(job_costing.costing, tenant_id, since=since)
+    res["fee_default_pct"] = (await asyncio.to_thread(job_costing.terms, tenant_id))["*"]
     return res
+
+
+class ProjectBaselineIn(BaseModel):
+    project: str
+    document: str           # filed document id, KB doc id, or part of its filename
+
+
+@router.post("/{tenant_id}/admin/projects/baseline")
+async def admin_project_baseline(tenant_id: str, body: ProjectBaselineIn, request: Request):
+    """Make a signed estimate the project's only cost baseline (locked; later estimates never
+    replace it). Owner/manager. Read back before it's reported."""
+    import asyncio
+    from vula.commerce import project_programme
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can set the baseline.")
+    try:
+        return await asyncio.to_thread(project_programme.set_baseline, tenant_id, body.project, body.document)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{tenant_id}/admin/projects/programme")
+async def admin_project_programme(tenant_id: str, body: ProjectBaselineIn, request: Request):
+    """Read a filed programme / Gantt (PDF, Excel, CSV) into the project's daily tasks."""
+    from vula.commerce import project_programme
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can load the programme.")
+    if body.document.strip().lower() == "clickup":      # the project's programme list in ClickUp
+        return await project_programme.import_from_clickup(tenant_id, body.project)
+    doc = project_programme.find_document(tenant_id, body.document)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"No filed document matches '{body.document}'.")
+    return await project_programme.import_and_report(tenant_id, body.project, doc, notify=False)
+
+
+class SiteStaffIn(BaseModel):
+    project: str
+    name: str
+    phone: str
+    trade: str = ""
+
+
+@router.post("/{tenant_id}/admin/projects/site-staff")
+async def admin_project_site_staff(tenant_id: str, body: SiteStaffIn, request: Request):
+    import asyncio
+    from vula.commerce import project_programme
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can add site staff.")
+    return await asyncio.to_thread(project_programme.add_site_staff, tenant_id, body.project,
+                                   body.name, body.phone, body.trade)
+
+
+@router.get("/{tenant_id}/admin/projects/today")
+async def admin_project_today(tenant_id: str, day: Optional[str] = None):
+    """Preview this morning's messages (staff tasks per room, the owner's summary) — nothing sent."""
+    from datetime import date as _date
+    from vula.commerce import project_programme
+    d = _date.fromisoformat(day) if day else None
+    return await project_programme.morning_briefs(tenant_id, d, send=False)
 
 
 class ProjectTermsIn(BaseModel):
@@ -3372,16 +3527,18 @@ async def admin_project_terms(tenant_id: str, body: ProjectTermsIn, request: Req
 @router.get("/{tenant_id}/admin/projects/price-advice")
 async def admin_price_advice(tenant_id: str, item: str, quantity: Optional[float] = None,
                              unit: Optional[str] = None, project: Optional[str] = None):
+    import asyncio
     from vula.commerce import job_costing
-    return job_costing.price_advice(tenant_id, item, quantity, unit, project)
+    return await asyncio.to_thread(job_costing.price_advice, tenant_id, item, quantity, unit, project)
 
 
 @router.get("/{tenant_id}/admin/crosscheck")
 async def admin_cross_check(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
     """Documents ↔ books ↔ bank: bills not in the books, bills not paid (with the likely bank
     payment), payments with no document, unpaid sales invoices, unexplained money in."""
+    import asyncio
     from vula.commerce import cross_check
-    rep = cross_check.report(tenant_id, since, until)
+    rep = await asyncio.to_thread(cross_check.report, tenant_id, since, until)
     rep["text"] = cross_check.summary_text(rep)
     return rep
 
@@ -3399,8 +3556,9 @@ async def admin_book_unbooked(tenant_id: str, request: Request):
 async def admin_vat_scenario(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None):
     """VAT in vs out per month from real tax invoices — and, when not registered, what it would
     be if the business were, plus 12-month sales against the registration threshold."""
+    import asyncio
     from vula.commerce import cross_check
-    return cross_check.vat(tenant_id, since, until)
+    return await asyncio.to_thread(cross_check.vat, tenant_id, since, until)
 
 
 @router.get("/{tenant_id}/admin/reports/labour")
@@ -3655,6 +3813,31 @@ async def admin_stats(tenant_id: str):
         series.append({"date": d, "revenue_cents": sum(o["total_cents"] for o in day_orders),
                        "orders": len(day_orders)})
 
+    # Money in from the bank (2026-09-29): Off the Hook sells face to face — 1 online order ever,
+    # 742 bank lines — so an orders-only Home showed R0. Card settlements and EFT deposits are its
+    # real takings. Sales-like credits only (not transfers, loans, refunds or set-aside lines).
+    bank_series, bank_in_7d, bank_in_30d, bank_last = [], 0, 0, None
+    try:
+        since = (today_d - _td(days=30)).isoformat()
+        rows = (db.table("commerce_bank_transactions")
+                .select("txn_date,amount_cents,category,match_status")
+                .eq("tenant_id", tenant_id).eq("direction", "in").gte("txn_date", since)
+                .limit(5000).execute().data or [])
+        rows = [r for r in rows if r.get("match_status") != "ignored"
+                and (r.get("category") or "") not in ("other_income", "transfer", "loan", "owner_contribution")]
+        by_day: dict = {}
+        for r in rows:
+            d = str(r.get("txn_date") or "")[:10]
+            by_day[d] = by_day.get(d, 0) + abs(int(r.get("amount_cents") or 0))
+        week = {(today_d - _td(days=i)).isoformat() for i in range(7)}
+        bank_in_7d = sum(v for d, v in by_day.items() if d in week)
+        bank_in_30d = sum(by_day.values())
+        bank_last = max(by_day) if by_day else None
+        bank_series = [{"date": (today_d - _td(days=i)).isoformat(),
+                        "revenue_cents": by_day.get((today_d - _td(days=i)).isoformat(), 0)} for i in range(6, -1, -1)]
+    except Exception as exc:
+        log.debug("bank money-in stats skipped for %s: %s", tenant_id, exc)
+
     try:
         low_stock = await service.get_low_stock_products(tenant_id, threshold=5)
         low_stock_count = len(low_stock)
@@ -3709,6 +3892,10 @@ async def admin_stats(tenant_id: str):
         "invoice_paid_month_cents": invoice_paid_month,
         "low_stock_count": low_stock_count,
         "daily_revenue": series,
+        "bank_in_7d_cents": bank_in_7d,
+        "bank_in_30d_cents": bank_in_30d,
+        "bank_in_last_date": bank_last,
+        "daily_bank_in": bank_series,
         "open_escalations": open_escalations,
         "oldest_escalation": oldest_escalation,
         "knowledge": knowledge,
@@ -4137,7 +4324,8 @@ async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Option
     approval_link = _ensure_approval_link(tenant_id, invoice)
 
     from vula.api.email import send_invoice_email
-    sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name, approval_link)
+    sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name, approval_link,
+                                    brand=await public_brand(tenant_id))
     if not sent:
         raise HTTPException(
             status_code=503,
@@ -4310,7 +4498,7 @@ Return null for any field you are not confident about. Do not guess."""
 
 _CLONE_VALID = {
     "logo_align": {"left", "center"},
-    "logo_size": {"sm", "md", "lg"},
+    "logo_size": {"sm", "md", "lg", "xl"},
     "font_pairing": {"", "vula", "modern", "editorial", "classic"},
     "template_choice": set(service._TEMPLATE_CHOICES),
 }
@@ -4431,12 +4619,21 @@ async def public_brand(tenant_id: str):
     truth for brand: the same commerce_invoice_settings row the dashboard's Brand Kit card writes,
     replacing the old split where the storefront read a separate, never-updated tenant_config.theme."""
     settings = await service.get_invoice_settings(tenant_id) or {}
+    from vula.api.tenants import display_name as _display_name
     return {
-        "name": settings.get("trading_as") or settings.get("company_name"),
+        # the name everywhere (dashboard shell, login, app icon, emails): the brand kit's trading
+        # name, else the company name, else the tenant's display name — never "Vula Commerce"
+        "name": (settings.get("trading_as") or settings.get("company_name")
+                 or _display_name(tenant_id)),
         "logo_url": settings.get("logo_url"),
+        "icon_url": settings.get("icon_url"),
+        "tagline": settings.get("tagline"),
         "accent_color": settings.get("accent_color"),
+        "secondary_color": settings.get("secondary_color"),
         "ink_color": settings.get("ink_color"),
         "font_pairing": settings.get("font_pairing"),
+        "corner_style": settings.get("corner_style") or "rounded",
+        "density": settings.get("density") or "comfortable",
         "logo_align": settings.get("logo_align") or "left",
         "logo_size": settings.get("logo_size") or "md",
         "header_sticky": settings.get("header_sticky", True),
@@ -4445,6 +4642,67 @@ async def public_brand(tenant_id: str):
         "header_cta_link": settings.get("header_cta_link"),
         "whatsapp": settings.get("company_phone"),  # utility bar contact link — already tenant-editable, no new field
     }
+
+
+# ── The installed app wears the business's brand (2026-09-29) ────────────────
+# The PWA manifest was static ("Vula Commerce", Vula green, an SVG icon iOS ignores), so every
+# business's home-screen app looked like Vula's. These are public (no secrets) like /brand.
+_ICON_CACHE: dict = {}
+
+
+@router.get("/{tenant_id}/app-icon/{size}.png")
+async def public_app_icon(tenant_id: str, size: int):
+    import time as _time
+    from fastapi.responses import Response
+    size = 512 if size > 256 else (192 if size > 180 else 180)
+    settings = await service.get_invoice_settings(tenant_id) or {}
+    src = settings.get("icon_url") or settings.get("logo_url")
+    accent = settings.get("accent_color") or "#2C5545"
+    key = (tenant_id, size, src, accent, settings.get("logo_size"))
+    hit = _ICON_CACHE.get(key)
+    if hit and _time.time() - hit[0] < 3600:
+        return Response(hit[1], media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+    from vula.commerce.brand_icon import render_icon
+    name = settings.get("trading_as") or settings.get("company_name") or tenant_id
+    png = await render_icon(src, accent, name, size, square=bool(settings.get("icon_url")),
+                            logo_size=settings.get("logo_size"))
+    _ICON_CACHE[key] = (_time.time(), png)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/{tenant_id}/manifest.webmanifest")
+async def public_manifest(tenant_id: str):
+    from fastapi.responses import JSONResponse
+    from config import settings as _settings
+    brand = await public_brand(tenant_id)
+    name = brand.get("name") or tenant_id
+    base = f"{(_settings.public_base_url or '').rstrip('/')}/v1/commerce/{tenant_id}/app-icon"
+    return JSONResponse({
+        "name": name, "short_name": name[:12], "description": brand.get("tagline") or f"{name} — run by Vula",
+        "start_url": "/", "scope": "/", "display": "standalone",
+        "background_color": "#F7F4EE", "theme_color": brand.get("accent_color") or "#2C5545",
+        "icons": [{"src": f"{base}/192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+                  {"src": f"{base}/512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
+    }, media_type="application/manifest+json", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.post("/{tenant_id}/admin/brand/suggest")
+async def admin_brand_suggest(tenant_id: str, body: dict):
+    """A brand kit suggested from the business's logo and/or website (brand_suggest.py): colours
+    sampled from the real image, a readable button colour, the website's theme-color. Nothing is
+    saved — the Brand kit previews it and the owner taps Apply."""
+    from vula.commerce import brand_suggest
+    logo = (body or {}).get("logo_url")
+    site = (body or {}).get("website_url")
+    if not logo and not site:
+        settings = await service.get_invoice_settings(tenant_id) or {}
+        logo = settings.get("logo_url")
+    if not logo and not site:
+        raise HTTPException(status_code=400, detail="Upload a logo or give your website address first.")
+    out = await brand_suggest.suggest(logo_url=logo, website_url=site)
+    if not out:
+        raise HTTPException(status_code=422, detail="Couldn't find brand colours in that logo or website.")
+    return {"suggestion": out}
 
 
 # ── Saved clients / suppliers (invoicing) ─────────────────────────────────────

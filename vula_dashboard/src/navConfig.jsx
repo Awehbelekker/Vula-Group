@@ -34,7 +34,7 @@ export const MERCHANT_GROUPS = [
   { label: "Sell", items: [
     { id: "sell", icon: "📦", label: "Sell", subtabs: [
       { id: "orders", icon: "📦", label: "Orders" },
-      { id: "products", icon: "🐟", label: "Products" },
+      { id: "products", icon: "🛍️", label: "Products" },
       { id: "stock", icon: "📊", label: "Stock" },
       { id: "discounts", icon: "🏷️", label: "Discounts" },
       { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
@@ -48,10 +48,10 @@ export const MERCHANT_GROUPS = [
     { id: "money", icon: "💰", label: "Money", subtabs: [
       { id: "invoices", icon: "🧾", label: "Invoices" },
       { id: "expenses", icon: "💸", label: "Expenses" },
-      { id: "bank", icon: "🏦", label: "Bank" },
-      { id: "books", icon: "📒", label: "Books" },
+      { id: "bank", icon: "🏦", label: "Bank & matching" },
+      { id: "books", icon: "📒", label: "Accounts" },
       { id: "payments", icon: "💳", label: "Payments" },
-      { id: "budget", icon: "💰", label: "Budget" },
+      { id: "budget", icon: "🎯", label: "Budget" },
       { id: "scanner", icon: "📷", label: "Scanner" },
       { id: "finances", icon: "💵", label: "Finances" },
     ]},
@@ -107,11 +107,11 @@ export const MERCHANT_GROUPS = [
       { id: "rep-contacts", icon: "📇", label: "Contacts" },
       { id: "rep-callsheet", icon: "📋", label: "Call Sheet" },
       { id: "rep-bookings", icon: "📅", label: "Bookings" },
-      { id: "rep-documents", icon: "📂", label: "Documents" },
+      { id: "rep-documents", icon: "📚", label: "Product knowledge" },
       { id: "rep-reminders", icon: "⏰", label: "Reminders" },
       { id: "rep-expenses", icon: "💸", label: "Expenses" },
-      { id: "rep-expense-sheet", icon: "🧮", label: "Expense Sheet" },
-      { id: "rep-crm", icon: "🔗", label: "Dynamics 365" },
+      { id: "rep-expense-sheet", icon: "🧾", label: "Claim sheet" },
+      { id: "rep-crm", icon: "🔗", label: "CRM sync" },
     ]},
   ]},
 ];
@@ -177,12 +177,16 @@ export const MASTER_GROUPS = MASTER_ZONES.flatMap((z) => z.groups);
 // This used to be a hand-copy of VulaMerchantAdmin's own internal CORE/MODMAP — and had already
 // drifted (missing `discounts: 'products'`) before that internal copy was deleted (2026-07-21).
 // This is now the ONLY copy, so it can't drift again by construction.
-const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'qsrates', 'pages', 'marketing', 'bank', 'books', 'labour', 'expenses', 'import', 'wa-templates', 'scheduling',
-  // Sales rep dashboard tabs — not gated by tenant business-type modules (the sales_rep feature
-  // itself is already module-gated at the WhatsApp tool layer); the real gate here is the
-  // per-login `access` list, same as 'team'/'settings' are gated by `full` instead of modules.
-  'rep-contacts', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-expense-sheet', 'rep-crm']);
+// Tabs every business gets whatever it does. 2026-09-29 (UI review): QS Rates and Labour used
+// to be here, so a seafood shop saw construction tools; they now need projects/estimating.
+const MERCHANT_CORE = new Set(['overview', 'assistant', 'agentlog', 'inbox', 'settings', 'suppliers', 'pages', 'marketing', 'bank', 'books', 'expenses', 'import', 'wa-templates', 'scheduling']);
+// Sales rep ("My Work") tabs: for a rep's own login (its `access` list) or a rep business —
+// not for every owner, who used to see a "Dynamics 365" tab whatever their business.
+const REP_TABS = new Set(['rep-contacts', 'rep-callsheet', 'rep-bookings', 'rep-documents', 'rep-reminders', 'rep-expenses', 'rep-expense-sheet', 'rep-crm']);
 const MERCHANT_MODMAP = {
+  qsrates: ['estimating', 'projects'],   // a business that prices building work
+  labour: ['projects', 'fieldops'],      // site workers' day rates
+
   customers: 'crm', contacts: 'crm', broadcast: 'broadcasts', subscriptions: 'orders',
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft',
   discounts: 'products',
@@ -194,12 +198,19 @@ const MERCHANT_MODMAP = {
 /** Visibility predicate for merchant nav items: member access + tenant modules. Operates on a
  * real tab id (a leaf — either a standalone item's own id, or one of a section's subtab ids).
  * A section's own synthetic id (e.g. "money") is never passed to this — see filterGroups. */
-export function merchantVisible({ full, access, modules }) {
+export function merchantVisible({ full, access, modules, profile }) {
   const canSee = (id) => full || id === 'overview' || (access || []).includes(id);
-  const tenantHas = (id) => modules === null || !modules.length || MERCHANT_CORE.has(id)
-    || (modules || []).includes(MERCHANT_MODMAP[id] || id);
+  // modules null = not known (still loading, or the lookup failed): the core tabs only, never
+  // "everything" (a network blip used to open the whole nav).
+  const tenantHas = (id) => {
+    if (MERCHANT_CORE.has(id)) return true;
+    if (!modules) return false;
+    const need = MERCHANT_MODMAP[id] || id;
+    return (Array.isArray(need) ? need : [need]).some((m) => modules.includes(m));
+  };
   return (id) => {
     if (id === 'team' || id === 'settings') return !!full;
+    if (REP_TABS.has(id)) return (!full && (access || []).includes(id)) || !!profile?.is_rep_business;
     return canSee(id) && tenantHas(id);
   };
 }

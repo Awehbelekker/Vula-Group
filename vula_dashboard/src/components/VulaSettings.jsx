@@ -7,14 +7,14 @@
  */
 
 import React, { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
 import VulaYocoConnect from './VulaYocoConnect'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaClickUpConnect from './VulaClickUpConnect'
 import VulaGoogleConnect from './VulaGoogleConnect'
 import VulaMicrosoftConnect from './VulaMicrosoftConnect'
 import VulaEmailConnect from './VulaEmailConnect'
-import { applyAccent, applyInk, applyFontPairing, FONT_PAIRINGS } from '../theme/tokens'
+import { applyBrand, FONT_PAIRINGS, CORNER_STYLES, DENSITIES, LOGO_SIZES } from '../theme/tokens'
+import { uploadBrandImage } from '../lib/brandUpload'
 import { VULA_API } from '../lib/authFetch'
 
 export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
@@ -29,7 +29,7 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
       <section style={s.section}>
         <h4 style={s.sectionTitle}>🎨 Brand kit</h4>
         <p style={s.sectionHint}>
-          Your logo and accent colour — used on invoices, your storefront pages, and throughout this dashboard.
+          Your name, logo, colours and style — used everywhere: this dashboard, the login page, your phone app icon, invoices, emails and your storefront. Status colours (paid, overdue) always stay green and red so they read the same for everyone.
         </p>
         <BrandKitSettings tenantId={tenantId} />
       </section>
@@ -126,13 +126,18 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
   )
 }
 
-function BrandKitSettings({ tenantId }) {
+export function BrandKitSettings({ tenantId }) {
   const API = VULA_API
   const [name, setName] = useState('')
+  const [tagline, setTagline] = useState('')
   const [logoUrl, setLogoUrl] = useState('')
+  const [iconUrl, setIconUrl] = useState('')
   const [accent, setAccent] = useState('#2C5545')
+  const [secondary, setSecondary] = useState('')
   const [ink, setInk] = useState('#1E1E1E')
   const [fontPairing, setFontPairing] = useState('vula')
+  const [corners, setCorners] = useState('rounded')
+  const [density, setDensity] = useState('comfortable')
   // Storefront header layout (migration 128) — logoAlign/logoSize already existed (migration
   // 103, invoice branding) and are reused as-is here: same tenant-editable fields now drive both
   // invoice PDFs and the storefront header, one setting instead of two parallel ones.
@@ -142,10 +147,14 @@ function BrandKitSettings({ tenantId }) {
   const [headerNavPosition, setHeaderNavPosition] = useState('right')
   const [headerCtaText, setHeaderCtaText] = useState('')
   const [headerCtaLink, setHeaderCtaLink] = useState('')
-  const [uploading, setUploading] = useState(false)
+  const [uploading, setUploading] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [website, setWebsite] = useState('')
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestion, setSuggestion] = useState(null)
+  const hex6 = (v, d) => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : d)
 
   useEffect(() => {
     fetch(`${API}/v1/commerce/${tenantId}/admin/invoice-settings`)
@@ -153,10 +162,15 @@ function BrandKitSettings({ tenantId }) {
       .then(d => {
         const st = d.settings || {}
         setName(st.trading_as || st.company_name || '')
+        setTagline(st.tagline || '')
         setLogoUrl(st.logo_url || '')
-        setAccent(/^#[0-9a-fA-F]{6}$/.test(st.accent_color || '') ? st.accent_color : '#2C5545')
-        setInk(/^#[0-9a-fA-F]{6}$/.test(st.ink_color || '') ? st.ink_color : '#1E1E1E')
+        setIconUrl(st.icon_url || '')
+        setAccent(hex6(st.accent_color, '#2C5545'))
+        setSecondary(hex6(st.secondary_color, ''))
+        setInk(hex6(st.ink_color, '#1E1E1E'))
         setFontPairing(st.font_pairing || 'vula')
+        setCorners(st.corner_style || 'rounded')
+        setDensity(st.density || 'comfortable')
         setLogoAlign(st.logo_align || 'left')
         setLogoSize(st.logo_size || 'md')
         setHeaderSticky(st.header_sticky !== false)
@@ -168,36 +182,58 @@ function BrandKitSettings({ tenantId }) {
       .catch(() => setLoaded(true))
   }, [tenantId])  // eslint-disable-line
 
-  async function uploadLogo(e) {
+  // Live: every change shows across the whole dashboard straight away (nothing is saved until
+  // "Save brand kit"; leaving without saving is undone on the next load of the saved brand).
+  const draft = { accent_color: accent, secondary_color: secondary || null, ink_color: ink,
+    font_pairing: fontPairing, corner_style: corners, density, logo_size: logoSize, logo_url: logoUrl, icon_url: iconUrl }
+  useEffect(() => { if (loaded) applyBrand(draft) }, [loaded, accent, secondary, ink, fontPairing, corners, density, logoSize])  // eslint-disable-line
+
+  async function upload(e, kind) {
     const file = (e.target.files || [])[0]
     if (!file) return
-    setUploading(true)
+    setUploading(kind)
     try {
-      const clean = file.name.replace(/[^a-zA-Z0-9.-]/g, '-').toLowerCase()
-      const path = `${tenantId}/logo/${Date.now()}-${clean}`
-      const { error } = await supabase.storage.from('product-images').upload(path, file, { cacheControl: '3600', upsert: true })
-      if (!error) {
-        const { data } = supabase.storage.from('product-images').getPublicUrl(path)
-        if (data?.publicUrl) setLogoUrl(data.publicUrl)
-      }
-    } finally { setUploading(false) }
+      const url = await uploadBrandImage(tenantId, file, kind)
+      if (url) (kind === 'icon' ? setIconUrl : setLogoUrl)(url)
+    } finally { setUploading('') }
+  }
+
+  async function suggest() {
+    setSuggesting(true); setMsg(''); setSuggestion(null)
+    try {
+      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/brand/suggest`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logo_url: logoUrl || undefined, website_url: website || undefined }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { setMsg(d.detail || 'No suggestion found.'); return }
+      setSuggestion(d.suggestion)
+    } finally { setSuggesting(false) }
+  }
+  function applySuggestion() {
+    const sg = suggestion || {}
+    if (sg.accent_color) setAccent(sg.accent_color)
+    setSecondary(sg.secondary_color || '')
+    if (sg.ink_color) setInk(sg.ink_color)
+    if (sg.logo_url && !logoUrl) setLogoUrl(sg.logo_url)
+    setSuggestion(null)
+    setMsg('Suggestion applied — check the preview, then Save.')
   }
 
   async function save() {
     setSaving(true); setMsg('')
     try {
-      await fetch(`${API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
+      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/invoice-settings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          trading_as: name, logo_url: logoUrl, accent_color: accent, ink_color: ink, font_pairing: fontPairing,
+          trading_as: name, tagline, logo_url: logoUrl, icon_url: iconUrl,
+          accent_color: accent, secondary_color: secondary || null, ink_color: ink, font_pairing: fontPairing,
+          corner_style: corners, density,
           logo_align: logoAlign, logo_size: logoSize, header_sticky: headerSticky,
           header_nav_position: headerNavPosition, header_cta_text: headerCtaText, header_cta_link: headerCtaLink,
         }),
       })
-      // Live preview — no refresh needed to see any of it take effect.
-      applyAccent(accent)
-      applyInk(ink)
-      applyFontPairing(fontPairing)
+      if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(d.detail || 'Could not save.'); return }
+      window.dispatchEvent(new Event('vula-brand-changed'))   // shell name/logo/app icon update now
       setMsg('Saved ✓')
       setTimeout(() => setMsg(''), 2500)
     } finally { setSaving(false) }
@@ -205,80 +241,168 @@ function BrandKitSettings({ tenantId }) {
 
   if (!loaded) return <p style={s.sectionHint}>Loading…</p>
 
+  const row = { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }
+  const lab = { fontSize: 13, color: 'var(--muted)', width: 110 }
+  const colour = (label, value, set, optional) => (
+    <div style={row}>
+      <span style={lab}>{label}</span>
+      <input type="color" value={value || '#888888'} onChange={e => set(e.target.value)} style={bk.colorSwatch} aria-label={label} />
+      <input value={value} placeholder={optional ? 'optional' : ''} onChange={e => set(e.target.value)} style={{ ...bk.input, width: 110, fontFamily: 'var(--font-mono)' }} />
+      {optional && value && <button type="button" onClick={() => set('')} style={bk.clearBtn} aria-label={`Clear ${label}`}>×</button>}
+    </div>)
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <input placeholder="Business / brand name" value={name} onChange={e => setName(e.target.value)} style={bk.input} />
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={bk.uploadBtn}>
-          {uploading ? 'Uploading…' : (logoUrl ? '↻ Replace logo' : '📷 Upload logo')}
-          <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={uploadLogo} style={{ display: 'none' }} />
-        </label>
-        {logoUrl && <img src={logoUrl} alt="logo" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
-        {logoUrl && <button type="button" onClick={() => setLogoUrl('')} style={bk.clearBtn}>×</button>}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 18, alignItems: 'start' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <input placeholder="Business / brand name" value={name} onChange={e => setName(e.target.value)} style={bk.input} aria-label="Business name" />
+        <input placeholder="Tagline (under your name in the app)" value={tagline} onChange={e => setTagline(e.target.value)} style={bk.input} aria-label="Tagline" />
+        <div style={row}>
+          <label style={bk.uploadBtn}>
+            {uploading === 'logo' ? 'Uploading…' : (logoUrl ? '↻ Replace logo' : '📷 Upload logo')}
+            <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={e => upload(e, 'logo')} style={{ display: 'none' }} />
+          </label>
+          {logoUrl && <img src={logoUrl} alt="logo" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
+          {logoUrl && <button type="button" onClick={() => setLogoUrl('')} style={bk.clearBtn} aria-label="Remove logo">×</button>}
+        </div>
+        <div style={row}>
+          <span style={lab}>Logo size</span>
+          {Object.entries(LOGO_SIZES).map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setLogoSize(k)} aria-pressed={logoSize === k}
+              style={{ ...bk.choice, ...(logoSize === k ? bk.choiceOn : {}) }}>{l}</button>))}
+          <span style={{ fontSize: 11.5, color: 'var(--muted)', flexBasis: '100%', paddingLeft: 120 }}>Everywhere: this dashboard, login, invoices, emails, your WhatsApp menu and phone app icon. Empty margins are trimmed when you upload.</span>
+        </div>
+        <div style={row}>
+          <label style={bk.uploadBtn}>
+            {uploading === 'icon' ? 'Uploading…' : (iconUrl ? '↻ Replace app icon' : '📱 App icon (square)')}
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => upload(e, 'icon')} style={{ display: 'none' }} />
+          </label>
+          {iconUrl && <img src={iconUrl} alt="app icon" style={{ width: 40, height: 40, borderRadius: 10, objectFit: 'cover' }} />}
+          {iconUrl && <button type="button" onClick={() => setIconUrl('')} style={bk.clearBtn} aria-label="Remove app icon">×</button>}
+        </div>
+
+        <div style={{ ...bk.suggestBox }}>
+          <b style={{ fontSize: 13 }}>✨ Suggest from my logo or website</b>
+          <div style={{ ...row, marginTop: 6 }}>
+            <input placeholder="Website (optional), e.g. gerflor.co.za" value={website} onChange={e => setWebsite(e.target.value)} style={{ ...bk.input, flex: '1 1 180px' }} aria-label="Website" />
+            <button type="button" onClick={suggest} disabled={suggesting || (!logoUrl && !website)} style={bk.saveBtn}>{suggesting ? 'Looking…' : 'Suggest'}</button>
+          </div>
+          {suggestion && (
+            <div style={{ marginTop: 8, fontSize: 12.5 }}>
+              <div style={{ display: 'flex', gap: 6, margin: '4px 0' }}>
+                {[suggestion.accent_color, suggestion.secondary_color, suggestion.ink_color].filter(Boolean).map(c =>
+                  <span key={c} title={c} style={{ width: 28, height: 28, borderRadius: 6, background: c, border: '1px solid var(--border)' }} />)}
+              </div>
+              <span style={{ color: 'var(--muted)' }}>From {suggestion.why}.</span>
+              <div style={{ marginTop: 6 }}><button type="button" onClick={applySuggestion} style={bk.saveBtn}>Use these colours</button></div>
+            </div>)}
+        </div>
+
+        {colour('Main colour', accent, setAccent)}
+        {colour('Second colour', secondary, setSecondary, true)}
+        {colour('Heading colour', ink, setInk)}
+        <div style={row}>
+          <span style={lab}>Heading font</span>
+          <select value={fontPairing} onChange={e => setFontPairing(e.target.value)} style={{ ...bk.input, width: 220 }}>
+            {Object.entries(FONT_PAIRINGS).map(([key, p]) => <option key={key} value={key}>{p.label}</option>)}
+          </select>
+        </div>
+        <div style={row}>
+          <span style={lab}>Corners</span>
+          {Object.entries(CORNER_STYLES).map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setCorners(k)} aria-pressed={corners === k}
+              style={{ ...bk.choice, ...(corners === k ? bk.choiceOn : {}), borderRadius: k === 'sharp' ? 2 : k === 'soft' ? 6 : 12 }}>{l}</button>))}
+        </div>
+        <div style={row}>
+          <span style={lab}>Spacing</span>
+          {Object.entries(DENSITIES).map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setDensity(k)} aria-pressed={density === k}
+              style={{ ...bk.choice, ...(density === k ? bk.choiceOn : {}) }}>{l}</button>))}
+        </div>
       </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Accent colour</span>
-        <input type="color" value={accent} onChange={e => setAccent(e.target.value)} style={bk.colorSwatch} />
-        <input value={accent} onChange={e => setAccent(e.target.value)} style={{ ...bk.input, width: 100, fontFamily: "'Source Code Pro', monospace" }} />
-      </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Text colour</span>
-        <input type="color" value={ink} onChange={e => setInk(e.target.value)} style={bk.colorSwatch} />
-        <input value={ink} onChange={e => setInk(e.target.value)} style={{ ...bk.input, width: 100, fontFamily: "'Source Code Pro', monospace" }} />
-      </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Heading font</span>
-        <select value={fontPairing} onChange={e => setFontPairing(e.target.value)} style={{ ...bk.input, width: 220 }}>
-          {Object.entries(FONT_PAIRINGS).map(([key, p]) => <option key={key} value={key}>{p.label}</option>)}
-        </select>
-      </div>
-      <div style={{ borderTop: '1px solid #EEE9DF', margin: '4px 0', paddingTop: 12 }}>
-        <p style={{ fontSize: 12.5, fontWeight: 600, color: '#8A8680', margin: '0 0 8px' }}>Storefront header</p>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Logo position</span>
+
+      <BrandPreview name={name} tagline={tagline} logoUrl={logoUrl} iconUrl={iconUrl} />
+
+      <div style={{ gridColumn: '1 / -1', borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
+        <p style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--muted)', margin: '0 0 8px' }}>Storefront header</p>
+        <div style={{ ...row, marginBottom: 8 }}>
+          <span style={lab}>Logo position</span>
           <select value={logoAlign} onChange={e => setLogoAlign(e.target.value)} style={{ ...bk.input, width: 140 }}>
             <option value="left">Left</option>
             <option value="center">Centered</option>
           </select>
-          <span style={{ fontSize: 13, color: '#8A8680', marginLeft: 10 }}>Size</span>
-          <select value={logoSize} onChange={e => setLogoSize(e.target.value)} style={{ ...bk.input, width: 100 }}>
-            <option value="sm">Small</option>
-            <option value="md">Medium</option>
-            <option value="lg">Large</option>
-          </select>
+
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Menu position</span>
+        <div style={{ ...row, marginBottom: 8 }}>
+          <span style={lab}>Menu position</span>
           <select value={headerNavPosition} onChange={e => setHeaderNavPosition(e.target.value)} style={{ ...bk.input, width: 140 }}>
             <option value="right">Right of logo</option>
             <option value="center">Centered</option>
             <option value="below-logo">Below logo</option>
           </select>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#8A8680', marginLeft: 10 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)', marginLeft: 10 }}>
             <input type="checkbox" checked={headerSticky} onChange={e => setHeaderSticky(e.target.checked)} />
             Sticky on scroll
           </label>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, color: '#8A8680', width: 100 }}>Button</span>
+        <div style={row}>
+          <span style={lab}>Button</span>
           <input placeholder="Button text (e.g. Get a quote) — blank for none" value={headerCtaText} onChange={e => setHeaderCtaText(e.target.value)} style={{ ...bk.input, flex: 1, minWidth: 160 }} />
           <input placeholder="Link (e.g. #contact or /shop)" value={headerCtaLink} onChange={e => setHeaderCtaLink(e.target.value)} style={{ ...bk.input, flex: 1, minWidth: 160 }} />
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+      <div style={{ ...row, gridColumn: '1 / -1' }}>
         <button onClick={save} disabled={saving} style={bk.saveBtn}>{saving ? 'Saving…' : 'Save brand kit'}</button>
-        {msg && <span style={{ color: 'var(--accent, #2C5545)', fontSize: 13 }}>{msg}</span>}
+        {msg && <span role="status" style={{ color: 'var(--muted)', fontSize: 13 }}>{msg}</span>}
+      </div>
+    </div>
+  )
+}
+
+/** What the brand looks like, built from the real tokens: the app header, a card with a
+ * button and status badges, an invoice header and the phone app icon. */
+function BrandPreview({ name, tagline, logoUrl, iconUrl }) {
+  const initial = (name || 'V').trim()[0]
+  return (
+    <div aria-label="Brand preview" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', padding: 'var(--s4)', display: 'flex', flexDirection: 'column', gap: 'var(--s3)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)', borderRadius: 'var(--r-card)', padding: 'var(--s3)', boxShadow: 'var(--shadow-sm)' }}>
+        {logoUrl ? <img src={logoUrl} alt="" className="vshell-logoimg" />
+          : <span style={{ width: 28, height: 28, borderRadius: 'var(--r-input)', background: 'var(--accent)', color: 'var(--on-accent)', display: 'grid', placeItems: 'center', fontWeight: 700 }}>{initial}</span>}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', color: 'var(--ink)', fontWeight: 600, fontSize: 16, lineHeight: 1.1 }}>{name || 'Your business'}</div>
+          <div style={{ fontSize: 11, color: 'var(--muted)' }}>{tagline || 'Business admin'}</div>
+        </div>
+      </div>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', padding: 'var(--s4)' }}>
+        <div style={{ fontFamily: 'var(--font-display)', color: 'var(--ink)', fontSize: 18, fontWeight: 600 }}>Invoice INV-0042</div>
+        <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 10px' }}>R 12 450.00 · due 30 Sep</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 'var(--r-pill)', background: 'var(--ok-soft)', color: 'var(--ok)' }}>Paid</span>
+          <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 'var(--r-pill)', background: 'var(--danger-soft)', color: 'var(--danger)' }}>Overdue</span>
+          <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 'var(--r-pill)', background: 'var(--accent-soft)', color: 'var(--accent)' }}>Draft</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <span style={{ padding: '7px 14px', borderRadius: 'var(--r-input)', background: 'var(--accent)', color: 'var(--on-accent)', fontSize: 13, fontWeight: 600 }}>Send invoice</span>
+          <span style={{ padding: '7px 14px', borderRadius: 'var(--r-input)', border: '1px solid var(--accent-2)', color: 'var(--accent-2)', fontSize: 13, fontWeight: 600 }}>Preview</span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {iconUrl ? <img src={iconUrl} alt="" style={{ width: 48, height: 48, borderRadius: 12, objectFit: 'cover', boxShadow: 'var(--shadow-md)' }} />
+          : <span style={{ width: 48, height: 48, borderRadius: 12, background: 'var(--accent)', color: 'var(--on-accent)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 20, boxShadow: 'var(--shadow-md)' }}>{initial}</span>}
+        <span style={{ fontSize: 12, color: 'var(--muted)' }}>Your app icon on a phone's home screen</span>
       </div>
     </div>
   )
 }
 
 const bk = {
-  input:      { padding: '9px 12px', border: '1px solid #DDD8CE', borderRadius: 8, fontFamily: 'system-ui', fontSize: 14, boxSizing: 'border-box' },
-  uploadBtn:  { padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' },
-  clearBtn:   { background: 'none', border: 'none', color: '#8A8680', cursor: 'pointer', fontSize: 18 },
-  colorSwatch:{ width: 40, height: 34, padding: 2, border: '1px solid #DDD8CE', borderRadius: 6, cursor: 'pointer', background: '#fff' },
-  saveBtn:    { padding: '10px 18px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', alignSelf: 'flex-start' },
+  input:      { padding: '9px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-input)', fontSize: 14, boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)' },
+  uploadBtn:  { padding: '8px 14px', background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 'var(--r-input)', fontSize: 13, cursor: 'pointer' },
+  clearBtn:   { background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18, minWidth: 32, minHeight: 32 },
+  colorSwatch:{ width: 40, height: 34, padding: 2, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', background: 'var(--surface)' },
+  saveBtn:    { padding: '10px 18px', background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: 'var(--r-input)', fontSize: 13, fontWeight: 600, cursor: 'pointer', alignSelf: 'flex-start' },
+  choice:     { padding: '7px 12px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13, cursor: 'pointer' },
+  choiceOn:   { borderColor: 'var(--accent)', background: 'var(--accent-soft)', color: 'var(--accent)', fontWeight: 600 },
+  suggestBox: { border: '1px dashed var(--accent)', borderRadius: 'var(--r-card)', padding: 'var(--s3)', background: 'var(--accent-soft)' },
 }
 
 function DeliverySettings({ tenantId }) {
@@ -325,10 +449,10 @@ function DeliverySettings({ tenantId }) {
         attribution: '© OpenStreetMap contributors', maxZoom: 18,
       }).addTo(map)
       const marker = L.circleMarker([start.lat, start.lng], {
-        radius: 8, color: 'var(--accent, #2C5545)', fillColor: 'var(--accent, #2C5545)', fillOpacity: 0.9,
+        radius: 8, color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.9,
       }).addTo(map)
       const circle = L.circle([start.lat, start.lng], {
-        radius: radiusKm * 1000, color: 'var(--accent, #2C5545)', weight: 1.5, fillOpacity: 0.08,
+        radius: radiusKm * 1000, color: 'var(--accent)', weight: 1.5, fillOpacity: 0.08,
       }).addTo(map)
       map.on('click', (e) => {
         setOrigin({ lat: e.latlng.lat, lng: e.latlng.lng })
@@ -389,12 +513,12 @@ function DeliverySettings({ tenantId }) {
     }
   }
 
-  const inp = { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  const inp = { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }
   return (
-    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
       {/* Marketplace-style location + radius */}
       <div>
-        <p style={{ fontSize: 12.5, fontWeight: 600, fontFamily: 'system-ui', margin: '0 0 6px' }}>
+        <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 6px' }}>
           📍 Shop location &amp; delivery radius
         </p>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -402,46 +526,46 @@ function DeliverySettings({ tenantId }) {
             onKeyDown={e => e.key === 'Enter' && findAddress()}
             placeholder="Search your shop's address or suburb…" style={{ ...inp, flex: 1, minWidth: 200 }} />
           <button onClick={findAddress}
-            style={{ padding: '9px 14px', border: '1px solid #DDD8CE', borderRadius: 8, background: '#fff', fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+            style={{ padding: '9px 14px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', fontSize: 13, cursor: 'pointer'}}>
             Find
           </button>
           <select value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} style={inp}>
             {[5, 10, 15, 20, 25, 30, 40, 50].map(k => <option key={k} value={k}>{k} km radius</option>)}
           </select>
         </div>
-        <div ref={mapDivRef} style={{ height: 260, borderRadius: 10, border: '1px solid #DDD8CE', overflow: 'hidden' }} />
-        <p style={{ fontSize: 11.5, color: '#8A8680', fontFamily: 'system-ui', margin: '6px 0 0' }}>
+        <div ref={mapDivRef} style={{ height: 260, borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }} />
+        <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '6px 0 0' }}>
           {origin
             ? <>Pinned: <b>{originLabel || 'your shop'}</b> · {radiusKm} km radius. Customers who share a WhatsApp location pin get an instant in/out answer.</>
             : 'Search or click the map to drop your shop pin — then the radius circle shows exactly where you deliver.'}
         </p>
       </div>
 
-      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+      <label style={{ fontSize: 12, color: 'var(--muted)'}}>
         Delivery areas (comma-separated — e.g. Table View, Blouberg, Parklands)
         <input value={areas} onChange={e => setAreas(e.target.value)} placeholder="Table View, Blouberg, Parklands…"
           style={{ ...inp, width: '100%', marginTop: 4 }} />
       </label>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', flex: 1, minWidth: 140 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted)', flex: 1, minWidth: 140 }}>
           Delivery fee (R)
           <input value={fee} onChange={e => setFee(e.target.value)} placeholder="80" style={{ ...inp, width: '100%', marginTop: 4 }} />
         </label>
-        <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', flex: 1, minWidth: 140 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted)', flex: 1, minWidth: 140 }}>
           Free delivery over (R)
           <input value={freeOver} onChange={e => setFreeOver(e.target.value)} placeholder="500" style={{ ...inp, width: '100%', marginTop: 4 }} />
         </label>
-        <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', flex: 1, minWidth: 140 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted)', flex: 1, minWidth: 140 }}>
           Minimum order (R)
           <input value={minOrder} onChange={e => setMinOrder(e.target.value)} placeholder="none" style={{ ...inp, width: '100%', marginTop: 4 }} />
         </label>
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button onClick={save} disabled={busy}
-          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent, #2C5545)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer'}}>
           {busy ? 'Saving…' : 'Save delivery settings'}
         </button>
-        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent)'}}>{msg}</span>}
       </div>
     </div>
   )
@@ -512,25 +636,25 @@ function BusinessHoursSettings({ tenantId }) {
     }
   }
 
-  const inp = { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  const inp = { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }
   return (
-    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {DAYS.map(d => {
           const day = days[d.key]
           return (
             <div key={d.key} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <label style={{ fontSize: 12.5, fontFamily: 'system-ui', width: 40, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <label style={{ fontSize: 12.5, width: 40, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <input type="checkbox" checked={!day.closed}
                   onChange={e => setDay(d.key, { closed: !e.target.checked })} />
                 {d.label}
               </label>
               {day.closed ? (
-                <span style={{ fontSize: 12.5, color: '#B5B0A8', fontFamily: 'system-ui' }}>Closed</span>
+                <span style={{ fontSize: 12.5, color: 'var(--faint)'}}>Closed</span>
               ) : (
                 <>
                   <input type="time" value={day.open} onChange={e => setDay(d.key, { open: e.target.value })} style={inp} />
-                  <span style={{ fontSize: 12.5, color: '#8A8680' }}>–</span>
+                  <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>–</span>
                   <input type="time" value={day.close} onChange={e => setDay(d.key, { close: e.target.value })} style={inp} />
                 </>
               )}
@@ -538,12 +662,12 @@ function BusinessHoursSettings({ tenantId }) {
           )
         })}
       </div>
-      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+      <label style={{ fontSize: 12, color: 'var(--muted)'}}>
         Note shown alongside your hours (optional — e.g. "Closed on public holidays")
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Closed on public holidays"
           style={{ ...inp, width: '100%', marginTop: 4 }} />
       </label>
-      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+      <label style={{ fontSize: 12, color: 'var(--muted)'}}>
         Custom after-hours message (optional — replaces the default "we're closed, back at X")
         <input value={afterHours} onChange={e => setAfterHours(e.target.value)}
           placeholder="We're offline for the weekend — WhatsApp us Monday from 8am!"
@@ -551,10 +675,10 @@ function BusinessHoursSettings({ tenantId }) {
       </label>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button onClick={save} disabled={busy}
-          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent, #2C5545)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer'}}>
           {busy ? 'Saving…' : 'Save opening hours'}
         </button>
-        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent)'}}>{msg}</span>}
       </div>
     </div>
   )
@@ -591,13 +715,12 @@ function LearnedSummary({ tenantId }) {
 
   if (!data) return <p style={{ ...s.sectionHint, margin: 0 }}>Loading…</p>
 
-  const card = { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 12 }
-  const label = { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 6px' }
-  const hint = { fontFamily: 'system-ui', fontSize: 12.5, color: '#8A8680', margin: 0, lineHeight: 1.5 }
+  const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 12 }
+  const label = { fontSize: 13, fontWeight: 700, color: 'var(--ink)', margin: '0 0 6px' }
+  const hint = { fontSize: 12.5, color: 'var(--muted)', margin: 0, lineHeight: 1.5 }
   const btn = (primary) => ({
-    padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
-    fontFamily: 'system-ui', border: primary ? 'none' : '1px solid #DDD8CE',
-    background: primary ? 'var(--accent, #2C5545)' : '#fff', color: primary ? '#fff' : 'var(--ink, #1E1E1E)',
+    padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: primary ? 'none' : '1px solid var(--border)',
+    background: primary ? 'var(--accent)' : '#fff', color: primary ? '#fff' : 'var(--ink)',
   })
 
   return (
@@ -610,14 +733,14 @@ function LearnedSummary({ tenantId }) {
           ? <p style={{ ...hint, marginBottom: 8 }}>Current: "{data.voice.current}"</p>
           : <p style={{ ...hint, marginBottom: 8 }}>No voice set yet — Vula uses its default tone.</p>}
         {data.voice.suggested ? (
-          <div style={{ background: '#F7F5EF', borderRadius: 8, padding: 10, marginTop: 4 }}>
-            <p style={{ ...hint, color: 'var(--ink, #1E1E1E)', marginBottom: 8 }}>
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, marginTop: 4 }}>
+            <p style={{ ...hint, color: 'var(--ink)', marginBottom: 8 }}>
               Suggested, from your own real messages: "{data.voice.suggested}"
             </p>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button style={btn(true)} disabled={busy} onClick={() => respondToVoiceSuggestion(true)}>Accept</button>
               <button style={btn(false)} disabled={busy} onClick={() => respondToVoiceSuggestion(false)}>Dismiss</button>
-              {msg && <span style={{ fontSize: 12, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+              {msg && <span style={{ fontSize: 12, color: 'var(--accent)'}}>{msg}</span>}
             </div>
           </div>
         ) : (
@@ -657,10 +780,10 @@ function LearnedSummary({ tenantId }) {
 
 const s = {
   intro:        { marginBottom: 16 },
-  h3:           { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 4px' },
-  sub:          { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
+  h3:           { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub:          { fontSize: 13, color: 'var(--muted)', margin: 0 },
   section:      { marginBottom: 24 },
-  sectionTitle: { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 4px' },
-  sectionHint:  { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: '0 0 12px', lineHeight: 1.5 },
-  footer:       { textAlign: 'center', fontFamily: 'system-ui', fontSize: 11, color: '#B5B0A8', marginTop: 24 },
+  sectionTitle: { fontSize: 15, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sectionHint:  { fontSize: 13, color: 'var(--muted)', margin: '0 0 12px', lineHeight: 1.5 },
+  footer:       { textAlign: 'center', fontSize: 11, color: 'var(--faint)', marginTop: 24 },
 }

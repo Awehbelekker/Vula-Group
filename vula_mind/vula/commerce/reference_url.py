@@ -92,6 +92,12 @@ async def safe_fetch_html(url: str) -> str:
     """Fetch a single URL's HTML, safely. Raises UnsafeUrlError or an httpx exception on
     failure — callers should catch both and skip that URL rather than let one bad URL block the
     others (see analyze_reference_urls)."""
+    return (await safe_fetch_bytes(url)).decode("utf-8", errors="replace")
+
+
+async def safe_fetch_bytes(url: str) -> bytes:
+    """safe_fetch_html's fetch, returning raw bytes (a logo or favicon image) — same scheme,
+    DNS-resolved IP, redirect and size checks."""
     hops = 0
     current = url
     while True:
@@ -118,7 +124,7 @@ async def safe_fetch_html(url: str) -> str:
                     if total > MAX_RESPONSE_BYTES:
                         raise UnsafeUrlError("Response too large")
                     chunks.append(chunk)
-                return b"".join(chunks).decode("utf-8", errors="replace")
+                return b"".join(chunks)
 
 
 def _extract_title_and_text(html: str):

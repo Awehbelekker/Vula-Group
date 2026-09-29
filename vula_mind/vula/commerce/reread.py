@@ -128,6 +128,7 @@ def status_for(tenant_id: str) -> Dict[str, Any]:
 
 _LEARN: Dict[str, Dict[str, Any]] = {}
 _BOQ = "Bill of Quantities (BOQ)"
+_PRICE_LIST = "Menu / Price List"
 
 
 def learn_status(tenant_id: str) -> Dict[str, Any]:
@@ -179,6 +180,82 @@ async def _reread_boq(tenant_id: str, row: dict) -> bool:
     return True
 
 
+async def _file_text(tenant_id: str, row: dict, path: Path) -> str:
+    try:
+        from vula.ingestion.pipeline import VulaIngestionPipeline
+        pages = await VulaIngestionPipeline(tenant_id=tenant_id).parser.parse(path)
+        return "\n".join(t for _, t in (pages or [])).strip()
+    except Exception as exc:
+        log.debug("parse failed for %s: %s", row.get("id"), exc)
+        return ""
+
+
+async def _read_price_list(tenant_id: str, row: dict) -> bool:
+    """Read a filed price list's priced lines (it was filed with a summary only). True when
+    it now has them."""
+    from vula.api.whatsapp import _complete_price_list, _has_priced_lines
+    from vula.ingestion import boq_sheet
+    name = (row.get("filename") or "").lower()
+    fields = row.get("fields") or {}
+    if (not row.get("file_url") or _has_priced_lines(fields)
+            or not name.endswith(boq_sheet.SHEET_SUFFIXES + (".pdf",))):
+        return False
+    data = await _download(row["file_url"])
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / Path(row["filename"]).name
+        path.write_bytes(data)
+        text = "" if name.endswith(boq_sheet.SHEET_SUFFIXES) else await _file_text(tenant_id, row, path)
+        done = await _complete_price_list({"category": _PRICE_LIST, "fields": fields}, path, text,
+                                          row["filename"])
+    new_fields = done.get("fields") or fields
+    if not _has_priced_lines(new_fields):
+        return False
+    (service._client().table("vula_filed_documents").update({"fields": new_fields})
+     .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
+    row["fields"] = new_fields
+    return True
+
+
+def _stock_sheet_candidates(tenant_id: str) -> List[dict]:
+    """Filed PDFs that say they hold stock on hand but aren't stored as a stock sheet
+    (2026-09-29, Gerflor: "DT SOH and Planning" was filed as a Programme / Schedule before
+    stock sheets were stored as rows, so "how's stock on Creation?" had nothing to answer from)."""
+    db = service._client()
+    rows = []
+    for col, pat in (("summary", "%stock on hand%"), ("summary", "%SOH%"), ("filename", "%SOH%")):
+        try:
+            rows += (db.table("vula_filed_documents")
+                     .select("id,filename,file_url,doc_id,summary")
+                     .eq("tenant_id", tenant_id).ilike(col, pat).limit(200).execute().data or [])
+        except Exception as exc:
+            log.debug("stock sheet candidates skipped: %s", exc)
+    try:
+        have = {r.get("doc_id") for r in (db.table("vula_stock_sheets").select("doc_id")
+                                          .eq("tenant_id", tenant_id).limit(1000).execute().data or [])}
+    except Exception:
+        have = set()
+    out, seen = [], set()
+    for r in rows:
+        key = r.get("doc_id") or r.get("id")
+        if (key in seen or key in have or not r.get("file_url")
+                or not (r.get("filename") or "").lower().endswith(".pdf")):
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+async def _store_stock_sheet(tenant_id: str, row: dict) -> bool:
+    from vula.commerce import stock_sheet
+    data = await _download(row["file_url"])
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / Path(row["filename"]).name
+        path.write_bytes(data)
+        text = await _file_text(tenant_id, row, path)
+    return bool(text and stock_sheet.persist_if_stock_sheet(
+        tenant_id, row.get("doc_id") or row["id"], row["filename"], text))
+
+
 async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[str, Any]:
     from vula.commerce import price_book
     st = _LEARN[tenant_id] = {"running": True, "step": "re-reading documents missing data",
@@ -198,6 +275,23 @@ async def learn_from_history(tenant_id: str, reread_first: bool = True) -> Dict[
                 except Exception as exc:
                     log.warning("BOQ re-read of %s failed: %s", row.get("id"), exc)
                     st["failed"] += 1
+        st["step"] = "reading price lists and stock sheets"
+        st["price_lists_read"] = st["stock_sheets"] = 0
+        for row in rows:
+            if row.get("category") == _PRICE_LIST:
+                try:
+                    if await _read_price_list(tenant_id, row):
+                        st["price_lists_read"] += 1
+                except Exception as exc:
+                    log.warning("price list read of %s failed: %s", row.get("id"), exc)
+                    st["failed"] += 1
+        for row in _stock_sheet_candidates(tenant_id):
+            try:
+                if await _store_stock_sheet(tenant_id, row):
+                    st["stock_sheets"] += 1
+            except Exception as exc:
+                log.warning("stock sheet read of %s failed: %s", row.get("id"), exc)
+                st["failed"] += 1
         st["step"] = "labelling variations"
         st["labelled"] = 0
         from vula.integrations.doc_labels import labels_for

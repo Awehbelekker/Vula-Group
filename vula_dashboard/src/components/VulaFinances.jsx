@@ -2,16 +2,17 @@
  * VulaFinances.jsx — money in/out per project, budget-vs-actual, built from filed
  * invoices/payments. Payments reconciled to invoices (matched, not guessed).
  */
+import { toast } from './ui/index.jsx'
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 import VulaJobCosting from "./VulaJobCosting";
 import VulaCrossCheck from "./VulaCrossCheck";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const rand = (n) => "R" + (Number(n) || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
 
 function Cell({ label, value, sub, color }) {
-  const C = { surface: "#FFFFFF", border: "#DDD8CE", muted: "#8A8680", text: "#2A2A2A" };
+  const C = { surface: "var(--surface)", border: "var(--border)", muted: "var(--muted)", text: "var(--text)" };
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
       <div style={{ fontSize: 10, textTransform: "uppercase", color: C.muted, marginBottom: 3 }}>{label}</div>
@@ -78,7 +79,7 @@ export default function VulaFinances({ tenantId }) {
     }).then(r => r.json()).catch(() => ({}));
     setClaimBusy(false);
     if (d.claim) { setNewClaim({ value: "", retention: "5" }); refreshProject(project); }
-    else alert(d.detail || d.error || "Could not create claim.");
+    else toast(d.detail || d.error || "Could not create claim.");
   };
 
   const certifyClaim = async (project, claimId) => {
@@ -97,8 +98,8 @@ export default function VulaFinances({ tenantId }) {
       }),
     }).then(r => r.json()).catch(() => ({}));
     setClaimBusy(false);
-    if (d.invoice) { alert(`Invoice ${d.invoice.invoice_number || ""} created for this claim.`); setInvoicing(null); refreshProject(project); }
-    else alert(d.detail || "Could not create invoice.");
+    if (d.invoice) { toast(`Invoice ${d.invoice.invoice_number || ""} created for this claim.`); setInvoicing(null); refreshProject(project); }
+    else toast(d.detail || "Could not create invoice.");
   };
 
   const saveContract = async (project) => {
@@ -123,7 +124,7 @@ export default function VulaFinances({ tenantId }) {
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
-      <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Finances</h1>
+      <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Finances</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Money in/out per project — built from invoices & payments Vula files. Payments are matched to invoices, not guessed.</p>
 
       <VulaJobCosting tenantId={tenantId} />
@@ -172,7 +173,7 @@ export default function VulaFinances({ tenantId }) {
                     <Cell label="Contract / budget" value={rand(detail.contract)} />
                     <Cell label="Invoiced" value={rand(detail.invoiced)} sub={`${detail.invoice_count} invoice(s)`} />
                     <Cell label="Outstanding" value={rand(detail.outstanding)} color={detail.outstanding > 0 ? C.red : C.text} sub="billed, unpaid" />
-                    <Cell label="Paid in" value={rand(detail.paid_in)} color={C.green} />
+                    <Cell label="Paid in" value={rand(detail.paid_in)} color={'var(--ok)'} />
                     <Cell label="Spent" value={rand(detail.spent)} color={C.red} sub="cash out + expenses" />
                     <Cell label="Net" value={rand(detail.net)} />
                     <Cell label="Budget left" value={detail.remaining != null ? rand(detail.remaining) : "—"} color={detail.remaining != null && detail.remaining < 0 ? C.red : C.text} />
@@ -182,7 +183,7 @@ export default function VulaFinances({ tenantId }) {
                   <span style={{ fontSize: 12, color: C.muted }}>Set contract value (from your BoQ):</span>
                   <input value={contractDraft} onChange={e => setContractDraft(e.target.value)} placeholder="R total"
                     style={{ width: 120, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
-                  <button onClick={() => saveContract(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "#fff", fontSize: 12, cursor: "pointer" }}>Save</button>
+                  <button onClick={() => saveContract(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "var(--on-accent)", fontSize: 12, cursor: "pointer" }}>Save</button>
                 </div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Unified from invoices, expenses and filed payments. Contract value persists (survives restarts) and drives budget-remaining; link invoices to a project on the invoice form.</div>
 
@@ -203,12 +204,12 @@ export default function VulaFinances({ tenantId }) {
                           <span style={{ display: "flex", gap: 4, justifyContent: "flex-end", alignItems: "center" }}>
                             <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>{c.status}</span>
                             {c.status === "draft" && (
-                              <button onClick={() => certifyClaim(p.project, c.id)} style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: "#fff", fontSize: 11, cursor: "pointer" }}>Certify</button>
+                              <button onClick={() => certifyClaim(p.project, c.id)} style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: "var(--surface)", fontSize: 11, cursor: "pointer" }}>Certify</button>
                             )}
                             {c.status === "certified" && !c.linked_invoice_id && (
-                              <button onClick={() => setInvoicing({ claimId: c.id, name: "", phone: "", email: "", address: "" })} style={{ padding: "3px 8px", border: "none", borderRadius: 5, background: C.green, color: "#fff", fontSize: 11, cursor: "pointer" }}>Invoice</button>
+                              <button onClick={() => setInvoicing({ claimId: c.id, name: "", phone: "", email: "", address: "" })} style={{ padding: "3px 8px", border: "none", borderRadius: 5, background: C.green, color: "var(--on-accent)", fontSize: 11, cursor: "pointer" }}>Invoice</button>
                             )}
-                            {c.linked_invoice_id && <span style={{ fontSize: 10, color: C.green }}>✓ invoiced</span>}
+                            {c.linked_invoice_id && <span style={{ fontSize: 10, color: 'var(--ok)' }}>✓ invoiced</span>}
                           </span>
                         </div>
                       ))}
@@ -224,8 +225,8 @@ export default function VulaFinances({ tenantId }) {
                         <input placeholder="Email (optional)" value={invoicing.email} onChange={e => setInvoicing({ ...invoicing, email: e.target.value })} style={{ flex: 1, minWidth: 120, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button disabled={claimBusy || !invoicing.name} onClick={() => submitInvoice(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "#fff", fontSize: 12, cursor: "pointer" }}>{claimBusy ? "Creating…" : "Create invoice"}</button>
-                        <button onClick={() => setInvoicing(null)} style={{ padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+                        <button disabled={claimBusy || !invoicing.name} onClick={() => submitInvoice(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "var(--on-accent)", fontSize: 12, cursor: "pointer" }}>{claimBusy ? "Creating…" : "Create invoice"}</button>
+                        <button onClick={() => setInvoicing(null)} style={{ padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: "var(--surface)", fontSize: 12, cursor: "pointer" }}>Cancel</button>
                       </div>
                     </div>
                   )}
@@ -235,7 +236,7 @@ export default function VulaFinances({ tenantId }) {
                     <input value={newClaim.value} onChange={e => setNewClaim({ ...newClaim, value: e.target.value })} placeholder="R total" style={{ width: 110, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
                     <span style={{ fontSize: 12, color: C.muted }}>Retention %</span>
                     <input value={newClaim.retention} onChange={e => setNewClaim({ ...newClaim, retention: e.target.value })} style={{ width: 50, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }} />
-                    <button disabled={claimBusy || !newClaim.value} onClick={() => addClaim(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "#fff", fontSize: 12, cursor: "pointer" }}>{claimBusy ? "Saving…" : "Add claim"}</button>
+                    <button disabled={claimBusy || !newClaim.value} onClick={() => addClaim(p.project)} style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: C.green, color: "var(--on-accent)", fontSize: 12, cursor: "pointer" }}>{claimBusy ? "Saving…" : "Add claim"}</button>
                   </div>
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Enter the CUMULATIVE value of all work completed to date, not just this period — retention and the actual payment due are calculated automatically from the previous claim.</div>
                 </div>
@@ -253,7 +254,7 @@ export default function VulaFinances({ tenantId }) {
             <span style={{ color: C.text }}>{t.counterparty || t.filename} <span style={{ color: C.muted }}>{t.description ? `· ${String(t.description).slice(0, 40)}` : ""}</span></span>
             <span style={{ color: C.muted }}>{t.project || "—"}</span>
             <span style={{ fontWeight: 600, color: C.text }}>{rand(t.amount)}</span>
-            <span style={{ fontSize: 10, color: t.reconciled ? C.green : C.muted }}>{t.reconciled ? "✓ matched" : t.kind}</span>
+            <span style={{ fontSize: 10, color: t.reconciled ? 'var(--ok)' : C.muted }}>{t.reconciled ? "✓ matched" : t.kind}</span>
           </div>
         ))}
       </div>
@@ -287,7 +288,7 @@ export default function VulaFinances({ tenantId }) {
           </div>
         )}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 20 }}>Powered by Vula · figures from filed invoices & payments</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 20 }}>Powered by Vula · figures from filed invoices & payments</p>
     </div>
   );
 }

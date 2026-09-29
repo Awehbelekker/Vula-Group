@@ -19,7 +19,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { VULA_API } from '../lib/authFetch'
 import { useAuthStore } from '../store/auth'
-import { Card, Button, Badge, SectionTabs, EmptyState, inputStyle } from './ui'
+import { Card, Button, Badge, SectionTabs, EmptyState, inputStyle, toast, confirmDialog } from './ui/index.jsx'
 import { T } from '../theme/tokens'
 
 const H = { 'Content-Type': 'application/json' }   // JWT attached by lib/authFetch
@@ -188,7 +188,7 @@ function useResolver(tenantId, products) {
           const hit = await api(tenantId, `/products/${p.id}/barcode`, { method: 'POST', body: JSON.stringify({ barcode: unknown.code }) })
           cache.current[unknown.code] = hit
           unknown.resolve(hit)
-        } catch (e) { alert(e.message); unknown.resolve(null) }
+        } catch (e) { toast(e.message); unknown.resolve(null) }
         setUnknown(null)
       }} />
       <Button size="sm" variant="ghost" style={{ marginTop: 8 }} onClick={() => { unknown.resolve(null); setUnknown(null) }}>Skip</Button>
@@ -325,7 +325,7 @@ function CountSession({ tenantId, products, countId, full, review, setReview, on
   }, [tenantId, countId, setReview])
 
   async function applyCount() {
-    if (!confirm('Set stock to these counts? Items you did not count are left as they are.')) return
+    if (!(await confirmDialog('Set stock to these counts? Items you did not count are left as they are.'))) return
     setBusy(true)
     try {
       const r = await api(tenantId, `/stock/counts/${countId}/apply`, { method: 'POST' })
@@ -351,7 +351,7 @@ function CountSession({ tenantId, products, countId, full, review, setReview, on
             {review.count.status === 'open' && (full
               ? <div style={{ display: 'flex', gap: 8 }}>
                   <Button variant="danger" size="sm" disabled={busy} onClick={async () => {
-                    if (!confirm('Cancel this stock-take? Nothing will change.')) return
+                    if (!(await confirmDialog('Cancel this stock-take? Nothing will change.', { danger: true, confirmLabel: 'Yes' }))) return
                     try { await api(tenantId, `/stock/counts/${countId}/cancel`, { method: 'POST' }); onClose() } catch (e) { setMsg(e.message) }
                   }}>Cancel count</Button>
                   <Button disabled={busy || !review.lines.length} onClick={applyCount}>Apply to stock</Button>

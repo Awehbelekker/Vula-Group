@@ -7,11 +7,11 @@
  */
 import { useEffect, useState, Fragment, useCallback } from 'react'
 import { authFetch } from '../lib/authFetch'
-import { SectionTabs } from './ui/index.jsx'
+import { SectionTabs, confirmDialog } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import VulaMasterTenantDetail from './VulaMasterTenantDetail'
 
-const C = { surface: '#FFFFFF', border: '#DDD8CE', green: 'var(--accent)', red: '#A23B2D', amber: '#B7791F', text: '#2A2A2A', muted: '#8A8680', alt: '#F0EDE5' }
+const C = { surface: 'var(--surface)', border: 'var(--border)', green: 'var(--accent)', red: 'var(--danger)', amber: 'var(--warn)', text: 'var(--text)', muted: 'var(--muted)', alt: 'var(--surface-alt)' }
 
 const SUBTABS = [
   { id: 'tenants', label: 'Tenants', icon: '🏢' },
@@ -78,7 +78,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   }
 
   return (
-    <div style={{ fontFamily: 'system-ui', color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
+    <div style={{ color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
       <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
       {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
@@ -171,8 +171,8 @@ function OnboardPanel({ onError, onOpenTenant, onProvision, selectTenantId, onCo
               <span style={{
                 width: 22, height: 22, borderRadius: 99, flex: 'none', display: 'flex', alignItems: 'center',
                 justifyContent: 'center', fontSize: 11, fontWeight: 700,
-                background: s.done ? C.green : C.surface, color: s.done ? '#fff' : C.muted,
-                border: s.done ? `1.5px solid ${C.green}` : `1.5px solid ${C.border}`,
+                background: s.done ? 'var(--ok)' : C.surface, color: s.done ? '#fff' : C.muted,
+                border: s.done ? `1.5px solid ${'var(--ok)'}` : `1.5px solid ${C.border}`,
               }}>{s.done ? '✓' : i + 1}</span>
               <div style={{ flex: 1 }}>
                 <b style={{ fontSize: 12.5, color: s.done ? C.muted : C.text }}>{s.label}</b>
@@ -194,6 +194,41 @@ function OnboardPanel({ onError, onOpenTenant, onProvision, selectTenantId, onCo
 }
 
 /* ── Tenants & provisioning ─────────────────────────────────────────────────── */
+// Health from /v1/master/tenants (master._health): red = WhatsApp down, amber = unanswered
+// questions / no number / quiet 30 days, green = fine, off = suspended.
+const HEALTH_ORDER = { red: 0, amber: 1, green: 2, off: 3 }
+const HEALTH_COLOUR = { red: 'var(--danger)', amber: 'var(--warn)', green: 'var(--ok)', off: 'var(--muted)' }
+
+function HealthDot({ t }) {
+  const h = t.health || 'green'
+  const why = (t.health_reasons || []).join(' · ') || 'All good'
+  return <span title={why} aria-label={`Health: ${why}`} role="img"
+    style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', marginTop: 4, background: HEALTH_COLOUR[h] || HEALTH_COLOUR.green }} />
+}
+
+function ago(iso) {
+  if (!iso) return 'never'
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
+  if (Number.isNaN(days)) return '—'
+  return days <= 0 ? 'today' : days === 1 ? 'yesterday' : days < 60 ? `${days} days ago` : `${Math.round(days / 30)} months ago`
+}
+
+function matchesTenant(t, q) {
+  const s = q.trim().toLowerCase()
+  if (!s) return true
+  return [t.tenant_id, t.display_name, t.business_type, t.signup_email, t.plan]
+    .some(v => (v || '').toString().toLowerCase().includes(s))
+}
+
+function sortTenants(list, by) {
+  const name = (t) => (t.display_name || t.tenant_id || '').toLowerCase()
+  const act = (t) => (t.last_activity ? new Date(t.last_activity).getTime() : 0)
+  return [...list].sort((a, b) =>
+    by === 'name' ? name(a).localeCompare(name(b))
+      : by === 'activity' ? act(b) - act(a) || name(a).localeCompare(name(b))
+        : (HEALTH_ORDER[a.health] ?? 2) - (HEALTH_ORDER[b.health] ?? 2) || act(b) - act(a))
+}
+
 function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumePrefill, onCreated }) {
   const [rows, setRows] = useState([])
   const [registry, setRegistry] = useState({ business_types: [], modules: [] })
@@ -201,6 +236,8 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
   const [form, setForm] = useState({ tenant_id: '', display_name: '', business_type: 'retail' })
   const [busy, setBusy] = useState(false)
   const [managing, setManaging] = useState(null)   // tenant_id being module/plan-edited
+  const [q, setQ] = useState('')
+  const [sort, setSort] = useState('health')          // health | activity | name
 
   const load = async () => {
     try {
@@ -238,6 +275,10 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
   }
 
   const toggleActive = async (t) => {
+    const name = t.display_name || t.tenant_id
+    if (t.active !== false && !(await confirmDialog(
+      `Suspend ${name}? Their WhatsApp bot, checkout and dashboard logins stop working until you activate them again.`,
+      { danger: true, confirmLabel: 'Suspend' }))) return
     try {
       await authFetch(`/v1/master/tenants/${t.tenant_id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -270,7 +311,7 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
     } catch (e) { onError(e.message) }
   }
   const cancelSub = async (t) => {
-    if (!confirm(`Cancel ${t.display_name || t.tenant_id}'s subscription? This also suspends them — bot, checkout, and dashboard logins stop working immediately.`)) return
+    if (!(await confirmDialog(`Cancel ${t.display_name || t.tenant_id}'s subscription? This also suspends them — bot, checkout, and dashboard logins stop working immediately.`, { danger: true, confirmLabel: 'Yes' }))) return
     try { await authFetch(`/v1/master/tenants/${t.tenant_id}/cancel`, { method: 'POST' }); load() }
     catch (e) { onError(e.message) }
   }
@@ -295,22 +336,35 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
           <button style={{ ...btn, ...btnOn }} disabled={busy} onClick={create}>{busy ? 'Creating…' : 'Create'}</button>
         </div>
       )}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+        <input placeholder="Search tenants…" value={q} onChange={e => setQ(e.target.value)} style={{ ...input, flex: '1 1 200px' }} aria-label="Search tenants" />
+        <select value={sort} onChange={e => setSort(e.target.value)} style={input} aria-label="Sort tenants">
+          <option value="health">Needs attention first</option>
+          <option value="activity">Most recently active</option>
+          <option value="name">Name</option>
+        </select>
+        <span style={{ fontSize: 12, color: C.muted }}>
+          {rows.filter(t => t.health === 'red').length} need attention · {rows.filter(t => t.dormant).length} quiet 30+ days
+        </span>
+      </div>
       <div style={{ ...card, padding: 0, overflowX: 'auto', marginTop: 10 }}>
         <table style={table}>
           <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
-            {['Tenant', 'Type', 'Modules', 'Paid', 'Trial ends', 'Logins', 'Active', ''].map(h => <th key={h} style={th}>{h}</th>)}
+            {['', 'Tenant', 'Type', 'Last message', 'Modules', 'Paid', 'Trial ends', 'Logins', 'Active', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {rows.map(t => (
+            {sortTenants(rows.filter(t => matchesTenant(t, q)), sort).map(t => (
               <Fragment key={t.tenant_id}>
                 <tr style={{ borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ ...td, paddingRight: 0 }}><HealthDot t={t} /></td>
                   <td style={td}><b>{t.display_name || t.tenant_id}</b><div style={{ color: C.muted, fontFamily: 'monospace', fontSize: 11 }}>{t.tenant_id}</div></td>
                   <td style={td}>{t.business_type || '—'}</td>
+                  <td style={{ ...td, color: t.dormant ? C.amber : C.muted, whiteSpace: 'nowrap' }}>{ago(t.last_activity)}</td>
                   <td style={{ ...td, color: C.muted, fontSize: 11.5 }}>{(t.modules || []).length} enabled · <span style={{ color: C.text, fontWeight: 600 }}>{t.plan || 'starter'}</span></td>
-                  <td style={{ ...td, color: t.paid ? C.green : C.amber, fontWeight: 600 }}>{t.paid ? 'Paid' : (t.signup_status || '—')}</td>
+                  <td style={{ ...td, color: t.paid ? 'var(--ok)' : C.amber, fontWeight: 600 }}>{t.paid ? 'Paid' : (t.signup_status || '—')}</td>
                   <td style={{ ...td, color: C.muted }}>{(t.trial_ends || '').slice(0, 10) || '—'}</td>
                   <td style={td}>{t.logins}</td>
-                  <td style={{ ...td, color: t.active === false ? C.red : C.green, fontWeight: 600 }}>{t.active === false ? 'Suspended' : 'Active'}</td>
+                  <td style={{ ...td, color: t.active === false ? C.red : 'var(--ok)', fontWeight: 600 }}>{t.active === false ? 'Suspended' : 'Active'}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     {onViewDetail && <button style={{ ...miniBtn, marginRight: 6 }} onClick={() => onViewDetail(t.tenant_id)}>Details</button>}
                     {onOpenTenant && <button style={{ ...miniBtn, marginRight: 6, color: C.green, fontWeight: 600 }} onClick={() => onOpenTenant(t.tenant_id)}>Open →</button>}
@@ -322,7 +376,7 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
                 </tr>
                 {managing === t.tenant_id && (
                   <tr>
-                    <td colSpan={8} style={{ padding: 0, background: C.alt }}>
+                    <td colSpan={10} style={{ padding: 0, background: C.alt }}>
                       <ManageTenantRow tenant={t} registry={registry} onSave={(patch) => saveManage(t.tenant_id, patch)} />
                       <div style={{ padding: '0 14px 14px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', borderTop: `1px solid ${C.border}`, marginTop: 4, paddingTop: 12 }}>
                         <b style={{ fontSize: 12.5 }}>Billing</b>
@@ -441,7 +495,7 @@ function HealthPanel({ onError, onViewDetail }) {
               ? <button onClick={() => onViewDetail(w.tenant_id)} style={{ ...miniBtn, minWidth: 110, textAlign: 'left', fontWeight: 700 }}>{w.tenant_id}</button>
               : <b style={{ minWidth: 110 }}>{w.tenant_id}</b>}
             <span style={{ fontFamily: 'monospace' }}>{w.phone_number}</span>
-            <span style={{ color: w.status === 'connected' ? C.green : C.red, fontWeight: 600 }}>{w.status}</span>
+            <span style={{ color: w.status === 'connected' ? 'var(--ok)' : C.red, fontWeight: 600 }}>{w.status}</span>
             <span style={{ color: C.muted }}>{w.webhook_registered ? 'webhook ✓' : 'webhook ✗'}</span>
             {w.last_error && <span style={{ color: C.red }}>{String(w.last_error).slice(0, 60)}</span>}
           </div>
@@ -461,7 +515,7 @@ function HealthPanel({ onError, onViewDetail }) {
             {(Array.isArray(h.scheduled_jobs) ? h.scheduled_jobs : []).map((j, i) => (
               <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
                 <td style={tdSm}>{j.tenant_id}</td><td style={tdSm}>{j.job_type}</td>
-                <td style={{ ...tdSm, color: j.enabled ? C.green : C.red }}>{j.enabled ? '✓' : '✗'}</td>
+                <td style={{ ...tdSm, color: j.enabled ? 'var(--ok)' : C.red }}>{j.enabled ? '✓' : '✗'}</td>
                 <td style={tdSm}>{j.hour != null ? `${String(j.hour).padStart(2, '0')}:${String(j.minute || 0).padStart(2, '0')}` : '—'}</td>
                 <td style={{ ...tdSm, fontFamily: 'monospace', fontSize: 11 }}>{j.template_name || 'default'}</td>
                 <td style={{ ...tdSm, color: C.muted }}>{(j.last_fired_at || '—').slice(0, 16).replace('T', ' ')}</td>
@@ -484,7 +538,7 @@ function HealthPanel({ onError, onViewDetail }) {
             {(qb || []).map(r => (
               <tr key={r.tenant_id} style={{ borderTop: `1px solid ${C.border}` }}>
                 <td style={tdSm}>{r.tenant_id}</td>
-                <td style={{ ...tdSm, color: r.last_backup_status === 'ok' ? C.green : C.red, fontWeight: 600 }}>
+                <td style={{ ...tdSm, color: r.last_backup_status === 'ok' ? 'var(--ok)' : C.red, fontWeight: 600 }}>
                   {r.last_backup_status || '—'}
                 </td>
                 <td style={{ ...tdSm, color: C.muted }}>{(r.last_backup_at || '—').slice(0, 16).replace('T', ' ')}</td>
@@ -587,6 +641,9 @@ function UsagePanel({ onError, onViewDetail }) {
   useEffect(() => { authFetch('/v1/master/usage?days=14').then(setU).catch(e => onError(e.message)) }, [])
   if (!u) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
   const tenants = Object.entries(u.per_tenant || {})
+  const rate = u.usd_zar_rate || 18
+  // Providers bill in USD; show the rand beside it (USD_ZAR_RATE on the server, display only).
+  const money = (usd) => `$${Number(usd || 0).toFixed(2)} · R${(Number(usd || 0) * rate).toFixed(2)}`
   return (
     <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
       <table style={table}>
@@ -603,12 +660,12 @@ function UsagePanel({ onError, onViewDetail }) {
                 {onViewDetail ? <button onClick={() => onViewDetail(tid)} style={miniBtn}>{tid}</button> : tid}
               </td>
               <td style={td}>{t.calls}</td>
-              <td style={td}>${(t.ai_cost_usd || 0).toFixed(2)}</td>
-              <td style={td}>${(t.infra_cost_usd || 0).toFixed(2)}</td>
+              <td style={{ ...td, whiteSpace: 'nowrap' }}>{money(t.ai_cost_usd)}</td>
+              <td style={{ ...td, whiteSpace: 'nowrap' }}>{money(t.infra_cost_usd)}</td>
               <td style={td}>{t.vectors ?? '—'}</td>
               <td style={td}>{t.storage_mb != null ? `${Number(t.storage_mb).toFixed(0)} MB` : '—'}</td>
               <td style={{ ...td, color: t.capped_today ? C.red : C.muted, fontWeight: t.capped_today ? 600 : 400 }}>
-                {t.spend_cap_usd != null ? `$${Number(t.spend_cap_usd).toFixed(2)}/day${t.capped_today ? ' · CAPPED TODAY' : ''}` : 'uncapped'}
+                {t.spend_cap_usd != null ? `${money(t.spend_cap_usd)}/day${t.capped_today ? ' · CAPPED TODAY' : ''}` : 'uncapped'}
               </td>
               <td style={{ ...td, color: docOver ? C.red : C.text, fontWeight: docOver ? 600 : 400 }}>
                 {t.doc_count ?? 0}{t.doc_cap != null ? ` / ${t.doc_cap}` : ' / ∞'}
@@ -1001,9 +1058,9 @@ function ModelsPanel({ onError }) {
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }
 const btn = { padding: '7px 13px', border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: 'pointer' }
-const btnOn = { background: C.green, color: '#fff', borderColor: C.green }
+const btnOn = { background: C.green, color: 'var(--on-accent)', borderColor: C.green }
 const miniBtn = { padding: '3px 9px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, fontSize: 11.5, cursor: 'pointer' }
-const input = { padding: '7px 10px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text, fontFamily: 'system-ui' }
+const input = { padding: '7px 10px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text}
 const table = { width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }
 const th = { padding: '8px 10px', fontWeight: 600, whiteSpace: 'nowrap' }
 const td = { padding: '8px 10px', verticalAlign: 'top' }

@@ -30,7 +30,8 @@ FENCED = {
 # Skills confirmed by direct code read (not assumption) to never surface externally-authored
 # text into an LLM prompt. Each needs a real reason.
 NO_EXTERNAL_CONTENT = {
-    "memory_recall": "no LLM generation at all — returns raw retrieved context or a fixed string",
+    "memory_recall": "builds no prompt itself — delegates the whole answer to the reasoning "
+                     "skill, which is FENCED (2026-09-29)",
     "file_parse": "raw-context path (run()) never hits an LLM; the one LLM-synthesis path "
                   "(_search_kb) delegates to vula.ingestion.pipeline.answer(), which is "
                   "itself already fenced",

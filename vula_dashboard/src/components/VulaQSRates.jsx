@@ -13,10 +13,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#C0392B", amber: "#B7791F",
-  text: "#2A2A2A", muted: "#8A8680", surfaceAlt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)",
+  text: "var(--text)", muted: "var(--muted)", surfaceAlt: "var(--surface-alt)" };
 const inp = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, color: C.text, background: C.surface, boxSizing: "border-box" };
-const btn = { padding: "8px 14px", background: C.green, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" };
+const btn = { padding: "8px 14px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" };
 const link = { background: "none", border: "none", cursor: "pointer", fontSize: 12, padding: 0 };
 const UNITS = ["m2", "m3", "m", "each", "no", "kg", "item", "sum", "day", "hour", "bag", "litre"];
 const KINDS = [["", "All"], ["material", "Materials"], ["labour", "Labour"], ["plant", "Plant hire"], ["delivery", "Delivery"]];
@@ -73,7 +73,7 @@ export default function VulaQSRates({ tenantId }) {
 
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto", padding: "24px 16px" }}>
-      <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>QS Rate Library</h1>
+      <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>QS Rate Library</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Your own unit rates come first. Below them, rates learned from your own invoices, quotes, BOQs and labour payments. The assistant, Quick Cost, QS Pro and Takeoff use both, and never guess a market rate.</p>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -146,7 +146,7 @@ export default function VulaQSRates({ tenantId }) {
           <button style={{ ...link, color: C.green, padding: 14 }} onClick={() => setShowAll(true)}>Show all {learned.length}</button>
         )}
       </div>
-      <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 22 }}>Powered by Vula</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 22 }}>Powered by Vula</p>
     </div>
   );
 }

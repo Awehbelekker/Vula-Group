@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", amber: "#B7791F", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((Number(c) || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const api = (t, p, opts) => fetch(`${VULA_API}/v1/commerce/${t}/admin${p}`, opts).then(r => r.json());
 
@@ -15,7 +15,7 @@ const STATUS = {
   submitted: { label: "Submitted", color: C.muted },
   approved: { label: "Approved", color: C.amber },
   reimbursed: { label: "Reimbursed", color: C.green },
-  paid: { label: "Paid", color: C.green },
+  paid: { label: "Paid", color: 'var(--ok)' },
   rejected: { label: "Rejected", color: C.red },
 };
 
@@ -85,7 +85,7 @@ export default function VulaExpenses({ tenantId, defaultPaidBy }) {
   const owed = rep?.reimbursable_owed_cents || 0;
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text, maxWidth: 960 }}>
+    <div style={{ color: C.text, maxWidth: 960 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0" }}>💸 Expenses & claims</h4>
         <span style={{ fontSize: 12.5, color: C.muted }}>Receipts sent on WhatsApp appear here automatically.</span>
@@ -284,11 +284,11 @@ const Stat = ({ label, value, color }) => (
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 };
 const btn = { padding: "7px 13px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const chip = { padding: "5px 11px", border: `1px solid ${C.border}`, borderRadius: 20, background: C.surface, color: C.muted, fontSize: 12, cursor: "pointer", textTransform: "capitalize" };
-const chipOn = { background: C.text, color: "#fff", borderColor: C.text };
+const chipOn = { background: C.text, color: "var(--bg)", borderColor: C.text };
 const miniBtn = { padding: "3px 9px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 11.5, cursor: "pointer", marginRight: 4 };
-const input = { padding: "6px 9px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12.5, background: C.surface, color: C.text, fontFamily: "system-ui" };
+const input = { padding: "6px 9px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12.5, background: C.surface, color: C.text};
 const miniInput = { padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 12, background: C.surface, color: C.text };
 const th = { padding: "8px 10px", fontWeight: 600, whiteSpace: "nowrap" };
 const td = { padding: "8px 10px", verticalAlign: "middle" };

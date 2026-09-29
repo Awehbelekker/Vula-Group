@@ -559,7 +559,7 @@ export default function VulaOnboarding() {
       `}</style>
 
       <div style={{ minHeight: "100vh", background: "#080808", color: "#F0EDE8", fontFamily: "'DM Sans', system-ui, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}>
-        <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", backgroundImage: "radial-gradient(ellipse at 20% 20%, #C4922A08 0%, transparent 60%), radial-gradient(ellipse at 80% 80%, var(--accent)06 0%, transparent 60%)" }} />
+        <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", backgroundImage: "radial-gradient(ellipse at 20% 20%, #C4922A08 0%, transparent 60%), radial-gradient(ellipse at 80% 80%, color-mix(in srgb, var(--accent) 2%, transparent) 0%, transparent 60%)" }} />
 
         <div style={{ position: "relative", zIndex: 1, width: "100%", maxWidth: 580 }}>
           {/* Logo */}

@@ -143,12 +143,15 @@ def _overlaps(start: datetime, end: datetime, busy: List[tuple[datetime, datetim
     return False
 
 
-async def _busy(tenant_id: str, day_start: datetime, day_end: datetime) -> List[tuple[datetime, datetime]]:
+async def _busy(tenant_id: str, day_start: datetime, day_end: datetime,
+                booked_by: Optional[str] = None) -> List[tuple[datetime, datetime]]:
     try:
-        rows = (_client().table("commerce_bookings").select("start_at,end_at,status")
-                .eq("tenant_id", tenant_id).in_("status", list(_ACTIVE))
-                .gte("start_at", day_start.isoformat()).lt("start_at", day_end.isoformat())
-                .execute().data or [])
+        q = (_client().table("commerce_bookings").select("start_at,end_at,status")
+             .eq("tenant_id", tenant_id).in_("status", list(_ACTIVE))
+             .gte("start_at", day_start.isoformat()).lt("start_at", day_end.isoformat()))
+        if booked_by:          # a rep's own diary — never the shop's customer slots
+            q = q.eq("booked_by", booked_by)
+        rows = q.execute().data or []
     except Exception as exc:
         log.debug("booking busy-lookup skipped (run migration 050?): %s", exc)
         return []
@@ -234,9 +237,11 @@ async def create_booking(tenant_id: str, body: Dict[str, Any]) -> Dict[str, Any]
         return {"error": "that time is in the past"}
 
     # Concurrency-safe enough for single-resource: re-check overlap immediately before insert.
-    busy = await _busy(tenant_id, start_utc - timedelta(hours=6), end_utc + timedelta(hours=6))
-    if _overlaps(start_utc, end_utc, busy, int(cfg["buffer_min"])):
-        return {"error": "that slot is no longer available"}
+    # A rep's appointment (booked_by, 2026-09-29) only clashes with that rep's own diary.
+    booked_by = (body.get("booked_by") or "").strip() or None
+    busy = await _busy(tenant_id, start_utc - timedelta(hours=6), end_utc + timedelta(hours=6), booked_by)
+    if _overlaps(start_utc, end_utc, busy, 0 if booked_by else int(cfg["buffer_min"])):
+        return {"error": "you already have something booked then" if booked_by else "that slot is no longer available"}
 
     row = {
         "tenant_id": tenant_id,
@@ -251,10 +256,59 @@ async def create_booking(tenant_id: str, body: Dict[str, Any]) -> Dict[str, Any]
         "notes": body.get("notes"),
         "channel": body.get("channel") or "web",
     }
-    res = _client().table("commerce_bookings").insert(row).execute()
+    extra = {k: v for k, v in (("booked_by", booked_by), ("location", (body.get("location") or "").strip() or None)) if v}
+    try:
+        res = _client().table("commerce_bookings").insert({**row, **extra}).execute()
+    except Exception as exc:
+        if not extra:
+            raise
+        log.warning("booking owner/location not saved (run migration 187?): %s", exc)
+        res = _client().table("commerce_bookings").insert(row).execute()
     booking = (res.data or [row])[0]
     booking["start_local"] = start_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M")
     return {"booking": booking}
+
+
+async def day_bounds_utc(tenant_id: str, date_str: Optional[str] = None) -> tuple[str, str, str]:
+    """(start_utc, end_utc, date) of one local day in the business's timezone — today by default."""
+    cfg = await get_settings(tenant_id)
+    tz = _tz(cfg["timezone"])
+    local = _now_utc().astimezone(tz)
+    if date_str:
+        y, mo, d = (int(x) for x in date_str.split("-"))
+        local = local.replace(year=y, month=mo, day=d)
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return (start.astimezone(timezone.utc).isoformat(),
+            (start + timedelta(days=1)).astimezone(timezone.utc).isoformat(), start.strftime("%Y-%m-%d"))
+
+
+async def list_day(tenant_id: str, date_str: Optional[str] = None,
+                   booked_by: Optional[str] = None) -> Dict[str, Any]:
+    """One day's appointments, in local time — a rep's own (booked_by) or the whole business's.
+    Cancelled ones are left out."""
+    a, b, day = await day_bounds_utc(tenant_id, date_str)
+    cfg = await get_settings(tenant_id)
+    tz = _tz(cfg["timezone"])
+    q = (_client().table("commerce_bookings").select("*").eq("tenant_id", tenant_id)
+         .gte("start_at", a).lt("start_at", b))
+    if booked_by:
+        q = q.eq("booked_by", booked_by)
+    try:
+        rows = q.order("start_at").limit(100).execute().data or []
+    except Exception as exc:
+        log.debug("day list skipped (run migration 187?): %s", exc)
+        rows = []
+    out = []
+    for r in rows:
+        if r.get("status") == "cancelled":
+            continue
+        try:
+            r["start_local"] = _parse(r["start_at"]).astimezone(tz).strftime("%H:%M")
+            r["end_local"] = _parse(r["end_at"]).astimezone(tz).strftime("%H:%M")
+        except Exception:
+            pass
+        out.append(r)
+    return {"date": day, "appointments": out}
 
 
 async def list_bookings(tenant_id: str, *, status: Optional[str] = None,

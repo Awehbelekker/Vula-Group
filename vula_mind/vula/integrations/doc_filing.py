@@ -93,7 +93,7 @@ def match_project(tenant_id: str, text: str) -> Optional[dict]:
     """
     if not (text or "").strip():
         return None
-    text_tokens = _tokens(text)
+    text_tokens = _tokens(without_own_address(tenant_id, text))
 
     if text_tokens:
         # ── ClickUp lists — highest-priority tier, can also attach the file into the list ──
@@ -164,6 +164,8 @@ def _own_names(tenant_id: Optional[str]) -> set:
         for k in ("display_name", "legal_name", "business_name"):
             if cfg.get(k):
                 names.add(str(cfg[k]))
+        # the other names it goes by (migration 187): "Aweh Be Lekker t/a DIGG Collection"
+        names.update(str(a) for a in (cfg.get("aliases") or []) if a)
     except Exception:
         pass
     out = set()
@@ -175,10 +177,60 @@ def _own_names(tenant_id: Optional[str]) -> set:
     return out
 
 
+_ADDR_CACHE: dict = {}
+
+
+def own_address_phrases(tenant_id: str) -> list:
+    """The business's own street address as it appears on documents ("22b porterfield road").
+    2026-09-29 (DIGG): DIGG operates from 22B Porterfield Road, so every drawing and supplier slip
+    addressed to DIGG "named" the Porterfield project — Belladonna's paperwork landed there."""
+    import time
+    hit = _ADDR_CACHE.get(tenant_id)
+    if hit and time.monotonic() - hit[0] < 600:
+        return hit[1]
+    phrases: list = []
+    try:
+        rows = (_client().table("commerce_invoice_settings").select("registered_address")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        addr = str((rows[0] if rows and isinstance(rows[0], dict) else {}).get("registered_address") or "")
+        street = addr.replace("\n", ",").split(",")[0].strip().lower()
+        if len(street) >= 6:
+            phrases.append(street)
+            m = re.match(r"(\d+)[a-z]?\s+(.+)", street)
+            if m:                                         # "22b porterfield road" also as "22 porterfield road"
+                phrases += [f"{m.group(1)} {m.group(2)}", f"{m.group(1)}b {m.group(2)}", f"{m.group(1)}a {m.group(2)}"]
+    except Exception as exc:
+        logger.debug("own address read skipped: %s", exc)
+    _ADDR_CACHE[tenant_id] = (time.monotonic(), sorted(set(phrases), key=len, reverse=True))
+    return _ADDR_CACHE[tenant_id][1]
+
+
+def without_own_address(tenant_id: str, text: str) -> str:
+    out = text or ""
+    for ph in own_address_phrases(tenant_id):
+        out = re.sub(re.escape(ph), " ", out, flags=re.IGNORECASE)
+    return out
+
+
 def _is_own(party: str, own: set) -> bool:
     from vula.commerce.service import _canonical_party
     key = _canonical_party(party)
     return bool(key) and (key in own or key.split()[0] in own)
+
+
+# Signals that say nothing about which job a document is for (2026-09-29, digg-demo's rules):
+# one "yes" had tied every Astron fuel slip to ATLANTIS FOODS and the word "builders" to Sporty.
+# Fuel stations and general trade words serve every project, so they're never learned.
+_NON_PROJECT_SIGNAL = re.compile(
+    r"\b(astron|engen|shell|sasol|caltex|totalenergies|total energies|bp|puma energy|"
+    r"fuel|petrol|diesel|garage|service station)\b", re.IGNORECASE)
+_GENERIC_SIGNALS = {"builders", "builder", "hardware", "supplies", "services", "trading",
+                    "construction", "contractors", "general", "cash", "sundries", "invoice"}
+
+
+def _useful_signal(val: str) -> bool:
+    v = (val or "").strip().lower()
+    return len(v) >= 3 and v not in _GENERIC_SIGNALS and not _NON_PROJECT_SIGNAL.search(v)
 
 
 def _signals_from(fields: dict, tenant_id: Optional[str] = None) -> list:
@@ -203,13 +255,15 @@ def _signals_from(fields: dict, tenant_id: Optional[str] = None) -> list:
         val = party.lower()
         if len(val) >= 3 and val not in seen:
             out.append(("supplier", val))
-    return out
+    return [(t, v) for t, v in out if _useful_signal(v)]
 
 
 def learn_filing_rule(tenant_id: str, fields: dict, project: str) -> int:
     """Remember that a doc with these signals belongs to `project`."""
     if not project or not fields:
         return 0
+    from vula.commerce.service import canonical_project
+    project = canonical_project(tenant_id, project) or project     # one spelling per project
     n = 0
     for stype, val in _signals_from(fields, tenant_id):
         try:
@@ -257,6 +311,14 @@ def lookup_learned_project(tenant_id: str, fields: dict) -> Optional[dict]:
         return None
     if not rows:
         return None
+    # "HPC Bokaap" and "HPC_Bokaap" are one project — rules learned under both spellings used to
+    # make every HPC supplier look ambiguous, so the document waited for a question instead.
+    from vula.commerce.service import canonical_project
+    canon = {}
+    for r in rows:
+        if r.get("project"):
+            r["project"] = canon.setdefault(r["project"], canonical_project(tenant_id, r["project"])
+                                            or r["project"])
     distinct_projects = sorted({r["project"] for r in rows if r.get("project")})
     if len(distinct_projects) > 1:
         return {"project": None, "clickup_list_id": None, "confidence": 1.0,
@@ -486,7 +548,25 @@ async def file_document(
         except Exception as exc2:
             logger.warning("vula_filed_documents insert failed (run migration 015/081?): %s", exc2)
     _record_prices(tenant_id, row)
+    _maybe_read_programme(tenant_id, row)
     return row
+
+
+def _maybe_read_programme(tenant_id: str, row: dict) -> None:
+    """A programme / Gantt filed for a project that runs against a signed baseline becomes that
+    project's daily tasks (vula/commerce/project_programme.py). Background; never blocks filing."""
+    if not (row.get("id") and row.get("project") and row.get("status") == "filed"
+            and row.get("category") == "Programme / Schedule"):
+        return
+    try:
+        from vula.commerce import project_programme
+        from vula.commerce.background_tasks import run_background
+        b = project_programme.baseline(tenant_id, row["project"])
+        if b and b.get("baseline_locked"):
+            run_background(tenant_id, "programme_import",
+                           project_programme.import_and_report(tenant_id, row["project"], row))
+    except Exception as exc:
+        logger.debug("programme read skipped: %s", exc)
 
 
 def _record_prices(tenant_id: str, row: dict) -> None:
@@ -499,6 +579,44 @@ def _record_prices(tenant_id: str, row: dict) -> None:
         record_from_document(tenant_id, row)
     except Exception as exc:
         logger.debug("price book record skipped: %s", exc)
+
+
+# A reply to "which project is this for?" is a project name or number, "yes", or "skip" — short and
+# not a request. 2026-09-29 (Judy, digg-demo): with a council letter waiting for a project, her
+# next four real messages were taken as answers — two long ones filed the letter under ATLANTIS
+# FOODS on a single coincidental word, and "What data are you using to reference cost" got
+# "I couldn't match that to a project" — none of them ever reached the assistant.
+_REQUEST_START = re.compile(
+    r"^\s*(what|where|when|who|which|why|how|can|could|would|will|is|are|do|does|did|please|"
+    r"get|find|send|show|check|give|tell|need|want|i\b|we\b|my\b|you\b|are you|help|"
+    r"list|make|create|draft|update|pull|look|search|explain|hi\b|hello|hey|morning|thanks)",
+    re.IGNORECASE)
+
+
+def looks_like_project_answer(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or len(t) > 60 or t.endswith("?") or len(t.split()) > 8:
+        return False
+    if t.lower().rstrip(".!") in ("yes", "y", "yep", "ja", "yes please", "correct", "that's right",
+                                  "skip", "none", "no project", "unfiled", "leave it"):
+        return True
+    return not _REQUEST_START.match(t)
+
+
+def _named_project_answer(tenant_id: str, text: str) -> Optional[dict]:
+    """The project the answer NAMES — its name, a spelling of it, or its project number."""
+    try:
+        from vula.integrations.project_resolver import _named, _projects
+        hits = _named(_projects(tenant_id), text)
+    except Exception as exc:
+        logger.debug("named project answer skipped: %s", exc)
+        return None
+    if len(hits) == 1:
+        return {"project": hits[0], "clickup_list_id": None, "confidence": 1.0, "ambiguous": False}
+    if len(hits) > 1:
+        return {"project": None, "clickup_list_id": None, "confidence": 1.0, "ambiguous": True,
+                "candidates": sorted(hits)}
+    return None
 
 
 async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Optional[dict]:
@@ -533,6 +651,8 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     if not rows:
         return None
     doc = rows[0]
+    if not looks_like_project_answer(text):
+        return None        # a real message — let it reach the assistant; the doc keeps waiting
 
     # "skip" → leave it unfiled (still stored + in KB).
     if text.strip().lower() in ("skip", "none", "no project", "unfiled", "leave it"):
@@ -543,7 +663,9 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
             pass
         return {"skipped": True, "filename": doc.get("filename")}
 
-    match = match_project(tenant_id, text)
+    # The project the answer names (name, spelling variant or project number) wins; the loose
+    # ClickUp-list word overlap is only a fallback, and still only for a short answer.
+    match = _named_project_answer(tenant_id, text) or match_project(tenant_id, text)
     # "yes" to "Is this for *HPC Bokaap*?" — the question project_resolver suggested; work the
     # same suggestion out again from the document rather than storing it.
     if text.strip().lower().rstrip(".!") in ("yes", "y", "yep", "ja", "yes please", "correct", "that's right"):
@@ -558,13 +680,13 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
                          "ambiguous": False}
         except Exception as exc:
             logger.debug("yes-to-suggestion skipped: %s", exc)
+    if match and match.get("project"):
+        from vula.commerce.service import canonical_project
+        match["project"] = canonical_project(tenant_id, match["project"]) or match["project"]
     # A match with no `project` (either no candidate at all, or an unresolved tie between
     # several plausible projects — match.get("ambiguous")) is treated identically: re-ask
     # rather than silently filing under a null project.
     if not match or not match.get("project"):
-        # Don't hijack an unrelated question — only re-ask for short answers.
-        if len(text) > 60 or text.strip().endswith("?"):
-            return None
         result = {"unmatched": True, "filename": doc.get("filename")}
         if match and match.get("candidates"):
             result["candidates"] = match["candidates"]

@@ -812,12 +812,8 @@ def _caller_identity(tenant_id: str, phone: str) -> tuple[Optional[str], Optiona
     caller treats as "ordinary customer" — exactly the behaviour before this existed.
     """
     try:
-        from vula.commerce import service as commerce_service
-        target = _digits_za(phone)
-        rows = (commerce_service._client().table("vula_team_members")
-                .select("name,whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
-                .execute().data or [])
-        match = next((r for r in rows if _digits_za(r.get("whatsapp") or "") == target), None)
+        from vula import team_index
+        match = team_index.member_for_phone(tenant_id, phone)
         if match:
             return match.get("name"), match.get("role")
     except Exception as exc:
@@ -1340,9 +1336,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         # If phone is completely unknown, reply once and stop
         if not tenant_id and not contractor:
             await _send_reply(phone, (
-                "Hi! I'm Vula, your construction AI. "
+                "Hi! I'm Vula, a business assistant. "
                 "I couldn't find an account linked to this number. "
-                "Contact your site manager to get set up."
+                "Ask the business you work with to add you to their team."
             ))
             return
 
@@ -1457,6 +1453,45 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
         await _send_reply(phone, "You have read-only access. Contact your admin to upgrade.", tenant_id)
         return
 
+    # ── "add staff <name> <number> <trade>" — the owner gives a site person's WhatsApp number so
+    # they get their programme tasks each morning (vula/commerce/project_programme.py).
+    try:
+        from vula.commerce import project_programme as _pp
+        if await _maybe_project_setup(phone, text, tenant_id):
+            return
+        _prog = _pp.parse_start_programme(text, tenant_id)
+        if _prog and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin"):
+            got = await _pp.import_from_clickup(tenant_id, _prog, notify=False)
+            if got.get("error"):
+                await _send_reply(phone, f"I couldn't find a programme for *{_prog}* in ClickUp — it "
+                                  "needs a list in the project's folder named like 'Work Programme'.",
+                                  tenant_id=tenant_id)
+            else:
+                msg = (f"📋 *{_prog}* programme read from ClickUp: {got['tasks']} task(s), "
+                       f"{got['start']} to {got['end']}, {got['open']} still open. From tomorrow "
+                       "06:00 the site team gets their tasks each morning and you get the day's "
+                       "work and anything overdue. ClickUp is re-read every morning.")
+                if got["needs_number"]:
+                    msg += ("\n\n📱 I need a WhatsApp number for: " + ", ".join(got["needs_number"])
+                            + ". Send *add staff <name> <number> <trade>* for each.")
+                await _send_reply(phone, msg, tenant_id=tenant_id)
+            return
+        _staff = _pp.parse_add_staff(text)
+        if _staff and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin"):
+            _proj = _pp.active_programme_project(tenant_id)
+            if not _proj:
+                await _send_reply(phone, "There's no programme loaded yet — send the programme "
+                                  "(PDF or Excel) filed to the project first.", tenant_id=tenant_id)
+                return
+            got = _pp.add_site_staff(tenant_id, _proj, _staff["name"], _staff["phone"], _staff["trade"])
+            await _send_reply(
+                phone, f"✅ Added *{got['name']}* ({got['phone']}) to *{_proj}* — "
+                f"{got['tasks']} programme task(s) are theirs, sent to them each morning at 06:00.",
+                tenant_id=tenant_id)
+            return
+    except Exception as exc:
+        logger.warning("add staff failed: %s", exc)
+
     # ── Pending document filing: if a doc is awaiting a project, treat this
     # message as the answer (file it + attach to ClickUp), else fall through.
     try:
@@ -1489,14 +1524,17 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     project_id = _active_project_for_phone(phone)
     thread_key = f"{phone}:{project_id}" if project_id else phone
 
-    if role == "admin":
-        await _maybe_capture_owner_correction(tenant_id, phone, thread_key, text)
-
     # Who is actually messaging — resolved BEFORE the history is formatted, because the answer
     # decides how that history labels them. Everyone reaching this branch is staff/admin on
     # this tenant's own line, so an unmatched lookup still isn't a customer; it just means we
     # can't name them, and the generic label stays.
     caller_name, caller_role = _caller_identity(tenant_id, phone)
+
+    # Only a known team member teaches Vula corrections. On a dedicated line every sender gets
+    # role "admin" (the number identifies the tenant), so before 2026-09-29 a member of the
+    # public's reply could be captured as an "owner correction" and learned.
+    if role == "admin" and _is_insider(caller_role):
+        await _maybe_capture_owner_correction(tenant_id, phone, thread_key, text)
     user_label = "Client"
     if _is_insider(caller_role):
         who = f"{caller_name} ({caller_role})" if caller_name else str(caller_role)
@@ -3653,6 +3691,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 result.setdefault("fields", {})["_unverified_figures"] = missing
         if result and result.get("category") == "Bill of Quantities (BOQ)":
             result = await _complete_boq_lines(result, local_path, full_text, filename)
+        elif result and result.get("category") == _PRICE_LIST:
+            result = await _complete_price_list(result, local_path, full_text, filename)
         if result:
             # Labels a person would put on it — "Variation — over BOQ", "Back-charge"
             # (vula/integrations/doc_labels.py, deterministic).
@@ -3704,7 +3744,43 @@ async def _complete_boq_lines(result: dict, local_path, full_text: str, filename
     return result
 
 
-async def _boq_lines_from_text(text: str, filename: str) -> list:
+_PRICE_LIST = "Menu / Price List"
+# A price in the text ("R 1 250.00", "R245", "ZAR 90") — a catalogue with none has no lines to read.
+_HAS_PRICE = re.compile(r"(\bR\s?\d|\bZAR\s?\d|\bprice\b.*\d)", re.I)
+
+
+def _has_priced_lines(fields: dict) -> bool:
+    return any(isinstance(li, dict) and (li.get("unit_price_cents") or li.get("total_cents"))
+               for li in (fields or {}).get("line_items") or [])
+
+
+async def _complete_price_list(result: dict, local_path, full_text: str, filename: str) -> dict:
+    """A supplier price list's priced lines, for the price book. 2026-09-29, Gerflor: the SPM
+    wall-protection and vinyl-sheeting price lists were filed with a summary and no lines, so
+    none of their prices reached the rates. A spreadsheet is read row by row; a PDF in grounded
+    chunks (a line is kept only when its figures are in the text). A catalogue with no prices
+    in it is left alone. Best-effort: any failure leaves the result as it was."""
+    fields = result.get("fields") or {}
+    if _has_priced_lines(fields):
+        return result
+    try:
+        from vula.ingestion import boq_sheet
+        if str(local_path or "").lower().endswith(boq_sheet.SHEET_SUFFIXES):
+            lines = boq_sheet.parse(local_path)
+        elif _HAS_PRICE.search(full_text or ""):
+            lines = await _boq_lines_from_text((full_text or "")[:6000 * 8], filename,
+                                               doc_kind="supplier price list")
+        else:
+            return result
+        if lines:
+            result["fields"] = {**fields, "line_items": lines}
+            logger.info("Price list %s: %d priced lines read", filename, len(lines))
+    except Exception as exc:
+        logger.debug("price list lines skipped for %s: %s", filename, exc)
+    return result
+
+
+async def _boq_lines_from_text(text: str, filename: str, doc_kind: str = "Bill of Quantities") -> list:
     import json as _json
     import litellm
     from core.llm_router import resolve_cheap_route
@@ -3717,7 +3793,7 @@ async def _boq_lines_from_text(text: str, filename: str) -> list:
             resp = await litellm.acompletion(model=model, temperature=0, max_tokens=1800,
                 api_key=api_key, api_base=api_base, messages=[
                     {"role": "system", "content":
-                        "This is part of a Bill of Quantities. Return STRICT JSON only: "
+                        f"This is part of a {doc_kind}. Return STRICT JSON only: "
                         '{"line_items": [{"description": string, "quantity": number|null, '
                         '"unit": string|null, "unit_price_cents": integer|null, '
                         '"total_cents": integer|null, "section": string|null}]} — every priced '
@@ -4623,6 +4699,59 @@ async def _read_stock_photo(media_id: str) -> Optional[dict]:
         return None
 
 
+async def _maybe_project_setup(phone: str, text: str, tenant_id: str) -> bool:
+    """The owner telling Vula how a project must run — its ClickUp programme, the signed cost
+    document to manage it against, daily staff tasks (2026-09-29, Judy's voice note on Atlantis
+    Paarden Eiland). Vula shows exactly what it will do, with Confirm buttons — one per candidate
+    document when more than one matches ("Rev10" / "Rev10 No Reception") — and changes nothing
+    until a tap (vula/commerce/project_programme.py). True when handled."""
+    role = _caller_identity(tenant_id, phone)[1] or ""
+    if role not in ("owner", "manager", "admin"):
+        return False
+    from vula.commerce import project_programme as _pp
+    intent = await _pp.read_setup_instruction(text)
+    if not intent:
+        return False
+    import asyncio as _aio
+    plan = await _aio.to_thread(_pp.plan_setup, tenant_id, intent)
+    if plan.get("question"):
+        await _send_reply(phone, plan["question"] + " Tell me the project and I'll set it up.", tenant_id)
+        return True
+    if not plan["lines"]:
+        return False
+    summary = _pp.plan_text(plan)
+    base = {"project": plan["project"], "create": plan["create"], "programme": plan.get("programme"),
+            "_caller": {"role": role, "name": None}}
+    choices = plan["options"] or [None]
+    rows = []
+    from vula.commerce import service as commerce_service
+    for opt in choices[:2]:
+        args = {**base, "baseline_doc_id": (opt or {}).get("doc_id")}
+        try:
+            ins = commerce_service._client().table("commerce_pending_confirmations").insert({
+                "tenant_id": tenant_id, "phone": phone, "skill_name": "commerce_admin",
+                "tool_name": "setup_project", "summary": summary, "tool_args": args}).execute()
+            rows.append((ins.data[0]["id"], opt))
+        except Exception as exc:
+            logger.warning("project setup confirmation insert failed: %s", exc)
+    if not rows:
+        await _send_reply(phone, summary + "\n\nI couldn't set up the Confirm button just now — "
+                                           "please try again in a moment.", tenant_id)
+        return True
+    if len(rows) == 1:
+        await _send_confirm_request(phone, tenant_id, {"id": rows[0][0], "summary": summary,
+                                                       "confirm_label": "Confirm set-up"})
+        return True
+    creds = await _get_tenant_wa_creds(tenant_id)
+    buttons = [{"id": f"admin_confirm:{pid}", "title": f"{_pp._r(o['total_incl_cents'])} " +
+                ("(no recep.)" if "no_reception" in (o["filename"] or "").lower() else "signed")}
+               for pid, o in rows]
+    buttons.append({"id": f"admin_cancel:{rows[0][0]}", "title": "Cancel"})
+    if not (creds and await _send_wa_buttons(creds, _wa_number(phone), summary, buttons)):
+        await _send_reply(phone, summary + "\n\nI couldn't show the buttons — please try again.", tenant_id)
+    return True
+
+
 async def _ask_admin_confirm(phone: str, tenant_id: str, tool_name: str, args: dict,
                              preview: dict, caller_role: Optional[str] = None) -> None:
     """Store a commerce_admin tool call as a pending confirmation (migration 146) and send the
@@ -5271,8 +5400,15 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 conversation_history=conversation_history,
             )
 
+        # The shared training KB is SA construction standards & rates — only a fallback for a
+        # business that works in projects, never a seafood shop's or a rep's answer.
+        try:
+            from vula.api.tenants import uses_projects as _up
+            construction_ok = _up(tenant_id)
+        except Exception:
+            construction_ok = True
         training = VulaIngestionPipeline(tenant_id=TRAINING_TENANT_ID)
-        training_sources = await training.query(question, top_k=3)
+        training_sources = await training.query(question, top_k=3) if construction_ok else []
         if training_sources:
             logger.info("Falling back to training KB for tenant %s", tenant_id)
             return await training.answer(
@@ -6446,10 +6582,8 @@ def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
 
     target = _digits(phone)
     try:
-        from vula.commerce import service as commerce_service
-        rows = (commerce_service._client().table("vula_team_members")
-                .select("whatsapp,role").eq("tenant_id", tenant_id).eq("active", True)
-                .execute().data or [])
+        from vula import team_index
+        rows = team_index.active_members(tenant_id)
         if rows:
             return any(_digits(r.get("whatsapp") or "") == target
                        and (r.get("role") or "") in _ADMIN_AGENT_ROLES for r in rows)
@@ -6522,10 +6656,24 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         # 2026-09-18: this used to close with a seafood in-joke ("No fish were harmed...") sent
         # to every tenant's owner regardless of vertical — an architecture firm or a clinic got
         # the same fish joke Off The Hook did. Generic sign-off instead.
+        # What lands here depends on the business (2026-09-29): DIGG's owner was promised
+        # "delivery briefings, low-stock nudges, order chases" it would never get.
+        try:
+            from vula.api.tenants import tenant_profile
+            prof = tenant_profile(tenant_id)
+        except Exception:
+            prof = {"sells_products": True}
+        if prof.get("is_rep_business"):
+            lands = "follow-up reminders, meeting notes, expense slips and product questions"
+        elif prof.get("uses_projects"):
+            lands = "project documents, supplier invoices, job-costing alerts and day-to-day questions"
+        elif prof.get("sells_products"):
+            lands = "delivery briefings, low-stock nudges, order chases and day-to-day questions"
+        else:
+            lands = "reminders, documents and day-to-day questions"
         msg = (f"Hey {first_name}! 👋 Welcome to Vula — you're all set up as the owner/team "
-               f"member for *{shop_name}* here on WhatsApp. This is where your delivery "
-               f"briefings, low-stock nudges, order chases and day-to-day questions land from "
-               f"now on.{dash_line}")
+               f"member for *{shop_name}* here on WhatsApp. This is where your {lands} land "
+               f"from now on.{dash_line}")
         await _send_reply(phone, msg, tenant_id)
         logger.info("Sent owner welcome to %s (%s)", phone, tenant_id)
         await _send_staff_capability_menu(phone, tenant_id)
@@ -6735,16 +6883,10 @@ async def _sender_is_sales_rep(phone: str, tenant_id: str) -> bool:
     awareness at all, so a rep captioning a photo "log as meeting" fell through to generic
     document filing instead of reaching commerce_admin/log_meeting."""
     try:
-        from vula.commerce import service as _commerce_service
-
-        def _digits(p: str) -> str:
-            n = "".join(ch for ch in (p or "") if ch.isdigit())
-            return "27" + n[1:] if n.startswith("0") else n
-        target = _digits(phone)
-        rep_rows = (_commerce_service._client().table("vula_team_members")
-                   .select("whatsapp").eq("tenant_id", tenant_id).eq("role", "sales_rep")
-                   .eq("active", True).execute().data or [])
-        return any(_digits(r.get("whatsapp") or "") == target for r in rep_rows)
+        from vula import team_index
+        target = team_index.digits_za(phone)
+        return any(r.get("role") == "sales_rep" and team_index.digits_za(r.get("whatsapp") or "") == target
+                   for r in team_index.active_members(tenant_id))
     except Exception as exc:
         logger.debug("sales_rep routing check skipped: %s", exc)
         return False
@@ -6928,6 +7070,11 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
     except Exception as exc:
         logger.warning("admin confirm re-dispatch failed: %s", exc)
         await _send_reply(phone, "Something went wrong applying that — please try again.", tenant_id)
+        return
+
+    # A tool that already wrote its own verified reply (setup_project) is sent as-is.
+    if isinstance(result, dict) and isinstance(result.get("reply"), str) and result["reply"].strip():
+        await _send_reply(phone, result["reply"], tenant_id)
         return
 
     # Summarise the raw tool result into plain WhatsApp language — same established pattern as

@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from "react";
 import VulaDynamics365Connect from "./VulaDynamics365Connect";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 const KINDS = [["contact", "Contacts"], ["account", "Accounts"], ["opportunity", "Opportunities"]];
 
 export default function VulaRepCrmLookup({ tenantId }) {
@@ -58,10 +58,10 @@ export default function VulaRepCrmLookup({ tenantId }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()}
                placeholder="Search…" style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
-        <button onClick={search} style={{ padding: "8px 16px", background: C.green, color: "#fff", border: "none",
+        <button onClick={search} style={{ padding: "8px 16px", background: C.green, color: "var(--on-accent)", border: "none",
           borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Search</button>
       </div>
-      {error && <div style={{ fontSize: 12.5, color: "#A23B2D", marginBottom: 10 }}>{error}</div>}
+      {error && <div style={{ fontSize: 12.5, color: "var(--danger)", marginBottom: 10 }}>{error}</div>}
       {results.map((r, i) => (
         <div key={r.id || i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", marginBottom: 6 }}>
           <div style={{ fontWeight: 700, color: C.text, fontSize: 13.5 }}>{r.name || r.fullname || r.subject || "—"}</div>
