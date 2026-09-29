@@ -596,7 +596,7 @@ function LearnFromHistory({ tenantId }) {
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
       <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>📚 Learn from your documents</h3>
       <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 10px" }}>
-        Every priced line on your invoices, quotes and BOQs, and your workers' day rates, become rates you can price from (QS Rates, Quick Cost, QS Pro, Takeoff). Your own rates are never changed. Nothing is booked.
+        Every priced line on your invoices, quotes, BOQs and supplier price lists, and your workers' day rates, become rates you can price from (QS Rates, Quick Cost, QS Pro, Takeoff). Your own rates are never changed. Nothing is booked.
       </p>
       {book.items > 0 && (
         <div style={{ fontSize: 13, color: C.text, marginBottom: 10 }}>
@@ -607,7 +607,7 @@ function LearnFromHistory({ tenantId }) {
         : <button onClick={start} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 13 }}>Learn from history</button>}
       {!st.running && st.step === "done" && (
         <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
-          Last run: {n(st.documents)} documents read, {n(st.priced_lines)} priced lines{st.boqs_completed ? `, ${st.boqs_completed} BOQ${st.boqs_completed === 1 ? "" : "s"} read in full` : ""}{st.reread_fixed ? `, ${st.reread_fixed} re-read and filled in` : ""}{st.still_unread ? `, ${st.still_unread} still unreadable` : ""}.
+          Last run: {n(st.documents)} documents read, {n(st.priced_lines)} priced lines{st.boqs_completed ? `, ${st.boqs_completed} BOQ${st.boqs_completed === 1 ? "" : "s"} read in full` : ""}{st.price_lists_read ? `, ${st.price_lists_read} price list${st.price_lists_read === 1 ? "" : "s"} itemised` : ""}{st.stock_sheets ? `, ${st.stock_sheets} stock sheet${st.stock_sheets === 1 ? "" : "s"} stored` : ""}{st.reread_fixed ? `, ${st.reread_fixed} re-read and filled in` : ""}{st.still_unread ? `, ${st.still_unread} still unreadable` : ""}.
         </div>)}
       {st.error && <div style={{ fontSize: 12.5, color: "#C0392B", marginTop: 8 }}>Stopped: {st.error}</div>}
       {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}

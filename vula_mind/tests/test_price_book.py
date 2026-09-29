@@ -361,3 +361,88 @@ async def test_assigning_a_project_in_the_dashboard_carries_the_bill_boq_and_pri
     assert db.tables["vula_price_observations"][0]["project"] == "HPC Bokaap"
     (pb,) = db.tables["vula_project_boq"]
     assert (pb["project"], pb["total_cents"], pb["sections"][0]["section"]) == ("HPC Bokaap", 263140, "Boards")
+
+
+# ── supplier price lists and stock sheets (2026-09-29, Gerflor) ──────────────
+# Gerflor's documents were mostly product knowledge (fire reports, spec sheets, brochures), but
+# the SPM wall-protection and vinyl-sheeting price lists were filed with a summary and no lines,
+# and "DT SOH and Planning" was filed as a Programme before stock sheets were stored as rows.
+
+_SPM_TEXT = """SPM WALL PROTECTION & HANDRAILS — PRICE LIST 2026 (excl VAT)
+BR200 Bumper rail 200mm  per m  R 485.00
+HR50 Handrail 50mm round  per m  R 612.50
+CG75 Corner guard 75x75  per 3m length  R 1 290.00"""
+
+_SOH_TEXT = """DT SOH and Planning — SOH m² – 07.09.26
+VIRTUO 30 COL: SUNNY WHITE 2.00MM 532
+VIRTUO 30 COL: BAITA MEDIUM 2.00MM 581.4 534 Est. Mid Nov - TBC
+MAC TILES-COL: 612 ST/GREY 1.60MM 6504.3
+AMBIANCE ULTRA TERRA COL: 0203 STEAM GREY 2.00W | 540 | 2000 | Est. Mid Oct - TBC
+MAC TILES-COL: 656 BASIL 2.00MM 378 164m² Reserved TVET College
+EL7 SD ROBUST COL: GREY 2.00MM 220"""
+
+
+def _spm_lines():
+    return [{"description": "BR200 Bumper rail 200mm", "unit": "m", "unit_price_cents": 48500},
+            {"description": "HR50 Handrail 50mm round", "unit": "m", "unit_price_cents": 61250},
+            {"description": "CG75 Corner guard 75x75", "unit": "3m length", "unit_price_cents": 129000}]
+
+
+@pytest.mark.asyncio
+async def test_a_price_list_is_itemised_but_a_catalogue_is_left_alone(monkeypatch):
+    from vula.api import whatsapp as wa
+    calls = []
+
+    async def fake_lines(text, filename, doc_kind="Bill of Quantities"):
+        calls.append(doc_kind)
+        return _spm_lines()
+    monkeypatch.setattr(wa, "_boq_lines_from_text", fake_lines)
+    out = await wa._complete_price_list({"category": "Menu / Price List", "fields": {"supplier": "SPM"}},
+                                        "Menu - SPM.pdf", _SPM_TEXT, "Menu - SPM.pdf")
+    assert calls == ["supplier price list"] and len(out["fields"]["line_items"]) == 3
+    assert out["fields"]["supplier"] == "SPM"
+    catalogue = await wa._complete_price_list(
+        {"category": "Menu / Price List", "fields": {}}, "Menu.pdf",
+        "Mipolam Troplan — available colours, 2.0mm, 2m wide rolls, EN 13501-1 Bfl-s1", "Menu.pdf")
+    assert catalogue["fields"] == {} and len(calls) == 1              # no prices → no LLM read
+
+
+@pytest.mark.asyncio
+async def test_learn_from_history_itemises_price_lists_and_stores_stock_sheets(db, monkeypatch):
+    from vula.api import whatsapp as wa
+    from vula.commerce import reread
+    tid = "gerflor"
+    db.tables["vula_filed_documents"] = [
+        {"id": "p1", "tenant_id": tid, "category": "Menu / Price List", "filename": "Menu - SPM 20260828-0659.pdf",
+         "file_url": "https://x/p1.pdf", "summary": "This document is a price list for SPM Wall Protection",
+         "fields": {"supplier": "SPM"}, "created_at": "2026-08-28T07:00:00Z"},
+        {"id": "s1", "tenant_id": tid, "category": "Programme / Schedule", "filename": "Programme 20260907-1232.pdf",
+         "file_url": "https://x/s1.pdf", "doc_id": "d-s1", "fields": {},
+         "summary": "This document is a new order proposal detailing various vinyl flooring products, their current stock on hand (SOH) in sqm"},
+    ]
+    texts = {"p1": _SPM_TEXT, "s1": _SOH_TEXT}
+
+    async def fake_download(url):
+        return b"%PDF"
+
+    async def fake_text(tenant_id, row, path):
+        return texts[row["id"]]
+
+    async def fake_lines(text, filename, doc_kind="Bill of Quantities"):
+        return _spm_lines()
+    monkeypatch.setattr(reread, "_download", fake_download)
+    monkeypatch.setattr(reread, "_file_text", fake_text)
+    monkeypatch.setattr(wa, "_boq_lines_from_text", fake_lines)
+    monkeypatch.setattr(reread, "candidates", lambda t, limit=200: [])
+
+    st = await reread.learn_from_history(tid)
+    assert st["step"] == "done" and st["failed"] == 0
+    assert (st["price_lists_read"], st["stock_sheets"], st["priced_lines"]) == (1, 1, 3)
+    sheet = db.tables["vula_stock_sheets"][0]
+    assert sheet["doc_id"] == "d-s1" and sheet["as_at"] and len(sheet["rows"]) >= 5
+    rates = {r["norm_key"]: r for r in db.tables["vula_price_observations"]}
+    assert any(r["unit_price_cents"] == 61250 and r["supplier"] == "SPM" for r in rates.values())
+    # a second run reads nothing again
+    db.tables["vula_stock_sheets"][0]["tenant_id"] = tid
+    again = await reread.learn_from_history(tid)
+    assert (again["price_lists_read"], again["stock_sheets"]) == (0, 0)

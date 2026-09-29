@@ -3653,6 +3653,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                 result.setdefault("fields", {})["_unverified_figures"] = missing
         if result and result.get("category") == "Bill of Quantities (BOQ)":
             result = await _complete_boq_lines(result, local_path, full_text, filename)
+        elif result and result.get("category") == _PRICE_LIST:
+            result = await _complete_price_list(result, local_path, full_text, filename)
         if result:
             # Labels a person would put on it — "Variation — over BOQ", "Back-charge"
             # (vula/integrations/doc_labels.py, deterministic).
@@ -3704,7 +3706,43 @@ async def _complete_boq_lines(result: dict, local_path, full_text: str, filename
     return result
 
 
-async def _boq_lines_from_text(text: str, filename: str) -> list:
+_PRICE_LIST = "Menu / Price List"
+# A price in the text ("R 1 250.00", "R245", "ZAR 90") — a catalogue with none has no lines to read.
+_HAS_PRICE = re.compile(r"(\bR\s?\d|\bZAR\s?\d|\bprice\b.*\d)", re.I)
+
+
+def _has_priced_lines(fields: dict) -> bool:
+    return any(isinstance(li, dict) and (li.get("unit_price_cents") or li.get("total_cents"))
+               for li in (fields or {}).get("line_items") or [])
+
+
+async def _complete_price_list(result: dict, local_path, full_text: str, filename: str) -> dict:
+    """A supplier price list's priced lines, for the price book. 2026-09-29, Gerflor: the SPM
+    wall-protection and vinyl-sheeting price lists were filed with a summary and no lines, so
+    none of their prices reached the rates. A spreadsheet is read row by row; a PDF in grounded
+    chunks (a line is kept only when its figures are in the text). A catalogue with no prices
+    in it is left alone. Best-effort: any failure leaves the result as it was."""
+    fields = result.get("fields") or {}
+    if _has_priced_lines(fields):
+        return result
+    try:
+        from vula.ingestion import boq_sheet
+        if str(local_path or "").lower().endswith(boq_sheet.SHEET_SUFFIXES):
+            lines = boq_sheet.parse(local_path)
+        elif _HAS_PRICE.search(full_text or ""):
+            lines = await _boq_lines_from_text((full_text or "")[:6000 * 8], filename,
+                                               doc_kind="supplier price list")
+        else:
+            return result
+        if lines:
+            result["fields"] = {**fields, "line_items": lines}
+            logger.info("Price list %s: %d priced lines read", filename, len(lines))
+    except Exception as exc:
+        logger.debug("price list lines skipped for %s: %s", filename, exc)
+    return result
+
+
+async def _boq_lines_from_text(text: str, filename: str, doc_kind: str = "Bill of Quantities") -> list:
     import json as _json
     import litellm
     from core.llm_router import resolve_cheap_route
@@ -3717,7 +3755,7 @@ async def _boq_lines_from_text(text: str, filename: str) -> list:
             resp = await litellm.acompletion(model=model, temperature=0, max_tokens=1800,
                 api_key=api_key, api_base=api_base, messages=[
                     {"role": "system", "content":
-                        "This is part of a Bill of Quantities. Return STRICT JSON only: "
+                        f"This is part of a {doc_kind}. Return STRICT JSON only: "
                         '{"line_items": [{"description": string, "quantity": number|null, '
                         '"unit": string|null, "unit_price_cents": integer|null, '
                         '"total_cents": integer|null, "section": string|null}]} — every priced '
