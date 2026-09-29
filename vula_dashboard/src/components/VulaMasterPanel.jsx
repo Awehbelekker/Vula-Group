@@ -662,7 +662,7 @@ function WeeklyDigestCard({ onError }) {
         }}>Send now</button>
       </div>
       {msg && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{msg}</div>}
-      {text && <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'inherit' }}>{text}</pre>}
+      {text && <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', margin: '8px 0 0', fontFamily: 'var(--font-body)' }}>{text}</pre>}
     </div>
   )
 }
