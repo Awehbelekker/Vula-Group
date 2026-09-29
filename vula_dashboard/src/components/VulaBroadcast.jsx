@@ -360,10 +360,10 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
           <input value={testPhone} onChange={e => setTestPhone(e.target.value)} placeholder="Test to: 2782…"
             style={{ ...s.input, width: 170 }} />
           <button onClick={sendTest} style={{ ...s.aiBtn, background: '#5B6B7A' }}>📲 Send test</button>
-          {testMsg && <span style={{ fontSize: 12, fontFamily: 'system-ui', color: testMsg.startsWith('✓') ? '#16a34a' : '#ef4444' }}>{testMsg}</span>}
+          {testMsg && <span style={{ fontSize: 12, color: testMsg.startsWith('✓') ? 'var(--ok)' : 'var(--danger)' }}>{testMsg}</span>}
         </div>
 
-        <p style={s.sectionLabel}>Audience <span style={{ fontWeight: 400, color: '#8A8680' }}>— pick one or more; overlaps are de-duplicated</span></p>
+        <p style={s.sectionLabel}>Audience <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— pick one or more; overlaps are de-duplicated</span></p>
         <div style={s.audRow}>
           {AUDIENCES.map(a => (
             <button
@@ -382,7 +382,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
               <span style={s.audLabel}>{audiences.includes(`seg:${seg.id}`) ? '☑ ' : '☐ '}🎯 {seg.name}
                 {audCount(`seg:${seg.id}`) != null && <span style={s.reachBadge}>{audCount(`seg:${seg.id}`)} reachable</span>}
                 <span onClick={(e) => { e.stopPropagation(); deleteSegment(seg.id) }}
-                  style={{ marginLeft: 6, color: '#C0392B', cursor: 'pointer' }}>×</span>
+                  style={{ marginLeft: 6, color: 'var(--danger)', cursor: 'pointer' }}>×</span>
               </span>
               <span style={s.audHint}>{segHint(seg.criteria)}</span>
             </button>
@@ -395,26 +395,26 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
         {showSeg && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', margin: '0 0 12px' }}>
             <input placeholder="Segment name" value={segForm.name} onChange={e => setSegForm({ ...segForm, name: e.target.value })}
-              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12 }} />
+              style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12 }} />
             <input type="number" placeholder="no order in … days" value={segForm.not_ordered_within_days}
               onChange={e => setSegForm({ ...segForm, not_ordered_within_days: e.target.value })}
-              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 150 }} />
+              style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12, width: 150 }} />
             <input type="number" placeholder="min spend (R)" value={segForm.min_spend}
               onChange={e => setSegForm({ ...segForm, min_spend: e.target.value })}
-              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 120 }} />
+              style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12, width: 120 }} />
             <select value={segForm.channel} onChange={e => setSegForm({ ...segForm, channel: e.target.value })}
-              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12 }}>
+              style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12 }}>
               <option value="">any channel</option><option value="whatsapp">WhatsApp</option><option value="web">Web</option>
             </select>
             <input placeholder="tags (comma-separated)" value={segForm.tags}
               onChange={e => setSegForm({ ...segForm, tags: e.target.value })}
               title="Matches a customer with ANY of these tags — set tags per-customer in the Customers tab"
-              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 170 }} />
+              style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12, width: 170 }} />
             <input placeholder="area" value={segForm.area}
               onChange={e => setSegForm({ ...segForm, area: e.target.value })}
-              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, width: 110 }} />
+              style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12, width: 110 }} />
             <select value={segForm.language} onChange={e => setSegForm({ ...segForm, language: e.target.value })}
-              style={{ padding: '7px 9px', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12 }}>
+              style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12 }}>
               <option value="">any language</option>
               {Object.entries(SEG_LANGUAGES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
             </select>
@@ -479,9 +479,9 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
       <p style={{ ...s.audHint, margin: '-4px 0 8px' }}>💡 Food promos land best on weekday late afternoons (≈ 4–6pm), before dinner planning.</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <input type="datetime-local" value={scheduleAt} onChange={e => setScheduleAt(e.target.value)}
-          style={{ padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13 }} />
+          style={{ padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }} />
         <select value={recurrence} onChange={e => setRecurrence(e.target.value)}
-          style={{ padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13 }}>
+          style={{ padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}>
           <option value="once">One-off</option>
           <option value="daily">Every day</option>
           <option value="weekly">Every week</option>
@@ -511,7 +511,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
       {/* Aggregated analytics — rolls up every campaign in the window (default 90 days) */}
       {analytics && analytics.totals?.broadcasts > 0 && (
         <>
-          <p style={s.sectionLabel}>📊 Marketing analytics <span style={{ fontWeight: 400, color: '#8A8680' }}>— last {analytics.days} days</span></p>
+          <p style={s.sectionLabel}>📊 Marketing analytics <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— last {analytics.days} days</span></p>
           <BroadcastAnalytics analytics={analytics} />
         </>
       )}
@@ -537,7 +537,7 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
                   {b.delivered_count > 0 && <span style={s.statChip}>✓ {b.delivered_count}</span>}
                   {b.read_count > 0 && <span style={{ ...s.statChip, color: 'var(--accent, var(--accent))' }}>👁 {b.read_count}</span>}
                   {b.clicked_count > 0 && <span style={{ ...s.statChip, color: 'var(--accent, var(--accent))' }}>🔗 {b.clicked_count}</span>}
-                  <span style={{ ...s.statChip, color: '#8A8680' }}>{funnelId === b.id ? '▴' : '▾'}</span>
+                  <span style={{ ...s.statChip, color: 'var(--muted)' }}>{funnelId === b.id ? '▴' : '▾'}</span>
                 </div>
               </div>
               {funnelId === b.id && <BroadcastFunnel tenantId={tenantId} broadcastId={b.id} />}
@@ -563,25 +563,25 @@ function BroadcastAnalytics({ analytics }) {
       hint: t.attributed_orders ? `${t.attributed_orders} order${t.attributed_orders !== 1 ? 's' : ''}` : null },
   ]
   return (
-    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 16, marginBottom: 18 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 18 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: trend.length > 1 ? 16 : 0 }}>
         {tiles.map(tile => (
-          <div key={tile.label} style={{ background: '#F7F4EE', borderRadius: 8, padding: '10px 12px' }}>
-            <div style={{ fontSize: 10, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 3 }}>{tile.label}</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent, #2C5545)' }}>{tile.value}</div>
-            {tile.hint && <div style={{ fontSize: 10.5, color: '#8A8680' }}>{tile.hint}</div>}
+          <div key={tile.label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--muted)', fontFamily: "'Source Code Pro', monospace", marginBottom: 3 }}>{tile.label}</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent)' }}>{tile.value}</div>
+            {tile.hint && <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{tile.hint}</div>}
           </div>
         ))}
       </div>
 
       {trend.length > 1 && (
         <div style={{ marginBottom: best.length > 0 ? 16 : 0 }}>
-          <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 6 }}>Weekly reach</div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', fontFamily: "'Source Code Pro', monospace", marginBottom: 6 }}>Weekly reach</div>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 48 }}>
             {trend.map(w => (
               <div key={w.week} title={`Week of ${w.week}: ${w.sent} sent, ${w.clicked} clicked`}
                 style={{ flex: 1, height: `${Math.max(4, Math.round(44 * w.sent / maxTrend))}px`,
-                  background: 'var(--accent, #2C5545)', borderRadius: 3, opacity: 0.75 }} />
+                  background: 'var(--accent)', borderRadius: 3, opacity: 0.75 }} />
             ))}
           </div>
         </div>
@@ -589,12 +589,12 @@ function BroadcastAnalytics({ analytics }) {
 
       {best.length > 0 && (
         <div>
-          <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 6 }}>Best performing</div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', fontFamily: "'Source Code Pro', monospace", marginBottom: 6 }}>Best performing</div>
           {best.map((b, i) => (
             <div key={b.id} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '4px 0', alignItems: 'center' }}>
-              <span style={{ color: '#8A8680', width: 14 }}>{i + 1}.</span>
-              <span style={{ flex: 1, color: '#1E1E1E' }}>{b.name}</span>
-              <span style={{ color: 'var(--accent, #2C5545)', fontWeight: 600 }}>{b.click_rate}% clicked</span>
+              <span style={{ color: 'var(--muted)', width: 14 }}>{i + 1}.</span>
+              <span style={{ flex: 1, color: 'var(--ink)' }}>{b.name}</span>
+              <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{b.click_rate}% clicked</span>
             </div>
           ))}
         </div>
@@ -609,42 +609,42 @@ function BroadcastFunnel({ tenantId, broadcastId }) {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/${broadcastId}/recipients`)
       .then(r => r.json()).then(setData).catch(() => setData({ funnel: {}, recipients: [] }))
   }, [tenantId, broadcastId])
-  if (!data) return <p style={{ fontSize: 12, color: '#8A8680', padding: '6px 12px' }}>Loading funnel…</p>
+  if (!data) return <p style={{ fontSize: 12, color: 'var(--muted)', padding: '6px 12px' }}>Loading funnel…</p>
   const f = data.funnel || {}
   const stages = [
-    { label: 'Sent', n: f.sent || 0, color: '#8A8680' },
-    { label: 'Delivered', n: f.delivered || 0, color: 'var(--accent, #2C5545)' },
-    { label: 'Read', n: f.read || 0, color: 'var(--accent, #2C5545)' },
-    { label: 'Clicked', n: f.clicked || 0, color: 'var(--accent, #2C5545)' },
-    ...(f.failed ? [{ label: 'Failed', n: f.failed, color: '#A23B2D' }] : []),
+    { label: 'Sent', n: f.sent || 0, color: 'var(--muted)' },
+    { label: 'Delivered', n: f.delivered || 0, color: 'var(--accent)' },
+    { label: 'Read', n: f.read || 0, color: 'var(--accent)' },
+    { label: 'Clicked', n: f.clicked || 0, color: 'var(--accent)' },
+    ...(f.failed ? [{ label: 'Failed', n: f.failed, color: 'var(--danger)' }] : []),
   ]
   const max = Math.max(1, f.sent || 1)
   const clickers = (data.recipients || []).filter(r => r.clicked_at)
   const failures = (data.recipients || []).filter(r => r.status === 'failed')
   return (
-    <div style={{ background: '#F0EDE5', borderRadius: 8, padding: '10px 14px', margin: '2px 0 8px' }}>
+    <div style={{ background: 'var(--surface-alt)', borderRadius: 8, padding: '10px 14px', margin: '2px 0 8px' }}>
       {stages.map(st => (
         <div key={st.label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 12 }}>
-          <span style={{ width: 66, color: '#8A8680' }}>{st.label}</span>
-          <div style={{ flex: 1, height: 8, background: '#fff', borderRadius: 99, overflow: 'hidden' }}>
+          <span style={{ width: 66, color: 'var(--muted)' }}>{st.label}</span>
+          <div style={{ flex: 1, height: 8, background: 'var(--surface)', borderRadius: 99, overflow: 'hidden' }}>
             <div style={{ width: `${Math.round(100 * st.n / max)}%`, height: '100%', background: st.color, borderRadius: 99 }} />
           </div>
-          <span style={{ width: 34, textAlign: 'right', fontFamily: 'monospace', color: '#1E1E1E' }}>{st.n}</span>
+          <span style={{ width: 34, textAlign: 'right', fontFamily: 'monospace', color: 'var(--ink)' }}>{st.n}</span>
         </div>
       ))}
       {f.attributed_orders > 0 && (
-        <p style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontWeight: 600, margin: '10px 0 0' }}>
+        <p style={{ fontSize: 12.5, color: 'var(--accent)', fontWeight: 600, margin: '10px 0 0' }}>
           💰 R{((f.attributed_revenue_cents || 0) / 100).toFixed(2)} from {f.attributed_orders} order{f.attributed_orders !== 1 ? 's' : ''}
-          <span style={{ fontWeight: 400, color: '#8A8680' }}> — placed within 7 days of a click</span>
+          <span style={{ fontWeight: 400, color: 'var(--muted)' }}> — placed within 7 days of a click</span>
         </p>
       )}
       {clickers.length > 0 && (
-        <p style={{ fontSize: 11.5, color: '#8A8680', margin: '8px 0 0' }}>
+        <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '8px 0 0' }}>
           🔗 Clicked: {clickers.slice(0, 8).map(r => r.phone).join(', ')}{clickers.length > 8 ? ` +${clickers.length - 8} more` : ''}
         </p>
       )}
       {failures.length > 0 && (
-        <p style={{ fontSize: 11.5, color: '#A23B2D', margin: '6px 0 0' }}>
+        <p style={{ fontSize: 11.5, color: 'var(--danger)', margin: '6px 0 0' }}>
           ⚠ Failed: {failures.slice(0, 5).map(r => `${r.phone}${r.error ? ` (${String(r.error).slice(0, 30)})` : ''}`).join(', ')}{failures.length > 5 ? ` +${failures.length - 5}` : ''}
         </p>
       )}
@@ -654,43 +654,43 @@ function BroadcastFunnel({ tenantId, broadcastId }) {
 
 const s = {
   intro:        { marginBottom: 16 },
-  h3:           { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: '0 0 4px' },
-  sub:          { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0, lineHeight: 1.5 },
-  composeCard:  { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 18, marginBottom: 20 },
-  sectionLabel: { fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, color: '#1E1E1E', margin: '16px 0 8px' },
-  input:        { padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, fontFamily: 'system-ui', outline: 'none', boxSizing: 'border-box' },
-  textarea:     { width: '100%', padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, fontFamily: 'system-ui', outline: 'none', boxSizing: 'border-box', resize: 'vertical' },
-  aiBtn:        { padding: '10px 16px', background: '#C4861A', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', whiteSpace: 'nowrap' },
-  charCount:    { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '4px 0 0', textAlign: 'right' },
+  h3:           { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub:          { fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.5 },
+  composeCard:  { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 18, marginBottom: 20 },
+  sectionLabel: { fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '16px 0 8px' },
+  input:        { padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' },
+  textarea:     { width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box', resize: 'vertical' },
+  aiBtn:        { padding: '10px 16px', background: 'var(--warn)', color: 'var(--bg)', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' },
+  charCount:    { fontSize: 11, color: 'var(--muted)', margin: '4px 0 0', textAlign: 'right' },
   tplList:      { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 },
-  tplBtn:       { background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2 },
+  tplBtn:       { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2 },
   tplBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid var(--accent, var(--accent))' },
-  tplLabel:     { fontFamily: 'system-ui', fontSize: 13, fontWeight: 600, color: '#1E1E1E' },
-  tplHint:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
+  tplLabel:     { fontSize: 13, fontWeight: 600, color: 'var(--ink)' },
+  tplHint:      { fontSize: 11, color: 'var(--muted)' },
   audRow:       { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 },
-  audBtn:       { background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center' },
+  audBtn:       { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center' },
   audBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid var(--accent, var(--accent))' },
-  audLabel:     { fontFamily: 'system-ui', fontSize: 13, fontWeight: 600, color: '#1E1E1E', minWidth: 140 },
-  audHint:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
-  reachBadge:   { marginLeft: 8, fontFamily: 'system-ui', fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'rgba(44,85,69,0.10)', padding: '1px 7px', borderRadius: 10 },
-  preview:      { background: '#F7F4EE', borderRadius: 6, padding: '10px 14px', marginBottom: 14 },
-  previewLabel: { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '0 0 4px' },
-  previewText:  { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', margin: 0 },
-  error:        { color: '#ef4444', fontSize: 13, fontFamily: 'system-ui', margin: '0 0 10px' },
-  success:      { color: '#16a34a', fontSize: 13, fontFamily: 'system-ui', margin: '0 0 10px', fontWeight: 600 },
-  sendBtn:      { width: '100%', padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  btnDisabled:  { width: '100%', padding: '12px', background: '#DDD8CE', color: '#8A8680', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'not-allowed', fontFamily: 'system-ui' },
+  audLabel:     { fontSize: 13, fontWeight: 600, color: 'var(--ink)', minWidth: 140 },
+  audHint:      { fontSize: 11, color: 'var(--muted)' },
+  reachBadge:   { marginLeft: 8, fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'rgba(44,85,69,0.10)', padding: '1px 7px', borderRadius: 10 },
+  preview:      { background: 'var(--bg)', borderRadius: 6, padding: '10px 14px', marginBottom: 14 },
+  previewLabel: { fontSize: 11, color: 'var(--muted)', margin: '0 0 4px' },
+  previewText:  { fontSize: 13, color: 'var(--ink)', margin: 0 },
+  error:        { color: 'var(--danger)', fontSize: 13, margin: '0 0 10px' },
+  success:      { color: 'var(--ok)', fontSize: 13, margin: '0 0 10px', fontWeight: 600 },
+  sendBtn:      { width: '100%', padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'},
+  btnDisabled:  { width: '100%', padding: '12px', background: 'var(--border)', color: 'var(--muted)', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'not-allowed'},
   confirmBox:   { background: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 8, padding: 14 },
-  confirmText:  { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', margin: '0 0 10px', lineHeight: 1.5 },
-  sampleNames:  { color: '#8A8680' },
+  confirmText:  { fontSize: 13, color: 'var(--ink)', margin: '0 0 10px', lineHeight: 1.5 },
+  sampleNames:  { color: 'var(--muted)' },
   confirmRow:   { display: 'flex', gap: 8 },
-  cancelBtn:    { flex: 1, padding: '11px', background: 'transparent', color: '#8A8680', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 14, cursor: 'pointer', fontFamily: 'system-ui' },
-  sendLiveBtn:  { flex: 2, padding: '11px', background: '#25D366', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  muted:        { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '16px 0' },
+  cancelBtn:    { flex: 1, padding: '11px', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, cursor: 'pointer'},
+  sendLiveBtn:  { flex: 2, padding: '11px', background: '#25D366', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'},
+  muted:        { color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '16px 0' },
   histList:     { display: 'flex', flexDirection: 'column', gap: 6 },
-  histRow:      { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 },
-  histName:     { display: 'block', fontFamily: 'system-ui', fontSize: 13, fontWeight: 600, color: '#1E1E1E' },
-  histMeta:     { display: 'block', fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
+  histRow:      { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 },
+  histName:     { display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--ink)' },
+  histMeta:     { display: 'block', fontSize: 11, color: 'var(--muted)' },
   histStats:    { display: 'flex', gap: 6 },
-  statChip:     { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', background: '#F7F4EE', padding: '2px 8px', borderRadius: 10 },
+  statChip:     { fontSize: 11, color: 'var(--muted)', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10 },
 }

@@ -6,13 +6,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const STATUS = {
-  pending:   { label: "Pending",   color: "#f59e0b" },
+  pending:   { label: "Pending",   color: "var(--warn)" },
   confirmed: { label: "Confirmed", color: "#3b82f6" },
-  completed: { label: "Completed", color: "#10b981" },
-  cancelled: { label: "Cancelled", color: "#ef4444" },
-  no_show:   { label: "No-show",   color: "#6b7280" },
+  completed: { label: "Completed", color: "var(--ok)" },
+  cancelled: { label: "Cancelled", color: "var(--danger)" },
+  no_show:   { label: "No-show",   color: "var(--muted)" },
 };
 const DAYNAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 1..7
 
@@ -85,7 +85,7 @@ export default function VulaBookings({ tenantId }) {
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 3000); };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text }}>
+    <div style={{ color: C.text }}>
       {/* Sub-nav */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
         {["day", "week", "services", "settings"].map(v => (
@@ -127,7 +127,7 @@ export default function VulaBookings({ tenantId }) {
                   <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
                     <button style={miniBtn} onClick={() => setStatus(b.id, "completed")}>Done</button>
                     <button style={miniBtn} onClick={() => setStatus(b.id, "no_show")}>No-show</button>
-                    <button style={{ ...miniBtn, color: "#ef4444" }} onClick={() => setStatus(b.id, "cancelled")}>Cancel</button>
+                    <button style={{ ...miniBtn, color: "var(--danger)" }} onClick={() => setStatus(b.id, "cancelled")}>Cancel</button>
                   </div>
                 )}
               </div>
@@ -257,7 +257,7 @@ function ServicesTab({ tenantId, services, reload, flash }) {
             <div style={{ fontSize: 13, color: C.muted }}>{s.duration_min} min · {s.price_cents ? fmtR(s.price_cents) : "price on day"}</div>
           </div>
           <button style={miniBtn} onClick={() => save({ ...s, active: !s.active })}>{s.active ? "Disable" : "Enable"}</button>
-          <button style={{ ...miniBtn, color: "#ef4444" }} onClick={() => del(s.id)}>Delete</button>
+          <button style={{ ...miniBtn, color: "var(--danger)" }} onClick={() => del(s.id)}>Delete</button>
         </div>
       ))}
       <div style={{ ...card, gap: 8 }}>
@@ -319,7 +319,7 @@ const Field = ({ label, children }) => <div><div style={lbl}>{label}</div>{child
 function shift(d, n) { const x = new Date(d + "T12:00:00"); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); }
 
 const btn = { padding: "8px 14px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const miniBtn = { padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
 const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text };
 const card = { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.surface, marginBottom: 8 };

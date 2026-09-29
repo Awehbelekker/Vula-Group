@@ -91,3 +91,8 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Every page on the shared design tokens: no new hardcoded colours or fonts (the
+      # allowance per file only goes down — scripts/design-token-baseline.json).
+      - name: Design tokens
+        run: npm run check:tokens

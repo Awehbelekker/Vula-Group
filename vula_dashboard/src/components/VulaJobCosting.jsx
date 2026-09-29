@@ -8,11 +8,12 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
+import { ErrorCard, Skeleton } from "./ui/index.jsx";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", amber: "#B7791F",
-  text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)",
+  text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => "R" + ((Number(c) || 0) / 100).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
-const STATUS = { "loss": C.red, "below target": C.amber, "on track": "#2E7D32" };
+const STATUS = { "loss": C.red, "below target": C.amber, "on track": "var(--ok)" };
 const inp = { padding: "7px 9px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, boxSizing: "border-box" };
 
 function Stat({ label, value, color, sub }) {
@@ -41,9 +42,15 @@ export default function VulaJobCosting({ tenantId }) {
         setHasProjects(p ? !!p.uses_projects : (t.modules || []).includes("projects")); })
       .catch(() => setHasProjects(false));
   }, [tenantId]);
+  const [failed, setFailed] = useState(false);
   const load = useCallback(async () => {
     if (!tenantId) return;
-    try { setData(await (await fetch(`${base}/costing`)).json()); } catch { setData(null); }
+    setFailed(false);
+    try {
+      const r = await fetch(`${base}/costing`);
+      if (!r.ok) throw new Error(String(r.status));
+      setData(await r.json());
+    } catch { setData(null); setFailed(true); }
   }, [tenantId, base]);
   useEffect(() => { load(); }, [load]);
 
@@ -63,7 +70,9 @@ export default function VulaJobCosting({ tenantId }) {
     try { setAdvice(await (await fetch(`${base}/price-advice?${q}`)).json()); } catch { setAdvice(null); }
   };
 
-  if (!data || !hasProjects) return null;   // job costing is for project businesses (DIGG)
+  if (hasProjects === false) return null;   // job costing is for project businesses (DIGG)
+  if (failed) return <ErrorCard what="job costing" onRetry={load} />;
+  if (!data || hasProjects === null) return <div style={{ padding: 16 }}><Skeleton height={18} width="45%" /><Skeleton height={60} style={{ marginTop: 12 }} /></div>;
   const projects = data.projects || [];
 
   return (
@@ -104,7 +113,7 @@ export default function VulaJobCosting({ tenantId }) {
             <Stat label="Fee earned" value={R(p.fee_earned_cents)} sub={`of ${R(p.fee_target_cents)}`}
                   color={p.fee_earned_cents < p.fee_target_cents ? C.red : undefined} />
             <Stat label="Overhead share" value={R(p.overhead_share_cents)} />
-            <Stat label="Profit" value={R(p.profit_cents)} color={p.profit_cents < 0 ? C.red : "#2E7D32"} />
+            <Stat label="Profit" value={R(p.profit_cents)} color={p.profit_cents < 0 ? C.red : "var(--ok)"} />
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 8, fontSize: 12 }}>
             <button onClick={() => setOpen(open === p.project ? null : p.project)}
@@ -115,7 +124,7 @@ export default function VulaJobCosting({ tenantId }) {
             <input style={{ ...inp, width: 70 }} type="number" value={feeEdit[p.project] ?? p.fee_pct}
                    onChange={(e) => setFeeEdit({ ...feeEdit, [p.project]: e.target.value })} />
             {feeEdit[p.project] !== undefined &&
-              <button onClick={() => saveFee(p.project)} style={{ ...inp, cursor: "pointer", background: C.green, color: "#fff", border: "none" }}>Save</button>}
+              <button onClick={() => saveFee(p.project)} style={{ ...inp, cursor: "pointer", background: C.green, color: "var(--on-accent)", border: "none" }}>Save</button>}
             {p.unallocated_trade_cents > 0 && <span style={{ color: C.amber }}>{R(p.unallocated_trade_cents)} not yet allocated to a trade</span>}
             {p.variations && <span style={{ color: C.amber }} title="Documents labelled 'Variation — over BOQ'">
               Variations over BOQ: {p.variations.documents} · claimed {R(p.variations.claimed_cents)} · extra costs {R(p.variations.extra_cost_cents)}</span>}
@@ -137,7 +146,7 @@ export default function VulaJobCosting({ tenantId }) {
           <input style={{ ...inp, flex: "2 1 180px" }} placeholder="Item or work, e.g. ceiling board, tiling labour" value={ask.item} onChange={(e) => setAsk({ ...ask, item: e.target.value })} />
           <input style={{ ...inp, flex: "1 1 80px" }} type="number" placeholder="Qty" value={ask.quantity} onChange={(e) => setAsk({ ...ask, quantity: e.target.value })} />
           <input style={{ ...inp, flex: "1 1 70px" }} placeholder="Unit (m2…)" value={ask.unit} onChange={(e) => setAsk({ ...ask, unit: e.target.value })} />
-          <button onClick={getAdvice} style={{ ...inp, cursor: "pointer", background: C.green, color: "#fff", border: "none" }}>Price it</button>
+          <button onClick={getAdvice} style={{ ...inp, cursor: "pointer", background: C.green, color: "var(--on-accent)", border: "none" }}>Price it</button>
         </div>
         {advice && <div style={{ fontSize: 12.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{advice.text || advice.message}</div>}
       </div>

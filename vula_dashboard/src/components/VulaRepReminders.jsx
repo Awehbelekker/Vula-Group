@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
 export default function VulaRepReminders({ tenantId, repPhone }) {
   const [reminders, setReminders] = useState([]);
@@ -52,7 +52,7 @@ export default function VulaRepReminders({ tenantId, repPhone }) {
           border: `1px solid ${isOverdue(r) ? "#E6A23C" : C.border}`, borderRadius: 10, padding: "10px 14px", marginBottom: 8 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13.5, color: C.text }}>{r.text}</div>
-            {r.due_at && <div style={{ fontSize: 11.5, color: isOverdue(r) ? "#A23B2D" : C.muted }}>
+            {r.due_at && <div style={{ fontSize: 11.5, color: isOverdue(r) ? "var(--danger)" : C.muted }}>
               Due {new Date(r.due_at).toLocaleDateString()}{isOverdue(r) ? " — overdue" : ""}
             </div>}
           </div>

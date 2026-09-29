@@ -3,9 +3,9 @@ import { VULA_API } from "../lib/authFetch";
 
 
 const C = {
-  bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "var(--accent)", amber: "#C4861A", red: "#C0392B",
-  text: "#2A2A2A", muted: "#8A8680", surfaceAlt: "#F0EDE5",
+  bg: "var(--bg)", surface: "var(--surface)", border: "var(--border)",
+  green: "var(--accent)", amber: "var(--warn)", red: "var(--danger)",
+  text: "var(--text)", muted: "var(--muted)", surfaceAlt: "var(--surface-alt)",
 };
 
 const EXT_ICON = {
@@ -16,8 +16,8 @@ const EXT_ICON = {
 };
 
 const EXT_COLOR = {
-  ".pdf": "#C0392B", ".docx": "#2B5797", ".doc": "#2B5797",
-  ".xlsx": "#1E7145", ".xls": "#1E7145", ".csv": "#1E7145",
+  ".pdf": "var(--danger)", ".docx": "var(--info)", ".doc": "var(--info)",
+  ".xlsx": "var(--ok)", ".xls": "var(--ok)", ".csv": "var(--ok)",
   ".dxf": "#8E44AD", ".dwg": "#8E44AD",
 };
 
@@ -27,7 +27,7 @@ function FileBadge({ ext }) {
   return (
     <span style={{
       display: "inline-block", padding: "3px 8px",
-      background: `${color}18`, color,
+      background: `color-mix(in srgb, ${color} 9%, transparent)`, color,
       borderRadius: 4, fontSize: 10,
       fontWeight: 700, letterSpacing: "0.05em",
       fontFamily: "'Source Code Pro', monospace",
@@ -61,7 +61,7 @@ function DropZone({ onFiles, disabled }) {
         padding: "28px 20px",
         textAlign: "center",
         cursor: disabled ? "not-allowed" : "pointer",
-        background: dragging ? `${C.green}08` : C.surfaceAlt,
+        background: dragging ? `color-mix(in srgb, ${C.green} 3%, transparent)` : C.surfaceAlt,
         transition: "all 0.15s",
         opacity: disabled ? 0.5 : 1,
       }}
@@ -191,7 +191,7 @@ function DocTile({ doc, projects, onAssign, onOpenImage }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
           {(doc.fields?.labels || []).map((l) => (
-            <span key={l} style={{ fontSize: 9.5, fontWeight: 700, color: "#fff", background: "#B7791F", padding: "2px 6px", borderRadius: 4, marginRight: 4 }}>{l}</span>
+            <span key={l} style={{ fontSize: 9.5, fontWeight: 700, color: "var(--bg)", background: "var(--warn)", padding: "2px 6px", borderRadius: 4, marginRight: 4 }}>{l}</span>
           ))}
           {doc.category && (
             <span style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, background: C.surfaceAlt, padding: "2px 6px", borderRadius: 4 }}>{doc.category}</span>
@@ -609,7 +609,7 @@ function LearnFromHistory({ tenantId }) {
         <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
           Last run: {n(st.documents)} documents read, {n(st.priced_lines)} priced lines{st.boqs_completed ? `, ${st.boqs_completed} BOQ${st.boqs_completed === 1 ? "" : "s"} read in full` : ""}{st.price_lists_read ? `, ${st.price_lists_read} price list${st.price_lists_read === 1 ? "" : "s"} itemised` : ""}{st.stock_sheets ? `, ${st.stock_sheets} stock sheet${st.stock_sheets === 1 ? "" : "s"} stored` : ""}{st.reread_fixed ? `, ${st.reread_fixed} re-read and filled in` : ""}{st.still_unread ? `, ${st.still_unread} still unreadable` : ""}.
         </div>)}
-      {st.error && <div style={{ fontSize: 12.5, color: "#C0392B", marginTop: 8 }}>Stopped: {st.error}</div>}
+      {st.error && <div style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 8 }}>Stopped: {st.error}</div>}
       {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}
     </div>
   );
@@ -709,7 +709,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px" }}>
-      <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>
+      <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 4px" }}>
         Document Library
       </h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 32px" }}>

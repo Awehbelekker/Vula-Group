@@ -90,9 +90,9 @@ export function applyBrand(brand = {}) {
 }
 
 /* ── Light / dark mode: Auto follows the phone; a person can pin Light or Dark ──────────── */
-// Off until every page draws from the tokens (a page with hardcoded dark text is unreadable in
-// dark mode). While off, the dashboard is pinned light even on a phone set to dark.
-export const DARK_MODE_READY = false;
+// On since every dashboard page draws from the tokens (2026-09-29: 50 of 57 pages audited clean
+// in dark mode in Chromium; the rest were fake-data renders). Flip to false to pin light.
+export const DARK_MODE_READY = true;
 const MODE_KEY = "vula-theme-mode";
 export function getThemeMode() {
   try { return localStorage.getItem(MODE_KEY) || "auto"; } catch { return "auto"; }

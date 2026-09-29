@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
 export default function VulaRepHome({ tenantId, repPhone, onNavigate }) {
   const [reminders, setReminders] = useState([]);
@@ -39,7 +39,7 @@ export default function VulaRepHome({ tenantId, repPhone, onNavigate }) {
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Your own contacts, call sheet, reminders, and bookings — nothing tenant-wide.</p>
 
       <Card title={`⏰ Reminders (${reminders.length} open)`} onClick={() => onNavigate?.("my-work", "rep-reminders")}>
-        {overdue.length > 0 && <div style={{ fontSize: 13, color: "#A23B2D", marginBottom: 4 }}>{overdue.length} overdue</div>}
+        {overdue.length > 0 && <div style={{ fontSize: 13, color: "var(--danger)", marginBottom: 4 }}>{overdue.length} overdue</div>}
         {reminders.length === 0
           ? <div style={{ fontSize: 13, color: C.muted }}>Nothing due — nice.</div>
           : reminders.slice(0, 3).map((r) => (
@@ -53,7 +53,7 @@ export default function VulaRepHome({ tenantId, repPhone, onNavigate }) {
               <div style={{ fontSize: 13, color: C.text }}>{(callSheet.entries || []).length} entr{(callSheet.entries || []).length === 1 ? "y" : "ies"} logged so far</div>
               {callSheet.config?.call_sheet_recipient_email
                 ? <div style={{ fontSize: 12, color: C.muted }}>Goes to {callSheet.config.call_sheet_recipient_email}</div>
-                : <div style={{ fontSize: 12, color: "#A23B2D" }}>No recipient configured yet</div>}
+                : <div style={{ fontSize: 12, color: "var(--danger)" }}>No recipient configured yet</div>}
             </>
           : <div style={{ fontSize: 13, color: C.muted }}>Loading…</div>}
       </Card>

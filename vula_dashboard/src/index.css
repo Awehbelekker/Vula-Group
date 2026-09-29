@@ -116,6 +116,22 @@ input, select, textarea { font-family: var(--font-body); }
 .vula-fade-up { animation: vulaFadeUp 0.4s ease-out both; }
 .vula-slide-in { animation: vulaSlideIn 0.3s ease-out both; }
 
+/* Shared primitives (components/ui) */
+.vula-skeleton { background: linear-gradient(90deg, var(--surface-alt) 25%, var(--border-soft) 37%, var(--surface-alt) 63%); background-size: 400% 100%; animation: vulaShimmer 1.4s ease infinite; }
+@keyframes vulaShimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+.vula-row-click:hover { background: var(--surface-alt); }
+.vula-input:focus { outline: none; border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-soft); }
+button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+@media (max-width: 860px) {
+  /* one scrolling row of tabs instead of 2-3 wrapped rows */
+  .vula-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .vula-tabs::-webkit-scrollbar { display: none; }
+  .vula-tabs button { min-height: 38px; }
+  /* 16px form text: iOS zooms the page into any smaller field on focus */
+  input, select, textarea { font-size: 16px !important; }
+}
+@media (prefers-reduced-motion: reduce) { .vula-skeleton { animation: none; } .vula-fade-up, .vula-slide-in { animation: none; } }
+
 /* Thin, branded scrollbars + focus rings */
 ::-webkit-scrollbar { height: 8px; width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }

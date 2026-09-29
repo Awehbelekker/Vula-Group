@@ -7,6 +7,7 @@
  * - Send via WhatsApp, mark paid, delete
  */
 
+import { toast, confirmDialog, promptDialog } from './ui/index.jsx'
 import { uploadBrandImage } from '../lib/brandUpload'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toWhatsAppNumber } from '../lib/phone'
@@ -16,15 +17,15 @@ import { VULA_API } from '../lib/authFetch'
 
 
 const STATUS = {
-  draft:     { label: 'Draft',      color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
+  draft:     { label: 'Draft',      color: 'var(--muted)', bg: 'rgba(107,114,128,0.12)' },
   sent:      { label: 'Sent',       color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
-  part_paid: { label: 'Part paid',  color: '#d97706', bg: 'rgba(217,119,6,0.12)' },
-  paid:      { label: 'Paid',       color: '#16a34a', bg: 'rgba(34,197,94,0.12)' },
-  overdue:   { label: 'Overdue',    color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
-  cancelled: { label: 'Cancelled',  color: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
-  accepted:  { label: 'Accepted',   color: '#16a34a', bg: 'rgba(34,197,94,0.12)' },
-  declined:  { label: 'Declined',   color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
-  expired:   { label: 'Expired',    color: '#9ca3af', bg: 'rgba(156,163,175,0.12)' },
+  part_paid: { label: 'Part paid',  color: 'var(--warn)', bg: 'rgba(217,119,6,0.12)' },
+  paid:      { label: 'Paid',       color: 'var(--ok)', bg: 'rgba(34,197,94,0.12)' },
+  overdue:   { label: 'Overdue',    color: 'var(--danger)', bg: 'rgba(239,68,68,0.12)' },
+  cancelled: { label: 'Cancelled',  color: 'var(--faint)', bg: 'rgba(156,163,175,0.12)' },
+  accepted:  { label: 'Accepted',   color: 'var(--ok)', bg: 'rgba(34,197,94,0.12)' },
+  declined:  { label: 'Declined',   color: 'var(--danger)', bg: 'rgba(239,68,68,0.12)' },
+  expired:   { label: 'Expired',    color: 'var(--faint)', bg: 'rgba(156,163,175,0.12)' },
 }
 const SENT_CHANNEL_LABEL = { email: 'via Email', whatsapp: 'via WhatsApp', manual: 'manually' }
 
@@ -103,19 +104,19 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
     if (remaining > 0 && quoteInvoicedCents(quote) === 0) {
       // First conversion of this quote — offer a deposit/portion instead of always the full amount.
       const full = remaining / 100
-      const answer = window.prompt(
+      const answer = await promptDialog(
         `Convert ${quote.invoice_number} to a tax invoice.\n\nInvoice the full R${full.toFixed(2)}, ` +
         `or enter a deposit amount in Rand (e.g. ${(full * 0.3).toFixed(2)} for 30%):`,
         full.toFixed(2),
       )
       if (answer === null) return
       const parsed = Math.round(parseFloat(answer) * 100)
-      if (!parsed || parsed <= 0) { alert('Please enter a valid amount.'); return }
-      if (parsed > remaining) { alert(`Only R${full.toFixed(2)} remains on this quote.`); return }
+      if (!parsed || parsed <= 0) { toast('Please enter a valid amount.'); return }
+      if (parsed > remaining) { toast(`Only R${full.toFixed(2)} remains on this quote.`); return }
       if (parsed < remaining) amountCents = parsed
     } else if (remaining > 0) {
       // Already partially invoiced — this call is for the remaining balance.
-      if (!confirm(`Invoice the remaining R${(remaining / 100).toFixed(2)} balance on ${quote.invoice_number}?`)) return
+      if (!(await confirmDialog(`Invoice the remaining R${(remaining / 100).toFixed(2)} balance on ${quote.invoice_number}?`))) return
     } else {
       return
     }
@@ -129,13 +130,13 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) {
-        alert(d.detail || 'Could not convert this quote to an invoice.')
+        toast(d.detail || 'Could not convert this quote to an invoice.', 'danger')
         return
       }
       setDocType('invoice')
       load()
     } catch {
-      alert('Could not convert this quote to an invoice — please try again.')
+      toast('Could not convert this quote to an invoice — please try again.', 'danger')
     }
   }
 
@@ -148,18 +149,18 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) {
-        alert(d.detail || `Could not update this ${inv.doc_type}.`)
+        toast(d.detail || `Could not update this ${inv.doc_type}.`, 'danger')
         return
       }
     } catch {
-      alert(`Could not update this ${inv.doc_type} — please try again.`)
+      toast(`Could not update this ${inv.doc_type} — please try again.`, 'danger')
       return
     }
     load()
   }
 
   async function markPaid(inv) {
-    const method = window.prompt('How was this paid? (cash / eft / card / other — leave blank to skip)', 'eft')
+    const method = await promptDialog('How was this paid? (cash / eft / card / other — leave blank to skip)', 'eft')
     if (method === null) return  // cancelled
     const body = { status: 'paid' }
     if (method.trim()) body.payment_method = method.trim().toLowerCase()
@@ -170,13 +171,13 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }
 
   async function del(id) {
-    if (!confirm('Delete this invoice?')) return
+    if (!(await confirmDialog('Delete this invoice?', { danger: true, confirmLabel: 'Yes' }))) return
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${id}`, { method: 'DELETE' })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) { alert(d.detail || 'Could not delete this document.'); return }
+      if (!r.ok) { toast(d.detail || 'Could not delete this document.'); return }
     } catch {
-      alert('Could not delete this document — please try again.')
+      toast('Could not delete this document — please try again.', 'danger')
       return
     }
     load()
@@ -184,30 +185,30 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
 
   async function recordPayment(inv) {
     const balance = (inv.total_cents || 0) - (inv.total_paid_cents || 0)
-    const raw = window.prompt(
+    const raw = await promptDialog(
       `How much was paid? (Rand — balance due is R${(balance / 100).toFixed(2)})`, (balance / 100).toFixed(2))
     if (raw === null) return
     const rand = parseFloat(raw)
-    if (!rand || rand <= 0) { alert('Enter an amount greater than zero.'); return }
-    const method = window.prompt('How was this paid? (cash / eft / card / other — leave blank to skip)', 'eft')
+    if (!rand || rand <= 0) { toast('Enter an amount greater than zero.'); return }
+    const method = await promptDialog('How was this paid? (cash / eft / card / other — leave blank to skip)', 'eft')
     const body = { amount_cents: Math.round(rand * 100) }
     if (method && method.trim()) body.payment_method = method.trim().toLowerCase()
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/payments`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { alert(d.detail || 'Could not record that payment.'); return }
+    if (!r.ok) { toast(d.detail || 'Could not record that payment.'); return }
     load()
   }
 
   async function cancelInvoice(inv) {
-    const reason = window.prompt(`Cancel ${inv.invoice_number}? Optionally say why (or leave blank):`, '')
+    const reason = await promptDialog(`Cancel ${inv.invoice_number}? Optionally say why (or leave blank):`, '')
     if (reason === null) return
     const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/cancel`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason || null }),
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { alert(d.detail || 'Could not cancel this invoice.'); return }
+    if (!r.ok) { toast(d.detail || 'Could not cancel this invoice.'); return }
     load()
   }
 
@@ -222,7 +223,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   async function deleteSelectedQuotes() {
     const ids = [...selectedQuotes]
     if (!ids.length) return
-    if (!confirm(`Delete ${ids.length} selected quote${ids.length === 1 ? '' : 's'}? This can't be undone.`)) return
+    if (!(await confirmDialog(`Delete ${ids.length} selected quote${ids.length === 1 ? '' : 's'}? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return
     setBulkDeleting(true)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/quotes/bulk-delete`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -239,7 +240,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   // reason (optional) explains WHY the automatic send didn't happen — shown up front rather
   // than silently swapping to the manual link with no context.
   function whatsAppLinkFallback(inv, reason) {
-    if (reason) alert(`Couldn't send automatically (${reason}) — opening WhatsApp for you to send it yourself.`)
+    if (reason) toast(`Couldn't send automatically (${reason}) — opening WhatsApp for you to send it yourself.`, 'danger')
     const phone = toWhatsAppNumber(inv.customer_phone)
     const pdfUrl = `${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`
     const msg = `Hi ${inv.customer_name}, here's your invoice ${inv.invoice_number} for ${fmt(inv.total_cents)}. ` +
@@ -249,14 +250,14 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }
 
   async function sendWhatsApp(inv) {
-    if (!confirm(`Send ${inv.invoice_number} to ${inv.customer_phone} on WhatsApp?`)) return
+    if (!(await confirmDialog(`Send ${inv.invoice_number} to ${inv.customer_phone} on WhatsApp?`))) return
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/send-whatsapp`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
       })
       const d = await r.json().catch(() => ({}))
       if (r.ok) {
-        alert(`Sent to ${d.to}`)
+        toast(`Sent to ${d.to}`)
         load()
         return
       }
@@ -278,9 +279,9 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       )
       const d = await r.json().catch(() => ({}))
       setMatchResults(prev => ({ ...prev, [inv.id]: d }))
-      if (!d.matched) alert('No supplier match found for this invoice.')
+      if (!d.matched) toast('No supplier match found for this invoice.')
     } catch {
-      alert('Could not reach the matching service.')
+      toast('Could not reach the matching service.', 'danger')
     } finally {
       setMatchingId(null)
     }
@@ -303,10 +304,10 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
         }
       )
       const d = await r.json().catch(() => ({}))
-      if (r.ok) alert(`Sent to ${d.approvers} admin${d.approvers !== 1 ? 's' : ''} on WhatsApp for confirmation.`)
-      else alert(d.detail || 'Could not request approval.')
+      if (r.ok) toast(`Sent to ${d.approvers} admin${d.approvers !== 1 ? 's' : ''} on WhatsApp for confirmation.`)
+      else toast(d.detail || 'Could not request approval.', 'danger')
     } catch {
-      alert('Could not request approval.')
+      toast('Could not request approval.', 'danger')
     }
   }
 
@@ -317,13 +318,13 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   async function downloadPdf(inv) {
     try {
       const resp = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/pdf`)
-      if (!resp.ok) { alert('Could not open the PDF — please try again.'); return }
+      if (!resp.ok) { toast('Could not open the PDF — please try again.'); return }
       const blob = await resp.blob()
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank')
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     } catch {
-      alert('Could not open the PDF — please try again.')
+      toast('Could not open the PDF — please try again.', 'danger')
     }
   }
 
@@ -335,20 +336,20 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       const d = await fetch(`${VULA_API}/v1/documents/${tenantId}/filed?commerce_invoice_id=${inv.id}`).then(r => r.json())
       const doc = (d.documents || [])[0]
       if (doc?.file_url) window.open(doc.file_url, '_blank')
-      else alert('No original document linked to this invoice.')
+      else toast('No original document linked to this invoice.')
     } catch {
-      alert('Could not look up the original document.')
+      toast('Could not look up the original document.', 'danger')
     }
   }
 
   async function creditNote(inv) {
     let autoRefund = false
     if (inv.yoco_checkout_id) {
-      autoRefund = confirm(
-        `This invoice was paid online via Yoco (${fmt(inv.total_cents)}).\n\n` +
-        `OK = create the credit note AND refund the customer through Yoco now.\nCancel = just create the credit note (you'll refund them yourself).`
+      autoRefund = await confirmDialog(
+        `This invoice was paid online via Yoco (${fmt(inv.total_cents)}). Create the credit note and refund the customer through Yoco now, or just create the credit note and refund them yourself?`,
+        { title: 'Credit note', confirmLabel: 'Credit + refund through Yoco', cancelLabel: 'Credit note only' }
       )
-    } else if (!confirm(`Create a credit note for ${inv.invoice_number} (${fmt(inv.total_cents)})?`)) {
+    } else if (!(await confirmDialog(`Create a credit note for ${inv.invoice_number} (${fmt(inv.total_cents)})?`))) {
       return
     }
     const d = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/credit-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_refund: autoRefund }) })
@@ -357,9 +358,9 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       let msg = `Credit note ${d.credit_note.invoice_number} created.`
       if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
       else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
-      alert(msg); load()
+      toast(msg); load()
     }
-    else alert(d.detail || 'Could not create credit note.')
+    else toast(d.detail || 'Could not create credit note.', 'danger')
   }
 
   async function payLink(inv) {
@@ -367,30 +368,30 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       .then(r => r.json()).catch(() => ({}))
     if (d.pay_url) {
       try { await navigator.clipboard.writeText(d.pay_url) } catch (e) { /* clipboard may be blocked */ }
-      alert(`Pay link created & copied to clipboard:\n\n${d.pay_url}\n\nSend it to your customer — the invoice marks itself paid once they pay.`)
+      toast(`Pay link created & copied to clipboard:\n\n${d.pay_url}\n\nSend it to your customer — the invoice marks itself paid once they pay.`)
       load()
     } else if (d.already_paid) {
-      alert('This invoice is already paid.')
+      toast('This invoice is already paid.')
     } else {
-      alert(d.detail || 'Could not create pay link — connect Yoco in Branding/Settings first.')
+      toast(d.detail || 'Could not create pay link — connect Yoco in Branding/Settings first.', 'danger')
     }
   }
 
   async function emailInvoice(inv) {
-    if (!confirm(`Email ${inv.invoice_number} to ${inv.customer_email}?`)) return
+    if (!(await confirmDialog(`Email ${inv.invoice_number} to ${inv.customer_email}?`))) return
     try {
       const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices/${inv.id}/send-email`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
       })
       const d = await r.json().catch(() => ({}))
       if (r.ok) {
-        alert(`Sent to ${d.to}`)
+        toast(`Sent to ${d.to}`)
         load()
       } else {
-        alert(d.detail || 'Could not send email.')
+        toast(d.detail || 'Could not send email.', 'danger')
       }
     } catch {
-      alert('Could not send email.')
+      toast('Could not send email.', 'danger')
     }
   }
 
@@ -456,7 +457,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
       {docType === 'quote' && selectedQuotes.size > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(162,59,45,0.06)',
           border: '1px solid rgba(162,59,45,0.25)', borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontFamily: 'system-ui' }}>{selectedQuotes.size} selected</span>
+          <span style={{ fontSize: 13}}>{selectedQuotes.size} selected</span>
           <button onClick={deleteSelectedQuotes} disabled={bulkDeleting} style={s.actDel}>
             {bulkDeleting ? 'Deleting…' : `🗑 Delete ${selectedQuotes.size} selected`}
           </button>
@@ -505,12 +506,12 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                     <span style={{ ...s.badge, color: st.color, background: st.bg }}>{st.label}</span>
                     {inv.requires_approval && (
                       inv.approved_at ? (
-                        <span style={{ ...s.badge, color: '#16a34a', background: 'rgba(34,197,94,0.12)' }}
+                        <span style={{ ...s.badge, color: 'var(--ok)', background: 'rgba(34,197,94,0.12)' }}
                               title={`Approved ${inv.approved_at.slice(0, 10)}`}>
                           ✅ Approved{inv.approved_by ? ` by ${inv.approved_by}` : ''}
                         </span>
                       ) : (
-                        <span style={{ ...s.badge, color: '#a8780a', background: 'rgba(212,160,23,0.12)' }}>
+                        <span style={{ ...s.badge, color: 'var(--warn)', background: 'rgba(212,160,23,0.12)' }}>
                           ⏳ Awaiting approval
                         </span>
                       )
@@ -618,7 +619,7 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
                               {inv.doc_type === 'invoice' && !['paid', 'part_paid', 'cancelled'].includes(inv.status) && (
                                 <button onClick={() => { setOpenMenuId(null); cancelInvoice(inv) }} style={s.menuItem}>✕ Cancel</button>
                               )}
-                              <button onClick={() => { setOpenMenuId(null); del(inv.id) }} style={{ ...s.menuItem, color: '#ef4444' }}>🗑 Delete</button>
+                              <button onClick={() => { setOpenMenuId(null); del(inv.id) }} style={{ ...s.menuItem, color: 'var(--danger)' }}>🗑 Delete</button>
                             </div>
                           </>
                         )}
@@ -802,7 +803,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
       })
       const d = await r.json().catch(() => ({}))
       setSaving(false)
-      if (!r.ok) { alert(d.detail || `Could not save changes to this ${docType}.`); return }
+      if (!r.ok) { toast(d.detail || `Could not save changes to this ${docType}.`); return }
       onDone()
       return
     }
@@ -839,9 +840,9 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
 
       <div style={s.formSection}>
         {pickerOptions.length > 0 && (
-          <select onChange={e => pickClient(e.target.value)} defaultValue="" style={{ ...s.fInput, color: 'var(--muted, #8A8680)' }}>
+          <select onChange={e => pickClient(e.target.value)} defaultValue="" style={{ ...s.fInput, color: 'var(--muted)' }}>
             <option value="">📇 Pick an existing customer…</option>
-            {pickerOptions.map(c => <option key={c.id} value={c.id} style={{ color: '#2A2A2A' }}>{c.name}{c.phone ? ` · ${c.phone}` : ''}</option>)}
+            {pickerOptions.map(c => <option key={c.id} value={c.id} style={{ color: 'var(--text)' }}>{c.name}{c.phone ? ` · ${c.phone}` : ''}</option>)}
           </select>
         )}
         <input placeholder="Customer name" value={customer.name} onChange={e => setCustomer({ ...customer, name: e.target.value })} style={s.fInput} />
@@ -849,12 +850,12 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
           <input placeholder="Phone" value={customer.phone} onChange={e => setCustomer({ ...customer, phone: e.target.value })} style={s.fInput} />
           <input placeholder="Email (optional)" value={customer.email} onChange={e => setCustomer({ ...customer, email: e.target.value })} style={s.fInput} />
         </div>
-        {customer.name && <button type="button" onClick={saveClient} style={{ alignSelf: 'flex-start', padding: '5px 12px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' }}>💾 Save as client</button>}
+        {customer.name && <button type="button" onClick={saveClient} style={{ alignSelf: 'flex-start', padding: '5px 12px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 6, fontSize: 12, cursor: 'pointer'}}>💾 Save as client</button>}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0 6px' }}>
         <p style={{ ...s.sectionLabel, margin: 0 }}>Line items</p>
-        <button type="button" onClick={() => setShowCatalog(true)} style={{ marginLeft: 'auto', padding: '4px 10px', background: 'transparent', border: '1px dashed #DDD8CE', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' }}>🧰 Products &amp; services</button>
+        <button type="button" onClick={() => setShowCatalog(true)} style={{ marginLeft: 'auto', padding: '4px 10px', background: 'transparent', border: '1px dashed var(--border)', borderRadius: 6, fontSize: 11, cursor: 'pointer', color: 'var(--muted)' }}>🧰 Products &amp; services</button>
       </div>
       {items.map((it, i) => (
         <div key={i} style={s.itemRow}>
@@ -876,7 +877,7 @@ function InvoiceCreate({ tenantId, products, docType, editingInvoice, onDone, on
         {['Demolition', 'Structure', 'Finishes', 'Electrical', 'Plumbing', 'External Works'].map(sec => <option key={sec} value={sec} />)}
       </datalist>
       {items.some(it => it._tplDescription) && !project && (
-        <p style={{ fontFamily: 'system-ui', fontSize: 11, color: '#a8780a', margin: '0 0 8px' }}>
+        <p style={{ fontSize: 11, color: 'var(--warn)', margin: '0 0 8px' }}>
           ⓘ Pick a project below to fill it into the highlighted line item(s).
         </p>
       )}
@@ -971,9 +972,9 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
       let msg = `Credit note ${d.credit_note.invoice_number} created.`
       if (d.refund?.status === 'pending') msg += ` Refunded ${fmt(d.refund.amount_cents)} via Yoco.`
       else if (d.refund?.status === 'failed') msg += ` Automatic Yoco refund failed (${d.refund.detail || 'unknown error'}) — please refund manually.`
-      alert(msg); onDone()
+      toast(msg); onDone()
     }
-    else alert(d.detail || 'Could not create credit note.')
+    else toast(d.detail || 'Could not create credit note.', 'danger')
   }
 
   return (
@@ -982,18 +983,18 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
         <button onClick={onCancel} style={s.backBtn}>← Back</button>
         <h3 style={s.formTitle}>Credit note — {invoice.invoice_number}</h3>
       </div>
-      <p style={{ fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', margin: '0 0 10px' }}>
+      <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 10px' }}>
         Untick a line, or reduce its quantity, to credit only part of this invoice.
         {isFullCredit ? ' Every line is currently full — this will be a full credit note.' : ''}
       </p>
       {rows.map((r, i) => (
         <div key={i} style={{ ...s.itemRow, opacity: r.checked ? 1 : 0.45, alignItems: 'center' }}>
           <input type="checkbox" checked={r.checked} onChange={() => toggle(i)} style={{ marginRight: 2 }} />
-          <span style={{ flex: 2, fontFamily: 'system-ui', fontSize: 13 }}>{r.description}</span>
+          <span style={{ flex: 2, fontSize: 13 }}>{r.description}</span>
           <input type="number" step="0.001" disabled={!r.checked} value={r.creditQty}
             onChange={e => setQty(i, e.target.value)} style={{ ...s.fInput, width: 60 }} />
-          <span style={{ width: 70, fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>of {r.quantity} {r.unit || ''}</span>
-          <span style={{ width: 80, textAlign: 'right', fontFamily: 'system-ui', fontSize: 13 }}>{fmt(r.unit_price_cents)}</span>
+          <span style={{ width: 70, fontSize: 12, color: 'var(--muted)'}}>of {r.quantity} {r.unit || ''}</span>
+          <span style={{ width: 80, textAlign: 'right', fontSize: 13 }}>{fmt(r.unit_price_cents)}</span>
         </div>
       ))}
       <div style={s.totals}>
@@ -1002,7 +1003,7 @@ function CreditNoteForm({ tenantId, invoice, onDone, onCancel }) {
         <div style={{ ...s.totRow, ...s.totFinal }}><span>Credit total</span><span>{fmt(total)}</span></div>
       </div>
       {invoice.yoco_checkout_id && (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'system-ui', fontSize: 12, color: '#444', margin: '0 0 10px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text)', margin: '0 0 10px' }}>
           <input type="checkbox" checked={autoRefund} onChange={e => setAutoRefund(e.target.checked)} />
           This invoice was paid online via Yoco — also refund {fmt(total)} to the customer through Yoco now
         </label>
@@ -1052,7 +1053,7 @@ function InvoiceItemsCatalog({ tenantId, onDone }) {
   }
 
   async function del(id) {
-    if (!confirm('Remove this item from the catalog?')) return
+    if (!(await confirmDialog('Remove this item from the catalog?', { danger: true, confirmLabel: 'Yes' }))) return
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoice-items/${id}`, { method: 'DELETE' })
     load()
   }
@@ -1091,15 +1092,15 @@ function InvoiceItemsCatalog({ tenantId, onDone }) {
       {loading ? <p style={s.muted}>Loading…</p> : list.length === 0 ? <p style={s.muted}>No products or services yet.</p> : (
         <div style={s.list}>
           {list.map(it => (
-            <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 8, marginBottom: 8 }}>
+            <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 8 }}>
               <div>
                 <b>{it.kind === 'product' ? '📦' : '🛠'} {it.name}</b>
-                <div style={{ fontSize: 12, color: '#8A8680' }}>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                   R{(it.unit_price_cents / 100).toFixed(2)}{it.unit ? `/${it.unit}` : ''}
                   {it.description ? ` · ${it.description}` : ''}
                 </div>
               </div>
-              <button onClick={() => del(it.id)} style={{ color: '#A23B2D', background: 'none', border: '1px solid #DDD8CE', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Remove</button>
+              <button onClick={() => del(it.id)} style={{ color: 'var(--danger)', background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Remove</button>
             </div>
           ))}
         </div>
@@ -1114,8 +1115,8 @@ const TEMPLATES = [
   { id: 'classic', name: 'Classic', desc: 'Accent header, filled table — the original Vula look.', accent: 'var(--accent)' },
   { id: 'minimal', name: 'Minimal', desc: 'Monochrome, hairline rules, ink-light.', accent: '#222222' },
   { id: 'modern',  name: 'Modern',  desc: 'Bold colour band, rounded cards, high-contrast totals.', accent: '#0077b6' },
-  { id: 'digg',    name: 'Certified payment', desc: 'JBCC-style: description/amount table, bold running subtotals, banking details box. Built for construction certified-payment invoices.', accent: '#2C5545' },
-  { id: 'branded', name: 'Branded', desc: 'Logo-forward: centred logo, accent rules, your brand front-and-centre.', accent: '#2C5545' },
+  { id: 'digg',    name: 'Certified payment', desc: 'JBCC-style: description/amount table, bold running subtotals, banking details box. Built for construction certified-payment invoices.', accent: 'var(--accent)' },
+  { id: 'branded', name: 'Branded', desc: 'Logo-forward: centred logo, accent rules, your brand front-and-centre.', accent: 'var(--accent)' },
 ]
 
 function RecurringManager({ tenantId, onCancel }) {
@@ -1169,9 +1170,9 @@ function RecurringManager({ tenantId, onCancel }) {
 
       <p style={s.sectionLabel}>Active recurring</p>
       {list.length === 0 ? <p style={s.muted}>None yet.</p> : list.map(r => (
-        <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 8, marginBottom: 8 }}>
-          <div><b>{r.label || r.customer_name}</b><div style={{ fontSize: 12, color: '#8A8680' }}>{r.customer_name} · {r.cadence} · next {String(r.next_run_at).slice(0, 10)}</div></div>
-          <button onClick={() => del(r.id)} style={{ color: '#A23B2D', background: 'none', border: '1px solid #DDD8CE', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Remove</button>
+        <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 8 }}>
+          <div><b>{r.label || r.customer_name}</b><div style={{ fontSize: 12, color: 'var(--muted)' }}>{r.customer_name} · {r.cadence} · next {String(r.next_run_at).slice(0, 10)}</div></div>
+          <button onClick={() => del(r.id)} style={{ color: 'var(--danger)', background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Remove</button>
         </div>
       ))}
     </div>
@@ -1326,12 +1327,12 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
         <input placeholder="Trading as (optional, e.g. brand name)" value={form.trading_as}
           onChange={e => set('trading_as', e.target.value)} style={s.fInput} />
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 8, fontSize: 13, cursor: 'pointer'}}>
             {uploadingLogo ? 'Uploading…' : (form.logo_url ? '↻ Replace logo' : '📷 Upload logo')}
             <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={uploadLogo} style={{ display: 'none' }} />
           </label>
           {form.logo_url && <img src={form.logo_url} alt="logo" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
-          {form.logo_url && <button type="button" onClick={() => set('logo_url', '')} style={{ background: 'none', border: 'none', color: '#8A8680', cursor: 'pointer', fontSize: 18 }}>×</button>}
+          {form.logo_url && <button type="button" onClick={() => set('logo_url', '')} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18 }}>×</button>}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input placeholder="Business email" value={form.company_email}
@@ -1341,14 +1342,14 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
         </div>
         <input placeholder="Company registration no. (optional)" value={form.company_reg}
           onChange={e => set('company_reg', e.target.value)} style={s.fInput} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text, #2A2A2A)', fontFamily: 'system-ui' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text)'}}>
           <input type="checkbox" checked={!!form.vat_registered} onChange={e => set('vat_registered', e.target.checked)} />
           We are VAT-registered (issue Tax Invoices @ 15%)
         </label>
         {form.vat_registered && <>
           <input placeholder="VAT / Tax registration number" value={form.vat_number}
             onChange={e => set('vat_number', e.target.value)} style={s.fInput} />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted, #8A8680)', fontFamily: 'system-ui' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted)'}}>
             <input type="checkbox" checked={!!form.prices_include_vat} onChange={e => set('prices_include_vat', e.target.checked)} />
             My prices already include VAT
           </label>
@@ -1373,16 +1374,16 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
 
       <p style={s.sectionLabel}>WhatsApp menu</p>
       <div style={s.formSection}>
-        <p style={{ fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', margin: '0 0 4px' }}>
+        <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 4px' }}>
           Optional hero image sent right before the product menu when a customer messages you on WhatsApp.
         </p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 8, fontSize: 13, cursor: 'pointer'}}>
             {uploadingMenuImage ? 'Uploading…' : (form.menu_header_image_url ? '↻ Replace image' : '📷 Upload menu image')}
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadMenuImage} style={{ display: 'none' }} />
           </label>
           {form.menu_header_image_url && <img src={form.menu_header_image_url} alt="menu header" style={{ maxHeight: 60, maxWidth: 200, objectFit: 'cover', borderRadius: 6 }} />}
-          {form.menu_header_image_url && <button type="button" onClick={() => set('menu_header_image_url', '')} style={{ background: 'none', border: 'none', color: '#8A8680', cursor: 'pointer', fontSize: 18 }}>×</button>}
+          {form.menu_header_image_url && <button type="button" onClick={() => set('menu_header_image_url', '')} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18 }}>×</button>}
         </div>
       </div>
 
@@ -1391,27 +1392,27 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
       <div style={{ margin: '4px 0 14px' }}>
         {!showCloneUpload ? (
           <button type="button" onClick={() => { setShowCloneUpload(true); setCloneError(null); setCloneApplied(null) }}
-            style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+            style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 8, fontSize: 13, cursor: 'pointer'}}>
             ✨ Clone from an old invoice
           </button>
         ) : (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: cloning ? 'default' : 'pointer', fontFamily: 'system-ui', opacity: cloning ? 0.6 : 1 }}>
+            <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 8, fontSize: 13, cursor: cloning ? 'default' : 'pointer', opacity: cloning ? 0.6 : 1 }}>
               {cloning ? 'Analyzing…' : '📄 Upload a PDF or photo'}
               <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" disabled={cloning} onChange={cloneFromUpload} style={{ display: 'none' }} />
             </label>
             <button type="button" onClick={() => setShowCloneUpload(false)} disabled={cloning}
-              style={{ background: 'none', border: '1px solid #DDD8CE', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer', color: '#8A8680', fontFamily: 'system-ui' }}>
+              style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--muted)'}}>
               Cancel
             </button>
           </div>
         )}
-        <p style={{ fontFamily: 'system-ui', fontSize: 11.5, color: '#8A8680', margin: '6px 0 0' }}>
+        <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '6px 0 0' }}>
           Upload an invoice you used before — Vula suggests matching colours, fonts and layout below. Nothing saves until you click "Save branding".
         </p>
-        {cloneError && <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12.5, color: '#A23B2D', fontFamily: 'system-ui' }}>{cloneError}</div>}
+        {cloneError && <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12.5, color: 'var(--danger)'}}>{cloneError}</div>}
         {cloneApplied && (
-          <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', border: '1px solid var(--accent, #2C5545)', borderRadius: 6, fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>
+          <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', border: '1px solid var(--accent)', borderRadius: 6, fontSize: 12.5, color: 'var(--accent)'}}>
             <span>{cloneApplied.length > 0 ? `Applied: ${cloneApplied.join(', ')} — review below and Save branding to keep them.` : "Couldn't confidently match anything from that file."}</span>
             <button type="button" onClick={() => setCloneApplied(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 15, flexShrink: 0 }}>×</button>
           </div>
@@ -1437,15 +1438,15 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
           this screen. Editing either place stays in sync (both read/write commerce_invoice_settings). */}
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', margin: '10px 0' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8A8680' }}>Accent</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Accent</span>
           <input type="color" value={form.accent_color} onChange={e => set('accent_color', e.target.value)} style={{ width: 34, height: 30, padding: 2, border: '1px solid #DDD8CE', borderRadius: 6 }} />
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8A8680' }}>Text</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Text</span>
           <input type="color" value={form.ink_color} onChange={e => set('ink_color', e.target.value)} style={{ width: 34, height: 30, padding: 2, border: '1px solid #DDD8CE', borderRadius: 6 }} />
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8A8680' }}>Heading font</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Heading font</span>
           <select value={form.font_pairing} onChange={e => set('font_pairing', e.target.value)} style={{ ...s.fInput, flex: 'none', width: 180 }}>
             {Object.entries(FONT_PAIRINGS).map(([key, p]) => <option key={key} value={key}>{p.label}</option>)}
           </select>
@@ -1455,13 +1456,13 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
       <p style={s.sectionLabel}>Logo</p>
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 14px' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8A8680' }}>Size</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Size</span>
           <select value={form.logo_size} onChange={e => set('logo_size', e.target.value)} style={{ ...s.fInput, flex: 'none', width: 110 }}>
             <option value="sm">Small</option><option value="md">Medium</option><option value="lg">Large</option>
           </select>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8A8680' }}>Position</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Position</span>
           <select value={form.logo_align} onChange={e => set('logo_align', e.target.value)} style={{ ...s.fInput, flex: 'none', width: 110 }}>
             <option value="left">Left</option><option value="center">Centered</option>
           </select>
@@ -1472,11 +1473,11 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
       <div style={s.formSection}>
         <textarea placeholder="Custom footer note (blank = &quot;Thank you for your business.&quot;)" value={form.footer_text}
           onChange={e => set('footer_text', e.target.value)} style={{ ...s.fInput, minHeight: 50, resize: 'vertical' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#2A2A2A', fontFamily: 'system-ui' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text)'}}>
           <input type="checkbox" checked={!!form.show_vat_breakdown} onChange={e => set('show_vat_breakdown', e.target.checked)} />
           Show VAT breakdown on the invoice
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#2A2A2A', fontFamily: 'system-ui' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text)'}}>
           <input type="checkbox" checked={!!form.show_company_reg} onChange={e => set('show_company_reg', e.target.checked)} />
           Show company registration number
         </label>
@@ -1484,18 +1485,18 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
 
       <p style={s.sectionLabel}>Signature</p>
       <div style={s.formSection}>
-        <p style={{ fontSize: 12, color: '#8A8680', margin: '0 0 4px' }}>
+        <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 4px' }}>
           Appears on every letter/document Vula generates, alongside the name below. You can also
           set this via WhatsApp by saying "set my signature" and sending a photo — whichever you
           set most recently is what's used.
         </p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent, #2C5545)', border: '1px solid var(--accent, #2C5545)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          <label style={{ padding: '8px 14px', background: 'var(--accent-soft, rgba(44,85,69,0.1))', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 8, fontSize: 13, cursor: 'pointer'}}>
             {uploadingSignature ? 'Uploading…' : (form.signature_url ? '↻ Replace signature' : '✍️ Upload signature')}
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadSignature} style={{ display: 'none' }} />
           </label>
           {form.signature_url && <img src={form.signature_url} alt="signature" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
-          {form.signature_url && <button type="button" onClick={() => set('signature_url', '')} style={{ background: 'none', border: 'none', color: '#8A8680', cursor: 'pointer', fontSize: 18 }}>×</button>}
+          {form.signature_url && <button type="button" onClick={() => set('signature_url', '')} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18 }}>×</button>}
         </div>
         <input placeholder="Name/title shown under the signature (e.g. Judy Downing, Director)" value={form.signature_name}
           onChange={e => set('signature_name', e.target.value)} style={s.fInput} />
@@ -1545,11 +1546,11 @@ function InvoicePreviewPane({ tenantId, form }) {
 
   return (
     <div style={{ margin: '4px 0 18px' }}>
-      <p style={s.sectionLabel}>Live preview {loading && <span style={{ color: '#8A8680', fontWeight: 400 }}>— updating…</span>}</p>
-      <div style={{ border: '1px solid #DDD8CE', borderRadius: 8, overflow: 'hidden', height: 420, background: '#FAF9F6' }}>
+      <p style={s.sectionLabel}>Live preview {loading && <span style={{ color: 'var(--muted)', fontWeight: 400 }}>— updating…</span>}</p>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', height: 420, background: 'var(--bg)' }}>
         {url
           ? <embed src={url} type="application/pdf" style={{ width: '100%', height: '100%' }} />
-          : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8680', fontSize: 13 }}>Preview loading…</div>}
+          : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted)', fontSize: 13 }}>Preview loading…</div>}
       </div>
     </div>
   )
@@ -1557,58 +1558,58 @@ function InvoicePreviewPane({ tenantId, form }) {
 
 const s = {
   dirTabs:    { display: 'flex', gap: 8, marginBottom: 12 },
-  dirTab:     { padding: '8px 16px', background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
+  dirTab:     { padding: '8px 16px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--muted)' },
   dirTabActive:{ background: 'var(--accent, var(--accent))', borderColor: 'var(--accent, var(--accent))', color: '#fff' },
-  dirFilterChip:{ padding: '8px 14px', background: 'rgba(212,160,23,0.12)', border: '1px solid rgba(212,160,23,0.35)', borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#a8780a' },
+  dirFilterChip:{ padding: '8px 14px', background: 'rgba(212,160,23,0.12)', border: '1px solid rgba(212,160,23,0.35)', borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: 'pointer', color: 'var(--warn)' },
   supplierBadge:{ marginLeft: 8, padding: '1px 8px', borderRadius: 10, fontSize: 10, fontWeight: 600, background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))' },
-  tabs:       { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #DDD8CE', paddingBottom: 8 },
-  tab:        { padding: '6px 16px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
+  tabs:       { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 8 },
+  tab:        { padding: '6px 16px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--muted)' },
   tabActive:  { background: 'rgba(44,85,69,0.1)', color: 'var(--accent, var(--accent))' },
   topBar:     { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 },
-  count:      { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
-  newBtn:     { padding: '8px 16px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  brandBtn:   { marginLeft: 'auto', padding: '8px 14px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
-  backBtn:    { padding: '6px 12px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
-  formTitle:  { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: 0 },
-  muted:      { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '24px 0' },
+  count:      { fontSize: 13, color: 'var(--muted)', margin: 0 },
+  newBtn:     { padding: '8px 16px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer'},
+  brandBtn:   { marginLeft: 'auto', padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--muted)' },
+  backBtn:    { padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, cursor: 'pointer', color: 'var(--muted)' },
+  formTitle:  { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: 0 },
+  muted:      { color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '24px 0' },
   list:       { display: 'flex', flexDirection: 'column', gap: 8 },
-  card:       { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '14px 16px' },
+  card:       { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px' },
   cardTop:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  invNum:     { fontFamily: "'Source Code Pro', monospace", fontSize: 13, fontWeight: 600, color: '#1E1E1E', marginRight: 8 },
-  amount:     { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: 'var(--accent, var(--accent))' },
+  invNum:     { fontFamily: "'Source Code Pro', monospace", fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginRight: 8 },
+  amount:     { fontSize: 15, fontWeight: 700, color: 'var(--accent, var(--accent))' },
   badge:      { padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600 },
-  cust:       { fontFamily: 'system-ui', fontSize: 13, color: '#444', margin: '2px 0' },
-  dates:      { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '0 0 8px' },
+  cust:       { fontSize: 13, color: 'var(--text)', margin: '2px 0' },
+  dates:      { fontSize: 11, color: 'var(--muted)', margin: '0 0 8px' },
   cardActions:{ display: 'flex', gap: 6 },
-  actWa:      { padding: '5px 10px', background: 'rgba(37,211,102,0.1)', color: '#1da851', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  actPdf:     { padding: '5px 10px', background: 'rgba(0,119,182,0.08)', color: '#0077b6', border: '1px solid rgba(0,119,182,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: '#a8780a', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  actPaid:    { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', fontWeight: 600 },
-  actDisabled:{ padding: '5px 10px', background: '#F0EDE5', color: '#9C978C', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, cursor: 'not-allowed', fontFamily: 'system-ui' },
-  balanceTag: { padding: '5px 10px', fontSize: 12, color: '#a8780a', fontFamily: 'system-ui', fontWeight: 600, alignSelf: 'center' },
-  actMore:    { padding: '5px 10px', background: 'transparent', color: '#8A8680', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, cursor: 'pointer', fontFamily: 'system-ui', lineHeight: 1 },
-  menuPanel:  { position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 11, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', minWidth: 170, display: 'flex', flexDirection: 'column', padding: 4 },
-  menuItem:   { textAlign: 'left', padding: '8px 12px', border: 'none', background: 'transparent', borderRadius: 6, cursor: 'pointer', fontSize: 13, color: '#2A2A2A', fontFamily: 'system-ui', whiteSpace: 'nowrap' },
-  actDel:     { padding: '5px 10px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui' },
-  matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', color: 'var(--accent)' },
+  actWa:      { padding: '5px 10px', background: 'rgba(37,211,102,0.1)', color: '#1da851', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer'},
+  actPdf:     { padding: '5px 10px', background: 'rgba(0,119,182,0.08)', color: '#0077b6', border: '1px solid rgba(0,119,182,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer'},
+  actEmail:   { padding: '5px 10px', background: 'rgba(212,160,23,0.1)', color: 'var(--warn)', border: '1px solid rgba(212,160,23,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer'},
+  actPaid:    { padding: '5px 10px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600 },
+  actDisabled:{ padding: '5px 10px', background: 'var(--surface-alt)', color: '#9C978C', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, cursor: 'not-allowed'},
+  balanceTag: { padding: '5px 10px', fontSize: 12, color: 'var(--warn)', fontWeight: 600, alignSelf: 'center' },
+  actMore:    { padding: '5px 10px', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, cursor: 'pointer', lineHeight: 1 },
+  menuPanel:  { position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 11, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', minWidth: 170, display: 'flex', flexDirection: 'column', padding: 4 },
+  menuItem:   { textAlign: 'left', padding: '8px 12px', border: 'none', background: 'transparent', borderRadius: 6, cursor: 'pointer', fontSize: 13, color: 'var(--text)', whiteSpace: 'nowrap' },
+  actDel:     { padding: '5px 10px', background: 'transparent', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 12, cursor: 'pointer'},
+  actMatch:   { padding: '5px 10px', background: 'rgba(44,85,69,0.08)', color: 'var(--accent, var(--accent))', border: '1px solid rgba(44,85,69,0.25)', borderRadius: 6, fontSize: 12, cursor: 'pointer'},
+  matchBanner:{ marginTop: 8, padding: '8px 10px', background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 6, fontSize: 12, color: 'var(--accent)' },
   formSection:{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 },
-  fInput:     { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, boxSizing: 'border-box', flex: 1 },
+  fInput:     { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', flex: 1 },
   fRow:       { display: 'flex', gap: 8 },
-  sectionLabel:{ fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, color: '#1E1E1E', margin: '8px 0 6px' },
+  sectionLabel:{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '8px 0 6px' },
   itemRow:    { display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' },
-  rmBtn:      { background: 'transparent', border: 'none', color: '#ef4444', fontSize: 20, cursor: 'pointer', lineHeight: 1 },
-  addItemBtn: { padding: '6px 12px', background: 'transparent', border: '1px dashed #DDD8CE', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680', marginBottom: 12 },
-  dueLabel:   { fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 },
-  totals:     { background: '#F7F4EE', borderRadius: 8, padding: 14, margin: '12px 0' },
-  totRow:     { display: 'flex', justifyContent: 'space-between', fontFamily: 'system-ui', fontSize: 13, color: '#444', padding: '3px 0' },
-  totFinal:   { borderTop: '1px solid #DDD8CE', marginTop: 6, paddingTop: 8, fontWeight: 700, fontSize: 15, color: 'var(--accent, var(--accent))' },
-  saveInvBtn: { width: '100%', padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  wizardIntro:{ background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 8, padding: '12px 14px', fontFamily: 'system-ui', fontSize: 13, lineHeight: 1.6, color: 'var(--accent)', margin: '0 0 16px' },
+  rmBtn:      { background: 'transparent', border: 'none', color: 'var(--danger)', fontSize: 20, cursor: 'pointer', lineHeight: 1 },
+  addItemBtn: { padding: '6px 12px', background: 'transparent', border: '1px dashed var(--border)', borderRadius: 6, fontSize: 12, cursor: 'pointer', color: 'var(--muted)', marginBottom: 12 },
+  dueLabel:   { fontSize: 12, color: 'var(--muted)', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 },
+  totals:     { background: 'var(--bg)', borderRadius: 8, padding: 14, margin: '12px 0' },
+  totRow:     { display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text)', padding: '3px 0' },
+  totFinal:   { borderTop: '1px solid var(--border)', marginTop: 6, paddingTop: 8, fontWeight: 700, fontSize: 15, color: 'var(--accent, var(--accent))' },
+  saveInvBtn: { width: '100%', padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'},
+  wizardIntro:{ background: 'rgba(44,85,69,0.07)', border: '1px solid rgba(44,85,69,0.2)', borderRadius: 8, padding: '12px 14px', fontSize: 13, lineHeight: 1.6, color: 'var(--accent)', margin: '0 0 16px' },
   tplGrid:    { display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' },
-  tplCard:    { flex: '1 1 150px', minWidth: 150, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: 12, cursor: 'pointer' },
+  tplCard:    { flex: '1 1 150px', minWidth: 150, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, cursor: 'pointer' },
   tplCardActive:{ borderColor: 'var(--accent, var(--accent))', boxShadow: '0 0 0 2px rgba(44,85,69,0.2)' },
   tplSwatch:  { height: 28, borderRadius: 4, marginBottom: 8 },
-  tplName:    { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: '#1E1E1E', marginBottom: 4 },
-  tplDesc:    { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', lineHeight: 1.5 },
+  tplName:    { fontSize: 13, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 },
+  tplDesc:    { fontSize: 11, color: 'var(--muted)', lineHeight: 1.5 },
 }

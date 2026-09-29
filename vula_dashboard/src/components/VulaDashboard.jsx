@@ -11,18 +11,18 @@ import { VULA_API } from "../lib/authFetch";
 // including local dev without a local API running. Override with VITE_API_URL.
 
 const COLORS = {
-  bg: "#F7F4EE",
-  surface: "#FFFFFF",
-  surfaceAlt: "#F0EDE5",
-  border: "#DDD8CE",
+  bg: "var(--bg)",
+  surface: "var(--surface)",
+  surfaceAlt: "var(--surface-alt)",
+  border: "var(--border)",
   green: "var(--accent)",
-  greenLight: "#3D7260",
-  amber: "#C4861A",
+  greenLight: "var(--accent-dark)",
+  amber: "var(--warn)",
   amberLight: "#E8A832",
-  charcoal: "#1E1E1E",
-  text: "#2A2A2A",
-  muted: "#8A8680",
-  mutedLight: "#B5B0A8",
+  charcoal: "var(--ink)",
+  text: "var(--text)",
+  muted: "var(--muted)",
+  mutedLight: "var(--faint)",
 };
 
 // ── Utilities ────────────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ function Badge({ children, color = COLORS.green }) {
   return (
     <span style={{
       display: "inline-block", padding: "2px 10px",
-      background: `${color}18`, color: color,
+      background: `color-mix(in srgb, ${color} 9%, transparent)`, color: color,
       borderRadius: 20, fontSize: 11,
       fontFamily: "'Source Code Pro', monospace",
       letterSpacing: "0.05em", fontWeight: 500,
@@ -65,7 +65,7 @@ function SectionTitle({ children, sub }) {
   return (
     <div style={{ marginBottom: 20 }}>
       <h2 style={{
-        fontFamily: "'Cormorant Garamond', serif",
+        fontFamily: "var(--font-display)",
         fontSize: 26, fontWeight: 600,
         color: COLORS.charcoal, marginBottom: 4,
       }}>{children}</h2>
@@ -123,7 +123,7 @@ function UploadZone({ tenantId, onUploaded }) {
           border: `2px dashed ${dragOver ? COLORS.green : COLORS.border}`,
           borderRadius: 10, padding: "36px 24px",
           textAlign: "center", cursor: "pointer",
-          background: dragOver ? `${COLORS.green}08` : COLORS.surfaceAlt,
+          background: dragOver ? `color-mix(in srgb, ${COLORS.green} 3%, transparent)` : COLORS.surfaceAlt,
           transition: "all 0.2s ease",
           marginBottom: results.length ? 20 : 0,
         }}
@@ -131,7 +131,7 @@ function UploadZone({ tenantId, onUploaded }) {
         <div style={{ fontSize: 36, marginBottom: 10 }}>
           {uploading ? "⏳" : "📂"}
         </div>
-        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, color: COLORS.charcoal, marginBottom: 6 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 18, color: COLORS.charcoal, marginBottom: 6 }}>
           {uploading ? "Processing..." : "Drop business documents here"}
         </div>
         <div style={{ fontSize: 12, color: COLORS.muted, fontFamily: "'Source Code Pro', monospace" }}>
@@ -151,8 +151,8 @@ function UploadZone({ tenantId, onUploaded }) {
               border: `1px solid ${COLORS.border}`,
             }}>
               <span style={{ fontSize: 20 }}>{fileIcon(r.file.slice(r.file.lastIndexOf(".")))}</span>
-              <span style={{ flex: 1, fontSize: 13, color: COLORS.text, fontFamily: "system-ui" }}>{r.file}</span>
-              <Badge color={r.status === "error" ? "#C0392B" : COLORS.green}>
+              <span style={{ flex: 1, fontSize: 13, color: COLORS.text}}>{r.file}</span>
+              <Badge color={r.status === "error" ? "var(--danger)" : COLORS.green}>
                 {r.status === "queued" ? "Queued ✓" : "Error"}
               </Badge>
             </div>
@@ -228,8 +228,7 @@ function QueryPanel({ tenantId }) {
           style={{
             flex: 1, padding: "12px 16px",
             border: `1px solid ${COLORS.border}`,
-            borderRadius: 8, fontSize: 14,
-            fontFamily: "system-ui", color: COLORS.text,
+            borderRadius: 8, fontSize: 14, color: COLORS.text,
             background: COLORS.surfaceAlt, outline: "none",
           }}
         />
@@ -240,7 +239,7 @@ function QueryPanel({ tenantId }) {
             padding: "12px 24px", borderRadius: 8,
             background: loading ? COLORS.mutedLight : COLORS.green,
             color: "#fff", border: "none", cursor: loading ? "not-allowed" : "pointer",
-            fontSize: 14, fontWeight: 600, fontFamily: "system-ui",
+            fontSize: 14, fontWeight: 600,
             transition: "background 0.2s",
           }}
         >{loading ? "..." : "Ask →"}</button>
@@ -249,14 +248,14 @@ function QueryPanel({ tenantId }) {
       {/* Result */}
       {result && (
         <div style={{
-          background: `${COLORS.green}08`,
-          border: `1px solid ${COLORS.green}30`,
+          background: `color-mix(in srgb, ${COLORS.green} 3%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${COLORS.green} 19%, transparent)`,
           borderRadius: 10, padding: 20, marginBottom: 16,
         }}>
           <div style={{ fontSize: 12, color: COLORS.green, fontFamily: "'Source Code Pro', monospace", marginBottom: 10 }}>
             ✦ Answer · {formatTime(result.time)}
           </div>
-          <div style={{ fontSize: 15, color: COLORS.text, lineHeight: 1.7, marginBottom: 16, fontFamily: "system-ui", whiteSpace: "pre-wrap" }}>
+          <div style={{ fontSize: 15, color: COLORS.text, lineHeight: 1.7, marginBottom: 16, whiteSpace: "pre-wrap" }}>
             {result.answer}
           </div>
           {result.sources?.length > 0 && (
@@ -290,7 +289,7 @@ function QueryPanel({ tenantId }) {
             <div key={i} onClick={() => setResult(h)} style={{
               padding: "8px 12px", borderRadius: 6, cursor: "pointer",
               border: `1px solid ${COLORS.border}`, marginBottom: 6,
-              fontSize: 13, color: COLORS.muted, fontFamily: "system-ui",
+              fontSize: 13, color: COLORS.muted,
               background: COLORS.surfaceAlt,
             }}>
               {h.question}
@@ -358,7 +357,7 @@ function WebIntelPanel({ tenantId }) {
             color: tab === t.id ? COLORS.green : COLORS.muted,
             fontSize: 13, fontWeight: tab === t.id ? 600 : 400,
             boxShadow: tab === t.id ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
-            transition: "all 0.15s", fontFamily: "system-ui",
+            transition: "all 0.15s",
           }}>{t.label}</button>
         ))}
       </div>
@@ -381,8 +380,7 @@ function WebIntelPanel({ tenantId }) {
         width: "100%", padding: 12, borderRadius: 8,
         background: loading ? COLORS.mutedLight : COLORS.amber,
         color: "#fff", border: "none", cursor: loading ? "not-allowed" : "pointer",
-        fontSize: 14, fontWeight: 600, marginBottom: result ? 20 : 0,
-        fontFamily: "system-ui", transition: "background 0.2s",
+        fontSize: 14, fontWeight: 600, marginBottom: result ? 20 : 0, transition: "background 0.2s",
       }}>
         {loading ? "Researching..." : "Research →"}
       </button>
@@ -392,7 +390,7 @@ function WebIntelPanel({ tenantId }) {
         <div style={{ background: COLORS.surfaceAlt, borderRadius: 10, padding: 16, border: `1px solid ${COLORS.border}` }}>
           {tab === "company" && (
             <>
-              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, color: COLORS.charcoal, marginBottom: 4 }}>{result.name}</div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: 22, color: COLORS.charcoal, marginBottom: 4 }}>{result.name}</div>
               <p style={{ fontSize: 13, color: COLORS.muted, marginBottom: 12, lineHeight: 1.6 }}>{result.description}</p>
               {result.services?.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
@@ -424,7 +422,7 @@ function WebIntelPanel({ tenantId }) {
               )}
               {result.articles?.slice(0, 4).map((a, i) => (
                 <div key={i} style={{ padding: "10px 0", borderTop: `1px solid ${COLORS.border}` }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.charcoal, marginBottom: 4, fontFamily: "system-ui" }}>{a.title}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.charcoal, marginBottom: 4}}>{a.title}</div>
                   <div style={{ fontSize: 12, color: COLORS.muted }}>{a.summary}</div>
                 </div>
               ))}
@@ -435,7 +433,7 @@ function WebIntelPanel({ tenantId }) {
               <div style={labelStyle}>{result.tenders_found || 0} tenders found</div>
               {result.tenders?.slice(0, 5).map((t, i) => (
                 <div key={i} style={{ padding: "10px 0", borderTop: `1px solid ${COLORS.border}` }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.charcoal, fontFamily: "system-ui" }}>{t.title}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.charcoal}}>{t.title}</div>
                   <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
                     {t.reference && <span style={{ fontSize: 11, color: COLORS.muted, fontFamily: "'Source Code Pro', monospace" }}>Ref: {t.reference}</span>}
                     {t.closing_date && <span style={{ fontSize: 11, color: COLORS.amber, fontFamily: "'Source Code Pro', monospace" }}>Closes: {t.closing_date}</span>}
@@ -447,7 +445,7 @@ function WebIntelPanel({ tenantId }) {
         </div>
       )}
       {result?.error && (
-        <div style={{ padding: 12, borderRadius: 8, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 13, color: "#991B1B" }}>
+        <div style={{ padding: 12, borderRadius: 8, background: "var(--danger-soft)", border: "1px solid var(--danger-soft)", fontSize: 13, color: "var(--danger)" }}>
           ⚠️ {result.error} — make sure the Vula API server is running on port 7438.
         </div>
       )}
@@ -459,7 +457,7 @@ function WebIntelPanel({ tenantId }) {
 const inputStyle = {
   width: "100%", padding: "12px 16px", marginBottom: 12,
   border: `1px solid ${COLORS.border}`, borderRadius: 8,
-  fontSize: 14, fontFamily: "system-ui", color: COLORS.text,
+  fontSize: 14, color: COLORS.text,
   background: COLORS.surfaceAlt, outline: "none", boxSizing: "border-box",
 };
 
@@ -507,7 +505,7 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
         input:focus { border-color: ${COLORS.green} !important; }
       `}</style>
 
-      <div style={{ minHeight: "100vh", background: COLORS.bg, fontFamily: "system-ui" }}>
+      <div style={{ minHeight: "100vh", background: COLORS.bg}}>
         {/* Header */}
         <div style={{
           background: COLORS.surface,
@@ -520,12 +518,12 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
             width: 36, height: 36, borderRadius: 10,
             background: COLORS.green,
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 20, color: "#fff", fontWeight: 700,
+            fontFamily: "var(--font-display)",
+            fontSize: 20, color: "var(--on-accent)", fontWeight: 700,
           }}>V</div>
 
           <div>
-            <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: COLORS.charcoal, lineHeight: 1 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: COLORS.charcoal, lineHeight: 1 }}>
               Vula
             </div>
             <div style={{ fontSize: 10, color: COLORS.muted, fontFamily: "'Source Code Pro', monospace", letterSpacing: "0.1em" }}>
@@ -537,7 +535,7 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{
                 width: 8, height: 8, borderRadius: "50%",
-                background: apiStatus === "ok" ? "#22C55E" : apiStatus === "offline" ? "#EF4444" : "#F59E0B",
+                background: apiStatus === "ok" ? "var(--ok)" : apiStatus === "offline" ? "var(--danger)" : "var(--warn)",
                 animation: apiStatus === "checking" ? "pulse 1s infinite" : "none",
               }} />
               <span style={{ fontSize: 11, color: COLORS.muted, fontFamily: "'Source Code Pro', monospace" }}>
@@ -556,12 +554,12 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
         {/* Offline banner */}
         {apiStatus === "offline" && (
           <div style={{
-            background: "#FEF3C7", borderBottom: "1px solid #FDE68A",
+            background: "#FEF3C7", borderBottom: "1px solid var(--warn-soft)",
             padding: "10px 24px", fontSize: 13, color: "#92400E",
             fontFamily: "'Source Code Pro', monospace",
           }}>
             ⚠️ Vula API is offline — start it with:{" "}
-            <code style={{ background: "#FDE68A", padding: "2px 6px", borderRadius: 4 }}>
+            <code style={{ background: "var(--warn-soft)", padding: "2px 6px", borderRadius: 4 }}>
               uvicorn vula.api.server:app --port 7438
             </code>
           </div>
@@ -572,7 +570,7 @@ export default function VulaDashboard({ tenantId: tenantIdProp }) {
           {/* Hero */}
           <div style={{ marginBottom: 36, textAlign: "center" }}>
             <h1 style={{
-              fontFamily: "'Cormorant Garamond', serif",
+              fontFamily: "var(--font-display)",
               fontSize: "clamp(36px, 5vw, 56px)",
               fontWeight: 700, color: COLORS.charcoal, lineHeight: 1.1,
               marginBottom: 12,

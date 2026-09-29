@@ -38,12 +38,12 @@ import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, m
 import { applyBrand, applyThemeMode } from "./theme/tokens";
 
 const COLORS = {
-  bg: "#F7F4EE",
-  surface: "#FFFFFF",
-  border: "#DDD8CE",
-  green: "#2C5545",
-  muted: "#8A8680",
-  charcoal: "#1E1E1E",
+  bg: "var(--bg)",
+  surface: "var(--surface)",
+  border: "var(--border)",
+  green: "var(--accent)",
+  muted: "var(--muted)",
+  charcoal: "var(--ink)",
   amber: "#F5C451",   // master-mode banner (was referenced but never defined -> no background)
 };
 
@@ -137,7 +137,13 @@ export default function App() {
   // override it on every page, so Gerflor's saved navy "Gerflor Cape Town" showed as Vula-green
   // "Vula Commerce" and Off the Hook's own blue never appeared. Settings › Brand kit fires
   // "vula-brand-changed" after a save so the shell updates without a reload.
-  useEffect(() => { applyThemeMode(); }, []);
+  // Public pages (storefront, invoice approval, legal) are the business's customer-facing
+  // look and always light; the dashboard follows the person's Light/Dark/Auto choice.
+  const isPublicRoute = /^#\/(page|approve-invoice|privacy|terms|data-deletion)\b/.test(route || "");
+  useEffect(() => {
+    if (isPublicRoute) document.documentElement.dataset.theme = "light";
+    else applyThemeMode();
+  }, [isPublicRoute]);
   useEffect(() => {
     // Master HQ wears Vula's own brand; only "Open as tenant" takes on that tenant's brand
     // (the whole master panel used to recolour to whichever tenant was picked in the switcher).
@@ -213,7 +219,7 @@ export default function App() {
   if (route.startsWith("#/page/")) {
     const parts = route.replace(/^#\/page\//, "").split("/");
     return (
-      <Suspense fallback={<div style={{ padding: 24, fontFamily: "system-ui", color: "#8A8680" }}>Loading…</div>}>
+      <Suspense fallback={<div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>}>
         <VulaPageRender tenant={parts[0]} slug={parts.slice(1).join("/")} />
       </Suspense>
     );
@@ -224,7 +230,7 @@ export default function App() {
   if (route.startsWith("#/approve-invoice/")) {
     const parts = route.replace(/^#\/approve-invoice\//, "").split("?")[0].split("/");
     return (
-      <Suspense fallback={<div style={{ padding: 24, fontFamily: "system-ui", color: "#8A8680" }}>Loading…</div>}>
+      <Suspense fallback={<div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>}>
         <VulaInvoiceApproval tenant={parts[0]} invoiceId={parts[1]} />
       </Suspense>
     );
@@ -245,13 +251,13 @@ export default function App() {
   // "Powered by Vula" at the bottom. Same VulaMerchantAdmin content, shell-controlled nav.
   if ((role === "owner" || role === "staff") && !ownTenant) {
     return (
-      <div style={{ padding: 32, fontFamily: "system-ui", color: "#2A2A2A", maxWidth: 480, margin: "10vh auto" }}>
+      <div style={{ padding: 32, color: "var(--text)", maxWidth: 480, margin: "10vh auto" }}>
         <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Your login isn't linked to a business yet</h2>
-        <p style={{ fontSize: 14, color: "#8A8680", lineHeight: 1.5 }}>
+        <p style={{ fontSize: 14, color: "var(--muted)", lineHeight: 1.5 }}>
           Ask the business owner to add you under Team, or contact Vula support. Nothing is shown
           until your login belongs to a business, so you never see someone else's data.
         </p>
-        <button onClick={logout} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, border: "1px solid #DDD8CE", background: "#fff", cursor: "pointer" }}>
+        <button onClick={logout} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>
           Sign out
         </button>
       </div>
@@ -297,7 +303,7 @@ export default function App() {
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
           padding: "6px 12px", background: COLORS.amber, color: "#1A1200",
-          fontSize: 12, fontFamily: "system-ui", fontWeight: 600, textAlign: "center",
+          fontSize: 12, fontWeight: 600, textAlign: "center",
         }}>
           <span>👁 Master mode — viewing {mName}'s real workspace</span>
           {impersonateReason && <span style={{ fontWeight: 400, opacity: 0.85 }}>— {impersonateReason}</span>}
@@ -317,8 +323,8 @@ export default function App() {
             // (Tenants/Health/Usage/...) the operator was on before "Open as tenant".
             <button onClick={() => { setImpersonateReason(""); setActiveTab("master"); }}
               style={{ padding: "6px 12px", border: `1px solid ${COLORS.border}`, borderRadius: 6,
-                       background: COLORS.surface, color: "var(--text, #2A2A2A)", fontSize: 12,
-                       cursor: "pointer", fontFamily: "system-ui", fontWeight: 600 }}>
+                       background: COLORS.surface, color: "var(--text)", fontSize: 12,
+                       cursor: "pointer", fontWeight: 600 }}>
               ← Master HQ
             </button>
           }
@@ -351,8 +357,8 @@ export default function App() {
             title="Switch tenant"
             style={{
               padding: "6px 10px", border: `1px solid ${COLORS.border}`,
-              borderRadius: 6, background: COLORS.surface, color: "var(--text, #2A2A2A)",
-              fontSize: 12, fontFamily: "system-ui", cursor: "pointer",
+              borderRadius: 6, background: COLORS.surface, color: "var(--text)",
+              fontSize: 12, cursor: "pointer",
             }}
           >
             {!masterTenants.length && <option value="">{masterTenant || "No tenants loaded"}</option>}

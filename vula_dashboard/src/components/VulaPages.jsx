@@ -7,6 +7,7 @@
  * Editor depth (2026-07-17): draft-vs-publish, SEO fields, rename, duplicate, starter templates,
  * and live product blocks (window.__VULA_PAGE_TENANT injected for them).
  */
+import { confirmDialog, promptDialog } from './ui/index.jsx'
 import { useState, useEffect, useRef } from "react";
 import { Puck } from "@measured/puck";
 import "@measured/puck/puck.css";
@@ -21,7 +22,7 @@ import { VULA_API } from "../lib/authFetch";
 // subdomain for every tenant automatically. A tenant with a wired custom domain (storeUrl) still
 // takes priority below; this is the always-real fallback, not just a preview.
 const STOREFRONT_ROOT_DOMAIN = import.meta.env.VITE_STOREFRONT_ROOT_DOMAIN || "vula.site";
-const C = { surface: "#FFFFFF", border: "#DDD8CE", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", text: "var(--text)", muted: "var(--muted)" };
 
 function norm(data) {
   const d = data && typeof data === "object" ? data : {};
@@ -58,12 +59,12 @@ const UNSUPPORTED_FEATURE_LABELS = { blog: "a blog", login: "account/login", liv
 const URL_RE = /https?:\/\/[^\s]+/gi;
 
 const btn = (bg) => ({ padding: "8px 14px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#fff", background: bg, cursor: "pointer" });
-const rowStyle = { textAlign: "left", padding: "10px 12px", border: `1px solid #DDD8CE`, borderRadius: 8, background: "#FAF9F6", cursor: "pointer" };
+const rowStyle = { textAlign: "left", padding: "10px 12px", border: `1px solid var(--border)`, borderRadius: 8, background: "var(--bg)", cursor: "pointer" };
 const ghost = { padding: "8px 12px", border: `1px solid ${C.border}`, background: C.surface, color: C.text, borderRadius: 8, cursor: "pointer", fontSize: 13 };
 // Rendered inside Puck's own headerActions override, alongside its built-in Publish button —
 // deliberately plain/small so they read as part of that toolbar, not a second competing one.
 const iconBtn = { padding: "6px 9px", border: "1px solid transparent", background: "transparent", borderRadius: 6, cursor: "pointer", fontSize: 14, lineHeight: 1 };
-const iconBtnActive = { background: "rgba(44,85,69,0.1)", border: "1px solid var(--accent, #2C5545)" };
+const iconBtnActive = { background: "rgba(44,85,69,0.1)", border: "1px solid var(--accent)" };
 const menuItem = { textAlign: "left", padding: "8px 12px", border: "none", background: "transparent", borderRadius: 6, cursor: "pointer", fontSize: 13, color: C.text, whiteSpace: "nowrap" };
 
 // Starter templates — a page is never a blank scary canvas. Homepage templates are keyed by
@@ -270,9 +271,9 @@ export default function VulaPages({ tenantId }) {
   // div — that never reaches the iframe at all. So the brand vars have to be actual CSS text
   // inside a <style> tag, not inline styles, unlike VulaPageRender.jsx's non-iframed <Render>.
   const brandCss = `:root {
-    --brand-accent: ${brand.accent || "#2C5545"};
+    --brand-accent: ${brand.accent || "var(--accent)"};
     --brand-accent-fg: #FFFFFF;
-    --brand-ink: ${brand.ink || "#1E1E1E"};
+    --brand-ink: ${brand.ink || "var(--ink)"};
     ${fontDef ? `--brand-font-display: '${fontDef.family}', ${fontDef.fallback};` : ""}
   }`;
 
@@ -343,7 +344,7 @@ export default function VulaPages({ tenantId }) {
   };
 
   const rename = async (p) => {
-    const raw = window.prompt("New page name:", p.title || p.slug);
+    const raw = await promptDialog("New page name:", p.title || p.slug);
     if (!raw || !raw.trim()) return;
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${p.slug}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -363,7 +364,7 @@ export default function VulaPages({ tenantId }) {
   };
 
   const del = async (slug, title) => {
-    if (!window.confirm(`Delete the page "${title || slug}"? This can't be undone.`)) return;
+    if (!(await confirmDialog(`Delete the page "${title || slug}"? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return;
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${slug}`, { method: "DELETE" }).catch(() => {});
     load();
   };
@@ -392,7 +393,7 @@ export default function VulaPages({ tenantId }) {
   const makeLive = async (previewPage) => {
     const originalSlug = previewPage.slug.replace(/-preview$/, "");
     if (originalSlug === previewPage.slug) return;  // not actually a preview page — refuse
-    if (!window.confirm(`Replace the live "${originalSlug}" page with this template? The previous version stays in History if you want it back.`)) return;
+    if (!(await confirmDialog(`Replace the live "${originalSlug}" page with this template? The previous version stays in History if you want it back.`, { danger: true, confirmLabel: 'Yes' }))) return;
     const full = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${previewPage.slug}`).then((r) => r.json()).catch(() => ({}));
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${originalSlug}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -422,7 +423,7 @@ export default function VulaPages({ tenantId }) {
   };
 
   const restoreVersion = async (versionId) => {
-    if (!window.confirm("Restore this version? It'll come back as a draft — review before publishing.")) return;
+    if (!(await confirmDialog("Restore this version? It'll come back as a draft — review before publishing."))) return;
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}/versions/${versionId}/restore`, { method: "POST" }).catch(() => {});
     const p = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/pages/${editing.slug}`).then((r) => r.json()).catch(() => ({}));
     setEditing((e) => ({ ...e, data: norm(p.puck_data), status: p.status || "draft", title: p.title || e.title, seo: p.seo || {} }));
@@ -612,7 +613,7 @@ export default function VulaPages({ tenantId }) {
     <>
       <div onClick={() => !aiDraftBusy && setAiDraftTarget(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 1099 }} />
       <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 420, maxWidth: "92vw",
-        background: "#fff", borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,0.25)", zIndex: 1100, padding: 20 }}>
+        background: "var(--surface)", borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,0.25)", zIndex: 1100, padding: 20 }}>
         <strong style={{ color: C.text, fontSize: 15 }}>✨ AI-draft copy &amp; design</strong>
         <p style={{ fontSize: 12, color: C.muted, margin: "4px 0 14px" }}>
           Optional — the more you give it, the more specific the result. Nothing is saved until you review it.
@@ -637,7 +638,7 @@ export default function VulaPages({ tenantId }) {
         <VulaImageUpload tenantId={tenantId} maxFiles={1}
           existingUrls={aiDraftRefImageUrl ? [aiDraftRefImageUrl] : []}
           onUploaded={(urls) => setAiDraftRefImageUrl(urls[urls.length - 1] || "")} />
-        {aiDraftErr && <p style={{ color: "#A23B2D", fontSize: 12, margin: "10px 0 0" }}>{aiDraftErr}</p>}
+        {aiDraftErr && <p style={{ color: "var(--danger)", fontSize: 12, margin: "10px 0 0" }}>{aiDraftErr}</p>}
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
           <button onClick={() => setAiDraftTarget(null)} disabled={aiDraftBusy} style={ghost}>Cancel</button>
           <button onClick={runAiDraft} disabled={aiDraftBusy} style={btn("var(--accent)")}>
@@ -719,22 +720,22 @@ export default function VulaPages({ tenantId }) {
       <div>
         {aiDraftModal}
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", flexWrap: "wrap" }}>
-          <button onClick={() => { setEditing(null); load(); }} style={btn("#6B7280")}>← Pages</button>
+          <button onClick={() => { setEditing(null); load(); }} style={btn("var(--muted)")}>← Pages</button>
           <strong style={{ color: C.text }}>{editing.title}</strong>
           <span style={{ color: C.muted, fontSize: 12 }}>/{editing.slug}</span>
           <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 9px",
-            color: editing.status === "published" ? "#2C7A4B" : "#B7791F",
+            color: editing.status === "published" ? "var(--ok)" : "var(--warn)",
             background: editing.status === "published" ? "rgba(44,122,75,.12)" : "rgba(183,121,31,.12)" }}>
             {editing.status === "published" ? "Live" : "Draft"}
           </span>
-          {msg && <span style={{ color: "#2C7A4B", fontSize: 12 }}>{msg}</span>}
+          {msg && <span style={{ color: "var(--ok)", fontSize: 12 }}>{msg}</span>}
           {isPreviewPage && <span style={{ fontSize: 12, color: C.muted }}>— private preview, not live yet</span>}
         </div>
 
         {aiDraftThemeStrip}
 
         {showLivePreview && storeUrl && (
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 320, marginBottom: 10, background: "#FAF9F6" }}>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 320, marginBottom: 10, background: "var(--bg)" }}>
             <iframe src={storeUrl} title="Current live site" style={{ width: "100%", height: "100%", border: "none" }} />
           </div>
         )}
@@ -751,7 +752,7 @@ export default function VulaPages({ tenantId }) {
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <button onClick={() => persist(latestData.current || editing.data, "draft")} style={ghost}>💾 Save draft</button>
           {editing.status === "published" && (
-            <button onClick={() => persist(latestData.current || editing.data, "draft")} style={{ ...ghost, color: "#B7791F" }}>⏸ Unpublish (back to draft)</button>
+            <button onClick={() => persist(latestData.current || editing.data, "draft")} style={{ ...ghost, color: "var(--warn)" }}>⏸ Unpublish (back to draft)</button>
           )}
         </div>
 
@@ -760,7 +761,7 @@ export default function VulaPages({ tenantId }) {
         {showHistory && (
           <>
             <div onClick={() => setShowHistory(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.15)", zIndex: 999 }} />
-            <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 340, background: "#fff",
+            <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 340, background: "var(--surface)",
               borderLeft: `1px solid ${C.border}`, boxShadow: "-8px 0 28px rgba(0,0,0,0.12)", zIndex: 1000,
               padding: 16, overflowY: "auto" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -771,7 +772,7 @@ export default function VulaPages({ tenantId }) {
                 versions.length === 0 ? <span style={{ fontSize: 12, color: C.muted }}>No earlier versions yet — a snapshot is taken every time you publish over an existing page.</span> :
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     {versions.map((v) => (
-                      <div key={v.id} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5, paddingBottom: 10, borderBottom: `1px solid #F0EDE5` }}>
+                      <div key={v.id} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5, paddingBottom: 10, borderBottom: `1px solid var(--surface-alt)` }}>
                         <span style={{ color: C.muted }}>{new Date(v.created_at).toLocaleString("en-ZA")}</span>
                         <span>{v.title}</span>
                         <button onClick={() => restoreVersion(v.id)} style={{ ...ghost, padding: "4px 10px", fontSize: 11, alignSelf: "flex-start" }}>Restore as draft</button>
@@ -785,7 +786,7 @@ export default function VulaPages({ tenantId }) {
         {/* Floating chat widget, bottom-right — separate from History's right-side drawer so the
             two never collide. Only mounted while open, so no cost when unused. */}
         {showRefine && (
-          <div style={{ position: "fixed", bottom: 16, right: 16, width: 340, height: 420, background: "#fff",
+          <div style={{ position: "fixed", bottom: 16, right: 16, width: 340, height: 420, background: "var(--surface)",
             border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 8px 28px rgba(0,0,0,0.18)",
             zIndex: 1000, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: `1px solid ${C.border}` }}>
@@ -805,7 +806,7 @@ export default function VulaPages({ tenantId }) {
                   <div style={{ maxWidth: "85%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.4,
                     whiteSpace: "pre-wrap", ...(m.role === "user"
                       ? { background: "var(--accent)", color: "#fff", borderBottomRightRadius: 3 }
-                      : { background: "#FAF9F6", color: C.text, border: `1px solid ${C.border}`, borderBottomLeftRadius: 3 }) }}>
+                      : { background: "var(--bg)", color: C.text, border: `1px solid ${C.border}`, borderBottomLeftRadius: 3 }) }}>
                     {m.text}
                   </div>
                 </div>
@@ -822,7 +823,7 @@ export default function VulaPages({ tenantId }) {
               )}
               {refineSending && (
                 <div style={{ display: "flex", justifyContent: "flex-start" }}>
-                  <div style={{ padding: "8px 12px", borderRadius: 12, fontSize: 13, background: "#FAF9F6", border: `1px solid ${C.border}` }}>…</div>
+                  <div style={{ padding: "8px 12px", borderRadius: 12, fontSize: 13, background: "var(--bg)", border: `1px solid ${C.border}` }}>…</div>
                 </div>
               )}
               <div ref={refineEndRef} />
@@ -885,7 +886,7 @@ export default function VulaPages({ tenantId }) {
           {!storeUrl && <span style={{ fontSize: 11, color: C.muted }}>(live now at your free {tenantId}.{STOREFRONT_ROOT_DOMAIN} address — a custom domain can be added later)</span>}
         </div>
         {showLivePreview && (
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 480, background: "#FAF9F6" }}>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", height: 480, background: "var(--bg)" }}>
             <iframe
               key={liveUrl}
               src={liveUrl}
@@ -898,7 +899,7 @@ export default function VulaPages({ tenantId }) {
       </div>
 
       {creating && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, background: "#FAF9F6", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, background: "var(--bg)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
           <input placeholder="Page name (e.g. Winter Specials)" value={newForm.title} autoFocus
             onChange={(e) => setNewForm((f) => ({ ...f, title: e.target.value }))}
             onKeyDown={(e) => e.key === "Enter" && createNew()}
@@ -926,7 +927,7 @@ export default function VulaPages({ tenantId }) {
                   <span style={{ fontWeight: 600, color: C.text }}>{p.title || p.slug}</span>
                   <span style={{ color: C.muted, fontSize: 12 }}>  /{p.slug}</span>
                   <span style={{ fontSize: 11, fontWeight: 600, marginLeft: 8,
-                    color: p.status === "published" ? "#2C7A4B" : "#B7791F" }}>
+                    color: p.status === "published" ? "var(--ok)" : "var(--warn)" }}>
                     {p.status === "published" ? "● Live" : "○ Draft"}
                   </span>
                 </button>
@@ -938,7 +939,7 @@ export default function VulaPages({ tenantId }) {
                   <>
                     <div onClick={() => setOpenMenuSlug(null)} style={{ position: "fixed", inset: 0, zIndex: 10 }} />
                     <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, zIndex: 11,
-                      background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+                      background: "var(--surface)", border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
                       minWidth: 170, display: "flex", flexDirection: "column", padding: 4 }}>
                       <button onClick={() => { setOpenMenuSlug(null); rename(p); }} style={menuItem}>✏️ Rename</button>
                       <button onClick={() => { setOpenMenuSlug(null); duplicate(p); }} style={menuItem}>⧉ Duplicate</button>
@@ -947,7 +948,7 @@ export default function VulaPages({ tenantId }) {
                           🎨 Try new template
                         </button>
                       )}
-                      <button onClick={() => { setOpenMenuSlug(null); del(p.slug, p.title); }} style={{ ...menuItem, color: "#A23B2D" }}>🗑 Delete</button>
+                      <button onClick={() => { setOpenMenuSlug(null); del(p.slug, p.title); }} style={{ ...menuItem, color: "var(--danger)" }}>🗑 Delete</button>
                     </div>
                   </>
                 )}

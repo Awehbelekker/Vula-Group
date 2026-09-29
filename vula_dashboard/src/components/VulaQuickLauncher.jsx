@@ -10,7 +10,7 @@ import VulaFollowups from "./VulaFollowups";
 import VulaFinances from "./VulaFinances";
 import VulaInvoices from "./VulaInvoices";
 
-const C = { green: "var(--accent)", surface: "#FFFFFF", border: "#DDD8CE", text: "#2A2A2A" };
+const C = { green: "var(--accent)", surface: "var(--surface)", border: "var(--border)", text: "var(--text)" };
 
 const ACTIONS = [
   { key: "assistant", icon: "💬", label: "Vula AI", comp: VulaAssistant, always: true },
@@ -39,10 +39,10 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true }
       {/* Overlay sheet */}
       {ActiveComp && (
         <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,18,15,0.45)", display: "flex", justifyContent: "center", alignItems: "flex-end" }} onClick={() => setActive(null)}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: "#F7F4EE", width: "100%", maxWidth: 560, height: "92vh", borderRadius: "16px 16px 0 0", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 -8px 40px rgba(0,0,0,0.25)" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg)", width: "100%", maxWidth: 560, height: "92vh", borderRadius: "16px 16px 0 0", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 -8px 40px rgba(0,0,0,0.25)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
               <span style={{ fontWeight: 700, color: C.text, fontSize: 14 }}>{ACTIONS.find((a) => a.key === active)?.label}</span>
-              <button onClick={() => setActive(null)} style={{ border: "none", background: "none", fontSize: 22, color: "#8A8680", cursor: "pointer", lineHeight: 1 }}>×</button>
+              <button onClick={() => setActive(null)} style={{ border: "none", background: "none", fontSize: 22, color: "var(--muted)", cursor: "pointer", lineHeight: 1 }}>×</button>
             </div>
             <div style={{ flex: 1, overflowY: "auto" }}><ActiveComp tenantId={tenantId} /></div>
           </div>
@@ -66,7 +66,7 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true }
       {/* FAB */}
       <button onClick={() => setOpen(!open)} aria-label="Vula quick actions"
         style={{ position: "fixed", right: 20, bottom: 20, zIndex: 901, width: 58, height: 58, borderRadius: "50%", border: "none",
-          background: C.green, color: "#fff", fontSize: 24, cursor: "pointer", boxShadow: "0 4px 16px rgba(44,85,69,0.45)",
+          background: C.green, color: "var(--on-accent)", fontSize: 24, cursor: "pointer", boxShadow: "0 4px 16px rgba(44,85,69,0.45)",
           transform: open ? "rotate(45deg)" : "none", transition: "transform 0.2s", marginBottom: "env(safe-area-inset-bottom)" }}>
         {open ? "＋" : "✦"}
       </button>

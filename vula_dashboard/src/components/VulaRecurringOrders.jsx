@@ -6,9 +6,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const CAD = { weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
-const STATUS = { active: { l: "Active", c: "#22c55e" }, paused: { l: "Paused", c: "#f59e0b" }, cancelled: { l: "Cancelled", c: "#ef4444" } };
+const STATUS = { active: { l: "Active", c: "var(--ok)" }, paused: { l: "Paused", c: "var(--warn)" }, cancelled: { l: "Cancelled", c: "var(--danger)" } };
 const R = (c) => `R${((c || 0) / 100).toFixed(2)}`;
 const itemsTotal = (items) => (items || []).reduce((s, i) => s + Math.round((i.quantity || 0) * (i.unit_price_cents || 0)), 0);
 
@@ -49,7 +49,7 @@ export default function VulaRecurringOrders({ tenantId }) {
   };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text }}>
+    <div style={{ color: C.text }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
         <h4 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>🔁 Recurring orders</h4>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
@@ -176,7 +176,7 @@ function NewSub({ tenantId, products, onDone, flash, sub, onCancel }) {
 }
 
 const btn = { padding: "7px 14px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const miniBtn = { padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
 const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text };
 const card = { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.surface, marginBottom: 8 };

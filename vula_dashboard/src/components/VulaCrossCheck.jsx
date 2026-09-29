@@ -8,9 +8,10 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
+import { ErrorCard, Skeleton } from "./ui/index.jsx";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", amber: "#B7791F",
-  text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", amber: "var(--warn)",
+  text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => "R" + ((Number(c) || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const btn = { padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 12 };
 const row = { display: "flex", flexWrap: "wrap", gap: 8, alignItems: "baseline", fontSize: 12.5, padding: "6px 0", borderBottom: `1px solid ${C.alt}` };
@@ -34,13 +35,14 @@ export default function VulaCrossCheck({ tenantId }) {
   const [msg, setMsg] = useState("");
   const base = `${VULA_API}/v1/commerce/${tenantId}/admin`;
 
+  const [loaded, setLoaded] = useState(false);
   const load = useCallback(async () => {
     if (!tenantId) return;
     const [a, b] = await Promise.all([
-      fetch(`${base}/crosscheck`).then(r => r.json()).catch(() => null),
-      fetch(`${base}/reports/vat-scenario`).then(r => r.json()).catch(() => null),
+      fetch(`${base}/crosscheck`).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${base}/reports/vat-scenario`).then(r => (r.ok ? r.json() : null)).catch(() => null),
     ]);
-    setRep(a); setVat(b);
+    setRep(a); setVat(b); setLoaded(true);
   }, [tenantId, base]);
   useEffect(() => { load(); }, [load]);
 
@@ -56,7 +58,8 @@ export default function VulaCrossCheck({ tenantId }) {
     load();
   };
 
-  if (!rep || rep.detail) return null;
+  if (!loaded) return <div style={{ padding: 16 }}><Skeleton height={18} width="40%" /><Skeleton height={48} style={{ marginTop: 12 }} /></div>;
+  if (!rep || rep.detail) return <ErrorCard what="the cross-check" onRetry={load} />;
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
@@ -88,7 +91,7 @@ export default function VulaCrossCheck({ tenantId }) {
 
       <Section title="Bills filed but not in the books" count={rep.unbooked.length} open={open === "u"} onToggle={() => toggle("u")}>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{R(rep.unbooked_total_cents)} of supplier bills/quotes Vula read but never booked — so they're not in payables, VAT or matching.</div>
-        {rep.unbooked.length > 0 && <button style={{ ...btn, background: C.green, color: "#fff", border: "none" }} disabled={busy} onClick={bookAll}>{busy ? "Booking…" : "Book them"}</button>}
+        {rep.unbooked.length > 0 && <button style={{ ...btn, background: C.green, color: "var(--on-accent)", border: "none" }} disabled={busy} onClick={bookAll}>{busy ? "Booking…" : "Book them"}</button>}
         {rep.unbooked.slice(0, 30).map(u => (
           <div key={u.id} style={row}><span style={{ flex: "1 1 200px" }}>{u.supplier || u.filename}</span>
             <span style={{ color: C.muted }}>{u.category} · {u.date || "—"}</span><b>{R(u.total_cents)}</b></div>))}

@@ -5,7 +5,7 @@
 import { useState, useEffect } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", accent: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", accent: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 
 export default function VulaOrderWorkflow({ tenantId }) {
   const [s, setS] = useState(null);
@@ -37,7 +37,7 @@ export default function VulaOrderWorkflow({ tenantId }) {
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontWeight: 700, color: C.text }}>Order workflow</span>
-        {msg && <span style={{ fontSize: 12, color: "#2C7A4B" }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12, color: "var(--ok)" }}>{msg}</span>}
       </div>
       <p style={{ fontSize: 12, color: C.muted, margin: "2px 0 12px" }}>Approve orders before fulfilment, and choose where the ticket is sent.</p>
 

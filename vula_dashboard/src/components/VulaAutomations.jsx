@@ -3,6 +3,7 @@
  * v1 scope: order reaches a status / product hits its reorder threshold → WhatsApp the
  * customer or the team helper. Evaluated by a backend poller every 5 minutes.
  */
+import { confirmDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback } from 'react'
 import { VULA_API } from '../lib/authFetch'
 
@@ -103,7 +104,7 @@ export default function VulaAutomations({ tenantId }) {
   }
 
   async function remove(row) {
-    if (!confirm(`Delete automation "${row.name}"?`)) return
+    if (!(await confirmDialog(`Delete automation "${row.name}"?`, { danger: true, confirmLabel: 'Yes' }))) return
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/automations/${row.id}`, { method: 'DELETE' })
     load()
   }
@@ -125,8 +126,8 @@ export default function VulaAutomations({ tenantId }) {
                   <div style={s.name}>{f.message}</div>
                   <div style={s.meta}>{ACTIONS[f.action_type]?.label || f.action_type}</div>
                 </div>
-                <button onClick={() => decide(f, 'approve')} style={{ ...s.miniBtn, color: '#fff', background: 'var(--accent, #2C5545)', borderColor: 'var(--accent, #2C5545)' }}>Approve & send</button>
-                <button onClick={() => decide(f, 'reject')} style={{ ...s.miniBtn, color: '#C0392B' }}>Reject</button>
+                <button onClick={() => decide(f, 'approve')} style={{ ...s.miniBtn, color: '#fff', background: 'var(--accent)', borderColor: 'var(--accent)' }}>Approve & send</button>
+                <button onClick={() => decide(f, 'reject')} style={{ ...s.miniBtn, color: 'var(--danger)' }}>Reject</button>
               </div>
             ))}
           </div>
@@ -142,7 +143,7 @@ export default function VulaAutomations({ tenantId }) {
               placeholder="When... then..." style={{ ...s.input, resize: 'vertical', marginTop: 8 }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
               <button onClick={teach} disabled={teaching} style={s.saveBtn}>{teaching ? 'Teaching…' : 'Create rule'}</button>
-              {teachMsg && <span style={{ fontSize: 12, color: teachMsg.includes('✓') ? '#16a34a' : '#C0392B' }}>{teachMsg}</span>}
+              {teachMsg && <span style={{ fontSize: 12, color: teachMsg.includes('✓') ? 'var(--ok)' : 'var(--danger)' }}>{teachMsg}</span>}
             </div>
           </>
         ) : (
@@ -200,10 +201,10 @@ export default function VulaAutomations({ tenantId }) {
                   {r.created_from === 'conversation' && ' · 💬 taught'}
                 </div>
               </div>
-              <button onClick={() => toggle(r)} style={{ ...s.miniBtn, color: r.enabled ? '#16a34a' : '#8A8680' }}>
+              <button onClick={() => toggle(r)} style={{ ...s.miniBtn, color: r.enabled ? 'var(--ok)' : 'var(--muted)' }}>
                 {r.enabled ? 'On' : 'Off'}
               </button>
-              <button onClick={() => remove(r)} style={{ ...s.miniBtn, color: '#C0392B' }}>Delete</button>
+              <button onClick={() => remove(r)} style={{ ...s.miniBtn, color: 'var(--danger)' }}>Delete</button>
             </div>
           ))}
         </div>
@@ -214,20 +215,20 @@ export default function VulaAutomations({ tenantId }) {
 
 const s = {
   intro: { marginBottom: 14 },
-  h3: { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 4px' },
-  sub: { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
-  newBtn: { padding: '8px 16px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', marginBottom: 14 },
-  card: { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 16, marginBottom: 18, display: 'flex', flexDirection: 'column', gap: 8 },
+  h3: { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub: { fontSize: 13, color: 'var(--muted)', margin: 0 },
+  newBtn: { padding: '8px 16px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: 14 },
+  card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 18, display: 'flex', flexDirection: 'column', gap: 8 },
   row: { display: 'flex', gap: 8 },
-  input: { padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box', width: '100%' },
-  label: { fontSize: 12, fontWeight: 700, color: '#1E1E1E', margin: '4px 0 0', fontFamily: 'system-ui' },
-  hint: { fontSize: 11.5, color: '#8A8680', margin: 0, fontFamily: 'system-ui' },
-  error: { color: '#C0392B', fontSize: 13, margin: 0 },
-  saveBtn: { padding: '9px 16px', background: 'var(--accent, #2C5545)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', alignSelf: 'flex-start' },
-  muted: { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui' },
+  input: { padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', width: '100%' },
+  label: { fontSize: 12, fontWeight: 700, color: 'var(--ink)', margin: '4px 0 0'},
+  hint: { fontSize: 11.5, color: 'var(--muted)', margin: 0},
+  error: { color: 'var(--danger)', fontSize: 13, margin: 0 },
+  saveBtn: { padding: '9px 16px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', alignSelf: 'flex-start' },
+  muted: { color: 'var(--muted)', fontSize: 13},
   list: { display: 'flex', flexDirection: 'column', gap: 8 },
-  row2: { display: 'flex', alignItems: 'center', gap: 10, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: '12px 14px' },
-  name: { fontFamily: 'system-ui', fontSize: 14, fontWeight: 600, color: '#1E1E1E' },
-  meta: { fontFamily: 'system-ui', fontSize: 12, color: '#8A8680', marginTop: 2 },
-  miniBtn: { padding: '5px 12px', border: '1px solid #DDD8CE', borderRadius: 6, background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
+  row2: { display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px' },
+  name: { fontSize: 14, fontWeight: 600, color: 'var(--ink)' },
+  meta: { fontSize: 12, color: 'var(--muted)', marginTop: 2 },
+  miniBtn: { padding: '5px 12px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', fontSize: 12, fontWeight: 600, cursor: 'pointer'},
 }

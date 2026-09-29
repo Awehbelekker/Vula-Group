@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function VulaBankRec({ tenantId }) {
@@ -160,7 +160,7 @@ export default function VulaBankRec({ tenantId }) {
   };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text }}>
+    <div style={{ color: C.text }}>
       <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0 2px" }}>🏦 Bank reconciliation</h4>
       <p style={{ color: C.muted, fontSize: 13, marginTop: 0 }}>
         Vula reads your weekly Capitec statement (and payment-confirmation emails) and matches deposits to invoices or orders paid by EFT (marks them paid), flagging the rest. No accounting software needed.
@@ -169,13 +169,13 @@ export default function VulaBankRec({ tenantId }) {
       {/* Summary */}
       {sum && !sum.error && (
         <div style={grid}>
-          <Stat label="Money in" value={R(sum.money_in_cents)} color={C.green} />
+          <Stat label="Money in" value={R(sum.money_in_cents)} color={'var(--ok)'} />
           <Stat label="Money out" value={R(sum.money_out_cents)} color={C.red} />
           <Stat label="Invoices → paid" value={sum.matched} sub="auto-matched" />
           <Stat label="Needs your input" value={sum.needs_input || 0} color={(sum.needs_input || 0) > 0 ? C.red : C.text} sub="Vula unsure" />
           <Stat label="To review" value={sum.unmatched_credits + sum.unmatched_debits} color={(sum.unmatched_credits + sum.unmatched_debits) > 0 ? C.red : C.text} />
           <Stat label="Invoiced, unpaid" value={R(sum.invoices_sent_unpaid_cents)} sub="still owed" />
-          <Stat label="Invoiced, paid" value={R(sum.invoices_paid_cents)} color={C.green} />
+          <Stat label="Invoiced, paid" value={R(sum.invoices_paid_cents)} color={'var(--ok)'} />
         </div>
       )}
 
@@ -271,7 +271,7 @@ export default function VulaBankRec({ tenantId }) {
                 )}
               </div>
             </div>
-            {t.match_status === "matched" ? <span style={{ ...pill, color: C.green, borderColor: C.green }}>matched</span>
+            {t.match_status === "matched" ? <span style={{ ...pill, color: 'var(--ok)', borderColor: 'var(--ok)' }}>matched</span>
               : t.match_status === "ignored" ? <span style={{ ...pill, color: C.muted, borderColor: C.border }}>ignored</span>
                 : (
                   <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -308,9 +308,9 @@ const Stat = ({ label, value, sub, color }) => (
 const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 };
 const card = { display: "flex", alignItems: "center", gap: 10, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8 };
 const btn = { padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const miniBtn = { padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
 const chip = { padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 16, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
-const chipOn = { background: C.green, color: "#fff", borderColor: C.green };
+const chipOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text };
 const pill = { fontSize: 11, padding: "2px 8px", borderRadius: 10, border: "1px solid", fontWeight: 600 };

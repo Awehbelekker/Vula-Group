@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function VulaAccounting({ tenantId }) {
@@ -28,7 +28,7 @@ export default function VulaAccounting({ tenantId }) {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text, maxWidth: 720 }}>
+    <div style={{ color: C.text, maxWidth: 720 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
         <h4 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>📒 Books</h4>
         <span style={{ fontSize: 12, color: C.muted }}>from</span>
@@ -95,5 +95,5 @@ const Section = ({ title, rows }) => (!rows?.length ? null : (
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 };
 const btn = { padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const input = { padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, background: C.surface, color: C.text };

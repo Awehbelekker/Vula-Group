@@ -7,11 +7,11 @@
  */
 import { useEffect, useState, Fragment, useCallback } from 'react'
 import { authFetch } from '../lib/authFetch'
-import { SectionTabs } from './ui/index.jsx'
+import { SectionTabs, confirmDialog } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import VulaMasterTenantDetail from './VulaMasterTenantDetail'
 
-const C = { surface: '#FFFFFF', border: '#DDD8CE', green: 'var(--accent)', red: '#A23B2D', amber: '#B7791F', text: '#2A2A2A', muted: '#8A8680', alt: '#F0EDE5' }
+const C = { surface: 'var(--surface)', border: 'var(--border)', green: 'var(--accent)', red: 'var(--danger)', amber: 'var(--warn)', text: 'var(--text)', muted: 'var(--muted)', alt: 'var(--surface-alt)' }
 
 const SUBTABS = [
   { id: 'tenants', label: 'Tenants', icon: '🏢' },
@@ -78,7 +78,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
   }
 
   return (
-    <div style={{ fontFamily: 'system-ui', color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
+    <div style={{ color: C.text, maxWidth: 1000, padding: '16px 24px' }}>
       <SectionTabs tabs={tabs} active={tab} onChange={(id) => { setTab(id); setErr('') }} />
       {err && <div style={{ fontSize: 13, color: C.red, marginBottom: 10 }}>{err}</div>}
       {tab === 'tenants' && <TenantsPanel onError={setErr} onOpenTenant={onOpenTenant} onViewDetail={openDetail} prefill={prefill} onConsumePrefill={() => setPrefill(null)}
@@ -171,8 +171,8 @@ function OnboardPanel({ onError, onOpenTenant, onProvision, selectTenantId, onCo
               <span style={{
                 width: 22, height: 22, borderRadius: 99, flex: 'none', display: 'flex', alignItems: 'center',
                 justifyContent: 'center', fontSize: 11, fontWeight: 700,
-                background: s.done ? C.green : C.surface, color: s.done ? '#fff' : C.muted,
-                border: s.done ? `1.5px solid ${C.green}` : `1.5px solid ${C.border}`,
+                background: s.done ? 'var(--ok)' : C.surface, color: s.done ? '#fff' : C.muted,
+                border: s.done ? `1.5px solid ${'var(--ok)'}` : `1.5px solid ${C.border}`,
               }}>{s.done ? '✓' : i + 1}</span>
               <div style={{ flex: 1 }}>
                 <b style={{ fontSize: 12.5, color: s.done ? C.muted : C.text }}>{s.label}</b>
@@ -270,7 +270,7 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
     } catch (e) { onError(e.message) }
   }
   const cancelSub = async (t) => {
-    if (!confirm(`Cancel ${t.display_name || t.tenant_id}'s subscription? This also suspends them — bot, checkout, and dashboard logins stop working immediately.`)) return
+    if (!(await confirmDialog(`Cancel ${t.display_name || t.tenant_id}'s subscription? This also suspends them — bot, checkout, and dashboard logins stop working immediately.`, { danger: true, confirmLabel: 'Yes' }))) return
     try { await authFetch(`/v1/master/tenants/${t.tenant_id}/cancel`, { method: 'POST' }); load() }
     catch (e) { onError(e.message) }
   }
@@ -307,10 +307,10 @@ function TenantsPanel({ onError, onOpenTenant, onViewDetail, prefill, onConsumeP
                   <td style={td}><b>{t.display_name || t.tenant_id}</b><div style={{ color: C.muted, fontFamily: 'monospace', fontSize: 11 }}>{t.tenant_id}</div></td>
                   <td style={td}>{t.business_type || '—'}</td>
                   <td style={{ ...td, color: C.muted, fontSize: 11.5 }}>{(t.modules || []).length} enabled · <span style={{ color: C.text, fontWeight: 600 }}>{t.plan || 'starter'}</span></td>
-                  <td style={{ ...td, color: t.paid ? C.green : C.amber, fontWeight: 600 }}>{t.paid ? 'Paid' : (t.signup_status || '—')}</td>
+                  <td style={{ ...td, color: t.paid ? 'var(--ok)' : C.amber, fontWeight: 600 }}>{t.paid ? 'Paid' : (t.signup_status || '—')}</td>
                   <td style={{ ...td, color: C.muted }}>{(t.trial_ends || '').slice(0, 10) || '—'}</td>
                   <td style={td}>{t.logins}</td>
-                  <td style={{ ...td, color: t.active === false ? C.red : C.green, fontWeight: 600 }}>{t.active === false ? 'Suspended' : 'Active'}</td>
+                  <td style={{ ...td, color: t.active === false ? C.red : 'var(--ok)', fontWeight: 600 }}>{t.active === false ? 'Suspended' : 'Active'}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     {onViewDetail && <button style={{ ...miniBtn, marginRight: 6 }} onClick={() => onViewDetail(t.tenant_id)}>Details</button>}
                     {onOpenTenant && <button style={{ ...miniBtn, marginRight: 6, color: C.green, fontWeight: 600 }} onClick={() => onOpenTenant(t.tenant_id)}>Open →</button>}
@@ -441,7 +441,7 @@ function HealthPanel({ onError, onViewDetail }) {
               ? <button onClick={() => onViewDetail(w.tenant_id)} style={{ ...miniBtn, minWidth: 110, textAlign: 'left', fontWeight: 700 }}>{w.tenant_id}</button>
               : <b style={{ minWidth: 110 }}>{w.tenant_id}</b>}
             <span style={{ fontFamily: 'monospace' }}>{w.phone_number}</span>
-            <span style={{ color: w.status === 'connected' ? C.green : C.red, fontWeight: 600 }}>{w.status}</span>
+            <span style={{ color: w.status === 'connected' ? 'var(--ok)' : C.red, fontWeight: 600 }}>{w.status}</span>
             <span style={{ color: C.muted }}>{w.webhook_registered ? 'webhook ✓' : 'webhook ✗'}</span>
             {w.last_error && <span style={{ color: C.red }}>{String(w.last_error).slice(0, 60)}</span>}
           </div>
@@ -461,7 +461,7 @@ function HealthPanel({ onError, onViewDetail }) {
             {(Array.isArray(h.scheduled_jobs) ? h.scheduled_jobs : []).map((j, i) => (
               <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
                 <td style={tdSm}>{j.tenant_id}</td><td style={tdSm}>{j.job_type}</td>
-                <td style={{ ...tdSm, color: j.enabled ? C.green : C.red }}>{j.enabled ? '✓' : '✗'}</td>
+                <td style={{ ...tdSm, color: j.enabled ? 'var(--ok)' : C.red }}>{j.enabled ? '✓' : '✗'}</td>
                 <td style={tdSm}>{j.hour != null ? `${String(j.hour).padStart(2, '0')}:${String(j.minute || 0).padStart(2, '0')}` : '—'}</td>
                 <td style={{ ...tdSm, fontFamily: 'monospace', fontSize: 11 }}>{j.template_name || 'default'}</td>
                 <td style={{ ...tdSm, color: C.muted }}>{(j.last_fired_at || '—').slice(0, 16).replace('T', ' ')}</td>
@@ -484,7 +484,7 @@ function HealthPanel({ onError, onViewDetail }) {
             {(qb || []).map(r => (
               <tr key={r.tenant_id} style={{ borderTop: `1px solid ${C.border}` }}>
                 <td style={tdSm}>{r.tenant_id}</td>
-                <td style={{ ...tdSm, color: r.last_backup_status === 'ok' ? C.green : C.red, fontWeight: 600 }}>
+                <td style={{ ...tdSm, color: r.last_backup_status === 'ok' ? 'var(--ok)' : C.red, fontWeight: 600 }}>
                   {r.last_backup_status || '—'}
                 </td>
                 <td style={{ ...tdSm, color: C.muted }}>{(r.last_backup_at || '—').slice(0, 16).replace('T', ' ')}</td>
@@ -1001,9 +1001,9 @@ function ModelsPanel({ onError }) {
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }
 const btn = { padding: '7px 13px', border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: 'pointer' }
-const btnOn = { background: C.green, color: '#fff', borderColor: C.green }
+const btnOn = { background: C.green, color: 'var(--on-accent)', borderColor: C.green }
 const miniBtn = { padding: '3px 9px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, fontSize: 11.5, cursor: 'pointer' }
-const input = { padding: '7px 10px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text, fontFamily: 'system-ui' }
+const input = { padding: '7px 10px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text}
 const table = { width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }
 const th = { padding: '8px 10px', fontWeight: 600, whiteSpace: 'nowrap' }
 const td = { padding: '8px 10px', verticalAlign: 'top' }

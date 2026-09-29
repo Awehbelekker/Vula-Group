@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)" };
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 export default function VulaRepCallSheet({ tenantId, repPhone }) {
@@ -84,17 +84,17 @@ export default function VulaRepCallSheet({ tenantId, repPhone }) {
         <input value={instruction} onChange={(e) => setInstruction(e.target.value)}
                placeholder='e.g. "the Dick meeting was about self-levelling, not HBC"'
                style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
-        {msg && <div style={{ fontSize: 12.5, color: "#A23B2D", marginTop: 8 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 8 }}>{msg}</div>}
         {preview && (
-          <div style={{ background: "#FBF7E9", border: "1px solid #E6D9A8", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginTop: 8 }}>
+          <div style={{ background: "var(--warn-soft)", border: "1px solid #E6D9A8", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginTop: 8 }}>
             {preview.change}
             <button onClick={() => submitInstruction(true)} style={{ marginLeft: 10, padding: "4px 10px", background: C.green,
-              color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>Confirm</button>
+              color: "var(--on-accent)", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>Confirm</button>
           </div>
         )}
         {!preview && (
           <button onClick={() => submitInstruction(false)} disabled={!instruction.trim()}
-            style={{ marginTop: 8, padding: "7px 14px", background: C.text, color: "#fff", border: "none",
+            style={{ marginTop: 8, padding: "7px 14px", background: C.text, color: "var(--bg)", border: "none",
               borderRadius: 8, fontSize: 12.5, cursor: instruction.trim() ? "pointer" : "not-allowed" }}>Preview change</button>
         )}
       </div>

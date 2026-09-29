@@ -1,20 +1,21 @@
+import { toast } from './ui/index.jsx'
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
 
 const C = {
-  bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "var(--accent)", amber: "#C4861A", red: "#C0392B",
-  blue: "#1A5276", text: "#2A2A2A", muted: "#8A8680",
-  surfaceAlt: "#F0EDE5", greenLight: "#EAF2EF",
+  bg: "var(--bg)", surface: "var(--surface)", border: "var(--border)",
+  green: "var(--accent)", amber: "var(--warn)", red: "var(--danger)",
+  blue: "#1A5276", text: "var(--text)", muted: "var(--muted)",
+  surfaceAlt: "var(--surface-alt)", greenLight: "var(--ok-soft)",
 };
 
 const STATUS_STYLE = {
-  pending:            { bg: "#F0EDE5", color: "#8A8680", label: "Pending" },
-  in_progress:        { bg: "#EAF2EF", color: "var(--accent)", label: "In Progress" },
-  awaiting_sign_off:  { bg: "#FEF9E7", color: "#C4861A", label: "Awaiting Sign-off" },
-  complete:           { bg: "#EAF2EF", color: "#1A7A4A", label: "Complete" },
-  rejected:           { bg: "#FDEDEC", color: "#C0392B", label: "Rejected" },
+  pending:            { bg: "var(--surface-alt)", color: "var(--muted)", label: "Pending" },
+  in_progress:        { bg: "var(--ok-soft)", color: "var(--accent)", label: "In Progress" },
+  awaiting_sign_off:  { bg: "var(--warn-soft)", color: "var(--warn)", label: "Awaiting Sign-off" },
+  complete:           { bg: "var(--ok-soft)", color: "#1A7A4A", label: "Complete" },
+  rejected:           { bg: "var(--danger-soft)", color: "var(--danger)", label: "Rejected" },
 };
 
 function StatusBadge({ status }) {
@@ -32,7 +33,7 @@ function Pill({ label, color = C.muted }) {
   return (
     <span style={{
       display: "inline-block", padding: "2px 10px",
-      background: `${color}18`, color, borderRadius: 20,
+      background: `color-mix(in srgb, ${color} 9%, transparent)`, color, borderRadius: 20,
       fontSize: 11, fontWeight: 600, letterSpacing: "0.03em",
     }}>{label}</span>
   );
@@ -64,9 +65,9 @@ function Btn({ children, onClick, variant = "primary", small, disabled, style = 
     opacity: disabled ? 0.5 : 1, transition: "opacity 0.15s", ...style,
   };
   const colors = {
-    primary: { background: C.green, color: "#fff" },
+    primary: { background: C.green, color: "var(--on-accent)" },
     secondary: { background: C.surfaceAlt, color: C.text, border: `1px solid ${C.border}` },
-    danger: { background: "#FDEDEC", color: C.red },
+    danger: { background: "var(--danger-soft)", color: C.red },
   };
   return (
     <button onClick={onClick} disabled={disabled} style={{ ...base, ...colors[variant] }}>
@@ -330,13 +331,13 @@ function ProjectPanel({ tenantId }) {
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 20 }}>
             {[
-              { label: "Complete", value: status.tasks_complete, color: C.green },
+              { label: "Complete", value: status.tasks_complete, color: 'var(--ok)' },
               { label: "In Progress", value: status.tasks_in_progress, color: C.blue },
               { label: "Awaiting Sign-off", value: status.tasks_awaiting_sign_off, color: C.amber },
               { label: "Rejected", value: status.tasks_rejected, color: C.red },
             ].map(({ label, value, color }) => (
               <div key={label} style={{
-                background: `${color}12`, border: `1px solid ${color}30`,
+                background: `color-mix(in srgb, ${color} 7%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 19%, transparent)`,
                 borderRadius: 8, padding: "12px 16px", textAlign: "center",
               }}>
                 <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
@@ -455,9 +456,9 @@ function TaskRow({ task, projectId, onRefresh, tenantId }) {
               )}
 
               {detail.sign_off ? (
-                <div style={{ padding: 12, background: detail.sign_off.status === "approved" ? C.greenLight : "#FDEDEC", borderRadius: 8 }}>
+                <div style={{ padding: 12, background: detail.sign_off.status === "approved" ? C.greenLight : "var(--danger-soft)", borderRadius: 8 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: detail.sign_off.status === "approved" ? C.green : C.red }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: detail.sign_off.status === "approved" ? 'var(--ok)' : C.red }}>
                       {detail.sign_off.status === "approved" ? "✓ Approved" : "✗ Rejected"}
                     </span>
                     <span style={{ fontSize: 11, color: C.muted }}>{detail.sign_off.approved_at?.slice(0, 16).replace("T", " ")}</span>
@@ -491,20 +492,20 @@ function SignOffActions({ taskId, onRefresh }) {
         notes,
       });
       onRefresh();
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message); }
     finally { setBusy(false); }
   };
 
   return (
-    <div style={{ padding: 12, background: "#FEF9E7", borderRadius: 8, border: "1px solid #F9E79F" }}>
+    <div style={{ padding: 12, background: "var(--warn-soft)", borderRadius: 8, border: "1px solid var(--warn-soft)" }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 8 }}>Sign-off required</div>
       <textarea
         value={notes}
         onChange={e => setNotes(e.target.value)}
         placeholder="Add review notes (optional)..."
         style={{
-          width: "100%", padding: 8, fontSize: 12, borderRadius: 6, border: "1px solid #F9E79F",
-          background: "#fff", marginBottom: 10, boxSizing: "border-box"
+          width: "100%", padding: 8, fontSize: 12, borderRadius: 6, border: "1px solid var(--warn-soft)",
+          background: "var(--surface)", marginBottom: 10, boxSizing: "border-box"
         }}
       />
       <div style={{ display: "flex", gap: 8 }}>
@@ -688,7 +689,7 @@ function WalkthroughPanel({ tenantId }) {
           {msg && (
             <div style={{
               marginTop: 8, fontSize: 12,
-              color: result?.whatsapp_sent ? C.green : C.muted,
+              color: result?.whatsapp_sent ? 'var(--ok)' : C.muted,
             }}>{msg}</div>
           )}
           {result && (
@@ -724,7 +725,7 @@ export default function VulaFieldOps({ tenantId }) {
       {/* Header */}
       <div style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
         <div>
-          <h2 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 700, color: C.text, fontFamily: "'Cormorant Garamond', serif" }}>
+          <h2 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 700, color: C.text, fontFamily: "var(--font-display)" }}>
             Field Operations
           </h2>
           <p style={{ margin: 0, fontSize: 13, color: C.muted }}>
@@ -735,7 +736,7 @@ export default function VulaFieldOps({ tenantId }) {
 
       {!tenantId && (
         <div style={{
-          padding: 20, background: "#FEF9E7", border: `1px solid #F9E79F`,
+          padding: 20, background: "var(--warn-soft)", border: `1px solid var(--warn-soft)`,
           borderRadius: 8, marginBottom: 24, fontSize: 13, color: C.amber,
         }}>
           Error: No Tenant ID provided.

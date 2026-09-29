@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { UiHost } from "./components/ui/index.jsx";
 import { installAuthFetch } from "./lib/authFetch";
 
 // Attach the signed-in user's JWT to every guarded Vula API call (tenant-scoped auth).
@@ -20,6 +21,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <ErrorBoundary>
       <App />
+      <UiHost />
     </ErrorBoundary>
   </React.StrictMode>
 );

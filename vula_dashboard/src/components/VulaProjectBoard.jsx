@@ -6,6 +6,7 @@
  * resized, or edited in the last ~2.5s is protected from being overwritten by a poll response
  * that lands mid-gesture — see `recentRef`/`draggingRef` below.
  */
+import { confirmDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import { supabase } from '../lib/supabase'
@@ -16,13 +17,13 @@ const POLL_MS = 15000
 const EPS = 0.5   // ignore drag/resize "changes" smaller than this — avoids no-op saves
 
 const TYPE_META = {
-  note:      { icon: '📝', label: 'Note',      tint: '#FFF3C4' },
+  note:      { icon: '📝', label: 'Note',      tint: 'var(--warn-soft)' },
   image:     { icon: '🖼', label: 'Image',      tint: '#FFFFFF' },
   link:      { icon: '🔗', label: 'Link',       tint: '#DCEBFA' },
-  checklist: { icon: '☑️', label: 'Checklist', tint: '#E1F0E3' },
+  checklist: { icon: '☑️', label: 'Checklist', tint: 'var(--ok-soft)' },
 }
 
-const PALETTE = [null, '#FFF3C4', '#FFD9C4', '#FFC4D6', '#E1D4FF', '#DCEBFA', '#E1F0E3', '#FFFFFF']
+const PALETTE = [null, 'var(--warn-soft)', '#FFD9C4', '#FFC4D6', '#E1D4FF', '#DCEBFA', 'var(--ok-soft)', '#FFFFFF']
 
 export default function VulaProjectBoard({ tenantId, project }) {
   const [cards, setCards] = useState([])
@@ -111,7 +112,7 @@ export default function VulaProjectBoard({ tenantId, project }) {
   }
 
   async function removeCard(id) {
-    if (!confirm('Remove this card?')) return
+    if (!(await confirmDialog('Remove this card?', { danger: true, confirmLabel: 'Yes' }))) return
     setCards((cs) => cs.filter((c) => c.id !== id))
     await fetch(cardUrl(id), { method: 'DELETE' })
   }
@@ -235,7 +236,7 @@ function Card({ card, uploading, onFocusCard, onContentChange, onColorChange, on
             <div style={s.palette}>
               {PALETTE.map((c, i) => (
                 <button key={i} onClick={() => { onColorChange(c); setShowPalette(false) }}
-                  style={{ ...s.swatch, background: c || meta.tint, border: c ? '1px solid rgba(0,0,0,0.15)' : '1px dashed #B5B0A8' }} />
+                  style={{ ...s.swatch, background: c || meta.tint, border: c ? '1px solid rgba(0,0,0,0.15)' : '1px dashed var(--faint)' }} />
               ))}
             </div>
           )}
@@ -298,8 +299,8 @@ function ChecklistBody({ content, onChange }) {
         {items.map((it, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '2px 0' }}>
             <input type="checkbox" checked={!!it.done} onChange={() => setItems(items.map((x, idx) => idx === i ? { ...x, done: !x.done } : x))} />
-            <span style={{ flex: 1, textDecoration: it.done ? 'line-through' : 'none', color: it.done ? '#8A8680' : '#2A2A2A' }}>{it.text}</span>
-            <button onClick={() => setItems(items.filter((_, idx) => idx !== i))} style={{ background: 'none', border: 'none', color: '#A23B2D', cursor: 'pointer', fontSize: 13 }}>×</button>
+            <span style={{ flex: 1, textDecoration: it.done ? 'line-through' : 'none', color: it.done ? 'var(--muted)' : 'var(--text)' }}>{it.text}</span>
+            <button onClick={() => setItems(items.filter((_, idx) => idx !== i))} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 13 }}>×</button>
           </div>
         ))}
       </div>
@@ -310,18 +311,18 @@ function ChecklistBody({ content, onChange }) {
 }
 
 const s = {
-  bg: '#EFEBE1', surface: '#FFFFFF', border: '#DDD8CE', muted: '#8A8680',
-  addBtn: { padding: '6px 12px', background: 'transparent', border: '1px solid #DDD8CE', borderRadius: 7, fontSize: 12, cursor: 'pointer', fontFamily: 'system-ui', color: '#2A2A2A' },
-  emptyHint: { position: 'absolute', top: 60, left: 0, right: 0, textAlign: 'center', color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', padding: '0 40px' },
+  bg: '#EFEBE1', surface: 'var(--surface)', border: 'var(--border)', muted: 'var(--muted)',
+  addBtn: { padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 7, fontSize: 12, cursor: 'pointer', color: 'var(--text)' },
+  emptyHint: { position: 'absolute', top: 60, left: 0, right: 0, textAlign: 'center', color: 'var(--muted)', fontSize: 13, padding: '0 40px' },
   card: { width: '100%', height: '100%', borderRadius: 8, boxShadow: '0 1px 4px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column', border: '1px solid rgba(0,0,0,0.08)' },
   cardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', cursor: 'move', background: 'rgba(0,0,0,0.04)', borderRadius: '8px 8px 0 0' },
   cardIconBtn: { background: 'none', border: 'none', fontSize: 12, cursor: 'pointer', lineHeight: 1, padding: '2px 4px' },
-  cardX: { background: 'none', border: 'none', color: '#A23B2D', fontSize: 15, cursor: 'pointer', lineHeight: 1, padding: 0 },
+  cardX: { background: 'none', border: 'none', color: 'var(--danger)', fontSize: 15, cursor: 'pointer', lineHeight: 1, padding: 0 },
   cardBody: { flex: 1, padding: 8, minHeight: 0 },
-  noteArea: { width: '100%', height: '100%', border: 'none', background: 'transparent', resize: 'none', fontSize: 12.5, fontFamily: 'system-ui', outline: 'none', boxSizing: 'border-box' },
-  linkInput: { width: '100%', padding: '5px 7px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, fontFamily: 'system-ui', boxSizing: 'border-box' },
-  linkOpen: { fontSize: 11, color: 'var(--accent, #2C5545)' },
-  uploadLabel: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', border: '1px dashed #B5B0A8', borderRadius: 6, fontSize: 12, color: '#8A8680', cursor: 'pointer', fontFamily: 'system-ui' },
-  palette: { position: 'absolute', top: 20, right: 0, display: 'flex', flexWrap: 'wrap', width: 88, gap: 4, padding: 6, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.15)', zIndex: 10 },
+  noteArea: { width: '100%', height: '100%', border: 'none', background: 'transparent', resize: 'none', fontSize: 12.5, outline: 'none', boxSizing: 'border-box' },
+  linkInput: { width: '100%', padding: '5px 7px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, boxSizing: 'border-box' },
+  linkOpen: { fontSize: 11, color: 'var(--accent)' },
+  uploadLabel: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', border: '1px dashed var(--faint)', borderRadius: 6, fontSize: 12, color: 'var(--muted)', cursor: 'pointer'},
+  palette: { position: 'absolute', top: 20, right: 0, display: 'flex', flexWrap: 'wrap', width: 88, gap: 4, padding: 6, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.15)', zIndex: 10 },
   swatch: { width: 18, height: 18, borderRadius: 4, cursor: 'pointer', padding: 0 },
 }

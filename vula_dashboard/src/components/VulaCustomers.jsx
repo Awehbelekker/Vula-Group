@@ -58,8 +58,8 @@ export default function VulaCustomers({ tenantId }) {
     const w = window.open('', '_blank')
     if (!w) return
     w.document.write(`<html><head><title>Statement — ${name || phone}</title>
-      <style>body{font-family:system-ui;padding:24px;color:#1E1E1E}table{width:100%;border-collapse:collapse;margin-top:14px}
-      th,td{padding:6px 8px;border-bottom:1px solid #DDD8CE;text-align:left;font-size:13px}
+      <style>body{font-family:system-ui;padding:24px;color:var(--ink)}table{width:100%;border-collapse:collapse;margin-top:14px}
+      th,td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:left;font-size:13px}
       h1{font-size:18px}.tot{font-weight:700}</style></head><body>
       <h1>Statement of account</h1>
       <p>${name || ''} · ${phone}</p>
@@ -183,13 +183,13 @@ export default function VulaCustomers({ tenantId }) {
                 <div style={s.right}>
                   <span style={s.spent}>{fmt(c.total_spent_cents)}</span>
                   <a href={waLink(c.phone)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={s.waBtn}>💬</a>
-                  <span style={{ color: '#8A8680', fontSize: 16, transform: openPhone === c.phone ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>›</span>
+                  <span style={{ color: 'var(--muted)', fontSize: 16, transform: openPhone === c.phone ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>›</span>
                 </div>
               </div>
               {openPhone === c.phone && (
-                <div style={{ background: 'var(--surface-alt, #F0EDE5)', borderRadius: 10, padding: 14, margin: '2px 0 10px' }}>
+                <div style={{ background: 'var(--surface-alt)', borderRadius: 10, padding: 14, margin: '2px 0 10px' }}>
                   {!detail ? (
-                    <div style={{ fontSize: 12.5, color: '#8A8680' }}>Loading…</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Loading…</div>
                   ) : (
                     <>
                       {/* Stat cards */}
@@ -204,7 +204,7 @@ export default function VulaCustomers({ tenantId }) {
                         <button onClick={() => printStatement(c.phone, c.name)} style={s.statementBtn}>📄 Statement</button>
                       </div>
                       {/* Profile line */}
-                      <div style={{ fontSize: 12, color: '#8A8680', marginBottom: 10, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                         {detail.profile?.email && <span>✉️ {detail.profile.email}</span>}
                         {detail.profile?.preferred_language &&
                           <span>🗣️ {LANG_NAMES[detail.profile.preferred_language] || detail.profile.preferred_language}</span>}
@@ -218,9 +218,9 @@ export default function VulaCustomers({ tenantId }) {
                           onChange={e => setNoteDraft(e.target.value)}
                           onBlur={() => saveNote(c.phone)}
                           placeholder="Add a private note about this customer (preferences, allergies, delivery quirks)…"
-                          style={{ width: '100%', minHeight: 48, boxSizing: 'border-box', padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 12.5, resize: 'vertical', background: '#fff' }}
+                          style={{ width: '100%', minHeight: 48, boxSizing: 'border-box', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12.5, resize: 'vertical', background: 'var(--surface)' }}
                         />
-                        {savingNote && <span style={{ fontSize: 11, color: '#8A8680' }}>saving…</span>}
+                        {savingNote && <span style={{ fontSize: 11, color: 'var(--muted)' }}>saving…</span>}
                       </div>
                       {/* Tags + area — the data segments actually filter on (see Broadcast → New segment) */}
                       <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -231,7 +231,7 @@ export default function VulaCustomers({ tenantId }) {
                             onChange={e => setTagsDraft(e.target.value)}
                             onBlur={() => saveTags(c.phone)}
                             placeholder="vip, wholesale, allergy-nuts…"
-                            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 12.5, background: '#fff' }}
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12.5, background: 'var(--surface)' }}
                           />
                         </div>
                         <div style={{ width: 150 }}>
@@ -241,10 +241,10 @@ export default function VulaCustomers({ tenantId }) {
                             onChange={e => setAreaDraft(e.target.value)}
                             onBlur={() => saveTags(c.phone)}
                             placeholder="e.g. Tableview"
-                            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 12.5, background: '#fff' }}
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12.5, background: 'var(--surface)' }}
                           />
                         </div>
-                        {savingTags && <span style={{ fontSize: 11, color: '#8A8680', alignSelf: 'flex-end' }}>saving…</span>}
+                        {savingTags && <span style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'flex-end' }}>saving…</span>}
                       </div>
                       {/* Conversation — the actual WhatsApp exchange (Customer-360 depth) */}
                       {(detail.conversation || []).length > 0 && (
@@ -255,11 +255,11 @@ export default function VulaCustomers({ tenantId }) {
                               <div key={j} style={{
                                 alignSelf: m.role === 'user' ? 'flex-start' : 'flex-end',
                                 background: m.role === 'user' ? '#fff' : 'var(--accent-soft, rgba(44,85,69,.10))',
-                                border: '1px solid #E5DFCF', borderRadius: 10, padding: '6px 10px',
+                                border: '1px solid var(--border)', borderRadius: 10, padding: '6px 10px',
                                 fontSize: 12, maxWidth: '85%',
                               }}>
                                 {m.text}
-                                <span style={{ display: 'block', fontSize: 10, color: '#8A8680', marginTop: 2 }}>{String(m.at || '').slice(5, 16).replace('T', ' ')}</span>
+                                <span style={{ display: 'block', fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{String(m.at || '').slice(5, 16).replace('T', ' ')}</span>
                               </div>
                             ))}
                           </div>
@@ -274,7 +274,7 @@ export default function VulaCustomers({ tenantId }) {
                               <span>📢 {g.campaign}</span>
                               <span style={{
                                 marginLeft: 'auto', fontSize: 11, fontWeight: 600,
-                                color: g.status === 'clicked' ? 'var(--accent, #2C5545)' : (g.status === 'failed' ? '#A23B2D' : '#8A8680'),
+                                color: g.status === 'clicked' ? 'var(--accent)' : (g.status === 'failed' ? 'var(--danger)' : 'var(--muted)'),
                               }}>{g.status}</span>
                             </div>
                           ))}
@@ -282,15 +282,15 @@ export default function VulaCustomers({ tenantId }) {
                       )}
                       {/* Timeline */}
                       <div style={s.secLabel}>Interaction history</div>
-                      {(detail.events || []).length === 0 && <div style={{ fontSize: 12.5, color: '#8A8680' }}>No recorded orders, invoices or chats yet.</div>}
+                      {(detail.events || []).length === 0 && <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>No recorded orders, invoices or chats yet.</div>}
                       {(detail.events || []).map((e, j) => (
-                        <div key={j} style={{ display: 'flex', gap: 10, padding: '6px 0', borderTop: j ? '1px solid #E5DFCF' : 'none', fontSize: 12.5 }}>
-                          <span style={{ width: 78, color: '#8A8680', flexShrink: 0 }}>{(e.at || '').slice(0, 10)}</span>
+                        <div key={j} style={{ display: 'flex', gap: 10, padding: '6px 0', borderTop: j ? '1px solid var(--border)' : 'none', fontSize: 12.5 }}>
+                          <span style={{ width: 78, color: 'var(--muted)', flexShrink: 0 }}>{(e.at || '').slice(0, 10)}</span>
                           <span style={{ flexShrink: 0 }}>{e.type === 'order' ? '📦' : e.type === 'message' ? '💬' : (e.type === 'quote' ? '📝' : '🧾')}</span>
-                          <span style={{ flex: 1, color: '#2A2A2A' }}>
+                          <span style={{ flex: 1, color: 'var(--text)' }}>
                             <b>{e.title}</b>{e.detail ? ` · ${e.detail}` : ''}
                           </span>
-                          {e.amount_cents != null && <span style={{ fontFamily: "'Source Code Pro', monospace", color: '#2A2A2A' }}>{fmt(e.amount_cents)}</span>}
+                          {e.amount_cents != null && <span style={{ fontFamily: "'Source Code Pro', monospace", color: 'var(--text)' }}>{fmt(e.amount_cents)}</span>}
                         </div>
                       ))}
                       {/* Documents & media filed against this customer (migration 109) — same
@@ -312,31 +312,31 @@ export default function VulaCustomers({ tenantId }) {
 
 function Stat({ label, value, strong }) {
   return (
-    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '8px 10px' }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 3 }}>{label}</div>
-      <div style={{ fontSize: strong ? 17 : 15, fontWeight: 700, color: strong ? 'var(--accent, #2C5545)' : '#1E1E1E' }}>{value}</div>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+      <div style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--muted)', fontFamily: "'Source Code Pro', monospace", marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: strong ? 17 : 15, fontWeight: 700, color: strong ? 'var(--accent)' : 'var(--ink)' }}>{value}</div>
     </div>
   )
 }
 
 const s = {
   intro:     { marginBottom: 14 },
-  secLabel:  { fontSize: 11, textTransform: 'uppercase', color: '#8A8680', fontFamily: "'Source Code Pro', monospace", marginBottom: 8 },
-  statementBtn: { padding: '7px 12px', background: '#fff', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#3A3A3A', cursor: 'pointer', fontFamily: 'system-ui', flexShrink: 0, whiteSpace: 'nowrap' },
-  h3:        { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: '0 0 4px' },
-  sub:       { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
+  secLabel:  { fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', fontFamily: "'Source Code Pro', monospace", marginBottom: 8 },
+  statementBtn: { padding: '7px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, fontWeight: 600, color: 'var(--text)', cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' },
+  h3:        { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub:       { fontSize: 13, color: 'var(--muted)', margin: 0 },
   segs:      { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 },
-  seg:       { padding: '6px 12px', borderRadius: 20, border: '1px solid #DDD8CE', background: '#fff', cursor: 'pointer', fontSize: 12, fontFamily: 'system-ui', color: '#8A8680' },
+  seg:       { padding: '6px 12px', borderRadius: 20, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12, color: 'var(--muted)' },
   segActive: { background: 'var(--accent, var(--accent))', color: '#fff', border: '1px solid var(--accent, var(--accent))' },
-  search:    { marginLeft: 'auto', padding: '7px 11px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, minWidth: 180 },
-  reach:     { fontFamily: 'system-ui', fontSize: 12, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.07)', padding: '8px 12px', borderRadius: 6, margin: '0 0 12px' },
-  muted:     { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '24px 0' },
+  search:    { marginLeft: 'auto', padding: '7px 11px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, minWidth: 180 },
+  reach:     { fontSize: 12, color: 'var(--accent, var(--accent))', background: 'rgba(44,85,69,0.07)', padding: '8px 12px', borderRadius: 6, margin: '0 0 12px' },
+  muted:     { color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '24px 0' },
   list:      { display: 'flex', flexDirection: 'column', gap: 6 },
-  row:       { display: 'flex', alignItems: 'center', gap: 12, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 14px' },
-  avatar:    { width: 34, height: 34, borderRadius: '50%', background: 'var(--accent, var(--accent))', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui', fontWeight: 700, fontSize: 14, flexShrink: 0 },
-  name:      { display: 'block', fontFamily: 'system-ui', fontSize: 14, fontWeight: 600, color: '#1E1E1E' },
-  meta:      { display: 'block', fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  row:       { display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px' },
+  avatar:    { width: 34, height: 34, borderRadius: '50%', background: 'var(--accent, var(--accent))', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flexShrink: 0 },
+  name:      { display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--ink)' },
+  meta:      { display: 'block', fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   right:     { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
-  spent:     { fontFamily: 'system-ui', fontSize: 14, fontWeight: 700, color: 'var(--accent, var(--accent))' },
+  spent:     { fontSize: 14, fontWeight: 700, color: 'var(--accent, var(--accent))' },
   waBtn:     { textDecoration: 'none', fontSize: 16, padding: '4px 8px', borderRadius: 6, background: 'rgba(37,211,102,0.12)', border: '1px solid rgba(37,211,102,0.3)' },
 }

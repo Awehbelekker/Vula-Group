@@ -114,10 +114,10 @@ export default function VulaEmailCampaigns({ tenantId }) {
           <input value={testEmail} onChange={e => setTestEmail(e.target.value)} placeholder="Test to: you@example.com"
             style={{ ...s.input, width: 220 }} />
           <button onClick={sendTest} style={{ ...s.aiBtn, background: '#5B6B7A' }}>📧 Send test</button>
-          {testMsg && <span style={{ fontSize: 12, fontFamily: 'system-ui', color: testMsg.startsWith('✓') ? '#16a34a' : '#ef4444' }}>{testMsg}</span>}
+          {testMsg && <span style={{ fontSize: 12, color: testMsg.startsWith('✓') ? 'var(--ok)' : 'var(--danger)' }}>{testMsg}</span>}
         </div>
 
-        <p style={s.sectionLabel}>Audience <span style={{ fontWeight: 400, color: '#8A8680' }}>— pick one or more; overlaps de-duplicated</span></p>
+        <p style={s.sectionLabel}>Audience <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— pick one or more; overlaps de-duplicated</span></p>
         <div style={s.audRow}>
           {AUDIENCES.map(a => (
             <button key={a.id} onClick={() => toggleAud(a.id)} style={{ ...s.audBtn, ...(audiences.includes(a.id) ? s.audBtnActive : {}) }}>
@@ -186,7 +186,7 @@ export default function VulaEmailCampaigns({ tenantId }) {
               </div>
               <div style={s.histStats}>
                 {c.sent_count > 0 && <span style={s.statChip}>✉ {c.sent_count}</span>}
-                {c.failed_count > 0 && <span style={{ ...s.statChip, color: '#A23B2D' }}>⚠ {c.failed_count}</span>}
+                {c.failed_count > 0 && <span style={{ ...s.statChip, color: 'var(--danger)' }}>⚠ {c.failed_count}</span>}
               </div>
             </div>
           ))}
@@ -198,34 +198,34 @@ export default function VulaEmailCampaigns({ tenantId }) {
 
 const s = {
   intro:        { marginBottom: 16 },
-  h3:           { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', margin: '0 0 4px' },
-  sub:          { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0, lineHeight: 1.5 },
-  composeCard:  { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 18, marginBottom: 20 },
-  sectionLabel: { fontFamily: 'system-ui', fontSize: 12, fontWeight: 600, color: '#1E1E1E', margin: '16px 0 8px' },
-  input:        { padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, fontFamily: 'system-ui', outline: 'none', boxSizing: 'border-box' },
-  textarea:     { width: '100%', padding: '10px 12px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 14, fontFamily: 'system-ui', outline: 'none', boxSizing: 'border-box', resize: 'vertical' },
-  aiBtn:        { padding: '10px 16px', background: '#C4861A', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui', whiteSpace: 'nowrap' },
+  h3:           { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub:          { fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.5 },
+  composeCard:  { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 18, marginBottom: 20 },
+  sectionLabel: { fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '16px 0 8px' },
+  input:        { padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' },
+  textarea:     { width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box', resize: 'vertical' },
+  aiBtn:        { padding: '10px 16px', background: 'var(--warn)', color: 'var(--bg)', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' },
   audRow:       { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
-  audBtn:       { background: '#F7F4EE', border: '1px solid #DDD8CE', borderRadius: 20, padding: '6px 12px', cursor: 'pointer', textAlign: 'left', fontSize: 12.5, fontFamily: 'system-ui', color: '#1E1E1E' },
+  audBtn:       { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 20, padding: '6px 12px', cursor: 'pointer', textAlign: 'left', fontSize: 12.5, color: 'var(--ink)' },
   audBtnActive: { background: 'rgba(44,85,69,0.08)', border: '1px solid var(--accent, var(--accent))' },
-  preview:      { background: '#F7F4EE', borderRadius: 6, padding: '10px 14px', marginBottom: 14 },
-  previewLabel: { fontFamily: 'system-ui', fontSize: 11, color: '#8A8680', margin: '0 0 4px' },
-  previewText:  { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', margin: 0 },
-  error:        { color: '#ef4444', fontSize: 13, fontFamily: 'system-ui', margin: '0 0 10px' },
-  success:      { color: '#16a34a', fontSize: 13, fontFamily: 'system-ui', margin: '0 0 10px', fontWeight: 600 },
-  sendBtn:      { width: '100%', padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  btnDisabled:  { width: '100%', padding: '12px', background: '#DDD8CE', color: '#8A8680', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'not-allowed', fontFamily: 'system-ui' },
+  preview:      { background: 'var(--bg)', borderRadius: 6, padding: '10px 14px', marginBottom: 14 },
+  previewLabel: { fontSize: 11, color: 'var(--muted)', margin: '0 0 4px' },
+  previewText:  { fontSize: 13, color: 'var(--ink)', margin: 0 },
+  error:        { color: 'var(--danger)', fontSize: 13, margin: '0 0 10px' },
+  success:      { color: 'var(--ok)', fontSize: 13, margin: '0 0 10px', fontWeight: 600 },
+  sendBtn:      { width: '100%', padding: '12px', background: 'var(--accent, var(--accent))', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'},
+  btnDisabled:  { width: '100%', padding: '12px', background: 'var(--border)', color: 'var(--muted)', border: 'none', borderRadius: 8, fontSize: 14, cursor: 'not-allowed'},
   confirmBox:   { background: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.3)', borderRadius: 8, padding: 14 },
-  confirmText:  { fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', margin: '0 0 10px', lineHeight: 1.5 },
-  sampleNames:  { color: '#8A8680' },
+  confirmText:  { fontSize: 13, color: 'var(--ink)', margin: '0 0 10px', lineHeight: 1.5 },
+  sampleNames:  { color: 'var(--muted)' },
   confirmRow:   { display: 'flex', gap: 8 },
-  cancelBtn:    { padding: '10px 16px', background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui', color: '#8A8680' },
-  sendLiveBtn:  { flex: 1, padding: '10px 16px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' },
-  muted:        { color: '#8A8680', fontSize: 13, fontFamily: 'system-ui', textAlign: 'center', padding: '24px 0' },
+  cancelBtn:    { padding: '10px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, cursor: 'pointer', color: 'var(--muted)' },
+  sendLiveBtn:  { flex: 1, padding: '10px 16px', background: 'var(--ok)', color: 'var(--bg)', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer'},
+  muted:        { color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '24px 0' },
   histList:     { display: 'flex', flexDirection: 'column', gap: 6 },
-  histRow:      { display: 'flex', alignItems: 'center', gap: 10, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 8, padding: '10px 14px' },
-  histName:     { display: 'block', fontFamily: 'system-ui', fontSize: 13.5, fontWeight: 600, color: '#1E1E1E' },
-  histMeta:     { display: 'block', fontFamily: 'system-ui', fontSize: 11, color: '#8A8680' },
+  histRow:      { display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px' },
+  histName:     { display: 'block', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' },
+  histMeta:     { display: 'block', fontSize: 11, color: 'var(--muted)' },
   histStats:    { display: 'flex', gap: 6, alignItems: 'center' },
-  statChip:     { fontFamily: 'monospace', fontSize: 11.5, color: '#8A8680', background: '#F7F4EE', padding: '2px 7px', borderRadius: 10 },
+  statChip:     { fontFamily: 'monospace', fontSize: 11.5, color: 'var(--muted)', background: 'var(--bg)', padding: '2px 7px', borderRadius: 10 },
 }

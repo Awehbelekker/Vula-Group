@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (c) => `R${((c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const PERIODS = [{ d: 7, l: "7 days" }, { d: 30, l: "30 days" }, { d: 90, l: "90 days" }];
 const RISK_LABELS = { high_risk: "High risk", frequently_late: "Often late" };
@@ -42,7 +42,7 @@ export default function VulaFinanceInsights({ tenantId }) {
   const profitColor = profit >= 0 ? C.green : C.red;
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text }}>
+    <div style={{ color: C.text }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <h4 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>💵 Financial insights</h4>
         <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
@@ -157,4 +157,4 @@ const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(15
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 };
 const lbl = { fontSize: 12, color: C.muted, marginBottom: 6 };
 const chip = { padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 16, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
-const chipOn = { background: C.green, color: "#fff", borderColor: C.green };
+const chipOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };

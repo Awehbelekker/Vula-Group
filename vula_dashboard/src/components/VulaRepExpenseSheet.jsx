@@ -7,8 +7,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D",
-            amber: "#B7791F", text: "#2A2A2A", muted: "#8A8680" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)",
+            amber: "var(--warn)", text: "var(--text)", muted: "var(--muted)" };
 const R = (cents) => `R${((Number(cents) || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function VulaRepExpenseSheet({ tenantId, repPhone }) {
@@ -84,7 +84,7 @@ export default function VulaRepExpenseSheet({ tenantId, repPhone }) {
           {R(mtdCents)}{budgetCents ? ` of ${R(budgetCents)} budget` : " spent (no budget set)"}
         </div>
         {budgetCents > 0 && (
-          <div style={{ background: "#F0EDE5", borderRadius: 6, height: 10, overflow: "hidden" }}>
+          <div style={{ background: "var(--surface-alt)", borderRadius: 6, height: 10, overflow: "hidden" }}>
             <div style={{ width: `${pct}%`, height: "100%", background: barColor, transition: "width 0.2s" }} />
           </div>
         )}

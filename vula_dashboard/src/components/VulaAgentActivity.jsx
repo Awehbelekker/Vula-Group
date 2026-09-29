@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5", blue: "#2B5797" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)", blue: "var(--info)" };
 
 const when = (ts) => {
   if (!ts) return "";
@@ -77,7 +77,7 @@ export default function VulaAgentActivity({ tenantId }) {
   };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text, maxWidth: 760 }}>
+    <div style={{ color: C.text, maxWidth: 760 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <h4 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>🧠 Agent activity</h4>
         <button onClick={load} style={{ ...btn, marginLeft: "auto" }}>Refresh</button>
@@ -177,6 +177,6 @@ export default function VulaAgentActivity({ tenantId }) {
 }
 
 const btn = { padding: "6px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
-const input = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text, fontFamily: "system-ui" };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
+const input = { padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text};
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px" };

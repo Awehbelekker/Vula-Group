@@ -1,3 +1,4 @@
+import { toast } from './ui/index.jsx'
 import { VULA_API } from "../lib/authFetch";
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 
@@ -219,7 +220,7 @@ function OrderSheet({ items, markup, selectedTrades, projectName }) {
       return `\n=== ${g.trade.label} ===\n${tradeLines}`;
     }).join("\n");
     navigator.clipboard?.writeText(`VULA TAKEOFF ORDER — ${projectName}\n${lines}`).catch(() => {});
-    alert("Copied to clipboard — paste into your order sheet or email.");
+    toast("Copied to clipboard — paste into your order sheet or email.");
   };
 
   return (
@@ -399,7 +400,7 @@ export default function VulaTakeoff({ tenantId = "" }) {
       const data = await resp.json();
       setLiveJob({ job_id: data.job_id, status: "queued", filename: data.filename, boq: null });
     } catch (err) {
-      alert(`Upload error: ${err.message}\nMake sure the Vula API is running on ${apiHost}`);
+      toast(`Upload error: ${err.message}\nMake sure the Vula API is running on ${apiHost}`);
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -622,7 +623,7 @@ export default function VulaTakeoff({ tenantId = "" }) {
                           const a = document.createElement("a");
                           a.href = url; a.download = `BOQ_${liveJob.job_id}.xlsx`; a.click();
                           setTimeout(() => URL.revokeObjectURL(url), 5000);
-                        } catch (e) { alert(`Download failed: ${e.message}`); }
+                        } catch (e) { toast(`Download failed: ${e.message}`); }
                       }}
                       style={{ padding: "4px 12px", background: C.green, border: "none", borderRadius: 4, color: C.navy, fontSize: 10, fontWeight: 700, cursor: "pointer", ...mono }}
                     >
@@ -632,7 +633,7 @@ export default function VulaTakeoff({ tenantId = "" }) {
                   <button onClick={() => {
                     const lines = filtered.map(i => `${i.description}\t${i.qty}\t${i.unit}\t${R(parseFloat(itemRates[i.id]) || mid(i))}\t${R((parseFloat(itemRates[i.id]) || mid(i)) * i.qty * (1 + markup / 100))}`).join("\n");
                     navigator.clipboard?.writeText(`BOQ — ${projectName}\nDescription\tQty\tUnit\tRate\tTotal\n${lines}`).catch(() => {});
-                    alert("Copied! Paste into Excel.");
+                    toast("Copied! Paste into Excel.");
                   }} style={{ padding: "4px 12px", background: C.cyan, border: "none", borderRadius: 4, color: C.navy, fontSize: 10, fontWeight: 700, cursor: "pointer", ...mono }}>
                     Copy TSV
                   </button>

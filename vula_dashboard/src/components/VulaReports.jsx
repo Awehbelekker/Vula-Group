@@ -4,9 +4,9 @@ import { VULA_API } from "../lib/authFetch";
 
 
 const C = {
-  bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680",
-  surfaceAlt: "#F0EDE5", greenLight: "#EAF2EF", amber: "#C4861A",
+  bg: "var(--bg)", surface: "var(--surface)", border: "var(--border)",
+  green: "var(--accent)", text: "var(--text)", muted: "var(--muted)",
+  surfaceAlt: "var(--surface-alt)", greenLight: "var(--ok-soft)", amber: "var(--warn)",
 };
 
 function fmt(cents) {
@@ -101,7 +101,7 @@ export default function VulaReports({ tenantId }) {
         </div>
       </div>
 
-      {error && <div style={{ padding: 12, background: "#FDEDEC", borderRadius: 8, color: "#C0392B", fontSize: 13, marginBottom: 20 }}>{error}</div>}
+      {error && <div style={{ padding: 12, background: "var(--danger-soft)", borderRadius: 8, color: "var(--danger)", fontSize: 13, marginBottom: 20 }}>{error}</div>}
 
       {loading && <div style={{ padding: 60, textAlign: "center", color: C.muted }}>Loading…</div>}
 

@@ -17,6 +17,7 @@
  * Ian never needs to touch Meta credentials again.
  */
 
+import { confirmDialog } from './ui/index.jsx'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { VULA_API } from '../lib/authFetch'
 
@@ -138,7 +139,7 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
   }, [tenantId, adminEmail])
 
   const handleDisconnect = async () => {
-    if (!confirm(`Disconnect WhatsApp for ${tenantName}? Ordering will stop immediately.`)) return
+    if (!(await confirmDialog(`Disconnect WhatsApp for ${tenantName}? Ordering will stop immediately.`, { danger: true, confirmLabel: 'Yes' }))) return
     setLoading(true)
     await fetch(`${VULA_API}/v1/whatsapp/disconnect/${tenantId}`, { method: 'DELETE' })
     setStatus('not_connected')
@@ -171,7 +172,7 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
           </div>
           <div style={styles.infoRow}>
             <span style={styles.label}>Webhook</span>
-            <span style={{ ...styles.value, color: account.webhook_registered ? '#22c55e' : '#f59e0b' }}>
+            <span style={{ ...styles.value, color: account.webhook_registered ? 'var(--ok)' : 'var(--warn)' }}>
               {account.webhook_registered ? '✓ Registered' : '⚠ Not registered'}
             </span>
           </div>
@@ -225,10 +226,10 @@ export default function VulaWhatsAppConnect({ tenantId, tenantName, adminEmail }
 
 function StatusBadge({ status }) {
   const configs = {
-    connected: { label: 'Connected', color: '#22c55e', bg: 'rgba(34,197,94,0.15)' },
-    pending: { label: 'Pending', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
-    error: { label: 'Error', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
-    not_connected: { label: 'Not connected', color: '#6b7280', bg: 'rgba(107,114,128,0.15)' },
+    connected: { label: 'Connected', color: 'var(--ok)', bg: 'rgba(34,197,94,0.15)' },
+    pending: { label: 'Pending', color: 'var(--warn)', bg: 'rgba(245,158,11,0.15)' },
+    error: { label: 'Error', color: 'var(--danger)', bg: 'rgba(239,68,68,0.15)' },
+    not_connected: { label: 'Not connected', color: 'var(--muted)', bg: 'rgba(107,114,128,0.15)' },
   }
   const c = configs[status] || configs.not_connected
   return (
@@ -240,8 +241,8 @@ function StatusBadge({ status }) {
 
 const styles = {
   card: {
-    background: '#111111',
-    border: '1px solid #2a2a2a',
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
     borderRadius: 8,
     padding: 24,
     maxWidth: 480,
@@ -253,8 +254,8 @@ const styles = {
     marginBottom: 20,
   },
   waIcon: { fontSize: 32 },
-  title: { margin: 0, color: '#f5f2ec', fontSize: 18, fontWeight: 600 },
-  subtitle: { margin: '2px 0 0', color: '#6b7280', fontSize: 13 },
+  title: { margin: 0, color: 'var(--ink)', fontSize: 18, fontWeight: 600 },
+  subtitle: { margin: '2px 0 0', color: 'var(--muted)', fontSize: 13 },
   badge: {
     marginLeft: 'auto',
     padding: '4px 10px',
@@ -263,8 +264,8 @@ const styles = {
     fontWeight: 600,
   },
   connectedInfo: {
-    background: '#0a0a0a',
-    border: '1px solid #1a1a1a',
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
     borderRadius: 6,
     padding: 16,
     marginBottom: 16,
@@ -273,15 +274,15 @@ const styles = {
     display: 'flex',
     justifyContent: 'space-between',
     padding: '6px 0',
-    borderBottom: '1px solid #1a1a1a',
+    borderBottom: '1px solid var(--border-soft)',
   },
-  label: { color: '#6b7280', fontSize: 13 },
-  value: { color: '#f5f2ec', fontSize: 13, fontWeight: 500 },
-  description: { color: '#9ca3af', fontSize: 14, lineHeight: 1.6, margin: '0 0 16px' },
+  label: { color: 'var(--muted)', fontSize: 13 },
+  value: { color: 'var(--ink)', fontSize: 13, fontWeight: 500 },
+  description: { color: 'var(--muted)', fontSize: 14, lineHeight: 1.6, margin: '0 0 16px' },
   errorBox: {
     background: 'rgba(239,68,68,0.1)',
     border: '1px solid rgba(239,68,68,0.3)',
-    color: '#ef4444',
+    color: 'var(--danger)',
     borderRadius: 6,
     padding: '10px 14px',
     fontSize: 13,
@@ -290,7 +291,7 @@ const styles = {
   warningBox: {
     background: 'rgba(245,158,11,0.1)',
     border: '1px solid rgba(245,158,11,0.3)',
-    color: '#f59e0b',
+    color: 'var(--warn)',
     borderRadius: 6,
     padding: '10px 14px',
     fontSize: 13,
@@ -308,8 +309,8 @@ const styles = {
     width: '100%',
   },
   btnDisabled: {
-    background: '#2a2a2a',
-    color: '#6b7280',
+    background: 'var(--surface-alt)',
+    color: 'var(--muted)',
     border: 'none',
     borderRadius: 6,
     padding: '12px 24px',
@@ -319,12 +320,12 @@ const styles = {
   },
   btnDanger: {
     background: 'transparent',
-    color: '#ef4444',
+    color: 'var(--danger)',
     border: '1px solid rgba(239,68,68,0.3)',
     borderRadius: 6,
     padding: '8px 16px',
     fontSize: 13,
     cursor: 'pointer',
   },
-  hint: { color: '#4b5563', fontSize: 12, marginTop: 10, textAlign: 'center' },
+  hint: { color: 'var(--muted)', fontSize: 12, marginTop: 10, textAlign: 'center' },
 }

@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", red: "#A23B2D", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", red: "var(--danger)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 const R = (n) => `R${(Number(n) || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function VulaImport({ tenantId }) {
@@ -72,7 +72,7 @@ export default function VulaImport({ tenantId }) {
   };
 
   return (
-    <div style={{ fontFamily: "system-ui", color: C.text, maxWidth: 820 }}>
+    <div style={{ color: C.text, maxWidth: 820 }}>
       <h4 style={{ fontSize: 15, fontWeight: 600, margin: "2px 0 2px" }}>📥 Import your history</h4>
       <div style={{ display: "flex", gap: 6, margin: "6px 0" }}>
         {[["orders", "💬 Orders (chats/emails)"], ["invoices", "🧾 Old invoices (Xero export)"]].map(([v, l]) => (
@@ -154,7 +154,7 @@ export default function VulaImport({ tenantId }) {
                     <td style={{ padding: "7px 10px" }}>{v.customer_name || "—"}</td>
                     <td style={{ padding: "7px 10px" }}>{v.date || "—"}</td>
                     <td style={{ padding: "7px 10px" }}>{R(v.total_rands)}</td>
-                    <td style={{ padding: "7px 10px", color: v.status === "paid" ? C.green : C.red, fontWeight: 600 }}>{v.status || "unpaid"}</td>
+                    <td style={{ padding: "7px 10px", color: v.status === "paid" ? 'var(--ok)' : C.red, fontWeight: 600 }}>{v.status || "unpaid"}</td>
                     <td style={{ padding: "7px 10px" }}><button style={miniBtn} onClick={() => setInvoices(vs => vs.filter((_, j) => j !== i))}>Remove</button></td>
                   </tr>
                 ))}
@@ -169,7 +169,7 @@ export default function VulaImport({ tenantId }) {
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 };
 const btn = { padding: "8px 14px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer" };
-const btnOn = { background: C.green, color: "#fff", borderColor: C.green };
+const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const miniBtn = { padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
-const input = { padding: "6px 9px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12.5, background: C.surface, color: C.text, fontFamily: "system-ui" };
+const input = { padding: "6px 9px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12.5, background: C.surface, color: C.text};
 const chk = { fontSize: 12, color: C.muted, display: "flex", alignItems: "center", gap: 3 };

@@ -79,7 +79,7 @@ export default function VulaImageUpload({ tenantId, onUploaded, maxFiles = 5, ex
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {error && <p style={{ color: '#ef4444', fontSize: 12, fontFamily: 'system-ui', margin: 0 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--danger)', fontSize: 12, margin: 0 }}>{error}</p>}
 
       {/* Previews */}
       {previews.length > 0 && (
@@ -89,13 +89,13 @@ export default function VulaImageUpload({ tenantId, onUploaded, maxFiles = 5, ex
               <img
                 src={url}
                 alt={`Product ${i + 1}`}
-                style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 6, border: '1px solid #DDD8CE' }}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)' }}
               />
               <button
                 onClick={() => removeImage(url)}
                 style={{
                   position: 'absolute', top: -6, right: -6,
-                  background: '#ef4444', color: '#fff', border: 'none',
+                  background: 'var(--danger)', color: 'var(--bg)', border: 'none',
                   borderRadius: '50%', width: 20, height: 20,
                   cursor: 'pointer', fontSize: 12, lineHeight: '20px', textAlign: 'center',
                 }}
@@ -121,15 +121,15 @@ export default function VulaImageUpload({ tenantId, onUploaded, maxFiles = 5, ex
             htmlFor="img-upload"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '8px 14px', border: '1px dashed #DDD8CE',
+              padding: '8px 14px', border: '1px dashed var(--border)',
               borderRadius: 6, cursor: uploading ? 'wait' : 'pointer',
-              fontSize: 12, fontFamily: 'system-ui', color: '#8A8680',
-              background: '#F7F4EE',
+              fontSize: 12, color: 'var(--muted)',
+              background: 'var(--bg)',
             }}
           >
             {uploading ? `Uploading… ${progress}%` : '📷 Add photos'}
           </label>
-          <p style={{ fontSize: 11, color: '#B5B0A8', fontFamily: 'system-ui', margin: '4px 0 0' }}>
+          <p style={{ fontSize: 11, color: 'var(--faint)', margin: '4px 0 0' }}>
             JPG, PNG, WEBP · Max 10MB each · {maxFiles - previews.length} remaining
           </p>
         </div>

@@ -447,10 +447,10 @@ function DeliverySettings({ tenantId }) {
         attribution: '© OpenStreetMap contributors', maxZoom: 18,
       }).addTo(map)
       const marker = L.circleMarker([start.lat, start.lng], {
-        radius: 8, color: 'var(--accent, #2C5545)', fillColor: 'var(--accent, #2C5545)', fillOpacity: 0.9,
+        radius: 8, color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.9,
       }).addTo(map)
       const circle = L.circle([start.lat, start.lng], {
-        radius: radiusKm * 1000, color: 'var(--accent, #2C5545)', weight: 1.5, fillOpacity: 0.08,
+        radius: radiusKm * 1000, color: 'var(--accent)', weight: 1.5, fillOpacity: 0.08,
       }).addTo(map)
       map.on('click', (e) => {
         setOrigin({ lat: e.latlng.lat, lng: e.latlng.lng })
@@ -511,12 +511,12 @@ function DeliverySettings({ tenantId }) {
     }
   }
 
-  const inp = { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  const inp = { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }
   return (
-    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
       {/* Marketplace-style location + radius */}
       <div>
-        <p style={{ fontSize: 12.5, fontWeight: 600, fontFamily: 'system-ui', margin: '0 0 6px' }}>
+        <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 6px' }}>
           📍 Shop location &amp; delivery radius
         </p>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -524,46 +524,46 @@ function DeliverySettings({ tenantId }) {
             onKeyDown={e => e.key === 'Enter' && findAddress()}
             placeholder="Search your shop's address or suburb…" style={{ ...inp, flex: 1, minWidth: 200 }} />
           <button onClick={findAddress}
-            style={{ padding: '9px 14px', border: '1px solid #DDD8CE', borderRadius: 8, background: '#fff', fontSize: 13, cursor: 'pointer', fontFamily: 'system-ui' }}>
+            style={{ padding: '9px 14px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', fontSize: 13, cursor: 'pointer'}}>
             Find
           </button>
           <select value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} style={inp}>
             {[5, 10, 15, 20, 25, 30, 40, 50].map(k => <option key={k} value={k}>{k} km radius</option>)}
           </select>
         </div>
-        <div ref={mapDivRef} style={{ height: 260, borderRadius: 10, border: '1px solid #DDD8CE', overflow: 'hidden' }} />
-        <p style={{ fontSize: 11.5, color: '#8A8680', fontFamily: 'system-ui', margin: '6px 0 0' }}>
+        <div ref={mapDivRef} style={{ height: 260, borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }} />
+        <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '6px 0 0' }}>
           {origin
             ? <>Pinned: <b>{originLabel || 'your shop'}</b> · {radiusKm} km radius. Customers who share a WhatsApp location pin get an instant in/out answer.</>
             : 'Search or click the map to drop your shop pin — then the radius circle shows exactly where you deliver.'}
         </p>
       </div>
 
-      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+      <label style={{ fontSize: 12, color: 'var(--muted)'}}>
         Delivery areas (comma-separated — e.g. Table View, Blouberg, Parklands)
         <input value={areas} onChange={e => setAreas(e.target.value)} placeholder="Table View, Blouberg, Parklands…"
           style={{ ...inp, width: '100%', marginTop: 4 }} />
       </label>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', flex: 1, minWidth: 140 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted)', flex: 1, minWidth: 140 }}>
           Delivery fee (R)
           <input value={fee} onChange={e => setFee(e.target.value)} placeholder="80" style={{ ...inp, width: '100%', marginTop: 4 }} />
         </label>
-        <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', flex: 1, minWidth: 140 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted)', flex: 1, minWidth: 140 }}>
           Free delivery over (R)
           <input value={freeOver} onChange={e => setFreeOver(e.target.value)} placeholder="500" style={{ ...inp, width: '100%', marginTop: 4 }} />
         </label>
-        <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', flex: 1, minWidth: 140 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted)', flex: 1, minWidth: 140 }}>
           Minimum order (R)
           <input value={minOrder} onChange={e => setMinOrder(e.target.value)} placeholder="none" style={{ ...inp, width: '100%', marginTop: 4 }} />
         </label>
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button onClick={save} disabled={busy}
-          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent, #2C5545)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer'}}>
           {busy ? 'Saving…' : 'Save delivery settings'}
         </button>
-        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent)'}}>{msg}</span>}
       </div>
     </div>
   )
@@ -634,25 +634,25 @@ function BusinessHoursSettings({ tenantId }) {
     }
   }
 
-  const inp = { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 8, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  const inp = { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }
   return (
-    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {DAYS.map(d => {
           const day = days[d.key]
           return (
             <div key={d.key} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <label style={{ fontSize: 12.5, fontFamily: 'system-ui', width: 40, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <label style={{ fontSize: 12.5, width: 40, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <input type="checkbox" checked={!day.closed}
                   onChange={e => setDay(d.key, { closed: !e.target.checked })} />
                 {d.label}
               </label>
               {day.closed ? (
-                <span style={{ fontSize: 12.5, color: '#B5B0A8', fontFamily: 'system-ui' }}>Closed</span>
+                <span style={{ fontSize: 12.5, color: 'var(--faint)'}}>Closed</span>
               ) : (
                 <>
                   <input type="time" value={day.open} onChange={e => setDay(d.key, { open: e.target.value })} style={inp} />
-                  <span style={{ fontSize: 12.5, color: '#8A8680' }}>–</span>
+                  <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>–</span>
                   <input type="time" value={day.close} onChange={e => setDay(d.key, { close: e.target.value })} style={inp} />
                 </>
               )}
@@ -660,12 +660,12 @@ function BusinessHoursSettings({ tenantId }) {
           )
         })}
       </div>
-      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+      <label style={{ fontSize: 12, color: 'var(--muted)'}}>
         Note shown alongside your hours (optional — e.g. "Closed on public holidays")
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Closed on public holidays"
           style={{ ...inp, width: '100%', marginTop: 4 }} />
       </label>
-      <label style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui' }}>
+      <label style={{ fontSize: 12, color: 'var(--muted)'}}>
         Custom after-hours message (optional — replaces the default "we're closed, back at X")
         <input value={afterHours} onChange={e => setAfterHours(e.target.value)}
           placeholder="We're offline for the weekend — WhatsApp us Monday from 8am!"
@@ -673,10 +673,10 @@ function BusinessHoursSettings({ tenantId }) {
       </label>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button onClick={save} disabled={busy}
-          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent, #2C5545)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'system-ui' }}>
+          style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer'}}>
           {busy ? 'Saving…' : 'Save opening hours'}
         </button>
-        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12.5, color: 'var(--accent)'}}>{msg}</span>}
       </div>
     </div>
   )
@@ -713,13 +713,12 @@ function LearnedSummary({ tenantId }) {
 
   if (!data) return <p style={{ ...s.sectionHint, margin: 0 }}>Loading…</p>
 
-  const card = { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 12 }
-  const label = { fontFamily: 'system-ui', fontSize: 13, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 6px' }
-  const hint = { fontFamily: 'system-ui', fontSize: 12.5, color: '#8A8680', margin: 0, lineHeight: 1.5 }
+  const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 12 }
+  const label = { fontSize: 13, fontWeight: 700, color: 'var(--ink)', margin: '0 0 6px' }
+  const hint = { fontSize: 12.5, color: 'var(--muted)', margin: 0, lineHeight: 1.5 }
   const btn = (primary) => ({
-    padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
-    fontFamily: 'system-ui', border: primary ? 'none' : '1px solid #DDD8CE',
-    background: primary ? 'var(--accent, #2C5545)' : '#fff', color: primary ? '#fff' : 'var(--ink, #1E1E1E)',
+    padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: primary ? 'none' : '1px solid var(--border)',
+    background: primary ? 'var(--accent)' : '#fff', color: primary ? '#fff' : 'var(--ink)',
   })
 
   return (
@@ -732,14 +731,14 @@ function LearnedSummary({ tenantId }) {
           ? <p style={{ ...hint, marginBottom: 8 }}>Current: "{data.voice.current}"</p>
           : <p style={{ ...hint, marginBottom: 8 }}>No voice set yet — Vula uses its default tone.</p>}
         {data.voice.suggested ? (
-          <div style={{ background: '#F7F5EF', borderRadius: 8, padding: 10, marginTop: 4 }}>
-            <p style={{ ...hint, color: 'var(--ink, #1E1E1E)', marginBottom: 8 }}>
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, marginTop: 4 }}>
+            <p style={{ ...hint, color: 'var(--ink)', marginBottom: 8 }}>
               Suggested, from your own real messages: "{data.voice.suggested}"
             </p>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button style={btn(true)} disabled={busy} onClick={() => respondToVoiceSuggestion(true)}>Accept</button>
               <button style={btn(false)} disabled={busy} onClick={() => respondToVoiceSuggestion(false)}>Dismiss</button>
-              {msg && <span style={{ fontSize: 12, color: 'var(--accent, #2C5545)', fontFamily: 'system-ui' }}>{msg}</span>}
+              {msg && <span style={{ fontSize: 12, color: 'var(--accent)'}}>{msg}</span>}
             </div>
           </div>
         ) : (
@@ -779,10 +778,10 @@ function LearnedSummary({ tenantId }) {
 
 const s = {
   intro:        { marginBottom: 16 },
-  h3:           { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 4px' },
-  sub:          { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: 0 },
+  h3:           { fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sub:          { fontSize: 13, color: 'var(--muted)', margin: 0 },
   section:      { marginBottom: 24 },
-  sectionTitle: { fontFamily: 'system-ui', fontSize: 15, fontWeight: 700, color: 'var(--ink, #1E1E1E)', margin: '0 0 4px' },
-  sectionHint:  { fontFamily: 'system-ui', fontSize: 13, color: '#8A8680', margin: '0 0 12px', lineHeight: 1.5 },
-  footer:       { textAlign: 'center', fontFamily: 'system-ui', fontSize: 11, color: '#B5B0A8', marginTop: 24 },
+  sectionTitle: { fontSize: 15, fontWeight: 700, color: 'var(--ink)', margin: '0 0 4px' },
+  sectionHint:  { fontSize: 13, color: 'var(--muted)', margin: '0 0 12px', lineHeight: 1.5 },
+  footer:       { textAlign: 'center', fontSize: 11, color: 'var(--faint)', marginTop: 24 },
 }

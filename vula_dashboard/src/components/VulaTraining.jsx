@@ -3,9 +3,9 @@ import { VULA_API } from "../lib/authFetch";
 
 
 const C = {
-  bg: "#F7F4EE", surface: "#FFFFFF", border: "#DDD8CE",
-  green: "var(--accent)", amber: "#D97706", red: "#DC2626",
-  charcoal: "#1E1E1E", text: "#2A2A2A", muted: "#8A8680",
+  bg: "var(--bg)", surface: "var(--surface)", border: "var(--border)",
+  green: "var(--accent)", amber: "var(--warn)", red: "var(--danger)",
+  charcoal: "var(--ink)", text: "var(--text)", muted: "var(--muted)",
 };
 
 function TopicCard({ doc }) {
@@ -18,14 +18,14 @@ function TopicCard({ doc }) {
     }}>
       <div style={{
         width: 36, height: 36, borderRadius: 8,
-        background: `${C.green}14`, display: "flex",
+        background: `color-mix(in srgb, ${C.green} 8%, transparent)`, display: "flex",
         alignItems: "center", justifyContent: "center",
         flexShrink: 0, fontSize: 18,
       }}>
         📚
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 16, fontWeight: 600, color: C.charcoal }}>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600, color: C.charcoal }}>
           {doc.topic}
         </div>
         <div style={{ fontSize: 11, color: C.muted, fontFamily: "'Source Code Pro', monospace", marginTop: 4 }}>
@@ -34,8 +34,8 @@ function TopicCard({ doc }) {
       </div>
       <div style={{
         padding: "3px 10px", borderRadius: 6,
-        background: `${C.green}12`, color: C.green,
-        border: `1px solid ${C.green}30`,
+        background: `color-mix(in srgb, ${C.green} 7%, transparent)`, color: C.green,
+        border: `1px solid color-mix(in srgb, ${C.green} 19%, transparent)`,
         fontSize: 10, fontWeight: 600,
         fontFamily: "'Source Code Pro', monospace",
         flexShrink: 0,
@@ -101,11 +101,11 @@ export default function VulaTraining() {
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap');`}</style>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px", fontFamily: "system-ui" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px"}}>
 
         {/* Header */}
         <div style={{ marginBottom: 28 }}>
-          <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 32, fontWeight: 700, color: C.charcoal, marginBottom: 4 }}>
+          <h1 style={{ fontFamily: "var(--font-display)", fontSize: 32, fontWeight: 700, color: C.charcoal, marginBottom: 4 }}>
             Training Knowledge Base
           </h1>
           <p style={{ fontSize: 13, color: C.muted, fontFamily: "'Source Code Pro', monospace" }}>
@@ -124,13 +124,13 @@ export default function VulaTraining() {
 
         {/* Status card */}
         <div style={{
-          background: C.surface, border: `1px solid ${isSeeded ? C.green + "40" : C.amber + "40"}`,
+          background: C.surface, border: `1px solid ${isSeeded ? `color-mix(in srgb, ${C.green} 25%, transparent)` : `color-mix(in srgb, ${C.amber} 25%, transparent)`}`,
           borderRadius: 12, padding: "20px 24px", marginBottom: 24,
           display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap",
         }}>
           <div style={{
             width: 12, height: 12, borderRadius: "50%",
-            background: isSeeded ? "#22C55E" : C.amber,
+            background: isSeeded ? "var(--ok)" : C.amber,
             flexShrink: 0,
           }} />
           <div style={{ flex: 1 }}>
@@ -190,14 +190,14 @@ export default function VulaTraining() {
         </div>
 
         {seedMsg && (
-          <div style={{ padding: "12px 16px", borderRadius: 8, background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: 13, color: "#166534", marginBottom: 20 }}>
+          <div style={{ padding: "12px 16px", borderRadius: 8, background: "var(--ok-soft)", border: "1px solid #BBF7D0", fontSize: 13, color: "var(--ok)", marginBottom: 20 }}>
             {seedMsg}
           </div>
         )}
 
         {/* How it works */}
         <div style={{
-          background: `${C.green}06`, border: `1px solid ${C.green}20`,
+          background: `color-mix(in srgb, ${C.green} 2%, transparent)`, border: `1px solid color-mix(in srgb, ${C.green} 13%, transparent)`,
           borderRadius: 10, padding: "16px 20px", marginBottom: 28,
         }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.green, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8, fontFamily: "'Source Code Pro', monospace" }}>

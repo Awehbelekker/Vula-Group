@@ -7,7 +7,7 @@ import { supabase } from "../lib/supabase";
 import { REP_DEFAULT_ACCESS, MERCHANT_GROUPS } from "../navConfig.jsx";
 import { VULA_API } from "../lib/authFetch";
 
-const C = { surface: "#FFFFFF", border: "#DDD8CE", green: "var(--accent)", text: "#2A2A2A", muted: "#8A8680", alt: "#F0EDE5" };
+const C = { surface: "var(--surface)", border: "var(--border)", green: "var(--accent)", text: "var(--text)", muted: "var(--muted)", alt: "var(--surface-alt)" };
 
 // Access modules map 1:1 to dashboard tab ids — generated from the sidebar (navConfig) so a
 // new tab can always be granted. The hand-kept list had drifted: ~28 tabs (Inbox, Expenses,
@@ -141,7 +141,7 @@ export default function VulaTeam({ tenantId }) {
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
-      <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Team</h1>
+      <h1 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 2px" }}>Team</h1>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Add people, give each their own WhatsApp, and choose what they see and get notified about.</p>
 
       {/* ── Logins & passwords ─────────────────────────────────────────── */}
@@ -155,7 +155,7 @@ export default function VulaTeam({ tenantId }) {
           <select value={loginForm.role} onChange={(e) => setLoginForm({ ...loginForm, role: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }}>
             {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
           </select>
-          <button onClick={createLogin} style={{ padding: "8px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Create login</button>
+          <button onClick={createLogin} style={{ padding: "8px 16px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Create login</button>
         </div>
         {loginForm.role === "sales_rep" && (
           <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>
@@ -163,8 +163,8 @@ export default function VulaTeam({ tenantId }) {
           </div>
         )}
 
-        {tempPw && <div style={{ background: "#FBF7E9", border: "1px solid #E6D9A8", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: "#6B5A12", marginBottom: 10 }}>🔑 {tempPw} <span style={{ color: C.muted }}>(copy now — shown once)</span></div>}
-        {msg && <div style={{ fontSize: 12.5, color: msg.includes("✓") ? "#2C7A4B" : "#A23B2D", marginBottom: 10 }}>{msg}</div>}
+        {tempPw && <div style={{ background: "var(--warn-soft)", border: "1px solid #E6D9A8", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: "#6B5A12", marginBottom: 10 }}>🔑 {tempPw} <span style={{ color: C.muted }}>(copy now — shown once)</span></div>}
+        {msg && <div style={{ fontSize: 12.5, color: msg.includes("✓") ? "var(--ok)" : "var(--danger)", marginBottom: 10 }}>{msg}</div>}
 
         {logins.map((u) => (
           <div key={u.user_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderTop: `1px solid ${C.alt}`, flexWrap: "wrap" }}>
@@ -173,7 +173,7 @@ export default function VulaTeam({ tenantId }) {
             <span style={{ fontSize: 11, color: C.muted }}>{u.last_sign_in ? `last in ${new Date(u.last_sign_in).toLocaleDateString()}` : "never signed in"}</span>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <button onClick={() => resetPw(u.user_id, u.email)} style={{ fontSize: 11.5, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Reset password</button>
-              <button onClick={() => removeLogin(u.user_id)} style={{ fontSize: 11.5, color: "#A23B2D", background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Revoke</button>
+              <button onClick={() => removeLogin(u.user_id)} style={{ fontSize: 11.5, color: "var(--danger)", background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Revoke</button>
             </div>
           </div>
         ))}
@@ -181,7 +181,7 @@ export default function VulaTeam({ tenantId }) {
         <div style={{ borderTop: `1px solid ${C.alt}`, marginTop: 12, paddingTop: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 12.5, color: C.muted }}>Change my password:</span>
           <input type="password" placeholder="New password" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
-          <button onClick={changeMyPassword} style={{ padding: "7px 14px", background: C.text, color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, cursor: "pointer" }}>Update</button>
+          <button onClick={changeMyPassword} style={{ padding: "7px 14px", background: C.text, color: "var(--bg)", border: "none", borderRadius: 8, fontSize: 12.5, cursor: "pointer" }}>Update</button>
         </div>
       </div>
 
@@ -191,7 +191,7 @@ export default function VulaTeam({ tenantId }) {
         <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }}>
           {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
         </select>
-        <button onClick={add} style={{ padding: "8px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Add member</button>
+        <button onClick={add} style={{ padding: "8px 16px", background: C.green, color: "var(--on-accent)", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ Add member</button>
       </div>
 
       {members.length === 0 && <div style={{ padding: 16, fontSize: 13, color: C.muted, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>No team members yet — add one above. (Until then, notifications go to the tenant's default number.)</div>}
@@ -206,7 +206,7 @@ export default function VulaTeam({ tenantId }) {
             </select>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <button onClick={() => patch(m.id, { active: !m.active })} style={{ fontSize: 11.5, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>{m.active ? "Disable" : "Enable"}</button>
-              <button onClick={() => del(m.id)} style={{ fontSize: 11.5, color: "#A23B2D", background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Remove</button>
+              <button onClick={() => del(m.id)} style={{ fontSize: 11.5, color: "var(--danger)", background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>Remove</button>
             </div>
           </div>
           {(() => {
@@ -263,7 +263,7 @@ export default function VulaTeam({ tenantId }) {
         )}
       </div>
 
-      <p style={{ textAlign: "center", fontSize: 11, color: "#B5B0A8", marginTop: 12 }}>Powered by Vula · each member gets only what you select</p>
+      <p style={{ textAlign: "center", fontSize: 11, color: "var(--faint)", marginTop: 12 }}>Powered by Vula · each member gets only what you select</p>
     </div>
   );
 }

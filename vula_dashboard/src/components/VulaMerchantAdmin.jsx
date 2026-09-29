@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
-import { SectionTabs } from './ui/index.jsx'
+import { SectionTabs, toast, confirmDialog, Skeleton } from './ui/index.jsx'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { MERCHANT_GROUPS } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
@@ -76,14 +76,14 @@ import { VULA_API } from '../lib/authFetch'
 
 
 const STATUS_LABELS = {
-  pending_payment: { label: 'Awaiting payment', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-  paid:            { label: 'Paid',              color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
+  pending_payment: { label: 'Awaiting payment', color: 'var(--warn)', bg: 'rgba(245,158,11,0.12)' },
+  paid:            { label: 'Paid',              color: 'var(--ok)', bg: 'rgba(34,197,94,0.12)' },
   confirmed:       { label: 'Confirmed',         color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
   packing:         { label: 'Packing',            color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)' },
   dispatched:      { label: 'Dispatched',         color: '#0ea5e9', bg: 'rgba(14,165,233,0.12)' },
-  delivered:       { label: 'Delivered',          color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
-  cancelled:       { label: 'Cancelled',          color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
-  refunded:        { label: 'Refunded',           color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
+  delivered:       { label: 'Delivered',          color: 'var(--ok)', bg: 'rgba(16,185,129,0.12)' },
+  cancelled:       { label: 'Cancelled',          color: 'var(--danger)', bg: 'rgba(239,68,68,0.12)' },
+  refunded:        { label: 'Refunded',           color: 'var(--muted)', bg: 'rgba(107,114,128,0.12)' },
 }
 
 const NEXT_STATUSES = {
@@ -183,7 +183,7 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)}
             draftBody={broadcastDraft} onConsumeDraft={() => setBroadcastDraft(null)}
             onSendAsBroadcast={(text) => { setBroadcastDraft(text); navigateTo('marketing-hub', 'broadcast') }} />}
-          {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: '#8A8680' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
+          {tab === 'pages'     && <Suspense fallback={<div style={{ padding: 20, color: 'var(--muted)' }}>Loading page builder…</div>}><VulaPages tenantId={tenantId} /></Suspense>}
           {tab === 'operate' && <OperateSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'operate')}
             pendingSubtab={pendingNav?.subtab} onConsumePendingNav={() => setPendingNav(null)} />}
           {tab === 'estimating' && <EstimatingSection tenantId={tenantId} subtabs={subtabsFor(navGroups, 'estimating')}
@@ -375,18 +375,18 @@ function GoLiveChecklist({ tenantId, onNavigate }) {
   if (!setup || setup.done >= setup.total) return null
   const open = setup.steps.filter(st => !st.done)
   return (
-    <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
       <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 14 }}>
         🚀 Getting you live — {setup.done}/{setup.total} done ({setup.progress_pct}%)
       </p>
-      <div style={{ height: 6, background: '#F0EDE5', borderRadius: 3, marginBottom: 10 }}>
+      <div style={{ height: 6, background: 'var(--surface-alt)', borderRadius: 3, marginBottom: 10 }}>
         <div style={{ width: `${setup.progress_pct}%`, height: 6, background: 'var(--accent)', borderRadius: 3 }} />
       </div>
       {open.map(st => (
         <button key={st.id} onClick={() => { const n = sectionFor(st.tab || 'settings'); onNavigate && onNavigate(n.section, n.subtab) }}
                 style={{ display: 'flex', justifyContent: 'space-between', width: '100%', border: 'none',
                          background: 'none', padding: '6px 0', cursor: 'pointer', fontSize: 13, textAlign: 'left' }}>
-          <span>☐ {st.label} <span style={{ color: '#8A8680' }}>— {st.detail}</span></span>
+          <span>☐ {st.label} <span style={{ color: 'var(--muted)' }}>— {st.detail}</span></span>
           <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Do this →</span>
         </button>
       ))}
@@ -416,13 +416,13 @@ function HomeCustomiser({ layout, onSave, onCancel }) {
     if (j < 0 || j >= next.length) return
     ;[next[i], next[j]] = [next[j], next[i]]; setCards(next)
   }
-  const btn = { border: '1px solid #DDD8CE', background: '#fff', borderRadius: 6, padding: '3px 9px', cursor: 'pointer', fontSize: 12 }
+  const btn = { border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 6, padding: '3px 9px', cursor: 'pointer', fontSize: 12 }
   return (
     <div style={{ ...ovS.chartCard, marginTop: 0, marginBottom: 16 }}>
       <p style={ovS.sectionLabel}>Customise Home</p>
-      <p style={{ fontSize: 12.5, color: '#8A8680', margin: '0 0 10px' }}>Choose the cards your business sees, in your order. Everyone on your team sees the same Home.</p>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 10px' }}>Choose the cards your business sees, in your order. Everyone on your team sees the same Home.</p>
       {cards.map((c, i) => (
-        <div key={c} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #ECE8DF', fontSize: 13 }}>
+        <div key={c} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-soft)', fontSize: 13 }}>
           <span style={{ flex: 1 }}>{HOME_CARD_LABELS[c] || c}</span>
           <button style={btn} onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move up">↑</button>
           <button style={btn} onClick={() => move(i, 1)} disabled={i === cards.length - 1} aria-label="Move down">↓</button>
@@ -430,7 +430,7 @@ function HomeCustomiser({ layout, onSave, onCancel }) {
         </div>))}
       {hidden.length > 0 && (
         <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8A8680' }}>Add:</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Add:</span>
           {hidden.map(c => <button key={c} style={btn} onClick={() => setCards([...cards, c])}>+ {HOME_CARD_LABELS[c] || c}</button>)}
         </div>)}
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
@@ -500,7 +500,11 @@ function OverviewTab({ tenantId, onNavigate }) {
     } catch { setSaveErr('Could not save.') }
   }
 
-  if (loading) return <p style={styles.loading}>Loading…</p>
+  if (loading) return (
+    <div aria-busy="true" style={{ display: 'grid', gap: 12 }}>
+      {[0, 1, 2].map(i => <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', padding: 16 }}>
+        <Skeleton height={14} width="30%" /><Skeleton height={42} style={{ marginTop: 12 }} /></div>)}
+    </div>)
 
   const s = stats || {}
   const fmt = cents => `R${(Number(cents || 0) / 100).toLocaleString('en-ZA', { maximumFractionDigits: 0 })}`
@@ -510,11 +514,11 @@ function OverviewTab({ tenantId, onNavigate }) {
   // { section, subtab } pairs now that Orders/Invoices/Products live nested inside Sell/Money —
   // was a flat `tab` id before the IA overhaul (2026-07-22).
   const alerts = [
-    { show: s.open_escalations > 0,     label: 'Customer waiting on you', value: s.open_escalations,   hint: (s.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), section: 'inbox', color: '#C0392B' },
+    { show: s.open_escalations > 0,     label: 'Customer waiting on you', value: s.open_escalations,   hint: (s.oldest_escalation?.question || 'answer on WhatsApp').slice(0, 46), section: 'inbox', color: 'var(--danger)' },
     { show: s.to_dispatch > 0,          label: 'To dispatch',      value: s.to_dispatch,                hint: 'orders ready to send', section: 'sell',  subtab: 'orders',   color: '#8b5cf6' },
-    { show: s.pending_payment > 0,      label: 'Awaiting payment', value: s.pending_payment,            hint: 'unpaid orders',        section: 'sell',  subtab: 'orders',   color: '#f59e0b' },
-    { show: s.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(s.invoice_overdue_cents), hint: 'chase these',          section: 'money', subtab: 'invoices', color: '#C0392B' },
-    { show: s.low_stock_count > 0,      label: 'Low stock',        value: s.low_stock_count,            hint: 'items running out',    section: 'sell',  subtab: 'products', color: '#C0392B' },
+    { show: s.pending_payment > 0,      label: 'Awaiting payment', value: s.pending_payment,            hint: 'unpaid orders',        section: 'sell',  subtab: 'orders',   color: 'var(--warn)' },
+    { show: s.invoice_overdue_cents > 0,label: 'Invoices overdue', value: fmt(s.invoice_overdue_cents), hint: 'chase these',          section: 'money', subtab: 'invoices', color: 'var(--danger)' },
+    { show: s.low_stock_count > 0,      label: 'Low stock',        value: s.low_stock_count,            hint: 'items running out',    section: 'sell',  subtab: 'products', color: 'var(--danger)' },
   ].filter(a => a.show)
 
   const cards = {
@@ -523,7 +527,7 @@ function OverviewTab({ tenantId, onNavigate }) {
       <div style={styles.statGrid}>
         <StatCard label="Today's revenue" value={fmt(s.today_revenue_cents)} sub={`${s.today_orders} orders today`} accent="var(--accent, var(--accent))" />
         <StatCard label="Total revenue"   value={fmt(s.total_revenue_cents)} sub={`${s.total_orders} orders`} />
-        <StatCard label="Avg order value" value={fmt(aov)}                   sub="per paid order" accent="#2B5797" />
+        <StatCard label="Avg order value" value={fmt(aov)}                   sub="per paid order" accent="var(--info)" />
         <StatCard label="This week"       value={weekOrders}                 sub="orders (7 days)" accent="#8b5cf6" />
       </div>) : <p style={styles.error}>Could not load sales figures.</p>,
     trend: () => <TrendChart series={series} fmt={fmt} />,
@@ -554,9 +558,9 @@ function OverviewTab({ tenantId, onNavigate }) {
           <div className="vula-panel" style={ovS.chartCard}>
             <p style={ovS.sectionLabel}>🧠 Your assistant, recently <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ float: 'right', border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>Watch it work →</button></p>
             {(s.agent_recent || []).map((a, i) => (
-              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid #ECE8DF', alignItems: 'center' }}>
+              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--border-soft)', alignItems: 'center' }}>
                 <span style={{ fontFamily: 'monospace', fontSize: 11.5, color: 'var(--accent)' }}>{a.tool}</span>
-                <span style={{ marginLeft: 'auto', color: '#8A8680', fontSize: 11 }}>{String(a.at || '').slice(11, 16)}</span>
+                <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 11 }}>{String(a.at || '').slice(11, 16)}</span>
               </div>
             ))}
           </div>
@@ -565,10 +569,10 @@ function OverviewTab({ tenantId, onNavigate }) {
           <div className="vula-panel" style={ovS.chartCard}>
             <p style={ovS.sectionLabel}>📚 Knowledge pulling through</p>
             <div style={{ display: 'flex', gap: 18, fontSize: 13 }}>
-              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>learned answers</div></div>
-              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.taught}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>taught by you</div></div>
+              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: 'var(--muted)' }}>learned answers</div></div>
+              <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.taught}</b><div style={{ fontSize: 11.5, color: 'var(--muted)' }}>taught by you</div></div>
             </div>
-            <p style={{ fontSize: 11.5, color: '#8A8680', margin: '10px 0 0' }}>Everything the assistant knows is visible and editable in the <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11.5, padding: 0, fontWeight: 600 }}>Agent tab</button>.</p>
+            <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '10px 0 0' }}>Everything the assistant knows is visible and editable in <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ border: 'none', background: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11.5, padding: 0, fontWeight: 600 }}>Assistant › Activity</button>.</p>
           </div>
         )}
       </div>
@@ -616,22 +620,22 @@ function TrendChart({ series, fmt }) {
 }
 
 const ovS = {
-  sectionLabel: { fontSize: 12, fontWeight: 700, color: '#8A8680', textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px' },
-  chartCard: { background: '#fff', border: '1px solid #DDD8CE', borderRadius: 12, padding: 18, marginTop: 16 },
+  sectionLabel: { fontSize: 12, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px' },
+  chartCard: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 18, marginTop: 16 },
   bars: { display: 'flex', alignItems: 'flex-end', gap: 10, height: 120 },
   barCol: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, height: '100%' },
   barWrap: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' },
   bar: { width: '100%', background: 'linear-gradient(180deg, var(--accent), #3d7a5f)', borderRadius: '4px 4px 0 0', minHeight: 2 },
-  barLabel: { fontSize: 11, color: '#8A8680' },
-  chartFoot: { fontSize: 11, color: '#B5B0A8', margin: '10px 0 0', textAlign: 'right' },
+  barLabel: { fontSize: 11, color: 'var(--muted)' },
+  chartFoot: { fontSize: 11, color: 'var(--faint)', margin: '10px 0 0', textAlign: 'right' },
   alertRow: { display: 'flex', gap: 10, flexWrap: 'wrap' },
-  alertCard: { flex: '1 1 150px', minWidth: 140, background: '#fff', border: '1px solid #DDD8CE', borderRadius: 12, padding: '14px 16px', textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2 },
+  alertCard: { flex: '1 1 150px', minWidth: 140, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 16px', textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2 },
   alertValue: { fontSize: 22, fontWeight: 700 },
-  alertLabel: { fontSize: 13, fontWeight: 600, color: '#2A2A2A' },
-  alertHint: { fontSize: 11, color: '#8A8680' },
+  alertLabel: { fontSize: 13, fontWeight: 600, color: 'var(--text)' },
+  alertHint: { fontSize: 11, color: 'var(--muted)' },
 }
 
-function StatCard({ label, value, sub, accent = '#6b7280' }) {
+function StatCard({ label, value, sub, accent = 'var(--muted)' }) {
   return (
     <div className="vula-tile" style={styles.statCard}>
       <p style={{ ...styles.statValue, color: accent }}>{value}</p>
@@ -681,9 +685,9 @@ function OrdersTab({ tenantId }) {
     })
     const d = await r.json().catch(() => ({}))
     if (d.refund?.status === 'pending') {
-      alert(`Refunded R${(d.refund.amount_cents / 100).toFixed(2)} via Yoco.`)
+      toast(`Refunded R${(d.refund.amount_cents / 100).toFixed(2)} via Yoco.`)
     } else if (d.refund?.status === 'failed') {
-      alert(`Order marked refunded, but the automatic Yoco refund failed: ${d.refund.detail || 'unknown error'}. Please process it manually in Yoco.`)
+      toast(`Order marked refunded, but the automatic Yoco refund failed: ${d.refund.detail || 'unknown error'}. Please process it manually in Yoco.`, 'danger')
     }
     await load()
     setUpdating(null)
@@ -691,11 +695,11 @@ function OrdersTab({ tenantId }) {
 
   // "Refunded" is real money leaving the business — for an order that was paid online, offer to
   // actually call Yoco's refund API (opt-in) instead of only recording the status.
-  function refundOrder(o) {
+  async function refundOrder(o) {
     if (o.yoco_checkout_id) {
-      const auto = confirm(
-        `This order was paid online via Yoco (R${(o.total_cents / 100).toFixed(2)}).\n\n` +
-        `OK = refund it automatically through Yoco now.\nCancel = just mark it refunded (you'll process the refund yourself).`
+      const auto = await confirmDialog(
+        `This order was paid online via Yoco (R${(o.total_cents / 100).toFixed(2)}). Refund the customer through Yoco now, or just mark it refunded and refund them yourself?`,
+        { title: 'Refund this order', confirmLabel: 'Refund through Yoco', cancelLabel: "Just mark refunded" }
       )
       advance(o.id, 'refunded', auto ? { auto_refund: true } : {})
     } else {
@@ -712,7 +716,7 @@ function OrdersTab({ tenantId }) {
   }
 
   async function deleteOne(order) {
-    if (!confirm(`Delete order ${order.display_id}? This can't be undone.`)) return
+    if (!(await confirmDialog(`Delete order ${order.display_id}? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return
     setUpdating(order.id)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/${order.id}`, { method: 'DELETE' })
     await load()
@@ -722,7 +726,7 @@ function OrdersTab({ tenantId }) {
   async function deleteSelected() {
     const ids = [...selected]
     if (!ids.length) return
-    if (!confirm(`Delete ${ids.length} selected order${ids.length === 1 ? '' : 's'}? This can't be undone.`)) return
+    if (!(await confirmDialog(`Delete ${ids.length} selected order${ids.length === 1 ? '' : 's'}? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return
     setDeleting(true)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders/bulk-delete`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -771,7 +775,7 @@ function OrdersTab({ tenantId }) {
       {selected.size > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(162,59,45,0.06)',
           border: '1px solid rgba(162,59,45,0.25)', borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontFamily: 'system-ui' }}>{selected.size} selected</span>
+          <span style={{ fontSize: 13}}>{selected.size} selected</span>
           <button onClick={deleteSelected} disabled={deleting} style={styles.btnDanger}>
             {deleting ? 'Deleting…' : `🗑 Delete ${selected.size} selected`}
           </button>
@@ -913,7 +917,7 @@ function ManualOrderModal({ tenantId, onClose, onCreated }) {
     setSaving(false)
   }
 
-  const field = { padding: '9px 11px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box', width: '100%' }
+  const field = { padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', width: '100%' }
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -950,7 +954,7 @@ function ManualOrderModal({ tenantId, onClose, onCreated }) {
                   </div>
                 )
               })}
-              <div style={{ textAlign: 'right', fontWeight: 700, fontSize: 14, paddingTop: 4, borderTop: '1px solid #EDE9DF' }}>
+              <div style={{ textAlign: 'right', fontWeight: 700, fontSize: 14, paddingTop: 4, borderTop: '1px solid var(--border-soft)' }}>
                 Total: {fmt(total)}
               </div>
             </div>
@@ -978,7 +982,7 @@ function ManualOrderModal({ tenantId, onClose, onCreated }) {
             Already paid — mark as paid now
           </label>
 
-          {error && <p style={{ color: '#C0392B', fontSize: 13, margin: 0 }}>{error}</p>}
+          {error && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{error}</p>}
 
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 6 }}>
             <button onClick={onClose} style={styles.btnGhost}>Cancel</button>
@@ -1015,8 +1019,8 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
     ).join('')
     w.document.write(`
       <html><head><title>Packing slip ${order.display_id}</title>
-      <style>body{font-family:system-ui;padding:24px;color:#1E1E1E}h1{font-size:20px}
-      table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 4px;border-bottom:1px solid #ddd;text-align:left}</style>
+      <style>body{font-family:system-ui;padding:24px;color:var(--ink)}h1{font-size:20px}
+      table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}</style>
       </head><body>
       <h1>Packing slip — ${order.display_id}</h1>
       <p><strong>${order.customer_name || ''}</strong> · ${order.customer_phone || ''}</p>
@@ -1070,11 +1074,11 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
               {(depth?.timeline || []).length > 0 && (
                 <>
                   <p style={styles.detailSection}>Timeline</p>
-                  <div style={{ borderLeft: '2px solid #ECE8DF', paddingLeft: 12, marginLeft: 4 }}>
+                  <div style={{ borderLeft: '2px solid var(--border-soft)', paddingLeft: 12, marginLeft: 4 }}>
                     {depth.timeline.map((t, i) => (
                       <div key={i} style={{ padding: '4px 0', fontSize: 12.5 }}>
-                        <b style={{ color: '#1E1E1E' }}>{t.label}</b>
-                        <span style={{ display: 'block', fontSize: 11, color: '#8A8680' }}>
+                        <b style={{ color: 'var(--ink)' }}>{t.label}</b>
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
                           {String(t.at || '').slice(0, 16).replace('T', ' ')}
                         </span>
                       </div>
@@ -1091,7 +1095,7 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
                     {depth.conversation.map((m, i) => (
                       <div key={i} style={{
                         alignSelf: m.role === 'user' ? 'flex-start' : 'flex-end',
-                        background: m.role === 'user' ? '#F0EDE5' : 'var(--accent-soft, rgba(44,85,69,.10))',
+                        background: m.role === 'user' ? 'var(--surface-alt)' : 'var(--accent-soft, rgba(44,85,69,.10))',
                         borderRadius: 10, padding: '6px 10px', fontSize: 12, maxWidth: '88%',
                       }}>
                         {m.text}
@@ -1163,8 +1167,8 @@ function DeliveryTab({ tenantId }) {
         + `<tr><th>#</th><th>Customer</th><th>Address</th><th>Items</th><th style="text-align:right">Total</th></tr>${rows}</table>`
     }).join('')
     w.document.write(`<html><head><title>Delivery run — ${date}</title>
-      <style>body{font-family:system-ui;padding:24px;color:#1E1E1E}h1{font-size:20px}h2{font-size:15px;margin-top:18px}
-      table{width:100%;border-collapse:collapse;margin-top:6px}td,th{padding:6px 4px;border-bottom:1px solid #ddd;text-align:left;font-size:12px;vertical-align:top}</style>
+      <style>body{font-family:system-ui;padding:24px;color:var(--ink)}h1{font-size:20px}h2{font-size:15px;margin-top:18px}
+      table{width:100%;border-collapse:collapse;margin-top:6px}td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left;font-size:12px;vertical-align:top}</style>
       </head><body><h1>Delivery run — ${date}</h1>${blocks || '<p>No deliveries.</p>'}</body></html>`)
     w.document.close(); w.print()
   }
@@ -1182,8 +1186,8 @@ function DeliveryTab({ tenantId }) {
       {!loading && data && (
         <div style={styles.statGrid}>
           <StatCard label="Deliveries" value={data.total} sub={`${slots.length} slot${slots.length !== 1 ? 's' : ''}`} accent="var(--accent, var(--accent))" />
-          <StatCard label="Paid"   value={data.paid_count}   sub={fmt(data.paid_revenue_cents)}   accent="#16a34a" />
-          <StatCard label="Unpaid" value={data.unpaid_count} sub={fmt(data.unpaid_revenue_cents)} accent="#f59e0b" />
+          <StatCard label="Paid"   value={data.paid_count}   sub={fmt(data.paid_revenue_cents)}   accent="var(--ok)" />
+          <StatCard label="Unpaid" value={data.unpaid_count} sub={fmt(data.unpaid_revenue_cents)} accent="var(--warn)" />
           <StatCard label="To collect" value={fmt((data.paid_revenue_cents || 0) + (data.unpaid_revenue_cents || 0))} sub="total value" />
         </div>
       )}
@@ -1205,7 +1209,7 @@ function DeliveryTab({ tenantId }) {
                   <div style={styles.orderTop}>
                     <div>
                       <span style={styles.orderId}>{o.display_id}</span>
-                      <span style={{ ...styles.badge, color: paid ? '#16a34a' : '#f59e0b', background: paid ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)' }}>
+                      <span style={{ ...styles.badge, color: paid ? 'var(--ok)' : 'var(--warn)', background: paid ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)' }}>
                         {paid ? 'Paid' : 'Unpaid'}
                       </span>
                     </div>
@@ -1306,7 +1310,7 @@ function ProductsTab({ tenantId }) {
   }
 
   async function deleteProduct(p) {
-    if (!confirm(`Remove "${p.name}" from the shop? (Products with order history are archived and can be restored.)`)) return
+    if (!(await confirmDialog(`Remove "${p.name}" from the shop? (Products with order history are archived and can be restored.)`, { danger: true, confirmLabel: 'Yes' }))) return
     setSaving(p.id)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${p.id}`, { method: 'DELETE' })
     await load()
@@ -1416,7 +1420,7 @@ function ProductsTab({ tenantId }) {
               <button type="submit" disabled={adding} style={styles.btnAction}>{adding ? 'Adding…' : 'Add product'}</button>
               <button type="button" onClick={() => setShowAdd(false)} style={styles.btnGhost}>Cancel</button>
             </div>
-            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: 0 }}>
+            <p style={{ fontSize: 11, color: 'var(--muted)', margin: 0 }}>
               You can add a photo after creating, via the 📷 Photos button.
             </p>
           </form>
@@ -1424,32 +1428,32 @@ function ProductsTab({ tenantId }) {
       </div>
 
       {showCats && (
-        <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 16 }}>
-          <p style={{ fontSize: 12.5, fontWeight: 600, fontFamily: 'system-ui', margin: '0 0 8px' }}>Your categories</p>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 8px' }}>Your categories</p>
           {(categories.length ? categories : Object.keys(CATEGORY_LABELS).map(k => ({ key: k, label: CATEGORY_LABELS[k] }))).map(c => (
-            <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontFamily: 'system-ui', background: '#F0EDE5', borderRadius: 999, padding: '4px 12px', margin: '0 6px 6px 0' }}>
+            <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, background: 'var(--surface-alt)', borderRadius: 999, padding: '4px 12px', margin: '0 6px 6px 0' }}>
               {c.label}
             </span>
           ))}
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <input placeholder="New category (e.g. Smoked Fish)" value={newCat} onChange={e => setNewCat(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && addCategory()}
-              style={{ flex: 1, padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui' }} />
+              style={{ flex: 1, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13}} />
             <button onClick={addCategory} style={styles.btnAction}>Add</button>
           </div>
-          {!categories.length && <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: '8px 0 0' }}>Adding your first category needs migration 073.</p>}
+          {!categories.length && <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0' }}>Adding your first category needs migration 073.</p>}
         </div>
       )}
 
       {importRows && (
-        <div style={{ background: '#fff', border: '1px solid #DDD8CE', borderRadius: 10, padding: 14, marginBottom: 16 }}>
-          <p style={{ fontSize: 12.5, fontWeight: 600, fontFamily: 'system-ui', margin: '0 0 8px' }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 8px' }}>
             Import preview — {importRows.length} row{importRows.length === 1 ? '' : 's'}
           </p>
-          <div style={{ maxHeight: 260, overflow: 'auto', border: '1px solid #EDE9DF', borderRadius: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'system-ui' }}>
+          <div style={{ maxHeight: 260, overflow: 'auto', border: '1px solid var(--border-soft)', borderRadius: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
               <thead>
-                <tr style={{ background: '#F7F5EF', textAlign: 'left' }}>
+                <tr style={{ background: 'var(--bg)', textAlign: 'left' }}>
                   <th style={{ padding: '6px 10px' }}>#</th>
                   <th style={{ padding: '6px 10px' }}>Name</th>
                   <th style={{ padding: '6px 10px' }}>Price (c)</th>
@@ -1462,13 +1466,13 @@ function ProductsTab({ tenantId }) {
                   const errors = validateImportRow(row)
                   const isNewCat = row.category && ![...catKeys].includes(row.category)
                   return (
-                    <tr key={i} style={{ borderTop: '1px solid #EDE9DF', background: errors.length ? 'rgba(162,59,45,0.06)' : undefined }}>
-                      <td style={{ padding: '6px 10px', color: '#8A8680' }}>{i + 1}</td>
-                      <td style={{ padding: '6px 10px' }}>{row.name || <em style={{ color: '#A23B2D' }}>missing</em>}</td>
-                      <td style={{ padding: '6px 10px' }}>{row.price_cents || <em style={{ color: '#A23B2D' }}>missing</em>}</td>
-                      <td style={{ padding: '6px 10px' }}>{row.category || 'extras'}{isNewCat && <span style={{ color: '#8A8680' }}> (new)</span>}</td>
+                    <tr key={i} style={{ borderTop: '1px solid var(--border-soft)', background: errors.length ? 'rgba(162,59,45,0.06)' : undefined }}>
+                      <td style={{ padding: '6px 10px', color: 'var(--muted)' }}>{i + 1}</td>
+                      <td style={{ padding: '6px 10px' }}>{row.name || <em style={{ color: 'var(--danger)' }}>missing</em>}</td>
+                      <td style={{ padding: '6px 10px' }}>{row.price_cents || <em style={{ color: 'var(--danger)' }}>missing</em>}</td>
+                      <td style={{ padding: '6px 10px' }}>{row.category || 'extras'}{isNewCat && <span style={{ color: 'var(--muted)' }}> (new)</span>}</td>
                       <td style={{ padding: '6px 10px' }}>
-                        {errors.length ? <span style={{ color: '#A23B2D' }}>⚠ {errors.join(', ')}</span> : <span style={{ color: '#2C7A4B' }}>OK</span>}
+                        {errors.length ? <span style={{ color: 'var(--danger)' }}>⚠ {errors.join(', ')}</span> : <span style={{ color: 'var(--ok)' }}>OK</span>}
                       </td>
                     </tr>
                   )
@@ -1477,11 +1481,11 @@ function ProductsTab({ tenantId }) {
             </table>
           </div>
           {importResults ? (
-            <p style={{ fontSize: 12.5, fontFamily: 'system-ui', margin: '10px 0 0' }}>
+            <p style={{ fontSize: 12.5, margin: '10px 0 0' }}>
               ✅ {importResults.created} created · {importResults.updated} updated
-              {importResults.errors > 0 && <span style={{ color: '#A23B2D' }}> · {importResults.errors} failed</span>}
+              {importResults.errors > 0 && <span style={{ color: 'var(--danger)' }}> · {importResults.errors} failed</span>}
               {importResults.results?.filter(r => r.status === 'error').map((r, i) => (
-                <span key={i} style={{ display: 'block', color: '#A23B2D', marginTop: 4 }}>Row {r.row + 1} ({r.slug}): {r.error}</span>
+                <span key={i} style={{ display: 'block', color: 'var(--danger)', marginTop: 4 }}>Row {r.row + 1} ({r.slug}): {r.error}</span>
               ))}
             </p>
           ) : (
@@ -1508,7 +1512,7 @@ function ProductsTab({ tenantId }) {
                   <div style={{ flex: 1 }}>
                     <span style={styles.productName}>{p.name}</span>
                     {p.is_daily_catch && (
-                      <span style={{ ...styles.badge, color: '#f59e0b', background: 'rgba(245,158,11,0.12)', marginLeft: 6 }}>
+                      <span style={{ ...styles.badge, color: 'var(--warn)', background: 'rgba(245,158,11,0.12)', marginLeft: 6 }}>
                         ⭐ Catch of the day
                       </span>
                     )}
@@ -1577,7 +1581,7 @@ function ProductsTab({ tenantId }) {
 // reads as organized instead of one long wall of inputs.
 function SectionLabel({ children }) {
   return (
-    <p style={{ fontSize: 12, fontFamily: 'system-ui', fontWeight: 600, color: '#1E1E1E', margin: '4px 0 0' }}>
+    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '4px 0 0' }}>
       {children}
     </p>
   )
@@ -1615,8 +1619,8 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       .catch(() => {})
   }, [tenantId])  // eslint-disable-line
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
-  const inp = { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
-  const lbl = { fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }
+  const inp = { padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }
+  const lbl = { fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }
 
   function saveDetails() {
     const upd = { name: f.name.trim() || p.name, category: f.category, sold_by: f.sold_by }
@@ -1662,9 +1666,9 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
   const gallery = (p.images && p.images.length) ? p.images : (p.image_url ? [p.image_url] : [])
 
   return (
-    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #EDE9DF', display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-soft)', display: 'flex', flexDirection: 'column', gap: 12 }}>
       {p.archived && (
-        <div style={{ fontSize: 12.5, fontFamily: 'system-ui', color: '#A23B2D' }}>
+        <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>
           📦 Archived — hidden from the shop. <button onClick={() => patch(p.id, { archived: false })} style={{ ...styles.btnGhost, color: 'var(--accent)' }}>Restore</button>
         </div>
       )}
@@ -1723,7 +1727,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
         </>)}
       </div>
 
-      <SectionLabel>Origin &amp; story <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, shown on the product page</span></SectionLabel>
+      <SectionLabel>Origin &amp; story <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, shown on the product page</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>Catch source</span>
           <input value={f.catchSource} onChange={e => set('catchSource', e.target.value)} placeholder="e.g. Line-caught, Hout Bay" style={{ ...inp, width: '100%' }} /></div>
@@ -1731,7 +1735,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
           <input value={f.fishermanName} onChange={e => set('fishermanName', e.target.value)} placeholder="e.g. Skipper Jan" style={{ ...inp, width: '100%' }} /></div>
       </div>
 
-      <SectionLabel>📦 Box deal / bundle <span style={{ fontWeight: 400, color: '#8A8680' }}>— sell several products as one (e.g. Braai Box)</span></SectionLabel>
+      <SectionLabel>📦 Box deal / bundle <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— sell several products as one (e.g. Braai Box)</span></SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <select value={f.productType} onChange={e => set('productType', e.target.value)} style={{ ...inp, maxWidth: 260 }}>
           <option value="single">Normal product</option>
@@ -1753,30 +1757,30 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
                   set('bundleItems', items)
                 }} style={{ ...inp, width: 64 }} />
                 <button onClick={() => set('bundleItems', f.bundleItems.filter((_, i) => i !== idx))}
-                        style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: 18, cursor: 'pointer' }}>×</button>
+                        style={{ background: 'transparent', border: 'none', color: 'var(--danger)', fontSize: 18, cursor: 'pointer' }}>×</button>
               </div>
             ))}
             <button onClick={() => set('bundleItems', [...f.bundleItems, { product_id: '', quantity: 1 }])}
                     style={{ ...styles.btnGhost, alignSelf: 'flex-start' }}>+ Add item to box</button>
-            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: 0 }}>
+            <p style={{ fontSize: 11, color: 'var(--muted)', margin: 0 }}>
               The box sells at THIS product&apos;s price — set it above. Contents show on the product page.
             </p>
           </div>
         )}
       </div>
 
-      <SectionLabel>🍳 How to cook it <span style={{ fontWeight: 400, color: '#8A8680' }}>— shown on the product page</span></SectionLabel>
+      <SectionLabel>🍳 How to cook it <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— shown on the product page</span></SectionLabel>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <textarea value={f.cookingTips} onChange={e => set('cookingTips', e.target.value)} rows={3}
                   placeholder="e.g. Braai over medium coals for 4–5 minutes a side, skin down first…"
-                  style={{ ...inp, width: '100%', resize: 'vertical', fontFamily: 'system-ui' }} />
+                  style={{ ...inp, width: '100%', resize: 'vertical'}} />
         <button onClick={writeTipsWithAI} disabled={writingTips}
                 style={{ ...styles.btnGhost, alignSelf: 'flex-start', color: 'var(--accent)' }}>
           {writingTips ? '✨ Writing…' : '✨ Write it for me'}
         </button>
       </div>
 
-      <SectionLabel>Stock &amp; reordering <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, for your own supply planning</span></SectionLabel>
+      <SectionLabel>Stock &amp; reordering <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, for your own supply planning</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>🔔 Reorder when stock ≤</span>
           <input type="number" value={f.reorderThreshold} onChange={e => set('reorderThreshold', e.target.value)} placeholder="e.g. 5" style={{ ...inp, width: '100%' }} /></div>
@@ -1794,7 +1798,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       </button>
 
       <div>
-        <SectionLabel>Photo gallery <span style={{ fontWeight: 400, color: '#8A8680' }}>— first photo is the cover</span></SectionLabel>
+        <SectionLabel>Photo gallery <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— first photo is the cover</span></SectionLabel>
         <VulaImageUpload
           tenantId={tenantId}
           existingUrls={gallery}
@@ -1810,7 +1814,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
             {gallery.map((u, i) => (
               <div key={u} style={{ position: 'relative' }}>
-                <img src={u} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: i === 0 ? '2px solid var(--accent)' : '1px solid #DDD8CE' }} />
+                <img src={u} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: i === 0 ? '2px solid var(--accent)' : '1px solid var(--border)' }} />
                 <button title={i === 0 ? 'Cover photo' : 'Make cover'} onClick={() => {
                   const re = [u, ...gallery.filter(x => x !== u)]
                   patch(p.id, { images: re, image_url: re[0] })
@@ -1818,7 +1822,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
                 <button title="Remove photo" onClick={() => {
                   const re = gallery.filter(x => x !== u)
                   patch(p.id, { images: re, image_url: re[0] || null })
-                }} style={{ position: 'absolute', top: 2, right: 2, fontSize: 10, border: 'none', borderRadius: 4, background: 'rgba(255,255,255,.85)', cursor: 'pointer', padding: '1px 4px', color: '#A23B2D' }}>✕</button>
+                }} style={{ position: 'absolute', top: 2, right: 2, fontSize: 10, border: 'none', borderRadius: 4, background: 'rgba(255,255,255,.85)', cursor: 'pointer', padding: '1px 4px', color: 'var(--danger)' }}>✕</button>
               </div>
             ))}
           </div>
@@ -1834,7 +1838,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
             const val = e.target.value.trim()
             if (val !== (p.description || p.notes || '')) patch(p.id, { description: val })
           }}
-          style={{ width: '100%', padding: '8px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontFamily: 'system-ui', fontSize: 13, color: '#1E1E1E', resize: 'vertical', boxSizing: 'border-box' }}
+          style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--ink)', resize: 'vertical', boxSizing: 'border-box' }}
           placeholder="e.g. Skin-on, boneless, great for braaing"
         />
       </div>
@@ -1851,13 +1855,13 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       </div>
 
       <div>
-        <SectionLabel>🔍 SEO <span style={{ fontWeight: 400, color: '#8A8680' }}>— optional, improves search/social sharing</span></SectionLabel>
+        <SectionLabel>🔍 SEO <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, improves search/social sharing</span></SectionLabel>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <input value={f.seoTitle} onChange={e => set('seoTitle', e.target.value)}
                  placeholder="SEO title (browser tab / Google)" style={{ ...inp, width: '100%' }} />
           <textarea value={f.seoDescription} onChange={e => set('seoDescription', e.target.value)} rows={2}
                     placeholder="SEO description (search result snippet)"
-                    style={{ ...inp, width: '100%', resize: 'vertical', fontFamily: 'system-ui' }} />
+                    style={{ ...inp, width: '100%', resize: 'vertical'}} />
         </div>
       </div>
 
@@ -1895,13 +1899,13 @@ function AIPhotoButton({ tenantId, product, onDone }) {
   return (
     <div style={{ marginTop: 8 }}>
       <button onClick={generate} disabled={busy}
-        style={{ padding: '7px 14px', background: busy ? '#DDD8CE' : 'var(--accent, #2C5545)', color: '#fff',
+        style={{ padding: '7px 14px', background: busy ? 'var(--border)' : 'var(--accent)', color: '#fff',
                  border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                 cursor: busy ? 'wait' : 'pointer', fontFamily: 'system-ui' }}>
+                 cursor: busy ? 'wait' : 'pointer'}}>
         {busy ? '✨ Generating photo… (~30s)' : '✨ AI photo — generate a store-ready shot'}
       </button>
-      {err && <p style={{ color: '#ef4444', fontSize: 12, fontFamily: 'system-ui', margin: '6px 0 0' }}>{err}</p>}
-      <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: '4px 0 0' }}>
+      {err && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '6px 0 0' }}>{err}</p>}
+      <p style={{ fontSize: 11, color: 'var(--muted)', margin: '4px 0 0' }}>
         Generates a professional photo in your house style. Click again for another angle — each one is added to the gallery.
       </p>
     </div>
@@ -1920,8 +1924,8 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
   const [bulkStock, setBulkStock] = useState('')
   const [error, setError] = useState(null)
   const optionNames = options || []
-  const inp = { padding: '6px 8px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 12.5, fontFamily: 'system-ui', boxSizing: 'border-box' }
-  const lbl = { fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 2 }
+  const inp = { padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12.5, boxSizing: 'border-box' }
+  const lbl = { fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 2 }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1948,7 +1952,7 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
   }
 
   async function deleteVariant(id) {
-    if (!confirm('Remove this variant?')) return
+    if (!(await confirmDialog('Remove this variant?', { danger: true, confirmLabel: 'Yes' }))) return
     setSaving(id)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${id}`, { method: 'DELETE' })
     await load()
@@ -1990,11 +1994,11 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
     await load()
   }
 
-  function saveOptions() {
+  async function saveOptions() {
     const names = optionsInput.split(',').map(s => s.trim()).filter(Boolean)
     const changed = names.length !== optionNames.length || names.some((n, i) => n !== optionNames[i])
     if (changed && variants.length > 0) {
-      if (!confirm(
+      if (!await confirmDialog(
         `${variants.length} existing variant${variants.length === 1 ? '' : 's'} use the current option names. ` +
         `Changing them won't delete those variants, but customers won't be able to pick them until you update ` +
         `each variant's option values below. Continue?`
@@ -2005,23 +2009,23 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
 
   return (
     <div>
-      <p style={{ fontSize: 12, fontWeight: 600, fontFamily: 'system-ui', color: '#1E1E1E', margin: '0 0 8px' }}>
-        🧩 Variants <span style={{ fontWeight: 400, color: '#8A8680' }}>— e.g. Size, Colour — each gets its own SKU/barcode/price/stock</span>
+      <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', margin: '0 0 8px' }}>
+        🧩 Variants <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— e.g. Size, Colour — each gets its own SKU/barcode/price/stock</span>
       </p>
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
         <input value={optionsInput} onChange={e => setOptionsInput(e.target.value)} placeholder="Option names, e.g. Size, Colour"
                style={{ ...inp, flex: 1 }} />
         <button onClick={saveOptions} style={styles.btnGhost}>Save options</button>
       </div>
-      {error && <p style={{ fontSize: 12, color: '#A23B2D', fontFamily: 'system-ui', margin: '0 0 10px' }}>⚠ {error}</p>}
+      {error && <p style={{ fontSize: 12, color: 'var(--danger)', margin: '0 0 10px' }}>⚠ {error}</p>}
 
       {loading ? <p style={styles.loading}>Loading variants…</p> : (
         <>
           {variants.length > 0 && (
             <div style={{ overflowX: 'auto', marginBottom: 10 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'system-ui' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
                 <thead>
-                  <tr style={{ background: '#F7F5EF', textAlign: 'left' }}>
+                  <tr style={{ background: 'var(--bg)', textAlign: 'left' }}>
                     <th style={{ padding: '5px 8px' }}>Options</th>
                     <th style={{ padding: '5px 8px' }}>SKU</th>
                     <th style={{ padding: '5px 8px' }}>Barcode</th>
@@ -2034,7 +2038,7 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
                 </thead>
                 <tbody>
                   {variants.map(v => (
-                    <tr key={v.id} style={{ borderTop: '1px solid #EDE9DF', opacity: v.archived ? 0.5 : 1 }}>
+                    <tr key={v.id} style={{ borderTop: '1px solid var(--border-soft)', opacity: v.archived ? 0.5 : 1 }}>
                       <td style={{ padding: '5px 8px' }}>
                         {Object.entries(v.option_values || {}).map(([k, val]) => `${k}: ${val}`).join(', ') || '—'}
                       </td>
@@ -2080,7 +2084,7 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
                         <button onClick={() => patchVariant(v.id, { archived: !v.archived })} disabled={saving === v.id} style={styles.btnGhost}>
                           {v.archived ? 'Restore' : 'Archive'}
                         </button>
-                        <button onClick={() => deleteVariant(v.id)} disabled={saving === v.id} style={{ ...styles.btnGhost, color: '#A23B2D' }}>✕</button>
+                        <button onClick={() => deleteVariant(v.id)} disabled={saving === v.id} style={{ ...styles.btnGhost, color: 'var(--danger)' }}>✕</button>
                       </td>
                     </tr>
                   ))}
@@ -2121,7 +2125,7 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
             </div>
           )}
           {!optionNames.length && (
-            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: '6px 0 0' }}>
+            <p style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0' }}>
               Set option names above (e.g. "Size, Colour") before adding variants.
             </p>
           )}
@@ -2145,7 +2149,7 @@ function DiscountCodesTab({ tenantId }) {
   const [editing, setEditing] = useState(null) // null | {} (new) | code row
   const [form, setForm] = useState(BLANK_DISCOUNT)
   const [error, setError] = useState(null)
-  const inp = { padding: '7px 10px', border: '1px solid #DDD8CE', borderRadius: 6, fontSize: 13, fontFamily: 'system-ui', boxSizing: 'border-box' }
+  const inp = { padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -2208,7 +2212,7 @@ function DiscountCodesTab({ tenantId }) {
   }
 
   async function remove(c) {
-    if (!confirm(`Delete code "${c.code}"?`)) return
+    if (!(await confirmDialog(`Delete code "${c.code}"?`, { danger: true, confirmLabel: 'Yes' }))) return
     setSaving(true)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/discount-codes/${c.id}`, { method: 'DELETE' })
     await load()
@@ -2239,7 +2243,7 @@ function DiscountCodesTab({ tenantId }) {
           <button onClick={startNew} style={styles.btnAction}>+ Add discount code</button>
         ) : (
           <form onSubmit={save} style={styles.addProductForm}>
-            {error && <p style={{ fontSize: 12, color: '#A23B2D', fontFamily: 'system-ui', margin: '0 0 4px' }}>⚠ {error}</p>}
+            {error && <p style={{ fontSize: 12, color: 'var(--danger)', margin: '0 0 4px' }}>⚠ {error}</p>}
             <input placeholder="Code, e.g. SUMMER20" value={form.code} required
                    onChange={e => setForm({ ...form, code: e.target.value.toUpperCase() })} style={inp} />
             <div style={{ display: 'flex', gap: 8 }}>
@@ -2263,7 +2267,7 @@ function DiscountCodesTab({ tenantId }) {
             <div style={{ display: 'flex', gap: 8 }}>
               <input type="number" placeholder="Max uses per customer (optional)" value={form.per_customer_limit}
                      onChange={e => setForm({ ...form, per_customer_limit: e.target.value })} style={{ ...inp, flex: 1 }} />
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'system-ui', flex: 1 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, flex: 1 }}>
                 <input type="checkbox" checked={form.first_order_only}
                        onChange={e => setForm({ ...form, first_order_only: e.target.checked })} />
                 First order only
@@ -2271,15 +2275,15 @@ function DiscountCodesTab({ tenantId }) {
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <span style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }}>Starts (optional)</span>
+                <span style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Starts (optional)</span>
                 <input type="date" value={form.starts_at} onChange={e => setForm({ ...form, starts_at: e.target.value })} style={{ ...inp, width: '100%' }} />
               </div>
               <div style={{ flex: 1 }}>
-                <span style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', display: 'block', marginBottom: 3 }}>Ends (optional)</span>
+                <span style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Ends (optional)</span>
                 <input type="date" value={form.ends_at} onChange={e => setForm({ ...form, ends_at: e.target.value })} style={{ ...inp, width: '100%' }} />
               </div>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'system-ui' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13}}>
               <input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} />
               Active
             </label>
@@ -2294,10 +2298,10 @@ function DiscountCodesTab({ tenantId }) {
       </div>
 
       {codes.length === 0 ? (
-        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: '#FFFFFF', border: '1px solid #DDD8CE', borderRadius: 12, padding: 32 }}>
+        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 32 }}>
           <div style={{ fontSize: 32, marginBottom: 10 }}>🏷️</div>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', marginBottom: 6 }}>No discount codes yet</div>
-          <p style={{ fontSize: 13, color: '#8A8680', lineHeight: 1.55, margin: '0 0 16px' }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>No discount codes yet</div>
+          <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, margin: '0 0 16px' }}>
             Create a code customers can type at checkout — percent off, a fixed amount, or free shipping.
           </p>
           {!editing && <button onClick={startNew} style={styles.btnAction}>+ Add your first code</button>}
@@ -2309,13 +2313,13 @@ function DiscountCodesTab({ tenantId }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                 <div>
                   <span style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 14 }}>{c.code}</span>
-                  <span style={{ marginLeft: 10, fontSize: 13, color: '#2C7A4B', fontFamily: 'system-ui' }}>{valueLabel(c)}</span>
+                  <span style={{ marginLeft: 10, fontSize: 13, color: 'var(--ok)'}}>{valueLabel(c)}</span>
                 </div>
                 <button onClick={() => toggleActive(c)} disabled={saving} style={c.active ? styles.btnStock : styles.btnStockOff}>
                   {c.active ? '✓ Active' : '✗ Inactive'}
                 </button>
               </div>
-              <div style={{ fontSize: 12, color: '#8A8680', fontFamily: 'system-ui', marginTop: 6 }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
                 {c.min_order_cents ? `Min order R${(c.min_order_cents / 100).toFixed(2)} · ` : ''}
                 Used {c.usage_count || 0}{c.usage_limit ? ` / ${c.usage_limit}` : ''}
                 {c.starts_at ? ` · from ${c.starts_at.slice(0, 10)}` : ''}
@@ -2325,7 +2329,7 @@ function DiscountCodesTab({ tenantId }) {
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <button onClick={() => startEdit(c)} style={styles.btnGhost}>Edit</button>
-                <button onClick={() => remove(c)} disabled={saving} style={{ ...styles.btnGhost, color: '#A23B2D' }}>Delete</button>
+                <button onClick={() => remove(c)} disabled={saving} style={{ ...styles.btnGhost, color: 'var(--danger)' }}>Delete</button>
               </div>
             </div>
           ))}
@@ -2391,7 +2395,7 @@ function SuppliersTab({ tenantId, onViewInvoices }) {
   }
 
   async function remove(s) {
-    if (!confirm(`Delete supplier "${s.name}"?`)) return
+    if (!(await confirmDialog(`Delete supplier "${s.name}"?`, { danger: true, confirmLabel: 'Yes' }))) return
     setSaving(true)
     await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/suppliers/${s.id}`, { method: 'DELETE' })
     await load()
@@ -2431,7 +2435,7 @@ function SuppliersTab({ tenantId, onViewInvoices }) {
               </button>
               <button type="button" onClick={cancel} style={styles.btnGhost}>Cancel</button>
             </div>
-            <p style={{ fontSize: 11, color: '#8A8680', fontFamily: 'system-ui', margin: 0 }}>
+            <p style={{ fontSize: 11, color: 'var(--muted)', margin: 0 }}>
               Tax number & aliases improve auto-matching when you scan this supplier's bills.
             </p>
           </form>
@@ -2439,10 +2443,10 @@ function SuppliersTab({ tenantId, onViewInvoices }) {
       </div>
 
       {suppliers.length === 0 ? (
-        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: '#FFFFFF', border: `1px solid ${'#DDD8CE'}`, borderRadius: 12, padding: 32 }}>
+        <div style={{ textAlign: 'center', maxWidth: 420, margin: '24px auto', background: 'var(--surface)', border: `1px solid ${'var(--border)'}`, borderRadius: 12, padding: 32 }}>
           <div style={{ fontSize: 32, marginBottom: 10 }}>🚚</div>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 700, color: '#1E1E1E', marginBottom: 6 }}>Set up your suppliers</div>
-          <p style={{ fontSize: 13, color: '#8A8680', lineHeight: 1.55, margin: '0 0 16px' }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>Set up your suppliers</div>
+          <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, margin: '0 0 16px' }}>
             Add suppliers once and Vula auto-fills payment terms, VAT and account details when you
             scan their bills — and matches incoming invoices automatically.
           </p>
@@ -2551,13 +2555,13 @@ function PurchaseOrders({ tenantId }) {
 
   return (
     <div style={{ marginTop: 28 }}>
-      <p style={{ fontSize: 14, fontWeight: 700, fontFamily: 'system-ui', color: '#1E1E1E', margin: '0 0 10px' }}>
+      <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', margin: '0 0 10px' }}>
         📋 Purchase orders
       </p>
 
       {suggestions.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <p style={{ fontSize: 12.5, fontFamily: 'system-ui', color: '#b45309', fontWeight: 600, margin: '0 0 8px' }}>
+          <p style={{ fontSize: 12.5, color: 'var(--warn)', fontWeight: 600, margin: '0 0 8px' }}>
             🔔 Low stock — suggested reorders
           </p>
           {suggestions.map((g, i) => (
@@ -2577,7 +2581,7 @@ function PurchaseOrders({ tenantId }) {
       )}
 
       {pos.length === 0 ? (
-        <p style={{ fontSize: 13, color: '#8A8680', fontFamily: 'system-ui' }}>No purchase orders yet — set a reorder threshold on a product to get suggestions.</p>
+        <p style={{ fontSize: 13, color: 'var(--muted)'}}>No purchase orders yet — set a reorder threshold on a product to get suggestions.</p>
       ) : (
         <div style={styles.list}>
           {pos.map(po => (
@@ -2606,7 +2610,7 @@ function PurchaseOrders({ tenantId }) {
                 {(po.items || []).map(it => `${it.name} ×${it.quantity}`).join(' · ')}
                 {po.sent_channel && ` · sent via ${po.sent_channel}`}
               </div>
-              {sendMsg[po.id] && <div style={{ fontSize: 11, color: sendMsg[po.id].includes('error') || sendMsg[po.id] === 'network' ? '#A23B2D' : '#8A8680', marginTop: 4 }}>{sendMsg[po.id]}</div>}
+              {sendMsg[po.id] && <div style={{ fontSize: 11, color: sendMsg[po.id].includes('error') || sendMsg[po.id] === 'network' ? 'var(--danger)' : 'var(--muted)', marginTop: 4 }}>{sendMsg[po.id]}</div>}
             </div>
           ))}
         </div>
@@ -2619,68 +2623,68 @@ function PurchaseOrders({ tenantId }) {
 
 const styles = {
   overlay:      { position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200, display:'flex', justifyContent:'flex-end' },
-  panel:        { width:'100%', maxWidth:680, background:'#F7F4EE', overflowY:'auto', display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.15)' },
-  header:       { display:'flex', alignItems:'flex-start', justifyContent:'space-between', padding:'24px 28px 0', borderBottom:'1px solid #DDD8CE', paddingBottom:16 },
-  title:        { fontFamily:"'Cormorant Garamond', serif", fontSize:26, fontWeight:700, color:'#1E1E1E', margin:0 },
-  subtitle:     { fontFamily:'system-ui', fontSize:12, color:'#8A8680', margin:'2px 0 0' },
-  closeBtn:     { background:'transparent', border:'none', fontSize:28, cursor:'pointer', color:'#8A8680', lineHeight:1 },
+  panel:        { width:'100%', maxWidth:680, background:'var(--bg)', overflowY:'auto', display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.15)' },
+  header:       { display:'flex', alignItems:'flex-start', justifyContent:'space-between', padding:'24px 28px 0', borderBottom:'1px solid var(--border)', paddingBottom:16 },
+  title:        { fontFamily:"var(--font-display)", fontSize:26, fontWeight:700, color:'var(--ink)', margin:0 },
+  subtitle:     { fontSize:12, color:'var(--muted)', margin:'2px 0 0' },
+  closeBtn:     { background:'transparent', border:'none', fontSize:28, cursor:'pointer', color:'var(--muted)', lineHeight:1 },
   content:      { padding:'20px 28px', flex:1, overflowY:'auto' },
   contentBare:  { padding:'20px 24px', flex:1, minWidth:0 },  // shell mode — shell owns chrome
-  loading:      { color:'#8A8680', fontSize:13, fontFamily:'system-ui' },
-  empty:        { color:'#8A8680', fontSize:13, fontFamily:'system-ui', padding:'24px 0', textAlign:'center' },
-  error:        { color:'#ef4444', fontSize:13, fontFamily:'system-ui' },
+  loading:      { color:'var(--muted)', fontSize:13},
+  empty:        { color:'var(--muted)', fontSize:13, padding:'24px 0', textAlign:'center' },
+  error:        { color:'var(--danger)', fontSize:13},
 
-  statGrid:     { display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:12, marginBottom:20 },
-  statCard:     { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'16px 18px' },
-  statValue:    { fontFamily:"'Cormorant Garamond', serif", fontSize:28, fontWeight:700, margin:'0 0 4px', color:'var(--accent, var(--accent))' },
-  statLabel:    { fontFamily:'system-ui', fontSize:12, fontWeight:600, color:'#1E1E1E', margin:'0 0 2px' },
-  statSub:      { fontFamily:'system-ui', fontSize:11, color:'#8A8680', margin:0 },
+  statGrid:     { display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:12, marginBottom:20 },
+  statCard:     { background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'16px 18px' },
+  statValue:    { fontFamily:"var(--font-display)", fontSize:28, fontWeight:700, margin:'0 0 4px', color:'var(--accent, var(--accent))' },
+  statLabel:    { fontSize:12, fontWeight:600, color:'var(--ink)', margin:'0 0 2px' },
+  statSub:      { fontSize:11, color:'var(--muted)', margin:0 },
 
   delBar:       { display:'flex', alignItems:'center', gap:8, marginBottom:16 },
-  dateInput:    { padding:'7px 10px', border:'1px solid #DDD8CE', borderRadius:6, fontFamily:'system-ui', fontSize:13, color:'#1E1E1E' },
-  slotHeader:   { fontFamily:"'Cormorant Garamond', serif", fontSize:18, fontWeight:700, color:'#1E1E1E', margin:'0 0 8px' },
-  slotCount:    { fontFamily:'system-ui', fontSize:12, fontWeight:400, color:'#8A8680' },
-  delAddress:   { fontFamily:'system-ui', fontSize:12, color:'#6B7280', margin:'2px 0' },
-  delItems:     { fontFamily:'system-ui', fontSize:12, color:'#1E1E1E', margin:'6px 0 0' },
+  dateInput:    { padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, color:'var(--ink)' },
+  slotHeader:   { fontFamily:"var(--font-display)", fontSize:18, fontWeight:700, color:'var(--ink)', margin:'0 0 8px' },
+  slotCount:    { fontSize:12, fontWeight:400, color:'var(--muted)' },
+  delAddress:   { fontSize:12, color:'var(--muted)', margin:'2px 0' },
+  delItems:     { fontSize:12, color:'var(--ink)', margin:'6px 0 0' },
 
   chips:        { display:'flex', gap:6, flexWrap:'wrap', marginBottom:16 },
-  chip:         { padding:'5px 12px', borderRadius:20, border:'1px solid #DDD8CE', background:'#fff', cursor:'pointer', fontSize:12, fontFamily:'system-ui', color:'#8A8680' },
+  chip:         { padding:'5px 12px', borderRadius:20, border:'1px solid var(--border)', background:'var(--surface)', cursor:'pointer', fontSize:12, color:'var(--muted)' },
   chipActive:   { background:'var(--accent, var(--accent))', color:'#fff', border:'1px solid var(--accent, var(--accent))' },
 
   list:         { display:'flex', flexDirection:'column', gap:8 },
-  orderCard:    { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'14px 16px' },
+  orderCard:    { background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'14px 16px' },
   orderTop:     { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 },
-  orderId:      { fontFamily:"'Source Code Pro', monospace", fontSize:13, fontWeight:600, color:'#1E1E1E', marginRight:8 },
-  orderAmount:  { fontFamily:'system-ui', fontSize:15, fontWeight:700, color:'var(--accent, var(--accent))' },
-  orderMeta:    { fontFamily:'system-ui', fontSize:12, color:'#8A8680', display:'flex', gap:6, marginBottom:4, flexWrap:'wrap' },
-  orderDate:    { fontFamily:'system-ui', fontSize:11, color:'#B5B0A8', margin:'2px 0 8px' },
+  orderId:      { fontFamily:"'Source Code Pro', monospace", fontSize:13, fontWeight:600, color:'var(--ink)', marginRight:8 },
+  orderAmount:  { fontSize:15, fontWeight:700, color:'var(--accent, var(--accent))' },
+  orderMeta:    { fontSize:12, color:'var(--muted)', display:'flex', gap:6, marginBottom:4, flexWrap:'wrap' },
+  orderDate:    { fontSize:11, color:'var(--faint)', margin:'2px 0 8px' },
   badge:        { padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600 },
   actions:      { display:'flex', gap:6, flexWrap:'wrap' },
-  btnAction:    { padding:'5px 12px', background:'var(--accent, var(--accent))', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600 },
-  btnDanger:    { padding:'5px 12px', background:'transparent', color:'#ef4444', border:'1px solid rgba(239,68,68,0.3)', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui' },
+  btnAction:    { padding:'5px 12px', background:'var(--accent, var(--accent))', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:600 },
+  btnDanger:    { padding:'5px 12px', background:'transparent', color:'var(--danger)', border:'1px solid rgba(239,68,68,0.3)', borderRadius:6, cursor:'pointer', fontSize:12},
 
-  catHeader:    { fontFamily:"'Cormorant Garamond', serif", fontSize:18, fontWeight:700, color:'#1E1E1E', margin:'0 0 8px' },
-  productCard:  { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'12px 14px' },
+  catHeader:    { fontFamily:"var(--font-display)", fontSize:18, fontWeight:700, color:'var(--ink)', margin:'0 0 8px' },
+  productCard:  { background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'12px 14px' },
   productTop:   { display:'flex', alignItems:'center', gap:8, marginBottom:8 },
-  productName:  { fontFamily:'system-ui', fontSize:13, fontWeight:600, color:'#1E1E1E' },
+  productName:  { fontSize:13, fontWeight:600, color:'var(--ink)' },
   productMeta:  { display:'flex', alignItems:'center', gap:10 },
   priceRow:     { display:'flex', alignItems:'center', gap:2 },
-  priceLabel:   { fontFamily:'system-ui', fontSize:13, color:'#1E1E1E', fontWeight:600 },
-  priceInput:   { width:60, padding:'3px 6px', border:'1px solid #DDD8CE', borderRadius:4, fontFamily:'system-ui', fontSize:13, color:'#1E1E1E', textAlign:'right' },
-  priceUnit:    { fontFamily:'system-ui', fontSize:12, color:'#8A8680' },
-  btnStock:     { padding:'4px 10px', background:'rgba(34,197,94,0.12)', color:'#16a34a', border:'1px solid rgba(34,197,94,0.3)', borderRadius:20, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600, whiteSpace:'nowrap' },
-  btnStockOff:  { padding:'4px 10px', background:'rgba(239,68,68,0.1)', color:'#ef4444', border:'1px solid rgba(239,68,68,0.3)', borderRadius:20, cursor:'pointer', fontSize:12, fontFamily:'system-ui', fontWeight:600, whiteSpace:'nowrap' },
-  btnGhost:     { padding:'4px 10px', background:'transparent', color:'#8A8680', border:'1px solid #DDD8CE', borderRadius:20, cursor:'pointer', fontSize:11, fontFamily:'system-ui' },
-  addProductForm:{ display:'flex', flexDirection:'column', gap:8, background:'#fff', border:'1px solid #DDD8CE', borderRadius:10, padding:14 },
-  apInput:      { flex:1, padding:'9px 11px', border:'1px solid #DDD8CE', borderRadius:6, fontFamily:'system-ui', fontSize:13, boxSizing:'border-box' },
-  btnDeleteProduct:{ marginTop:12, padding:'7px 12px', background:'transparent', color:'#ef4444', border:'1px solid rgba(239,68,68,0.3)', borderRadius:6, cursor:'pointer', fontSize:12, fontFamily:'system-ui' },
-  detailBlock:  { background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:14, marginBottom:14 },
-  detailName:   { fontFamily:'system-ui', fontSize:15, fontWeight:700, color:'#1E1E1E', margin:'0 0 4px' },
-  detailMeta:   { fontFamily:'system-ui', fontSize:13, color:'#6B7280', margin:'2px 0' },
-  detailNotes:  { fontFamily:'system-ui', fontSize:13, color:'#1E1E1E', margin:'6px 0 0', fontStyle:'italic' },
-  detailSection:{ fontFamily:'system-ui', fontSize:12, fontWeight:600, color:'#1E1E1E', margin:'0 0 8px' },
-  packRow:      { display:'flex', alignItems:'center', gap:10, background:'#fff', border:'1px solid #DDD8CE', borderRadius:8, padding:'10px 12px', fontFamily:'system-ui', fontSize:14, color:'#1E1E1E' },
+  priceLabel:   { fontSize:13, color:'var(--ink)', fontWeight:600 },
+  priceInput:   { width:60, padding:'3px 6px', border:'1px solid var(--border)', borderRadius:4, fontSize:13, color:'var(--ink)', textAlign:'right' },
+  priceUnit:    { fontSize:12, color:'var(--muted)' },
+  btnStock:     { padding:'4px 10px', background:'rgba(34,197,94,0.12)', color:'var(--ok)', border:'1px solid rgba(34,197,94,0.3)', borderRadius:20, cursor:'pointer', fontSize:12, fontWeight:600, whiteSpace:'nowrap' },
+  btnStockOff:  { padding:'4px 10px', background:'rgba(239,68,68,0.1)', color:'var(--danger)', border:'1px solid rgba(239,68,68,0.3)', borderRadius:20, cursor:'pointer', fontSize:12, fontWeight:600, whiteSpace:'nowrap' },
+  btnGhost:     { padding:'4px 10px', background:'transparent', color:'var(--muted)', border:'1px solid var(--border)', borderRadius:20, cursor:'pointer', fontSize:11},
+  addProductForm:{ display:'flex', flexDirection:'column', gap:8, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:10, padding:14 },
+  apInput:      { flex:1, padding:'9px 11px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, boxSizing:'border-box' },
+  btnDeleteProduct:{ marginTop:12, padding:'7px 12px', background:'transparent', color:'var(--danger)', border:'1px solid rgba(239,68,68,0.3)', borderRadius:6, cursor:'pointer', fontSize:12},
+  detailBlock:  { background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:14, marginBottom:14 },
+  detailName:   { fontSize:15, fontWeight:700, color:'var(--ink)', margin:'0 0 4px' },
+  detailMeta:   { fontSize:13, color:'var(--muted)', margin:'2px 0' },
+  detailNotes:  { fontSize:13, color:'var(--ink)', margin:'6px 0 0', fontStyle:'italic' },
+  detailSection:{ fontSize:12, fontWeight:600, color:'var(--ink)', margin:'0 0 8px' },
+  packRow:      { display:'flex', alignItems:'center', gap:10, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'10px 12px', fontSize:14, color:'var(--ink)' },
   packQty:      { fontWeight:700, color:'var(--accent, var(--accent))' },
-  packPrice:    { color:'#6B7280', fontSize:13, minWidth:70, textAlign:'right' },
-  detailTotal:  { display:'flex', justifyContent:'space-between', fontFamily:'system-ui', fontWeight:700, fontSize:16, color:'var(--accent, var(--accent))', marginTop:12, paddingTop:10, borderTop:'1px solid #DDD8CE' },
+  packPrice:    { color:'var(--muted)', fontSize:13, minWidth:70, textAlign:'right' },
+  detailTotal:  { display:'flex', justifyContent:'space-between', fontWeight:700, fontSize:16, color:'var(--accent, var(--accent))', marginTop:12, paddingTop:10, borderTop:'1px solid var(--border)' },
 }

@@ -1,3 +1,4 @@
+import { toast } from './ui/index.jsx'
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { VULA_API } from "../lib/authFetch";
 
@@ -20,7 +21,7 @@ const C = {
   red: "#D45A4A",
   text: "#E8EAF0",
   muted: "#7A8099",
-  dim: "#454A60",
+  dim: "#6A7090",
   highlight: "#1E2438",
 };
 
@@ -104,7 +105,7 @@ const inp = { background: C.surface, border: `1px solid ${C.border}`, borderRadi
 const lbl = { display: "block", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, fontFamily: "'DM Mono', monospace", marginBottom: 4 };
 
 function Tag({ children, color = C.blue }) {
-  return <span style={{ padding: "2px 7px", borderRadius: 3, background: `${color}20`, color, fontSize: 9, fontFamily: "'DM Mono', monospace", letterSpacing: "0.08em" }}>{children}</span>;
+  return <span style={{ padding: "2px 7px", borderRadius: 3, background: `color-mix(in srgb, ${color} 13%, transparent)`, color, fontSize: 9, fontFamily: "'DM Mono', monospace", letterSpacing: "0.08em" }}>{children}</span>;
 }
 
 function Card({ children, style }) {
@@ -141,7 +142,7 @@ function LineItem({ item, onUpdate, onRemove }) {
     <tr style={{ borderBottom: `1px solid ${C.border}` }}>
       {/* Description */}
       <td style={{ padding: "8px 10px", minWidth: 160 }}>
-        <div style={{ fontSize: 12, color: C.text, fontFamily: "system-ui", marginBottom: 3 }}>{item.description || rate.label || "Item"}</div>
+        <div style={{ fontSize: 12, color: C.text, marginBottom: 3 }}>{item.description || rate.label || "Item"}</div>
         {(rate.source || item.source) && <div style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace" }}>{rate.source || item.source}</div>}
       </td>
       {/* Market range */}
@@ -434,7 +435,7 @@ export default function VulaQSPro({ tenantId }) {
               </div>
               <div style={{ maxHeight: 520, overflowY: "auto" }}>
                 {ownRates.filter(r => !search || `${r.description} ${r.code || ""}`.toLowerCase().includes(search.toLowerCase())).slice(0, search ? 200 : 40).map(r => (
-                  <div key={`own-${r.code || r.description}-${r.rate}`} onClick={() => addOwnRate(r)} style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", background: `${C.green}0d` }}>
+                  <div key={`own-${r.code || r.description}-${r.rate}`} onClick={() => addOwnRate(r)} style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", background: `color-mix(in srgb, ${C.green} 5%, transparent)` }}>
                     <div style={{ fontSize: 11, color: C.text, marginBottom: 3 }}>{r.description || r.code}</div>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
                       <span style={{ fontSize: 9, color: C.dim, fontFamily: "'DM Mono', monospace" }} title={r.source || ""}>{r.learned ? `From your documents (${r.observations}) · ${r.unit}` : `Your rate · ${r.unit}`}</span>
@@ -476,7 +477,7 @@ export default function VulaQSPro({ tenantId }) {
                         return `${i.description || rate.label || "Item"}\t${parseFloat(i.qty)||0} ${rate.unit||""}\t${R(parseFloat(i.listPrice)||0)}\t${R(net)}\t${R(co)}`;
                       }).join("\n");
                       navigator.clipboard?.writeText(`VULA QS — ${projectName}\n${client ? `Client: ${client}\n` : ""}${"─".repeat(60)}\nDescription\tQty\tList Price\tNet Cost\tCharge-out\n${lines}`).catch(()=>{});
-                      alert("Copied! Paste into Excel or Word.");
+                      toast("Copied! Paste into Excel or Word.");
                     }} style={{ padding: "4px 12px", background: C.blue, border: "none", borderRadius: 4, color: "#fff", fontSize: 10, cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
                       Export
                     </button>
