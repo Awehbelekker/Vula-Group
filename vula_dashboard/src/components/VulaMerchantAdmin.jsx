@@ -56,6 +56,7 @@ import VulaCSMetrics from './VulaCSMetrics'
 import VulaJobCosting from './VulaJobCosting'
 import VulaCrossCheck from './VulaCrossCheck'
 import GlassCard from './GlassCard'
+import { BrandKitSettings } from './VulaSettings'
 import VulaQS from './VulaQS'
 import VulaQSPro from './VulaQSPro'
 import VulaTakeoff from './VulaTakeoff'
@@ -441,6 +442,34 @@ function HomeCustomiser({ layout, onSave, onCancel }) {
   )
 }
 
+// "Make it yours" (2026-09-29): a business whose brand kit is still Vula's default (no logo,
+// Vula green) gets its brand set up from Home on day one — upload a logo or paste a website,
+// Vula suggests the colours, preview, save. Hidden once a brand is set or when dismissed.
+function MakeItYours({ tenantId }) {
+  const [show, setShow] = useState(false)
+  const key = `vula-brand-dismissed-${tenantId}`
+  useEffect(() => {
+    let hidden = false
+    try { hidden = localStorage.getItem(key) === '1' } catch { /* private mode */ }
+    if (hidden) return
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/brand`).then(r => r.ok ? r.json() : null)
+      .then(b => { if (b && !b.logo_url && (!b.accent_color || b.accent_color.toUpperCase() === '#2C5545')) setShow(true) })
+      .catch(() => {})
+  }, [tenantId])  // eslint-disable-line
+  if (!show) return null
+  const dismiss = () => { try { localStorage.setItem(key, '1') } catch { /* private mode */ } setShow(false) }
+  return (
+    <div className="vula-panel" style={{ background: 'var(--surface)', border: '1px solid var(--accent)', borderRadius: 'var(--r-card)', padding: 'var(--s4)', marginBottom: 'var(--s4)' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+        <p style={{ ...ovS.sectionLabel, margin: 0, color: 'var(--accent)' }}>✨ Make it yours</p>
+        <button onClick={dismiss} style={{ marginLeft: 'auto', border: 'none', background: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12.5 }}>Not now</button>
+      </div>
+      <p style={{ fontSize: 13, color: 'var(--muted)', margin: '0 0 12px' }}>Upload your logo or paste your website — Vula picks your colours, and your whole dashboard, invoices, emails and phone app take them on.</p>
+      <BrandKitSettings tenantId={tenantId} />
+    </div>
+  )
+}
+
 function OverviewTab({ tenantId, onNavigate }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -556,6 +585,7 @@ function OverviewTab({ tenantId, onNavigate }) {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
           {!editing && <button onClick={() => setEditing(true)} style={{ border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12.5, cursor: 'pointer', fontWeight: 600 }}>⚙ Customise Home</button>}
         </div>)}
+      <MakeItYours tenantId={tenantId} />
       {editing && layout && <HomeCustomiser layout={layout} onSave={saveLayout} onCancel={() => setEditing(false)} />}
       {saveErr && <p style={styles.error}>{saveErr}</p>}
       {order.map(c => <GlassCard key={c} dark={c === 'customers'}>{cards[c]()}</GlassCard>)}

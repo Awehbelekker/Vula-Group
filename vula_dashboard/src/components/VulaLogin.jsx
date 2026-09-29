@@ -15,12 +15,14 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../store/auth'
-import { resolveTenantFromHost, getTenantTheme } from '../theme/tenantThemes'
+import { resolveTenantFromHost } from '../theme/tenantThemes'
+import { applyBrand } from '../theme/tokens'
 import { VULA_API } from '../lib/authFetch'
 
-// If reached via a tenant subdomain (offthehook.vula-ai.com), brand the login.
-const LOGIN_TENANT = resolveTenantFromHost()
-const LOGIN_THEME = LOGIN_TENANT ? getTenantTheme(LOGIN_TENANT) : null
+// Reached via a tenant's own dashboard address (admin.offthehook.co.za, gerflor.vula-ai.com…)?
+// The backend resolves the host to a tenant (its domains / store / slug) and the login wears that
+// tenant's saved brand — name, logo, colours, font. The static host list is only a first guess.
+const HOST_HINT = resolveTenantFromHost()
 
 const COLORS = {
   bg: '#F7F4EE',
@@ -41,7 +43,7 @@ export default function VulaLogin({ onSuccess }) {
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [loading, setLoading] = useState(false)
-  const [brandLogoUrl, setBrandLogoUrl] = useState(null)
+  const [loginBrand, setLoginBrand] = useState(null)
   const { login } = useAuthStore()
 
   // Self-serve workspace setup (2026-08-15) — a signed-in Supabase user with no
@@ -58,17 +60,20 @@ export default function VulaLogin({ onSuccess }) {
       .catch(() => {})
   }, [])
 
-  // Real logo (2026-07-24) — LOGIN_THEME's logoUrl is a static fallback in tenantThemes.js that
-  // goes stale the moment a tenant uploads their own (confirmed: off-the-hook's real logo_url in
-  // commerce_invoice_settings is a completely different file). Same fix already applied to the
-  // post-login sidebar (App.jsx) — this is the pre-auth screen that never got it. Uses the public
-  // /brand endpoint (not /admin/invoice-settings) since nobody is signed in yet at this screen.
   useEffect(() => {
-    if (!LOGIN_TENANT) return
-    fetch(`${VULA_API}/v1/commerce/${LOGIN_TENANT}/brand`)
-      .then((r) => r.json())
-      .then((b) => { if (b?.logo_url) setBrandLogoUrl(b.logo_url) })
+    let alive = true
+    const host = window.location.hostname
+    fetch(`${VULA_API}/v1/tenants/by-domain?host=${encodeURIComponent(host)}`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .catch(() => ({}))
+      .then((d) => {
+        const tid = d?.tenant_id || HOST_HINT
+        if (!tid) return null
+        return fetch(`${VULA_API}/v1/commerce/${tid}/brand`).then((r) => (r.ok ? r.json() : null))
+      })
+      .then((b) => { if (alive && b) { applyBrand(b); setLoginBrand(b) } })
       .catch(() => {})
+    return () => { alive = false }
   }, [])
 
   // Resolve tenant/role for a signed-in user (any method) and enter the app. A user with NO
@@ -279,13 +284,13 @@ export default function VulaLogin({ onSuccess }) {
     <div style={s.outer}>
       <div style={s.card}>
         <div style={s.logoWrap}>
-          {LOGIN_THEME ? (
+          {loginBrand ? (
             <>
-              {(brandLogoUrl || LOGIN_THEME.logoUrl) ? (
-                <img src={brandLogoUrl || LOGIN_THEME.logoUrl} alt={LOGIN_THEME.name}
+              {loginBrand.logo_url ? (
+                <img src={loginBrand.logo_url} alt={loginBrand.name || ''}
                      style={{ height: 96, width: 'auto', maxWidth: '100%', objectFit: 'contain', marginBottom: 10 }} />
               ) : (
-                <span style={{ ...s.logoText, color: LOGIN_THEME.accent }}>{LOGIN_THEME.name}</span>
+                <span style={{ ...s.logoText, color: 'var(--accent)' }}>{loginBrand.name}</span>
               )}
               <span style={s.logoSub}>Powered by Vula</span>
             </>
@@ -418,9 +423,7 @@ function Field({ label, type, value, onChange, placeholder }) {
 }
 
 function Btn({ children, disabled }) {
-  const activeStyle = LOGIN_THEME
-    ? { ...s.btn, background: LOGIN_THEME.accent }
-    : s.btn
+  const activeStyle = { ...s.btn, background: 'var(--accent)', color: 'var(--on-accent)' }
   return (
     <button type="submit" disabled={disabled}
       style={disabled ? s.btnDisabled : activeStyle}>

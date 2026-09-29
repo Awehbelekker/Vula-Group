@@ -4137,7 +4137,8 @@ async def admin_send_invoice_email(tenant_id: str, invoice_id: str, body: Option
     approval_link = _ensure_approval_link(tenant_id, invoice)
 
     from vula.api.email import send_invoice_email
-    sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name, approval_link)
+    sent = await send_invoice_email(recipient, invoice, pdf_bytes, tenant_name, approval_link,
+                                    brand=await public_brand(tenant_id))
     if not sent:
         raise HTTPException(
             status_code=503,
@@ -4431,12 +4432,21 @@ async def public_brand(tenant_id: str):
     truth for brand: the same commerce_invoice_settings row the dashboard's Brand Kit card writes,
     replacing the old split where the storefront read a separate, never-updated tenant_config.theme."""
     settings = await service.get_invoice_settings(tenant_id) or {}
+    from vula.api.tenants import display_name as _display_name
     return {
-        "name": settings.get("trading_as") or settings.get("company_name"),
+        # the name everywhere (dashboard shell, login, app icon, emails): the brand kit's trading
+        # name, else the company name, else the tenant's display name — never "Vula Commerce"
+        "name": (settings.get("trading_as") or settings.get("company_name")
+                 or _display_name(tenant_id)),
         "logo_url": settings.get("logo_url"),
+        "icon_url": settings.get("icon_url"),
+        "tagline": settings.get("tagline"),
         "accent_color": settings.get("accent_color"),
+        "secondary_color": settings.get("secondary_color"),
         "ink_color": settings.get("ink_color"),
         "font_pairing": settings.get("font_pairing"),
+        "corner_style": settings.get("corner_style") or "rounded",
+        "density": settings.get("density") or "comfortable",
         "logo_align": settings.get("logo_align") or "left",
         "logo_size": settings.get("logo_size") or "md",
         "header_sticky": settings.get("header_sticky", True),
@@ -4445,6 +4455,66 @@ async def public_brand(tenant_id: str):
         "header_cta_link": settings.get("header_cta_link"),
         "whatsapp": settings.get("company_phone"),  # utility bar contact link — already tenant-editable, no new field
     }
+
+
+# ── The installed app wears the business's brand (2026-09-29) ────────────────
+# The PWA manifest was static ("Vula Commerce", Vula green, an SVG icon iOS ignores), so every
+# business's home-screen app looked like Vula's. These are public (no secrets) like /brand.
+_ICON_CACHE: dict = {}
+
+
+@router.get("/{tenant_id}/app-icon/{size}.png")
+async def public_app_icon(tenant_id: str, size: int):
+    import time as _time
+    from fastapi.responses import Response
+    size = 512 if size > 256 else (192 if size > 180 else 180)
+    settings = await service.get_invoice_settings(tenant_id) or {}
+    src = settings.get("icon_url") or settings.get("logo_url")
+    accent = settings.get("accent_color") or "#2C5545"
+    key = (tenant_id, size, src, accent)
+    hit = _ICON_CACHE.get(key)
+    if hit and _time.time() - hit[0] < 3600:
+        return Response(hit[1], media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+    from vula.commerce.brand_icon import render_icon
+    name = settings.get("trading_as") or settings.get("company_name") or tenant_id
+    png = await render_icon(src, accent, name, size, square=bool(settings.get("icon_url")))
+    _ICON_CACHE[key] = (_time.time(), png)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/{tenant_id}/manifest.webmanifest")
+async def public_manifest(tenant_id: str):
+    from fastapi.responses import JSONResponse
+    from config import settings as _settings
+    brand = await public_brand(tenant_id)
+    name = brand.get("name") or tenant_id
+    base = f"{(_settings.public_base_url or '').rstrip('/')}/v1/commerce/{tenant_id}/app-icon"
+    return JSONResponse({
+        "name": name, "short_name": name[:12], "description": brand.get("tagline") or f"{name} — run by Vula",
+        "start_url": "/", "scope": "/", "display": "standalone",
+        "background_color": "#F7F4EE", "theme_color": brand.get("accent_color") or "#2C5545",
+        "icons": [{"src": f"{base}/192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+                  {"src": f"{base}/512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
+    }, media_type="application/manifest+json", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.post("/{tenant_id}/admin/brand/suggest")
+async def admin_brand_suggest(tenant_id: str, body: dict):
+    """A brand kit suggested from the business's logo and/or website (brand_suggest.py): colours
+    sampled from the real image, a readable button colour, the website's theme-color. Nothing is
+    saved — the Brand kit previews it and the owner taps Apply."""
+    from vula.commerce import brand_suggest
+    logo = (body or {}).get("logo_url")
+    site = (body or {}).get("website_url")
+    if not logo and not site:
+        settings = await service.get_invoice_settings(tenant_id) or {}
+        logo = settings.get("logo_url")
+    if not logo and not site:
+        raise HTTPException(status_code=400, detail="Upload a logo or give your website address first.")
+    out = await brand_suggest.suggest(logo_url=logo, website_url=site)
+    if not out:
+        raise HTTPException(status_code=422, detail="Couldn't find brand colours in that logo or website.")
+    return {"suggestion": out}
 
 
 # ── Saved clients / suppliers (invoicing) ─────────────────────────────────────

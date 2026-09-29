@@ -19,8 +19,11 @@ const BEVEL = 26          // px of edge that bends
 const STRENGTH = 34       // displacement scale: the edge samples up to STRENGTH/2 px inward
 
 // Chrome, Edge, Opera, Samsung Internet (userAgentData is Chromium-only; iOS browsers are WebKit).
+// Not on touch devices: a displacement filter + ResizeObserver per card is too much for a
+// low-end phone; phones keep the frost and the light.
 const CAN_BEND = typeof navigator !== 'undefined'
   && !!navigator.userAgentData?.brands?.some(b => b.brand === 'Chromium')
+  && !(typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches)
 
 // A curved bevel, not a straight ramp: strongest right at the edge, easing to neutral (128).
 const RAMP = [[0, 255], [0.25, 212], [0.55, 168], [1, 128]]

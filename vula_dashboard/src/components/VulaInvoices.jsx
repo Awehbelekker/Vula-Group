@@ -7,6 +7,7 @@
  * - Send via WhatsApp, mark paid, delete
  */
 
+import { uploadBrandImage } from '../lib/brandUpload'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toWhatsAppNumber } from '../lib/phone'
 import { supabase } from '../lib/supabase'
@@ -1221,13 +1222,8 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
     if (!file) return
     setUploadingLogo(true)
     try {
-      const clean = file.name.replace(/[^a-zA-Z0-9.-]/g, '-').toLowerCase()
-      const path = `${tenantId}/logo/${Date.now()}-${clean}`
-      const { error } = await supabase.storage.from('product-images').upload(path, file, { cacheControl: '3600', upsert: true })
-      if (!error) {
-        const { data } = supabase.storage.from('product-images').getPublicUrl(path)
-        if (data?.publicUrl) set('logo_url', data.publicUrl)
-      }
+      const url = await uploadBrandImage(tenantId, file, 'logo')
+      if (url) set('logo_url', url)
     } finally { setUploadingLogo(false) }
   }
 

@@ -159,7 +159,12 @@ async def send_data_export(tenant_id: str, phone: str) -> Dict[str, Any]:
 
     try:
         from vula.api.email import send_data_export_email
-        ok = await send_data_export_email(email, tenant_name, pdf_bytes)
+        from vula.api.commerce import public_brand
+        try:
+            brand = await public_brand(tenant_id)
+        except Exception:
+            brand = None
+        ok = await send_data_export_email(email, tenant_name, pdf_bytes, brand=brand)
     except Exception as exc:
         logger.error("data export email send failed (tenant=%s): %s", tenant_id, exc)
         return {"error": "email_failed"}

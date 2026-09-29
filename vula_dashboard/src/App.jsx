@@ -35,8 +35,7 @@ import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 import VulaSmartScanner from "./components/VulaSmartScanner";
 import VulaShell from "./components/VulaShell";
 import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible } from "./navConfig";
-import { getTenantTheme, themeVars } from "./theme/tenantThemes";
-import { applyAccent, applyInk, applyFontPairing } from "./theme/tokens";
+import { applyBrand, applyThemeMode } from "./theme/tokens";
 
 const COLORS = {
   bg: "#F7F4EE",
@@ -104,7 +103,7 @@ export default function App() {
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
-  const [brandLogoUrl, setBrandLogoUrl] = useState(null); // live logo_url from Settings, overrides tenantThemes' static fallback
+  const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
   const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
 
   // DB-driven tenant switcher: every configured tenant, not a hardcoded pair.
@@ -132,38 +131,41 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Brand the whole portal from the tenant's brand kit: baseline from tenantThemes, then
-  // override from the DB (commerce_invoice_settings — accent/ink/font) so a tenant's own choices
-  // drive buttons/tabs/borders/headings everywhere — not just the invoice PDF (P3 brand kit).
+  // Brand the whole portal from the tenant's brand kit (2026-09-29). ONE source: the brand kit
+  // (commerce_invoice_settings, read via the public /brand endpoint) sets name, logo, icon,
+  // colours, font, corners and density everywhere. A hardcoded tenantThemes.js wrapper used to
+  // override it on every page, so Gerflor's saved navy "Gerflor Cape Town" showed as Vula-green
+  // "Vula Commerce" and Off the Hook's own blue never appeared. Settings › Brand kit fires
+  // "vula-brand-changed" after a save so the shell updates without a reload.
+  useEffect(() => { applyThemeMode(); }, []);
   useEffect(() => {
-    const tid = (role === "master") ? masterTenant : ownTenant;
-    const baseTheme = getTenantTheme(tid);
-    applyAccent(baseTheme.accent);
-    applyInk(baseTheme.ink);
-    let meta = document.querySelector('meta[name="theme-color"]');
-    if (!meta) { meta = document.createElement("meta"); meta.name = "theme-color"; document.head.appendChild(meta); }
-    meta.content = baseTheme.accent;
-
-    const API = VULA_API;
-    setBrandLogoUrl(null); // reset on tenant switch so a stale logo never flashes for the wrong tenant
+    // Master HQ wears Vula's own brand; only "Open as tenant" takes on that tenant's brand
+    // (the whole master panel used to recolour to whichever tenant was picked in the switcher).
+    const tid = (role === "master") ? (activeTab === "merchant" ? masterTenant : null) : ownTenant;
+    setBrand(null); // reset on tenant switch so a stale logo/name never flashes for the wrong tenant
+    applyBrand({});
     if (!tid) return;
-    fetch(`${API}/v1/commerce/${tid}/admin/invoice-settings`)
-      .then((r) => r.json())
-      .then((d) => {
-        const s = d?.settings || {};
-        const c = s.accent_color;
-        if (c && /^#?[0-9a-fA-F]{3,8}$/.test(c)) {
-          const hex = c.startsWith("#") ? c : `#${c}`;
-          applyAccent(hex); meta.content = hex;
-        }
-        if (s.ink_color && /^#?[0-9a-fA-F]{3,8}$/.test(s.ink_color)) {
-          applyInk(s.ink_color.startsWith("#") ? s.ink_color : `#${s.ink_color}`);
-        }
-        if (s.font_pairing) applyFontPairing(s.font_pairing);
-        if (s.logo_url) setBrandLogoUrl(s.logo_url);
+    let alive = true;
+    const load = () => fetch(`${VULA_API}/v1/commerce/${tid}/brand`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        if (!alive || !b) return;
+        applyBrand(b); setBrand(b);
+        // the installed app (home-screen name + icon) and the browser tab wear the brand too
+        const setLink = (rel, href) => {
+          let l = document.querySelector(`link[rel="${rel}"]`);
+          if (!l) { l = document.createElement("link"); l.rel = rel; document.head.appendChild(l); }
+          l.href = href;
+        };
+        setLink("manifest", `${VULA_API}/v1/commerce/${tid}/manifest.webmanifest`);
+        setLink("apple-touch-icon", `${VULA_API}/v1/commerce/${tid}/app-icon/180.png`);
+        if (b.name) document.title = b.name;
       })
       .catch(() => {});
-  }, [role, tenantId, masterTenant]);
+    load();
+    window.addEventListener("vula-brand-changed", load);
+    return () => { alive = false; window.removeEventListener("vula-brand-changed", load); };
+  }, [role, tenantId, masterTenant, activeTab]);
 
   // Load this member's access scope (which modules they may see) for owners/staff.
   useEffect(() => {
@@ -257,14 +259,13 @@ export default function App() {
   }
 
   if (role === "owner" || role === "staff") {
-    const theme = getTenantTheme(effectiveTenantId);
-    const tenantName = theme.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
+    const tenantName = brand?.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
     const groups = withInboxBadge(filterGroups(MERCHANT_GROUPS,
       merchantVisible({ full, access, modules: tenantModules })), openEscalations);
     return (
-      <div style={{ ...themeVars(theme) }}>
+      <div>
         <VulaShell
-          brand={{ logoUrl: brandLogoUrl || theme.logoUrl, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: theme.tagline || "Business admin" }}
+          brand={{ logoUrl: brand?.logo_url, logoEmoji: (tenantName || "V")[0], name: tenantName, sub: brand?.tagline || "Business admin" }}
           groups={groups}
           activeId={merchTab}
           onSelect={setMerchTab}
@@ -285,11 +286,10 @@ export default function App() {
   // overlay + old tab strip). Now the master steps INTO the tenant's real shell — same
   // experience the owner gets — with a "← Master HQ" way back.
   if (activeTab === "merchant") {
-    const mTheme = getTenantTheme(effectiveTenantId);
-    const mName = mTheme.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
+    const mName = brand?.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
     const mGroups = withInboxBadge(filterGroups(MERCHANT_GROUPS, () => true), openEscalations); // master sees every module
     return (
-      <div style={{ ...themeVars(mTheme) }}>
+      <div>
         {/* Prominent, impossible-to-miss impersonation banner — the small brand "sub" label
             below is easy to miss once scrolled past the header; this stays pinned above
             everything for the whole visit. Shows the reason logged with master_impersonate_tenant
@@ -303,7 +303,7 @@ export default function App() {
           {impersonateReason && <span style={{ fontWeight: 400, opacity: 0.85 }}>— {impersonateReason}</span>}
         </div>
         <VulaShell
-          brand={{ logoUrl: brandLogoUrl || mTheme.logoUrl, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
+          brand={{ logoUrl: brand?.logo_url, logoEmoji: (mName || "V")[0], name: mName, sub: "Viewing as tenant" }}
           groups={mGroups}
           activeId={merchTab}
           onSelect={setMerchTab}

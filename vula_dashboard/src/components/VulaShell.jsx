@@ -7,6 +7,19 @@
  * Styles live in index.css (.vshell-*) so media queries + tokens (var(--accent) etc.) apply.
  */
 import { useState } from "react";
+import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
+
+// Auto (follow the phone) → Light → Dark → Auto. Per person, remembered on this device.
+const MODES = [["auto", "◐", "Theme: follows your device"], ["light", "☀", "Theme: light"], ["dark", "☾", "Theme: dark"]];
+function ThemeToggle() {
+  const [mode, setMode] = useState(getThemeMode());
+  const i = Math.max(0, MODES.findIndex(([m]) => m === mode));
+  const next = MODES[(i + 1) % MODES.length][0];
+  return (
+    <button className="vshell-theme" onClick={() => { setThemeMode(next); setMode(next); }}
+      title={MODES[i][2]} aria-label={`${MODES[i][2]} — switch`}>{MODES[i][1]}</button>
+  );
+}
 
 export default function VulaShell({
   brand,          // { logoUrl?, logoEmoji?, name, sub }
@@ -81,6 +94,7 @@ export default function VulaShell({
           <h1>{title}</h1>
           <div className="vshell-topright">
             {headerExtra}
+            {DARK_MODE_READY && <ThemeToggle />}
             <span className="vshell-user">{userEmail}{roleLabel ? ` · ${roleLabel}` : ""}</span>
             <button className="vshell-signout" onClick={onLogout}>Sign out</button>
           </div>

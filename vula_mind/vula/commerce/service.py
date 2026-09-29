@@ -2719,8 +2719,20 @@ _INVOICE_SETTINGS_FIELDS = (
     "footer_text", "show_vat_breakdown", "show_company_reg", "logo_size", "logo_align",
     "header_sticky", "header_nav_position", "header_cta_text", "header_cta_link",
     "signature_url", "signature_name",
+    "secondary_color", "corner_style", "density", "tagline", "icon_url",
 )
+_CORNER_STYLES = ("rounded", "soft", "sharp")
+_DENSITIES = ("comfortable", "compact")
 _TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded", "digg")
+
+
+async def _brand_accent(tenant_id: str) -> Optional[str]:
+    """The business's brand colour for an export's header rows — best-effort: a colour must
+    never be why an export fails."""
+    try:
+        return ((await get_invoice_settings(tenant_id)) or {}).get("accent_color")
+    except Exception:
+        return None
 
 
 async def get_invoice_settings(tenant_id: str) -> Optional[dict]:
@@ -2744,9 +2756,11 @@ _INVOICE_SETTINGS_128_FIELDS = (  # only exist once migration 128 runs
     "header_sticky", "header_nav_position", "header_cta_text", "header_cta_link",
 )
 _INVOICE_SETTINGS_165_FIELDS = ("signature_url", "signature_name")  # only exist once migration 165 runs
+# the dashboard theme's brand fields (2026-09-29) — only exist once migration 187 runs
+_INVOICE_SETTINGS_187_FIELDS = ("secondary_color", "corner_style", "density", "tagline", "icon_url")
 _INVOICE_SETTINGS_OPTIONAL_FIELDS = (
     _INVOICE_SETTINGS_078_FIELDS + _INVOICE_SETTINGS_103_FIELDS + _INVOICE_SETTINGS_128_FIELDS
-    + _INVOICE_SETTINGS_165_FIELDS
+    + _INVOICE_SETTINGS_165_FIELDS + _INVOICE_SETTINGS_187_FIELDS
 )
 
 
@@ -2764,6 +2778,14 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
     choice = patch.get("template_choice")
     if choice is not None and choice not in _TEMPLATE_CHOICES:
         raise ValueError(f"template_choice must be one of {_TEMPLATE_CHOICES}")
+    if patch.get("corner_style") not in (None, "") and patch["corner_style"] not in _CORNER_STYLES:
+        raise ValueError(f"corner_style must be one of {_CORNER_STYLES}")
+    if patch.get("density") not in (None, "") and patch["density"] not in _DENSITIES:
+        raise ValueError(f"density must be one of {_DENSITIES}")
+    for key in ("accent_color", "ink_color", "secondary_color"):
+        v = patch.get(key)
+        if v and not re.fullmatch(r"#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?", str(v).strip()):
+            raise ValueError(f"{key} must be a hex colour like #1a295e")
 
     db = _client()
     existing = await get_invoice_settings(tenant_id)
@@ -3825,7 +3847,7 @@ async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
         return False
     try:
         from vula.commerce.xlsx import render_supplier_history_xlsx
-        xlsx_bytes = render_supplier_history_xlsx(result, supplier)
+        xlsx_bytes = render_supplier_history_xlsx(result, supplier, accent=await _brand_accent(tenant_id))
         if not xlsx_bytes:
             return False
         return await _send_xlsx(tenant_id, phone, xlsx_bytes, supplier)
@@ -3909,7 +3931,8 @@ async def answer_all_invoices(tenant_id: str, question: str, phone: str = "") ->
         try:
             from vula.commerce.xlsx import render_invoices_xlsx
             materials, _ = _aggregate_line_items(raw, cap=None)
-            data = render_invoices_xlsx(rows, "All suppliers", materials=materials, by_supplier=True)
+            data = render_invoices_xlsx(rows, "All suppliers", materials=materials, by_supplier=True,
+                                        accent=await _brand_accent(tenant_id))
             xlsx_sent = bool(data) and await _send_xlsx(tenant_id, phone, data, "All suppliers")
         except Exception as exc:
             logger.warning("all-invoices xlsx send failed for %s: %s", tenant_id, exc)

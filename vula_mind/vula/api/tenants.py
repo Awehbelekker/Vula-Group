@@ -342,6 +342,50 @@ async def ai_spend(days: int = 14) -> dict:
     }
 
 
+def tenant_for_host(host: str) -> Optional[str]:
+    """Which business a dashboard address belongs to, so the login page shows its brand before
+    anyone signs in. Checks, in order: the tenant's own `domains`; its store's host with an
+    admin./app./dashboard. prefix (admin.offthehook.co.za → offthehook.co.za); then
+    <slug>.vula-ai.com. None for the apex, master or preview hosts."""
+    h = (host or "").strip().lower().split(":")[0]
+    if not h:
+        return None
+    bare = h
+    for pre in ("admin.", "app.", "dashboard.", "www."):
+        if bare.startswith(pre):
+            bare = bare[len(pre):]
+            break
+    try:
+        rows = _client().table("vula_tenant_config").select("tenant_id,domains,store_url").limit(500).execute().data or []
+    except Exception as exc:
+        log.debug("tenant_for_host lookup failed: %s", exc)
+        rows = []
+    for r in rows:
+        doms = {str(d).lower().strip() for d in (r.get("domains") or []) if d}
+        if h in doms or bare in doms:
+            return r["tenant_id"]
+    import re as _re
+    for r in rows:
+        store = _re.sub(r"^https?://", "", (r.get("store_url") or "").lower()).split("/")[0]
+        store = store[4:] if store.startswith("www.") else store
+        if store and store == bare and h != bare:          # only the admin./app. host, not the shop
+            return r["tenant_id"]
+    if bare.endswith(".vula-ai.com"):
+        slug = bare[: -len(".vula-ai.com")]
+        ids = {r["tenant_id"] for r in rows}
+        for cand in (slug, f"{slug}-demo"):
+            if cand in ids:
+                return cand
+    return None
+
+
+@router.get("/by-domain")
+async def get_tenant_by_domain(host: str) -> dict:
+    """Public: the tenant a dashboard hostname belongs to (no secrets — just the id), for a
+    branded login page."""
+    return {"tenant_id": tenant_for_host(host)}
+
+
 @router.get("/{tenant_id}")
 async def get_tenant(tenant_id: str) -> dict:
     cfg = get_config(tenant_id, fresh=True)

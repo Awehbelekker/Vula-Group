@@ -187,4 +187,7 @@ async def test_send_data_export_success():
 
     assert result == {"sent": True, "email": "client@example.com"}
     mock_render.assert_called_once()
-    mock_send.assert_called_once_with("client@example.com", "DIGG", b"%PDF-1.4")
+    mock_send.assert_called_once()
+    assert mock_send.call_args.args == ("client@example.com", "DIGG", b"%PDF-1.4")
+    # the export email wears the business's brand, not Vula's (2026-09-29)
+    assert "brand" in mock_send.call_args.kwargs
