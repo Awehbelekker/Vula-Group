@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 from typing import Optional
 from urllib.parse import urlencode
@@ -152,8 +153,17 @@ def _popup_close_html(message: str, ok: bool = True) -> HTMLResponse:
         f"""<!doctype html><html><head><meta charset="utf-8"><title>ClickUp</title></head>
         <body style="font-family:system-ui;text-align:center;padding:48px;color:{colour}">
         <h2>{message}</h2><p>You can close this window.</p>
-        <script>try{{window.opener&&window.opener.postMessage('clickup-connected','*');}}catch(e){{}}
-        setTimeout(function(){{window.close();}}, 1200);</script>
+        <p><a href="{settings.dashboard_url}">Back to Vula</a></p>
+        <script>
+        // Opened as a pop-up: tell the dashboard and close. Opened in the same tab (a phone that
+        // blocked the pop-up): go back to the dashboard instead of stranding her here.
+        if (window.opener) {{
+          try {{ window.opener.postMessage('clickup-connected','*'); }} catch(e) {{}}
+          setTimeout(function(){{ window.close(); }}, 1200);
+        }} else {{
+          setTimeout(function(){{ window.location.href = {json.dumps(settings.dashboard_url)}; }}, 1500);
+        }}
+        </script>
         </body></html>"""
     )
 

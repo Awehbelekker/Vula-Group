@@ -401,14 +401,33 @@ async def attach_file_to_list(tenant_id: str, list_id: str, filename: str,
 
     # Attach the file (multipart). Note: no Content-Type header — httpx sets the
     # multipart boundary; ClickUp auth header carries the token.
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        r = await client.post(
-            f"{_BASE}/task/{task_id}/attachment",
-            headers={"Authorization": token},
-            files={"attachment": (filename, data, content_type)},
-        )
-        r.raise_for_status()
-        d = r.json()
+    async def _attach(tid: str) -> httpx.Response:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            return await client.post(f"{_BASE}/task/{tid}/attachment",
+                                     headers={"Authorization": token},
+                                     files={"attachment": (filename, data, content_type)})
+
+    r = await _attach(task_id)
+    # 2026-09-29 (DIGG): every attach into ATLANTIS FOODS failed "401 Unauthorized" while the same
+    # token synced fine — the remembered documents task had been deleted, moved or made private
+    # in ClickUp. A refused/missing remembered task isn't a dead connection: file into a fresh
+    # documents task in the project's list instead.
+    if r.status_code in (401, 403, 404) and list_id:
+        logger.warning("ClickUp refused documents task %s (%s) — using a fresh one in list %s",
+                       task_id, r.status_code, list_id)
+        existing = await find_task(tenant_id, _DOCS_TASK_TITLE, list_id=list_id)
+        fresh = existing["id"] if existing and existing.get("id") != task_id else None
+        if not fresh:
+            created = await create_task(
+                tenant_id, title=_DOCS_TASK_TITLE,
+                description="Documents filed here automatically by Vula from WhatsApp.",
+                list_id=list_id)
+            fresh = created.get("id")
+        if fresh:
+            task_id = fresh
+            r = await _attach(task_id)
+    r.raise_for_status()
+    d = r.json()
     return {"task_id": task_id, "attachment_id": d.get("id")}
 
 

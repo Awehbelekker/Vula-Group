@@ -61,11 +61,16 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
   const handleConnect = useCallback(async () => {
     setLoading(true)
     setError(null)
+    // Open the window NOW, inside the tap: a window opened after an `await` isn't a user action
+    // any more, and phones and Safari silently block it (2026-09-29, Judy couldn't reconnect).
+    // If it's blocked anyway, go to ClickUp in this tab; the callback brings her back.
+    const popup = window.open('', 'clickup-oauth', 'width=620,height=760')
     try {
       const r = await fetch(`${VULA_API}/v1/clickup/authorize-url?tenant_id=${encodeURIComponent(tenantId)}`)
       const d = await r.json()
       if (!d.url) throw new Error(d.error || 'ClickUp app not configured.')
-      window.open(d.url, 'clickup-oauth', 'width=620,height=760')
+      if (popup && !popup.closed) popup.location.href = d.url
+      else { window.location.href = d.url; return }
       // Poll for ~90s while the user authorises in the popup.
       let ticks = 0
       pollRef.current = setInterval(() => {
@@ -73,6 +78,7 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
         if (++ticks > 30 || status === 'connected') clearInterval(pollRef.current)
       }, 3000)
     } catch (err) {
+      if (popup && !popup.closed) popup.close()
       setError(err.message)
     } finally {
       setLoading(false)
