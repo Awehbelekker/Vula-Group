@@ -145,6 +145,20 @@ def test_reflect_writes_the_graph_tenant_id(monkeypatch):
     assert rows[0]["tenant_id"] == TENANT_A
 
 
+def test_reflection_row_matches_the_column_types(monkeypatch):
+    """2026-09-29: production had 0 rows in vula_reflections although reflections ran all day —
+    total_latency_ms is an integer column and the graph's latency is a float (14278.98…), so
+    every insert was rejected and only logged at debug. The fake client accepted anything."""
+    fake = _FakeClient()
+    agent = _agent(monkeypatch, fake)
+    graph = _graph(TENANT_A, "Can you summarize Jack hammer invoices")
+    graph.completed_at = graph.created_at + 14.27898907661438
+    agent.reflect(graph)
+    row = fake._tables["vula_reflections"][0]
+    assert isinstance(row["total_latency_ms"], int) and row["total_latency_ms"] == 14279
+    assert row["tenant_id"] and row["graph_id"] and row["goal"]          # NOT NULL columns
+
+
 def test_reflect_fails_open_when_the_table_is_missing(monkeypatch):
     """migration 159 not yet applied — must never break the caller's request."""
     agent = _agent(monkeypatch, _BrokenClient())

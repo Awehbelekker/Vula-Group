@@ -309,11 +309,13 @@ class ReflectionAgent:
                 "winning_tier": log.model_tiers_used[0] if log.model_tiers_used else None,
                 "outcome_score": log.outcome_score,
                 "merge_strategy": log.merge_strategy_used.value,
-                "total_latency_ms": log.total_latency_ms,
+                # integer column: a float ("14278.98") was rejected, so until 2026-09-29 no
+                # reflection was ever stored and routing hints never had anything to learn from.
+                "total_latency_ms": int(round(log.total_latency_ms or 0)),
                 "what_worked": log.what_worked,
                 "what_to_try_next": log.what_to_try_next,
                 "skills_used": log.skills_used,
                 "model_tiers_used": log.model_tiers_used,
             }).execute()
         except Exception as exc:
-            logger.debug("reflection write skipped (run migration 159?): %s", exc)
+            logger.warning("reflection write failed (run migration 159?): %s", exc)
