@@ -99,3 +99,17 @@ def test_rules_under_two_spellings_of_one_project_are_not_ambiguous(monkeypatch)
     monkeypatch.setattr("vula.commerce.service.canonical_project", _canon)
     got = doc_filing.lookup_learned_project("digg-demo", {"supplier": "Edison Maunganidze"})
     assert got["project"] == "HPC Bokaap" and not got["ambiguous"]
+
+
+def test_the_business_own_address_names_no_project(digg, monkeypatch):
+    doc_filing._ADDR_CACHE.clear()
+    q = MagicMock()
+    q.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[{"registered_address": "22B Porterfield Road, Blouberg, Cape Town"}])
+    monkeypatch.setattr(doc_filing, "_client", lambda: MagicMock(table=lambda _t: q))
+    drawing = ("This is a construction plan for the demolition and new brickwork of a first-floor "
+               "apartment at Villa Belladonna, located at 22 Porterfield Road, Blouberg, Cape Town.")
+    assert "porterfield" not in doc_filing.without_own_address("digg-demo", drawing).lower()
+    assert (project_resolver.resolve("digg-demo", {}, drawing) or {}).get("project") != "Porterfield"
+    assert project_resolver.resolve("digg-demo", {}, "Porterfield: kitchen tiles")["project"] == "Porterfield"
+    doc_filing._ADDR_CACHE.clear()

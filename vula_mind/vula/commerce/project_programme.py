@@ -190,7 +190,8 @@ def normalise_tasks(raw: List[Dict[str, Any]], year_hint: int) -> List[Dict[str,
         out.append({"title": title[:300], "room": (str(t.get("room") or "").strip() or "General")[:80],
                     "trade": str(t.get("trade") or "").strip()[:60],
                     "assignee": str(t.get("assignee") or "").strip()[:80],
-                    "start": start, "end": end})
+                    "start": start, "end": end, "done": bool(t.get("done")),
+                    "notes": str(t.get("notes") or "")[:300]})
     return out
 
 
@@ -287,6 +288,13 @@ def match_person(people: List[Dict[str, Any]], name: str) -> Optional[Dict[str, 
     return first[0] if len(first) == 1 else None
 
 
+_NAME_SPLIT = re.compile(r"\s*(?:/|,|&|\+|\band\b)\s*", re.IGNORECASE)
+
+
+def split_names(assignee: str) -> List[str]:
+    return [n.strip() for n in _NAME_SPLIT.split(assignee or "") if n.strip()]
+
+
 def import_programme(tenant_id: str, project: str, doc: Dict[str, Any],
                      tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Replace the project's open programme tasks with these (tasks already done are kept)."""
@@ -298,15 +306,19 @@ def import_programme(tenant_id: str, project: str, doc: Dict[str, Any],
     now = datetime.now(timezone.utc).isoformat()
     rows, unmatched = [], set()
     for t in tasks:
-        who = match_person(people, t["assignee"]) if t["assignee"] else None
-        if t["assignee"] and not (who and who["kind"] == "site"):
-            unmatched.add(t["assignee"])
-        rows.append({"id": uuid.uuid4().hex, "tenant_id": tenant_id, "project_id": project,
-                     "title": t["title"], "trade": t["trade"], "status": "pending",
-                     "assigned_to": (who or {}).get("id") or "", "due_date": t["end"] or "",
-                     "start_date": t["start"] or "", "room": t["room"],
-                     "assignee_name": t["assignee"], "source": "programme",
-                     "source_doc_id": doc.get("id"), "notes": "", "created_at": now, "updated_at": now})
+        # "Electrical & Plumbing Second Fix (Elyas / Edison)": one row per person, so each gets it
+        for name in split_names(t["assignee"]) or [""]:
+            who = match_person(people, name) if name else None
+            if name and not (who and who["kind"] == "site"):
+                unmatched.add(name)
+            rows.append({"id": uuid.uuid4().hex, "tenant_id": tenant_id, "project_id": project,
+                         "title": t["title"], "trade": t["trade"],
+                         "status": "complete" if t.get("done") else "pending",
+                         "assigned_to": (who or {}).get("id") or "", "due_date": t["end"] or "",
+                         "start_date": t["start"] or "", "room": t["room"],
+                         "assignee_name": name, "source": "programme",
+                         "source_doc_id": doc.get("id"), "notes": t.get("notes") or "",
+                         "created_at": now, "updated_at": now})
     for i in range(0, len(rows), 200):
         db.table("vula_field_tasks").insert(rows[i:i + 200]).execute()
     saved = (db.table("vula_field_tasks").select("id").eq("tenant_id", tenant_id)
@@ -486,6 +498,8 @@ def _owners(tenant_id: str) -> List[str]:
 async def morning_briefs(tenant_id: str, day: Optional[date] = None, send: bool = True) -> Dict[str, Any]:
     """Build (and send) today's messages for every project with programme tasks."""
     day = day or today_sast()
+    if send:
+        await refresh_from_clickup(tenant_id)          # ClickUp programmes are read fresh each morning
     tasks = programme_tasks(tenant_id)
     by_project: Dict[str, List[Dict[str, Any]]] = {}
     for t in tasks:
@@ -573,3 +587,134 @@ def active_programme_project(tenant_id: str) -> Optional[str]:
             ends[t["project_id"]] = max(ends.get(t["project_id"], ""), t["due_date"])
     live = [p for p, e in ends.items() if e >= today] or list(ends)
     return sorted(live, key=lambda p: ends[p])[-1] if live else None
+
+
+# ── Programmes that live in ClickUp ──────────────────────────────────────────
+# 2026-09-29 (Ian): DIGG runs its programmes in ClickUp — Belladonna's "Work Programme" list
+# ("Plumbing First Fix (Edison)", "Painting (Eric)", …); Sporty Phase 2 has one list per room.
+# Read straight from there, so there's no Gantt to send and a change in ClickUp reaches the
+# next morning's messages.
+
+_PROGRAMME_LIST = re.compile(r"programme|program\b|gantt|schedule of works|work plan", re.IGNORECASE)
+_NOT_PROGRAMME = re.compile(r"procurement|documents?|design|concept|legali[sz]ation|council|submission",
+                            re.IGNORECASE)
+_WHO_IN_TITLE = re.compile(r"\s*\(([^)]+)\)\s*$")
+
+
+def clickup_programme_lists(tenant_id: str, project: str) -> List[tuple]:
+    """(list_id, list_name) of the project's programme in ClickUp: the lists in its folder named
+    like a programme ("Work Programme"); failing that, a folder of per-room lists ("Sporty P2 –
+    Reception") counts as the programme. Design, procurement and council lists never do."""
+    from vula.commerce.service import project_key
+    from vula.integrations.doc_filing import _clickup_candidates, _project_label
+    mine = [(lid, name) for lid, name in _clickup_candidates(tenant_id)
+            if project_key(_project_label(name)) == project_key(project)]
+    leaf = lambda n: str(n).split("/")[-1].strip()
+    named = [(lid, n) for lid, n in mine if _PROGRAMME_LIST.search(leaf(n)) and not _NOT_PROGRAMME.search(leaf(n))]
+    if named:
+        return named
+    rooms = [(lid, n) for lid, n in mine if not _NOT_PROGRAMME.search(leaf(n))]
+    return rooms if len(rooms) >= 3 else []
+
+
+def _room_from_list(list_name: str) -> Optional[str]:
+    """ "Sporty P2 – Reception" → "Reception"; a "Work Programme" list has no room."""
+    leaf = str(list_name).split("/")[-1].strip()
+    if _PROGRAMME_LIST.search(leaf):
+        return None
+    parts = re.split(r"\s+[–—-]\s+", leaf)
+    return parts[-1].strip() if len(parts) > 1 else None
+
+
+def tasks_from_clickup(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """ClickUp tasks → programme tasks. The person comes from ClickUp's assignees, else the name
+    in brackets in the title ("Painting (Eric)"). A task with only a due date starts the day after
+    the previous due date in the programme, so a two-week phase shows on every day of it."""
+    tasks = []
+    for r in rows:
+        name = (r.get("name") or "").strip()
+        if not name or name.startswith("📎"):
+            continue
+        m = _WHO_IN_TITLE.search(name)
+        who = ", ".join(r.get("assignees") or []) or (m.group(1) if m else "")
+        title = _WHO_IN_TITLE.sub("", name).strip() if m else name
+        tasks.append({"task": title, "assignee": who, "room": _room_from_list(r.get("list") or ""),
+                      "start": r.get("start_date"), "end": r.get("due_date"),
+                      "done": bool(r.get("closed")) or r.get("status") in ("complete", "done", "closed")})
+    dues = sorted({t["end"] for t in tasks if t["end"]})
+    for t in tasks:
+        if t["end"] and not t["start"]:
+            earlier = [d for d in dues if d < t["end"]]
+            t["start"] = ((date.fromisoformat(earlier[-1]) + timedelta(days=1)).isoformat()
+                          if earlier else t["end"])
+            t["notes"] = "start inferred from the programme order"
+    return tasks
+
+
+async def import_from_clickup(tenant_id: str, project: str, notify: bool = False) -> Dict[str, Any]:
+    from vula.clickup import service as clickup
+    project = _canon(tenant_id, project)
+    lists = clickup_programme_lists(tenant_id, project)
+    if not lists:
+        return {"project": project, "tasks": 0, "error": "No programme list for this project in ClickUp."}
+    rows: List[Dict[str, Any]] = []
+    for lid, _name in lists:
+        rows += await clickup.list_programme_tasks(tenant_id, lid)
+    tasks = normalise_tasks(tasks_from_clickup(rows), today_sast().year)
+    doc = {"id": "clickup:" + ",".join(sorted(l for l, _ in lists)),
+           "filename": "ClickUp — " + ", ".join(str(n).split("/")[-1].strip() for _, n in lists)}
+    result = import_programme(tenant_id, project, doc, tasks)
+    result["open"] = sum(1 for t in tasks if not t.get("done"))
+    if notify:
+        from vula.api.whatsapp import _send_reply
+        text = (f"📋 Programme read from ClickUp for *{result['project']}*: {result['tasks']} task(s), "
+                f"{result['start']} to {result['end']}. Each morning at 06:00 your site team gets "
+                "their tasks for the day, and you get the day's work and anything overdue.")
+        if result["needs_number"]:
+            text += ("\n\n📱 I need a WhatsApp number for: " + ", ".join(result["needs_number"])
+                     + ". Send *add staff <name> <number> <trade>* for each.")
+        for phone in _owners(tenant_id):
+            await _send_reply(phone, text, tenant_id, idem_key=f"programme-clickup:{project}:{today_sast()}")
+        result["text"] = text
+    return result
+
+
+def running_projects(tenant_id: str) -> List[str]:
+    try:
+        rows = (_client().table("vula_projects").select("name,status").eq("tenant_id", tenant_id)
+                .execute().data or [])
+    except Exception as exc:
+        log.debug("project register read skipped: %s", exc)
+        return []
+    return [r["name"] for r in rows if r.get("name") and (r.get("status") or "active") == "active"]
+
+
+async def refresh_from_clickup(tenant_id: str) -> List[Dict[str, Any]]:
+    """Before the morning messages: re-read every active project's ClickUp programme, so what's
+    done or moved in ClickUp is what the site team is told."""
+    out = []
+    # Only programmes the owner switched on ("programme Belladonna") — a project with old ClickUp
+    # lists (HPC's phases, Sporty's rooms) doesn't start sending overdue lists by itself.
+    live = {t["project_id"] for t in programme_tasks(tenant_id)
+            if str(t.get("source_doc_id") or "").startswith("clickup:")}
+    for project in sorted(live):
+        try:
+            out.append(await import_from_clickup(tenant_id, project))
+        except Exception as exc:
+            log.warning("ClickUp programme refresh failed for %s/%s: %s", tenant_id, project, exc)
+    return out
+
+
+_START_PROGRAMME_RE = re.compile(
+    r"^\s*(?:start|run|load|read|sync)?\s*(?:the\s+)?(?:programme|program|gantt)\s+(?:for\s+)?(?P<project>.{2,60}?)"
+    r"(?:\s+from\s+click\s?up)?\s*[.!]*\s*$", re.IGNORECASE)
+
+
+def parse_start_programme(text: str, tenant_id: str) -> Optional[str]:
+    """ "programme Belladonna" / "start programme for Belladonna from ClickUp" → the project."""
+    m = _START_PROGRAMME_RE.match(text or "")
+    if not m:
+        return None
+    from vula.commerce.service import project_key
+    want = project_key(m.group("project"))
+    return next((p for p in running_projects(tenant_id) if project_key(p) == want), None)

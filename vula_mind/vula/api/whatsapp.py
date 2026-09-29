@@ -1457,6 +1457,23 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # they get their programme tasks each morning (vula/commerce/project_programme.py).
     try:
         from vula.commerce import project_programme as _pp
+        _prog = _pp.parse_start_programme(text, tenant_id)
+        if _prog and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin"):
+            got = await _pp.import_from_clickup(tenant_id, _prog, notify=False)
+            if got.get("error"):
+                await _send_reply(phone, f"I couldn't find a programme for *{_prog}* in ClickUp — it "
+                                  "needs a list in the project's folder named like 'Work Programme'.",
+                                  tenant_id=tenant_id)
+            else:
+                msg = (f"📋 *{_prog}* programme read from ClickUp: {got['tasks']} task(s), "
+                       f"{got['start']} to {got['end']}, {got['open']} still open. From tomorrow "
+                       "06:00 the site team gets their tasks each morning and you get the day's "
+                       "work and anything overdue. ClickUp is re-read every morning.")
+                if got["needs_number"]:
+                    msg += ("\n\n📱 I need a WhatsApp number for: " + ", ".join(got["needs_number"])
+                            + ". Send *add staff <name> <number> <trade>* for each.")
+                await _send_reply(phone, msg, tenant_id=tenant_id)
+            return
         _staff = _pp.parse_add_staff(text)
         if _staff and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin"):
             _proj = _pp.active_programme_project(tenant_id)

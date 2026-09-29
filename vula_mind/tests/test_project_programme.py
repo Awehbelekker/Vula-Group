@@ -232,3 +232,74 @@ async def test_morning_briefs_send_once_per_person_per_day(db, monkeypatch):
     assert keys == ["programme-owner:ATLANTIS FOODS:2026-10-06:27827077080",
                     "programme:ATLANTIS FOODS:2026-10-06:27820000001"]
     assert "Edison" in out["projects"][0]["owner"]            # no number yet → owner is told
+
+
+# ── ClickUp programmes — Belladonna's real "Work Programme" list (29 Sep) ─────
+
+BELLADONNA = [
+    {"name": "Site Establishment & Demolition", "status": "to do", "start_date": None, "due_date": "2026-09-02",
+     "assignees": [], "list": "Work Programme"},
+    {"name": "Plumbing First Fix (Edison)", "status": "to do", "start_date": None, "due_date": "2026-09-11",
+     "assignees": [], "list": "Work Programme"},
+    {"name": "Electrical First Fix (Elyas)", "status": "to do", "start_date": None, "due_date": "2026-09-11",
+     "assignees": [], "list": "Work Programme"},
+    {"name": "Tiling & Waterproofing (Tiling Team)", "status": "to do", "start_date": None, "due_date": "2026-09-18",
+     "assignees": [], "list": "Work Programme"},
+    {"name": "Electrical & Plumbing Second Fix (Elyas / Edison)", "status": "to do", "start_date": None,
+     "due_date": "2026-09-25", "assignees": [], "list": "Work Programme"},
+    {"name": "📎 Project Documents", "status": "to do", "start_date": None, "due_date": None,
+     "assignees": [], "list": "Work Programme"},
+    {"name": "Kitchen units", "status": "complete", "closed": True, "start_date": "2026-09-20",
+     "due_date": "2026-09-22", "assignees": ["Edward Mokoena"], "list": "Work Programme"},
+]
+
+
+def test_a_clickup_programme_becomes_daily_tasks():
+    tasks = pp.normalise_tasks(pp.tasks_from_clickup(BELLADONNA), 2026)
+    by = {t["title"]: t for t in tasks}
+    assert "📎 Project Documents" not in by
+    assert by["Plumbing First Fix"]["assignee"] == "Edison"
+    # only a due date: the phase runs from the day after the previous due date
+    assert (by["Plumbing First Fix"]["start"], by["Plumbing First Fix"]["end"]) == ("2026-09-03", "2026-09-11")
+    assert by["Tiling & Waterproofing"]["start"] == "2026-09-12"
+    assert by["Site Establishment & Demolition"]["start"] == "2026-09-02"
+    assert by["Kitchen units"]["assignee"] == "Edward Mokoena" and by["Kitchen units"]["done"]
+    assert pp.split_names("Elyas / Edison") == ["Elyas", "Edison"]
+
+
+def test_two_people_on_one_task_each_get_it(db, monkeypatch):
+    monkeypatch.setattr(pp, "_people", lambda _t: [
+        {"id": "e1", "name": "Elyas", "phone": "27820000002", "kind": "site"},
+        {"id": "e2", "name": "Edison", "phone": "27820000003", "kind": "site"}])
+    tasks = pp.normalise_tasks(pp.tasks_from_clickup(BELLADONNA), 2026)
+    got = pp.import_programme("digg-demo", "Belladonna", {"id": "clickup:901220795562"}, tasks)
+    second = [r for r in db.t["vula_field_tasks"] if r["title"] == "Electrical & Plumbing Second Fix"]
+    assert sorted(r["assigned_to"] for r in second) == ["e1", "e2"]
+    assert got["needs_number"] == ["Edward Mokoena", "Tiling Team"]
+    done = [r for r in db.t["vula_field_tasks"] if r["title"] == "Kitchen units"]
+    assert done[0]["status"] == "complete"
+
+
+def test_which_clickup_lists_are_the_programme(monkeypatch):
+    lists = [("a1", "Team Space / ATLANTIS FOODS / Atlantis Branch — Interior Design & Concept"),
+             ("a2", "Team Space / ATLANTIS FOODS / Paarden Island Branch — Legalisation & Council Submissions"),
+             ("b1", "Team Space / Belladonna / Work Programme"),
+             ("b2", "Team Space / Belladonna / Procurement Schedule"),
+             ("h1", "Team Space / HPC_Bokaap / Phase 1 — Site Establishment & Demolition"),
+             ("h2", "Team Space / HPC_Bokaap / Phase 2 — Builder's Work First Fix"),
+             ("h3", "Team Space / HPC_Bokaap / Phase 3 — Acoustic Partitions & Glazed Screens")]
+    monkeypatch.setattr("vula.integrations.doc_filing._clickup_candidates", lambda _t: lists)
+    assert [l for l, _ in pp.clickup_programme_lists("digg-demo", "Belladonna")] == ["b1"]
+    assert pp.clickup_programme_lists("digg-demo", "ATLANTIS FOODS") == []       # design + council only
+    assert [l for l, _ in pp.clickup_programme_lists("digg-demo", "HPC_Bokaap")] == ["h1", "h2", "h3"]
+
+
+@pytest.mark.parametrize("text,want", [
+    ("programme Belladonna", "Belladonna"),
+    ("Start the programme for Belladonna from ClickUp", "Belladonna"),
+    ("What's on the programme for Belladonna today?", None),
+    ("programme Nowhere", None),
+])
+def test_start_programme_command(text, want, monkeypatch):
+    monkeypatch.setattr(pp, "running_projects", lambda _t: ["Belladonna", "HPC Bokaap"])
+    assert pp.parse_start_programme(text, "digg-demo") == want

@@ -280,6 +280,35 @@ async def list_tasks(tenant_id: str, list_id: Optional[str] = None,
     return out or {"message": "No tasks found."}
 
 
+async def list_programme_tasks(tenant_id: str, list_id: str) -> list[dict]:
+    """Every task in a list (closed ones too, all pages) with start and due dates, assignees and
+    the list's name — a project programme read from ClickUp (vula/commerce/project_programme.py).
+    Dates are the SAST calendar day."""
+    from zoneinfo import ZoneInfo
+    sast = ZoneInfo("Africa/Johannesburg")
+    day = lambda ms: (datetime.fromtimestamp(int(ms) / 1000, tz=sast).date().isoformat() if ms else None)
+    creds = _creds_or_raise(tenant_id)
+    out: list[dict] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for page in range(20):
+            r = await client.get(f"{_BASE}/list/{list_id}/task", headers=_headers(creds["token"]),
+                                 params={"subtasks": "true", "include_closed": "true", "page": page})
+            r.raise_for_status()
+            body = r.json()
+            for t in body.get("tasks") or []:
+                out.append({
+                    "id": t.get("id"), "name": t.get("name") or "",
+                    "status": ((t.get("status") or {}).get("status") or "").lower(),
+                    "closed": ((t.get("status") or {}).get("type") or "") in ("closed", "done"),
+                    "start_date": day(t.get("start_date")), "due_date": day(t.get("due_date")),
+                    "assignees": [a.get("username") for a in (t.get("assignees") or []) if a.get("username")],
+                    "list": (t.get("list") or {}).get("name") or "",
+                })
+            if body.get("last_page", True) or not body.get("tasks"):
+                break
+    return out
+
+
 async def find_task(tenant_id: str, query: str, list_id: Optional[str] = None) -> Optional[dict]:
     """Find the first task whose title contains `query` (case-insensitive)."""
     rows = await list_tasks(tenant_id, list_id=list_id, limit=50)

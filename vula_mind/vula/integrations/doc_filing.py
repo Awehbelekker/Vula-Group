@@ -93,7 +93,7 @@ def match_project(tenant_id: str, text: str) -> Optional[dict]:
     """
     if not (text or "").strip():
         return None
-    text_tokens = _tokens(text)
+    text_tokens = _tokens(without_own_address(tenant_id, text))
 
     if text_tokens:
         # ── ClickUp lists — highest-priority tier, can also attach the file into the list ──
@@ -174,6 +174,41 @@ def _own_names(tenant_id: Optional[str]) -> set:
         if key and len(key) >= 3:
             out.add(key)
             out.add(key.split()[0])
+    return out
+
+
+_ADDR_CACHE: dict = {}
+
+
+def own_address_phrases(tenant_id: str) -> list:
+    """The business's own street address as it appears on documents ("22b porterfield road").
+    2026-09-29 (DIGG): DIGG operates from 22B Porterfield Road, so every drawing and supplier slip
+    addressed to DIGG "named" the Porterfield project — Belladonna's paperwork landed there."""
+    import time
+    hit = _ADDR_CACHE.get(tenant_id)
+    if hit and time.monotonic() - hit[0] < 600:
+        return hit[1]
+    phrases: list = []
+    try:
+        rows = (_client().table("commerce_invoice_settings").select("registered_address")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        addr = str((rows[0] if rows and isinstance(rows[0], dict) else {}).get("registered_address") or "")
+        street = addr.replace("\n", ",").split(",")[0].strip().lower()
+        if len(street) >= 6:
+            phrases.append(street)
+            m = re.match(r"(\d+)[a-z]?\s+(.+)", street)
+            if m:                                         # "22b porterfield road" also as "22 porterfield road"
+                phrases += [f"{m.group(1)} {m.group(2)}", f"{m.group(1)}b {m.group(2)}", f"{m.group(1)}a {m.group(2)}"]
+    except Exception as exc:
+        logger.debug("own address read skipped: %s", exc)
+    _ADDR_CACHE[tenant_id] = (time.monotonic(), sorted(set(phrases), key=len, reverse=True))
+    return _ADDR_CACHE[tenant_id][1]
+
+
+def without_own_address(tenant_id: str, text: str) -> str:
+    out = text or ""
+    for ph in own_address_phrases(tenant_id):
+        out = re.sub(re.escape(ph), " ", out, flags=re.IGNORECASE)
     return out
 
 

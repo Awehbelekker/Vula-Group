@@ -169,6 +169,8 @@ def resolve(tenant_id: str, fields: Optional[Dict[str, Any]], text: str = "") ->
         return None
     by_key = {_key(p["name"]): p["name"] for p in projects}
     blob = " ".join([text or ""] + [str(v) for v in fields.values() if isinstance(v, (str, int, float))])
+    from vula.integrations.doc_filing import without_own_address
+    blob = without_own_address(tenant_id, blob)           # the business's own address names no project
 
     named = _named(projects, blob)
     if len(named) == 1:

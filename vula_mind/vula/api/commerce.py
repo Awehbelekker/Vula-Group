@@ -3473,6 +3473,8 @@ async def admin_project_programme(tenant_id: str, body: ProjectBaselineIn, reque
     from vula.commerce import project_programme
     if not await _may_apply_stock(request, tenant_id):
         raise HTTPException(status_code=403, detail="Only the owner or a manager can load the programme.")
+    if body.document.strip().lower() == "clickup":      # the project's programme list in ClickUp
+        return await project_programme.import_from_clickup(tenant_id, body.project)
     doc = project_programme.find_document(tenant_id, body.document)
     if not doc:
         raise HTTPException(status_code=404, detail=f"No filed document matches '{body.document}'.")
