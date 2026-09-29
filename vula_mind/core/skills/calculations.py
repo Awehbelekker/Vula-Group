@@ -172,7 +172,7 @@ class CalculationsSkill(BaseSkill):
     async def _agent_loop(self, history: str, question: str, context: str, tenant_id: str) -> str:
         import litellm
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="calculations")
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system_prompt()}]
         if history:

@@ -72,7 +72,7 @@ class StandardsLookupSkill(BaseSkill):
             import litellm
             from config import settings
             litellm.drop_params = True
-            model, api_key, api_base = await resolve_generation_route()
+            model, api_key, api_base = await resolve_generation_route(task_type="standards_lookup")
             _msgs = [{"role": "system", "content": system_msg},
                      {"role": "user", "content": user_msg}]
             resp = await litellm.acompletion(

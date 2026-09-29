@@ -359,7 +359,7 @@ class EmailAdminSkill(BaseSkill):
                     phone: str = "", sources: Optional[List[Dict[str, Any]]] = None) -> str:
         import litellm
         litellm.drop_params = True
-        route = await resolve_generation_route()
+        route = await resolve_generation_route(task_type="email_admin")
         tools = _tools_for(creds)
         system = self._system(creds.get("send_mode"))
         if not creds:

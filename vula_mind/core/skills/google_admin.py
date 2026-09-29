@@ -73,7 +73,7 @@ class GoogleAdminSkill(BaseSkill):
     async def _loop(self, history: str, question: str, tenant_id: str) -> str:
         import litellm
         litellm.drop_params = True
-        model, api_key, api_base = await resolve_generation_route()
+        model, api_key, api_base = await resolve_generation_route(task_type="google_admin")
         messages: List[Dict[str, Any]] = [{"role": "system", "content": self._system()}]
         if history:
             messages.append({"role": "user", "content": f"(Conversation so far)\n{history}"})
