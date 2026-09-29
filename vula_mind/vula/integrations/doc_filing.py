@@ -233,6 +233,41 @@ def _useful_signal(val: str) -> bool:
     return len(v) >= 3 and v not in _GENERIC_SIGNALS and not _NON_PROJECT_SIGNAL.search(v)
 
 
+_CREW_CACHE: dict = {}
+
+
+def site_crew_names(tenant_id: str) -> set:
+    """First names of the business's site contractors — added with "add staff", or named in a
+    running programme ("Plumbing First Fix (Edison)"). 2026-09-29 (Ian: "Edison is the plumber
+    contractor"): one "yes" had learned "edison maunganidze" → HPC Bokaap, so every Edison invoice
+    went to HPC although he also plumbs Belladonna. Someone who works across jobs never decides a
+    document's project; its own content or its payment does."""
+    import time
+    hit = _CREW_CACHE.get(tenant_id)
+    if hit and time.monotonic() - hit[0] < 600:
+        return hit[1]
+    names: set = set()
+    for table, col, extra in (("vula_field_contractors", "name", None),
+                              ("vula_field_tasks", "assignee_name", ("source", "programme"))):
+        try:
+            q = _client().table(table).select(col).eq("tenant_id", tenant_id)
+            if extra:
+                q = q.eq(*extra)
+            for r in q.limit(2000).execute().data or []:
+                first = str((r if isinstance(r, dict) else {}).get(col) or "").strip().lower().split(" ")[:1]
+                if first and len(first[0]) >= 3 and first[0] not in ("team", "tiling", "site", "general"):
+                    names.add(first[0])
+        except Exception as exc:
+            logger.debug("site crew read skipped (%s): %s", table, exc)
+    _CREW_CACHE[tenant_id] = (time.monotonic(), names)
+    return names
+
+
+def _names_crew(signal: str, crew: set) -> bool:
+    words = re.findall(r"[a-z]+", (signal or "").lower())
+    return bool(words) and words[0] in crew
+
+
 def _signals_from(fields: dict, tenant_id: Optional[str] = None) -> list:
     """Extract (signal_type, normalised_value) learning signals from a doc's fields. The
     business's own name is never one (see _own_names)."""
@@ -255,7 +290,8 @@ def _signals_from(fields: dict, tenant_id: Optional[str] = None) -> list:
         val = party.lower()
         if len(val) >= 3 and val not in seen:
             out.append(("supplier", val))
-    return [(t, v) for t, v in out if _useful_signal(v)]
+    crew = site_crew_names(tenant_id) if tenant_id else set()
+    return [(t, v) for t, v in out if _useful_signal(v) and not _names_crew(v, crew)]
 
 
 def learn_filing_rule(tenant_id: str, fields: dict, project: str) -> int:

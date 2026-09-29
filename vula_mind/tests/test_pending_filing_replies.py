@@ -113,3 +113,21 @@ def test_the_business_own_address_names_no_project(digg, monkeypatch):
     assert (project_resolver.resolve("digg-demo", {}, drawing) or {}).get("project") != "Porterfield"
     assert project_resolver.resolve("digg-demo", {}, "Porterfield: kitchen tiles")["project"] == "Porterfield"
     doc_filing._ADDR_CACHE.clear()
+
+
+def test_a_site_contractor_never_decides_the_project(monkeypatch):
+    """Ian, 29 Sep: "Edison is the plumber contractor" — he works on HPC and Belladonna, so an
+    invoice naming him must not be filed to HPC by a rule learned once."""
+    doc_filing._CREW_CACHE.clear()
+    q = MagicMock()
+    q.select.return_value = q
+    q.eq.return_value = q
+    q.limit.return_value = q
+    q.execute.return_value = MagicMock(data=[{"name": "Edison", "assignee_name": "Edison"}])
+    monkeypatch.setattr(doc_filing, "_client", lambda: MagicMock(table=lambda _t: q))
+    monkeypatch.setattr(doc_filing, "_own_names", lambda _t: ["DIGG"])
+    monkeypatch.setattr("vula.commerce.party.resolve_party_name", lambda f, exclude=(): f.get("supplier"))
+    assert doc_filing._signals_from({"supplier": "Edison Maunganidze"}, "digg-demo") == []
+    assert doc_filing._signals_from({"supplier": "Solid Cape (Pty) Ltd"}, "digg-demo") == [
+        ("supplier", "solid cape (pty) ltd")]
+    doc_filing._CREW_CACHE.clear()
