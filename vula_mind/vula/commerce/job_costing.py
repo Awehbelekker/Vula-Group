@@ -192,6 +192,73 @@ def costing(tenant_id: str, since: Optional[str] = None, txns: Optional[List[Dic
     }
 
 
+import re as _re
+
+# 2026-09-29, Judy (digg-demo) at 09:03: "What data are you using to reference cost" reached the
+# general knowledge skill, which can't see her costing and could only guess. Where the numbers
+# come from is a fact about her data, so it's answered from the data.
+COST_BASIS_RE = _re.compile(
+    r"\b(what|which)\s+(data|info\w*|figures|numbers|sources?|documents?)\b[^?]{0,50}\bcosts?\b|"
+    r"\breferenc\w*\s+(the\s+)?costs?\b|"
+    r"\bwhere\b[^?]{0,30}\b(costs?|cost\s+figures|numbers)\b[^?]{0,25}\bfrom\b", _re.IGNORECASE)
+
+
+def looks_like_cost_basis_question(text: str) -> bool:
+    return bool(COST_BASIS_RE.search(text or ""))
+
+
+def cost_basis(tenant_id: str) -> str:
+    """What the project costs are measured from, with the real counts — no model."""
+    rows = _txns(tenant_id)
+    res = costing(tenant_id, txns=rows)
+    tagged = [t for t in rows if t.get("project")]
+    lines = ["💡 *Where your project costs come from*", ""]
+    if rows:
+        first = min(str(t.get("txn_date") or "") for t in rows if t.get("txn_date"))
+        last = max(str(t.get("txn_date") or "") for t in rows if t.get("txn_date"))
+        lines.append(f"1. *Bank statements* — {len(rows)} lines from {first} to {last}. "
+                     f"{len(tagged)} are on a project: money out is the project's cost (by trade), "
+                     "money in is what the client has paid.")
+    else:
+        lines.append("1. *Bank statements* — none imported yet, so there are no project costs to "
+                     "measure. Send a statement (PDF or the Excel breakdown).")
+    if res.get("unallocated_project_lines"):
+        lines.append(f"   {res['unallocated_project_lines']} job-cost lines "
+                     f"({_r(res['unallocated_project_spend_cents'])}) aren't on a project yet — "
+                     "they're left out until you say which job they're for.")
+    for p in res.get("projects", [])[:6]:
+        lines.append(f"   • {p['project']}: cost {_r(p['cost_cents'])}, received {_r(p['received_cents'])}")
+    fees = terms(tenant_id)
+    lines.append(f"2. *Your fee* — cost + {fees['*']:g}% unless a project has its own %. Running "
+                 "costs (overheads, drawings) are shared across the month's active projects.")
+    lines.append("3. *Signed baselines* — each project's cost is checked against its signed "
+                 "cost document; anything over it is flagged for a variation order.")
+    try:
+        boq = (_client().table("vula_project_boq")
+               .select("project,total_cents,baseline_locked")
+               .eq("tenant_id", tenant_id).limit(100).execute().data or [])
+    except Exception as exc:
+        log.debug("cost basis: baselines skipped: %s", exc)
+        boq = []
+    locked = {b["project"]: b for b in boq if b.get("baseline_locked") is True}
+    for b in locked.values():
+        lines.append(f"   • {b['project']}: signed baseline {_r(b.get('total_cents'))}")
+    try:
+        from vula.commerce.project_programme import running_projects
+        missing = [p for p in running_projects(tenant_id) if p not in locked]
+    except Exception:
+        missing = []
+    if missing:
+        lines.append("   No signed baseline yet for: " + ", ".join(missing) + ". Tell me which "
+                     "document it is, e.g. *set up " + missing[0] + " — costs against the signed "
+                     "Rev10*, and I'll lock it.")
+    elif not locked:
+        lines.append("   None set yet — tell me the project and its signed cost document.")
+    lines += ["", "Filed invoices are kept as the evidence behind the bank lines, not counted a "
+              "second time."]
+    return "\n".join(lines)
+
+
 def _variations(tenant_id: str) -> Dict[str, Dict[str, Any]]:
     """Per project: documents labelled "Variation — over BOQ" (vula/integrations/doc_labels.py) —
     what the business claims from its client for extra work, and extra costs suppliers charged

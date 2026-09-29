@@ -1489,6 +1489,14 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
                 f"{got['tasks']} programme task(s) are theirs, sent to them each morning at 06:00.",
                 tenant_id=tenant_id)
             return
+        # "What data are you using to reference cost" (Judy, 29 Sep) — answered from the data.
+        from vula.commerce import job_costing as _jc
+        if (_jc.looks_like_cost_basis_question(text)
+                and (_caller_identity(tenant_id, phone)[1] or "") in ("owner", "manager", "admin")):
+            import asyncio as _aio
+            await _send_reply(phone, await _aio.to_thread(_jc.cost_basis, tenant_id),
+                              tenant_id=tenant_id)
+            return
     except Exception as exc:
         logger.warning("add staff failed: %s", exc)
 

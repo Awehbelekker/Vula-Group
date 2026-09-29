@@ -537,6 +537,9 @@ _SUPPLIER_HISTORY_RE = re.compile(
     # "See if you can find invoices gardening gardens area",
     # "For gardens handiman full list of spend and material".
     r"\b(find|search|show|get|pull|fetch|look\s+up)\b[^.?!]{0,30}?\binvoices?\b|"
+    # 2026-09-29, Judy: "Can you summarize Jack hammer invoices" ("Jack Hammer" is her own
+    # alias for Gardens Handiman) went to `reasoning`, which can't see invoices.
+    r"\bsummar(y|i[sz]e)\b[^.?!]{0,30}?\binvoices?\b|"
     r"\b(list|summary|break\s*[.\-]?\s*down|total)\s+of\s+(the\s+|all\s+|our\s+)?"
     r"(spend|spending|purchases|materials?)\b|"
     # 2026-09-25, real digg-demo follow-up in the SAME conversation as a resolved supplier
