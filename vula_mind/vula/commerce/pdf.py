@@ -10,6 +10,7 @@ Usage:
 """
 from __future__ import annotations
 
+from vula.commerce.brand_sizes import logo_px as _logo_px
 import json
 import logging
 from typing import Any, Optional
@@ -248,7 +249,7 @@ _DOC_HTML = """<!DOCTYPE html>
 
 <div class="header">
   <div class="brand"{% if logo_align == 'center' %} style="text-align:center;"{% endif %}>
-    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:{{ '56px' if logo_size == 'sm' else ('100px' if logo_size == 'lg' else '76px') }};max-width:{{ '180px' if logo_size == 'sm' else ('320px' if logo_size == 'lg' else '240px') }};margin-bottom:10px;display:block;{% if logo_align == 'center' %}margin-left:auto;margin-right:auto;{% endif %}">{% endif %}
+    {% if tenant_logo %}<img src="{{ tenant_logo }}" alt="logo" style="max-height:{{ logo_max_h }}px;max-width:{{ logo_max_w }}px;margin-bottom:10px;display:block;{% if logo_align == 'center' %}margin-left:auto;margin-right:auto;{% endif %}">{% endif %}
     {% if not tenant_logo %}
     {% if trading_as %}
     <h1>{{ trading_as }}</h1>
@@ -617,6 +618,9 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "show_vat_breakdown": branding.get("show_vat_breakdown", True),
         "show_company_reg": branding.get("show_company_reg", True),
         "logo_size": branding.get("logo_size") or "md",
+        # one size setting for every surface (vula/commerce/brand_sizes.py)
+        "logo_max_h": _logo_px("pdf", branding.get("logo_size"))[0],
+        "logo_max_w": _logo_px("pdf", branding.get("logo_size"))[1],
         "logo_align": branding.get("logo_align") or "left",
         "ink_color": branding.get("ink_color") or "",
         **_font_ctx(branding),

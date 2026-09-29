@@ -18,3 +18,11 @@ alter table commerce_invoice_settings
     add column if not exists density text,          -- 'comfortable' | 'compact'
     add column if not exists tagline text,
     add column if not exists icon_url text;         -- square app icon (PWA, favicon)
+
+-- A rep's own appointments (2026-09-29, Ian: "sales reps need their appointments for the day and
+-- a notes / minutes button on the meeting"): who the booking belongs to and where it is. A rep's
+-- booking only clashes with that rep's own diary, not the shop's customer slots.
+alter table commerce_bookings
+    add column if not exists booked_by text,
+    add column if not exists location text;
+create index if not exists idx_commerce_bookings_rep on commerce_bookings (tenant_id, booked_by, start_at);

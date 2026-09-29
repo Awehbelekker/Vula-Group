@@ -491,11 +491,11 @@ async def patch_tenant(tenant_id: str, body: TenantPatch,
 # orders, so a project business (DIGG) saw mostly zeros. The dashboard renders these ids in
 # this order (VulaMerchantAdmin OverviewTab); unknown ids are dropped, so an old saved layout
 # never breaks the page.
-HOME_CARDS = ("checklist", "attention", "sales", "trend", "jobcosting", "crosscheck",
+HOME_CARDS = ("today", "checklist", "attention", "sales", "trend", "jobcosting", "crosscheck",
               "customers", "assistant")
 _HOME_DEFAULT_SHOP = ["checklist", "attention", "sales", "trend", "customers", "assistant"]
 _HOME_DEFAULT_PROJECTS = ["checklist", "attention", "jobcosting", "crosscheck", "assistant"]
-_HOME_DEFAULT_REP = ["checklist", "attention", "assistant"]
+_HOME_DEFAULT_REP = ["today", "checklist", "attention", "assistant"]
 _HOME_DEFAULT_GENERAL = ["checklist", "attention", "crosscheck", "assistant"]
 
 

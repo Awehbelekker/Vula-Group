@@ -13,7 +13,7 @@ import VulaClickUpConnect from './VulaClickUpConnect'
 import VulaGoogleConnect from './VulaGoogleConnect'
 import VulaMicrosoftConnect from './VulaMicrosoftConnect'
 import VulaEmailConnect from './VulaEmailConnect'
-import { applyBrand, FONT_PAIRINGS, CORNER_STYLES, DENSITIES } from '../theme/tokens'
+import { applyBrand, FONT_PAIRINGS, CORNER_STYLES, DENSITIES, LOGO_SIZES } from '../theme/tokens'
 import { uploadBrandImage } from '../lib/brandUpload'
 import { VULA_API } from '../lib/authFetch'
 
@@ -185,8 +185,8 @@ export function BrandKitSettings({ tenantId }) {
   // Live: every change shows across the whole dashboard straight away (nothing is saved until
   // "Save brand kit"; leaving without saving is undone on the next load of the saved brand).
   const draft = { accent_color: accent, secondary_color: secondary || null, ink_color: ink,
-    font_pairing: fontPairing, corner_style: corners, density, logo_url: logoUrl, icon_url: iconUrl }
-  useEffect(() => { if (loaded) applyBrand(draft) }, [loaded, accent, secondary, ink, fontPairing, corners, density])  // eslint-disable-line
+    font_pairing: fontPairing, corner_style: corners, density, logo_size: logoSize, logo_url: logoUrl, icon_url: iconUrl }
+  useEffect(() => { if (loaded) applyBrand(draft) }, [loaded, accent, secondary, ink, fontPairing, corners, density, logoSize])  // eslint-disable-line
 
   async function upload(e, kind) {
     const file = (e.target.files || [])[0]
@@ -265,6 +265,13 @@ export function BrandKitSettings({ tenantId }) {
           {logoUrl && <button type="button" onClick={() => setLogoUrl('')} style={bk.clearBtn} aria-label="Remove logo">×</button>}
         </div>
         <div style={row}>
+          <span style={lab}>Logo size</span>
+          {Object.entries(LOGO_SIZES).map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setLogoSize(k)} aria-pressed={logoSize === k}
+              style={{ ...bk.choice, ...(logoSize === k ? bk.choiceOn : {}) }}>{l}</button>))}
+          <span style={{ fontSize: 11.5, color: 'var(--muted)', flexBasis: '100%', paddingLeft: 120 }}>Everywhere: this dashboard, login, invoices, emails, your WhatsApp menu and phone app icon. Empty margins are trimmed when you upload.</span>
+        </div>
+        <div style={row}>
           <label style={bk.uploadBtn}>
             {uploading === 'icon' ? 'Uploading…' : (iconUrl ? '↻ Replace app icon' : '📱 App icon (square)')}
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => upload(e, 'icon')} style={{ display: 'none' }} />
@@ -323,12 +330,7 @@ export function BrandKitSettings({ tenantId }) {
             <option value="left">Left</option>
             <option value="center">Centered</option>
           </select>
-          <span style={{ fontSize: 13, color: 'var(--muted)', marginLeft: 10 }}>Size</span>
-          <select value={logoSize} onChange={e => setLogoSize(e.target.value)} style={{ ...bk.input, width: 100 }}>
-            <option value="sm">Small</option>
-            <option value="md">Medium</option>
-            <option value="lg">Large</option>
-          </select>
+
         </div>
         <div style={{ ...row, marginBottom: 8 }}>
           <span style={lab}>Menu position</span>
@@ -363,7 +365,7 @@ function BrandPreview({ name, tagline, logoUrl, iconUrl }) {
   return (
     <div aria-label="Brand preview" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', padding: 'var(--s4)', display: 'flex', flexDirection: 'column', gap: 'var(--s3)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)', borderRadius: 'var(--r-card)', padding: 'var(--s3)', boxShadow: 'var(--shadow-sm)' }}>
-        {logoUrl ? <img src={logoUrl} alt="" style={{ height: 28, maxWidth: 90, objectFit: 'contain' }} />
+        {logoUrl ? <img src={logoUrl} alt="" className="vshell-logoimg" />
           : <span style={{ width: 28, height: 28, borderRadius: 'var(--r-input)', background: 'var(--accent)', color: 'var(--on-accent)', display: 'grid', placeItems: 'center', fontWeight: 700 }}>{initial}</span>}
         <div style={{ minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', color: 'var(--ink)', fontWeight: 600, fontSize: 16, lineHeight: 1.1 }}>{name || 'Your business'}</div>

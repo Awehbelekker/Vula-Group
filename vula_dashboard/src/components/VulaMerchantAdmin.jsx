@@ -56,6 +56,7 @@ import VulaCSMetrics from './VulaCSMetrics'
 import VulaJobCosting from './VulaJobCosting'
 import VulaCrossCheck from './VulaCrossCheck'
 import GlassCard from './GlassCard'
+import VulaRepToday from './VulaRepToday'
 import { BrandKitSettings } from './VulaSettings'
 import VulaQS from './VulaQS'
 import VulaQSPro from './VulaQSPro'
@@ -398,6 +399,7 @@ function GoLiveChecklist({ tenantId, onNavigate }) {
 // Each business picks which cards it sees and in what order — GET/PUT /v1/tenants/{t}/home,
 // default by business type (a project business gets job costing, a shop gets sales).
 const HOME_CARD_LABELS = {
+  today: "Today's appointments & meeting notes",
   checklist: 'Go-live checklist',
   attention: 'Needs attention',
   sales: 'Sales today & totals',
@@ -526,6 +528,7 @@ function OverviewTab({ tenantId, onNavigate }) {
   ].filter(a => a.show)
 
   const cards = {
+    today: () => <VulaRepToday tenantId={tenantId} />,
     checklist: () => <GoLiveChecklist tenantId={tenantId} onNavigate={onNavigate} />,
     sales: () => !stats ? <ErrorCard what="sales figures" /> : bankLed ? (
       <div style={styles.statGrid}>

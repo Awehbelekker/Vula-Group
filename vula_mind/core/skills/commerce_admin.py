@@ -519,6 +519,7 @@ BOOKING_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "start": {"type": "string"}, "customer_name": {"type": "string"},
             "customer_phone": {"type": "string"}, "service": {"type": "string"},
+            "location": {"type": "string", "description": "Where the meeting is, if said (site, office address)."},
             "confirm": {"type": "boolean"}},
             "required": ["start", "customer_name"]}}},
     {"type": "function", "function": {
@@ -1786,7 +1787,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_product":     return await self._update_product(tid, args)
             if name == "booking_availability": return await self._booking_availability(tid, args.get("date", ""))
             if name == "list_bookings":      return await self._list_bookings(tid, args.get("status"))
-            if name == "create_booking":     return await self._create_booking(tid, args)
+            if name == "create_booking":     return await self._create_booking(tid, args, ctx)
             if name == "cancel_booking":     return await self._cancel_booking(tid, args.get("booking_id", ""), bool(args.get("confirm")))
             if name == "generate_marketing": return await self._generate_marketing(tid, args)
             if name == "create_subscription": return await self._create_subscription(tid, args)
@@ -2692,7 +2693,7 @@ class CommerceAdminSkill(BaseSkill):
             {"id": b["id"], "when": b.get("start_at"), "service": b.get("service_name"),
              "customer": b.get("customer_name")} for b in rows[:15]]}
 
-    async def _create_booking(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _create_booking(self, tid: str, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         from vula.bookings import service as bk
         svc_id, svc_name = None, (args.get("service") or "").strip()
         if svc_name:
@@ -2707,7 +2708,10 @@ class CommerceAdminSkill(BaseSkill):
         res = await bk.create_booking(tid, {
             "service_id": svc_id, "service_name": svc_name or None,
             "customer_name": args.get("customer_name"), "customer_phone": args.get("customer_phone"),
-            "start": args.get("start"), "channel": "dashboard"})
+            "start": args.get("start"), "channel": "dashboard",
+            # a rep's booking goes in the rep's own diary (their "today" list), not the shop's
+            "booked_by": (ctx or {}).get("phone") if (ctx or {}).get("caller_role") == "sales_rep" else None,
+            "location": args.get("location")})
         if res.get("error"):
             return res
         return {"booked": True, "when": res["booking"].get("start_local"), "service": res["booking"].get("service_name")}

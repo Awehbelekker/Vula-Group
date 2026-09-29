@@ -41,7 +41,8 @@ def _letter_tile(accent: str, name: str, size: int):
     return img
 
 
-async def render_icon(src: Optional[str], accent: str, name: str, size: int, square: bool = False) -> bytes:
+async def render_icon(src: Optional[str], accent: str, name: str, size: int, square: bool = False,
+                      logo_size: Optional[str] = None) -> bytes:
     from PIL import Image
     img = None
     if src:
@@ -56,7 +57,8 @@ async def render_icon(src: Optional[str], accent: str, name: str, size: int, squ
                 img = bg
             else:                            # a wide logo: centred with a safe margin (maskable)
                 tile = Image.new("RGB", (size, size), (255, 255, 255))
-                inner = int(size * 0.7)
+                from vula.commerce.brand_sizes import ICON_FILL, size_key
+                inner = int(size * ICON_FILL[size_key(logo_size)])
                 logo.thumbnail((inner, inner))
                 tile.paste(logo, ((size - logo.width) // 2, (size - logo.height) // 2), mask=logo.split()[3])
                 img = tile

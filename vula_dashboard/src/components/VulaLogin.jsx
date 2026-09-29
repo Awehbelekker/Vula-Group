@@ -287,8 +287,8 @@ export default function VulaLogin({ onSuccess }) {
           {loginBrand ? (
             <>
               {loginBrand.logo_url ? (
-                <img src={loginBrand.logo_url} alt={loginBrand.name || ''}
-                     style={{ height: 96, width: 'auto', maxWidth: '100%', objectFit: 'contain', marginBottom: 10 }} />
+                <img src={loginBrand.logo_url} alt={loginBrand.name || ''} className="vula-login-logo"
+                     style={{ marginBottom: 10 }} />
               ) : (
                 <span style={{ ...s.logoText, color: 'var(--accent)' }}>{loginBrand.name}</span>
               )}

@@ -102,7 +102,9 @@ def _brand_parts(brand: dict | None, fallback_name: str) -> tuple[str, str, str]
     on = "#1E1E1E" if (0.299 * r + 0.587 * g + 0.114 * bl) / 255 > 0.62 else "#FFFFFF"
     name = _h.escape(b.get("name") or fallback_name or "")
     logo = b.get("logo_url") or ""
-    title = (f'<img src="{_h.escape(logo)}" alt="{name}" style="max-height:48px;max-width:220px;'
+    from vula.commerce.brand_sizes import logo_px
+    lh, lw = logo_px("email", b.get("logo_size"))
+    title = (f'<img src="{_h.escape(logo)}" alt="{name}" style="max-height:{lh}px;max-width:{lw}px;'
              f'display:block;background:#fff;border-radius:6px;padding:4px;">' if logo.startswith("https://")
              else f'<p style="margin:0;color:{on};font-size:22px;font-weight:700;letter-spacing:-0.3px;">{name}</p>')
     tagline = _h.escape(b.get("tagline") or "")

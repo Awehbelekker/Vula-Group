@@ -142,7 +142,13 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
 .vshell-side { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; z-index: 300; }
 .vshell-brand { display: flex; align-items: center; gap: 10px; padding: 16px 14px 13px; border-bottom: 1px solid var(--border-soft); }
 .vshell-logo { width: 40px; height: 40px; border-radius: var(--r-card); background: var(--accent); color: var(--on-accent, #fff); display: flex; align-items: center; justify-content: center; font-size: 19px; flex: none; }
-.vshell-logoimg { max-width: 96px; max-height: 42px; width: auto; height: auto; object-fit: contain; flex: none; }
+/* The logo's size follows the brand kit's one setting (data-logo-size on <html>). */
+:root { --logo-h: 38px; --logo-w: 150px; }
+:root[data-logo-size="sm"] { --logo-h: 30px; --logo-w: 120px; }
+:root[data-logo-size="lg"] { --logo-h: 48px; --logo-w: 180px; }
+:root[data-logo-size="xl"] { --logo-h: 58px; --logo-w: 208px; }
+.vshell-logoimg { max-width: var(--logo-w); max-height: var(--logo-h); width: auto; height: auto; object-fit: contain; flex: none; }
+.vula-login-logo { max-height: calc(var(--logo-h) * 2.2); max-width: min(100%, calc(var(--logo-w) * 1.8)); width: auto; height: auto; object-fit: contain; }
 .vshell-brandtext b { font-family: var(--font-display); font-size: 16px; color: var(--ink); display: block; line-height: 1.15; letter-spacing: -0.01em; }
 .vshell-brandtext span { font-size: 10px; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
 .vshell-zone-switch { display: flex; gap: 3px; padding: 10px 9px 0; }

@@ -51,6 +51,8 @@ async def photo_menu(tenant_id: str) -> HTMLResponse:
     if not accent.startswith("#"):
         accent = f"#{accent}"
     logo_url = _esc((inv or {}).get("logo_url") or "")
+    from vula.commerce.brand_sizes import logo_px
+    logo_h, logo_w = logo_px("menu", (inv or {}).get("logo_size"))
 
     by_cat: dict[str, list] = {}
     for p in products:
@@ -98,7 +100,7 @@ async def photo_menu(tenant_id: str) -> HTMLResponse:
   .card h3 {{ font-size: 13px; margin: 0 0 4px; }}
   .meta {{ font-size: 12px; color: {accent}; font-weight: 600; margin: 0 0 2px; }}
   .brandrow {{ display: flex; align-items: center; gap: 10px; }}
-  .brandrow img {{ height: 40px; width: auto; object-fit: contain; }}
+  .brandrow img {{ max-height: {logo_h}px; max-width: {logo_w}px; height: auto; width: auto; object-fit: contain; }}
   .desc {{ font-size: 11px; color: #8A8680; margin: 0; }}
   .empty {{ color: #8A8680; }}
   .cta {{ margin-top: 28px; font-size: 13px; color: #8A8680; }}

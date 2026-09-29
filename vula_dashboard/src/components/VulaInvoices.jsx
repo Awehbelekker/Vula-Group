@@ -1459,6 +1459,7 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>Size</span>
           <select value={form.logo_size} onChange={e => set('logo_size', e.target.value)} style={{ ...s.fInput, flex: 'none', width: 110 }}>
             <option value="sm">Small</option><option value="md">Medium</option><option value="lg">Large</option>
+            <option value="xl">Extra large</option>
           </select>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

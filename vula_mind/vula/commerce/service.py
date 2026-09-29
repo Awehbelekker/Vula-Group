@@ -2778,6 +2778,8 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
     choice = patch.get("template_choice")
     if choice is not None and choice not in _TEMPLATE_CHOICES:
         raise ValueError(f"template_choice must be one of {_TEMPLATE_CHOICES}")
+    if patch.get("logo_size") not in (None, "") and patch["logo_size"] not in ("sm", "md", "lg", "xl"):
+        raise ValueError("logo_size must be one of sm, md, lg, xl")
     if patch.get("corner_style") not in (None, "") and patch["corner_style"] not in _CORNER_STYLES:
         raise ValueError(f"corner_style must be one of {_CORNER_STYLES}")
     if patch.get("density") not in (None, "") and patch["density"] not in _DENSITIES:

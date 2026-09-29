@@ -65,6 +65,9 @@ export function applyInk(ink) {
 
 export const CORNER_STYLES = { rounded: "Rounded", soft: "Soft", sharp: "Sharp" };
 export const DENSITIES = { comfortable: "Comfortable", compact: "Compact" };
+// One logo size for every surface: this dashboard, the login page, invoices, emails, the
+// WhatsApp menu page and the phone app icon (backend: vula/commerce/brand_sizes.py).
+export const LOGO_SIZES = { sm: "Small", md: "Medium", lg: "Large", xl: "Extra large" };
 
 /** Everything in one call — the dashboard, login, Brand kit preview and hosted pages use this. */
 export function applyBrand(brand = {}) {
@@ -78,6 +81,7 @@ export function applyBrand(brand = {}) {
   applyFontPairing(brand.font_pairing);
   root.dataset.corners = CORNER_STYLES[brand.corner_style] ? brand.corner_style : "rounded";
   root.dataset.density = DENSITIES[brand.density] ? brand.density : "comfortable";
+  root.dataset.logoSize = LOGO_SIZES[brand.logo_size] ? brand.logo_size : "md";
   let meta = document.querySelector('meta[name="theme-color"]');
   if (!meta) { meta = document.createElement("meta"); meta.name = "theme-color"; document.head.appendChild(meta); }
   meta.content = accent;

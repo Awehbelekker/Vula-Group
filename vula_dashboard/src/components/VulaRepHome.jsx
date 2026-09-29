@@ -3,6 +3,7 @@
  * a nudge into the other My Work tabs. Replaces the tenant-wide owner overview for a restricted
  * sales_rep dashboard login (see VulaMerchantAdmin.jsx's overview branch).
  */
+import VulaRepToday from './VulaRepToday'
 import { useState, useEffect, useCallback } from "react";
 import { VULA_API } from "../lib/authFetch";
 
@@ -39,6 +40,8 @@ export default function VulaRepHome({ tenantId, repPhone, onNavigate }) {
     <div style={{ maxWidth: 700, margin: "0 auto", padding: 20 }}>
       <h2 className="vula-display" style={{ fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: "0 0 4px" }}>Today</h2>
       <p style={{ fontSize: 13, color: C.muted, margin: "0 0 18px" }}>Your own contacts, call sheet, reminders, and bookings — nothing tenant-wide.</p>
+
+      <VulaRepToday tenantId={tenantId} repPhone={repPhone} />
 
       <Card title={reminders === null ? "⏰ Reminders" : `⏰ Reminders (${list.length} open)`} onClick={() => onNavigate?.("my-work", "rep-reminders")}>
         {overdue.length > 0 && <div style={{ fontSize: 13, color: "var(--danger)", marginBottom: 4 }}>{overdue.length} overdue</div>}

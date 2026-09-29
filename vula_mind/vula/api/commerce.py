@@ -1923,6 +1923,97 @@ async def admin_complete_reminder(tenant_id: str, reminder_id: str):
     return {"completed": True}
 
 
+# ── A rep's day: today's appointments, and minutes on each meeting (2026-09-29) ─────────────
+# Ian: "sales reps need their appointments for the day and a notes button / minutes on the
+# meeting." Minutes go through the same log_meeting pipeline a WhatsApp voice note uses —
+# summary + attendees + action items (each a real reminder), filed against the contact, added
+# to the call sheet, and the meeting-minutes PDF sent to the rep's WhatsApp.
+
+def _rep_digits(p: Optional[str]) -> str:
+    d = re.sub(r"\D", "", p or "")
+    return "27" + d[1:] if d.startswith("0") else d
+
+
+@router.get("/{tenant_id}/admin/rep/today")
+async def admin_rep_today(tenant_id: str, rep_phone: Optional[str] = None, date: Optional[str] = None):
+    from vula.bookings import service as bk
+    rep = _rep_digits(rep_phone) or None
+    day = await bk.list_day(tenant_id, date, booked_by=rep)
+    notes = []
+    try:
+        a, b, _ = await bk.day_bounds_utc(tenant_id, date)
+        q = (service._client().table("vula_filed_documents")
+             .select("id,summary,fields,created_at,customer_phone,filed_by")
+             .eq("tenant_id", tenant_id).eq("category", "meeting_notes")
+             .gte("created_at", a).lt("created_at", b))
+        if rep:
+            q = q.eq("filed_by", rep)
+        for r in q.order("created_at", desc=True).limit(50).execute().data or []:
+            f = r.get("fields") or {}
+            notes.append({"id": r["id"], "summary": r.get("summary"), "booking_id": f.get("booking_id"),
+                          "action_items": f.get("action_items") or [], "created_at": r.get("created_at")})
+    except Exception as exc:
+        log.debug("rep meeting notes read skipped: %s", exc)
+    noted = {n["booking_id"] for n in notes if n.get("booking_id")}
+    for ap in day["appointments"]:
+        ap["has_minutes"] = ap.get("id") in noted
+    return {**day, "notes": notes}
+
+
+@router.post("/{tenant_id}/admin/rep/appointments")
+async def admin_rep_add_appointment(tenant_id: str, body: dict):
+    """A rep books a client meeting into their own diary from the dashboard."""
+    from vula.bookings import service as bk
+    rep = _rep_digits((body or {}).get("rep_phone")) or None
+    if not (body or {}).get("start") or not (body or {}).get("customer_name"):
+        raise HTTPException(status_code=400, detail="Who is the meeting with, and when?")
+    res = await bk.create_booking(tenant_id, {
+        "customer_name": body.get("customer_name"), "customer_phone": _rep_digits(body.get("customer_phone")) or None,
+        "start": body.get("start"), "duration_min": int(body.get("duration_min") or 60),
+        "service_name": body.get("title") or "Meeting", "notes": body.get("notes"),
+        "location": body.get("location"), "booked_by": rep, "channel": "dashboard"})
+    if res.get("error"):
+        raise HTTPException(status_code=409, detail=res["error"])
+    return res
+
+
+@router.post("/{tenant_id}/admin/meetings")
+async def admin_log_meeting(tenant_id: str, body: dict):
+    """Minutes on a meeting, typed or dictated in the dashboard."""
+    from core.skills.commerce_admin import CommerceAdminSkill
+    notes = ((body or {}).get("notes") or "").strip()
+    if len(notes) < 3:
+        raise HTTPException(status_code=400, detail="Write what happened in the meeting first.")
+    rep = _rep_digits(body.get("rep_phone"))
+    booking = None
+    if body.get("booking_id"):
+        try:
+            rows = (service._client().table("commerce_bookings").select("id,customer_name,customer_phone,service_name")
+                    .eq("tenant_id", tenant_id).eq("id", body["booking_id"]).limit(1).execute().data or [])
+            booking = rows[0] if rows else None
+        except Exception as exc:
+            log.debug("meeting booking lookup skipped: %s", exc)
+    who = body.get("contact") or (booking or {}).get("customer_phone") or (booking or {}).get("customer_name") or ""
+    result = await CommerceAdminSkill()._log_meeting(
+        tenant_id, {"notes": notes, "contact_name_or_phone": who},
+        {"tenant_id": tenant_id, "phone": rep, "caller_role": "sales_rep"})
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=result["error"])
+    if booking:
+        try:     # the meeting happened: mark it done and link the minutes to it
+            db = service._client()
+            rows = (db.table("vula_filed_documents").select("id,fields").eq("tenant_id", tenant_id)
+                    .eq("category", "meeting_notes").eq("filed_by", rep)
+                    .order("created_at", desc=True).limit(1).execute().data or [])
+            if rows:
+                f = {**(rows[0].get("fields") or {}), "booking_id": booking["id"]}
+                db.table("vula_filed_documents").update({"fields": f}).eq("id", rows[0]["id"]).execute()
+            db.table("commerce_bookings").update({"status": "completed"}).eq("tenant_id", tenant_id).eq("id", booking["id"]).execute()
+        except Exception as exc:
+            log.debug("linking minutes to booking skipped: %s", exc)
+    return result
+
+
 @router.get("/{tenant_id}/admin/call-sheet")
 async def admin_get_call_sheet(tenant_id: str, rep_phone: str):
     """The calling rep's own standing config + current open call sheet — resolves strictly by
@@ -4340,7 +4431,7 @@ Return null for any field you are not confident about. Do not guess."""
 
 _CLONE_VALID = {
     "logo_align": {"left", "center"},
-    "logo_size": {"sm", "md", "lg"},
+    "logo_size": {"sm", "md", "lg", "xl"},
     "font_pairing": {"", "vula", "modern", "editorial", "classic"},
     "template_choice": set(service._TEMPLATE_CHOICES),
 }
@@ -4500,13 +4591,14 @@ async def public_app_icon(tenant_id: str, size: int):
     settings = await service.get_invoice_settings(tenant_id) or {}
     src = settings.get("icon_url") or settings.get("logo_url")
     accent = settings.get("accent_color") or "#2C5545"
-    key = (tenant_id, size, src, accent)
+    key = (tenant_id, size, src, accent, settings.get("logo_size"))
     hit = _ICON_CACHE.get(key)
     if hit and _time.time() - hit[0] < 3600:
         return Response(hit[1], media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
     from vula.commerce.brand_icon import render_icon
     name = settings.get("trading_as") or settings.get("company_name") or tenant_id
-    png = await render_icon(src, accent, name, size, square=bool(settings.get("icon_url")))
+    png = await render_icon(src, accent, name, size, square=bool(settings.get("icon_url")),
+                            logo_size=settings.get("logo_size"))
     _ICON_CACHE[key] = (_time.time(), png)
     return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
