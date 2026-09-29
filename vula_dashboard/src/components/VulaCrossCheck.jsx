@@ -64,7 +64,7 @@ export default function VulaCrossCheck({ tenantId }) {
       <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 12px" }}>{rep.text}</p>
 
       {vat && !vat.detail && (
-        <div style={{ background: C.alt, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+        <div className="vula-tile" style={{ background: C.alt, borderRadius: 8, padding: 12, marginBottom: 12 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
             🧾 VAT {vat.vat_registered ? "in vs out" : "— if you were VAT registered"}
           </div>

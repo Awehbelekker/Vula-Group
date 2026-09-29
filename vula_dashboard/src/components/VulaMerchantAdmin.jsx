@@ -55,6 +55,7 @@ import VulaClientOnboarding from './VulaClientOnboarding'
 import VulaCSMetrics from './VulaCSMetrics'
 import VulaJobCosting from './VulaJobCosting'
 import VulaCrossCheck from './VulaCrossCheck'
+import GlassCard from './GlassCard'
 import VulaQS from './VulaQS'
 import VulaQSPro from './VulaQSPro'
 import VulaTakeoff from './VulaTakeoff'
@@ -505,7 +506,7 @@ function OverviewTab({ tenantId, onNavigate }) {
         <p style={ovS.sectionLabel}>Needs attention</p>
         <div style={ovS.alertRow}>
           {alerts.map(a => (
-            <button key={a.label} onClick={() => onNavigate && onNavigate(a.section, a.subtab)} style={ovS.alertCard}>
+            <button key={a.label} onClick={() => onNavigate && onNavigate(a.section, a.subtab)} className="vula-tile" style={ovS.alertCard}>
               <span style={{ ...ovS.alertValue, color: a.color }}>{a.value}</span>
               <span style={ovS.alertLabel}>{a.label}</span>
               <span style={ovS.alertHint}>{a.hint} →</span>
@@ -517,10 +518,11 @@ function OverviewTab({ tenantId, onNavigate }) {
       <p style={{ ...ovS.sectionLabel, marginTop: 18 }}>✓ All caught up — nothing needs attention right now.</p>
     ),
     // Glass-box AI + knowledge — what the assistant did and knows (UI overhaul P3)
-    assistant: () => (
+    assistant: () => ((s.agent_recent || []).length === 0
+        && !(s.knowledge && (s.knowledge.learned_answers > 0 || s.knowledge.taught > 0))) ? null : (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14, marginTop: 18 }}>
         {(s.agent_recent || []).length > 0 && (
-          <div style={ovS.chartCard}>
+          <div className="vula-panel" style={ovS.chartCard}>
             <p style={ovS.sectionLabel}>🧠 Your assistant, recently <button onClick={() => onNavigate && onNavigate('assistant-hub', 'agentlog')} style={{ float: 'right', border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>Watch it work →</button></p>
             {(s.agent_recent || []).map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid #ECE8DF', alignItems: 'center' }}>
@@ -531,7 +533,7 @@ function OverviewTab({ tenantId, onNavigate }) {
           </div>
         )}
         {s.knowledge && (s.knowledge.learned_answers > 0 || s.knowledge.taught > 0) && (
-          <div style={ovS.chartCard}>
+          <div className="vula-panel" style={ovS.chartCard}>
             <p style={ovS.sectionLabel}>📚 Knowledge pulling through</p>
             <div style={{ display: 'flex', gap: 18, fontSize: 13 }}>
               <div><b style={{ fontSize: 20, fontFamily: 'monospace' }}>{s.knowledge.learned_answers}</b><div style={{ fontSize: 11.5, color: '#8A8680' }}>learned answers</div></div>
@@ -548,14 +550,15 @@ function OverviewTab({ tenantId, onNavigate }) {
     .filter(c => cards[c])
 
   return (
-    <div>
+    <div className="vula-home">
+      <div className="vula-home-bg" aria-hidden="true" />
       {layout && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
           {!editing && <button onClick={() => setEditing(true)} style={{ border: 'none', background: 'none', color: 'var(--accent)', fontSize: 12.5, cursor: 'pointer', fontWeight: 600 }}>⚙ Customise Home</button>}
         </div>)}
       {editing && layout && <HomeCustomiser layout={layout} onSave={saveLayout} onCancel={() => setEditing(false)} />}
       {saveErr && <p style={styles.error}>{saveErr}</p>}
-      {order.map(c => <div key={c}>{cards[c]()}</div>)}
+      {order.map(c => <GlassCard key={c} dark={c === 'customers'}>{cards[c]()}</GlassCard>)}
     </div>
   )
 }
@@ -600,7 +603,7 @@ const ovS = {
 
 function StatCard({ label, value, sub, accent = '#6b7280' }) {
   return (
-    <div style={styles.statCard}>
+    <div className="vula-tile" style={styles.statCard}>
       <p style={{ ...styles.statValue, color: accent }}>{value}</p>
       <p style={styles.statLabel}>{label}</p>
       <p style={styles.statSub}>{sub}</p>

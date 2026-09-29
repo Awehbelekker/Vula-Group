@@ -17,7 +17,7 @@ const inp = { padding: "7px 9px", border: `1px solid ${C.border}`, borderRadius:
 
 function Stat({ label, value, color, sub }) {
   return (
-    <div style={{ background: C.alt, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
+    <div className="vula-tile" style={{ background: C.alt, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
       <div style={{ fontSize: 10, textTransform: "uppercase", color: C.muted }}>{label}</div>
       <div style={{ fontSize: 15, fontWeight: 700, color: color || C.text }}>{value}</div>
       {sub && <div style={{ fontSize: 10, color: C.muted }}>{sub}</div>}
@@ -90,7 +90,7 @@ export default function VulaJobCosting({ tenantId }) {
       </div>
 
       {projects.map((p) => (
-        <div key={p.project} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+        <div key={p.project} className="vula-panel" style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "baseline", marginBottom: 8 }}>
             <b style={{ fontSize: 14, color: C.text, flex: "1 1 160px" }}>{p.project}</b>
             <span style={{ fontSize: 12, fontWeight: 700, color: STATUS[p.status] }}>{p.status}</span>

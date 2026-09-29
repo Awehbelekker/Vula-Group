@@ -118,3 +118,70 @@ input, select, textarea { font-family: var(--font-body); }
   .vshell-top { padding: 12px 14px; }
   .vshell-user { display: none; }
 }
+
+/* ── Home: glass cards (2026-09-29, Ian: "a true glass feel, actually bending the light and the
+   background"). Behind the cards: slow-drifting accent-coloured light and a faint texture, so
+   there is something to refract. Each card frosts and tints what's behind it, catches a
+   highlight on its top edge, and — on Chromium — bends the background at its edges like a slab
+   of glass (SVG displacement map per card, GlassCard.jsx). Safari/Firefox
+   get the frosted glass without the bending; reduced motion stops the drift; reduced
+   transparency makes the cards solid. */
+.vula-home { position: relative; isolation: isolate; }
+.vula-home-bg {
+  position: absolute; inset: -12px; z-index: -1; border-radius: 20px; pointer-events: none;
+  background:
+    radial-gradient(38% 32% at 14% 18%, color-mix(in srgb, var(--accent) 70%, transparent), transparent 70%),
+    radial-gradient(34% 40% at 86% 26%, rgba(43, 87, 151, 0.5), transparent 70%),
+    radial-gradient(42% 36% at 58% 82%, rgba(245, 158, 11, 0.42), transparent 70%),
+    radial-gradient(30% 28% at 30% 62%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 70%),
+    radial-gradient(26% 24% at 78% 58%, rgba(192, 57, 43, 0.22), transparent 70%),
+    repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.08) 0 1px, transparent 1px 20px);
+  background-size: 160% 160%, 160% 160%, 160% 160%, 160% 160%, 160% 160%, auto;
+  background-position: 0% 0%, 100% 0%, 50% 100%, 0% 100%, 100% 100%, 0 0;
+  animation: vula-drift 32s ease-in-out infinite alternate;
+}
+@keyframes vula-drift {
+  0%   { background-position: 0% 0%, 100% 0%, 50% 100%, 0% 100%, 100% 100%, 0 0; }
+  100% { background-position: 60% 40%, 40% 70%, 0% 30%, 80% 20%, 20% 60%, 40px 40px; }
+}
+.vula-glass {
+  position: relative; border-radius: 18px; padding: 16px; margin-top: 16px; overflow: hidden;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.1));
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(255, 255, 255, 0.25),
+              inset 1px 0 0 rgba(255, 255, 255, 0.35), 0 12px 32px rgba(20, 40, 30, 0.12);
+  -webkit-backdrop-filter: blur(14px) saturate(170%);
+  backdrop-filter: blur(14px) saturate(170%);
+}
+.vula-glass.refract { backdrop-filter: var(--vula-bend) blur(3px) saturate(175%) brightness(1.04); }
+.vula-glass:first-child { margin-top: 0; }
+/* a card with nothing to show (two rules: a browser without :has() must still hide :empty) */
+.vula-glass:empty { display: none; }
+.vula-glass:not(:has(> :not(svg))) { display: none; }
+/* the light catching the pane: bright top-left, a faint return bottom-right */
+.vula-glass::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(118deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0) 26%,
+                              rgba(255, 255, 255, 0) 74%, rgba(255, 255, 255, 0.22) 100%);
+  mix-blend-mode: soft-light;
+}
+/* a card's own white box becomes the glass; its tiles become lighter glass */
+.vula-glass > * {
+  position: relative; z-index: 1;
+  background: transparent !important; border-color: transparent !important;
+  box-shadow: none !important; margin: 0 !important;
+}
+.vula-glass .vula-tile, .vula-glass .vula-panel {
+  background: rgba(255, 255, 255, 0.45) !important;
+  border: 1px solid rgba(255, 255, 255, 0.55) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
+}
+.vula-glass.dark {
+  background: linear-gradient(135deg, rgba(14, 59, 46, 0.78), rgba(20, 80, 61, 0.6));
+  border-color: rgba(255, 255, 255, 0.28); color: #EAF3EF;
+}
+@media (prefers-reduced-motion: reduce) { .vula-home-bg { animation: none; } }
+@media (prefers-reduced-transparency: reduce) {
+  .vula-glass, .vula-glass.refract { -webkit-backdrop-filter: none; backdrop-filter: none; background: #fff; }
+  .vula-glass.dark { background: #14503D; }
+}
