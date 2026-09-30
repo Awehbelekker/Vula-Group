@@ -40,13 +40,13 @@ def test_empty_kb_is_seeded_with_every_sector_pack(monkeypatch):
     assert written and written[0]["detail"]["fingerprint"] == seeder.shared_kb_fingerprint()
 
 
-def test_up_to_date_kb_is_left_alone(monkeypatch):
+def test_up_to_date_kb_is_left_alone(monkeypatch):  # marker + collection has points
     calls, _ = _patch(monkeypatch, seeded=True, marker=True)
     assert asyncio.run(seeder.ensure_shared_kbs())["seeded"] is False and calls == []
 
 
 def test_changed_content_reseeds(monkeypatch):
-    calls, _ = _patch(monkeypatch, seeded=True, marker=False)
+    calls, _ = _patch(monkeypatch, seeded=True, marker=False)   # no marker for this content
     assert asyncio.run(seeder.ensure_shared_kbs())["seeded"] and calls
 
 
@@ -55,3 +55,40 @@ def test_sector_packs_never_state_a_tenant_figure():
     text = " ".join(d.content for docs in SECTOR_DOCUMENTS.values() for d in docs)
     for brand in ("Affinity", "Taraflex", "Mipolam", "Off the Hook", "DIGG"):
         assert brand not in text
+
+
+def test_a_failed_status_check_does_not_reseed(monkeypatch):
+    """2026-09-30: the status check sent no Qdrant api-key, was refused, and every deploy
+    re-seeded everything. With the marker present, an unreadable status means "leave it"."""
+    calls, _ = _patch(monkeypatch, seeded=False, marker=True)
+
+    async def refused():
+        return {"seeded": False, "chunks": 0, "error": "HTTP 403"}
+    monkeypatch.setattr(seeder, "business_kb_status", refused)
+    assert asyncio.run(seeder.ensure_shared_kbs())["seeded"] is False and calls == []
+
+
+def test_status_check_sends_the_qdrant_key(monkeypatch):
+    import httpx
+    seen = {}
+
+    class _C:
+        def __init__(self, **kw): seen.update(kw.get("headers") or {})
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url):
+            class R:
+                status_code = 200
+                def json(self): return {"result": {"points_count": 13}}
+            return R()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _C)
+    monkeypatch.setattr("config.settings.qdrant_api_key", "k")
+    st = asyncio.run(seeder.collection_status("business_basics"))
+    assert seen.get("api-key") == "k" and st["seeded"] and st["chunks"] == 13
+
+
+def test_marker_but_empty_collection_reseeds(monkeypatch):
+    """Qdrant reset: the marker exists but the collection clearly has no points."""
+    calls, _ = _patch(monkeypatch, seeded=False, marker=True)
+    assert asyncio.run(seeder.ensure_shared_kbs())["seeded"] and calls

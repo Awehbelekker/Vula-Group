@@ -83,22 +83,32 @@ async def seed_training_kb(force: bool = False) -> SeedResult:
     )
 
 
+async def collection_status(tenant_id: str) -> dict:
+    """{seeded, chunks, collection} for one shared collection, or {"error": ...} when Qdrant's
+    answer can't be read. Uses the same auth and naming as the ingestion store: before
+    2026-09-30 these checks sent no api-key, got refused, read the refusal as "0 points" and
+    re-seeded every shared KB on every deploy."""
+    from vula.ingestion.pipeline import QdrantStore
+    store = QdrantStore()
+    collection = store._collection_name(tenant_id)
+    try:
+        async with httpx.AsyncClient(timeout=5.0, headers=store._headers()) as client:
+            resp = await client.get(f"{store.base}/collections/{collection}")
+        if resp.status_code == 404:
+            return {"seeded": False, "chunks": 0, "collection": collection}
+        if resp.status_code != 200:
+            return {"error": f"HTTP {resp.status_code}", "collection": collection}
+        points = (resp.json().get("result") or {}).get("points_count") or 0
+        return {"seeded": points > 0, "chunks": points, "collection": collection}
+    except Exception as exc:
+        return {"error": str(exc), "collection": collection}
+
+
 async def training_kb_status() -> dict:
     """Return stats on the current state of the training KB collection."""
-    from config import settings
     from vula.training.content import TRAINING_TENANT_ID
-
-    collection = f"vula_{TRAINING_TENANT_ID}"
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.qdrant_base}/collections/{collection}")
-            if resp.status_code == 404:
-                return {"seeded": False, "chunks": 0, "collection": collection}
-            data = resp.json()
-            points = data.get("result", {}).get("points_count", 0)
-            return {"seeded": points > 0, "chunks": points, "collection": collection}
-    except Exception as exc:
-        return {"seeded": False, "chunks": 0, "error": str(exc)}
+    st = await collection_status(TRAINING_TENANT_ID)
+    return {"seeded": False, "chunks": 0, **st}
 
 
 async def seed_business_kb(force: bool = False) -> SeedResult:
@@ -201,9 +211,13 @@ async def ensure_shared_kbs(force: bool = False) -> dict:
     from vula.training.business_content import BUSINESS_TRAINING_DOCUMENTS, BUSINESS_TRAINING_TENANT_ID
     from vula.training.sector_content import SECTOR_DOCUMENTS, sector_tenant_id
     fp = shared_kb_fingerprint()
-    status = await business_kb_status()
-    if not force and status.get("seeded") and _seeded_marker(fp):
-        return {"seeded": False, "reason": "up to date", "fingerprint": fp}
+    if not force and _seeded_marker(fp):
+        # The marker says this exact content was seeded. Re-seed only when Qdrant clearly says
+        # the collection is empty or gone (e.g. Qdrant was reset) — not when the check itself
+        # fails, which is what re-seeded on every deploy before 2026-09-30.
+        status = await business_kb_status()
+        if status.get("seeded") or status.get("error"):
+            return {"seeded": False, "reason": "up to date", "fingerprint": fp}
     results = {BUSINESS_TRAINING_TENANT_ID: await seed_documents(BUSINESS_TRAINING_TENANT_ID,
                                                                  BUSINESS_TRAINING_DOCUMENTS)}
     for sector, docs in SECTOR_DOCUMENTS.items():
@@ -226,20 +240,9 @@ async def ensure_shared_kbs(force: bool = False) -> dict:
 
 async def business_kb_status() -> dict:
     """Return stats on the current state of the shared business_basics collection."""
-    from config import settings
     from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
-
-    collection = f"vula_{BUSINESS_TRAINING_TENANT_ID}"
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.qdrant_base}/collections/{collection}")
-            if resp.status_code == 404:
-                return {"seeded": False, "chunks": 0, "collection": collection}
-            data = resp.json()
-            points = data.get("result", {}).get("points_count", 0)
-            return {"seeded": points > 0, "chunks": points, "collection": collection}
-    except Exception as exc:
-        return {"seeded": False, "chunks": 0, "error": str(exc)}
+    st = await collection_status(BUSINESS_TRAINING_TENANT_ID)
+    return {"seeded": False, "chunks": 0, **st}
 
 
 if __name__ == "__main__":
