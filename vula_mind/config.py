@@ -165,6 +165,9 @@ class Settings(BaseSettings):
     # listed uses model_worker_cloud. Pick entries from `python -m evals.run tools` results, not
     # reputation. An env change still needs `railway up` to take effect.
     cloud_model_by_task: str = ""
+    # The capability benchmark's judge (evals/benchmark.py) — a model distinct from the ones it
+    # grades. Empty = rules only.
+    benchmark_judge_model: str = "openrouter/anthropic/claude-sonnet-5"
     # Ask OpenRouter to route only to providers that neither train on nor retain prompts
     # (provider.data_collection="deny" + zdr) — tenant data leaving SA should at least not stay
     # anywhere. Applied via llm_router.cloud_generation_kwargs().

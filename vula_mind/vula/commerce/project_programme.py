@@ -736,7 +736,9 @@ def parse_start_programme(text: str, tenant_id: str) -> Optional[str]:
 
 _SETUP_HINT = re.compile(
     r"\b(programme|program|gantt|click\s?up|baseline|cost\s+(revision|rev|estimate)|rev(ision)?\s*\.?\s*\d+|"
-    r"variation\s+order|tasks?\s+(due|for the day)|task the staff)\b", re.IGNORECASE)
+    r"variation\s+order|tasks?\s+(due|for the day)|task the staff|"
+    # "so we need to prepare for a new project to track costing … belladonna" (Judy, 31 Aug)
+    r"new\s+project|set\s*up\s+(a\s+|the\s+)?project|track\s+(the\s+)?cost(s|ing)?)\b", re.IGNORECASE)
 
 _SETUP_PROMPT = (
     "You read an instruction a construction business owner sent on WhatsApp. Return STRICT JSON only: "

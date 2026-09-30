@@ -9,6 +9,7 @@ core/skills/finance_admin.py — answer money questions from the project finance
 Reads vula_project_finances + vula_project_budgets (populated by filed invoices/payments).
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import json
 import logging
@@ -406,6 +407,7 @@ class FinanceAdminSkill(BaseSkill):
                 return p["project"]
         return hint
 
+    @_dry_run.guard_dispatch
     async def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
         from vula.integrations.finances import finance_summary
         try:

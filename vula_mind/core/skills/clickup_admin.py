@@ -15,6 +15,7 @@ low-confidence "connect first" message so the orchestrator can fall back.
 Mirrors the tool-calling pattern of core/skills/commerce_admin.py.
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import json
 import logging
@@ -259,6 +260,7 @@ class ClickUpAdminSkill(BaseSkill):
         return None
 
     # ── Tool dispatch ─────────────────────────────────────────────────────────
+    @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
         try:

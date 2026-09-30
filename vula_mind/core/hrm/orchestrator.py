@@ -30,7 +30,8 @@ COMPLEXITY_KEYWORDS = {
 
 # Keyword hits (and a miss, None) that a supplier spend/materials-history question may be
 # re-routed away from — see _route_with_reason.
-_SUPPLIER_HISTORY_OVERRIDABLE = {None, "commerce_assistant", "finance_admin", "calculations"}
+# standards_lookup: its "look up" keyword took "Please look up jack hammer invoice…" (2026-09-30 audit)
+_SUPPLIER_HISTORY_OVERRIDABLE = {None, "commerce_assistant", "finance_admin", "calculations", "standards_lookup"}
 
 SKILL_KEYWORDS: dict[str, list[str]] = {
     # ClickUp first — explicit task-management phrasing only, so it never shadows
@@ -87,7 +88,9 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "budget left", "budget remaining", "left on the budget",
                              "whats left on the", "what's left on the", "budget for",
                              "who is account", "supplier paid", "what have we paid", "total invoiced",
-                             "cash in", "cash out", "the ledger"],
+                             "cash in", "cash out", "the ledger",
+                             # 2026-09-30 (benchmark): "How much money came in and went out last month?"
+                             "came in", "went out", "money came", "money went"],
     "email_admin":          ["email", "my mail", "my emails", "inbox", "draft a reply",
                              "draft an email", "draft email", "check my email", "check email",
                              "reply to the email", "file the attachment", "email attachment",
@@ -121,7 +124,12 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "how wide", "calculate", "floor area", "how many units",
                              "what does it cost", "what would it cost", "how much does", "how much will",
                              "how much is", "using our rates", "cost of", "rate for", "what do we charge",
-                             "estimate the cost", "total cost", "what will it cost"],
+                             "estimate the cost", "total cost", "what will it cost",
+                             # 2026-09-30 (benchmark): VAT and quantities went to `reasoning`, which
+                             # does arithmetic in its head; `calculations` computes and self-checks.
+                             "vat on", "% vat", "percent of", "% of r", "how many tiles", "tiles for",
+                             "how many bricks", "how many bags", "how many sheets", "how many litres",
+                             "square metres", "square meters", " m2 ", " m² "],
     # Architecture/construction BEFORE file_parse so "Stage 4 documentation",
     # "fees", "SACAP" etc consult the SA construction KB (not just tenant docs).
     # 2026-09-18: this used to also include generic words ("fee", "plan", "design",
@@ -135,7 +143,10 @@ SKILL_KEYWORDS: dict[str, list[str]] = {
                              "provisional sum", "retention", "practical completion", "snag"],
     "web_search":           ["search", "find online", "latest", "current", "news", "tender alert",
                              "research", "look up", "google"],
-    "code_execution":       ["run", "execute", "compute", "code", "script"],
+    # 2026-09-30 (benchmark): bare "run"/"code" matched "Which projects are we running?" and any
+    # "project code" — phrases about running code only.
+    "code_execution":       ["run this code", "run the code", "run a script", "run this script",
+                             "execute this", "python", "write a script", "script to"],
     "memory_recall":        ["remember", "previous", "history", "last time", "before", "we discussed"],
     "file_parse":           ["this file", "this document", "pdf", "parse", "extract from", "summarise this"],
     "image_analysis":       ["image", "photo", "picture", "screenshot", "diagram"],

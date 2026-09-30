@@ -9,6 +9,7 @@ Works for any mailbox connected via IMAP/SMTP (GoDaddy Workspace, cPanel, Zohoâ€
 Defers if no mailbox is connected. Drafts saved to the Drafts folder by default.
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import json
 import logging
@@ -447,6 +448,7 @@ class EmailAdminSkill(BaseSkill):
         args = obj.get("arguments") or obj.get("parameters") or obj.get("args") or {}
         return (name, args) if name in _TOOL_NAMES and isinstance(args, dict) else None
 
+    @_dry_run.guard_dispatch
     async def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str, creds: dict) -> Any:
         try:
             if name == "email_search":

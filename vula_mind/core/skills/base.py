@@ -525,9 +525,11 @@ def looks_like_tenant_data_question(text: str, require_possessive: bool = False)
 # question ("how much have we spent ON Stage 3") stays with finance_admin, and a pricing
 # question ("what does X charge") never matches.
 _SUPPLIER_HISTORY_RE = re.compile(
-    r"\b(spent|spend|spending|paid|pay|bought|buy|purchased)\s+(with|at|from)\b|"
+    r"\b(spent|spend|spending|paid|pay|bought|buy|purchased|hire|hired|rent|rented)\s+(with|at|from)\b|"
     r"\b(expenses?|purchases?|spend|spending)\s+(from|with|at)\b|"
     r"\binvoices?\s+(from|by)\b|"
+    # "Sorry can I have just the invoice for jack hammer" (Judy, 26 Sep; audit 2026-09-30)
+    r"\b(have|get|see|show|send)\s+(me\s+)?(just\s+)?the\s+invoices?\s+(for|from)\b|"
     r"\b(all|every)\s+(of\s+)?(the\s+|our\s+|my\s+)?([\w'-]+\s+){0,3}invoices?\b|"
     r"\b(what|which)\s+(materials?|items?|stuff|products?)\s+(have|has|did|were)\s+"
     r"(we|i|you)?\s*(been\s+)?(buy|bought|get|got|order|ordered|purchase|purchased)\b|"
@@ -537,6 +539,9 @@ _SUPPLIER_HISTORY_RE = re.compile(
     # "See if you can find invoices gardening gardens area",
     # "For gardens handiman full list of spend and material".
     r"\b(find|search|show|get|pull|fetch|look\s+up)\b[^.?!]{0,30}?\binvoices?\b|"
+    # 2026-09-29, Judy: "Can you summarize Jack hammer invoices" ("Jack Hammer" is her own
+    # alias for Gardens Handiman) went to `reasoning`, which can't see invoices.
+    r"\bsummar(y|i[sz]e)\b[^.?!]{0,30}?\binvoices?\b|"
     r"\b(list|summary|break\s*[.\-]?\s*down|total)\s+of\s+(the\s+|all\s+|our\s+)?"
     r"(spend|spending|purchases|materials?)\b|"
     # 2026-09-25, real digg-demo follow-up in the SAME conversation as a resolved supplier
@@ -551,11 +556,48 @@ _SUPPLIER_HISTORY_RE = re.compile(
 # Invoice questions that are about what's OWED (receivables/payables status), not a supplier's
 # history — those stay with finance_admin / commerce skills.
 _NOT_SUPPLIER_HISTORY_RE = re.compile(
-    r"\b(unpaid|outstanding|overdue|owe|owed|owing|due|create|make|draft|send|issue)\b",
+    r"\b(unpaid|outstanding|overdue|owe|owed|owing|due|create|make|draft|send|issue|"
+    # 2026-09-30 (benchmark): "Delete all the HPC invoices" was answered with every invoice
+    r"delete|remove|void|cancel|wipe)\b",
     re.IGNORECASE)
 _SUPPLIER_PRICING_RE = re.compile(
     r"\b(charge|charges|charging|price\s*list|pricing|quote\s+me|sell|sells|selling|"
     r"catalog(ue)?)\b", re.IGNORECASE)
+
+
+# 2026-09-30, capability benchmark: on a knowledge line (DIGG) the owner's job-costing and pricing
+# questions ("How is HPC doing — are we making our 10%?", "What should I charge per m² for
+# ceiling boarding?") reached `reasoning`, which has no tools. project_profit / price_advice /
+# lookup_rate live only in commerce_admin, which a knowledge-line owner never reached. The
+# WhatsApp path sends an INSIDER's question matching this to commerce_admin (never the public's).
+_OWNER_ADMIN_RE = re.compile(
+    r"\bare we making\b|\bmaking (?:our|my|the) (?:\d+\s?%|fee|margin|profit)\b|"
+    r"\b(?:profit|margin|loss)\s+on\s+(?:the\s+)?\w+|\blos(?:e|ing) money\b|"
+    r"\bhow(?:'s| is)\s+[\w\s]{2,25}?\s+doing\b|\bon (?:track|budget) for (?:our|the|my) fee\b|"
+    r"\bwhat should (?:i|we) (?:charge|quote|price)\b|\bhow much should (?:i|we) (?:charge|quote)\b|"
+    r"\b(?:job|project) cost(?:ing)?\b|\bfee target\b",
+    re.IGNORECASE)
+
+
+# 2026-09-30 audit of every real DIGG question: follow-ups ("Just give me the full list.", "Please
+# send full list", "Please show all and do a full break down in excel", "Yes please", "Please check
+# attachments") were routed on their own words to `reasoning`, which can't see what the previous
+# answer was about. A short follow-up that names no new job goes back to the skill that answered.
+_FOLLOW_UP_RE = re.compile(
+    r"\b(full list|the list|whole list|all of (?:them|it)|the rest|show (?:me )?all|send (?:it|them|me)|"
+    r"break\s*[.\-]?\s*down|in excel|spreadsheet|attachments?|that one|those ones?|the same|"
+    r"more detail|try again)\b|"
+    r"^\s*(?:yes|yep|yeah|ok|okay|sure|please do|go ahead|do it)(?:\s+please)?\s*[.!]*\s*$",
+    re.IGNORECASE)
+
+
+def looks_like_follow_up(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and len(t.split()) <= 14 and bool(_FOLLOW_UP_RE.search(t))
+
+
+def looks_like_owner_admin_question(text: str) -> bool:
+    return bool(_OWNER_ADMIN_RE.search(text or ""))
 
 
 def looks_like_supplier_history_question(text: str) -> bool:

@@ -532,6 +532,9 @@ async def send(creds: dict, to: str, subject: str, body: str,
     Raises asyncio.TimeoutError on breach — same "let the caller's try/except handle it" contract
     every other _send failure already relies on (this function only ever returns an explicit
     {"error": ...} for the missing-SMTP-host case)."""
+    from core import dry_run as _dry
+    if _dry.record_send("email", to, f"{subject}\n\n{body}"):   # capability benchmark
+        return {"sent": True, "dry_run": True}
     return await asyncio.wait_for(
         asyncio.to_thread(_send, creds, to, subject, body, attachments),
         timeout=_SEND_WALL_CLOCK_TIMEOUT_S,
