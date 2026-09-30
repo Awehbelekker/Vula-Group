@@ -756,6 +756,24 @@ async def _programme_briefs_loop() -> None:
         await _asyncio.sleep(600)
 
 
+async def _conversation_check_loop() -> None:
+    """07:00–11:00 SAST daily: yesterday's replies checked for every tenant, emailed to
+    TEAM_EMAIL (vula/conversation_check.py). Marked once per day in vula_admin_audit."""
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    await _asyncio.sleep(270)
+    while True:
+        try:
+            from vula import conversation_check as _cc
+            if _cc.due(_dt.now(_cc.SAST)):
+                res = await _cc.send()
+                if res.get("sent"):
+                    log.info("conversation check sent for %s", res.get("day"))
+        except Exception as exc:
+            log.warning("conversation check loop error: %s", exc)
+        await _asyncio.sleep(900)
+
+
 async def _shared_kb_loop() -> None:
     """Keeps the shared general-business KB and the sector packs seeded (vula/training/
     seeder.py::ensure_shared_kbs) — on boot, then daily. A no-op when nothing changed."""
@@ -1382,6 +1400,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))

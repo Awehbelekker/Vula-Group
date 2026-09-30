@@ -1162,6 +1162,26 @@ async def master_benchmark_reports(limit: int = 10) -> dict:
     return {"runs": runs, "latest": latest}
 
 
+# ── Daily conversation check (vula/conversation_check.py) ─────────────────────
+@router.get("/conversations/check")
+async def master_conversation_check(day: Optional[str] = None) -> dict:
+    """The day's replies (default yesterday, SAST) that look wrong, per tenant."""
+    from datetime import date as _date
+    from vula import conversation_check
+    try:
+        d = _date.fromisoformat(day) if day else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD")
+    return conversation_check.build(d)
+
+
+@router.post("/conversations/check/send")
+async def master_conversation_check_send(identity: dict = Depends(require_master)) -> dict:
+    from vula import conversation_check
+    audit(identity, "conversation_check.send")
+    return await conversation_check.send(force=True)
+
+
 # ── Content titles for generically-named documents (vula/commerce/doc_titles.py) ──────────
 # Preview first (nothing written), then apply the reviewed preview. Runs in the background — one
 # small model call per document. The last result per tenant is kept in memory for the page.
