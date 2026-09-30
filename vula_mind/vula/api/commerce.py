@@ -2354,6 +2354,26 @@ async def admin_learned_summary(tenant_id: str):
     return {"voice": voice, "learned_answers": learned_answers, "merchant_profiles": merchant_profiles}
 
 
+@router.post("/{tenant_id}/admin/learned-answers/{learned_id}/{action}")
+async def admin_review_learned_answer(tenant_id: str, learned_id: str, action: str):
+    """Keep / Bin a pending learned answer from the dashboard — the same gate as the WhatsApp
+    buttons (2026-09-30: pending corrections could only be reviewed on WhatsApp, so one missed
+    tap meant the correction was never used)."""
+    from vula import escalation as esc
+    row = esc.get_learned_answer(learned_id)
+    if not row or row.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=404, detail="Not found")
+    if action == "approve":
+        if not esc.approve_learned_answer(learned_id, approved_by="dashboard"):
+            raise HTTPException(status_code=500, detail="Couldn't save")
+        await esc.embed_learned_answer(tenant_id, learned_id, row.get("question", ""))
+        return {"status": "approved"}
+    if action == "reject":
+        esc.reject_learned_answer(learned_id)
+        return {"status": "rejected"}
+    raise HTTPException(status_code=400, detail="action must be approve or reject")
+
+
 class PageAiDraftRequest(BaseModel):
     content: list = []
     description: str = ""

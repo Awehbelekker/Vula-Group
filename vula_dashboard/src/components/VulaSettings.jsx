@@ -722,6 +722,14 @@ function LearnedSummary({ tenantId }) {
     }
   }
 
+  async function reviewLearned(id, action) {
+    setBusy(true)
+    try {
+      await fetch(`${API}/v1/commerce/${tenantId}/admin/learned-answers/${id}/${action}`, { method: 'POST' })
+      load()
+    } finally { setBusy(false) }
+  }
+
   if (!data) return <p style={{ ...s.sectionHint, margin: 0 }}>Loading…</p>
 
   const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 12 }
@@ -763,9 +771,19 @@ function LearnedSummary({ tenantId }) {
         <p style={hint}>
           {data.learned_answers.approved_count} approved and in use
           {data.learned_answers.pending_count > 0
-            ? `, ${data.learned_answers.pending_count} waiting for your Keep/Bin reply on WhatsApp.`
+            ? `, ${data.learned_answers.pending_count} waiting for you to Keep or Bin (here or on WhatsApp).`
             : '.'}
         </p>
+        {(data.learned_answers.pending || []).slice(0, 10).map(r => (
+          <div key={r.id} style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, marginTop: 8 }}>
+            <p style={{ ...hint, color: 'var(--ink)', margin: 0 }}>Q: “{r.question}”</p>
+            <p style={{ ...hint, margin: '4px 0 8px' }}>A: {r.answer}</p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={btn(true)} disabled={busy} onClick={() => reviewLearned(r.id, 'approve')}>Keep — use this answer</button>
+              <button style={btn(false)} disabled={busy} onClick={() => reviewLearned(r.id, 'reject')}>Bin</button>
+            </div>
+          </div>
+        ))}
         {data.learned_answers.recent_approved.length > 0 && (
           <ul style={{ margin: '8px 0 0', padding: '0 0 0 18px', ...hint }}>
             {data.learned_answers.recent_approved.slice(0, 5).map(r => (

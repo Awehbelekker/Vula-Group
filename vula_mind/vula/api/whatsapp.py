@@ -743,6 +743,14 @@ async def _maybe_helper_escalation_answer(phone: str, text: str,
     return True
 
 
+# "No, it's …", "That's wrong — …", "Actually …", "Incorrect, …" — the owner correcting Vula.
+_EXPLICIT_CORRECTION_RE = re.compile(
+    r"^\s*(?:no+[,.!:;—–-]+\s*|nope[,.!]?\s*|that'?s (?:wrong|not right|not correct|incorrect)"
+    r"[,.!:;—–-]*\s*|(?:in)?correct(?:ion)?[,.!:;—–-]+\s*|wrong[,.!:;—–-]+\s*|actually[,:]?\s+|"
+    r"not quite[,.!:;—–-]*\s*|the (?:right|correct) answer is[:\s]+|it should be[:\s]+|"
+    r"it'?s actually\s+)", re.IGNORECASE)
+
+
 async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key: str,
                                           text: str) -> None:
     """If Vula's LAST reply on this thread carried an uncertainty caveat (see
@@ -773,13 +781,18 @@ async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key
         prior_q, prior_a = msgs[0], msgs[1]
         if prior_q.role != "user" or prior_a.role != "assistant":
             return
-        if not is_uncertain_reply(prior_a.text):
-            return
         stripped = text.strip()
+        # 2026-09-30: an explicit correction ("No, it's R10", "That's wrong — we close at 4")
+        # counts even when Vula's answer sounded sure — a confidently wrong answer is exactly
+        # the one that must not ship again. Otherwise only after an uncertain reply, as before.
+        explicit = bool(_EXPLICIT_CORRECTION_RE.match(stripped))
+        if not explicit and not is_uncertain_reply(prior_a.text):
+            return
         if len(stripped) < 12:
             return
+        body = _EXPLICIT_CORRECTION_RE.sub("", stripped, count=1).strip() if explicit else stripped
         if (_GREETING_RE.match(stripped) or stripped.endswith("?")
-                or _NEW_QUESTION_RE.match(stripped) or _REQUEST_SHAPED.match(stripped)):
+                or _NEW_QUESTION_RE.match(body) or _REQUEST_SHAPED.match(body) or len(body) < 6):
             return  # a greeting/ack or the owner's own new question/request, not a correction
         learned_id = esc.capture_owner_correction(tenant_id, prior_q.text, stripped)
         if not learned_id:
@@ -1244,6 +1257,9 @@ async def _voice_the_relay(tenant_id: str, question: str, answer: str) -> str:
         return original
 
 
+_STOCK_WORD_RE = re.compile(r"\b(?:stock|in stock|available|availability|how many|price|cost)\b", re.I)
+
+
 async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
                                     reply: str, confidence: Optional[float] = None,
                                     caller_role: Optional[str] = None) -> str:
@@ -1265,6 +1281,16 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
     """
     try:
         from vula import escalation as esc
+        # 2026-09-30: an owner-approved answer is used whenever the question matches — not only
+        # when the fresh reply admits it doesn't know. A confidently WRONG answer the owner
+        # corrected used to be regenerated next time, because this lookup only ran on
+        # escalation. Live-data questions (amounts, invoices, stock) are never answered from a
+        # stored answer, which would go stale.
+        from core.skills.base import looks_like_tenant_data_question
+        if not looks_like_tenant_data_question(text) and not _STOCK_WORD_RE.search(text or ""):
+            learned = await esc.find_learned_answer(tenant_id, text)
+            if learned:
+                return learned
         if not esc.should_escalate(reply, confidence, customer_text=text):
             return reply
         learned = await esc.find_learned_answer(tenant_id, text)
