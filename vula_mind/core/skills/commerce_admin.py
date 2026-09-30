@@ -903,13 +903,34 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
                    + AUTOMATION_TOOLS + PROJECT_TOOLS)
 
+PRODUCT_DOC_TOOLS = [
+    {"type": "function", "function": {
+        "name": "find_product_document",
+        "description": (
+            "Find a PRODUCT document the business has on file — data sheet, technical sheet, test "
+            "report/certificate, brochure, product card, price list, installation guide — by "
+            "product or range name, and get its name and a download link the rep can forward to "
+            "a client. Use for 'send me the Affinity data sheet', 'do we have the slip test for "
+            "Astro?'. Never returns invoices, receipts or other money documents. To answer a "
+            "spec question (e.g. slip rating) use lookup_business_info; use this to hand over "
+            "the document itself."),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Product/range name and what kind of "
+                      "document, e.g. 'Mipolam Affinity slip test'."}},
+            "required": ["query"]},
+    }},
+]
+
+
 # A sales rep sharing the tenant's WhatsApp number with the owner/other reps gets a personal-
 # scope toolset — their own contacts, meetings, proposals, and bookings — not shop-wide levers
 # (stock, invoices, broadcasts, products) an individual rep has no business touching.
 # 2026-08-24: finance_insights (shop-wide revenue/margin/VAT) used to be included here despite
 # directly contradicting this comment's own stated scope — confirmed a real gap, not an
 # intentional commission-visibility exception, and removed.
-_REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
+_PRODUCT_DOC_STOP = {"the", "and", "for", "send", "me", "our", "have", "got", "any", "can", "you",
+                     "please", "document", "doc", "copy", "latest", "new"}
+_REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_DOC_TOOLS + DRAFT_TOOLS
                    + BOOKING_TOOLS + CRM_TOOLS + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)
 
 # Tools in the always-on set that only mean something to a business that sells products
@@ -1111,7 +1132,7 @@ def _tools_for(tenant_id: str, role: Optional[str] = None, message: str = "") ->
         mods = set()
     # REMINDER_TOOLS: the owner's WhatsApp menu offers "Set up a reminder", but only reps had
     # the tools, so owners were told something the agent then couldn't do.
-    tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS
+    tools = (list(TOOL_SPECS) + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_DOC_TOOLS + DRAFT_TOOLS
              + CONTACT_TOOLS + MEETING_TOOLS + REMINDER_TOOLS)  # always on
     try:
         from vula.api.tenants import tenant_profile
@@ -1333,7 +1354,8 @@ class CommerceAdminSkill(BaseSkill):
         if stock_answer:
             return SkillOutput(answer=stock_answer, skill_name=self.name, confidence=0.95)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
-               "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
+               "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
+               "message": inp.question}
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         if caller_role != "sales_rep":   # reps already get their own narrow set
             tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
@@ -1843,6 +1865,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "draft_followup_email": return await self._draft_followup_email(tid, args, ctx)
             if name == "competitor_check":   return await self._competitor_check(tid, args, ctx)
             if name == "lookup_business_info": return await self._lookup_business_info(tid, args)
+            if name == "find_product_document": return self._find_product_document(tid, args)
             if name == "calculate": return self._calculate(args)
             if name in ("remember_rule", "list_rules", "forget_rule"):
                 return self._rule_tool(name, tid, args, ctx)
@@ -3290,6 +3313,10 @@ class CommerceAdminSkill(BaseSkill):
         query = (args.get("query") or "").strip()
         if not query:
             return {"error": "Need something to research — a competitor name or a product/price query."}
+        from core.skills.base import looks_like_spec_question
+        if looks_like_spec_question(query) or looks_like_spec_question(ctx.get("message") or ""):
+            return {"error": "Product specifications come only from this business's own data "
+                             "sheets — use lookup_business_info, and if it isn't there say so."}
         from core.skills.web_search import _ddg_search, _fetch_text
         from core.prompt_safety import UNTRUSTED_CONTENT_RULE
 
@@ -3492,6 +3519,42 @@ class CommerceAdminSkill(BaseSkill):
         return {"expression": expr, "result": rounded,
                 "formatted": f"{rounded:,.2f}"}
 
+    def _find_product_document(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """A product document by name (2026-09-30: reps had no way to hand a client the data
+        sheet they'd just quoted from). Deterministic: filed knowledge documents ranked by how
+        many of the query's words their name/summary contain; money documents never included —
+        a rep's personal scope never reaches the company's invoices."""
+        from vula.commerce.doc_titles import is_money_category
+        words = [w for w in re.findall(r"[a-z0-9]{3,}", (args.get("query") or "").lower())
+                 if w not in _PRODUCT_DOC_STOP]
+        if not words:
+            return {"error": "Name the product or range, e.g. 'Mipolam Affinity data sheet'."}
+        try:
+            rows = (service._client().table("vula_filed_documents")
+                    .select("filename,category,summary,file_url,created_at")
+                    .eq("tenant_id", tid).order("created_at", desc=True).limit(1500)
+                    .execute().data or [])
+        except Exception as exc:
+            logger.warning("find_product_document failed for %s: %s", tid, exc)
+            return {"error": "Couldn't search documents right now."}
+        scored = []
+        for r in rows:
+            if is_money_category(r.get("category") or ""):
+                continue
+            hay = f"{r.get('filename') or ''} {r.get('summary') or ''}".lower()
+            hits = sum(1 for w in words if w in hay)
+            if hits:
+                scored.append((hits, r))
+        if not scored:
+            return {"found": False, "message": "No product document on file matches that. Say so "
+                    "and suggest they send the data sheet so it's kept for next time."}
+        best = max(h for h, _ in scored)
+        top = [r for h, r in sorted(scored, key=lambda x: -x[0]) if h == best][:5]
+        return {"found": True, "documents": [
+            {"name": r.get("filename"), "type": r.get("category"),
+             "about": (r.get("summary") or "")[:200], "link": r.get("file_url")} for r in top],
+            "note": "Paste the link as-is (raw URL) — WhatsApp doesn't render markdown links."}
+
     async def _lookup_business_info(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Real fix for the gerflor incident (2026-08-27): commerce_admin had no path to the
         tenant's own KB at all, for either owner/staff or sales_rep — the model's only
@@ -3521,17 +3584,50 @@ class CommerceAdminSkill(BaseSkill):
                         "authoritative": True, "stock": stock}
         except Exception as exc:
             logger.debug("stock sheet lookup skipped: %s", exc)
+        from core.skills.base import looks_like_spec_question, SPEC_ANSWER_RULE
+        spec = looks_like_spec_question(query)
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
-            chunks = await VulaIngestionPipeline(tenant_id=tid).query(query, top_k=4)
+            chunks = await VulaIngestionPipeline(tenant_id=tid).query(
+                query, top_k=6 if spec else 4, authoritative_only=spec)
         except Exception as exc:
             logger.debug("lookup_business_info retrieval skipped: %s", exc)
             return {"error": "Couldn't search the knowledge base right now."}
         if chunks:
-            return {"found": True, "source_kb": "tenant", "results": [
-                {"source": c.get("filename", "doc"), "text": c.get("text", "")[:400]}
+            try:
+                from vula.commerce.doc_titles import titles_for
+                titles = titles_for(tid, [c.get("doc_id") for c in chunks])
+            except Exception:
+                titles = {}
+            out = {"found": True, "source_kb": "tenant", "results": [
+                {"source": titles.get(str(c.get("doc_id") or "")) or c.get("filename", "doc"),
+                 "text": c.get("text", "")[:600 if spec else 400]}
                 for c in chunks
             ]}
+            if spec:
+                out["instruction"] = SPEC_ANSWER_RULE
+            return out
+        if spec:
+            # Never the shared general-business KB (or, via the model, the web) for a spec figure.
+            return {"found": False, "spec_question": True,
+                    "message": "That specification isn't in this business's data sheets or test "
+                               "reports yet. Say so plainly and offer to check — do not give a "
+                               "figure from anywhere else."}
+        # The tenant's sector pack (curated, per business type) before the general SA corpus.
+        try:
+            from vula.training.sector_content import sector_collection_for
+            sector_id = sector_collection_for(tid)
+            if sector_id:
+                sector_chunks = await VulaIngestionPipeline(tenant_id=sector_id).query(
+                    query, top_k=4, authoritative_only=True)
+                if sector_chunks:
+                    return {"found": True, "source_kb": "sector_guidance",
+                            "note": "General sector guidance from Vula, NOT this business's own "
+                                    "policy — say so, and never present it as their rule or price.",
+                            "results": [{"source": c.get("filename", "doc"),
+                                         "text": c.get("text", "")[:400]} for c in sector_chunks]}
+        except Exception as exc:
+            logger.debug("lookup_business_info sector-pack fallback skipped: %s", exc)
         try:
             from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
             shared_chunks = await VulaIngestionPipeline(tenant_id=BUSINESS_TRAINING_TENANT_ID).query(

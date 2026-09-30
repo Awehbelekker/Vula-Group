@@ -339,6 +339,12 @@ def setup_checklist(tenant_id: str) -> dict:
     team_n = _count("vula_team_members", tenant_id=tenant_id, active=True)
     orders_n = _count("commerce_orders", tenant_id=tenant_id)
     pages_n = _count("vula_pages", tenant_id=tenant_id)
+    try:
+        from vula.commerce.business_profile import status as _profile_status
+        prof = _profile_status(tenant_id)
+    except Exception:
+        prof = {"answered": 0, "total": 0}
+    _gl = latest_golive(tenant_id)
     steps = [
         {"id": "created", "label": "Created from business type", "done": True, "tab": "settings",
          "detail": f"{len(cfg.get('modules') or [])} modules enabled"},
@@ -357,6 +363,15 @@ def setup_checklist(tenant_id: str) -> dict:
         {"id": "vat", "label": "VAT status confirmed", "done": vat_set, "tab": "invoices",
          "detail": ("VAT registered" if (vat or {}).get("vat_registered") else "not VAT registered")
                    if vat_set else "not set — invoices assume VAT-registered until you say"},
+        # 2026-09-30: the owner's own answers (hours, area, payment, policies) — what Vula answers
+        # from instead of the starter KB's placeholders. Settings › Business profile, or WhatsApp.
+        {"id": "profile", "label": "Business profile answered", "tab": "settings",
+         "done": prof["total"] > 0 and prof["answered"] >= prof["total"] - 2,
+         "detail": f"{prof['answered']} of {prof['total']} answered"},
+        {"id": "golive_test", "label": "Go-live test passed", "tab": "settings",
+         "done": bool(((_gl or {}).get("report") or {}).get("ready")),
+         "detail": (f"{(_gl or {}).get('passed')}/{(_gl or {}).get('total')} passed"
+                    if (_gl or {}).get("status") == "done" else "not run yet — Master › Tenants › Go-live test")},
         {"id": "knowledge", "label": "Products & knowledge", "done": products > 0 or docs > 0,
          "tab": "products" if products or not docs else "documents",
          "detail": f"{products} product(s), {docs} document(s)"},
@@ -1068,7 +1083,7 @@ async def master_eval_reports(limit: int = 30) -> dict:
     try:
         rows = (_client().table("vula_eval_reports").select("*")
                 .order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
-        rows = [r for r in rows if r.get("model") != _BENCH]   # benchmark runs have their own tab
+        rows = [r for r in rows if r.get("model") not in ("benchmark", "golive")]   # their own tabs
     except Exception as exc:  # noqa: BLE001
         return {"reports": [], "error": f"{exc} (run migration 178?)"}
     now = datetime.now(timezone.utc)
@@ -1160,6 +1175,153 @@ async def master_benchmark_reports(limit: int = 10) -> dict:
             latest = {"components": rep.get("components") or [], "gaps": rep.get("gaps") or [],
                       "rows": rep.get("rows") or [], "created_at": r.get("created_at")}
     return {"runs": runs, "latest": latest}
+
+
+# ── Go-live test per tenant (evals/golive.py) ─────────────────────────────────
+_GOLIVE = "golive"
+
+
+@router.post("/golive-test")
+async def master_run_golive(body: dict, identity: dict = Depends(require_master)) -> dict:
+    from config import settings
+    tid = ((body or {}).get("tenant_id") or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="tenant_id is required.")
+    judge = (body or {}).get("judge_model") or settings.benchmark_judge_model or None
+    row = (_client().table("vula_eval_reports")
+           .insert({"model": _GOLIVE, "skill": tid, "status": "running",
+                    "created_by": identity.get("email") or identity.get("user_id")})
+           .execute().data or [{}])[0]
+    if not row.get("id"):
+        raise HTTPException(status_code=500, detail="Couldn't record the run.")
+    audit(identity, "golive.run", tenant_id=tid)
+
+    async def _go() -> None:
+        from core.llm_router import install_ollama_auth
+        from evals import golive
+        install_ollama_auth()
+        try:
+            rep = await golive.run(tid, judge)
+            upd = {"status": "done", "passed": rep["passed"], "total": rep["total"], "report": rep,
+                   "finished_at": datetime.now(timezone.utc).isoformat()}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("go-live test failed for %s", tid)
+            upd = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                   "finished_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            _client().table("vula_eval_reports").update(upd).eq("id", row["id"]).execute()
+        except Exception as exc:  # noqa: BLE001
+            log.error("go-live report %s not saved: %s", row["id"], exc)
+
+    from vula.commerce.background_tasks import run_background
+    run_background(tid, "golive_test", _go())
+    return {"queued": row["id"]}
+
+
+def latest_golive(tenant_id: str) -> Optional[dict]:
+    try:
+        rows = (_client().table("vula_eval_reports").select("*").eq("model", _GOLIVE)
+                .eq("skill", tenant_id).order("created_at", desc=True).limit(1).execute().data or [])
+    except Exception:
+        return None
+    return rows[0] if rows else None
+
+
+@router.get("/golive-test")
+async def master_golive_result(tenant_id: str) -> dict:
+    r = latest_golive(tenant_id)
+    if not r:
+        return {"status": "none"}
+    if _orphaned(r, datetime.now(timezone.utc)):
+        r.update(status="failed", error=_EVAL_INTERRUPTED)
+    rep = r.get("report") or {}
+    return {"status": r.get("status"), "passed": r.get("passed"), "total": r.get("total"),
+            "error": r.get("error"), "created_at": r.get("created_at"),
+            "pass_pct": rep.get("pass_pct"), "ready": rep.get("ready"),
+            "failures": [{"prompt": x.get("prompt"), "why": x.get("why"), "answer": x.get("answer")}
+                         for x in (rep.get("rows") or []) if not x.get("ok")]}
+
+
+# ── Daily conversation check (vula/conversation_check.py) ─────────────────────
+@router.get("/conversations/check")
+async def master_conversation_check(day: Optional[str] = None) -> dict:
+    """The day's replies (default yesterday, SAST) that look wrong, per tenant."""
+    from datetime import date as _date
+    from vula import conversation_check
+    try:
+        d = _date.fromisoformat(day) if day else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD")
+    return conversation_check.build(d)
+
+
+@router.post("/conversations/check/send")
+async def master_conversation_check_send(identity: dict = Depends(require_master)) -> dict:
+    from vula import conversation_check
+    audit(identity, "conversation_check.send")
+    return await conversation_check.send(force=True)
+
+
+@router.get("/advisor/preview")
+async def master_advisor_preview(tenant_id: str) -> dict:
+    """What this tenant's owner would get on Monday (vula/owner_advisor.py) — nothing is sent."""
+    from config import settings
+    from vula import owner_advisor
+    d = owner_advisor.build(tenant_id)
+    return {"enabled": settings.owner_advisor_enabled, "data": d, "text": owner_advisor.render(d)}
+
+
+# ── Content titles for generically-named documents (vula/commerce/doc_titles.py) ──────────
+# Preview first (nothing written), then apply the reviewed preview. Runs in the background — one
+# small model call per document. The last result per tenant is kept in memory for the page.
+_RETITLE: dict = {}
+
+
+@router.post("/documents/retitle")
+async def master_retitle_documents(body: dict, identity: dict = Depends(require_master)) -> dict:
+    tid = ((body or {}).get("tenant_id") or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="tenant_id is required.")
+    apply = bool((body or {}).get("apply"))
+    previewed = list((_RETITLE.get(tid) or {}).get("preview") or [])
+    if apply and not previewed:
+        raise HTTPException(status_code=400, detail="Run a preview first and check it.")
+    audit(identity, "documents.retitle", tenant_id=tid, apply=apply)
+    _RETITLE[tid] = {"status": "running", "applied": apply}
+
+    async def _go() -> None:
+        from vula.commerce import doc_titles
+        try:
+            if apply:
+                # Apply exactly what was previewed — never a fresh, unreviewed set of titles.
+                items = previewed
+                written = 0
+                for p in items:
+                    try:
+                        _client().table("vula_filed_documents").update({"filename": p["new"]}) \
+                            .eq("tenant_id", tid).eq("id", p["id"]).eq("filename", p["old"]).execute()
+                        written += 1
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("retitle %s failed: %s", p.get("id"), exc)
+                _RETITLE[tid] = {"status": "done", "applied": True, "written": written,
+                                 "items": items}
+            else:
+                rep = await doc_titles.retitle_tenant(tid, apply=False)
+                _RETITLE[tid] = {**rep, "status": "done", "preview": rep["items"]}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("retitle failed for %s", tid)
+            _RETITLE[tid] = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+    from vula.commerce.background_tasks import run_background
+    run_background(tid, "documents_retitle", _go())
+    return {"queued": True, "tenant_id": tid, "apply": apply}
+
+
+@router.get("/documents/retitle")
+async def master_retitle_status(tenant_id: str) -> dict:
+    r = dict(_RETITLE.get(tenant_id) or {"status": "idle"})
+    r.pop("preview", None)
+    return r
 
 
 # ── 👎 feedback → eval cases ────────────────────────────────────────────────────

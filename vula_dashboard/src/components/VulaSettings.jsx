@@ -34,6 +34,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
         <BrandKitSettings tenantId={tenantId} />
       </section>
 
+      {/* Business profile — the owner's own answers, which Vula answers from (not guesses) */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>📋 Business profile</h4>
+        <p style={s.sectionHint}>
+          Short answers about how your business works. Vula answers customers and your team from these — anything left blank, it says it needs to check instead of guessing. You can also do this on WhatsApp: send “set up my profile”.
+        </p>
+        <BusinessProfileSettings tenantId={tenantId} />
+      </section>
+
       {/* Payments */}
       <section style={s.section}>
         <h4 style={s.sectionTitle}>💳 Payments (Yoco)</h4>
@@ -713,6 +722,14 @@ function LearnedSummary({ tenantId }) {
     }
   }
 
+  async function reviewLearned(id, action) {
+    setBusy(true)
+    try {
+      await fetch(`${API}/v1/commerce/${tenantId}/admin/learned-answers/${id}/${action}`, { method: 'POST' })
+      load()
+    } finally { setBusy(false) }
+  }
+
   if (!data) return <p style={{ ...s.sectionHint, margin: 0 }}>Loading…</p>
 
   const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 12 }
@@ -754,9 +771,19 @@ function LearnedSummary({ tenantId }) {
         <p style={hint}>
           {data.learned_answers.approved_count} approved and in use
           {data.learned_answers.pending_count > 0
-            ? `, ${data.learned_answers.pending_count} waiting for your Keep/Bin reply on WhatsApp.`
+            ? `, ${data.learned_answers.pending_count} waiting for you to Keep or Bin (here or on WhatsApp).`
             : '.'}
         </p>
+        {(data.learned_answers.pending || []).slice(0, 10).map(r => (
+          <div key={r.id} style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, marginTop: 8 }}>
+            <p style={{ ...hint, color: 'var(--ink)', margin: 0 }}>Q: “{r.question}”</p>
+            <p style={{ ...hint, margin: '4px 0 8px' }}>A: {r.answer}</p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={btn(true)} disabled={busy} onClick={() => reviewLearned(r.id, 'approve')}>Keep — use this answer</button>
+              <button style={btn(false)} disabled={busy} onClick={() => reviewLearned(r.id, 'reject')}>Bin</button>
+            </div>
+          </div>
+        ))}
         {data.learned_answers.recent_approved.length > 0 && (
           <ul style={{ margin: '8px 0 0', padding: '0 0 0 18px', ...hint }}>
             {data.learned_answers.recent_approved.slice(0, 5).map(r => (
@@ -774,6 +801,47 @@ function LearnedSummary({ tenantId }) {
           categorised{data.merchant_profiles.total_count === 0 ? ' yet — this fills in as bank statements come through.' : '.'}
         </p>
       </div>
+    </div>
+  )
+}
+
+function BusinessProfileSettings({ tenantId }) {
+  const API = VULA_API
+  const [data, setData] = useState(null)
+  const [draft, setDraft] = useState({})
+  const [msg, setMsg] = useState('')
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    if (!tenantId) return
+    fetch(`${API}/v1/commerce/${tenantId}/admin/business-profile`)
+      .then(r => r.json()).then(d => { setData(d); setDraft(d.answers || {}) })
+      .catch(() => setMsg('Couldn\u2019t load the profile.'))
+  }, [tenantId])
+  const save = async () => {
+    setSaving(true); setMsg('')
+    try {
+      const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/business-profile`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: draft }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.detail || 'Save failed')
+      setData(d); setMsg(`Saved — ${d.answered} of ${d.total} answered.`)
+    } catch (e) { setMsg(e.message) } finally { setSaving(false) }
+  }
+  if (!data) return <div style={{ fontSize: 13, color: 'var(--muted)' }}>{msg || 'Loading…'}</div>
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ fontSize: 13, color: 'var(--muted)' }}>{data.answered} of {data.total} answered</div>
+      {data.questions.map(q => (
+        <label key={q.key} style={{ display: 'grid', gap: 4, fontSize: 13, color: 'var(--text)' }}>
+          {q.q}
+          <textarea rows={2} style={{ ...s.input, fontFamily: 'var(--font-body)', resize: 'vertical' }}
+            value={draft[q.key] || ''} onChange={e => setDraft({ ...draft, [q.key]: e.target.value })} />
+        </label>
+      ))}
+      <button style={s.saveBtn} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save profile'}</button>
+      {msg && <div style={{ fontSize: 13, color: 'var(--muted)' }}>{msg}</div>}
     </div>
   )
 }

@@ -289,11 +289,18 @@ def substitute_if_leaked(answer: str, *, skill: str, customer: bool = False,
 # receipt." with no tool call at all — nothing was filed or booked. "Verified, not reported":
 # a first-person claim that something was saved/filed/booked must be backed by a state-changing
 # tool that succeeded in the same turn, else the claim is replaced with an honest line.
+# 2026-09-30: also the non-first-person forms — "Done — order #12 dispatched", "✅ Saved",
+# "It's now marked paid", "Successfully cancelled" — which slipped past the first-person check.
+_CLAIM_VERBS = (r"(?:filed|saved|logged|recorded|booked|created|added|sent|updated|captured|stored|"
+                r"submitted|dispatched|marked|cancell?ed|refunded|scheduled|deleted|removed)")
 _ACTION_CLAIM_RE = re.compile(
     r"\b(?:I(?:'ve| have)|I've now|I have now|(?:it|this|that|the \w+) (?:has|have) been)\s+"
-    r"(?:just\s+|now\s+|successfully\s+)?"
-    r"(?:filed|saved|logged|recorded|booked|created|added|sent|updated|captured|stored|submitted)\b",
-    re.I)
+    r"(?:just\s+|now\s+|successfully\s+)?" + _CLAIM_VERBS + r"\b"
+    r"|^\s*(?:✅\s*)?(?:done|all done|sorted)\b[\s!.,:;—–-]*[^\n]{0,80}?\b" + _CLAIM_VERBS + r"\b"
+    r"|^\s*✅\s*" + _CLAIM_VERBS + r"\b"
+    r"|\b(?:is|are|'s|has been|have been) now " + _CLAIM_VERBS + r"\b"
+    r"|\bsuccessfully " + _CLAIM_VERBS + r"\b",
+    re.I | re.M)
 _MUTATING_PREFIXES = ("add_", "create_", "update_", "record_", "log_", "save_", "send_", "file_",
                       "assign_", "set_", "mark_", "receive_", "apply_", "cancel_", "delete_",
                       "link_", "book_", "submit_", "draft_", "schedule_", "approve_", "complete_",
@@ -600,6 +607,38 @@ def looks_like_owner_admin_question(text: str) -> bool:
     return bool(_OWNER_ADMIN_RE.search(text or ""))
 
 
+# 2026-09-30 (Ian: "if I ask what is the slip rate on the Affinity, will it tell me?"). A product
+# specification is a fact about THIS business's product that only its own data sheets / test
+# reports can state. A figure from the web or from general model knowledge is exactly the kind of
+# confident wrong answer a rep then repeats to a specifier — on 31 Aug a Gerflor answer blended
+# "Gerflor's website lists R129.90/m²" in with real price-list figures. Spec questions answer from
+# the tenant's documents only, name the document, and say plainly when it isn't there.
+# Not a bare "slip" (fuel/payment/deposit slips) nor a bare "fire" (fire an employee).
+_SPEC_RE = re.compile(
+    r"\b(?:anti|non)[- ]?slip\b|\bslip[- ]?(?:rate|rating|resist\w*|class\w*|value|test|r\d+)\b|"
+    r"\bslippery\b|\bR(?:9|10|11|12|13)\b|"
+    r"\bfire[- ]?(?:rat\w*|class\w*|resist\w*|test|retard\w*)\b|\breaction to fire\b|\bflammab\w*|"
+    r"\bwear ?layer\b|\b(?:total )?thickness\b|\bhow thick\b|"
+    r"\bacoustic\w*\b|\bimpact (?:noise|sound)\b|\bsound (?:reduction|insulation|rating)\b|"
+    r"\bchemical resist\w*|\bstain resist\w*|\bspec(?:s|ification|ifications)?\b|"
+    r"\btechnical (?:data|sheet|details)\b|\bdata ?sheets?\b|\btds\b|\btest (?:report|certificate|result)s?\b|"
+    r"\b(?:roll|plank|tile) (?:width|length|size)\b|\bdimensions\b|\bEN ?\d{3,5}\b|\bISO ?\d{3,5}\b|"
+    r"\bcastor chair\b|\bindentation\b|\bdimensional stability\b",
+    re.IGNORECASE)
+
+
+def looks_like_spec_question(text: str) -> bool:
+    return bool(_SPEC_RE.search(text or ""))
+
+
+SPEC_ANSWER_RULE = (
+    "This is a product SPECIFICATION question. Answer ONLY from the business's own documents in "
+    "these results, quote the figure exactly as the document states it (with its test standard "
+    "if given), and name the document it came from. If the figure is not in these results, say "
+    "it isn't in our data sheets and offer to check — never use the web, a competitor, or general "
+    "knowledge for a spec figure.")
+
+
 def looks_like_supplier_history_question(text: str) -> bool:
     """True if `text` asks what the business has actually bought from / spent with / been
     invoiced by a supplier (totals or materials), as opposed to a budget, pricing or shopping
@@ -629,11 +668,17 @@ async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
             tenant_id, [c.get("filename") for c in chunks if c.get("filename")])
     except Exception:
         filed = {}
+    # The filed (content-derived) name, so an answer can say WHICH data sheet a figure is from.
+    try:
+        from vula.commerce.doc_titles import titles_for
+        titles = titles_for(tenant_id, [c.get("doc_id") for c in chunks])
+    except Exception:
+        titles = {}
     lines = []
     for c in chunks:
         fname = c.get("filename") or "doc"
         extra = filed.get(fname)
-        tag = fname
+        tag = titles.get(str(c.get("doc_id") or "")) or fname
         if extra and extra.get("amount") is not None:
             party = f" — {extra['party']}" if extra.get("party") else ""
             tag = f"{fname} (filed: R{extra['amount']:.2f}{party})"

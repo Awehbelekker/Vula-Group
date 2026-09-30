@@ -145,6 +145,85 @@ async def seed_business_kb(force: bool = False) -> SeedResult:
     )
 
 
+async def seed_documents(tenant_id: str, docs) -> SeedResult:
+    """Ingest a list of TrainingDocument into one shared collection (deterministic doc_id per
+    filename, so re-seeding overwrites rather than duplicates)."""
+    started = time.time()
+    pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
+    total_chunks, failed = 0, []
+    for doc in docs:
+        doc_id = hashlib.md5(f"{tenant_id}:{doc.filename}".encode()).hexdigest()[:16]
+        try:
+            result = await pipeline.ingest_text(content=doc.content, filename=doc.filename, doc_id=doc_id)
+            if result.status == "success":
+                total_chunks += result.chunks_stored
+            else:
+                failed.append(doc.filename)
+        except Exception as exc:
+            logger.error("Exception seeding %s/%s: %s", tenant_id, doc.filename, exc)
+            failed.append(doc.filename)
+    return SeedResult(total_documents=len(docs), total_chunks=total_chunks, failed=failed,
+                      duration_s=round(time.time() - started, 2))
+
+
+def shared_kb_fingerprint() -> str:
+    """Changes whenever any shared business or sector document changes — the trigger to re-seed."""
+    from vula.training.business_content import BUSINESS_TRAINING_DOCUMENTS
+    from vula.training.sector_content import SECTOR_DOCUMENTS
+    h = hashlib.sha256()
+    for d in BUSINESS_TRAINING_DOCUMENTS:
+        h.update(f"business:{d.filename}:{d.content}".encode())
+    for sector in sorted(SECTOR_DOCUMENTS):
+        for d in SECTOR_DOCUMENTS[sector]:
+            h.update(f"{sector}:{d.filename}:{d.content}".encode())
+    return h.hexdigest()[:16]
+
+
+_SEED_MARK = "shared_kb_seeded"
+
+
+def _seeded_marker(fingerprint: str) -> bool:
+    try:
+        from vula.commerce import service
+        rows = (service._client().table("vula_admin_audit").select("id").eq("action", _SEED_MARK)
+                .contains("detail", {"fingerprint": fingerprint}).limit(1).execute().data or [])
+        return bool(rows)
+    except Exception as exc:
+        logger.debug("shared KB marker check failed: %s", exc)
+        return False
+
+
+async def ensure_shared_kbs(force: bool = False) -> dict:
+    """2026-09-30: the general business KB only existed if someone pressed Seed in Master ›
+    Training — nothing loaded it. On boot (and daily) this seeds the business_basics corpus and
+    every sector pack when they're missing or their content changed, then records a marker so a
+    restart doesn't re-embed everything."""
+    from vula.training.business_content import BUSINESS_TRAINING_DOCUMENTS, BUSINESS_TRAINING_TENANT_ID
+    from vula.training.sector_content import SECTOR_DOCUMENTS, sector_tenant_id
+    fp = shared_kb_fingerprint()
+    status = await business_kb_status()
+    if not force and status.get("seeded") and _seeded_marker(fp):
+        return {"seeded": False, "reason": "up to date", "fingerprint": fp}
+    results = {BUSINESS_TRAINING_TENANT_ID: await seed_documents(BUSINESS_TRAINING_TENANT_ID,
+                                                                 BUSINESS_TRAINING_DOCUMENTS)}
+    for sector, docs in SECTOR_DOCUMENTS.items():
+        if docs:
+            results[sector_tenant_id(sector)] = await seed_documents(sector_tenant_id(sector), docs)
+    failed = {k: r.failed for k, r in results.items() if r.failed}
+    if not failed:
+        try:
+            from vula.commerce import service
+            service._client().table("vula_admin_audit").insert({
+                "actor_email": "scheduler", "action": _SEED_MARK,
+                "detail": {"fingerprint": fp,
+                           "chunks": {k: r.total_chunks for k, r in results.items()}}}).execute()
+        except Exception as exc:
+            logger.warning("shared KB marker write failed: %s", exc)
+    logger.info("shared KBs seeded: %s", {k: r.total_chunks for k, r in results.items()})
+    return {"seeded": True, "fingerprint": fp, "failed": failed,
+            "chunks": {k: r.total_chunks for k, r in results.items()}}
+
+
 async def business_kb_status() -> dict:
     """Return stats on the current state of the shared business_basics collection."""
     from config import settings

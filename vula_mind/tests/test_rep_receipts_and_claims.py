@@ -73,3 +73,38 @@ async def test_a_reps_other_photo_is_still_asked_about(rep, monkeypatch):
     ingest.assert_not_awaited()
     prompt = agent.await_args.args[1]
     assert "log it as an expense" in prompt and "Never say something was saved" in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_reps_spec_sheet_photo_is_kept_in_the_knowledge_base(rep, monkeypatch):
+    """2026-09-22, gerflor: a photo of the Marmorette Acoustic / Elegance SD spec sheet was
+    described, then lost. A product document goes into the knowledge base like a PDF."""
+    ingest, agent = rep
+    monkeypatch.setattr(wa, "_is_receipt_photo", AsyncMock(return_value=False))
+    monkeypatch.setattr(wa, "_describe_photo_for_rep", AsyncMock(return_value=(
+        "This document details two Gerflor flooring products: Linoleum Marmorette Acoustic and "
+        "Elegance SD Shower System. It includes specifications like thickness, colour.")))
+    await wa._handle_image_or_video(PHONE, "image", "m1", "", "image/jpeg", "w1", "knowledge", TID, "sha")
+    assert ingest.await_count == 1 and ingest.await_args.args[2].startswith("product-")
+    agent.assert_not_awaited()
+
+
+@pytest.mark.parametrize("text", [
+    "Done — order #1042 dispatched to Sea Point.",
+    "✅ Saved to your expenses.",
+    "Order 1042 is now marked paid.",
+    "Successfully cancelled the booking for Tuesday.",
+    "Sorted! The quote has been sent to Thabo.",
+])
+def test_non_first_person_claims_are_caught(text):
+    assert substitute_if_unbacked_claim(text, [], skill="commerce_admin") != text
+
+
+@pytest.mark.parametrize("text", [
+    "Should I mark order 1042 as dispatched?",
+    "Order 1042 was dispatched on 12 September.",
+    "Once you confirm, I'll mark it paid.",
+    "Done with the quote? Tell me who to send it to.",
+])
+def test_questions_and_history_are_not_claims(text):
+    assert substitute_if_unbacked_claim(text, [], skill="commerce_admin") == text

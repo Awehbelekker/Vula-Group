@@ -326,12 +326,31 @@ class HRMOrchestrator:
                 return "email_admin", "mailbox_fallback"
         return "reasoning", "default"
 
+    def _classifier_prompt(self, prompt: str) -> str:
+        options = ", ".join(SKILL_KEYWORDS.keys())
+        return (f"Pick the ONE best-fitting skill for this request from this exact "
+                f"list: {options}. If none clearly fits, reply 'none'. Reply with only "
+                f"the skill name, nothing else.\n"
+                f"Request: {prompt}")
+
+    @staticmethod
+    def _skill_in(answer: str) -> str | None:
+        answer = (answer or "").strip().lower()
+        for skill_name in SKILL_KEYWORDS:
+            if skill_name in answer:
+                return skill_name
+        return None
+
     def _llm_classify_skill(self, prompt: str) -> str | None:
         """One cheap local-model pass, keyword-miss path only. Returns a skill name from
-        SKILL_KEYWORDS, or None (caller falls back to "reasoning") on any failure/non-match."""
+        SKILL_KEYWORDS, or None (caller falls back to "reasoning") on any failure/non-match.
+
+        2026-09-30: when the local box can't be reached (it was down for days), one cheap cloud
+        pass instead — logged through the router's audit trail with reason local_unreachable,
+        the same sanctioned reason generation uses. Before this, every keyword miss silently
+        became `reasoning` for as long as the box was down."""
         try:
             from core.llm_router import _ollama_headers
-            options = ", ".join(SKILL_KEYWORDS.keys())
             # CF-Access headers: the Ollama tunnel rejects requests without the service token,
             # and this call never sent it — so in production the fallback silently never ran.
             resp = httpx.post(
@@ -339,24 +358,42 @@ class HRMOrchestrator:
                 headers=_ollama_headers(),
                 json={
                     "model": self.model,
-                    "prompt": (
-                        f"Pick the ONE best-fitting skill for this request from this exact "
-                        f"list: {options}. If none clearly fits, reply 'none'. Reply with only "
-                        f"the skill name, nothing else.\n"
-                        f"Request: {prompt}"
-                    ),
+                    "prompt": self._classifier_prompt(prompt),
                     "stream": False,
                     "options": {"num_predict": 10},
                 },
                 timeout=8,
             )
-            answer = (resp.json().get("response") or "").strip().lower()
-            for skill_name in SKILL_KEYWORDS:
-                if skill_name in answer:
-                    return skill_name
+            resp.raise_for_status()
+            return self._skill_in(resp.json().get("response") or "")
         except Exception as exc:
-            log.debug("LLM skill classification failed, falling back to reasoning: %s", exc)
-        return None
+            log.debug("local skill classification unavailable (%s) — trying cloud", exc)
+        return self._cloud_classify_skill(prompt)
+
+    def _cloud_classify_skill(self, prompt: str) -> str | None:
+        model = (settings.skill_classifier_cloud_model or "").strip()
+        if not model or not settings.openrouter_api_key:
+            return None
+        try:
+            import uuid
+            from core.llm_router import _log_decision
+            _log_decision(run_id=uuid.uuid4().hex[:12], task="skill_classifier", outcome="routed",
+                          escalated=True, backend="cloud", reason="local_unreachable")
+        except Exception:
+            pass
+        body: dict = {"model": model, "temperature": 0, "max_tokens": 10,
+                      "messages": [{"role": "user", "content": self._classifier_prompt(prompt)}]}
+        if settings.openrouter_zdr:
+            body["provider"] = {"data_collection": "deny", "zdr": True}
+        try:
+            resp = httpx.post("https://openrouter.ai/api/v1/chat/completions",
+                              headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                              json=body, timeout=6)
+            resp.raise_for_status()
+            return self._skill_in(resp.json()["choices"][0]["message"]["content"] or "")
+        except Exception as exc:
+            log.debug("cloud skill classification failed, falling back to reasoning: %s", exc)
+            return None
 
     def _select_model(self, complexity: int, routing_hints: dict,
                       tenant_id: str = "", skill_name: str = "") -> ModelTier:

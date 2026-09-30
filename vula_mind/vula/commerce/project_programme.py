@@ -922,3 +922,34 @@ async def apply_setup(tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
             problems.append(f"the ClickUp programme couldn't be read ({exc})")
     reply = "\n\n".join(done + [f"⚠️ Not done: {p}" for p in problems]) or "Nothing was changed."
     return {"reply": reply, "done": len(done), "problems": problems}
+
+
+# ── "What's on the programme today?" (2026-09-30) ──────────────────────────────
+# The owner got this at 06:00 but could not ask for it: the question went to a skill with no
+# programme access. Answered from the same rows the morning brief uses — no model.
+_PROGRAMME_Q_RE = re.compile(
+    r"\b(?:what(?:'s|s| is| are)?|anything)\b[^?\n]{0,40}\b(?:on (?:the )?(?:programme|program|schedule)|"
+    r"on site|scheduled|planned|happening)\b[^?\n]{0,20}\b(?:today|tomorrow)\b|"
+    r"\b(?:today|tomorrow)(?:'s)? (?:programme|program|tasks|plan|work|schedule)\b|"
+    r"\bwho(?:'s|s| is) (?:working|on site)\b[^?\n]{0,20}\b(?:today|tomorrow)\b|"
+    r"\bwhat(?:'s|s| is) (?:overdue|behind|late) on (?:the )?(?:programme|program|site)\b",
+    re.IGNORECASE)
+
+
+def looks_like_programme_question(text: str) -> bool:
+    return bool(_PROGRAMME_Q_RE.search(text or ""))
+
+
+async def programme_answer(tenant_id: str, question: str) -> Optional[str]:
+    """Today's (or tomorrow's) programme per project, from vula_field_tasks. None when the
+    question isn't about the programme or the tenant has no programme tasks at all."""
+    if not looks_like_programme_question(question):
+        return None
+    if not programme_tasks(tenant_id):
+        return None
+    day = today_sast() + (timedelta(days=1) if re.search(r"\btomorrow\b", question, re.I) else timedelta())
+    brief = await morning_briefs(tenant_id, day=day, send=False)
+    texts = [p["owner"] for p in brief.get("projects") or []]
+    if not texts:
+        return f"Nothing is scheduled on any programme for {day.strftime('%a %d %b')}."
+    return "\n\n———\n\n".join(texts)

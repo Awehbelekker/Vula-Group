@@ -743,6 +743,14 @@ async def _maybe_helper_escalation_answer(phone: str, text: str,
     return True
 
 
+# "No, it's …", "That's wrong — …", "Actually …", "Incorrect, …" — the owner correcting Vula.
+_EXPLICIT_CORRECTION_RE = re.compile(
+    r"^\s*(?:no+[,.!:;—–-]+\s*|nope[,.!]?\s*|that'?s (?:wrong|not right|not correct|incorrect)"
+    r"[,.!:;—–-]*\s*|(?:in)?correct(?:ion)?[,.!:;—–-]+\s*|wrong[,.!:;—–-]+\s*|actually[,:]?\s+|"
+    r"not quite[,.!:;—–-]*\s*|the (?:right|correct) answer is[:\s]+|it should be[:\s]+|"
+    r"it'?s actually\s+)", re.IGNORECASE)
+
+
 async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key: str,
                                           text: str) -> None:
     """If Vula's LAST reply on this thread carried an uncertainty caveat (see
@@ -773,13 +781,18 @@ async def _maybe_capture_owner_correction(tenant_id: str, phone: str, thread_key
         prior_q, prior_a = msgs[0], msgs[1]
         if prior_q.role != "user" or prior_a.role != "assistant":
             return
-        if not is_uncertain_reply(prior_a.text):
-            return
         stripped = text.strip()
+        # 2026-09-30: an explicit correction ("No, it's R10", "That's wrong — we close at 4")
+        # counts even when Vula's answer sounded sure — a confidently wrong answer is exactly
+        # the one that must not ship again. Otherwise only after an uncertain reply, as before.
+        explicit = bool(_EXPLICIT_CORRECTION_RE.match(stripped))
+        if not explicit and not is_uncertain_reply(prior_a.text):
+            return
         if len(stripped) < 12:
             return
+        body = _EXPLICIT_CORRECTION_RE.sub("", stripped, count=1).strip() if explicit else stripped
         if (_GREETING_RE.match(stripped) or stripped.endswith("?")
-                or _NEW_QUESTION_RE.match(stripped) or _REQUEST_SHAPED.match(stripped)):
+                or _NEW_QUESTION_RE.match(body) or _REQUEST_SHAPED.match(body) or len(body) < 6):
             return  # a greeting/ack or the owner's own new question/request, not a correction
         learned_id = esc.capture_owner_correction(tenant_id, prior_q.text, stripped)
         if not learned_id:
@@ -1244,6 +1257,9 @@ async def _voice_the_relay(tenant_id: str, question: str, answer: str) -> str:
         return original
 
 
+_STOCK_WORD_RE = re.compile(r"\b(?:stock|in stock|available|availability|how many|price|cost)\b", re.I)
+
+
 async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
                                     reply: str, confidence: Optional[float] = None,
                                     caller_role: Optional[str] = None) -> str:
@@ -1265,6 +1281,16 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
     """
     try:
         from vula import escalation as esc
+        # 2026-09-30: an owner-approved answer is used whenever the question matches — not only
+        # when the fresh reply admits it doesn't know. A confidently WRONG answer the owner
+        # corrected used to be regenerated next time, because this lookup only ran on
+        # escalation. Live-data questions (amounts, invoices, stock) are never answered from a
+        # stored answer, which would go stale.
+        from core.skills.base import looks_like_tenant_data_question
+        if not looks_like_tenant_data_question(text) and not _STOCK_WORD_RE.search(text or ""):
+            learned = await esc.find_learned_answer(tenant_id, text)
+            if learned:
+                return learned
         if not esc.should_escalate(reply, confidence, customer_text=text):
             return reply
         learned = await esc.find_learned_answer(tenant_id, text)
@@ -1851,6 +1877,14 @@ async def _send_duplicate_notice(
         logger.warning("duplicate notice failed to build/send (%s: %s)", type(exc).__name__, exc)
 
 
+# What a vision description of a product document says about it (see the rep branch below).
+_PRODUCT_DOC_RE = re.compile(
+    r"\b(data ?sheet|spec(ification)?s?\b|technical (data|details|sheet)|product (card|sheet|"
+    r"brochure|information|details)|brochure|catalogue|catalog|price ?list|test (report|result|"
+    r"certificate)|installation (guide|instructions)|colou?r (chart|card|range)|swatch)",
+    re.IGNORECASE)
+
+
 async def _handle_image_or_video(
     phone: str, msg_type: str, media_id: str, caption: str, mime_type: str, msg_id: str,
     route_mode: Optional[str], route_tenant: Optional[str], content_sha: Optional[str],
@@ -1904,6 +1938,16 @@ async def _handle_image_or_video(
                                          route_mode=route_mode)
             return
         description = await _describe_photo_for_rep(media_id)
+        # A photographed data sheet / spec page / product card / price list is product
+        # knowledge — keep it in the knowledge base like an uploaded PDF, so the next "what's the
+        # slip rating on X?" can be answered from it. 2026-09-22, gerflor: the rep's photo of the
+        # Marmorette Acoustic / Elegance SD spec sheet was described, then lost.
+        if description and _PRODUCT_DOC_RE.search(description):
+            logger.info("rep photo detected as PRODUCT DOCUMENT → knowledge base (%s)", phone)
+            await _handle_document_ingest(phone, media_id, f"product-{msg_id}.jpg", "image/jpeg",
+                                         route_tenant_id=route_tenant, content_sha=content_sha,
+                                         route_mode=route_mode)
+            return
         if description:
             prompt = (
                 f"[The rep sent this photo with no caption. "
@@ -2339,6 +2383,18 @@ async def _handle_document_ingest(
             # use — this confirmation message, vula_document_extractions, and file_document()'s
             # stored filename — picks up the friendly name for free.
             result.filename = _friendly_document_name(doc_category, fields, result.filename)
+            # 2026-09-30: a knowledge document (report, data sheet, brochure) with no party in its
+            # fields came out as "Report 20260827-1001.pdf" — two different Gerflor test reports
+            # shared that exact name. Name it from its own summary instead (grounded check).
+            try:
+                from vula.commerce import doc_titles
+                if (doc_titles.generic_name(result.filename)
+                        and not doc_titles.is_money_category(doc_category)):
+                    _title = await doc_titles.title_from_summary(summary, doc_category)
+                    if _title:
+                        result.filename = doc_titles.with_title(_title, result.filename)
+            except Exception as exc:
+                logger.debug("content title skipped: %s", exc)
 
             # Keep the structured extraction (legacy table, best-effort).
             try:
@@ -5334,6 +5390,16 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
     # 0. The business teaching a supplier nickname ("Jack Hammer is an alias for Gardens
     # Handiman") — handled deterministically, never by a model, and only for insiders.
     if _is_insider(caller_role):
+        if (caller_role or "").lower() in ("owner", "manager", "admin") and phone:
+            try:
+                from vula.commerce.business_profile import handle_interview
+                profile_reply = await handle_interview(tenant_id, phone, question)
+            except Exception as exc:
+                logger.debug("profile interview skipped: %s", exc)
+                profile_reply = None
+            if profile_reply:
+                _LAST_CONF.set(1.0)
+                return profile_reply
         alias_reply = await _maybe_learn_supplier_alias(tenant_id, question)
         if alias_reply:
             _LAST_CONF.set(1.0)
@@ -5365,6 +5431,16 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if stock:
             _LAST_CONF.set(0.95)
             return stock
+        # 0d. "What's on the programme today/tomorrow?" — the morning brief, on demand, from rows.
+        try:
+            from vula.commerce.project_programme import programme_answer
+            plan_reply = await programme_answer(tenant_id, question)
+        except Exception as exc:
+            logger.debug("programme answer skipped: %s", exc)
+            plan_reply = None
+        if plan_reply:
+            _LAST_CONF.set(0.95)
+            return plan_reply
         # 0b. Job costing and pricing ("are we making our 10%?", "what should I charge per m²?")
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
@@ -6986,6 +7062,19 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     except Exception as exc:  # pragma: no cover — import guard
         logger.warning("commerce_admin unavailable: %s", exc)
         return False
+
+    # The owner's business-profile interview ("set up my profile") — answers become facts in the
+    # knowledge base instead of the starter KB's placeholders (vula/commerce/business_profile.py).
+    if _is_tenant_owner(tenant_id, phone):
+        try:
+            from vula.commerce.business_profile import handle_interview
+            profile_reply = await handle_interview(tenant_id, phone, text)
+        except Exception as exc:
+            logger.debug("profile interview skipped: %s", exc)
+            profile_reply = None
+        if profile_reply:
+            await _send_reply(phone, profile_reply, tenant_id)
+            return True
 
     admin_session_key = f"admin:{phone}"
     history = ""

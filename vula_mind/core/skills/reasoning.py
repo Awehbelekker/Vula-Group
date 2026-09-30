@@ -87,6 +87,20 @@ class ReasoningSkill(BaseSkill):
         # BEFORE spending an LLM call, rather than generating an answer and hoping the prompt
         # stops it from guessing — this is exactly the shape of the confirmed R70,400 "logged"
         # fabrication found in DIGG's real chat history, which had zero backing tool call.
+        # 2026-09-30: a product spec (slip rating, fire class, thickness…) is only ever stated by
+        # this business's own data sheets — never the shared KB, the web or model memory.
+        from core.skills.base import looks_like_spec_question, SPEC_ANSWER_RULE
+        spec = looks_like_spec_question(inp.question)
+        if spec and not kb_context:
+            return SkillOutput(
+                answer=("That specification isn't in our data sheets or test reports on file, so "
+                        "I won't guess at a figure. If you send me the product's data sheet or test "
+                        "report, I'll keep it and answer from it next time."),
+                skill_name=self.name,
+                confidence=0.3,
+                sources=sources,
+            )
+
         if not kb_context and looks_like_tenant_data_question(inp.question):
             return SkillOutput(
                 answer=("I don't have a document on file for that, so I don't want to guess at "
@@ -111,7 +125,11 @@ class ReasoningSkill(BaseSkill):
                 from vula.training.content import TRAINING_TENANT_ID
                 from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
                 from vula.training.network import NETWORK_TENANT_ID
+                from vula.training.sector_content import sector_collection_for
+                _sector = sector_collection_for(inp.tenant_id)
                 for shared_id, label in (
+                    *(((_sector, "General sector guidance (Vula) — not this business's own policy"),)
+                      if _sector else ()),
                     (TRAINING_TENANT_ID, "SA construction standards & rates"),
                     (BUSINESS_TRAINING_TENANT_ID, "General SA small-business knowledge"),
                     # Consumption is open to every tenant — only CONTRIBUTING into this
@@ -191,6 +209,7 @@ class ReasoningSkill(BaseSkill):
             "\nUsers CAN send you documents (PDF, Word, Excel) and images directly on "
             "WhatsApp — you file them into the knowledge base automatically. If asked about "
             "uploading, tell them to just attach the file in this chat."
+            + (f"\n\n{SPEC_ANSWER_RULE}" if spec else "")
         )
         # Context before history, and each labelled for precedence — a real DIGG-tenant bug
         # (2026-07-27) showed the model answering from a stale, topically-unrelated exchange

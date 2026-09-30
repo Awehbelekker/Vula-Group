@@ -756,6 +756,58 @@ async def _programme_briefs_loop() -> None:
         await _asyncio.sleep(600)
 
 
+async def _owner_advisor_loop() -> None:
+    """Monday 08:00–11:00 SAST: the weekly advisor WhatsApp to each owner (vula/owner_advisor.py).
+    Gated by settings.owner_advisor_enabled; one send per owner per ISO week (idem key)."""
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    await _asyncio.sleep(330)
+    while True:
+        try:
+            from vula import owner_advisor as _oa
+            if _oa.due(_dt.now(_oa.SAST)):
+                res = await _oa.send_all()
+                if res.get("sent"):
+                    log.info("owner advisor sent: %s", res)
+        except Exception as exc:
+            log.warning("owner advisor loop error: %s", exc)
+        await _asyncio.sleep(900)
+
+
+async def _conversation_check_loop() -> None:
+    """07:00–11:00 SAST daily: yesterday's replies checked for every tenant, emailed to
+    TEAM_EMAIL (vula/conversation_check.py). Marked once per day in vula_admin_audit."""
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    await _asyncio.sleep(270)
+    while True:
+        try:
+            from vula import conversation_check as _cc
+            if _cc.due(_dt.now(_cc.SAST)):
+                res = await _cc.send()
+                if res.get("sent"):
+                    log.info("conversation check sent for %s", res.get("day"))
+        except Exception as exc:
+            log.warning("conversation check loop error: %s", exc)
+        await _asyncio.sleep(900)
+
+
+async def _shared_kb_loop() -> None:
+    """Keeps the shared general-business KB and the sector packs seeded (vula/training/
+    seeder.py::ensure_shared_kbs) — on boot, then daily. A no-op when nothing changed."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(300)
+    while True:
+        try:
+            from vula.training.seeder import ensure_shared_kbs
+            res = await ensure_shared_kbs()
+            if res.get("seeded"):
+                log.info("shared KBs seeded: %s", res.get("chunks"))
+        except Exception as exc:
+            log.warning("shared KB seed loop error: %s", exc)
+        await _asyncio.sleep(86400)
+
+
 async def _master_digest_loop() -> None:
     """Monday 07:00–11:00 SAST: the weekly tenant-health email to TEAM_EMAIL
     (vula/master_digest.py). Checks every 15 minutes; the send is marked once per ISO week in
@@ -1365,6 +1417,9 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_owner_advisor_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))
@@ -1660,6 +1715,8 @@ app.include_router(microsoft_router, prefix="/v1/microsoft")
 app.include_router(dynamics365_router, prefix="/v1/dynamics365")
 app.include_router(email_connect_router, prefix="/v1/email")
 app.include_router(commerce_router, prefix="/v1/commerce")
+from vula.api.business_profile import router as business_profile_router  # noqa: E402
+app.include_router(business_profile_router, prefix="/v1/commerce")
 app.include_router(bookings_router, prefix="/v1/bookings")
 app.include_router(subscriptions_router, prefix="/v1/subscriptions")
 app.include_router(recurring_bills_router, prefix="/v1/recurring-bills")

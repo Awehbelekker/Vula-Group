@@ -780,8 +780,11 @@ def _synonym_variant(question: str) -> str:
     """The question restated with its business synonyms appended, so the wording a person types
     still reaches a document that uses a different word for the same thing. Returns "" when the
     question contains nothing worth expanding."""
-    extra: list = []
+    spec_terms, suppressed = _spec_expansion(question)
+    extra: list = list(spec_terms)
     for tok in re.findall(r"[A-Za-z][A-Za-z0-9\-]*", question or ""):
+        if tok.lower() in suppressed:
+            continue
         for s in sorted(_synonyms_of(tok)):
             if s != tok.lower() and s not in extra and len(s) > 2:
                 extra.append(s)
@@ -818,11 +821,77 @@ def _salient_terms(question: str) -> List[str]:
         # A plural typed against a singular in the document ("creations" vs "Creation").
         if low.endswith("s") and len(low) > 4 and low[:-1] not in out:
             out.append(low[:-1])
+    spec_terms, suppressed = _spec_expansion(question)
+    for cand in spec_terms[:3]:
+        if cand.lower() not in out and len(out) < 10:
+            out.append(cand.lower())
     for t in toks[:4]:
+        if t.lower() in suppressed:
+            continue
         for cand in sorted(_synonyms_of(t.lower())):
             if cand not in out and len(out) < 10:
                 out.append(cand)
     return out[:10]
+
+
+# Technical-spec wording (2026-09-30, Ian: "what is the slip rate on the Affinity?"). The word a
+# person uses and the word a data sheet uses differ here too — "slip rate" vs "slip resistance
+# ... R10 ... EN 16165" — and "rate"/"rating" must NOT pull in the price synonyms, or a spec
+# question gets expanded into a price-list search. Each entry: the phrase, the words the data
+# sheet actually uses, and the typed words whose ordinary synonyms are suppressed.
+_SPEC_PHRASES = [
+    # Not a bare "slip": reps send fuel slips, payment slips and deposit slips all day.
+    (re.compile(r"\b(anti|non)[- ]?slip\b|\bslip[- ]?(rate|rating|resist\w*|class\w*|value|test|r\d+)\b"
+                r"|\bslipp(ery|age)\b|\bR(9|10|11|12|13)\b", re.I),
+     ["slip", "resistance", "R10", "R11", "R9", "R12", "ramp", "EN 16165", "DIN 51130"],
+     {"rate", "rates", "rating", "ratings", "value"}),
+    (re.compile(r"\bfire[- ]?(rat\w*|class\w*|resist\w*|test|retard\w*)\b|\breaction to fire\b"
+                r"|\bflammab", re.I),
+     ["fire", "reaction", "Bfl-s1", "Cfl-s1", "EN 13501"],
+     {"rate", "rates", "rating", "ratings", "class"}),
+    (re.compile(r"\bwear ?layer\b|\bthickness\b|\bhow thick\b", re.I),
+     ["thickness", "wear layer", "mm", "total thickness"],
+     {"rate", "rating"}),
+    (re.compile(r"\bacoustic|\bimpact (noise|sound)\b|\bsound (reduction|insulation|rating)\b", re.I),
+     ["acoustic", "impact sound", "dB", "ΔLw"],
+     {"rate", "rating"}),
+    (re.compile(r"\bchemical resist|\bstain resist", re.I),
+     ["chemical", "resistance", "sensitive"],
+     {"rate", "rating"}),
+]
+
+
+def _spec_expansion(question: str):
+    """(extra data-sheet terms, typed words whose generic synonyms must be suppressed)."""
+    extra: List[str] = []
+    suppressed: set = set()
+    for rx, terms, supp in _SPEC_PHRASES:
+        if rx.search(question or ""):
+            extra += [t for t in terms if t not in extra]
+            suppressed |= supp
+    return extra, suppressed
+
+
+# A starter-KB document (vula/commerce/starter_kb.py) is a model-drafted template with
+# "[your delivery areas]"-style placeholders until the owner fills it in. A placeholder line
+# retrieved as context is an invitation to guess — so starter chunks lose every placeholder line,
+# and a chunk with nothing real left is dropped (2026-09-30).
+_PLACEHOLDER_RE = re.compile(r"\[[A-Za-z][^\]\n]{2,60}\]")
+
+
+def _without_placeholders(hits: List[dict]) -> List[dict]:
+    out: List[dict] = []
+    for h in hits:
+        starter = (h.get("source_type") == "starter"
+                   or str(h.get("filename") or "").startswith("starter_"))
+        if not starter or not _PLACEHOLDER_RE.search(h.get("text") or ""):
+            out.append(h)
+            continue
+        kept = "\n".join(line for line in (h.get("text") or "").splitlines()
+                         if not _PLACEHOLDER_RE.search(line)).strip()
+        if len(kept) >= 40:
+            out.append({**h, "text": kept})
+    return out
 
 
 def _chunk_key(hit: dict) -> str:
@@ -1593,7 +1662,7 @@ class VulaIngestionPipeline:
             if k not in seen:
                 seen.add(k)
                 out.append(h)
-        return out[:top_k]
+        return _without_placeholders(out[:top_k])
 
     async def answer(
         self,

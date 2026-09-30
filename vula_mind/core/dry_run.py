@@ -29,6 +29,7 @@ READ_ONLY = frozenset({
     "dynamics_lookup", "email_thread_summary", "finance_insights", "find_document", "list_bookings",
     "list_discount_codes", "list_purchase_orders", "list_quotes", "list_reminders", "list_rules",
     "list_storefront_pages", "list_subscriptions", "list_suppliers", "lookup_business_info",
+    "find_product_document",
     "outstanding_invoices", "price_advice", "project_profit", "recent_orders",
     "reimbursement_balance", "reorder_suggestions", "sales_summary", "stock_status",
     "view_call_sheet",

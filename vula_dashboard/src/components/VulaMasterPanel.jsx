@@ -23,6 +23,7 @@ const SUBTABS = [
   { id: 'audit', label: 'Audit', icon: '📜' },
   { id: 'models', label: 'Models', icon: '🧪' },
   { id: 'benchmark', label: 'Benchmark', icon: '🎯' },
+  { id: 'conversations', label: 'Conversations', icon: '💬' },
 ]
 
 // #/master/tenant/{id} — bookmarkable/shareable deep link into the tenant drill-in (2026-09-16).
@@ -92,7 +93,8 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
       {tab === 'knowledge' && <KnowledgePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'models' && <ModelsPanel onError={setErr} />}
-      {tab === 'benchmark' && <BenchmarkPanel onError={setErr} />}
+      {tab === 'benchmark' && <><GoLivePanel onError={setErr} /><div style={{ height: 12 }} /><BenchmarkPanel onError={setErr} /></>}
+      {tab === 'conversations' && <ConversationsPanel onError={setErr} />}
     </div>
   )
 }
@@ -943,6 +945,60 @@ function AuditPanel({ onError, onViewDetail }) {
  * vula_mind/evals/benchmark.py on the server: every component on real tenants, read-only (tools
  * that change anything are recorded, not run; nothing is sent), graded by rules + a judge model.
  * The scorecard is worst component first; each gap links to what the case expected and got. */
+/* ── Go-live test (evals/golive.py) ─────────────────────────────────────────────
+ * ~12 questions shaped for ONE tenant's business type, read-only, rules + judge. A tenant is ready
+ * at 85%. Run before a new tenant goes live and after deploys; the result feeds its checklist. */
+function GoLivePanel({ onError }) {
+  const [tenant, setTenant] = useState('')
+  const [res, setRes] = useState(null)
+  const load = useCallback((tid) => authFetch(`/v1/master/golive-test?tenant_id=${encodeURIComponent(tid)}`)
+    .then(setRes).catch(e => onError(e.message)), [])
+  useEffect(() => {
+    if (!tenant || res?.status !== 'running') return
+    const t = setInterval(() => load(tenant), 10000)
+    return () => clearInterval(t)
+  }, [tenant, res?.status])
+  const run = async () => {
+    try {
+      const r = await authFetch('/v1/master/golive-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tenant_id: tenant }),
+      })
+      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
+      else load(tenant)
+    } catch (e) { onError(e.message) }
+  }
+  return (
+    <div style={card}>
+      <h4 style={h4}>Go-live test (one tenant)</h4>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+        Questions every business must get right — no invented figures, no delete or customer message without a confirm,
+        answers from the owner's own profile or “I'll check”, hand-over to a person. Read-only. Ready at 85%.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input style={{ ...input, flex: 1, minWidth: 160 }} value={tenant} placeholder="tenant id"
+          onChange={e => { setTenant(e.target.value.trim()); setRes(null) }} onBlur={() => tenant && load(tenant)} />
+        <button style={{ ...btn, ...btnOn }} disabled={!tenant || res?.status === 'running'} onClick={run}>
+          {res?.status === 'running' ? 'Running…' : 'Run go-live test'}
+        </button>
+      </div>
+      {res && res.status === 'done' && (
+        <div style={{ marginTop: 8, fontSize: 13 }}>
+          <b style={{ color: res.ready ? C.green : C.red }}>{res.passed}/{res.total} ({res.pass_pct}%) — {res.ready ? 'ready' : 'not ready'}</b>
+          {(res.failures || []).map((f, i) => (
+            <div key={i} style={{ fontSize: 12, marginTop: 6, background: C.alt, borderRadius: 8, padding: 8 }}>
+              <div><b>“{f.prompt}”</b></div>
+              <div style={{ color: C.red }}>{(f.why || []).join(' · ')}</div>
+              {f.answer && <div style={{ color: C.muted, whiteSpace: 'pre-wrap' }}>{f.answer}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+      {res && res.status === 'failed' && <div style={{ marginTop: 8, fontSize: 12.5, color: C.red }}>{res.error}</div>}
+      {res && res.status === 'none' && <div style={{ marginTop: 8, fontSize: 12.5, color: C.muted }}>Not run yet for this tenant.</div>}
+    </div>
+  )
+}
+
 function BenchmarkPanel({ onError }) {
   const [data, setData] = useState(null)
   const [only, setOnly] = useState('')
@@ -1048,6 +1104,166 @@ function BenchmarkPanel({ onError }) {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+/* ── Conversations (daily check) ───────────────────────────────────────────────
+ * Yesterday's real replies per tenant that look wrong (vula/conversation_check.py): repeats, raw
+ * tool output, "couldn't answer", follow-up promises with no escalation, checker caveats, and
+ * people saying the answer was wrong. Emailed to TEAM_EMAIL each morning; this page shows any day.
+ * Also: content titles for generically-named documents (preview, then apply). */
+const KIND_LABEL = {
+  repeat: 'Same reply twice', leak: 'Raw output / false claim', cant_answer: "Couldn't answer",
+  promise: 'Promised a follow-up', caveat: 'Checker flagged', pushback: 'Person said wrong',
+}
+
+function ConversationsPanel({ onError }) {
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+  const [day, setDay] = useState(yesterday)
+  const [data, setData] = useState(null)
+  const [open, setOpen] = useState(null)
+  const [sending, setSending] = useState(false)
+  const load = useCallback(() => {
+    setData(null)
+    authFetch(`/v1/master/conversations/check?day=${day}`).then(setData).catch(e => onError(e.message))
+  }, [day])
+  useEffect(() => { load() }, [load])
+  const send = async () => {
+    setSending(true)
+    try {
+      const r = await authFetch('/v1/master/conversations/check/send', { method: 'POST' })
+      if (!r.sent) onError(r.reason || 'Not sent')
+    } catch (e) { onError(e.message) } finally { setSending(false) }
+  }
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div style={card}>
+        <h4 style={h4}>Daily conversation check</h4>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+          Every reply Vula sent that day, checked without a model. Emailed to the team each morning for yesterday.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input type="date" style={input} value={day} max={new Date().toISOString().slice(0, 10)}
+            onChange={e => setDay(e.target.value)} />
+          <button style={miniBtn} onClick={send} disabled={sending}>{sending ? 'Sending…' : 'Email yesterday now'}</button>
+          {data && <span style={{ fontSize: 13 }}>
+            <b>{data.totals.flagged}</b> of {data.totals.replies} replies need a look
+          </span>}
+        </div>
+      </div>
+      {!data && <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>}
+      {data && data.tenants.map(t => (
+        <div key={t.tenant_id} style={card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <b>{t.tenant_id}</b>
+            <span style={{ fontSize: 12.5, color: t.flagged ? C.amber : C.muted }}>{t.flagged}/{t.replies} flagged</span>
+          </div>
+          {t.unfollowed_promises > 0 && <div style={{ fontSize: 12.5, color: C.red, marginTop: 4 }}>
+            {t.unfollowed_promises} follow-up promise{t.unfollowed_promises === 1 ? '' : 's'} with no escalation raised
+          </div>}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {Object.entries(t.counts).filter(([, n]) => n).map(([k, n]) => (
+              <button key={k} style={miniBtn} onClick={() => setOpen(open === t.tenant_id + k ? null : t.tenant_id + k)}>
+                {KIND_LABEL[k] || k}: {n}
+              </button>
+            ))}
+          </div>
+          {Object.entries(t.examples).filter(([k]) => open === t.tenant_id + k).map(([k, ex]) => (
+            <div key={k} style={{ marginTop: 8, display: 'grid', gap: 8 }}>
+              {ex.map((e, i) => (
+                <div key={i} style={{ fontSize: 12.5, background: C.alt, borderRadius: 8, padding: 8 }}>
+                  <div><b>Q:</b> {e.question || '—'}</div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}><b>A:</b> {e.reply}</div>
+                  {e.next && <div style={{ color: C.red }}><b>Then:</b> {e.next}</div>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ))}
+      {data && !data.tenants.length && <div style={{ ...card, color: C.muted, fontSize: 13 }}>No conversations that day.</div>}
+      <AdvisorPreview onError={onError} />
+      <RetitlePanel onError={onError} />
+    </div>
+  )
+}
+
+function AdvisorPreview({ onError }) {
+  const [tenant, setTenant] = useState('')
+  const [res, setRes] = useState(null)
+  const load = () => authFetch(`/v1/master/advisor/preview?tenant_id=${encodeURIComponent(tenant)}`)
+    .then(setRes).catch(e => onError(e.message))
+  return (
+    <div style={card}>
+      <h4 style={h4}>Weekly owner advisor — preview</h4>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+        The Monday WhatsApp each owner gets: overdue invoices, spending jumps, low stock, unanswered questions, documents waiting
+        and profile gaps — from real rows only. Sending is {res ? (res.enabled ? <b>on</b> : <b>off</b>) : 'off until OWNER_ADVISOR_ENABLED=true'}.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input style={{ ...input, flex: 1, minWidth: 160 }} value={tenant} placeholder="tenant id"
+          onChange={e => setTenant(e.target.value.trim())} />
+        <button style={miniBtn} disabled={!tenant} onClick={load}>Preview</button>
+      </div>
+      {res && <div style={{ marginTop: 8, fontSize: 13, whiteSpace: 'pre-wrap', background: C.alt, borderRadius: 8, padding: 10 }}>
+        {res.text || 'Nothing to say this week — no message would be sent.'}
+      </div>}
+    </div>
+  )
+}
+
+function RetitlePanel({ onError }) {
+  const [tenant, setTenant] = useState('')
+  const [state, setState] = useState(null)
+  const poll = useCallback((tid) => authFetch(`/v1/master/documents/retitle?tenant_id=${encodeURIComponent(tid)}`)
+    .then(setState).catch(e => onError(e.message)), [])
+  useEffect(() => {
+    if (!tenant || state?.status !== 'running') return
+    const t = setInterval(() => poll(tenant), 5000)
+    return () => clearInterval(t)
+  }, [tenant, state?.status])
+  const start = async (apply) => {
+    if (apply && !(await confirmDialog(`Rename ${state?.items?.length || 0} documents for ${tenant}?`))) return
+    try {
+      const r = await authFetch('/v1/master/documents/retitle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tenant_id: tenant, apply }),
+      })
+      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
+      else poll(tenant)
+    } catch (e) { onError(e.message) }
+  }
+  return (
+    <div style={card}>
+      <h4 style={h4}>Name documents from their content</h4>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+        Reports, data sheets and brochures filed as “Report 20260827-1001.pdf” get a title from their own summary
+        (e.g. “Mipolam Affinity – slip resistance test (R10)”). Money documents are never renamed. Preview first; nothing
+        changes until you apply.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input style={{ ...input, flex: 1, minWidth: 160 }} value={tenant} placeholder="tenant id, e.g. gerflor"
+          onChange={e => { setTenant(e.target.value.trim()); setState(null) }} />
+        <button style={miniBtn} disabled={!tenant || state?.status === 'running'} onClick={() => start(false)}>Preview</button>
+        <button style={{ ...miniBtn, ...btnOn }} disabled={!state?.items?.length || state?.applied || state?.status === 'running'}
+          onClick={() => start(true)}>Apply</button>
+      </div>
+      {state?.status === 'running' && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>Working…</div>}
+      {state?.status === 'failed' && <div style={{ fontSize: 12.5, color: C.red, marginTop: 8 }}>{state.error}</div>}
+      {state?.status === 'done' && (
+        <div style={{ marginTop: 8, fontSize: 12.5 }}>
+          {state.applied ? <div>Renamed {state.written} document{state.written === 1 ? '' : 's'}.</div>
+            : <div>{state.proposed} of {state.generic} generic names can be improved ({state.skipped} skipped — no grounded title).</div>}
+          <div style={{ maxHeight: 280, overflowY: 'auto', marginTop: 6 }}>
+            {(state.items || []).map(p => (
+              <div key={p.id} style={{ borderTop: `1px solid ${C.border}`, padding: '4px 0' }}>
+                <span style={{ color: C.muted }}>{p.old}</span> → <b>{p.new}</b>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
