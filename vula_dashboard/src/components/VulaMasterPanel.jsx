@@ -22,6 +22,7 @@ const SUBTABS = [
   { id: 'knowledge', label: 'Knowledge', icon: '🧠' },
   { id: 'audit', label: 'Audit', icon: '📜' },
   { id: 'models', label: 'Models', icon: '🧪' },
+  { id: 'benchmark', label: 'Benchmark', icon: '🎯' },
 ]
 
 // #/master/tenant/{id} — bookmarkable/shareable deep link into the tenant drill-in (2026-09-16).
@@ -91,6 +92,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
       {tab === 'knowledge' && <KnowledgePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'models' && <ModelsPanel onError={setErr} />}
+      {tab === 'benchmark' && <BenchmarkPanel onError={setErr} />}
     </div>
   )
 }
@@ -933,6 +935,119 @@ function AuditPanel({ onError, onViewDetail }) {
           {!events.length && <tr><td style={td} colSpan={5}>No admin actions recorded yet — actions you take here (suspend, edit modules, create users) will show up in this trail.</td></tr>}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+/* ── Capability benchmark ──────────────────────────────────────────────────────
+ * vula_mind/evals/benchmark.py on the server: every component on real tenants, read-only (tools
+ * that change anything are recorded, not run; nothing is sent), graded by rules + a judge model.
+ * The scorecard is worst component first; each gap links to what the case expected and got. */
+function BenchmarkPanel({ onError }) {
+  const [data, setData] = useState(null)
+  const [only, setOnly] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(null)
+  const load = () => authFetch('/v1/master/benchmark').then(setData).catch(e => onError(e.message))
+  useEffect(() => { load() }, [])
+  const running = (data?.runs || []).some(r => r.status === 'running')
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, [running])
+  const run = async () => {
+    setBusy(true)
+    try {
+      const r = await authFetch('/v1/master/benchmark', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ only: only || null }),
+      })
+      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
+      else load()
+    } catch (e) { onError(e.message) } finally { setBusy(false) }
+  }
+  if (!data) return <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>
+  const latest = data.latest
+  const tone = (pct) => pct >= 85 ? C.green : pct >= 60 ? C.amber : C.red
+  const gapsFor = (comp) => (latest?.gaps || []).filter(g => g.component === comp)
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div style={card}>
+        <h4 style={h4}>Capability benchmark</h4>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+          Real questions on DIGG, Off the Hook and Gerflor through the same path WhatsApp uses, plus routing, WhatsApp commands and
+          filing accuracy on real documents. Read-only: anything that would change data or send a message is recorded, not done.
+          Each answer is checked by rules, then scored 1–5 by a separate judge model. A case passes on all rules and 4+.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input style={{ ...input, flex: 1, minWidth: 200 }} value={only} onChange={e => setOnly(e.target.value)}
+            placeholder="Only components containing… (blank = everything)" />
+          <button style={{ ...btn, ...btnOn }} disabled={busy || running} onClick={run}>
+            {running ? 'Running… (a few minutes)' : busy ? 'Starting…' : 'Run benchmark'}
+          </button>
+        </div>
+      </div>
+
+      {latest && (
+        <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+          <table style={table}>
+            <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
+              {['Component', 'Pass', 'Judge avg', 'p50', ''].map(x => <th key={x} style={th}>{x}</th>)}
+            </tr></thead>
+            <tbody>
+              {latest.components.map(c => (
+                <Fragment key={c.component}>
+                  <tr style={{ borderTop: `1px solid ${C.border}` }}>
+                    <td style={{ ...td, fontWeight: 600 }}>{c.component}</td>
+                    <td style={{ ...td, color: tone(c.pass_pct), fontWeight: 600 }}>{c.passed}/{c.total} ({c.pass_pct}%)</td>
+                    <td style={td}>{c.judge_avg != null ? `${c.judge_avg}/5` : '—'}</td>
+                    <td style={td}>{c.p50_secs != null ? `${c.p50_secs}s` : '—'}</td>
+                    <td style={td}>{gapsFor(c.component).length > 0 &&
+                      <button style={miniBtn} onClick={() => setOpen(open === c.component ? null : c.component)}>
+                        {open === c.component ? 'Hide' : `${gapsFor(c.component).length} gap${gapsFor(c.component).length === 1 ? '' : 's'}`}
+                      </button>}</td>
+                  </tr>
+                  {open === c.component && (
+                    <tr><td colSpan={5} style={{ ...td, background: C.alt }}>
+                      {gapsFor(c.component).map(g => (
+                        <div key={g.id} style={{ fontSize: 12, marginBottom: 8 }}>
+                          <div><b>“{g.prompt}”</b></div>
+                          <div style={{ color: C.red }}>{(g.why || []).join(' · ')}</div>
+                          {g.answer && <div style={{ color: C.muted, whiteSpace: 'pre-wrap' }}>{g.answer}</div>}
+                        </div>
+                      ))}
+                    </td></tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+        <table style={table}>
+          <thead><tr style={{ textAlign: 'left', color: C.muted, background: C.alt }}>
+            {['When', 'Scope', 'Result', 'Time', 'Judge cost'].map(x => <th key={x} style={th}>{x}</th>)}
+          </tr></thead>
+          <tbody>
+            {data.runs.map(r => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                <td style={{ ...td, color: C.muted, whiteSpace: 'nowrap' }}>{(r.created_at || '').slice(0, 16).replace('T', ' ')}</td>
+                <td style={td}>{r.skill || 'everything'}</td>
+                <td style={{ ...td, color: r.status === 'failed' ? C.red : C.text }}>
+                  {r.status === 'running' ? 'running…' : r.status === 'failed' ? (r.error || 'failed')
+                    : `${r.passed}/${r.total} (${r.total ? Math.round(100 * r.passed / r.total) : 0}%)`}
+                </td>
+                <td style={td}>{r.secs != null ? `${Math.round(r.secs)}s` : '—'}</td>
+                <td style={td}>{r.judge_cost_usd != null ? `$${r.judge_cost_usd}` : '—'}</td>
+              </tr>
+            ))}
+            {!data.runs.length && <tr><td style={td} colSpan={5}>No runs yet — press Run benchmark.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

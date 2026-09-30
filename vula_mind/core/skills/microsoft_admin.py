@@ -9,6 +9,7 @@ core/skills/microsoft_admin.py — OneDrive + Outlook over WhatsApp/portal.
 Defers (low confidence) if the tenant hasn't connected Microsoft. Draft-only email.
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import json
 import logging
@@ -144,6 +145,7 @@ class MicrosoftAdminSkill(BaseSkill):
         args = obj.get("arguments") or obj.get("parameters") or obj.get("args") or {}
         return (name, args) if name in _TOOL_NAMES and isinstance(args, dict) else None
 
+    @_dry_run.guard_dispatch
     async def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
         try:
             if name == "drive_search":

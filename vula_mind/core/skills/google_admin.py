@@ -8,6 +8,7 @@ Defers (low confidence) if the tenant hasn't connected Google. Email questions g
 email_admin (IMAP/SMTP connector); the Gmail tools were removed from this skill.
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import json
 import logging
@@ -133,6 +134,7 @@ class GoogleAdminSkill(BaseSkill):
         args = obj.get("arguments") or obj.get("parameters") or obj.get("args") or {}
         return (name, args) if name in _TOOL_NAMES and isinstance(args, dict) else None
 
+    @_dry_run.guard_dispatch
     async def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str) -> Any:
         try:
             if name == "drive_search":

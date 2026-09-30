@@ -1068,6 +1068,7 @@ async def master_eval_reports(limit: int = 30) -> dict:
     try:
         rows = (_client().table("vula_eval_reports").select("*")
                 .order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
+        rows = [r for r in rows if r.get("model") != _BENCH]   # benchmark runs have their own tab
     except Exception as exc:  # noqa: BLE001
         return {"reports": [], "error": f"{exc} (run migration 178?)"}
     now = datetime.now(timezone.utc)
@@ -1092,6 +1093,73 @@ async def master_eval_reports(limit: int = 30) -> dict:
                           "error": x.get("error")} for x in (rep.get("rows") or []) if not x.get("ok")],
         })
     return {"reports": out}
+
+
+# ── Capability benchmark (evals/benchmark.py) ──────────────────────────────────
+# Every component on real tenants, read-only (core/dry_run.py), scored by rules + a judge model.
+# Stored in vula_eval_reports with model='benchmark' so it never mixes with the bake-off.
+
+_BENCH = "benchmark"
+
+
+@router.post("/benchmark")
+async def master_run_benchmark(body: dict, identity: dict = Depends(require_master)) -> dict:
+    from config import settings
+    judge = (body or {}).get("judge_model") or settings.benchmark_judge_model or None
+    only = (body or {}).get("only") or None
+    if judge and judge.startswith("openrouter/") and not settings.openrouter_api_key:
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY is not set on this server.")
+    row = (_client().table("vula_eval_reports")
+           .insert({"model": _BENCH, "skill": only, "status": "running",
+                    "created_by": identity.get("email") or identity.get("user_id")})
+           .execute().data or [{}])[0]
+    if not row.get("id"):
+        raise HTTPException(status_code=500, detail="Couldn't record the run (migration 178 applied?).")
+    audit(identity, "benchmark.run", judge=judge, only=only)
+    from vula.commerce.background_tasks import run_background
+    run_background("master", "benchmark", _run_benchmark(row["id"], judge, only))
+    return {"queued": row["id"]}
+
+
+async def _run_benchmark(job_id: Any, judge: Optional[str], only: Optional[str]) -> None:
+    from core.llm_router import install_ollama_auth
+    from evals import benchmark
+    install_ollama_auth()
+    try:
+        rep = await benchmark.run(judge_model=judge, only=only)
+        upd = {"status": "done", "passed": rep["passed"], "total": rep["total"], "report": rep,
+               "finished_at": datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:  # noqa: BLE001
+        log.exception("benchmark failed")
+        upd = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+               "finished_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        _client().table("vula_eval_reports").update(upd).eq("id", job_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        log.error("benchmark report %s not saved: %s", job_id, exc)
+
+
+@router.get("/benchmark")
+async def master_benchmark_reports(limit: int = 10) -> dict:
+    """Latest runs, newest first: headline numbers for each, the full scorecard for the newest
+    finished one (so the page can show the trend and today's gaps)."""
+    rows = (_client().table("vula_eval_reports").select("*").eq("model", _BENCH)
+            .order("created_at", desc=True).limit(max(1, min(limit, 30))).execute().data or [])
+    now = datetime.now(timezone.utc)
+    latest = None
+    runs = []
+    for r in rows:
+        if _orphaned(r, now):
+            r.update(status="failed", error=_EVAL_INTERRUPTED)
+        rep = r.get("report") or {}
+        runs.append({k: r.get(k) for k in ("id", "status", "passed", "total", "error", "skill",
+                                           "created_by", "created_at", "finished_at")}
+                    | {"judge_model": rep.get("judge_model"), "secs": rep.get("secs"),
+                       "judge_cost_usd": rep.get("judge_cost_usd")})
+        if latest is None and r.get("status") == "done":
+            latest = {"components": rep.get("components") or [], "gaps": rep.get("gaps") or [],
+                      "rows": rep.get("rows") or [], "created_at": r.get("created_at")}
+    return {"runs": runs, "latest": latest}
 
 
 # ── 👎 feedback → eval cases ────────────────────────────────────────────────────

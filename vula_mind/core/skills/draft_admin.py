@@ -14,6 +14,7 @@ branding a tenant's invoices already use. Delivery is WhatsApp-document by defau
 save is opt-in and silently skipped (with a note in the reply) if Google isn't connected.
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import json
 import logging
@@ -388,6 +389,7 @@ class DraftAdminSkill(BaseSkill):
         args = obj.get("arguments") or obj.get("parameters") or obj.get("args") or {}
         return (name, args) if name in _TOOL_NAMES and isinstance(args, dict) else None
 
+    @_dry_run.guard_dispatch
     async def _dispatch(self, name: str, args: Dict[str, Any], tenant_id: str, phone: str) -> Any:
         if name != "draft_letter":
             return {"error": f"unknown tool {name}"}

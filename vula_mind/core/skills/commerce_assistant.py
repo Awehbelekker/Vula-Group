@@ -11,6 +11,7 @@ Tenant isolation: every service call is scoped by inp.tenant_id. The cart
 session is keyed on the customer's phone (metadata['session_id']).
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import asyncio
 import json
@@ -1442,6 +1443,7 @@ class CommerceAssistantSkill(BaseSkill):
         return final_answer
 
     # ── Tool dispatch + executors ────────────────────────────────────────────
+    @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid, sid, phone = ctx["tenant_id"], ctx["session_id"], ctx["customer_phone"]
         try:

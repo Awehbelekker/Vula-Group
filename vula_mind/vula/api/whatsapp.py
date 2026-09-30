@@ -5485,6 +5485,9 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
     template — free text to someone who hasn't messaged recently fails with 'Re-engagement message'
     (confirmed 2026-07-15: this affected every scheduled OTH/DIGG proactive notification, not a
     dev-mode issue). Shared by server.py (OTH schedules) and field_ops.py (DIGG field-ops)."""
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", to, str(template)):   # capability benchmark
+        return True
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
     if not creds:
         if settings.whatsapp_token and settings.whatsapp_phone_id:
@@ -6095,6 +6098,9 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
     same tenant goes out once, however many workers or retries reach it. Returns True for a
     skipped duplicate (it WAS sent), so callers record it as done.
     """
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", to, message):     # capability benchmark: recorded, not sent
+        return True
     if idem_key:
         import asyncio as _aio
         if not await _aio.to_thread(_claim_outbound, tenant_id, idem_key):
@@ -6194,6 +6200,9 @@ async def _send_invoice_document(
     a publicly reachable URL. Credentials are resolved per-tenant from Supabase,
     falling back to env vars, exactly like ``_send_reply``.
     """
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", to, f"[document {filename}] {caption}"):   # capability benchmark
+        return True
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
     if not creds:
         if settings.whatsapp_token and settings.whatsapp_phone_id:
@@ -7371,6 +7380,9 @@ async def _send_wa_buttons(creds: dict, number: str, body: str, buttons: list) -
     unambiguous button_reply id (handled in the webhook's msg_type == "interactive" branch),
     replacing the free-text "yes"/"confirm" parsing that produced a real fabricated-success
     incident (2026-08-22/24: the model misread its own tool results and invented an invoice)."""
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", number, str(body)):   # capability benchmark
+        return True
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -7394,6 +7406,9 @@ async def _send_wa_buttons(creds: dict, number: str, body: str, buttons: list) -
 async def _send_wa_list(creds: dict, number: str, header: str, body: str,
                         footer: str, button: str, sections: list) -> bool:
     """Send an interactive WhatsApp list (≤10 rows total across sections)."""
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", number, str(body)):   # capability benchmark
+        return True
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -7416,6 +7431,9 @@ async def _send_wa_list(creds: dict, number: str, header: str, body: str,
 async def _send_wa_image(creds: dict, number: str, image_url: str) -> bool:
     """Send a standalone image message. Used as a decorative header immediately before an
     interactive list, since WhatsApp's list type only supports a text header (Meta limit)."""
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", number, str(image_url)):   # capability benchmark
+        return True
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(

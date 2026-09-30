@@ -26,6 +26,9 @@ async def _send(
     text: str,
     attachments: Optional[list[dict]] = None,
 ) -> bool:
+    from core import dry_run as _dry
+    if _dry.record_send("email", to, f"{subject}\n\n{text}"):   # capability benchmark
+        return True
     if not settings.resend_api_key:
         logger.info("Resend not configured — skipping email to %s", to)
         return False

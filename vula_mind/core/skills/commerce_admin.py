@@ -19,6 +19,7 @@ skill serves every tenant. Owner detection (which phone numbers may use it)
 lives in the WhatsApp router, not here.
 """
 from __future__ import annotations
+from core import dry_run as _dry_run
 
 import json
 import logging
@@ -1738,6 +1739,7 @@ class CommerceAdminSkill(BaseSkill):
         return None
 
     # ── Tool dispatch ─────────────────────────────────────────────────────────
+    @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
         _log_tool_call(tid, "admin", name, args)
