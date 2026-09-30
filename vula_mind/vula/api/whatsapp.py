@@ -5359,6 +5359,12 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                         return out.answer
                 except Exception as exc:
                     logger.warning("follow-up to %s fell through: %s", sticky, exc)
+        # 0c. "Is there stock of X?" against the distributor stock sheet (Gerflor) — from the rows.
+        from core.skills.commerce_admin import _stock_sheet_answer
+        stock = _stock_sheet_answer(tenant_id, question)
+        if stock:
+            _LAST_CONF.set(0.95)
+            return stock
         # 0b. Job costing and pricing ("are we making our 10%?", "what should I charge per m²?")
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).

@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 # the quantities. Anchored on it because product names and colours both contain spaces and
 # digits, and only the thickness reliably marks where the numbers start.
 _THICK = re.compile(r"\b(\d+[.,]?\d*)\s*(MM|W)\b", re.I)
-_NUM = re.compile(r"\d+(?:[.,]\d+)?")
+_NUM = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:[.,]\d+)?")
 
 # A sheet is only recognised when its own header is present, so an unrelated PDF full of numbers
 # is never parsed as stock.
@@ -53,6 +53,23 @@ def looks_like_stock_sheet(text: str) -> bool:
     return len(_THICK.findall(text or "")) >= 5
 
 
+def _qty(v: str) -> Optional[float]:
+    """'1,949.4' → 1949.4 (thousands comma), '581,4' → 581.4 (decimal comma), '532' → 532."""
+    v = (v or "").strip()
+    if not v:
+        return None
+    if "," in v and "." in v:
+        v = v.replace(",", "")
+    elif re.fullmatch(r"\d{1,3}(,\d{3})+", v):
+        v = v.replace(",", "")
+    else:
+        v = v.replace(",", ".")
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
 def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").replace("|", " ")).strip(" -:•❗")
 
@@ -64,6 +81,7 @@ def parse_stock_lines(text: str) -> List[Dict[str, Any]]:
     those two together are what distinguish a stock line from a heading or a project note.
     """
     rows: List[Dict[str, Any]] = []
+    block = _parse_block_layout(text)
     for raw in re.split(r"[\r\n]+", text or ""):
         line = raw.strip()
         if not line or len(line) < 8:
@@ -90,14 +108,8 @@ def parse_stock_lines(text: str) -> List[Dict[str, Any]]:
         if not product:
             continue
 
-        def _f(v: str) -> Optional[float]:
-            try:
-                return float(v.replace(",", "."))
-            except Exception:
-                return None
-
-        soh = _f(nums[0])
-        inbound = _f(nums[1]) if len(nums) > 1 else None
+        soh = _qty(nums[0])
+        inbound = _qty(nums[1]) if len(nums) > 1 else None
         # Anything after the numbers is the ETA / reservation note, kept verbatim: "Reserved
         # TVET College" and "Est. Mid Nov - TBC" are exactly what a rep needs to see.
         note = _clean(re.sub(r"^[\d\s.,|m²]+", "", tail))
@@ -109,6 +121,69 @@ def parse_stock_lines(text: str) -> List[Dict[str, Any]]:
             "inbound": inbound,
             "note": note or None,
         })
+    seen = {(r["product"], r["colour"]) for r in block}
+    return block + [r for r in rows if (r["product"], r["colour"]) not in seen]
+
+
+# 2026-09-30, DT_Weekly_SOH_Stock_Availability_29-09-2026.pdf: the new weekly sheet puts every
+# field on its own line — the line-per-row parser above read 6 of ~100 products:
+#
+#     VIRTUO 55 COL: DAINTREE BROWN 2.50MM
+#     99.2
+#     ◆ PROJECT ALLOCATED
+#     300.0
+#     ❗Est. End October
+#     150m² Reserved for Tstisikama
+#
+# A product line ends at its thickness (a long name can wrap, leaving the thickness alone on the
+# next line); the lines up to the next product are its quantity, status, inbound, ETA and notes.
+_STATUS = re.compile(r"(IN STOCK|OUT OF STOCK|INBOUND|PROJECT ALLOCATED|VERIFY SOH)", re.I)
+_QTY_LINE = re.compile(r"^\d{1,3}(?:,\d{3})*(?:[.,]\d+)?$|^\d+(?:[.,]\d+)?$")
+_ENDS_THICK = re.compile(r"\b(\d+[.,]?\d*)\s*(MM|W)\s*$", re.I)
+
+
+def _parse_block_layout(text: str) -> List[Dict[str, Any]]:
+    lines = [ln.strip() for ln in re.split(r"[\r\n]+", text or "") if ln.strip()]
+    rows: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        name, thick = None, None
+        m = _ENDS_THICK.search(line)
+        if m and "COL" in line.upper():
+            name, thick = line[:m.start()], m
+        elif "COL" in line.upper() and i + 1 < len(lines):
+            m2 = re.fullmatch(r"(\d+[.,]?\d*)\s*(MM|W)", lines[i + 1], re.I)
+            if m2:
+                name, thick = line, m2
+                i += 1
+        if not name or i + 1 >= len(lines) or not _QTY_LINE.match(lines[i + 1]):
+            i += 1
+            continue
+        product, colour = (re.split(r"\bCOL\b\s*:?", name, maxsplit=1, flags=re.I) + [""])[:2]
+        row: Dict[str, Any] = {"product": _clean(product), "colour": _clean(colour),
+                               "thickness": f"{thick.group(1)}{thick.group(2).upper()}",
+                               "soh": _qty(lines[i + 1]), "inbound": None, "status": None, "note": None}
+        j = i + 2
+        notes: List[str] = []
+        while j < len(lines) and not (_ENDS_THICK.search(lines[j]) and "COL" in lines[j].upper()) \
+                and not ("COL" in lines[j].upper() and j + 1 < len(lines)
+                         and re.fullmatch(r"(\d+[.,]?\d*)\s*(MM|W)", lines[j + 1], re.I)):
+            ln = lines[j]
+            st = _STATUS.search(ln)
+            if st and row["status"] is None and len(ln) < 30:
+                row["status"] = st.group(1).lower()
+            elif _QTY_LINE.match(ln) and row["inbound"] is None and row["status"]:
+                row["inbound"] = _qty(ln)
+            elif row["status"] and (ln.lower().lstrip("❗ ").startswith("est") or "reserved" in ln.lower()):
+                notes.append(_clean(ln))
+            else:
+                break          # a heading or the legend — this row is done
+            j += 1
+        row["note"] = "; ".join(notes) or None
+        if row["product"]:
+            rows.append(row)
+        i = j
     return rows
 
 
@@ -126,6 +201,7 @@ _QUERY_NOISE = {
     "available", "availability", "hand", "onhand", "inbound", "eta", "lead", "time", "when",
     "arrive", "arriving", "coming", "order", "reserved", "please", "check", "tell", "me",
     "about", "list", "show", "level", "levels", "qty", "quantity",
+    "square", "metre", "metres", "meter", "meters", "sqm", "m2", "stocks",
 }
 
 
@@ -142,13 +218,23 @@ def find_product(rows: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]
         return []
     stems = {q, _stem(q)}
     tokens = {_stem(t) for t in q.split() if len(t) >= 3 and t not in _QUERY_NOISE}
-    out = []
+    # 2026-09-30 (DT weekly sheet): "Virtuo 55 Daintree Brown" matched all 33 VIRTUO lines —
+    # any shared word counted. Rank by how many of the question's words a line carries and keep
+    # only the best, so a colour question gets that colour and a range question the whole range.
+    scored = []
     for r in rows:
         hay = _norm(f"{r.get('product', '')} {r.get('colour', '')}")
         hay_tokens = {_stem(t) for t in hay.split()}
-        if any(s and s in hay for s in stems) or (tokens and tokens & hay_tokens):
-            out.append(r)
-    return out
+        if any(s and s in hay for s in stems):
+            scored.append((len(tokens) + 1, r))
+        elif tokens and tokens & hay_tokens:
+            # a two-word phrase from the question ("lt blue", "spring green") beats single words
+            pairs = sum(1 for a, b in zip(q.split(), q.split()[1:]) if f"{a} {b}" in hay)
+            scored.append((len(tokens & hay_tokens) + 0.5 * pairs, r))
+    if not scored:
+        return []
+    best = max(sc for sc, _ in scored)
+    return [r for sc, r in scored if sc == best]
 
 
 def product_names(rows: List[Dict[str, Any]]) -> List[str]:
@@ -161,6 +247,21 @@ def product_names(rows: List[Dict[str, Any]]) -> List[str]:
         if name and name not in seen:
             seen.append(name)
     return seen
+
+
+def _row_line(r: Dict[str, Any]) -> str:
+    """'VIRTUO 55 DAINTREE BROWN: 99.2 m² (project allocated), 300 m² inbound, Est. End October;
+    150m² Reserved for Tstisikama' — what a rep needs in one line."""
+    name = " ".join(x for x in (r.get("product"), r.get("colour")) if x)
+    soh = r.get("soh")
+    bits = [f"{name}: {soh:g} m²" if soh is not None else name]
+    if r.get("status"):
+        bits[0] += f" ({r['status']})"
+    if r.get("inbound"):
+        bits.append(f"{r['inbound']:g} m² inbound")
+    if r.get("note"):
+        bits.append(r["note"])
+    return ", ".join(bits)
 
 
 def summarise(rows: List[Dict[str, Any]], query: str, as_at: str = "") -> Dict[str, Any]:
@@ -176,9 +277,15 @@ def summarise(rows: List[Dict[str, Any]], query: str, as_at: str = "") -> Dict[s
             "query": query,
             "as_at": as_at or None,
             "available_products": product_names(rows)[:20],
-            "answer": (f"{query} is not on this stock list"
+            "answer": (f"{' '.join(t for t in query.split() if _norm(t) not in _QUERY_NOISE and len(_norm(t)) > 1).strip(' ?.') or query} is not on this stock list"
                        + (f" (as at {as_at})" if as_at else "") + "."),
         }
+    # "Mac tiles basil" when Basil isn't on the sheet: say so, then what the range does have —
+    # never a list of every Mac Tiles line as if one of them were the answer.
+    q_tokens = [t for t in _norm(query).split() if len(t) >= 3 and t not in _QUERY_NOISE]
+    matched_text = " ".join(_norm(f"{r.get('product', '')} {r.get('colour', '')}") for r in matches)
+    missing = [t for t in q_tokens if _stem(t) not in {_stem(x) for x in matched_text.split()}
+               and t not in {"square", "metre", "metres", "meter", "meters"} and not t.isdigit()]
     in_stock = [r for r in matches if (r.get("soh") or 0) > 0]
     total = round(sum(r.get("soh") or 0 for r in matches), 2)
     return {
@@ -189,14 +296,21 @@ def summarise(rows: List[Dict[str, Any]], query: str, as_at: str = "") -> Dict[s
         "in_stock_lines": len(in_stock),
         "total_soh": total,
         "rows": matches[:25],
-        "answer": (f"{len(matches)} {query} line(s) on the sheet, {len(in_stock)} with stock, "
-                   f"{total:g} m² in total" + (f" (as at {as_at})" if as_at else "") + "."),
+        "not_listed": missing or None,
+        "answer": ((f"{' '.join(missing).upper()} isn't on this stock list. What is: " if missing else "")
+                   + "; ".join(_row_line(r) for r in matches[:8])
+                   + (f" (+{len(matches) - 8} more)" if len(matches) > 8 else "")
+                   + (f" — as at {as_at}" if as_at else "") + "."),
     }
 
 
 def as_at_date(text: str) -> str:
     """The sheet's own 'SOH m² – 07.09.26' date, so an answer can say how current it is."""
     m = re.search(r"SOH[^\n]*?(\d{2}[./]\d{2}[./]\d{2,4})", text or "", re.I)
+    if m:
+        return m.group(1)
+    # "Stock position as at 29 September 2026" (DT weekly sheet, 2026-09-30)
+    m = re.search(r"as at\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})", text or "", re.I)
     return m.group(1) if m else ""
 
 

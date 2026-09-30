@@ -1222,6 +1222,27 @@ def _preview_summary(result: Dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "Confirm this action?"
 
 
+def _stock_sheet_answer(tenant_id: str, question: str) -> Optional[str]:
+    try:
+        from vula.commerce import stock_sheet
+        if not stock_sheet._STOCK_INTENT.search(question):
+            return None
+        from vula.api.tenants import tenant_profile
+        if tenant_profile(tenant_id).get("sells_products"):
+            return None
+        got = stock_sheet.answer_stock_query(tenant_id, question)
+    except Exception as exc:  # noqa: BLE001 — fall through to the agent
+        logger.debug("stock sheet shortcut skipped: %s", exc)
+        return None
+    if not got:
+        return None
+    src = got.get("source_file")
+    answer = got["answer"]
+    if not got.get("found") and got.get("available_products"):
+        answer += " Ranges on it: " + ", ".join(got["available_products"][:15]) + "."
+    return f"📦 {answer}" + (f"\n_Source: {src}_" if src else "")
+
+
 async def _direct_supplier_answer(question: str, tool: str, args: Dict[str, Any], result: Any,
                                   tenant_id: str = "", history: str = "",
                                   phone: str = "") -> Optional[str]:
@@ -1303,6 +1324,14 @@ class CommerceAdminSkill(BaseSkill):
                 direct = None
             if direct:
                 return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
+        # 2026-09-30 (Ian): "if Richard asks is there stock of a certain item, it should be able to
+        # tell him" — a distributor stock sheet is a set of rows, so a stock question is answered
+        # from it directly, no model: the line(s) asked about with SOH, status, inbound, ETA and
+        # reservations, or that the item isn't on this week's list. Only for a business that
+        # doesn't sell its own products (Gerflor) — a shop's "stock" is its product stock.
+        stock_answer = _stock_sheet_answer(inp.tenant_id, inp.question or "")
+        if stock_answer:
+            return SkillOutput(answer=stock_answer, skill_name=self.name, confidence=0.95)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
