@@ -278,6 +278,9 @@ class Settings(BaseSettings):
     # Empty = model_worker_cheap_local — one the Ollama box actually serves (the old hardcoded
     # qwen2.5:3b wasn't necessarily pulled there).
     skill_classifier_model: str = ""
+    # When the local box can't be reached, the same one-word classification goes to this cheap
+    # OpenRouter model instead (logged as local_unreachable). Empty = no cloud fallback.
+    skill_classifier_cloud_model: str = "google/gemini-2.5-flash"
 
     @property
     def verification_policies(self) -> dict[str, str]:
