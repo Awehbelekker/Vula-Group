@@ -1162,6 +1162,59 @@ async def master_benchmark_reports(limit: int = 10) -> dict:
     return {"runs": runs, "latest": latest}
 
 
+# ── Content titles for generically-named documents (vula/commerce/doc_titles.py) ──────────
+# Preview first (nothing written), then apply the reviewed preview. Runs in the background — one
+# small model call per document. The last result per tenant is kept in memory for the page.
+_RETITLE: dict = {}
+
+
+@router.post("/documents/retitle")
+async def master_retitle_documents(body: dict, identity: dict = Depends(require_master)) -> dict:
+    tid = ((body or {}).get("tenant_id") or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="tenant_id is required.")
+    apply = bool((body or {}).get("apply"))
+    previewed = list((_RETITLE.get(tid) or {}).get("preview") or [])
+    if apply and not previewed:
+        raise HTTPException(status_code=400, detail="Run a preview first and check it.")
+    audit(identity, "documents.retitle", tenant_id=tid, apply=apply)
+    _RETITLE[tid] = {"status": "running", "applied": apply}
+
+    async def _go() -> None:
+        from vula.commerce import doc_titles
+        try:
+            if apply:
+                # Apply exactly what was previewed — never a fresh, unreviewed set of titles.
+                items = previewed
+                written = 0
+                for p in items:
+                    try:
+                        _client().table("vula_filed_documents").update({"filename": p["new"]}) \
+                            .eq("tenant_id", tid).eq("id", p["id"]).eq("filename", p["old"]).execute()
+                        written += 1
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("retitle %s failed: %s", p.get("id"), exc)
+                _RETITLE[tid] = {"status": "done", "applied": True, "written": written,
+                                 "items": items}
+            else:
+                rep = await doc_titles.retitle_tenant(tid, apply=False)
+                _RETITLE[tid] = {**rep, "status": "done", "preview": rep["items"]}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("retitle failed for %s", tid)
+            _RETITLE[tid] = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+    from vula.commerce.background_tasks import run_background
+    run_background(tid, "documents_retitle", _go())
+    return {"queued": True, "tenant_id": tid, "apply": apply}
+
+
+@router.get("/documents/retitle")
+async def master_retitle_status(tenant_id: str) -> dict:
+    r = dict(_RETITLE.get(tenant_id) or {"status": "idle"})
+    r.pop("preview", None)
+    return r
+
+
 # ── 👎 feedback → eval cases ────────────────────────────────────────────────────
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 

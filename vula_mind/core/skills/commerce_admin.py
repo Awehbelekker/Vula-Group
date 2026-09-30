@@ -1333,7 +1333,8 @@ class CommerceAdminSkill(BaseSkill):
         if stock_answer:
             return SkillOutput(answer=stock_answer, skill_name=self.name, confidence=0.95)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
-               "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role}
+               "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
+               "message": inp.question}
         tools = _tools_for(inp.tenant_id, role=caller_role, message=inp.question)
         if caller_role != "sales_rep":   # reps already get their own narrow set
             tools = _restrict_to_access(tools, _member_access(inp.tenant_id, ctx["phone"]))
@@ -3290,6 +3291,10 @@ class CommerceAdminSkill(BaseSkill):
         query = (args.get("query") or "").strip()
         if not query:
             return {"error": "Need something to research — a competitor name or a product/price query."}
+        from core.skills.base import looks_like_spec_question
+        if looks_like_spec_question(query) or looks_like_spec_question(ctx.get("message") or ""):
+            return {"error": "Product specifications come only from this business's own data "
+                             "sheets — use lookup_business_info, and if it isn't there say so."}
         from core.skills.web_search import _ddg_search, _fetch_text
         from core.prompt_safety import UNTRUSTED_CONTENT_RULE
 
@@ -3521,17 +3526,35 @@ class CommerceAdminSkill(BaseSkill):
                         "authoritative": True, "stock": stock}
         except Exception as exc:
             logger.debug("stock sheet lookup skipped: %s", exc)
+        from core.skills.base import looks_like_spec_question, SPEC_ANSWER_RULE
+        spec = looks_like_spec_question(query)
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
-            chunks = await VulaIngestionPipeline(tenant_id=tid).query(query, top_k=4)
+            chunks = await VulaIngestionPipeline(tenant_id=tid).query(
+                query, top_k=6 if spec else 4, authoritative_only=spec)
         except Exception as exc:
             logger.debug("lookup_business_info retrieval skipped: %s", exc)
             return {"error": "Couldn't search the knowledge base right now."}
         if chunks:
-            return {"found": True, "source_kb": "tenant", "results": [
-                {"source": c.get("filename", "doc"), "text": c.get("text", "")[:400]}
+            try:
+                from vula.commerce.doc_titles import titles_for
+                titles = titles_for(tid, [c.get("doc_id") for c in chunks])
+            except Exception:
+                titles = {}
+            out = {"found": True, "source_kb": "tenant", "results": [
+                {"source": titles.get(str(c.get("doc_id") or "")) or c.get("filename", "doc"),
+                 "text": c.get("text", "")[:600 if spec else 400]}
                 for c in chunks
             ]}
+            if spec:
+                out["instruction"] = SPEC_ANSWER_RULE
+            return out
+        if spec:
+            # Never the shared general-business KB (or, via the model, the web) for a spec figure.
+            return {"found": False, "spec_question": True,
+                    "message": "That specification isn't in this business's data sheets or test "
+                               "reports yet. Say so plainly and offer to check — do not give a "
+                               "figure from anywhere else."}
         try:
             from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
             shared_chunks = await VulaIngestionPipeline(tenant_id=BUSINESS_TRAINING_TENANT_ID).query(

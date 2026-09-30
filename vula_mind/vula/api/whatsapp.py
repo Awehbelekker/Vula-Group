@@ -1851,6 +1851,14 @@ async def _send_duplicate_notice(
         logger.warning("duplicate notice failed to build/send (%s: %s)", type(exc).__name__, exc)
 
 
+# What a vision description of a product document says about it (see the rep branch below).
+_PRODUCT_DOC_RE = re.compile(
+    r"\b(data ?sheet|spec(ification)?s?\b|technical (data|details|sheet)|product (card|sheet|"
+    r"brochure|information|details)|brochure|catalogue|catalog|price ?list|test (report|result|"
+    r"certificate)|installation (guide|instructions)|colou?r (chart|card|range)|swatch)",
+    re.IGNORECASE)
+
+
 async def _handle_image_or_video(
     phone: str, msg_type: str, media_id: str, caption: str, mime_type: str, msg_id: str,
     route_mode: Optional[str], route_tenant: Optional[str], content_sha: Optional[str],
@@ -1904,6 +1912,16 @@ async def _handle_image_or_video(
                                          route_mode=route_mode)
             return
         description = await _describe_photo_for_rep(media_id)
+        # A photographed data sheet / spec page / product card / price list is product
+        # knowledge — keep it in the knowledge base like an uploaded PDF, so the next "what's the
+        # slip rating on X?" can be answered from it. 2026-09-22, gerflor: the rep's photo of the
+        # Marmorette Acoustic / Elegance SD spec sheet was described, then lost.
+        if description and _PRODUCT_DOC_RE.search(description):
+            logger.info("rep photo detected as PRODUCT DOCUMENT → knowledge base (%s)", phone)
+            await _handle_document_ingest(phone, media_id, f"product-{msg_id}.jpg", "image/jpeg",
+                                         route_tenant_id=route_tenant, content_sha=content_sha,
+                                         route_mode=route_mode)
+            return
         if description:
             prompt = (
                 f"[The rep sent this photo with no caption. "
@@ -2339,6 +2357,18 @@ async def _handle_document_ingest(
             # use — this confirmation message, vula_document_extractions, and file_document()'s
             # stored filename — picks up the friendly name for free.
             result.filename = _friendly_document_name(doc_category, fields, result.filename)
+            # 2026-09-30: a knowledge document (report, data sheet, brochure) with no party in its
+            # fields came out as "Report 20260827-1001.pdf" — two different Gerflor test reports
+            # shared that exact name. Name it from its own summary instead (grounded check).
+            try:
+                from vula.commerce import doc_titles
+                if (doc_titles.generic_name(result.filename)
+                        and not doc_titles.is_money_category(doc_category)):
+                    _title = await doc_titles.title_from_summary(summary, doc_category)
+                    if _title:
+                        result.filename = doc_titles.with_title(_title, result.filename)
+            except Exception as exc:
+                logger.debug("content title skipped: %s", exc)
 
             # Keep the structured extraction (legacy table, best-effort).
             try:

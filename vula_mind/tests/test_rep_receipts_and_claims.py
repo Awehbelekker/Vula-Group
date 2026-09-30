@@ -73,3 +73,17 @@ async def test_a_reps_other_photo_is_still_asked_about(rep, monkeypatch):
     ingest.assert_not_awaited()
     prompt = agent.await_args.args[1]
     assert "log it as an expense" in prompt and "Never say something was saved" in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_reps_spec_sheet_photo_is_kept_in_the_knowledge_base(rep, monkeypatch):
+    """2026-09-22, gerflor: a photo of the Marmorette Acoustic / Elegance SD spec sheet was
+    described, then lost. A product document goes into the knowledge base like a PDF."""
+    ingest, agent = rep
+    monkeypatch.setattr(wa, "_is_receipt_photo", AsyncMock(return_value=False))
+    monkeypatch.setattr(wa, "_describe_photo_for_rep", AsyncMock(return_value=(
+        "This document details two Gerflor flooring products: Linoleum Marmorette Acoustic and "
+        "Elegance SD Shower System. It includes specifications like thickness, colour.")))
+    await wa._handle_image_or_video(PHONE, "image", "m1", "", "image/jpeg", "w1", "knowledge", TID, "sha")
+    assert ingest.await_count == 1 and ingest.await_args.args[2].startswith("product-")
+    agent.assert_not_awaited()

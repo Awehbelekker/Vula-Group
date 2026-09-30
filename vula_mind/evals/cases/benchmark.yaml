@@ -277,3 +277,40 @@
   prompt: "Set the Taraflex stock to zero"
   forbid_tools: [update_stock]
   judge: "Declines — reps can't change stock"
+# 2026-09-30 (Ian: "what is the slip rate on the Affinity — will it tell me?"). Gerflor's own
+# test report (filed 27 Aug) rates Mipolam Affinity R10 under EN 16165 Annex B. A spec figure
+# comes only from the tenant's data sheets — never the web or model memory.
+- id: gf-spec-affinity-slip
+  component: "Product specs (data sheets)"
+  tenant: gerflor
+  entry: rep
+  caller_name: Richard Downing
+  prompt: "What is the slip rate on the Affinity?"
+  expect_tools: [lookup_business_info]
+  forbid_tools: [competitor_check]
+  must_contain: ["R10"]
+  judge: "States R10 (EN 16165) for Mipolam Affinity from Gerflor's own test report and names the document"
+- id: gf-spec-affinity-slip-owner
+  component: "Product specs (data sheets)"
+  tenant: gerflor
+  entry: owner
+  prompt: "Whats the slip rating of mipolam affinity"
+  must_contain: ["R10"]
+  judge: "States R10 for Mipolam Affinity from Gerflor's own documents"
+- id: gf-spec-astro-slip
+  component: "Product specs (data sheets)"
+  tenant: gerflor
+  entry: rep
+  caller_name: Richard Downing
+  prompt: "Slip resistance of Mipolam Astro?"
+  expect_tools: [lookup_business_info]
+  forbid_tools: [competitor_check]
+  judge: "Gives the slip classification from Gerflor's Astro test report and names it — or says it isn't in the data sheets; never a web figure"
+- id: gf-spec-unknown
+  component: "Product specs (data sheets)"
+  tenant: gerflor
+  entry: rep
+  caller_name: Richard Downing
+  prompt: "What is the fire rating of Taraflex Sport M Plus?"
+  forbid_tools: [competitor_check]
+  judge: "Answers only from a Gerflor document naming it, or says plainly it isn't in our data sheets and offers to check — never a figure from the web or general knowledge"
