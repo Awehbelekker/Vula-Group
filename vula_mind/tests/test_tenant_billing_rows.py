@@ -33,3 +33,16 @@ def test_master_created_row_has_no_trial():
         tenants.ensure_billing_row("digg-2", "DIGG 2")
     row = q.insert.call_args.args[0]
     assert "trial_ends" not in row and "email" not in row
+
+
+
+def test_existence_check_uses_tenant_id():
+    """2026-09-30 (devo): the check selected "id". Production's vula_tenants has no id column
+    (tenant_id is its primary key; migration 001's BIGSERIAL id never made it to production),
+    so the query raised, the warning was swallowed, and no signup ever got a billing row.
+    tenant_id exists in both the repo migration and production."""
+    db, q = _db([{"tenant_id": "x"}])
+    with patch.object(tenants, "_client", return_value=db):
+        tenants.ensure_billing_row("new-shop", "New Shop")
+    assert q.select.call_args.args[0] == "tenant_id"
+    q.insert.assert_not_called()

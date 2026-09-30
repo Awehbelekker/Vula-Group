@@ -157,7 +157,7 @@ def ensure_billing_row(slug: str, company_name: str, *, email: Optional[str] = N
     tenants: billing is agreed directly, so no automated trial-expiry emails)."""
     try:
         db = _client()
-        if db.table("vula_tenants").select("id").eq("workspace_slug", slug).limit(1).execute().data:
+        if db.table("vula_tenants").select("tenant_id").eq("workspace_slug", slug).limit(1).execute().data:
             return
         row = {"company_name": company_name or slug, "workspace_slug": slug, "status": "active",
                "plan": plan if plan in ("starter", "growth", "business") else "starter",
