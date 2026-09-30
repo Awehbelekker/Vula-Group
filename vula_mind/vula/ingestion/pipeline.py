@@ -872,6 +872,28 @@ def _spec_expansion(question: str):
     return extra, suppressed
 
 
+# A starter-KB document (vula/commerce/starter_kb.py) is a model-drafted template with
+# "[your delivery areas]"-style placeholders until the owner fills it in. A placeholder line
+# retrieved as context is an invitation to guess — so starter chunks lose every placeholder line,
+# and a chunk with nothing real left is dropped (2026-09-30).
+_PLACEHOLDER_RE = re.compile(r"\[[A-Za-z][^\]\n]{2,60}\]")
+
+
+def _without_placeholders(hits: List[dict]) -> List[dict]:
+    out: List[dict] = []
+    for h in hits:
+        starter = (h.get("source_type") == "starter"
+                   or str(h.get("filename") or "").startswith("starter_"))
+        if not starter or not _PLACEHOLDER_RE.search(h.get("text") or ""):
+            out.append(h)
+            continue
+        kept = "\n".join(line for line in (h.get("text") or "").splitlines()
+                         if not _PLACEHOLDER_RE.search(line)).strip()
+        if len(kept) >= 40:
+            out.append({**h, "text": kept})
+    return out
+
+
 def _chunk_key(hit: dict) -> str:
     """Identity for de-duplicating the same chunk found by several query variants."""
     for k in ("chunk_id", "id", "point_id"):
@@ -1640,7 +1662,7 @@ class VulaIngestionPipeline:
             if k not in seen:
                 seen.add(k)
                 out.append(h)
-        return out[:top_k]
+        return _without_placeholders(out[:top_k])
 
     async def answer(
         self,

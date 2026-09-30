@@ -1696,6 +1696,8 @@ app.include_router(microsoft_router, prefix="/v1/microsoft")
 app.include_router(dynamics365_router, prefix="/v1/dynamics365")
 app.include_router(email_connect_router, prefix="/v1/email")
 app.include_router(commerce_router, prefix="/v1/commerce")
+from vula.api.business_profile import router as business_profile_router  # noqa: E402
+app.include_router(business_profile_router, prefix="/v1/commerce")
 app.include_router(bookings_router, prefix="/v1/bookings")
 app.include_router(subscriptions_router, prefix="/v1/subscriptions")
 app.include_router(recurring_bills_router, prefix="/v1/recurring-bills")

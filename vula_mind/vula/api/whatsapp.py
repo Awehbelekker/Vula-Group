@@ -5364,6 +5364,16 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
     # 0. The business teaching a supplier nickname ("Jack Hammer is an alias for Gardens
     # Handiman") — handled deterministically, never by a model, and only for insiders.
     if _is_insider(caller_role):
+        if (caller_role or "").lower() in ("owner", "manager", "admin") and phone:
+            try:
+                from vula.commerce.business_profile import handle_interview
+                profile_reply = await handle_interview(tenant_id, phone, question)
+            except Exception as exc:
+                logger.debug("profile interview skipped: %s", exc)
+                profile_reply = None
+            if profile_reply:
+                _LAST_CONF.set(1.0)
+                return profile_reply
         alias_reply = await _maybe_learn_supplier_alias(tenant_id, question)
         if alias_reply:
             _LAST_CONF.set(1.0)
@@ -7026,6 +7036,19 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     except Exception as exc:  # pragma: no cover — import guard
         logger.warning("commerce_admin unavailable: %s", exc)
         return False
+
+    # The owner's business-profile interview ("set up my profile") — answers become facts in the
+    # knowledge base instead of the starter KB's placeholders (vula/commerce/business_profile.py).
+    if _is_tenant_owner(tenant_id, phone):
+        try:
+            from vula.commerce.business_profile import handle_interview
+            profile_reply = await handle_interview(tenant_id, phone, text)
+        except Exception as exc:
+            logger.debug("profile interview skipped: %s", exc)
+            profile_reply = None
+        if profile_reply:
+            await _send_reply(phone, profile_reply, tenant_id)
+            return True
 
     admin_session_key = f"admin:{phone}"
     history = ""

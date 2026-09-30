@@ -339,6 +339,11 @@ def setup_checklist(tenant_id: str) -> dict:
     team_n = _count("vula_team_members", tenant_id=tenant_id, active=True)
     orders_n = _count("commerce_orders", tenant_id=tenant_id)
     pages_n = _count("vula_pages", tenant_id=tenant_id)
+    try:
+        from vula.commerce.business_profile import status as _profile_status
+        prof = _profile_status(tenant_id)
+    except Exception:
+        prof = {"answered": 0, "total": 0}
     steps = [
         {"id": "created", "label": "Created from business type", "done": True, "tab": "settings",
          "detail": f"{len(cfg.get('modules') or [])} modules enabled"},
@@ -357,6 +362,11 @@ def setup_checklist(tenant_id: str) -> dict:
         {"id": "vat", "label": "VAT status confirmed", "done": vat_set, "tab": "invoices",
          "detail": ("VAT registered" if (vat or {}).get("vat_registered") else "not VAT registered")
                    if vat_set else "not set — invoices assume VAT-registered until you say"},
+        # 2026-09-30: the owner's own answers (hours, area, payment, policies) — what Vula answers
+        # from instead of the starter KB's placeholders. Settings › Business profile, or WhatsApp.
+        {"id": "profile", "label": "Business profile answered", "tab": "settings",
+         "done": prof["total"] > 0 and prof["answered"] >= prof["total"] - 2,
+         "detail": f"{prof['answered']} of {prof['total']} answered"},
         {"id": "knowledge", "label": "Products & knowledge", "done": products > 0 or docs > 0,
          "tab": "products" if products or not docs else "documents",
          "detail": f"{products} product(s), {docs} document(s)"},
