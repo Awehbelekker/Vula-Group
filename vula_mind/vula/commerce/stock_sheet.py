@@ -87,7 +87,7 @@ def parse_stock_lines(text: str) -> List[Dict[str, Any]]:
         if not line or len(line) < 8:
             continue
         m = _THICK.search(line)
-        if not m:
+        if not m or _CODE_LINE.match(line):
             continue
         head = _clean(line[:m.start()])
         tail = line[m.end():]
@@ -137,50 +137,99 @@ def parse_stock_lines(text: str) -> List[Dict[str, Any]]:
 #
 # A product line ends at its thickness (a long name can wrap, leaving the thickness alone on the
 # next line); the lines up to the next product are its quantity, status, inbound, ETA and notes.
-_STATUS = re.compile(r"(IN STOCK|OUT OF STOCK|INBOUND|PROJECT ALLOCATED|VERIFY SOH)", re.I)
+_STATUS = re.compile(r"^[●→◆⚠❗]\s*(IN STOCK|OUT OF STOCK|INBOUND|PROJECT ALLOCATED|VERIFY SOH)\s*$", re.I)
 _QTY_LINE = re.compile(r"^\d{1,3}(?:,\d{3})*(?:[.,]\d+)?$|^\d+(?:[.,]\d+)?$")
+_QTY_SUM = re.compile(r"^\d[\d,.]*(?:\s*\+\s*\d[\d,.]*)+$")          # "3000 + 1000"
 _ENDS_THICK = re.compile(r"\b(\d+[.,]?\d*)\s*(MM|W)\s*$", re.I)
+_THICK_ONLY = re.compile(r"^(\d+[.,]?\d*)\s*(MM|W)$", re.I)
+# Inbound-only lines carry a pack/code on the product line and the colour on the next:
+#     MIPOLAM AMBIANCE ULTRA EVERCARE 2.0mm 2X20LM - 0103 -
+#     SILVER GREY
+_CODE_LINE = re.compile(r"^(?P<prod>.+?)\s+(?P<th>\d+[.,]?\d*)\s*mm\s+(?P<pack>\S+)\s*-\s*(?P<code>\d{3,4})\s*-?\s*$", re.I)
+# Project allocations written as "AMBIANCE ULTRA LUNA - 0106 OAT GREY" (no COL:, no thickness)
+_DASH_NAME = re.compile(r"^(?P<prod>[A-Z][A-Z0-9 /&.]+?)\s+-\s+(?P<col>[A-Z0-9][A-Z0-9 /.\-]+)$")
+_HEADING = re.compile(r"\s–\s|^(DECOR TRADER|STATUS KEY|PRODUCT( LINES| /)|SOH\b|STOCK STATUS|INBOUND QTY|"
+                      r"ETA$|NOTES / RESERVATIONS|OUT OF STOCK$|INBOUND / ALLOCATED|Stock position)", re.I)
 
 
+def _split_name(name: str) -> tuple:
+    if re.search(r"\bCOL\b", name, re.I):
+        prod, col = (re.split(r"\bCOL\b\s*:?", name, maxsplit=1, flags=re.I) + [""])[:2]
+        return _clean(prod), _clean(col)
+    m = _DASH_NAME.match(name.strip())
+    return (_clean(m["prod"]), _clean(m["col"])) if m else (_clean(name), "")
+
+
+def _product_start(lines: List[str], i: int) -> Optional[Dict[str, Any]]:
+    """If lines[i] starts a product, {name, thickness, pack, used} (lines consumed), else None.
+    A product line only counts when a quantity or a status marker follows — never a heading."""
+    line = lines[i]
+    nxt = lines[i + 1] if i + 1 < len(lines) else ""
+    cm = _CODE_LINE.match(line)
+    if cm and i + 2 < len(lines) and _STATUS.match(lines[i + 2]):
+        return {"product": _clean(cm["prod"]), "colour": f"{cm['code']} {_clean(nxt)}",
+                "thickness": f"{cm['th']}MM", "pack": cm["pack"], "used": 2}
+    has_col = bool(re.search(r"\bCOL\b", line, re.I))
+    m = _ENDS_THICK.search(line)
+    if has_col and m and (_QTY_LINE.match(nxt) or _STATUS.match(nxt)):
+        prod, col = _split_name(line[:m.start()])
+        return {"product": prod, "colour": col, "thickness": f"{m.group(1)}{m.group(2).upper()}", "used": 1}
+    tm = _THICK_ONLY.match(nxt)
+    if has_col and tm and i + 2 < len(lines) and (_QTY_LINE.match(lines[i + 2]) or _STATUS.match(lines[i + 2])):
+        prod, col = _split_name(line)
+        return {"product": prod, "colour": col, "thickness": f"{tm.group(1)}{tm.group(2).upper()}", "used": 2}
+    if (has_col or _DASH_NAME.match(line)) and _STATUS.match(nxt) and not _HEADING.search(line):
+        prod, col = _split_name(line)
+        return {"product": prod, "colour": col, "thickness": None, "used": 1}
+    return None
+
+
+# 2026-09-30, DT_Weekly_SOH_Stock_Availability_29-09-2026.pdf: the weekly sheet puts every field
+# on its own line — the line-per-row parser read 6 of 146 products:
+#
+#     VIRTUO 55 COL: DAINTREE BROWN 2.50MM      product (a long name can wrap: thickness alone
+#     99.2                                      SOH m²                 on the next line)
+#     ◆ PROJECT ALLOCATED                       status
+#     300.0                                     inbound qty ("3000 + 1000" too)
+#     ❗Est. End October                         ETA / notes / reservations, until the next
+#     150m² Reserved for Tstisikama              product line or a section heading
+#
+# Project allocations can have no SOH line and no COL:/thickness ("AMBIANCE ULTRA LUNA - 0106
+# OAT GREY"); inbound-only lines carry a pack code ("… 2.0mm 2X20LM - 0103 -" / "SILVER GREY").
 def _parse_block_layout(text: str) -> List[Dict[str, Any]]:
     lines = [ln.strip() for ln in re.split(r"[\r\n]+", text or "") if ln.strip()]
     rows: List[Dict[str, Any]] = []
     i = 0
     while i < len(lines):
-        line = lines[i]
-        name, thick = None, None
-        m = _ENDS_THICK.search(line)
-        if m and "COL" in line.upper():
-            name, thick = line[:m.start()], m
-        elif "COL" in line.upper() and i + 1 < len(lines):
-            m2 = re.fullmatch(r"(\d+[.,]?\d*)\s*(MM|W)", lines[i + 1], re.I)
-            if m2:
-                name, thick = line, m2
-                i += 1
-        if not name or i + 1 >= len(lines) or not _QTY_LINE.match(lines[i + 1]):
+        start = _product_start(lines, i)
+        if not start:
             i += 1
             continue
-        product, colour = (re.split(r"\bCOL\b\s*:?", name, maxsplit=1, flags=re.I) + [""])[:2]
-        row: Dict[str, Any] = {"product": _clean(product), "colour": _clean(colour),
-                               "thickness": f"{thick.group(1)}{thick.group(2).upper()}",
-                               "soh": _qty(lines[i + 1]), "inbound": None, "status": None, "note": None}
-        j = i + 2
-        notes: List[str] = []
-        while j < len(lines) and not (_ENDS_THICK.search(lines[j]) and "COL" in lines[j].upper()) \
-                and not ("COL" in lines[j].upper() and j + 1 < len(lines)
-                         and re.fullmatch(r"(\d+[.,]?\d*)\s*(MM|W)", lines[j + 1], re.I)):
-            ln = lines[j]
-            st = _STATUS.search(ln)
-            if st and row["status"] is None and len(ln) < 30:
-                row["status"] = st.group(1).lower()
-            elif _QTY_LINE.match(ln) and row["inbound"] is None and row["status"]:
-                row["inbound"] = _qty(ln)
-            elif row["status"] and (ln.lower().lstrip("❗ ").startswith("est") or "reserved" in ln.lower()):
-                notes.append(_clean(ln))
-            else:
-                break          # a heading or the legend — this row is done
+        j = i + start.pop("used")
+        row: Dict[str, Any] = {**start, "soh": None, "status": None, "inbound": None, "note": None}
+        if j < len(lines) and _QTY_LINE.match(lines[j]):
+            row["soh"] = _qty(lines[j])
             j += 1
-        row["note"] = "; ".join(notes) or None
+        if j < len(lines) and _STATUS.match(lines[j]):
+            row["status"] = _STATUS.match(lines[j]).group(1).lower()
+            j += 1
+        else:                       # a product line with no status isn't a stock row
+            i += 1
+            continue
+        notes: List[str] = []
+        if j < len(lines) and (_QTY_LINE.match(lines[j]) or _QTY_SUM.match(lines[j])):
+            parts = [_qty(x) for x in re.split(r"\s*\+\s*", lines[j])]
+            row["inbound"] = sum(x for x in parts if x) if all(x is not None for x in parts) else None
+            if len(parts) > 1:
+                notes.append(lines[j])
+            j += 1
+        while j < len(lines) and not _product_start(lines, j) and not _HEADING.search(lines[j]) \
+                and not _QTY_LINE.match(lines[j]):
+            notes.append(_clean(lines[j]))
+            j += 1
+        row["note"] = "; ".join(n for n in notes if n) or None
+        if not row.get("pack"):
+            row.pop("pack", None)
         if row["product"]:
             rows.append(row)
         i = j
@@ -252,9 +301,10 @@ def product_names(rows: List[Dict[str, Any]]) -> List[str]:
 def _row_line(r: Dict[str, Any]) -> str:
     """'VIRTUO 55 DAINTREE BROWN: 99.2 m² (project allocated), 300 m² inbound, Est. End October;
     150m² Reserved for Tstisikama' — what a rep needs in one line."""
-    name = " ".join(x for x in (r.get("product"), r.get("colour")) if x)
+    # Thickness in the name: MAC TILES 619 BLACK is out at 2.00MM and 2,086.6 m² at 2.50MM.
+    name = " ".join(x for x in (r.get("product"), r.get("colour"), r.get("thickness")) if x)
     soh = r.get("soh")
-    bits = [f"{name}: {soh:g} m²" if soh is not None else name]
+    bits = [f"{name}: {soh:g} m²" if soh is not None else f"{name}: none on hand"]
     if r.get("status"):
         bits[0] += f" ({r['status']})"
     if r.get("inbound"):
