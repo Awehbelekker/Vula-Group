@@ -756,6 +756,22 @@ async def _programme_briefs_loop() -> None:
         await _asyncio.sleep(600)
 
 
+async def _shared_kb_loop() -> None:
+    """Keeps the shared general-business KB and the sector packs seeded (vula/training/
+    seeder.py::ensure_shared_kbs) — on boot, then daily. A no-op when nothing changed."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(300)
+    while True:
+        try:
+            from vula.training.seeder import ensure_shared_kbs
+            res = await ensure_shared_kbs()
+            if res.get("seeded"):
+                log.info("shared KBs seeded: %s", res.get("chunks"))
+        except Exception as exc:
+            log.warning("shared KB seed loop error: %s", exc)
+        await _asyncio.sleep(86400)
+
+
 async def _master_digest_loop() -> None:
     """Monday 07:00–11:00 SAST: the weekly tenant-health email to TEAM_EMAIL
     (vula/master_digest.py). Checks every 15 minutes; the send is marked once per ISO week in
@@ -1365,6 +1381,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))

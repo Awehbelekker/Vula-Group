@@ -125,7 +125,11 @@ class ReasoningSkill(BaseSkill):
                 from vula.training.content import TRAINING_TENANT_ID
                 from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
                 from vula.training.network import NETWORK_TENANT_ID
+                from vula.training.sector_content import sector_collection_for
+                _sector = sector_collection_for(inp.tenant_id)
                 for shared_id, label in (
+                    *(((_sector, "General sector guidance (Vula) — not this business's own policy"),)
+                      if _sector else ()),
                     (TRAINING_TENANT_ID, "SA construction standards & rates"),
                     (BUSINESS_TRAINING_TENANT_ID, "General SA small-business knowledge"),
                     # Consumption is open to every tenant — only CONTRIBUTING into this

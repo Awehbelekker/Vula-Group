@@ -3613,6 +3613,21 @@ class CommerceAdminSkill(BaseSkill):
                     "message": "That specification isn't in this business's data sheets or test "
                                "reports yet. Say so plainly and offer to check — do not give a "
                                "figure from anywhere else."}
+        # The tenant's sector pack (curated, per business type) before the general SA corpus.
+        try:
+            from vula.training.sector_content import sector_collection_for
+            sector_id = sector_collection_for(tid)
+            if sector_id:
+                sector_chunks = await VulaIngestionPipeline(tenant_id=sector_id).query(
+                    query, top_k=4, authoritative_only=True)
+                if sector_chunks:
+                    return {"found": True, "source_kb": "sector_guidance",
+                            "note": "General sector guidance from Vula, NOT this business's own "
+                                    "policy — say so, and never present it as their rule or price.",
+                            "results": [{"source": c.get("filename", "doc"),
+                                         "text": c.get("text", "")[:400]} for c in sector_chunks]}
+        except Exception as exc:
+            logger.debug("lookup_business_info sector-pack fallback skipped: %s", exc)
         try:
             from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
             shared_chunks = await VulaIngestionPipeline(tenant_id=BUSINESS_TRAINING_TENANT_ID).query(
