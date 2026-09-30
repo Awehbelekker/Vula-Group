@@ -87,3 +87,24 @@ async def test_a_reps_spec_sheet_photo_is_kept_in_the_knowledge_base(rep, monkey
     await wa._handle_image_or_video(PHONE, "image", "m1", "", "image/jpeg", "w1", "knowledge", TID, "sha")
     assert ingest.await_count == 1 and ingest.await_args.args[2].startswith("product-")
     agent.assert_not_awaited()
+
+
+@pytest.mark.parametrize("text", [
+    "Done — order #1042 dispatched to Sea Point.",
+    "✅ Saved to your expenses.",
+    "Order 1042 is now marked paid.",
+    "Successfully cancelled the booking for Tuesday.",
+    "Sorted! The quote has been sent to Thabo.",
+])
+def test_non_first_person_claims_are_caught(text):
+    assert substitute_if_unbacked_claim(text, [], skill="commerce_admin") != text
+
+
+@pytest.mark.parametrize("text", [
+    "Should I mark order 1042 as dispatched?",
+    "Order 1042 was dispatched on 12 September.",
+    "Once you confirm, I'll mark it paid.",
+    "Done with the quote? Tell me who to send it to.",
+])
+def test_questions_and_history_are_not_claims(text):
+    assert substitute_if_unbacked_claim(text, [], skill="commerce_admin") == text

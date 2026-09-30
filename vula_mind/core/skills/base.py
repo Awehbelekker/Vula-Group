@@ -289,11 +289,18 @@ def substitute_if_leaked(answer: str, *, skill: str, customer: bool = False,
 # receipt." with no tool call at all — nothing was filed or booked. "Verified, not reported":
 # a first-person claim that something was saved/filed/booked must be backed by a state-changing
 # tool that succeeded in the same turn, else the claim is replaced with an honest line.
+# 2026-09-30: also the non-first-person forms — "Done — order #12 dispatched", "✅ Saved",
+# "It's now marked paid", "Successfully cancelled" — which slipped past the first-person check.
+_CLAIM_VERBS = (r"(?:filed|saved|logged|recorded|booked|created|added|sent|updated|captured|stored|"
+                r"submitted|dispatched|marked|cancell?ed|refunded|scheduled|deleted|removed)")
 _ACTION_CLAIM_RE = re.compile(
     r"\b(?:I(?:'ve| have)|I've now|I have now|(?:it|this|that|the \w+) (?:has|have) been)\s+"
-    r"(?:just\s+|now\s+|successfully\s+)?"
-    r"(?:filed|saved|logged|recorded|booked|created|added|sent|updated|captured|stored|submitted)\b",
-    re.I)
+    r"(?:just\s+|now\s+|successfully\s+)?" + _CLAIM_VERBS + r"\b"
+    r"|^\s*(?:✅\s*)?(?:done|all done|sorted)\b[\s!.,:;—–-]*[^\n]{0,80}?\b" + _CLAIM_VERBS + r"\b"
+    r"|^\s*✅\s*" + _CLAIM_VERBS + r"\b"
+    r"|\b(?:is|are|'s|has been|have been) now " + _CLAIM_VERBS + r"\b"
+    r"|\bsuccessfully " + _CLAIM_VERBS + r"\b",
+    re.I | re.M)
 _MUTATING_PREFIXES = ("add_", "create_", "update_", "record_", "log_", "save_", "send_", "file_",
                       "assign_", "set_", "mark_", "receive_", "apply_", "cancel_", "delete_",
                       "link_", "book_", "submit_", "draft_", "schedule_", "approve_", "complete_",

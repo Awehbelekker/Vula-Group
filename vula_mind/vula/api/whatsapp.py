@@ -5395,6 +5395,16 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if stock:
             _LAST_CONF.set(0.95)
             return stock
+        # 0d. "What's on the programme today/tomorrow?" — the morning brief, on demand, from rows.
+        try:
+            from vula.commerce.project_programme import programme_answer
+            plan_reply = await programme_answer(tenant_id, question)
+        except Exception as exc:
+            logger.debug("programme answer skipped: %s", exc)
+            plan_reply = None
+        if plan_reply:
+            _LAST_CONF.set(0.95)
+            return plan_reply
         # 0b. Job costing and pricing ("are we making our 10%?", "what should I charge per m²?")
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
