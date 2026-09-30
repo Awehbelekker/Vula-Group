@@ -149,7 +149,8 @@ _CODE_LINE = re.compile(r"^(?P<prod>.+?)\s+(?P<th>\d+[.,]?\d*)\s*mm\s+(?P<pack>\
 # Project allocations written as "AMBIANCE ULTRA LUNA - 0106 OAT GREY" (no COL:, no thickness)
 _DASH_NAME = re.compile(r"^(?P<prod>[A-Z][A-Z0-9 /&.]+?)\s+-\s+(?P<col>[A-Z0-9][A-Z0-9 /.\-]+)$")
 _HEADING = re.compile(r"\s–\s|^(DECOR TRADER|STATUS KEY|PRODUCT( LINES| /)|SOH\b|STOCK STATUS|INBOUND QTY|"
-                      r"ETA$|NOTES / RESERVATIONS|OUT OF STOCK$|INBOUND / ALLOCATED|Stock position)", re.I)
+                      r"ETA$|NOTES / RESERVATIONS|OUT OF STOCK$|INBOUND / ALLOCATED|Stock position|Sales reminder)", re.I)
+_NOTE_WORDS = re.compile(r"\b(est|tbc|reserv|arriv|increase|qty|allocat|project|additions?)\w*|\d+(st|nd|rd|th)\b", re.I)
 
 
 def _split_name(name: str) -> tuple:
@@ -223,8 +224,10 @@ def _parse_block_layout(text: str) -> List[Dict[str, Any]]:
             if len(parts) > 1:
                 notes.append(lines[j])
             j += 1
+        # An ALL-CAPS line with no note words is a section label ("MACTILE 3.00MM") — stop.
         while j < len(lines) and not _product_start(lines, j) and not _HEADING.search(lines[j]) \
-                and not _QTY_LINE.match(lines[j]):
+                and not _QTY_LINE.match(lines[j]) \
+                and (re.search(r"[a-z]", lines[j]) or _NOTE_WORDS.search(lines[j])):
             notes.append(_clean(lines[j]))
             j += 1
         row["note"] = "; ".join(n for n in notes if n) or None
