@@ -5318,6 +5318,23 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if alias_reply:
             _LAST_CONF.set(1.0)
             return alias_reply
+        # 0b. Job costing and pricing ("are we making our 10%?", "what should I charge per m²?")
+        # — those tools live in commerce_admin, which the skill picker never offers on a
+        # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
+        from core.skills.base import looks_like_owner_admin_question
+        if looks_like_owner_admin_question(question):
+            try:
+                from core.skills.base import SkillInput
+                from core.skills.loader import get_skill
+                out = await _run_with_holding_message(phone, tenant_id, get_skill("commerce_admin")(SkillInput(
+                    question=question, tenant_id=tenant_id, conversation_history=conversation_history,
+                    metadata={"customer_phone": phone, "session_id": f"admin:{phone}",
+                              "caller_name": caller_name, "caller_role": caller_role})))
+                if out.success and out.answer:
+                    _LAST_CONF.set(float(out.confidence or 0.0))
+                    return out.answer
+            except Exception as exc:
+                logger.warning("owner admin question fell through to the knowledge path: %s", exc)
 
     # 1. Try the full multi-agent runner (research + memory + all skills)
     try:

@@ -185,6 +185,9 @@ def _entry_skill(case: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     role = {"caller_role": "owner", "caller_name": case.get("caller_name", "Owner")}
     if case.get("route_mode", "knowledge") == "commerce":
         return "commerce_admin", role
+    from core.skills.base import looks_like_owner_admin_question
+    if looks_like_owner_admin_question(case["prompt"]):      # vula/api/whatsapp.py::_rag_reply 0b
+        return "commerce_admin", role
     from core.hrm.orchestrator import HRMOrchestrator
     skill, _why = HRMOrchestrator()._route_with_reason(case["prompt"], tenant_id=tid)
     return skill, role

@@ -168,3 +168,57 @@ async def test_on_whatsapp_the_owner_gets_the_answer_not_the_knowledge_base():
                               route_tenant_id=TID)
     rag.assert_not_awaited()
     assert "Where your project costs come from" in send.await_args.args[1]
+
+
+# ── 2026-09-30: found by the capability benchmark ──────────────────────────────────────────
+
+@pytest.mark.parametrize("text,expected", [
+    ("How is HPC doing — are we making our 10%?", True),
+    ("What should I charge per m² for ceiling boarding so I make my 10%?", True),
+    ("Are we losing money on Belladonna?", True),
+    ("What's 15% VAT on R48,300?", False),
+    ("Can you summarize Jack hammer invoices", False),
+    ("Are you ok?", False),
+])
+def test_job_costing_and_pricing_questions_are_owner_admin(text, expected):
+    from core.skills.base import looks_like_owner_admin_question
+    assert looks_like_owner_admin_question(text) is expected
+
+
+def test_delete_all_invoices_is_never_answered_with_every_invoice():
+    assert not looks_like_supplier_history_question("Delete all the HPC invoices")
+
+
+@pytest.mark.asyncio
+async def test_an_owner_pricing_question_on_a_knowledge_line_reaches_commerce_admin():
+    from core.skills.base import SkillOutput
+    from vula.api import whatsapp
+    seen = {}
+
+    class FakeAdmin:
+        async def __call__(self, inp):
+            seen["role"] = inp.metadata["caller_role"]
+            return SkillOutput(answer="R216/m² — R168 paid · +12% overrun · +5% overheads · +10% fee",
+                               skill_name="commerce_admin")
+
+    runner = MagicMock()
+    runner.run = AsyncMock(side_effect=AssertionError("must not reach the skill picker"))
+    with (patch("core.skills.loader.get_skill", return_value=FakeAdmin()),
+          patch("core.agent_runner.get_agent_runner", return_value=runner),
+          patch.object(whatsapp, "_maybe_learn_supplier_alias", new=AsyncMock(return_value=None))):
+        out = await whatsapp._rag_reply(TID, "What should I charge per m² for ceiling boarding?",
+                                        phone=JUDY, caller_name="Judy Downing", caller_role="owner")
+    assert out.startswith("R216/m²") and seen["role"] == "owner"
+
+
+@pytest.mark.asyncio
+async def test_the_public_never_reaches_commerce_admin_that_way():
+    from vula.api import whatsapp
+    runner = MagicMock()
+    runner.run = AsyncMock(return_value=MagicMock(final_answer="general answer", confidence=0.7,
+                                                  skill_used="reasoning", latency_ms=5))
+    with (patch("core.skills.loader.get_skill", side_effect=AssertionError("public must not reach admin")),
+          patch("core.agent_runner.get_agent_runner", return_value=runner)):
+        out = await whatsapp._rag_reply(TID, "What should I charge per m² for ceiling boarding?",
+                                        phone="27820009999", caller_name=None, caller_role=None)
+    assert out == "general answer"

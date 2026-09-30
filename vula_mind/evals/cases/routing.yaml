@@ -24,3 +24,11 @@
 - {prompt: "What did we discuss last time?", expect: memory_recall}
 - {prompt: "Read this PDF document", expect: file_parse}
 - {prompt: "Just tell me something", expect: reasoning, note: "no keyword -> default"}
+# 2026-09-30, capability benchmark — DIGG owner questions that reached the wrong skill
+- {prompt: "Which projects are we running at the moment?", expect: reasoning, tenant: digg-demo, note: "was code_execution ('run' in 'running')"}
+- {prompt: "What's 15% VAT on R48,300?", expect: calculations, tenant: digg-demo}
+- {prompt: "How many 600x600 tiles for a 4.2m by 3.6m room with 10% waste?", expect: calculations, tenant: digg-demo}
+- {prompt: "How much money came in and went out last month?", expect: finance_admin, tenant: digg-demo}
+- {prompt: "Which equipment did we hire from Sea Point Hire in September?", expect: email_admin, tenant: digg-demo, note: "supplier history"}
+- {prompt: "Can you summarize Jack hammer invoices", expect: email_admin, tenant: digg-demo, note: "supplier history (Judy, 29 Sep)"}
+- {prompt: "Run this code for me", expect: code_execution}
