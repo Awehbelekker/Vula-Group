@@ -528,6 +528,8 @@ _SUPPLIER_HISTORY_RE = re.compile(
     r"\b(spent|spend|spending|paid|pay|bought|buy|purchased|hire|hired|rent|rented)\s+(with|at|from)\b|"
     r"\b(expenses?|purchases?|spend|spending)\s+(from|with|at)\b|"
     r"\binvoices?\s+(from|by)\b|"
+    # "Sorry can I have just the invoice for jack hammer" (Judy, 26 Sep; audit 2026-09-30)
+    r"\b(have|get|see|show|send)\s+(me\s+)?(just\s+)?the\s+invoices?\s+(for|from)\b|"
     r"\b(all|every)\s+(of\s+)?(the\s+|our\s+|my\s+)?([\w'-]+\s+){0,3}invoices?\b|"
     r"\b(what|which)\s+(materials?|items?|stuff|products?)\s+(have|has|did|were)\s+"
     r"(we|i|you)?\s*(been\s+)?(buy|bought|get|got|order|ordered|purchase|purchased)\b|"
@@ -575,6 +577,23 @@ _OWNER_ADMIN_RE = re.compile(
     r"\bwhat should (?:i|we) (?:charge|quote|price)\b|\bhow much should (?:i|we) (?:charge|quote)\b|"
     r"\b(?:job|project) cost(?:ing)?\b|\bfee target\b",
     re.IGNORECASE)
+
+
+# 2026-09-30 audit of every real DIGG question: follow-ups ("Just give me the full list.", "Please
+# send full list", "Please show all and do a full break down in excel", "Yes please", "Please check
+# attachments") were routed on their own words to `reasoning`, which can't see what the previous
+# answer was about. A short follow-up that names no new job goes back to the skill that answered.
+_FOLLOW_UP_RE = re.compile(
+    r"\b(full list|the list|whole list|all of (?:them|it)|the rest|show (?:me )?all|send (?:it|them|me)|"
+    r"break\s*[.\-]?\s*down|in excel|spreadsheet|attachments?|that one|those ones?|the same|"
+    r"more detail|try again)\b|"
+    r"^\s*(?:yes|yep|yeah|ok|okay|sure|please do|go ahead|do it)(?:\s+please)?\s*[.!]*\s*$",
+    re.IGNORECASE)
+
+
+def looks_like_follow_up(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and len(t.split()) <= 14 and bool(_FOLLOW_UP_RE.search(t))
 
 
 def looks_like_owner_admin_question(text: str) -> bool:

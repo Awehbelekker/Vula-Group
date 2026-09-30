@@ -222,3 +222,81 @@ async def test_the_public_never_reaches_commerce_admin_that_way():
         out = await whatsapp._rag_reply(TID, "What should I charge per m² for ceiling boarding?",
                                         phone="27820009999", caller_name=None, caller_role=None)
     assert out == "general answer"
+
+
+# ── 2026-09-30: audit of every real DIGG question since 31 Aug ─────────────────────────────
+
+@pytest.mark.parametrize("text,expected", [
+    ("Just give me the full list.", True), ("Please send full list", True),
+    ("Please show all and do a full.break down in excel", True), ("Yes please", True),
+    ("Please check attachments", True),
+    ("Are you ok?", False), ("?", False), ("Belladonna", False),
+    ("How can I colour a cast iron fireplace? Or can it not be done?", False),
+])
+def test_follow_ups_are_recognised(text, expected):
+    from core.skills.base import looks_like_follow_up
+    assert looks_like_follow_up(text) is expected
+
+
+@pytest.mark.parametrize("text", ["Sorry can I have just the invoice for jack hammer",
+                                  "Please look up jack hammer invoice and give me a summary"])
+def test_these_phrasings_now_reach_the_invoice_skill(text, monkeypatch):
+    monkeypatch.setattr("config.settings.skill_llm_fallback_enabled", False)
+    assert HRMOrchestrator()._route_with_reason(text, tenant_id=TID)[0] == "email_admin"
+
+
+def test_a_new_project_instruction_reaches_project_setup():
+    from vula.commerce.project_programme import _SETUP_HINT
+    assert _SETUP_HINT.search("so we need to prepare for a new project to track costing the project "
+                              "name is belladonna and its located in vredehoek")
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_goes_back_to_the_skill_that_answered():
+    """23 Sep: after a Gardens Handiman answer, "Just give me the full list." went to `reasoning`."""
+    from core.skills.base import SkillOutput
+    from vula.api import whatsapp
+    whatsapp._LAST_SKILL.clear()
+    whatsapp._remember_skill(TID, JUDY, "email_admin")
+    seen = []
+
+    class FakeSkill:
+        async def __call__(self, inp):
+            seen.append(inp.question)
+            return SkillOutput(answer="*GARDENS HANDIMAN CENTRE*: 22 documents, total spend *R28,647.50*",
+                               skill_name="email_admin")
+
+    runner = MagicMock()
+    runner.run = AsyncMock(side_effect=AssertionError("a follow-up must not be re-routed"))
+    with (patch("core.skills.loader.get_skill", return_value=FakeSkill()),
+          patch("core.agent_runner.get_agent_runner", return_value=runner),
+          patch.object(whatsapp, "_maybe_learn_supplier_alias", new=AsyncMock(return_value=None))):
+        out = await whatsapp._rag_reply(TID, "Just give me the full list.", phone=JUDY,
+                                        caller_name="Judy Downing", caller_role="owner")
+    assert "22 documents" in out and seen == ["Just give me the full list."]
+    whatsapp._LAST_SKILL.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_new_request_is_never_forced_back_to_the_last_skill():
+    from vula.api import whatsapp
+    whatsapp._LAST_SKILL.clear()
+    whatsapp._remember_skill(TID, JUDY, "email_admin")
+    runner = MagicMock()
+    runner.run = AsyncMock(return_value=MagicMock(final_answer="VAT is R7,245.00", confidence=0.9,
+                                                  skill_used="calculations", latency_ms=5))
+    with (patch("core.skills.loader.get_skill", side_effect=AssertionError("not sticky")),
+          patch("core.agent_runner.get_agent_runner", return_value=runner),
+          patch.object(whatsapp, "_maybe_learn_supplier_alias", new=AsyncMock(return_value=None))):
+        out = await whatsapp._rag_reply(TID, "What's 15% VAT on R48,300?", phone=JUDY,
+                                        caller_name="Judy Downing", caller_role="owner")
+    assert out == "VAT is R7,245.00"
+    assert whatsapp._last_skill(TID, JUDY) == "calculations"
+    whatsapp._LAST_SKILL.clear()
+
+
+def test_the_public_has_no_sticky_skill():
+    from vula.api import whatsapp
+    whatsapp._LAST_SKILL.clear()
+    whatsapp._remember_skill(TID, "27820009999", "reasoning")      # not a tool skill
+    assert whatsapp._last_skill(TID, "27820009999") is None

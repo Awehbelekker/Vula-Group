@@ -32,3 +32,5 @@
 - {prompt: "Which equipment did we hire from Sea Point Hire in September?", expect: email_admin, tenant: digg-demo, note: "supplier history"}
 - {prompt: "Can you summarize Jack hammer invoices", expect: email_admin, tenant: digg-demo, note: "supplier history (Judy, 29 Sep)"}
 - {prompt: "Run this code for me", expect: code_execution}
+- {prompt: "Sorry can I have just the invoice for jack hammer", expect: email_admin, tenant: digg-demo, note: "Judy 26 Sep"}
+- {prompt: "Please look up jack hammer invoice and give me a summary", expect: email_admin, tenant: digg-demo, note: "was standards_lookup ('look up')"}

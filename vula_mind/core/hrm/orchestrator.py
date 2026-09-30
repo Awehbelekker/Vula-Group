@@ -30,7 +30,8 @@ COMPLEXITY_KEYWORDS = {
 
 # Keyword hits (and a miss, None) that a supplier spend/materials-history question may be
 # re-routed away from — see _route_with_reason.
-_SUPPLIER_HISTORY_OVERRIDABLE = {None, "commerce_assistant", "finance_admin", "calculations"}
+# standards_lookup: its "look up" keyword took "Please look up jack hammer invoice…" (2026-09-30 audit)
+_SUPPLIER_HISTORY_OVERRIDABLE = {None, "commerce_assistant", "finance_admin", "calculations", "standards_lookup"}
 
 SKILL_KEYWORDS: dict[str, list[str]] = {
     # ClickUp first — explicit task-management phrasing only, so it never shadows

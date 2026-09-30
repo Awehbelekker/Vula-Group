@@ -5295,6 +5295,26 @@ async def _maybe_learn_supplier_alias(tenant_id: str, text: str) -> Optional[str
     return "I couldn't save that alias just now — please try again in a moment."
 
 
+# Which skill answered each insider's last question, so a follow-up can go back to it (see
+# _rag_reply 0a). In memory: a restart just means the next follow-up routes on its own words.
+_STICKY_TTL = 30 * 60
+_STICKY_SKILLS = {"email_admin", "commerce_admin", "finance_admin", "calculations", "clickup_admin",
+                  "draft_admin", "standards_lookup", "google_admin", "microsoft_admin"}
+_LAST_SKILL: dict = {}
+
+
+def _remember_skill(tenant_id: str, phone: str, skill: Optional[str]) -> None:
+    if tenant_id and phone and skill in _STICKY_SKILLS:
+        _LAST_SKILL[(tenant_id, phone)] = (skill, time.time())
+
+
+def _last_skill(tenant_id: str, phone: str) -> Optional[str]:
+    hit = _LAST_SKILL.get((tenant_id, phone))
+    if hit and time.time() - hit[1] < _STICKY_TTL:
+        return hit[0]
+    return None
+
+
 async def _rag_reply(tenant_id: str, question: str, conversation_history: str = "", phone: str = "",
                      caller_name: Optional[str] = None, caller_role: Optional[str] = None) -> str:
     """Answer a question — routes through the multi-agent runner.
@@ -5318,6 +5338,27 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if alias_reply:
             _LAST_CONF.set(1.0)
             return alias_reply
+        # 0a. A follow-up ("send the full list", "yes please", "in excel") goes back to the skill
+        # that answered this person's last question, not wherever its own words would route
+        # (2026-09-30 audit). Only when it names no job of its own, and within 30 minutes.
+        from core.skills.base import looks_like_follow_up
+        sticky = _last_skill(tenant_id, phone)
+        if sticky and looks_like_follow_up(question):
+            from core.hrm.orchestrator import HRMOrchestrator
+            if HRMOrchestrator()._keyword_skill(question, tenant_id) in (None, sticky):
+                try:
+                    from core.skills.base import SkillInput
+                    from core.skills.loader import get_skill
+                    out = await _run_with_holding_message(phone, tenant_id, get_skill(sticky)(SkillInput(
+                        question=question, tenant_id=tenant_id, conversation_history=conversation_history,
+                        metadata={"customer_phone": phone, "session_id": f"admin:{phone}",
+                                  "caller_name": caller_name, "caller_role": caller_role})))
+                    if out.success and out.answer:
+                        _remember_skill(tenant_id, phone, sticky)
+                        _LAST_CONF.set(float(out.confidence or 0.0))
+                        return out.answer
+                except Exception as exc:
+                    logger.warning("follow-up to %s fell through: %s", sticky, exc)
         # 0b. Job costing and pricing ("are we making our 10%?", "what should I charge per m²?")
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
@@ -5331,6 +5372,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                     metadata={"customer_phone": phone, "session_id": f"admin:{phone}",
                               "caller_name": caller_name, "caller_role": caller_role})))
                 if out.success and out.answer:
+                    _remember_skill(tenant_id, phone, "commerce_admin")
                     _LAST_CONF.set(float(out.confidence or 0.0))
                     return out.answer
             except Exception as exc:
@@ -5389,6 +5431,8 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 "Agent answered tenant=%s skill=%s confidence=%.2f",
                 tenant_id, result.skill_used, result.confidence,
             )
+            if _is_insider(caller_role):
+                _remember_skill(tenant_id, phone, result.skill_used)
             try:
                 _LAST_CONF.set(float(result.confidence or 0.0))
             except Exception:
