@@ -344,6 +344,7 @@ def setup_checklist(tenant_id: str) -> dict:
         prof = _profile_status(tenant_id)
     except Exception:
         prof = {"answered": 0, "total": 0}
+    _gl = latest_golive(tenant_id)
     steps = [
         {"id": "created", "label": "Created from business type", "done": True, "tab": "settings",
          "detail": f"{len(cfg.get('modules') or [])} modules enabled"},
@@ -367,6 +368,10 @@ def setup_checklist(tenant_id: str) -> dict:
         {"id": "profile", "label": "Business profile answered", "tab": "settings",
          "done": prof["total"] > 0 and prof["answered"] >= prof["total"] - 2,
          "detail": f"{prof['answered']} of {prof['total']} answered"},
+        {"id": "golive_test", "label": "Go-live test passed", "tab": "settings",
+         "done": bool(((_gl or {}).get("report") or {}).get("ready")),
+         "detail": (f"{(_gl or {}).get('passed')}/{(_gl or {}).get('total')} passed"
+                    if (_gl or {}).get("status") == "done" else "not run yet — Master › Tenants › Go-live test")},
         {"id": "knowledge", "label": "Products & knowledge", "done": products > 0 or docs > 0,
          "tab": "products" if products or not docs else "documents",
          "detail": f"{products} product(s), {docs} document(s)"},
@@ -1078,7 +1083,7 @@ async def master_eval_reports(limit: int = 30) -> dict:
     try:
         rows = (_client().table("vula_eval_reports").select("*")
                 .order("created_at", desc=True).limit(max(1, min(limit, 100))).execute().data or [])
-        rows = [r for r in rows if r.get("model") != _BENCH]   # benchmark runs have their own tab
+        rows = [r for r in rows if r.get("model") not in ("benchmark", "golive")]   # their own tabs
     except Exception as exc:  # noqa: BLE001
         return {"reports": [], "error": f"{exc} (run migration 178?)"}
     now = datetime.now(timezone.utc)
@@ -1170,6 +1175,71 @@ async def master_benchmark_reports(limit: int = 10) -> dict:
             latest = {"components": rep.get("components") or [], "gaps": rep.get("gaps") or [],
                       "rows": rep.get("rows") or [], "created_at": r.get("created_at")}
     return {"runs": runs, "latest": latest}
+
+
+# ── Go-live test per tenant (evals/golive.py) ─────────────────────────────────
+_GOLIVE = "golive"
+
+
+@router.post("/golive-test")
+async def master_run_golive(body: dict, identity: dict = Depends(require_master)) -> dict:
+    from config import settings
+    tid = ((body or {}).get("tenant_id") or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="tenant_id is required.")
+    judge = (body or {}).get("judge_model") or settings.benchmark_judge_model or None
+    row = (_client().table("vula_eval_reports")
+           .insert({"model": _GOLIVE, "skill": tid, "status": "running",
+                    "created_by": identity.get("email") or identity.get("user_id")})
+           .execute().data or [{}])[0]
+    if not row.get("id"):
+        raise HTTPException(status_code=500, detail="Couldn't record the run.")
+    audit(identity, "golive.run", tenant_id=tid)
+
+    async def _go() -> None:
+        from core.llm_router import install_ollama_auth
+        from evals import golive
+        install_ollama_auth()
+        try:
+            rep = await golive.run(tid, judge)
+            upd = {"status": "done", "passed": rep["passed"], "total": rep["total"], "report": rep,
+                   "finished_at": datetime.now(timezone.utc).isoformat()}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("go-live test failed for %s", tid)
+            upd = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                   "finished_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            _client().table("vula_eval_reports").update(upd).eq("id", row["id"]).execute()
+        except Exception as exc:  # noqa: BLE001
+            log.error("go-live report %s not saved: %s", row["id"], exc)
+
+    from vula.commerce.background_tasks import run_background
+    run_background(tid, "golive_test", _go())
+    return {"queued": row["id"]}
+
+
+def latest_golive(tenant_id: str) -> Optional[dict]:
+    try:
+        rows = (_client().table("vula_eval_reports").select("*").eq("model", _GOLIVE)
+                .eq("skill", tenant_id).order("created_at", desc=True).limit(1).execute().data or [])
+    except Exception:
+        return None
+    return rows[0] if rows else None
+
+
+@router.get("/golive-test")
+async def master_golive_result(tenant_id: str) -> dict:
+    r = latest_golive(tenant_id)
+    if not r:
+        return {"status": "none"}
+    if _orphaned(r, datetime.now(timezone.utc)):
+        r.update(status="failed", error=_EVAL_INTERRUPTED)
+    rep = r.get("report") or {}
+    return {"status": r.get("status"), "passed": r.get("passed"), "total": r.get("total"),
+            "error": r.get("error"), "created_at": r.get("created_at"),
+            "pass_pct": rep.get("pass_pct"), "ready": rep.get("ready"),
+            "failures": [{"prompt": x.get("prompt"), "why": x.get("why"), "answer": x.get("answer")}
+                         for x in (rep.get("rows") or []) if not x.get("ok")]}
 
 
 # ── Daily conversation check (vula/conversation_check.py) ─────────────────────

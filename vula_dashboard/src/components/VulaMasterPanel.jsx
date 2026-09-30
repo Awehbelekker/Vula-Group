@@ -93,7 +93,7 @@ export default function VulaMasterPanel({ onOpenTenant, activeTab, onTabChange }
       {tab === 'knowledge' && <KnowledgePanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'audit' && <AuditPanel onError={setErr} onViewDetail={openDetail} />}
       {tab === 'models' && <ModelsPanel onError={setErr} />}
-      {tab === 'benchmark' && <BenchmarkPanel onError={setErr} />}
+      {tab === 'benchmark' && <><GoLivePanel onError={setErr} /><div style={{ height: 12 }} /><BenchmarkPanel onError={setErr} /></>}
       {tab === 'conversations' && <ConversationsPanel onError={setErr} />}
     </div>
   )
@@ -945,6 +945,60 @@ function AuditPanel({ onError, onViewDetail }) {
  * vula_mind/evals/benchmark.py on the server: every component on real tenants, read-only (tools
  * that change anything are recorded, not run; nothing is sent), graded by rules + a judge model.
  * The scorecard is worst component first; each gap links to what the case expected and got. */
+/* ── Go-live test (evals/golive.py) ─────────────────────────────────────────────
+ * ~12 questions shaped for ONE tenant's business type, read-only, rules + judge. A tenant is ready
+ * at 85%. Run before a new tenant goes live and after deploys; the result feeds its checklist. */
+function GoLivePanel({ onError }) {
+  const [tenant, setTenant] = useState('')
+  const [res, setRes] = useState(null)
+  const load = useCallback((tid) => authFetch(`/v1/master/golive-test?tenant_id=${encodeURIComponent(tid)}`)
+    .then(setRes).catch(e => onError(e.message)), [])
+  useEffect(() => {
+    if (!tenant || res?.status !== 'running') return
+    const t = setInterval(() => load(tenant), 10000)
+    return () => clearInterval(t)
+  }, [tenant, res?.status])
+  const run = async () => {
+    try {
+      const r = await authFetch('/v1/master/golive-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tenant_id: tenant }),
+      })
+      if (r.detail) onError(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))
+      else load(tenant)
+    } catch (e) { onError(e.message) }
+  }
+  return (
+    <div style={card}>
+      <h4 style={h4}>Go-live test (one tenant)</h4>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+        Questions every business must get right — no invented figures, no delete or customer message without a confirm,
+        answers from the owner's own profile or “I'll check”, hand-over to a person. Read-only. Ready at 85%.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input style={{ ...input, flex: 1, minWidth: 160 }} value={tenant} placeholder="tenant id"
+          onChange={e => { setTenant(e.target.value.trim()); setRes(null) }} onBlur={() => tenant && load(tenant)} />
+        <button style={{ ...btn, ...btnOn }} disabled={!tenant || res?.status === 'running'} onClick={run}>
+          {res?.status === 'running' ? 'Running…' : 'Run go-live test'}
+        </button>
+      </div>
+      {res && res.status === 'done' && (
+        <div style={{ marginTop: 8, fontSize: 13 }}>
+          <b style={{ color: res.ready ? C.green : C.red }}>{res.passed}/{res.total} ({res.pass_pct}%) — {res.ready ? 'ready' : 'not ready'}</b>
+          {(res.failures || []).map((f, i) => (
+            <div key={i} style={{ fontSize: 12, marginTop: 6, background: C.alt, borderRadius: 8, padding: 8 }}>
+              <div><b>“{f.prompt}”</b></div>
+              <div style={{ color: C.red }}>{(f.why || []).join(' · ')}</div>
+              {f.answer && <div style={{ color: C.muted, whiteSpace: 'pre-wrap' }}>{f.answer}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+      {res && res.status === 'failed' && <div style={{ marginTop: 8, fontSize: 12.5, color: C.red }}>{res.error}</div>}
+      {res && res.status === 'none' && <div style={{ marginTop: 8, fontSize: 12.5, color: C.muted }}>Not run yet for this tenant.</div>}
+    </div>
+  )
+}
+
 function BenchmarkPanel({ onError }) {
   const [data, setData] = useState(null)
   const [only, setOnly] = useState('')
