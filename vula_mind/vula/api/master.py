@@ -1262,6 +1262,15 @@ async def master_conversation_check_send(identity: dict = Depends(require_master
     return await conversation_check.send(force=True)
 
 
+@router.get("/advisor/preview")
+async def master_advisor_preview(tenant_id: str) -> dict:
+    """What this tenant's owner would get on Monday (vula/owner_advisor.py) — nothing is sent."""
+    from config import settings
+    from vula import owner_advisor
+    d = owner_advisor.build(tenant_id)
+    return {"enabled": settings.owner_advisor_enabled, "data": d, "text": owner_advisor.render(d)}
+
+
 # ── Content titles for generically-named documents (vula/commerce/doc_titles.py) ──────────
 # Preview first (nothing written), then apply the reviewed preview. Runs in the background — one
 # small model call per document. The last result per tenant is kept in memory for the page.

@@ -281,6 +281,9 @@ class Settings(BaseSettings):
     # When the local box can't be reached, the same one-word classification goes to this cheap
     # OpenRouter model instead (logged as local_unreachable). Empty = no cloud fallback.
     skill_classifier_cloud_model: str = "google/gemini-2.5-flash"
+    # Monday-morning advisor WhatsApp to each owner (vula/owner_advisor.py). Off until the team
+    # has previewed it per tenant in Master › Conversations.
+    owner_advisor_enabled: bool = False
 
     @property
     def verification_policies(self) -> dict[str, str]:

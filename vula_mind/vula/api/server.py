@@ -756,6 +756,24 @@ async def _programme_briefs_loop() -> None:
         await _asyncio.sleep(600)
 
 
+async def _owner_advisor_loop() -> None:
+    """Monday 08:00–11:00 SAST: the weekly advisor WhatsApp to each owner (vula/owner_advisor.py).
+    Gated by settings.owner_advisor_enabled; one send per owner per ISO week (idem key)."""
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    await _asyncio.sleep(330)
+    while True:
+        try:
+            from vula import owner_advisor as _oa
+            if _oa.due(_dt.now(_oa.SAST)):
+                res = await _oa.send_all()
+                if res.get("sent"):
+                    log.info("owner advisor sent: %s", res)
+        except Exception as exc:
+            log.warning("owner advisor loop error: %s", exc)
+        await _asyncio.sleep(900)
+
+
 async def _conversation_check_loop() -> None:
     """07:00–11:00 SAST daily: yesterday's replies checked for every tenant, emailed to
     TEAM_EMAIL (vula/conversation_check.py). Marked once per day in vula_admin_audit."""
@@ -1401,6 +1419,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_owner_advisor_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_email_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_clickup_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_onedrive_sync_loop()))

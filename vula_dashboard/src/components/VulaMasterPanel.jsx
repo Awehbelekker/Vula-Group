@@ -1183,7 +1183,32 @@ function ConversationsPanel({ onError }) {
         </div>
       ))}
       {data && !data.tenants.length && <div style={{ ...card, color: C.muted, fontSize: 13 }}>No conversations that day.</div>}
+      <AdvisorPreview onError={onError} />
       <RetitlePanel onError={onError} />
+    </div>
+  )
+}
+
+function AdvisorPreview({ onError }) {
+  const [tenant, setTenant] = useState('')
+  const [res, setRes] = useState(null)
+  const load = () => authFetch(`/v1/master/advisor/preview?tenant_id=${encodeURIComponent(tenant)}`)
+    .then(setRes).catch(e => onError(e.message))
+  return (
+    <div style={card}>
+      <h4 style={h4}>Weekly owner advisor — preview</h4>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>
+        The Monday WhatsApp each owner gets: overdue invoices, spending jumps, low stock, unanswered questions, documents waiting
+        and profile gaps — from real rows only. Sending is {res ? (res.enabled ? <b>on</b> : <b>off</b>) : 'off until OWNER_ADVISOR_ENABLED=true'}.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input style={{ ...input, flex: 1, minWidth: 160 }} value={tenant} placeholder="tenant id"
+          onChange={e => setTenant(e.target.value.trim())} />
+        <button style={miniBtn} disabled={!tenant} onClick={load}>Preview</button>
+      </div>
+      {res && <div style={{ marginTop: 8, fontSize: 13, whiteSpace: 'pre-wrap', background: C.alt, borderRadius: 8, padding: 10 }}>
+        {res.text || 'Nothing to say this week — no message would be sent.'}
+      </div>}
     </div>
   )
 }
