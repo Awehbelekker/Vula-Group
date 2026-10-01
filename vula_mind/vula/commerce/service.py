@@ -3326,6 +3326,10 @@ def _filed_rows_query(tenant_id: str, terms: List[str], category: Optional[str],
         q = q.eq("category", category)
     clauses = []
     for t in terms:
+        # Words in order, anything between: _pg_term turns "SOLID CAPE (PTY) LTD" into
+        # "SOLID CAPE  PTY  LTD", which matched none of the 40 invoices filed under the real
+        # name — Solid Cape spend showed 3 documents, not 43 (benchmark, 1 Oct).
+        t = re.sub(r"\s+", "%", t.strip())
         if not party_only:
             clauses += [f"filename.ilike.%{t}%", f"summary.ilike.%{t}%"]
         clauses += [f"fields->>{k}.ilike.%{t}%" for k in _PARTY_FIELD_KEYS]

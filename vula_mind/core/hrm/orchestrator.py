@@ -300,6 +300,13 @@ class HRMOrchestrator:
         if (tenant_id and kw in _SUPPLIER_HISTORY_OVERRIDABLE
                 and looks_like_supplier_history_question(prompt)):
             return "email_admin", "supplier_history"
+        # "Find the Solid Cape invoice for R7,571.44" matched no keyword and the classifier sent
+        # it to finance_admin, whose ledger can't see filed invoices (benchmark, 1 Oct). A lookup
+        # of one specific document belongs to find_document (email_admin; works with no mailbox).
+        if tenant_id and kw in _SUPPLIER_HISTORY_OVERRIDABLE:
+            from core.skills.base import looks_like_document_lookup
+            if looks_like_document_lookup(prompt):
+                return "email_admin", "document_lookup"
         if kw:
             return kw, "keyword"
         # A product-spec question ("Whats the slip rating of mipolam affinity") names no keyword;
