@@ -43,11 +43,11 @@ async def test_the_guard_is_per_task_so_real_traffic_is_untouched():
     async def bench():
         with dry_run.session():
             await asyncio.sleep(0.01)
-            await s_bench._dispatch("send_broadcast", {}, "t")
+            await s_bench._dispatch("send_broadcast", {"confirm": True}, "t")
 
     async def live():
         await asyncio.sleep(0.005)
-        await s_live._dispatch("send_broadcast", {}, "t")
+        await s_live._dispatch("send_broadcast", {"confirm": True}, "t")
 
     await asyncio.gather(bench(), live())
     assert getattr(s_bench, "ran", []) == [] and s_live.ran == ["send_broadcast"]

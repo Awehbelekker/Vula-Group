@@ -1376,6 +1376,10 @@ class CommerceAdminSkill(BaseSkill):
         stock_answer = _stock_sheet_answer(inp.tenant_id, inp.question or "")
         if stock_answer:
             return SkillOutput(answer=stock_answer, skill_name=self.name, confidence=0.95)
+        from core.skills.base import delete_request_reply
+        refuse = delete_request_reply(inp.question or "")
+        if refuse:
+            return SkillOutput(answer=refuse, skill_name=self.name, confidence=1.0)
         ctx = {"tenant_id": inp.tenant_id, "phone": inp.metadata.get("customer_phone"),
                "caller_name": inp.metadata.get("caller_name"), "caller_role": caller_role,
                "message": inp.question}
@@ -3627,6 +3631,12 @@ class CommerceAdminSkill(BaseSkill):
                 titles = titles_for(tid, [c.get("doc_id") for c in chunks])
             except Exception:
                 titles = {}
+            from core.skills.base import spec_product_missing
+            if spec and spec_product_missing(query, chunks, titles):
+                return {"found": False, "spec_question": True,
+                        "message": "None of this business's data sheets found mention that product. "
+                                   "Say the specification isn't on file and offer to check — do not "
+                                   "give a figure from another product's document."}
             out = {"found": True, "source_kb": "tenant", "results": [
                 {"source": titles.get(str(c.get("doc_id") or "")) or c.get("filename", "doc"),
                  "text": c.get("text", "")[:600 if spec else 400]}

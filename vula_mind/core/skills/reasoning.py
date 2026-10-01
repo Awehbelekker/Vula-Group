@@ -69,7 +69,14 @@ class ReasoningSkill(BaseSkill):
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            chunks = await pipeline.query(inp.question, top_k=inp.top_k, authoritative_only=True)
+            from core.skills.base import looks_like_spec_question, spec_product_missing
+            # A spec figure often sits in one table row of a long data sheet: look wider, and drop
+            # results that never mention the product asked about (benchmark, 1 Oct).
+            is_spec = looks_like_spec_question(inp.question)
+            chunks = await pipeline.query(inp.question, top_k=max(inp.top_k, 8) if is_spec else inp.top_k,
+                                          authoritative_only=True)
+            if is_spec and chunks and spec_product_missing(inp.question, chunks):
+                chunks = []
             if chunks:
                 kb_context = await format_kb_chunks(inp.tenant_id, chunks)
                 sources = [
@@ -92,10 +99,9 @@ class ReasoningSkill(BaseSkill):
         from core.skills.base import looks_like_spec_question, SPEC_ANSWER_RULE
         spec = looks_like_spec_question(inp.question)
         if spec and not kb_context:
+            from core.skills.base import SPEC_NOT_FOUND
             return SkillOutput(
-                answer=("That specification isn't in our data sheets or test reports on file, so "
-                        "I won't guess at a figure. If you send me the product's data sheet or test "
-                        "report, I'll keep it and answer from it next time."),
+                answer=SPEC_NOT_FOUND,
                 skill_name=self.name,
                 confidence=0.3,
                 sources=sources,

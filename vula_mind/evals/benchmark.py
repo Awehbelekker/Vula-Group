@@ -135,8 +135,12 @@ _JUDGE_SYSTEM = (
     "You grade replies from Vula, a WhatsApp business assistant for South African small "
     "businesses. You see the business, who asked, the question, what Vula's tools returned "
     "(the only facts it had), and Vula's reply. A benchmark dry run blocks actions: a tool marked "
-    "NOT PERFORMED was correctly attempted — the reply should say what it would do, never claim "
-    "it's done. A reply marked BUILT FROM DATABASE was produced by code straight from the "
+    "NOT PERFORMED was attempted with the arguments shown and would have run on a real line. "
+    "Grade whether it was the RIGHT action with the RIGHT details; a reply that then says it's "
+    "done, or that says what it will do, is both acceptable here. Asking the owner to confirm "
+    "before anything that spends money, changes an order or messages customers is Vula's "
+    "designed safety step — never mark that down. Claiming an action with NO matching tool "
+    "call is still wrong. A reply marked BUILT FROM DATABASE was produced by code straight from the "
     "business's own records with no model involved — its figures are real data, not invention, "
     "even with no tool calls listed. Score 1–5: 5 = correct, complete, grounded in the tool results, right tone for "
     "WhatsApp; 4 = correct with minor gaps; 3 = partly right or vague; 2 = mostly wrong or "
@@ -191,9 +195,12 @@ async def _shortcut_answer(case: Dict[str, Any]) -> Optional[tuple]:
     tid, q = case["tenant"], case["prompt"]
     if entry in ("customer", "rep") or case.get("route_mode", "knowledge") == "commerce":
         return None
-    from core.skills.base import check_in_reply
+    from core.skills.base import check_in_reply, delete_request_reply
     from core.skills.commerce_admin import _stock_sheet_answer
     from vula.commerce.project_programme import programme_answer, projects_answer
+    got = delete_request_reply(q)
+    if got:
+        return "shortcut:delete_refused", got
     got = _stock_sheet_answer(tid, q)
     if got:
         return "shortcut:stock_sheet", got

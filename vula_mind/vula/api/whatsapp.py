@@ -5404,6 +5404,11 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if alias_reply:
             _LAST_CONF.set(1.0)
             return alias_reply
+        from core.skills.base import delete_request_reply
+        refuse = delete_request_reply(question)
+        if refuse:
+            _LAST_CONF.set(1.0)
+            return refuse
         # 0a. A follow-up ("send the full list", "yes please", "in excel") goes back to the skill
         # that answered this person's last question, not wherever its own words would route
         # (2026-09-30 audit). Only when it names no job of its own, and within 30 minutes.

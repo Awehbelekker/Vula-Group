@@ -37,8 +37,9 @@ def test_programme_answer_uses_the_brief_rows(monkeypatch):
     assert "Atlantis" in out and "Tile shower" in out and "Sipho" in out
 
 
-def test_no_programme_falls_through(monkeypatch):
+def test_no_programme_falls_through_for_a_business_without_projects(monkeypatch):
     monkeypatch.setattr(pp, "programme_tasks", lambda tid, project=None: [])
+    monkeypatch.setattr("vula.api.tenants.uses_projects", lambda tid: False)
     assert asyncio.run(pp.programme_answer("gerflor", "What's on the programme today?")) is None
 
 

@@ -30,7 +30,7 @@ READ_ONLY = frozenset({
     "list_discount_codes", "list_purchase_orders", "list_quotes", "list_reminders", "list_rules",
     "list_storefront_pages", "list_subscriptions", "list_suppliers", "lookup_business_info",
     "find_product_document",
-    "outstanding_invoices", "price_advice", "project_profit", "recent_orders",
+    "outstanding_invoices", "preview_broadcast", "price_advice", "project_profit", "recent_orders",
     "reimbursement_balance", "reorder_suggestions", "sales_summary", "stock_status",
     "view_call_sheet",
     # commerce_assistant
@@ -42,6 +42,11 @@ READ_ONLY = frozenset({
     "lookup_finance_knowledge", "money_in_out", "project_spend", "supplier_lookup", "lookup_rate",
     "list_comments", "list_tasks", "drive_search", "mail_list", "mail_read",
 })
+
+# Tools that only preview unless called with confirm=true (checked in their own code): without
+# confirm they run for real, so the reply can quote the real audience size (benchmark, 1 Oct —
+# "Send all customers…" got no reach figure because the preview itself was blocked).
+PREVIEW_UNLESS_CONFIRMED = frozenset({"send_broadcast"})
 
 NOT_RUN = ("Benchmark dry run: this action was recorded but NOT performed. Don't say it's done — "
            "say what you would do and what you'd need to confirm.")
@@ -91,7 +96,7 @@ def guard_dispatch(fn):
         st = _STATE.get()
         if st is None:
             return await fn(self, name, args, *a, **kw)
-        if name in READ_ONLY:
+        if name in READ_ONLY or (name in PREVIEW_UNLESS_CONFIRMED and not (args or {}).get("confirm")):
             try:
                 result = await fn(self, name, args, *a, **kw)
             except Exception as exc:
