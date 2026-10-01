@@ -239,3 +239,18 @@ def _async_return(value):
     async def f(*a, **k):
         return value
     return f
+
+
+@pytest.mark.asyncio
+async def test_a_full_catch_list_keeps_its_prices_through_the_price_check():
+    """Regression (benchmark 1 Oct): with six items and descriptions the tool result ran past
+    tool_source's 900-char cut, the prices fell off, and the reply was dropped entirely."""
+    from core.skills.base import unverified_prices
+    from core.skills.commerce_assistant import CommerceAssistantSkill
+    fish = [{"name": n, "slug": n.lower(), "price_cents": 8000 + i * 1000, "sold_by": "kg",
+             "category": "fresh_fish", "description": "Line-caught off Kalk Bay, cleaned and scaled. " * 3}
+            for i, n in enumerate(("Hake", "Kingklip", "Yellowtail", "Jacopever", "Octopus", "Tuna"))]
+    with patch("vula.commerce.service.list_products", side_effect=_async_return(fish)):
+        out = await CommerceAssistantSkill()._exec_get_daily_catch("off-the-hook")
+    src = [tool_source("get_daily_catch", out)]
+    assert unverified_prices(out["message"], src, {"get_daily_catch"}) == []

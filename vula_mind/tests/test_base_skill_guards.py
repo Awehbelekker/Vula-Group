@@ -68,7 +68,7 @@ def test_tool_source_shape():
     assert "Hake" in src["text"]
 
 
-def test_tool_source_truncates_to_900_chars():
-    big_result = {"data": "x" * 5000}
+def test_tool_source_is_still_capped():
+    big_result = {"data": "x" * 50000}
     src = tool_source("some_tool", big_result)
-    assert len(src["text"]) <= 900
+    assert len(src["text"]) <= 4000
