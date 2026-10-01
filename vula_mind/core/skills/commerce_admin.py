@@ -35,6 +35,7 @@ from core.llm_router import (
 from core.prompt_safety import fence
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
+    DB_ANSWER_SOURCE,
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
     need_info_message, substitute_if_leaked, substitute_if_unbacked_claim, tool_source,
     unverified_prices, wrong_arithmetic,
@@ -953,7 +954,11 @@ _KEYWORD_GROUPS: Dict[str, set] = {
     "bookings": {"booking", "appointment", "slot", "schedule", "calendar"},
     "orders": {"subscription", "standing order", "recurring"},
     "crm": {"customer", "dynamics", "crm"},
-    "broadcasts": {"broadcast", "blast", "campaign"},
+    # "Send all customers a message that…" matched only crm, so the broadcast tools were never
+    # offered (benchmark, 30 Sep).
+    "broadcasts": {"broadcast", "blast", "campaign", "all customers", "all our customers",
+                   "all my customers", "every customer", "everyone a message", "message everyone",
+                   "all our clients", "all clients", "mass message"},
     "pages": {"page", "website", "storefront", "section"},
     "purchase_orders": {"purchase order", "supplier", "reorder", "restock", "po "},
     "discounts": {"discount", "promo", "coupon", "voucher"},
@@ -1243,11 +1248,27 @@ def _preview_summary(result: Dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "Confirm this action?"
 
 
+# "Set the Taraflex stock to zero" — an instruction, not a question. The distributor's sheet is
+# theirs, not ours to edit, so it's declined honestly instead of read back as a stock level.
+_STOCK_CHANGE_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:set|update|change|adjust|make|put|mark|reduce|increase|zero)\b"
+    r".{0,60}\bstock\b|\bstock\b.{0,40}\b(?:to|at)\s+(?:zero|\d+)\b", re.IGNORECASE)
+
+
 def _stock_sheet_answer(tenant_id: str, question: str) -> Optional[str]:
     try:
         from vula.commerce import stock_sheet
         if not stock_sheet._STOCK_INTENT.search(question):
             return None
+        from core.skills.base import looks_like_spec_question
+        if looks_like_spec_question(question):
+            return None
+        if _STOCK_CHANGE_RE.search(question):
+            from vula.api.tenants import tenant_profile
+            if tenant_profile(tenant_id).get("sells_products"):
+                return None
+            return ("I can't change stock levels — they come from the supplier's stock sheet, "
+                    "which I only read. Send me the updated sheet and I'll use that from now on.")
         from vula.api.tenants import tenant_profile
         if tenant_profile(tenant_id).get("sells_products"):
             return None
@@ -1335,7 +1356,8 @@ class CommerceAdminSkill(BaseSkill):
                 logger.warning("commerce_admin direct supplier answer failed: %s", exc)
                 direct = None
             if direct:
-                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95,
+                                   sources=[DB_ANSWER_SOURCE])
         else:
             try:
                 direct = await service.answer_supplier_history_continuation(
@@ -1344,7 +1366,8 @@ class CommerceAdminSkill(BaseSkill):
                 logger.warning("commerce_admin supplier-history continuation failed: %s", exc)
                 direct = None
             if direct:
-                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95,
+                                   sources=[DB_ANSWER_SOURCE])
         # 2026-09-30 (Ian): "if Richard asks is there stock of a certain item, it should be able to
         # tell him" — a distributor stock sheet is a set of rows, so a stock question is answered
         # from it directly, no model: the line(s) asked about with SOH, status, inbound, ETA and
@@ -1906,7 +1929,10 @@ class CommerceAdminSkill(BaseSkill):
             if dt >= cutoff:
                 revenue += int(o.get("total_cents") or 0)
                 count += 1
-        return {"period": period, "revenue": self._rands(revenue), "paid_orders": count}
+        # Off the Hook sells face to face: R0 from online orders isn't "no sales" (benchmark, 30 Sep).
+        return {"period": period, "revenue": self._rands(revenue), "paid_orders": count,
+                "note": ("Counts paid orders placed through Vula only — card-machine settlements and "
+                         "cash sales aren't included. Say so when you give this figure.")}
 
     async def _recent_orders(self, tid: str, status: Optional[str], limit: int) -> Any:
         orders = await service.list_orders(tid, status=status, limit=min(int(limit or 10), 25))
@@ -3576,16 +3602,18 @@ class CommerceAdminSkill(BaseSkill):
         # what it OMITS, which is exactly the gerflor "how's Creation stock" failure (Creation
         # was not on the sheet at all). answer_stock_query() returns None when the tenant has no
         # stock sheet on file, so this is a no-op for every other tenant.
+        # A spec question ("slip rating of Affinity") names a range that's on the stock sheet too,
+        # and got the stock level back instead of the data-sheet figure (benchmark, 30 Sep).
+        from core.skills.base import looks_like_spec_question, SPEC_ANSWER_RULE
+        spec = looks_like_spec_question(query)
         try:
             from vula.commerce import stock_sheet
-            stock = stock_sheet.answer_stock_query(tid, query)
+            stock = None if spec else stock_sheet.answer_stock_query(tid, query)
             if stock is not None:
                 return {"found": True, "source_kb": "stock_sheet",
                         "authoritative": True, "stock": stock}
         except Exception as exc:
             logger.debug("stock sheet lookup skipped: %s", exc)
-        from core.skills.base import looks_like_spec_question, SPEC_ANSWER_RULE
-        spec = looks_like_spec_question(query)
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             chunks = await VulaIngestionPipeline(tenant_id=tid).query(

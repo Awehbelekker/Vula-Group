@@ -928,7 +928,8 @@ async def apply_setup(tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
 # The owner got this at 06:00 but could not ask for it: the question went to a skill with no
 # programme access. Answered from the same rows the morning brief uses — no model.
 _PROGRAMME_Q_RE = re.compile(
-    r"\b(?:what(?:'s|s| is| are)?|anything)\b[^?\n]{0,40}\b(?:on (?:the )?(?:programme|program|schedule)|"
+    # "on the Belladonna programme for today" — up to three words of project name in between.
+    r"\b(?:what(?:'s|s| is| are)?|anything)\b[^?\n]{0,40}\b(?:on (?:the )?(?:[\w'-]+ ){0,3}(?:programme|program|schedule)|"
     r"on site|scheduled|planned|happening)\b[^?\n]{0,20}\b(?:today|tomorrow)\b|"
     r"\b(?:today|tomorrow)(?:'s)? (?:programme|program|tasks|plan|work|schedule)\b|"
     r"\bwho(?:'s|s| is) (?:working|on site)\b[^?\n]{0,20}\b(?:today|tomorrow)\b|"
@@ -949,7 +950,35 @@ async def programme_answer(tenant_id: str, question: str) -> Optional[str]:
         return None
     day = today_sast() + (timedelta(days=1) if re.search(r"\btomorrow\b", question, re.I) else timedelta())
     brief = await morning_briefs(tenant_id, day=day, send=False)
-    texts = [p["owner"] for p in brief.get("projects") or []]
+    projects = brief.get("projects") or []
+    named = [p for p in projects if _names_project(question, p.get("project") or "")]
+    if named:
+        projects = named
+    texts = [p["owner"] for p in projects]
     if not texts:
         return f"Nothing is scheduled on any programme for {day.strftime('%a %d %b')}."
     return "\n\n———\n\n".join(texts)
+
+
+def _names_project(question: str, project: str) -> bool:
+    """"Belladonna" names "Belladonna Residence" — any significant word of the project name."""
+    q = set(_words(question))
+    return any(len(w) >= 4 and w in q for w in _words(project))
+
+
+# ── "Which projects are we running?" (2026-09-30, benchmark) ──────────────────
+# Went to clickup_admin, which asked for a list id. The project register answers it.
+_PROJECTS_Q_RE = re.compile(
+    r"\b(?:which|what|list|show)\b[^?\n]{0,25}\bprojects?\b[^?\n]{0,30}\b(?:running|active|on the go|"
+    r"going|busy|current|open|have|got)\b|\b(?:current|active|running|open)\s+projects\b|"
+    r"\bhow many projects\b", re.IGNORECASE)
+
+
+def projects_answer(tenant_id: str, question: str) -> Optional[str]:
+    if not _PROJECTS_Q_RE.search(question or ""):
+        return None
+    names = running_projects(tenant_id)
+    if not names:
+        return None
+    lines = "\n".join(f"• {n}" for n in sorted(names, key=str.lower))
+    return f"{len(names)} active project{'s' if len(names) != 1 else ''} on the register:\n{lines}"

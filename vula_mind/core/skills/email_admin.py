@@ -22,6 +22,7 @@ from core.llm_router import (
 )
 from core.prompt_safety import fence
 from core.skills.base import (
+    DB_ANSWER_SOURCE,
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, looks_like_supplier_history_question,
     need_info_message, substitute_if_leaked, tool_source, unverified_prices, wrong_arithmetic,
 )
@@ -244,7 +245,8 @@ class EmailAdminSkill(BaseSkill):
                 logger.warning("email_admin direct supplier answer failed: %s", exc)
                 direct = None
             if direct:
-                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95,
+                                   sources=[DB_ANSWER_SOURCE])
         else:
             try:
                 from vula.commerce.service import answer_supplier_history_continuation
@@ -254,7 +256,8 @@ class EmailAdminSkill(BaseSkill):
                 logger.warning("email_admin supplier-history continuation failed: %s", exc)
                 direct = None
             if direct:
-                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95)
+                return SkillOutput(answer=direct, skill_name=self.name, confidence=0.95,
+                                   sources=[DB_ANSWER_SOURCE])
         creds = get_email_creds(inp.tenant_id)
         # 2026-09-23: filed-document lookups ("all invoices from X", "what materials did we buy
         # from X") are routed here for every knowledge-mode owner — this is the only skill on

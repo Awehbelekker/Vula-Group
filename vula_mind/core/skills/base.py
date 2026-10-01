@@ -270,6 +270,34 @@ def leaked_tool_output(text: str, tool_names: Iterable[str] = ()) -> bool:
     return any(n and re.search(rf"\b{re.escape(n)}\s*\(", t) for n in tool_names)
 
 
+# The model narrating its own process instead of answering (2026-09-30 benchmark):
+#   "The user is looking for the landlord details … I'll ask the user to clarify.\n\n"Which
+#    Barend are you referring to? …""
+#   "The tool call returned a dry run result … Here is a revised response: "Dear …""
+_NARRATION_START_RE = re.compile(
+    r"^\s*(?:the user\b|the (?:tool|tool call|tool result)s? (?:returned|result|shows?)\b|"
+    r"based on the (?:tool|conversation history|provided)\b|here is (?:a|my) (?:revised|possible) "
+    r"(?:response|reply)\b)", re.IGNORECASE)
+_NARRATION_SENTENCE_RE = re.compile(
+    r"\bthe user\b|\btool (?:call|result)s?\b|\bdry run\b|\bI'?ll ask the user\b|"
+    r"\bhere is (?:a|my) (?:revised|possible) (?:response|reply)\b", re.IGNORECASE)
+_QUOTED_REPLY_RE = re.compile(r'"([^"]{20,})"\s*$|“([^”]{20,})”\s*$', re.DOTALL)
+
+
+def strip_narration(answer: str) -> str:
+    """Keep the reply meant for the person; drop the model talking about the user or its tools.
+    Only fires when the answer OPENS with narration, so an ordinary answer is untouched."""
+    text = answer or ""
+    if not _NARRATION_START_RE.search(text):
+        return text
+    m = _QUOTED_REPLY_RE.search(text.strip())
+    if m:
+        return (m.group(1) or m.group(2)).strip()
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept = " ".join(s for s in sentences if not _NARRATION_SENTENCE_RE.search(s)).strip()
+    return kept or text
+
+
 def substitute_if_leaked(answer: str, *, skill: str, customer: bool = False,
                          tenant_id: Optional[str] = None, tool_names: Iterable[str] = ()) -> str:
     """leaked_tool_output() -> the honest fallback, logged (type label only, POPIA)."""
@@ -345,6 +373,12 @@ def substitute_if_unbacked_claim(answer: str, sources: Iterable[Dict[str, Any]],
     return f"{kept}\n\n{UNBACKED_ACTION_NOTE}" if kept else UNBACKED_ACTION_NOTE
 
 
+# Marks a reply that code built straight from the business's own rows (no model wrote it) —
+# the benchmark judge was scoring those as "no tools called, so fabricated" (30 Sep).
+DB_ANSWER_SOURCE: Dict[str, Any] = {"type": "database", "name": "direct_answer",
+                                    "text": "Built directly from the business's records by code — no model."}
+
+
 def tool_source(name: str, result: Any) -> Dict[str, Any]:
     if isinstance(result, dict):   # private export payloads (e.g. _export_rows) aren't evidence
         result = {k: v for k, v in result.items() if not str(k).startswith("_")}
@@ -401,6 +435,19 @@ def unverified_prices(answer: str, sources: List[Dict[str, Any]], grounding_tool
         if amount is not None and amount not in source_amounts:
             bad.append(m.group(0))
     return bad
+
+
+PRICE_CHECK_NOTE = ("I've left out a price I couldn't confirm from our price list — ask me and "
+                    "I'll check it for you.")
+
+
+def drop_unverified_price_sentences(answer: str, bad_prices: List[str]) -> str:
+    """Remove only the sentences/lines that state an unconfirmed price, keep everything else,
+    and say so. Falls back to the note alone when nothing else is left."""
+    parts = re.split(r"(?<=[.!?])\s+|\n", answer or "")
+    kept = [p for p in parts if p.strip() and not any(b in p for b in bad_prices)]
+    body = "\n".join(kept).strip() if any("\n" in (answer or "") for _ in [0]) else " ".join(kept).strip()
+    return f"{body}\n\n{PRICE_CHECK_NOTE}" if body else PRICE_CHECK_NOTE
 
 
 # Arithmetic stated in an answer, e.g. "11.8 x 18.2 = 215.56" or "214.76 × R198.00 = R42,522.48".
@@ -686,6 +733,25 @@ async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
+# "Are you ok?" went to memory_recall and a web search, and got a non-answer (benchmark, 30 Sep).
+# A bare greeting or check-in with nothing else in it gets a short friendly reply, no model.
+_CHECK_IN_RE = re.compile(
+    r"^\s*(?:(?:hi|hello|hey|hallo|howzit|good\s*(?:morning|afternoon|evening)|goeie\s*(?:more|middag|dag))"
+    r"(?:\s+(?:vula|there|again))?|are\s+you\s+(?:ok(?:ay)?|there|alive|awake|working|online)|"
+    r"you\s+there|how\s+are\s+you(?:\s+doing)?(?:\s+today)?|how(?:'s|s| is)\s+it\s+going)"
+    r"\s*(?:vula)?\s*[?!.👋🙂]*\s*$", re.IGNORECASE)
+_THANKS_RE = re.compile(r"^\s*(?:thanks?(?:\s+you)?|thank\s+you(?:\s+so\s+much)?|dankie|cheers|shot)"
+                        r"(?:\s+vula)?\s*[!.🙏👍🙂]*\s*$", re.IGNORECASE)
+
+
+def check_in_reply(text: str) -> Optional[str]:
+    if _THANKS_RE.match(text or ""):
+        return "You're welcome! 🙂"
+    if _CHECK_IN_RE.match(text or ""):
+        return "I'm here and all good, thanks 🙂 What can I help you with?"
+    return None
+
+
 def need_info_message(result: Any) -> Optional[str]:
     """If a tool result is the shared {"status": "need_info", "message": ...} shape (used by
     commerce_admin's create_invoice, draft_admin's draft_letter, email_admin's send), return the
@@ -771,6 +837,22 @@ class BaseSkill(ABC):
                 latency_ms=latency,
                 error=str(exc),
             )
+        # 2026-09-30 benchmark: the leak / false-action / narration backstops lived in two
+        # skills only, so finance_admin answered "Delete all the HPC invoices" with "I have
+        # deleted all the HPC invoices" (no delete tool exists) and email_admin opened a reply
+        # with "The user is looking for…". Every skill's answer now passes through them here.
+        if result.answer and not result.error:
+            try:
+                customer = self.name == "commerce_assistant"
+                answer = strip_narration(result.answer)
+                answer = substitute_if_leaked(answer, skill=self.name, customer=customer,
+                                              tenant_id=inp.tenant_id)
+                if not customer:
+                    answer = substitute_if_unbacked_claim(answer, result.sources or [],
+                                                          skill=self.name, tenant_id=inp.tenant_id)
+                result.answer = answer
+            except Exception:
+                pass
         # Verification hook — policy "none" is a strict no-op; a hook failure must never
         # break the answer (core/verification.py fails open and swallows its own errors).
         try:

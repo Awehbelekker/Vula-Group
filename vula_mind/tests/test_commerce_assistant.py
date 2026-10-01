@@ -278,7 +278,7 @@ async def test_run_replaces_answer_when_kb_price_is_unverified():
         out = await skill.run(inp)
     assert "999.00" not in out.answer
     assert "couldn't confirm" in out.answer.lower()
-    assert out.confidence == 0.3
+    assert out.confidence == 0.4   # the rest of the reply is kept; only the price sentence goes
 
 
 @pytest.mark.asyncio
