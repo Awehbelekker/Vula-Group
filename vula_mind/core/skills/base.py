@@ -379,11 +379,16 @@ DB_ANSWER_SOURCE: Dict[str, Any] = {"type": "database", "name": "direct_answer",
                                     "text": "Built directly from the business's records by code — no model."}
 
 
+_TOOL_SOURCE_CHARS = 4000
+
+
 def tool_source(name: str, result: Any) -> Dict[str, Any]:
     if isinstance(result, dict):   # private export payloads (e.g. _export_rows) aren't evidence
         result = {k: v for k, v in result.items() if not str(k).startswith("_")}
     text = json.dumps(result, default=str)
-    return {"type": "tool", "name": name, "text": text[:900]}
+    # 900 chars cut the prices off a six-item catch list, so the price backstop dropped every one
+    # of them (benchmark, 1 Oct). Long enough for a real list; the verifier prompt stays small.
+    return {"type": "tool", "name": name, "text": text[:_TOOL_SOURCE_CHARS]}
 
 
 # 2026-08-31: real incident, gerflor — a rep asked about vinyl roll pricing, the model called a
