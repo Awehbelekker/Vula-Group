@@ -947,7 +947,17 @@ async def programme_answer(tenant_id: str, question: str) -> Optional[str]:
     if not looks_like_programme_question(question):
         return None
     if not programme_tasks(tenant_id):
-        return None
+        # Used to return None, and "What's on the Belladonna programme?" fell through to a web
+        # search ("The search results do not mention…") — benchmark, 1 Oct. Say what's missing,
+        # for a business that works in projects; anyone else's question goes on as before.
+        from vula.api.tenants import uses_projects
+        if not uses_projects(tenant_id):
+            return None
+        named = next((p for p in running_projects(tenant_id) if _names_project(question, p)), None)
+        where = f" for {named}" if named else ""
+        return (f"No programme is loaded{where} yet, so I can't tell you what's scheduled. Send me "
+                "the programme (PDF or Excel), or say *start programme <project> from ClickUp*, "
+                "and I'll read it and send the daily plan from then on.")
     day = today_sast() + (timedelta(days=1) if re.search(r"\btomorrow\b", question, re.I) else timedelta())
     brief = await morning_briefs(tenant_id, day=day, send=False)
     projects = brief.get("projects") or []

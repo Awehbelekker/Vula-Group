@@ -619,6 +619,15 @@ _NOT_SUPPLIER_HISTORY_RE = re.compile(
     # 2026-09-30 (benchmark): "Delete all the HPC invoices" was answered with every invoice
     r"delete|remove|void|cancel|wipe)\b",
     re.IGNORECASE)
+# "Find the Solid Cape invoice for R7,571.44" asks for ONE document, not the supplier's history —
+# the history shortcut answered it with the whole Solid Cape summary (benchmark, 1 Oct). A named
+# amount, an invoice number, or "find/show/send the <named> invoice" leaves it to find_document
+# (a bare "show me the invoice" follows on from the history just given, and stays with it).
+_SPECIFIC_DOCUMENT_RE = re.compile(
+    r"\bR\s?\d[\d\s,]*\.\d{2}\b|"
+    r"\b(?:invoice|inv|quote|receipt)\s*(?:no\.?|number|num|#)\s*[\w-]*\d|"
+    r"\b(?:find|show|send|get|open|pull up)\s+(?:me\s+)?(?:the|that|this)\s+(?:[\w&'-]+\s+){1,4}"
+    r"(?:invoice|quote|receipt|statement)\b(?!s)", re.IGNORECASE)
 _SUPPLIER_PRICING_RE = re.compile(
     r"\b(charge|charges|charging|price\s*list|pricing|quote\s+me|sell|sells|selling|"
     r"catalog(ue)?)\b", re.IGNORECASE)
@@ -683,6 +692,41 @@ def looks_like_spec_question(text: str) -> bool:
     return bool(_SPEC_RE.search(text or ""))
 
 
+# Words that describe the spec being asked about, not the product — what's left names the product.
+_SPEC_WORDS = set("""
+what whats what's is the of for on a an and our your their this that does do has have give me tell
+please rating ratings rate rated class classification slip anti non slippery fire flammability
+reaction resistance resistant resist wear layer thickness thick total how acoustic acoustics impact
+noise sound reduction insulation chemical stain spec specs specification specifications technical
+data sheet sheets tds test report certificate result results roll plank tile width length size
+dimensions dimension castor chair indentation dimensional stability value values product range
+floor flooring vinyl sheet en iso din
+""".split())
+
+
+def spec_product_missing(query: str, chunks: List[Dict[str, Any]], titles: Optional[Dict[str, str]] = None) -> bool:
+    """True when a spec question names a product that appears in none of the retrieved chunks
+    (text, filename or document title). "Fire rating for Taraflex Sport M Plus" was answered
+    with a Taralay figure from an unrelated data sheet (benchmark, 1 Oct): retrieval returned
+    the nearest fire-rating text, and the model attached it to the product asked about."""
+    words = [w for w in re.findall(r"[a-z0-9]+", (query or "").lower())
+             if len(w) >= 3 and w not in _SPEC_WORDS and not re.fullmatch(r"r?\d+", w)]
+    if not words:
+        return False
+    titles = titles or {}
+    for c in chunks or []:
+        hay = " ".join([str(c.get("text") or ""), str(c.get("filename") or ""),
+                        titles.get(str(c.get("doc_id") or ""), "")]).lower()
+        if all(w in hay for w in words):
+            return False
+    return True
+
+
+SPEC_NOT_FOUND = ("That specification isn't in our data sheets or test reports on file, so I won't "
+                  "guess at a figure. If you send me the product's data sheet or test report, I'll "
+                  "keep it and answer from it next time.")
+
+
 SPEC_ANSWER_RULE = (
     "This is a product SPECIFICATION question. Answer ONLY from the business's own documents in "
     "these results, quote the figure exactly as the document states it (with its test standard "
@@ -697,7 +741,7 @@ def looks_like_supplier_history_question(text: str) -> bool:
     question. See the incident note above."""
     t = text or ""
     return (bool(_SUPPLIER_HISTORY_RE.search(t)) and not _SUPPLIER_PRICING_RE.search(t)
-            and not _NOT_SUPPLIER_HISTORY_RE.search(t))
+            and not _NOT_SUPPLIER_HISTORY_RE.search(t) and not _SPECIFIC_DOCUMENT_RE.search(t))
 
 
 async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
@@ -755,6 +799,24 @@ def check_in_reply(text: str) -> Optional[str]:
     if _CHECK_IN_RE.match(text or ""):
         return "I'm here and all good, thanks 🙂 What can I help you with?"
     return None
+
+
+# "Delete all the HPC invoices" went to microsoft_admin ("Microsoft isn't connected") — benchmark,
+# 1 Oct. No skill deletes business records from chat, so say so plainly. Not "delete my data"
+# (the customer's POPIA erase request, handled before this in whatsapp.py).
+_DELETE_RECORDS_RE = re.compile(
+    r"^\s*(?:please\s+|can you\s+|could you\s+)?(?:delete|remove|wipe|erase|clear|get rid of)\b"
+    r"(?!.*\b(?:my\s+data|my\s+details|my\s+number|me)\b)"
+    r".{0,60}\b(?:invoices?|documents?|docs|expenses?|records?|receipts?|statements?|quotes?|"
+    r"files?|transactions?|bills?|contacts?|projects?)\b", re.IGNORECASE)
+
+
+def delete_request_reply(text: str) -> Optional[str]:
+    if not _DELETE_RECORDS_RE.search(text or ""):
+        return None
+    return ("I won't delete invoices or other records from a chat message — it's too easy to lose "
+            "something by accident, and nothing has been removed. If something was filed wrongly, "
+            "tell me which one and I'll help you fix or re-file it.")
 
 
 def need_info_message(result: Any) -> Optional[str]:
