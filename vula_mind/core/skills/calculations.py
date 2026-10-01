@@ -16,7 +16,7 @@ import logging
 import math
 import operator
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.llm_router import resolve_generation_route, looks_degenerate, substitute_if_degenerate
 from core.prompt_safety import fence
@@ -82,6 +82,60 @@ TOOL_SPECS: List[Dict[str, Any]] = [
 ]
 
 
+# ── Deterministic answers for the common quantity questions (2026-09-30 benchmark) ──────────
+# "How many 600x600 tiles for a 4.2m by 3.6m room with 10% waste?" came back as "1 tile" from the
+# model; "15% VAT on R48,300" gave the VAT but not the total. These are pure arithmetic with a
+# standard formula — answered here with no model, integer cents for money.
+_TILE_SIZE_RE = re.compile(r"\b(\d{2,4})\s*(?:mm)?\s*[x×]\s*(\d{2,4})\s*(?:mm)?\b")
+_ROOM_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*m?\s*(?:by|x|×)\s*(\d+(?:[.,]\d+)?)\s*m\b", re.I)
+_WASTE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%\s*(?:waste|wastage|extra|spare|cuts?)", re.I)
+_VAT_RE = re.compile(r"(?:(\d+(?:\.\d+)?)\s*%\s*)?vat\s+(?:on|of|for)\s+R?\s*([\d][\d ,]*(?:\.\d{1,2})?)", re.I)
+
+
+def _num(s: str) -> float:
+    return float(s.replace(" ", "").replace(",", "") if s.count(",") != 1 or len(s.split(",")[1]) == 3
+                 else s.replace(",", "."))
+
+
+def _rand(cents: int) -> str:
+    return f"R{cents / 100:,.2f}"
+
+
+def deterministic_answer(question: str) -> Optional[str]:
+    q = question or ""
+    if re.search(r"\btiles?\b", q, re.I):
+        size, room = _TILE_SIZE_RE.search(q), None
+        rooms = [m for m in _ROOM_RE.finditer(q) if not size or m.start() != size.start()]
+        room = next((m for m in rooms if _num(m.group(1)) < 100 and _num(m.group(2)) < 100), None)
+        if size and room:
+            tw, th = int(size.group(1)), int(size.group(2))
+            if tw >= 50 and th >= 50:
+                length, width = _num(room.group(1)), _num(room.group(2))
+                waste_m = _WASTE_RE.search(q)
+                waste = float(waste_m.group(1)) if waste_m else 0.0
+                area = round(length * width, 4)
+                tile_area = tw * th / 1_000_000
+                exact = area / tile_area
+                with_waste = exact * (1 + waste / 100)
+                count = math.ceil(round(with_waste, 6))
+                return (f"You need *{count} tiles* ({tw}×{th} mm).\n\n"
+                        f"Working: room {length:g} m × {width:g} m = {area:g} m²; one tile = "
+                        f"{tile_area:g} m²; {area:g} ÷ {tile_area:g} = {exact:.2f} tiles"
+                        + (f"; plus {waste:g}% waste = {with_waste:.2f}" if waste else "")
+                        + f", rounded up to {count}.")
+    vm = _VAT_RE.search(q)
+    if vm:
+        rate = float(vm.group(1)) if vm.group(1) else 15.0
+        amount_cents = int(round(_num(vm.group(2)) * 100))
+        if amount_cents > 0:
+            vat_cents = int(round(amount_cents * rate / 100))
+            return (f"{rate:g}% VAT on {_rand(amount_cents)} is *{_rand(vat_cents)}*, so the total "
+                    f"including VAT is *{_rand(amount_cents + vat_cents)}*.\n\n"
+                    f"(If {_rand(amount_cents)} already includes VAT, the VAT portion is "
+                    f"{_rand(int(round(amount_cents * rate / (100 + rate))))}.)")
+    return None
+
+
 class CalculationsSkill(BaseSkill):
     name = "calculations"
     description = "Deterministic SA construction/QS calculations — occupancy, escape widths, areas, parking."
@@ -93,6 +147,12 @@ class CalculationsSkill(BaseSkill):
 
     async def run(self, inp: SkillInput) -> SkillOutput:
         begin_turn()
+        direct = deterministic_answer(inp.question)
+        if direct:
+            return SkillOutput(answer=direct, skill_name=self.name, confidence=0.97,
+                               verification={"verifier": "digg.calc", "task": "calc",
+                                             "outcome": "accepted", "escalated": False,
+                                             "extra": {"deterministic": True}})
         # Retrieve authoritative context so any rule/ratio cited comes from real docs.
         context = ""
         try:

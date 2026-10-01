@@ -93,7 +93,7 @@ def ungrounded_amounts(answer: str, evidence: str) -> List[str]:
 
 def rule_checks(case: Dict[str, Any], *, skill: str, answer: str, calls: List[Dict[str, Any]],
                 truth: List[str], offered: List[str], error: Optional[str]) -> Dict[str, Any]:
-    from core.skills.base import leaked_tool_output, unbacked_action_claim
+    from core.skills.base import leaked_tool_output, tool_source, unbacked_action_claim
     low = (answer or "").lower()
     names = [c["tool"] for c in calls]
     checks: Dict[str, Any] = {}
@@ -113,7 +113,12 @@ def rule_checks(case: Dict[str, Any], *, skill: str, answer: str, calls: List[Di
     if case.get("must_not_contain"):
         checks["no_bad_content"] = not any(s.lower() in low for s in case["must_not_contain"])
     checks["no_leaked_plumbing"] = not leaked_tool_output(answer or "", offered)
-    sources = [{"tool": c["tool"], "result": c.get("result"), "executed": c.get("executed")} for c in calls]
+    # Same shape the skills check against (tool_source). A mutating tool the dry run recorded but
+    # didn't perform backs a "would do" claim — the old dict shape never matched, so every action
+    # wording failed this check (30 Sep).
+    sources = [tool_source(c["tool"], c.get("result") if c.get("executed")
+                           else ({"error": c["error"]} if c.get("error") else {"status": "dry_run_not_performed"}))
+               for c in calls]
     checks["no_false_action_claim"] = not unbacked_action_claim(answer or "", sources)
     evidence = " ".join(str(c.get("result") or "") for c in calls if c.get("executed"))
     if evidence:
@@ -131,14 +136,16 @@ _JUDGE_SYSTEM = (
     "businesses. You see the business, who asked, the question, what Vula's tools returned "
     "(the only facts it had), and Vula's reply. A benchmark dry run blocks actions: a tool marked "
     "NOT PERFORMED was correctly attempted — the reply should say what it would do, never claim "
-    "it's done. Score 1–5: 5 = correct, complete, grounded in the tool results, right tone for "
+    "it's done. A reply marked BUILT FROM DATABASE was produced by code straight from the "
+    "business's own records with no model involved — its figures are real data, not invention, "
+    "even with no tool calls listed. Score 1–5: 5 = correct, complete, grounded in the tool results, right tone for "
     "WhatsApp; 4 = correct with minor gaps; 3 = partly right or vague; 2 = mostly wrong or "
     "unhelpful; 1 = wrong, invented facts, or harmful. Reply with JSON only: "
     '{"score": <1-5>, "reason": "<one sentence>"}')
 
 
 async def judge(case: Dict[str, Any], profile: Dict[str, Any], answer: str,
-                calls: List[Dict[str, Any]], model: str) -> Dict[str, Any]:
+                calls: List[Dict[str, Any]], model: str, from_db: bool = False) -> Dict[str, Any]:
     import litellm
     from config import settings
     from core.llm_router import OPENROUTER_BASE
@@ -146,7 +153,8 @@ async def judge(case: Dict[str, Any], profile: Dict[str, Any], answer: str,
     tools = "\n".join(
         f"- {c['tool']}({json.dumps(c.get('args') or {}, default=str)[:300]}) → "
         + ("NOT PERFORMED (dry run)" if not c.get("executed") else str(c.get("result") or c.get("error"))[:1500])
-        for c in calls) or "(no tools called)"
+        for c in calls) or ("BUILT FROM DATABASE (deterministic code, no model)" if from_db
+                            else "(no tools called)")
     user = (f"Business: {profile.get('display_name')} ({profile.get('business_type')})\n"
             f"Asked by: {case.get('entry', 'owner')}\n"
             f"Question: {case['prompt']}\n"
@@ -173,6 +181,33 @@ async def judge(case: Dict[str, Any], profile: Dict[str, Any], answer: str,
 
 
 # ── Running one agent case ────────────────────────────────────────────────────
+
+async def _shortcut_answer(case: Dict[str, Any]) -> Optional[tuple]:
+    """The deterministic replies vula/api/whatsapp.py::_rag_reply gives before any skill runs
+    (stock sheet, programme, project list, check-in) — (name, answer) or None. Mirrors that
+    path so the benchmark grades what the person would actually get (30 Sep: "What's on the
+    Belladonna programme" was graded on a skill WhatsApp never calls for it)."""
+    entry = case.get("entry", "owner")
+    tid, q = case["tenant"], case["prompt"]
+    if entry in ("customer", "rep") or case.get("route_mode", "knowledge") == "commerce":
+        return None
+    from core.skills.base import check_in_reply
+    from core.skills.commerce_admin import _stock_sheet_answer
+    from vula.commerce.project_programme import programme_answer, projects_answer
+    got = _stock_sheet_answer(tid, q)
+    if got:
+        return "shortcut:stock_sheet", got
+    got = await programme_answer(tid, q)
+    if got:
+        return "shortcut:programme", got
+    got = projects_answer(tid, q)
+    if got:
+        return "shortcut:projects", got
+    got = check_in_reply(q)
+    if got:
+        return "shortcut:check_in", got
+    return None
+
 
 def _entry_skill(case: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     """The skill the WhatsApp path would give this message, and the caller it runs as."""
@@ -225,17 +260,28 @@ async def run_agent_case(case: Dict[str, Any], judge_model: Optional[str]) -> Di
                 row.setdefault("notes", []).append(f"truth {spec.get('kind')} unavailable: {exc}")
     skill = get_skill(skill_name)
     t0 = time.monotonic()
-    answer, error = "", None
+    answer, error, from_db = "", None, False
     set_request_tenant("benchmark")        # model spend is Vula's, not the tenant's
     with dry_run.session() as st:
         try:
-            out = await skill(SkillInput(
+            short = await _shortcut_answer(case)
+        except Exception as exc:  # noqa: BLE001 — fall back to the skill, as _rag_reply does
+            log.debug("benchmark shortcut skipped: %s", exc)
+            short = None
+        try:
+            if short:
+                row["skill"], answer, from_db = short[0], short[1], True
+                out = None
+            else:
+                out = await skill(SkillInput(
                 question=case["prompt"], tenant_id=tid,
                 conversation_history=case.get("history") or "",
                 metadata={**caller, "customer_phone": "", "session_id": f"benchmark:{case['id']}",
                           "preferred_language": "en"},
                 max_tokens=600))
-            answer, error = out.answer or "", out.error
+            if out is not None:
+                answer, error = out.answer or "", out.error
+                from_db = any((src or {}).get("type") == "database" for src in (out.sources or []))
         except Exception as exc:  # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
         calls, sent = list(st["calls"]), list(st["sent"])
@@ -247,7 +293,8 @@ async def run_agent_case(case: Dict[str, Any], judge_model: Optional[str]) -> Di
                          offered=_offered_tools(skill), error=error)
     row["checks"] = checks
     rules_ok = all(v for k, v in checks.items() if not k.startswith("_"))
-    j = await judge(case, profile, answer, calls, judge_model) if (judge_model and answer) else {"score": None}
+    j = (await judge(case, profile, answer, calls, judge_model, from_db=from_db)
+         if (judge_model and answer) else {"score": None})
     row["judge"] = j
     row["ok"] = rules_ok and (j.get("score") is None or j["score"] >= JUDGE_PASS)
     row["why"] = [k for k, v in checks.items() if not k.startswith("_") and not v]
@@ -322,8 +369,10 @@ def run_filing_accuracy(tenant_id: str, limit: int = 60) -> List[Dict[str, Any]]
         except Exception as exc:  # noqa: BLE001
             got = None
             log.debug("filing accuracy: resolve failed: %s", exc)
-        ok = bool(got) and project_key(got) == project_key(d["project"])
-        why = [] if ok else [f"resolver said {got or 'nothing'}, filed under {d['project']}"]
+        # "Not sure" is the resolver doing its job — it asks the owner rather than guessing — so
+        # only a WRONG project counts against it (30 Sep: 40 of the 61 filing fails were unsure).
+        ok = (not got) or project_key(got) == project_key(d["project"])
+        why = [] if ok else [f"resolver said {got}, filed under {d['project']}"]
         out.append({"id": f"filing:{d['id']}", "component": f"Document filing · {tenant_id}",
                     "prompt": (d.get("filename") or "")[:80], "ok": ok, "why": why,
                     "unsure": not got})

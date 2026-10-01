@@ -481,7 +481,7 @@ async def test_rag_reply_handles_pipeline_error():
         # Disable the multi-agent runner so the RAG fallback path runs and raises.
         with patch("core.agent_runner.get_agent_runner", side_effect=Exception("agent disabled")):
             from vula.api.whatsapp import _rag_reply
-            reply = await _rag_reply("tenant-abc", "hello")
+            reply = await _rag_reply("tenant-abc", "what are your opening hours")
         assert "trouble" in reply.lower()
     finally:
         _pip.VulaIngestionPipeline = original

@@ -24,7 +24,7 @@ from core.llm_router import is_local_model, resolve_generation_route, substitute
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, substitute_if_leaked, tool_source,
-    unverified_prices, wrong_arithmetic,
+    unverified_prices, wrong_arithmetic, drop_unverified_price_sentences,
 )
 from vula.commerce import service
 
@@ -965,14 +965,18 @@ class CommerceAssistantSkill(BaseSkill):
             # price actually appears in that context — the same gerflor-incident failure class
             # (a confident, unfounded R129.90/m² price) applies just as much here. KB sources are
             # tagged "name": "kb" above specifically so this grounding check can see them.
-            bad_prices = unverified_prices(answer, sources, {"kb"})
+            # 2026-09-30 benchmark: a price from a tool result (product list, daily catch, cart)
+            # is as grounded as one from the KB — only KB text was checked, so "How do I cook
+            # calamari?" (which mentioned the real R160/kg from the catch tool) was replaced
+            # wholesale with "couldn't confirm the exact price". Tool results now count, and only
+            # the sentence carrying an unconfirmed price is dropped — the rest of the answer stays.
+            grounding = {"kb"} | {t["function"]["name"] for t in TOOL_SPECS}
+            bad_prices = unverified_prices(answer, sources, grounding)
             if bad_prices:
                 logger.warning("commerce_assistant unverified price(s) in answer, tenant=%s: %s",
                                inp.tenant_id, bad_prices)
-                answer = ("I found some information but couldn't confirm the exact price from "
-                          "our price list — could you check with us directly, or ask me to "
-                          "search again with more specific details?")
-                confidence = 0.3
+                answer = drop_unverified_price_sentences(answer, bad_prices)
+                confidence = 0.4
             # Deterministic arithmetic backstop — same as commerce_admin. A customer-facing
             # quote with a wrong total (e.g. "11.8 × 18.2 = 215.56", correct 214.76) costs real
             # money; prompt rules alone don't stop the model doing the sum in its head.
@@ -1943,12 +1947,19 @@ class CommerceAssistantSkill(BaseSkill):
         specials = [p for p in all_products if p.get("is_daily_catch")]
         fresh_fish = [p for p in all_products if p.get("category") == "fresh_fish"]
 
-        highlights = specials or fresh_fish[:5]
+        highlights = specials or fresh_fish[:6]
         if not highlights:
             return {"message": "No specials today — check back tomorrow or browse our full range."}
 
-        header = "🎣 Today's catch highlights:" if specials else "🐟 Fresh in stock today:"
-        names = ", ".join(p["name"] for p in highlights[:3])
+        # Every item the list returns is named — the message used to name only the first 3 of 6,
+        # and that message is answered verbatim (benchmark, 30 Sep).
+        header = "🎣 Today's catch:" if specials else "🐟 Fresh in stock today:"
+
+        def _price(p: Dict[str, Any]) -> str:
+            r = f"R{p['price_cents'] / 100:.2f}"
+            return f"{r}/kg" if p.get("sold_by") == "kg" else r
+        names = ", ".join(f"{p['name']} ({_price(p)})" if p.get("price_cents") is not None else p["name"]
+                          for p in highlights[:6])
         return {
             "daily_catch": [
                 {

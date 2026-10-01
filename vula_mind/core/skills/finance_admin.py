@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.llm_router import (
     complete_local_first, is_local_model, resolve_generation_route, looks_degenerate,
@@ -40,7 +40,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
         "name": "money_in_out", "description": "Totals of money in vs out across projects, optionally for a period.",
         "parameters": {"type": "object", "properties": {
-            "period": {"type": "string", "enum": ["this_month", "last_30", "all"]}}}}},
+            "period": {"type": "string", "enum": ["this_month", "last_month", "last_30", "all"]}}}}},
     {"type": "function", "function": {
         "name": "supplier_lookup",
         "description": "Find a supplier/beneficiary by bank account number or name; shows their payments + projects.",
@@ -56,6 +56,49 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
 ]
 _TOOL_NAMES = {t["function"]["name"] for t in TOOL_SPECS}
+
+
+def _period_bounds(period: str) -> tuple:
+    """(start, end) ISO dates, end exclusive; (None, None) for all time."""
+    today = datetime.now(timezone.utc).date()
+    first = today.replace(day=1)
+    if period == "this_month":
+        return first.isoformat(), "9999-12-31"
+    if period == "last_month":
+        prev = (first - timedelta(days=1)).replace(day=1)
+        return prev.isoformat(), first.isoformat()
+    if period == "last_30":
+        return (today - timedelta(days=30)).isoformat(), "9999-12-31"
+    return None, None
+
+
+def _bank_in_out(tenant_id: str, start: Optional[str], end: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Money in/out from the tenant's bank statement lines (integer cents → rand). None when the
+    tenant has no bank lines at all; a zero result with lines on file says where they end."""
+    try:
+        from vula.commerce import service
+        q = (service._client().table("commerce_bank_transactions")
+             .select("txn_date,amount_cents,direction").eq("tenant_id", tenant_id))
+        if start:
+            q = q.gte("txn_date", start).lt("txn_date", end)
+        rows = q.limit(10000).execute().data or []
+        latest = None
+        if not rows:
+            last = (service._client().table("commerce_bank_transactions").select("txn_date")
+                    .eq("tenant_id", tenant_id).order("txn_date", desc=True).limit(1).execute().data or [])
+            if not last:
+                return None
+            latest = str(last[0]["txn_date"])[:10]
+    except Exception as exc:
+        logger.debug("bank in/out skipped: %s", exc)
+        return None
+    cin = sum(abs(int(r.get("amount_cents") or 0)) for r in rows if r.get("direction") == "in")
+    cout = sum(abs(int(r.get("amount_cents") or 0)) for r in rows if r.get("direction") == "out")
+    out = {"money_in": round(cin / 100, 2), "money_out": round(cout / 100, 2),
+           "net": round((cin - cout) / 100, 2), "transactions": len(rows), "source": "bank statement lines"}
+    if latest:
+        out["note"] = f"No bank lines in this period — the latest statement line on file is {latest}."
+    return out
 
 
 def _is_empty_ledger_result(result: dict) -> bool:
@@ -156,6 +199,25 @@ class FinanceAdminSkill(BaseSkill):
         # used to unconditionally report confidence=0.8 — misleadingly high for exactly the case
         # where nothing was actually found.
         if self._any_tool_dispatched and self._all_not_found:
+            # A period with nothing in it is an answer (R0 in, R0 out), not a failed lookup —
+            # the benchmark (30 Sep) graded "couldn't find" for a valid zero as wrong.
+            money = []
+            for src in self._sources or []:
+                if src.get("name") == "money_in_out":
+                    try:
+                        money.append(json.loads(src.get("text") or "{}"))
+                    except ValueError:
+                        pass
+            period = next((m.get("period") for m in money if isinstance(m, dict) and m.get("period")), None)
+            if period:
+                note = next((m["note"] for m in money if isinstance(m, dict) and m.get("note")), "")
+                label = {"this_month": "this month", "last_month": "last month",
+                         "last_30": "the last 30 days"}.get(period, "that period")
+                return SkillOutput(
+                    answer=(f"Nothing recorded for {label}: R0.00 in and R0.00 out, no transactions."
+                            + (f" {note}" if note else "")
+                            + " Send me the latest bank statement and I'll include it."),
+                    skill_name=self.name, confidence=0.9, sources=self._sources)
             return SkillOutput(
                 answer=("I couldn't find any financial records matching that — no invoices or "
                         "payments on file for it. Could you check the name/reference, or tell me "
@@ -446,16 +508,20 @@ class FinanceAdminSkill(BaseSkill):
                 # of an invoice/payment pair double-counted the money.
                 from vula.integrations.finances import _dedupe_reconciled, all_finance_rows
                 rows = _dedupe_reconciled(all_finance_rows(tenant_id))
-                if period in ("this_month", "last_30"):
-                    if period == "last_30":
-                        cut = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
-                    else:
-                        cut = datetime.now(timezone.utc).date().replace(day=1).isoformat()
-                    rows = [r for r in rows if (r.get("occurred_at") or r.get("created_at", "")[:10]) >= cut]
+                start, end = _period_bounds(period)
+                if start:
+                    rows = [r for r in rows
+                            if start <= (r.get("occurred_at") or r.get("created_at", "")[:10])[:10] < end]
                 tin = round(sum(float(r["amount"]) for r in rows if r.get("direction") == "in"), 2)
                 tout = round(sum(float(r["amount"]) for r in rows if r.get("direction") == "out"), 2)
+                if not rows:
+                    # Nothing in the project ledger — the bank statement lines are the real record
+                    # of money in and out (DIGG: 372 lines, benchmark 30 Sep said "couldn't find").
+                    bank = _bank_in_out(tenant_id, start, end)
+                    if bank:
+                        return {"period": period, **bank}
                 return {"period": period, "money_in": tin, "money_out": tout, "net": round(tin - tout, 2),
-                        "transactions": len(rows)}
+                        "transactions": len(rows), "source": "project ledger"}
             if name == "supplier_lookup":
                 q = (args.get("query") or "").strip()
                 digits = re.sub(r"\D", "", q)

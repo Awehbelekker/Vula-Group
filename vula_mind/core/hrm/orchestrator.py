@@ -302,6 +302,12 @@ class HRMOrchestrator:
             return "email_admin", "supplier_history"
         if kw:
             return kw, "keyword"
+        # A product-spec question ("Whats the slip rating of mipolam affinity") names no keyword;
+        # the classifier sent it to draft_admin (benchmark, 30 Sep). `reasoning` answers specs from
+        # the tenant's own data sheets (SPEC_ANSWER_RULE) — no need to guess.
+        from core.skills.base import looks_like_spec_question
+        if looks_like_spec_question(prompt):
+            return "reasoning", "spec"
         # No keyword matched — before silently defaulting to the least-specialized skill,
         # try one cheap local-model classification pass (2026-07-27: this exact fallthrough
         # is what routed a real supplier-quotation question to generic reasoning instead of

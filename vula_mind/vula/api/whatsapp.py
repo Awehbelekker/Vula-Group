@@ -5441,6 +5441,16 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if plan_reply:
             _LAST_CONF.set(0.95)
             return plan_reply
+        # "Which projects are we running?" — from the project register (benchmark, 30 Sep).
+        try:
+            from vula.commerce.project_programme import projects_answer
+            projects_reply = projects_answer(tenant_id, question)
+        except Exception as exc:
+            logger.debug("projects answer skipped: %s", exc)
+            projects_reply = None
+        if projects_reply:
+            _LAST_CONF.set(0.95)
+            return projects_reply
         # 0b. Job costing and pricing ("are we making our 10%?", "what should I charge per m²?")
         # — those tools live in commerce_admin, which the skill picker never offers on a
         # knowledge line. Insiders only (2026-09-30, found by the capability benchmark).
@@ -5459,6 +5469,13 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                     return out.answer
             except Exception as exc:
                 logger.warning("owner admin question fell through to the knowledge path: %s", exc)
+
+    # 0e. "Are you ok?" / "hi" / "thanks" — a short friendly reply, no skill (benchmark, 30 Sep).
+    from core.skills.base import check_in_reply
+    hello = check_in_reply(question)
+    if hello:
+        _LAST_CONF.set(1.0)
+        return hello
 
     # 1. Try the full multi-agent runner (research + memory + all skills)
     try:
