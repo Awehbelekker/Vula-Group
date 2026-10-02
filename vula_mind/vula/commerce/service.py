@@ -2309,6 +2309,18 @@ def project_key(name: Optional[str]) -> str:
     return re.sub(r"[\W_]+", " ", (name or "").lower()).strip()
 
 
+def registered_projects(tenant_id: str) -> List[Dict[str, Any]]:
+    """The project register (vula_projects): name, number and aliases (migration 190 — read
+    without it until that's applied)."""
+    db = _client()
+    try:
+        return (db.table("vula_projects").select("name,number,aliases,status").eq("tenant_id", tenant_id)
+                .limit(500).execute().data or [])
+    except Exception:
+        return (db.table("vula_projects").select("name,number,status").eq("tenant_id", tenant_id)
+                .limit(500).execute().data or [])
+
+
 def canonical_project(tenant_id: str, name: Optional[str]) -> Optional[str]:
     """The one spelling a project is filed under. 2026-09-28, real digg-demo data: "HPC Bokaap"
     (109 documents) and "HPC_Bokaap" (72), "PORTERFIELD" and "Porterfield" — each project's
@@ -2321,9 +2333,9 @@ def canonical_project(tenant_id: str, name: Optional[str]) -> Optional[str]:
         return raw or None
     try:
         db = _client()
-        for r in (db.table("vula_projects").select("name,number").eq("tenant_id", tenant_id)
-                  .limit(500).execute().data or []):
-            if key in (project_key(r.get("name")), project_key(r.get("number"))):
+        for r in registered_projects(tenant_id):
+            if key in (project_key(r.get("name")), project_key(r.get("number")),
+                       *(project_key(a) for a in r.get("aliases") or [])):
                 return r["name"]
         used = (db.table("vula_filed_documents").select("project").eq("tenant_id", tenant_id)
                 .ilike("project", key.split()[0] + "%").limit(2000).execute().data or [])
@@ -3326,8 +3338,14 @@ def _filed_rows_query(tenant_id: str, terms: List[str], category: Optional[str],
         q = q.eq("category", category)
     clauses = []
     for t in terms:
+        # Words in order, anything between: _pg_term turns "SOLID CAPE (PTY) LTD" into
+        # "SOLID CAPE  PTY  LTD", which matched none of the 40 invoices filed under the real
+        # name — Solid Cape spend showed 3 documents, not 43 (benchmark, 1 Oct).
+        t = re.sub(r"\s+", "%", t.strip())
         if not party_only:
-            clauses += [f"filename.ilike.%{t}%", f"summary.ilike.%{t}%"]
+            clauses += [f"filename.ilike.%{t}%", f"summary.ilike.%{t}%",
+                        # the document's own number/reference (2026-10-02: one search everywhere)
+                        f"fields->>invoice_number.ilike.%{t}%", f"fields->>reference.ilike.%{t}%"]
         clauses += [f"fields->>{k}.ilike.%{t}%" for k in _PARTY_FIELD_KEYS]
     if clauses:
         q = q.or_(",".join(clauses))

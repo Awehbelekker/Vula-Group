@@ -140,7 +140,9 @@ _JUDGE_SYSTEM = (
     "done, or that says what it will do, is both acceptable here. Asking the owner to confirm "
     "before anything that spends money, changes an order or messages customers is Vula's "
     "designed safety step — never mark that down. Claiming an action with NO matching tool "
-    "call is still wrong. A reply marked BUILT FROM DATABASE was produced by code straight from the "
+    "call is still wrong, but anything a called tool's own description says it does (e.g. a "
+    "meeting log that also sets reminders) is backed. Facts quoted from the business documents "
+    "Vula searched are grounded, not invented. A reply marked BUILT FROM DATABASE was produced by code straight from the "
     "business's own records with no model involved — its figures are real data, not invention, "
     "even with no tool calls listed. Score 1–5: 5 = correct, complete, grounded in the tool results, right tone for "
     "WhatsApp; 4 = correct with minor gaps; 3 = partly right or vague; 2 = mostly wrong or "
@@ -149,14 +151,18 @@ _JUDGE_SYSTEM = (
 
 
 async def judge(case: Dict[str, Any], profile: Dict[str, Any], answer: str,
-                calls: List[Dict[str, Any]], model: str, from_db: bool = False) -> Dict[str, Any]:
+                calls: List[Dict[str, Any]], model: str, from_db: bool = False,
+                tool_docs: Optional[Dict[str, str]] = None,
+                kb: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     import litellm
     from config import settings
     from core.llm_router import OPENROUTER_BASE
     litellm.drop_params = True
     tools = "\n".join(
         f"- {c['tool']}({json.dumps(c.get('args') or {}, default=str)[:300]}) → "
-        + ("NOT PERFORMED (dry run)" if not c.get("executed") else str(c.get("result") or c.get("error"))[:1500])
+        + (("NOT PERFORMED (dry run)" + (f". On a real line this tool: {(tool_docs or {})[c['tool']][:400]}"
+                                         if (tool_docs or {}).get(c["tool"]) else ""))
+           if not c.get("executed") else str(c.get("result") or c.get("error"))[:1500])
         for c in calls) or ("BUILT FROM DATABASE (deterministic code, no model)" if from_db
                             else "(no tools called)")
     user = (f"Business: {profile.get('display_name')} ({profile.get('business_type')})\n"
@@ -164,7 +170,13 @@ async def judge(case: Dict[str, Any], profile: Dict[str, Any], answer: str,
             f"Question: {case['prompt']}\n"
             + (f"Earlier in the chat:\n{case['history']}\n" if case.get("history") else "")
             + f"What a good reply does: {case.get('judge') or 'answers the question correctly from the tool results'}\n"
-            f"Tool results:\n{tools}\n\nVula's reply:\n{answer}")
+            f"Tool results:\n{tools}\n"
+            # Retrieval isn't a tool call: without this the judge called a correct, cited spec
+            # answer "invented" because it never saw the data sheet Vula read (benchmark, 1 Oct).
+            + (("Business documents Vula searched (its knowledge base):\n"
+                + "\n".join(f"- [{k.get('filename', 'doc')}] {str(k.get('text') or '')[:500]}" for k in kb[:6])
+                + "\n") if kb else "")
+            + f"\nVula's reply:\n{answer}")
     key = settings.openrouter_api_key if model.startswith("openrouter/") else None
     base = OPENROUTER_BASE if model.startswith("openrouter/") else settings.ollama_base
     try:
@@ -235,14 +247,20 @@ def _entry_skill(case: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     return skill, role
 
 
-def _offered_tools(skill_obj: Any) -> List[str]:
+def _tool_docs(skill_obj: Any) -> Dict[str, str]:
+    """Every tool spec in the skill's module: name -> its description."""
     import sys
     mod = sys.modules.get(type(skill_obj).__module__)
-    names: List[str] = []
+    docs: Dict[str, str] = {}
     for v in vars(mod).values() if mod else []:
         if isinstance(v, list) and v and isinstance(v[0], dict) and v[0].get("type") == "function":
-            names += [t["function"]["name"] for t in v]
-    return names
+            for t in v:
+                docs.setdefault(t["function"]["name"], str(t["function"].get("description") or ""))
+    return docs
+
+
+def _offered_tools(skill_obj: Any) -> List[str]:
+    return list(_tool_docs(skill_obj))
 
 
 async def run_agent_case(case: Dict[str, Any], judge_model: Optional[str]) -> Dict[str, Any]:
@@ -267,7 +285,7 @@ async def run_agent_case(case: Dict[str, Any], judge_model: Optional[str]) -> Di
                 row.setdefault("notes", []).append(f"truth {spec.get('kind')} unavailable: {exc}")
     skill = get_skill(skill_name)
     t0 = time.monotonic()
-    answer, error, from_db = "", None, False
+    answer, error, from_db, kb = "", None, False, []
     set_request_tenant("benchmark")        # model spend is Vula's, not the tenant's
     with dry_run.session() as st:
         try:
@@ -289,6 +307,7 @@ async def run_agent_case(case: Dict[str, Any], judge_model: Optional[str]) -> Di
             if out is not None:
                 answer, error = out.answer or "", out.error
                 from_db = any((src or {}).get("type") == "database" for src in (out.sources or []))
+                kb = [src for src in (out.sources or []) if (src or {}).get("type") == "kb"]
         except Exception as exc:  # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
         calls, sent = list(st["calls"]), list(st["sent"])
@@ -300,7 +319,8 @@ async def run_agent_case(case: Dict[str, Any], judge_model: Optional[str]) -> Di
                          offered=_offered_tools(skill), error=error)
     row["checks"] = checks
     rules_ok = all(v for k, v in checks.items() if not k.startswith("_"))
-    j = (await judge(case, profile, answer, calls, judge_model, from_db=from_db)
+    j = (await judge(case, profile, answer, calls, judge_model, from_db=from_db,
+                     tool_docs=_tool_docs(skill), kb=kb)
          if (judge_model and answer) else {"score": None})
     row["judge"] = j
     row["ok"] = rules_ok and (j.get("score") is None or j["score"] >= JUDGE_PASS)
@@ -386,6 +406,38 @@ def run_filing_accuracy(tenant_id: str, limit: int = 60) -> List[Dict[str, Any]]
     return out
 
 
+# Document quality (2026-10-02): what a tenant can find depends on documents being filed in the
+# right kind, read fully, and on a registered project. Thresholds are the bar for "easy to find".
+DOC_QUALITY_BARS = {"catch_all_pct": 10, "missing_pct": 10, "pending": 25, "unregistered": 0}
+DOC_QUALITY_TENANTS = ("digg-demo", "off-the-hook", "gerflor")
+
+
+def run_document_quality(tenant_id: str) -> List[Dict[str, Any]]:
+    from vula.commerce.doc_quality import REQUIRED, health
+    h = health(tenant_id, sample=0)
+    total = h.get("total") or 0
+    if not total:
+        return []
+    needs = sum(n for c, n in (h.get("categories") or {}).items() if c in REQUIRED) or 1
+    catch_pct = round(100 * h["catch_all"] / total)
+    missing_pct = round(100 * h["missing_details"] / needs)
+    unreg = sum((h.get("unregistered_projects") or {}).values())
+    comp = f"Document quality · {tenant_id}"
+    rows = [
+        ("filed-in-a-real-type", catch_pct <= DOC_QUALITY_BARS["catch_all_pct"],
+         f"{catch_pct}% in a catch-all category ({h['catch_all']} of {total})"),
+        ("details-read", missing_pct <= DOC_QUALITY_BARS["missing_pct"],
+         f"{missing_pct}% missing a required detail ({h['missing_details']} documents)"),
+        ("projects-assigned", h["pending_project"] <= DOC_QUALITY_BARS["pending"],
+         f"{h['pending_project']} waiting on which project"),
+        ("projects-registered", unreg <= DOC_QUALITY_BARS["unregistered"],
+         f"{unreg} filed under names not on the register: "
+         + ", ".join(list((h.get('unregistered_projects') or {}))[:4])),
+    ]
+    return [{"id": f"docq:{tenant_id}:{k}", "component": comp, "prompt": k, "ok": ok,
+             "why": [] if ok else [why]} for k, ok, why in rows]
+
+
 # ── Scorecard ─────────────────────────────────────────────────────────────────
 
 def scorecard(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -421,6 +473,12 @@ async def run(judge_model: Optional[str] = None, only: Optional[str] = None,
             rows += run_filing_accuracy(tid)
         except Exception as exc:  # noqa: BLE001
             rows.append({"id": f"filing:{tid}", "component": f"Document filing · {tid}", "ok": False,
+                         "why": [f"couldn't run: {exc}"]})
+    for tid in DOC_QUALITY_TENANTS:
+        try:
+            rows += run_document_quality(tid)
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"id": f"docq:{tid}", "component": f"Document quality · {tid}", "ok": False,
                          "why": [f"couldn't run: {exc}"]})
     judge_cost = 0.0
     for case in load_cases():

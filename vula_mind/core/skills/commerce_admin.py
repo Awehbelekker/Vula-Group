@@ -1237,6 +1237,10 @@ class ConfirmationRequired(Exception):
         super().__init__(f"confirmation required for {tool_name}")
 
 
+_AUDIENCE_LABELS = {"all": "All customers", "active_30d": "Customers active in the last 30 days",
+                    "high_value": "High-value customers"}
+
+
 def _preview_summary(result: Dict[str, Any]) -> str:
     """A short WhatsApp-friendly confirmation prompt built ONLY from the preview dict's own
     structured fields — deliberately not the tool's free-text `message` (written assuming a
@@ -3838,7 +3842,11 @@ class CommerceAdminSkill(BaseSkill):
             return {"error": "Need the approved template_name to send."}
         if not args.get("confirm"):
             prev = await self._preview_broadcast(tid, audience)
-            return {"preview": True, "would_reach": prev.get("would_reach"),
+            # The owner reads these fields as the confirm prompt (_preview_summary) — "Would reach:
+            # 738" alone didn't say what goes out or to whom (benchmark, 1 Oct).
+            return {"preview": True, "broadcast": f"WhatsApp template '{template}' (Meta-approved)",
+                    "audience": _AUDIENCE_LABELS.get(audience, audience),
+                    "would_reach": f"{prev.get('would_reach')} customers",
                     "message": "This will message customers. Confirm to send (call again with confirm=true)."}
         from vula.api.commerce import admin_send_broadcast
         res = await admin_send_broadcast(tid, {"template_name": template, "audience_filter": audience, "dry_run": False})

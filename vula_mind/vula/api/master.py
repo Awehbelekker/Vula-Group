@@ -12,6 +12,7 @@ writes go through the audit() helper so vula_admin_audit (migration 072) records
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -1322,6 +1323,41 @@ async def master_retitle_status(tenant_id: str) -> dict:
     r = dict(_RETITLE.get(tenant_id) or {"status": "idle"})
     r.pop("preview", None)
     return r
+
+
+# ── Document clean-up (2026-10-02) — preview, then apply exactly the preview ────
+_DOC_CLEANUP: dict = {}
+
+
+@router.post("/documents/cleanup")
+async def master_documents_cleanup(body: dict, identity: dict = Depends(require_master)) -> dict:
+    """{tenant_id, apply?, fix_named_mismatch?}. Without apply: builds the list of changes
+    (vula/commerce/doc_quality.cleanup_preview) and keeps it. With apply: writes exactly that
+    previewed list — never a fresh, unreviewed one — and reads the result back."""
+    tid = ((body or {}).get("tenant_id") or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="tenant_id is required.")
+    apply = bool((body or {}).get("apply"))
+    previewed = list((_DOC_CLEANUP.get(tid) or {}).get("items") or [])
+    if apply and not previewed:
+        raise HTTPException(status_code=400, detail="Run a preview first and check it.")
+    audit(identity, "documents.cleanup", tenant_id=tid, apply=apply)
+    from vula.commerce import doc_quality
+    if apply:
+        res = await asyncio.to_thread(doc_quality.apply_cleanup, tid, previewed)
+        _DOC_CLEANUP.pop(tid, None)
+        return {"applied": True, **res}
+    prev = await asyncio.to_thread(doc_quality.cleanup_preview, tid,
+                                   bool((body or {}).get("fix_named_mismatch")))
+    _DOC_CLEANUP[tid] = prev
+    return {"applied": False, "counts": prev["counts"], "items": prev["items"][:200],
+            "total_items": len(prev["items"])}
+
+
+@router.get("/documents/health")
+async def master_documents_health(tenant_id: str) -> dict:
+    from vula.commerce.doc_quality import health
+    return await asyncio.to_thread(health, tenant_id)
 
 
 # ── 👎 feedback → eval cases ────────────────────────────────────────────────────

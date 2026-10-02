@@ -442,7 +442,7 @@ async def test_sql_search_also_matches_the_counterparty_fields():
          patch("vula.commerce.service.list_suppliers", AsyncMock(return_value=[])):
         await find_filed_document(TID, "Gardens Handiman")
     flt = _or_filters(mock_client)[0]
-    assert "fields->>supplier.ilike.%Gardens Handiman%" in flt
+    assert "fields->>supplier.ilike.%Gardens%Handiman%" in flt
     assert "fields->>payee_name.ilike" in flt and "filename.ilike" in flt
 
 
@@ -463,8 +463,8 @@ async def test_known_alias_returns_every_invoice_with_a_server_side_total():
     # The alias search is restricted to the counterparty fields, under every name.
     alias_filter = _or_filters(mock_client)[1]
     assert "filename.ilike" not in alias_filter
-    assert "fields->>supplier.ilike.%GARDENS HANDIMAN CENTRE%" in alias_filter
-    assert "fields->>supplier.ilike.%Jack Hammer%" in alias_filter
+    assert "fields->>supplier.ilike.%GARDENS%HANDIMAN%CENTRE%" in alias_filter
+    assert "fields->>supplier.ilike.%Jack%Hammer%" in alias_filter
 
 
 @pytest.mark.asyncio
@@ -738,7 +738,7 @@ async def test_sql_hit_on_the_account_application_bridges_to_every_invoice():
     assert "Jack Hammer's COD account" in res["note"] and "confirm" in res["note"]
     # Both the raw query and its core were searched.
     first = _or_filters(mock_client)[0]
-    assert "%jack hammer invoices%" in first and "%jack hammer%" in first
+    assert "%jack%hammer%invoices%" in first and "%jack%hammer%" in first
 
 
 @pytest.mark.asyncio

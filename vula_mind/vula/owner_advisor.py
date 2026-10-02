@@ -141,6 +141,20 @@ def waiting_documents(tenant_id: str) -> int:
         return 0
 
 
+def document_gaps(tenant_id: str) -> Dict[str, Any]:
+    """Documents Vula couldn't fully read (missing a supplier, date or total after one re-read)
+    and documents filed under a name that isn't a registered project (doc_quality.health)."""
+    try:
+        from vula.commerce.doc_quality import health
+        h = health(tenant_id, sample=0)
+    except Exception as exc:
+        log.debug("advisor: document health skipped: %s", exc)
+        return {}
+    out = {"missing": h.get("missing_details") or 0,
+           "unregistered": sum((h.get("unregistered_projects") or {}).values())}
+    return out if any(out.values()) else {}
+
+
 def build(tenant_id: str, today: Optional[date] = None) -> Dict[str, Any]:
     today = today or datetime.now(SAST).date()
     try:
@@ -157,6 +171,7 @@ def build(tenant_id: str, today: Optional[date] = None) -> Dict[str, Any]:
         "unanswered": unanswered(tenant_id, today),
         "profile_gaps": profile_gaps(tenant_id),
         "waiting_docs": waiting_documents(tenant_id),
+        "doc_gaps": document_gaps(tenant_id),
     }
 
 
@@ -187,6 +202,14 @@ def render(d: Dict[str, Any]) -> Optional[str]:
         parts.append(line)
     if d.get("waiting_docs"):
         parts.append(f"📄 *{d['waiting_docs']} document(s)* waiting for you to say which project they belong to.")
+    g = d.get("doc_gaps") or {}
+    if g.get("missing"):
+        parts.append(f"🧾 *{g['missing']} document(s)* are missing a supplier, date or total I couldn't "
+                     "read — they don't count in supplier spend or job costing until filled in "
+                     "(Documents › Health).")
+    if g.get("unregistered"):
+        parts.append(f"🗂️ *{g['unregistered']} document(s)* are filed under names that aren't on your "
+                     "project list — Documents › Health shows which.")
     if d.get("profile_gaps"):
         parts.append(f"📋 Your business profile has *{d['profile_gaps']} unanswered question(s)* — I say "
                      "\"I'll check\" on those. Send *set up my profile* to finish it.")

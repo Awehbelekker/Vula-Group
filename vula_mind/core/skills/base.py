@@ -284,10 +284,23 @@ _NARRATION_SENTENCE_RE = re.compile(
 _QUOTED_REPLY_RE = re.compile(r'"([^"]{20,})"\s*$|“([^”]{20,})”\s*$', re.DOTALL)
 
 
+# "This means that I should not claim that the letter was sent… Here is the revised response:"
+# (draft_admin, benchmark 1 Oct) — a self-correction preamble ending in a revised-reply marker.
+# Everything up to the marker is the model talking to itself; only what follows is the reply.
+_REVISED_MARKER_RE = re.compile(
+    r"^.{0,600}?\bhere(?:'s| is) (?:the|a|my) (?:revised|corrected|updated|final) "
+    r"(?:response|reply|answer|version)\s*:?\s*", re.IGNORECASE | re.DOTALL)
+
+
 def strip_narration(answer: str) -> str:
     """Keep the reply meant for the person; drop the model talking about the user or its tools.
     Only fires when the answer OPENS with narration, so an ordinary answer is untouched."""
     text = answer or ""
+    cut = _REVISED_MARKER_RE.match(text)
+    if cut and text[cut.end():].strip():
+        text = text[cut.end():].strip()
+        q = re.fullmatch(r'\s*["“](.+)["”]\s*', text, re.DOTALL)
+        return q.group(1).strip() if q else text
     if not _NARRATION_START_RE.search(text):
         return text
     m = _QUOTED_REPLY_RE.search(text.strip())
@@ -733,6 +746,17 @@ SPEC_ANSWER_RULE = (
     "if given), and name the document it came from. If the figure is not in these results, say "
     "it isn't in our data sheets and offer to check — never use the web, a competitor, or general "
     "knowledge for a spec figure.")
+
+
+def looks_like_document_lookup(text: str) -> bool:
+    """One specific filed document — an amount, an invoice number, or "find the <named> invoice" —
+    asked about AS a document (an amount alone, as in "15% VAT on R48,300.00", is arithmetic)."""
+    t = text or ""
+    return bool(_SPECIFIC_DOCUMENT_RE.search(t) and _DOCUMENT_WORD_RE.search(t))
+
+
+_DOCUMENT_WORD_RE = re.compile(r"\b(?:invoice|inv|quote|quotation|receipt|statement|slip|"
+                               r"proof of payment|pop|credit note|delivery note)s?\b", re.IGNORECASE)
 
 
 def looks_like_supplier_history_question(text: str) -> bool:

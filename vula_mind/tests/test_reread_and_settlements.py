@@ -25,7 +25,7 @@ def db(monkeypatch):
         {"id": "d2", "tenant_id": TID, "category": "Invoice", "filename": "Inv_51934.pdf",
          "file_url": "https://s/d2.pdf", "fields": {"supplier": None}},
         {"id": "d3", "tenant_id": TID, "category": "Invoice", "filename": "ok.pdf", "file_url": "https://s/d3.pdf",
-         "fields": {"supplier": "Sea Harvest", "total_cents": 120000}},
+         "fields": {"supplier": "Sea Harvest", "date": "2026-09-10", "total_cents": 120000}},
         {"id": "d4", "tenant_id": TID, "category": "Email attachment", "filename": "data.xml",
          "file_url": "https://s/d4.xml", "fields": {}},
         {"id": "d5", "tenant_id": TID, "category": "Email attachment", "filename": "nocopy.pdf",
@@ -71,7 +71,10 @@ async def test_reread_fills_in_what_was_missing_and_books_nothing(db, monkeypatc
     assert out["categories"] == {"Settlement Statement": 1}
     rows = {r["id"]: r for r in db.tables["vula_filed_documents"]}
     assert rows["d1"]["category"] == "Settlement Statement" and rows["d1"]["fields"]["net_cents"] == 123450
-    assert rows["d2"]["category"] == "Invoice" and rows["d2"]["fields"] == {"supplier": None}
+    # Nothing found: the fields stay as they were, stamped so the daily pass doesn't retry it.
+    assert rows["d2"]["category"] == "Invoice" and rows["d2"]["fields"]["supplier"] is None
+    assert rows["d2"]["fields"]["_reread_at"]
+    assert rows["d1"]["fields"]["_reread_at"]
     commit.assert_not_awaited()
     assert reread.status_for(TID)["running"] is False
 

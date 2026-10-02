@@ -57,7 +57,12 @@ async def list_filed(
         if until:
             q = q.lte("created_at", until)
         if search:
-            q = q.or_(f"filename.ilike.%{search}%,summary.ilike.%{search}%")
+            # One search across title, summary, project, type and the supplier/customer/number
+            # fields — words in order (doc_quality.search_clauses, 2026-10-02).
+            from vula.commerce.doc_quality import search_clauses
+            clauses = search_clauses(search)
+            if clauses:
+                q = q.or_(clauses)
         res = q.range(offset, offset + min(limit, 200) - 1).execute()
         rows = res.data or []
         total = res.count if res.count is not None else len(rows)
@@ -67,15 +72,40 @@ async def list_filed(
     return {"tenant_id": tenant_id, "documents": rows, "count": len(rows), "total": total}
 
 
+@router.get("/{tenant_id}/health")
+async def documents_health(tenant_id: str) -> dict:
+    """Documents › Health: catch-alls, missing details, waiting on a project, and project names
+    that aren't on the register — with samples to act on (vula/commerce/doc_quality.py)."""
+    from vula.commerce.doc_quality import health
+    try:
+        return {"tenant_id": tenant_id, **health(tenant_id)}
+    except Exception as exc:
+        log.warning("documents health failed: %s", exc)
+        return {"tenant_id": tenant_id, "error": "Couldn't read the documents right now."}
+
+
 @router.get("/{tenant_id}/projects")
 async def projects(tenant_id: str) -> dict:
-    """Project labels (ClickUp lists + field-ops) for the assign-project dropdown."""
+    """Project labels for the assign-project dropdown: the project register first (2026-10-02 —
+    ClickUp list names like "Team Space / Get Started with ClickUp" were offered as projects and
+    documents got filed under them), then ClickUp lists and field-ops projects, each mapped to
+    its registered name where there is one."""
     out: list[dict] = []
     try:
+        from vula.commerce.service import canonical_project, registered_projects
         from vula.integrations.doc_filing import _clickup_candidates, _project_label, _field_projects
         seen = set()
+        for r in registered_projects(tenant_id):
+            if r.get("name") and (r.get("status") or "active") == "active" and r["name"] not in seen:
+                seen.add(r["name"])
+                out.append({"label": r["name"], "clickup_list_id": None, "registered": True})
         for lid, lname in _clickup_candidates(tenant_id):
-            label = _project_label(lname)
+            label = canonical_project(tenant_id, _project_label(lname)) or _project_label(lname)
+            if label in seen:
+                for o in out:          # the register's entry gains the ClickUp list to attach to
+                    if o["label"] == label and not o.get("clickup_list_id"):
+                        o["clickup_list_id"] = lid
+                continue
             if label not in seen:
                 seen.add(label)
                 out.append({"label": label, "clickup_list_id": lid})

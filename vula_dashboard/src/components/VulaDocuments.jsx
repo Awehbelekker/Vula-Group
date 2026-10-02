@@ -171,7 +171,8 @@ const GRID_STYLES = `
 `;
 
 const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-const CATEGORIES = ["invoice", "receipt", "quote", "delivery_note", "media", "meeting_notes", "other"];
+// The categories actually used, from the backend (2026-10-02) — this list used to be lowercase
+// doc_types ("invoice", "delivery_note") that never matched a filed document's category.
 
 function DocTile({ doc, projects, onAssign, onOpenImage }) {
   const ext = "." + (doc.filename || "").split(".").pop().toLowerCase();
@@ -218,6 +219,7 @@ export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = 
   const [docs, setDocs] = useState([]);
   const [projects, setProjects] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
   const [lightboxDoc, setLightboxDoc] = useState(null);
@@ -251,6 +253,13 @@ export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = 
       .then((r) => r.json()).then((d) => setCustomers(d.customers || [])).catch(() => {});
   }, [tenantId, customerPhone]);
 
+  useEffect(() => {
+    if (customerPhone || !tenantId?.trim()) return;
+    fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/health`)
+      .then((r) => r.json()).then((d) => setCategories(Object.entries(d.categories || {})))
+      .catch(() => setCategories([]));
+  }, [tenantId, customerPhone]);
+
   const setFilter = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
 
   const assign = async (docId, label) => {
@@ -275,12 +284,12 @@ export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = 
 
       {!customerPhone && (
         <div style={{ padding: "10px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 8, flexWrap: "wrap", background: C.surfaceAlt }}>
-          <input value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder="🔍 Search filename or summary…"
+          <input value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder="🔍 Search name, supplier, number, project…"
             style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface }} />
           <select value={filters.category} onChange={(e) => setFilter("category", e.target.value)}
             style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }}>
             <option value="">All categories</option>
-            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            {categories.map(([c, n]) => <option key={c} value={c}>{c} ({n})</option>)}
           </select>
           <select value={filters.customer_phone} onChange={(e) => setFilter("customer_phone", e.target.value)}
             style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, maxWidth: 180 }}>
@@ -473,6 +482,50 @@ function DriveImport({ tenantId, onImported }) {
 // Filed PDFs whose first read failed ("Email attachment") or that have no amount/supplier —
 // re-analysed in the background with today's pipeline (vula/commerce/reread.py). Fills in
 // the fields only; nothing is booked.
+// Documents › Health (2026-10-02): how many documents are in a catch-all type, missing a detail
+// Vula couldn't read, waiting on a project, or filed under a name that isn't on the project list.
+function DocumentsHealth({ tenantId }) {
+  const [h, setH] = useState(null);
+  useEffect(() => {
+    if (!tenantId?.trim()) return;
+    fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/health`)
+      .then((r) => r.json()).then(setH).catch(() => setH(null));
+  }, [tenantId]);
+  if (!h || !h.total) return null;
+  const unreg = Object.entries(h.unregistered_projects || {});
+  const stat = (n, label, warn) => (
+    <div style={{ minWidth: 120 }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color: warn && n ? "var(--warn)" : C.text }}>{n}</div>
+      <div style={{ fontSize: 11.5, color: C.muted }}>{label}</div>
+    </div>
+  );
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700, color: C.text }}>🩺 Documents health</h3>
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 10 }}>
+        {stat(h.total, "documents")}
+        {stat(h.missing_details, "missing a detail", true)}
+        {stat(h.pending_project, "waiting on a project", true)}
+        {stat(h.catch_all, "not yet sorted into a type", true)}
+      </div>
+      {(h.samples?.missing || []).length > 0 && (
+        <div style={{ fontSize: 12.5, color: C.text, marginBottom: 8 }}>
+          <div style={{ color: C.muted, marginBottom: 4 }}>Vula couldn't read these details — they don't count in supplier spend or job costing until filled in:</div>
+          {h.samples.missing.map((d) => (
+            <div key={d.id}>• {d.filename} — no {(d.missing || []).join(", ")}</div>
+          ))}
+        </div>
+      )}
+      {unreg.length > 0 && (
+        <div style={{ fontSize: 12.5, color: C.text }}>
+          <div style={{ color: C.muted, marginBottom: 4 }}>Filed under names that aren't on your project list:</div>
+          {unreg.map(([name, n]) => <div key={name}>• {name} — {n} document{n === 1 ? "" : "s"}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RereadMissing({ tenantId }) {
   const [info, setInfo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -502,7 +555,7 @@ function RereadMissing({ tenantId }) {
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
       <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>🔁 Documents missing data</h3>
       <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 10px" }}>
-        {info.candidates} filed PDF{info.candidates === 1 ? "" : "s"} couldn't be read properly the first time (no category, amount or supplier).
+        {info.candidates} filed PDF{info.candidates === 1 ? "" : "s"} couldn't be read properly the first time (no type, or a missing supplier, date or amount). Vula also re-reads new ones once a day by itself.
         Vula can read them again — it fills in the details; nothing is booked.
       </p>
       {st.running
@@ -749,6 +802,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
 
       <SortIntoProjects tenantId={tenantId} />
       <LearnFromHistory tenantId={tenantId} />
+      <DocumentsHealth tenantId={tenantId} />
       <RereadMissing tenantId={tenantId} />
 
       {/* Filed documents — durable copies, modern grid+lightbox, filterable (project/customer/

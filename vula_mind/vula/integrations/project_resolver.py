@@ -51,12 +51,18 @@ def _projects(tenant_id: str) -> List[Dict[str, Any]]:
     names: Dict[str, Dict[str, Any]] = {}
     numbers: Dict[str, str] = {}
     try:
-        for r in (_client().table("vula_projects").select("name,number").eq("tenant_id", tenant_id)
-                  .limit(500).execute().data or []):
+        try:
+            reg = (_client().table("vula_projects").select("name,number,aliases").eq("tenant_id", tenant_id)
+                   .limit(500).execute().data or [])
+        except Exception:      # before migration 190 (aliases)
+            reg = (_client().table("vula_projects").select("name,number").eq("tenant_id", tenant_id)
+                   .limit(500).execute().data or [])
+        for r in reg:
             if r.get("name"):
-                names.setdefault(r["name"], {"name": r["name"], "ids": set()})
+                p = names.setdefault(r["name"], {"name": r["name"], "ids": set()})
                 if r.get("number"):
                     numbers[r["name"]] = r["number"]
+                p["ids"].update(_key(a) for a in r.get("aliases") or [] if a)   # migration 190
     except Exception as exc:
         log.debug("project register read skipped: %s", exc)
     for n in known_projects(tenant_id):

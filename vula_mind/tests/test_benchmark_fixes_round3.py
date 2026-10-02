@@ -115,11 +115,11 @@ async def test_a_broadcast_without_confirm_previews_for_real_in_a_dry_run():
     class _S:
         @dry_run.guard_dispatch
         async def _dispatch(self, name, args, tid):
-            return {"preview": True, "would_reach": 87}
+            return {"preview": True, "would_reach": "87 customers"}
     with dry_run.session() as st:
         prev = await _S()._dispatch("send_broadcast", {"template_name": "fresh_in"}, "off-the-hook")
         sent = await _S()._dispatch("send_broadcast", {"template_name": "fresh_in", "confirm": True}, "off-the-hook")
-    assert prev["would_reach"] == 87
+    assert prev["would_reach"] == "87 customers"
     assert sent["status"] == "dry_run_not_performed"
     assert [c["executed"] for c in st["calls"]] == [True, False]
 
