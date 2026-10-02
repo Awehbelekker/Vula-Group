@@ -306,3 +306,24 @@ async def test_dup_notice_send_reply_failure_does_not_crash():
                                       "application/pdf", route_tenant_id=TID,
                                       content_sha="sha-replyfail")
     # No assertion beyond "didn't raise" — pytest fails the test on an uncaught exception.
+
+
+@pytest.mark.asyncio
+async def test_the_got_it_carries_a_shared_key_so_two_workers_send_one(tmp_path):
+    """2 Oct, Ian: "why do I get two Got it messages?" — production runs two uvicorn workers and
+    the once-per-burst gate was per worker. The ack now carries a send key every worker shares."""
+    local_file = tmp_path / "21 Sep 2026.pdf"
+    local_file.write_bytes(b"pdf")
+    wa._media_claims_local.pop((TID, f"ack:{PHONE}"), None)
+    pipe = MagicMock()
+    pipe.ingest_file = AsyncMock(return_value=MagicMock(status="failed", error="x", filename="x.pdf"))
+    with (
+        patch("vula.commerce.service._client", return_value=_dedup_client()),
+        patch("vula.api.whatsapp._send_reply", new=AsyncMock()) as reply,
+        patch("vula.api.whatsapp._download_document", new=AsyncMock(return_value=local_file)),
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", return_value=pipe),
+    ):
+        await _handle_document_ingest(PHONE, "media789", "21 Sep 2026.pdf",
+                                      "application/pdf", route_tenant_id=TID, content_sha=None)
+    ack = next(c for c in reply.call_args_list if "Got it" in c.args[1])
+    assert ack.kwargs["idem_key"].startswith(f"doc-ack:{PHONE}:document:")
