@@ -2916,6 +2916,11 @@ async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, 
         q = db.table("commerce_bank_transactions").select("*").eq("tenant_id", tenant_id)
         if status == "needs_input":
             q = q.in_("categorized_by", ["default", "asked"])   # Vula unsure — owner to allocate
+        elif status == "no_project":
+            # Materials/labour paid but not on a project — filtered here, not in the browser,
+            # so a line older than the latest page still shows (2 Oct: 72 DIGG lines back to June).
+            q = (q.eq("direction", "out").in_("account_code", ["cost_of_sales", "casual_labour"])
+                 .is_("project", "null").neq("match_status", "ignored"))
         elif status:
             q = q.eq("match_status", status)
         rows = q.order("txn_date", desc=True).limit(min(limit, 500)).execute().data or []
