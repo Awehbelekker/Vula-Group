@@ -92,6 +92,21 @@ def test_the_charge_column_is_not_a_transaction():
     assert len(fnb_statement.parse(TEXT)["transactions"]) == 4    # no R3 / R8 / R4 lines
 
 
+def test_identical_lines_and_unnamed_charges_are_kept_apart():
+    """2 Oct, after the re-upload: two R120 Dez Wood swipes on 22 Sep came out as one line (the
+    books key on date+amount+description), and FNB's own charges print with no description."""
+    text = TEXT.replace("22 Sep Payshap Account Off-Us Hpc Paint\n300.00\n700.00Cr\n3.00\n",
+                        "22 Sep POS Purchase Yoco *Dez Wood\n150.00\n850.00Cr\n4.00\n"
+                        "22 Sep POS Purchase Yoco *Dez Wood\n150.00\n700.00Cr\n4.00\n")
+    text = text.replace("25 Sep POS Purchase Build It City Bi\n491050*9369 23 Sep\n990.50\n3,889.50Cr\n4.00\n",
+                        "25 Sep POS Purchase Build It City Bi\n491050*9369 23 Sep\n978.50\n3,901.50Cr\n4.00\n"
+                        "25 Sep\n12.00\n3,889.50Cr\n")
+    t = fnb_statement.parse(text)["transactions"]
+    assert [x["description"] for x in t[:2]] == ["POS Purchase Yoco *Dez Wood",
+                                                 "POS Purchase Yoco *Dez Wood (2)"]
+    assert t[-1]["description"] == "FNB bank charges" and t[-1]["amount_cents"] == 1200
+
+
 def test_one_wrong_figure_and_it_is_not_trusted():
     assert fnb_statement.parse(TEXT.replace("820.00\n", "82.00\n", 1)) is None
     assert fnb_statement.parse("Capitec statement Opening Balance") is None
@@ -102,6 +117,8 @@ class _Q:
         self.db, self.f, self.op, self.payload = db, [], "select", None
 
     def select(self, *_a, **_k): return self
+    def order(self, *_a, **_k): return self
+    def limit(self, *_a, **_k): return self
     def eq(self, k, v): self.f.append(lambda r, k=k, v=v: r.get(k) == v); return self
     def gte(self, k, v): self.f.append(lambda r, k=k, v=v: str(r.get(k)) >= v); return self
     def lte(self, k, v): self.f.append(lambda r, k=k, v=v: str(r.get(k)) <= v); return self
@@ -153,6 +170,29 @@ def test_a_verified_statement_sets_aside_what_was_misread(monkeypatch):
     assert (nelitho["project"], nelitho["trade"]) == ("HPC Bokaap", "Labour")   # owner's work kept
 
 
+def test_an_old_fee_line_gives_way_to_the_statements_own_charge(monkeypatch):
+    txns = [{"date": "2026-06-30", "description": "FNB bank charges", "amount_cents": 12479,
+             "direction": "out", "balance_cents": 0},
+            {"date": "2026-06-30", "description": "FNB bank charges (2)", "amount_cents": 1200,
+             "direction": "out", "balance_cents": 0}]
+    rows = [_row("v1", "2026-06-30", "FNB bank charges", 12479),
+            _row("v2", "2026-06-30", "FNB bank charges (2)", 1200),
+            _row("old", "2026-06-30", "Service Fees", 13679),
+            _row("blank", "2026-06-30", "", 1200)]          # the first upload, before the name
+    monkeypatch.setattr(bank_rec, "_client", lambda: _DB(rows))
+    assert bank_rec.supersede_misread("digg-demo", txns)["superseded"] == 2
+    assert [r["id"] for r in rows if r["match_status"] == "ignored"] == ["old", "blank"]
+
+
+def test_the_review_never_asks_about_a_line_set_aside(monkeypatch):
+    from vula.commerce import bank_review
+    rows = [_row("supplier", "2026-07-17", "INV05118 Sales Order", 439999, "in",
+                 categorized_by="asked", match_status="ignored"),
+            _row("real", "2026-07-18", "FNB App Payment To Wet And Dry", 4379, categorized_by="default")]
+    monkeypatch.setattr(bank_review, "_client", lambda: _DB(rows))
+    assert [r["id"] for r in bank_review.pending_txns("digg-demo")] == ["real"]
+
+
 @pytest.mark.asyncio
 async def test_ingest_reads_fnb_exactly_and_skips_the_llm():
     llm = AsyncMock(return_value=[])
@@ -167,3 +207,44 @@ async def test_ingest_reads_fnb_exactly_and_skips_the_llm():
     assert res["parser"] == "fnb" and res["extraction_reconciled"] is True
     assert len(rec.await_args.args[1]) == 4 and rec.await_args.kwargs["auto_settle"] is True
     llm.assert_not_awaited()
+
+
+# ── WhatsApp: a statement is imported before (and whatever happens to) its filing ──────────
+
+@pytest.mark.asyncio
+async def test_a_statement_by_whatsapp_imports_even_when_filing_fails(tmp_path):
+    """2 Oct: of 11 statements sent at once, 17 Aug's knowledge-base filing failed under load
+    and its bank lines were never imported — the import waited on the filing."""
+    import vula.api.whatsapp as wa
+    pdf = tmp_path / "17 Aug 2026.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    sent = []
+
+    async def send(to, text, tenant_id="", idem_key=None):
+        sent.append(text)
+        return True
+    failing = type("P", (), {"__init__": lambda self, **k: None,
+                             "ingest_file": AsyncMock(side_effect=RuntimeError("busy"))})
+    with (
+        patch.object(wa, "_statement_text", return_value=TEXT),
+        patch.object(bank_rec, "ingest_statement",
+                     new=AsyncMock(return_value={"parsed": 4, "superseded": 2, "needs_input": 0})) as ing,
+        patch.object(wa, "_send_reply", new=send),
+        patch("vula.ingestion.pipeline.VulaIngestionPipeline", failing),
+    ):
+        handled = await wa._bank_statement_first("digg-demo", "27820000000", pdf)
+    assert handled is True and ing.await_count == 1
+    assert "*4 transactions*" in sent[0] and "2 earlier misread line(s) replaced" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_a_suppliers_statement_of_account_is_left_to_the_document_path(tmp_path):
+    import vula.api.whatsapp as wa
+    pdf = tmp_path / "Accounts Receivable Statement.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    with (
+        patch.object(wa, "_statement_text", return_value="Statement of account Opening balance"),
+        patch.object(bank_rec, "ingest_statement",
+                     new=AsyncMock(return_value={"error": "x", "not_bank_statement": True})),
+    ):
+        assert await wa._bank_statement_first("digg-demo", "27820000000", pdf) is False

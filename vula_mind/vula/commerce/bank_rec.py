@@ -851,6 +851,10 @@ def looks_like_own_bank_statement(text: str) -> bool:
     return bool(_BANK_NAMES.search(head) or _BALANCE_WORDS.search(head))
 
 
+_FEE_DESC = re.compile(r"^\s*(bank charges?|service fees?|other fees?|monthly (account )?fees?|fees?)\s*$",
+                       re.IGNORECASE)
+
+
 def _words(s: str) -> set:
     return {w for w in re.findall(r"[a-z]{3,}", (s or "").lower())
             if w not in {"fnb", "app", "payment", "pmt", "rtc", "account", "off", "purchase", "pos",
@@ -902,6 +906,11 @@ def supersede_misread(tenant_id: str, txns: List[Dict[str, Any]]) -> Dict[str, A
                                not (r.get("matched_invoice_id") or r.get("matched_order_id")
                                     or r.get("matched_expense_id") or r.get("project"))))
         keep_ids.update(r["id"] for r in rs[:verified[k]])
+    # more rows than the statement has for this day and amount: the extras are the same line
+    # booked again (an earlier read's wording, a blank description) — however they're worded
+    surplus = {r["id"] for rs in by_key.values() for r in rs
+               if r["id"] not in keep_ids
+               and (str(r.get("txn_date"))[:10], r.get("direction"), int(r.get("amount_cents") or 0)) in verified}
     out, carried = [], 0
     for r in live:
         d, direction = str(r.get("txn_date"))[:10], r.get("direction")
@@ -911,9 +920,13 @@ def supersede_misread(tenant_id: str, txns: List[Dict[str, Any]]) -> Dict[str, A
             continue
         same = on_day.get((d, direction)) or []
         desc = r.get("description") or ""
-        fee_line = desc.lower().endswith("bank charge")
+        # "… bank charge" (the accrued-charge column misread as a debit), or a fee line read in
+        # other words ("Bank Charges", "Service Fees", "Other Fees") on a day the verified
+        # statement has its own charge lines
+        fee_line = desc.lower().endswith("bank charge") or (
+            _FEE_DESC.match(desc) and any(t["description"].startswith("FNB bank charges") for t in same))
         twin = next((t for t in same if _words(t["description"]) & _words(desc)), None)
-        if not (fee_line or twin):
+        if not (fee_line or twin or r["id"] in surplus):
             continue
         out.append(r["id"])
         if twin and (r.get("project") or r.get("trade")):
