@@ -851,12 +851,117 @@ def looks_like_own_bank_statement(text: str) -> bool:
     return bool(_BANK_NAMES.search(head) or _BALANCE_WORDS.search(head))
 
 
+def _words(s: str) -> set:
+    return {w for w in re.findall(r"[a-z]{3,}", (s or "").lower())
+            if w not in {"fnb", "app", "payment", "pmt", "rtc", "account", "off", "purchase", "pos",
+                         "send", "money", "digg", "bank", "charge"}}
+
+
+def supersede_misread(tenant_id: str, txns: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """A statement that reconciled to the cent replaces what an earlier, unverified read of the
+    same days put in the books. The upsert key includes the amount, so a misread amount (R8,200
+    for R82,000) would otherwise stay next to the corrected line. Only rows that are plainly the
+    same transaction are set aside (match_status 'ignored', reversible):
+      - same day and direction, sharing a payee word with a verified line, an amount the verified
+        statement doesn't have on that day;
+      - a separate "… bank charge" line (FNB's accrued-charge column misread as a debit).
+    Rows from a different account (no shared words) and anything already matched to an invoice,
+    order or expense are left alone. An owner's project/trade on a set-aside row moves to the
+    verified line."""
+    if not txns:
+        return {"superseded": 0}
+    days = sorted({t["date"] for t in txns})
+    on_day: Dict[tuple, List[Dict[str, Any]]] = {}
+    for t in txns:
+        on_day.setdefault((t["date"], t["direction"]), []).append(t)
+    db = _client()
+    try:
+        rows = (db.table("commerce_bank_transactions")
+                .select("id,txn_date,description,amount_cents,direction,match_status,project,trade,"
+                        "matched_invoice_id,matched_order_id,matched_expense_id")
+                .eq("tenant_id", tenant_id).gte("txn_date", days[0]).lte("txn_date", days[-1])
+                .execute().data or [])
+    except Exception as exc:
+        log.debug("supersede read skipped: %s", exc)
+        return {"superseded": 0}
+    from collections import Counter
+    verified = Counter((t["date"], t["direction"], t["amount_cents"]) for t in txns)
+    exact = {(t["date"], t["direction"], t["amount_cents"], t["description"]) for t in txns}
+    live = [r for r in rows if r.get("match_status") != "ignored"]
+    # The same line read twice in different words (same day, direction, amount): keep as many
+    # rows as the statement has — the verified wording, then anything matched/allocated first.
+    keep_ids = set()
+    by_key: Dict[tuple, List[Dict[str, Any]]] = {}
+    for r in live:
+        k = (str(r.get("txn_date"))[:10], r.get("direction"), int(r.get("amount_cents") or 0))
+        by_key.setdefault(k, []).append(r)
+    for k, rs in by_key.items():
+        if k not in verified:
+            continue
+        rs.sort(key=lambda r: ((*k, r.get("description") or "") not in exact,
+                               not (r.get("matched_invoice_id") or r.get("matched_order_id")
+                                    or r.get("matched_expense_id") or r.get("project"))))
+        keep_ids.update(r["id"] for r in rs[:verified[k]])
+    out, carried = [], 0
+    for r in live:
+        d, direction = str(r.get("txn_date"))[:10], r.get("direction")
+        if r["id"] in keep_ids:
+            continue
+        if r.get("matched_invoice_id") or r.get("matched_order_id") or r.get("matched_expense_id"):
+            continue
+        same = on_day.get((d, direction)) or []
+        desc = r.get("description") or ""
+        fee_line = desc.lower().endswith("bank charge")
+        twin = next((t for t in same if _words(t["description"]) & _words(desc)), None)
+        if not (fee_line or twin):
+            continue
+        out.append(r["id"])
+        if twin and (r.get("project") or r.get("trade")):
+            try:
+                db.table("commerce_bank_transactions").update(
+                    {k: r[k] for k in ("project", "trade") if r.get(k)}
+                ).eq("tenant_id", tenant_id).eq("txn_date", d).eq("amount_cents", twin["amount_cents"]
+                ).eq("description", twin["description"]).is_("project", "null").execute()
+                carried += 1
+            except Exception as exc:
+                log.debug("allocation carry-over skipped: %s", exc)
+    for i in range(0, len(out), 100):
+        try:
+            db.table("commerce_bank_transactions").update({"match_status": "ignored"}).eq(
+                "tenant_id", tenant_id).in_("id", out[i:i + 100]).execute()
+        except Exception as exc:
+            log.warning("supersede update failed: %s", exc)
+            return {"superseded": 0}
+    if out:
+        log.info("%s: verified statement %s–%s set aside %d misread line(s)",
+                 tenant_id, days[0], days[-1], len(out))
+    return {"superseded": len(out), "allocations_carried": carried}
+
+
 async def ingest_statement(tenant_id: str, pdf_path: Path, password: Optional[str] = None,
                            source_file: str = "", trusted: bool = False) -> Dict[str, Any]:
     """Full pipeline: decrypt (stored ID password if not given) → parse → reconcile.
     `trusted`: the owner uploaded it as their bank statement (dashboard) — skip the check that
-    an automatically-detected PDF (email/WhatsApp) really is their own bank statement."""
+    an automatically-detected PDF (email/WhatsApp) really is their own bank statement.
+
+    An FNB statement is read deterministically first (vula/ingestion/fnb_statement.py) and only
+    accepted when every running balance reconciles; anything else goes to the LLM as before."""
     pwd = password if password is not None else get_statement_password(tenant_id)
+    exact = None
+    try:
+        from vula.ingestion import fnb_statement
+        exact = fnb_statement.parse(fnb_statement.pdf_text(Path(pdf_path), pwd))
+    except Exception as exc:
+        log.debug("deterministic statement read skipped: %s", exc)
+    if exact and exact["transactions"]:
+        txns = exact["transactions"]
+        result = await reconcile(tenant_id, txns, source_file=source_file or Path(pdf_path).name,
+                                 auto_settle=True)
+        result.update(supersede_misread(tenant_id, txns))
+        result["extraction_reconciled"] = True
+        result["parser"] = "fnb"
+        log.info("bank statement (FNB, exact) reconciled for %s: %s", tenant_id, result)
+        return result
     try:
         text = extract_pdf_text(Path(pdf_path), pwd)
     except Exception as exc:
