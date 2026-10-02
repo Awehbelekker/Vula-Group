@@ -2314,11 +2314,40 @@ def registered_projects(tenant_id: str) -> List[Dict[str, Any]]:
     without it until that's applied)."""
     db = _client()
     try:
-        return (db.table("vula_projects").select("name,number,aliases,status").eq("tenant_id", tenant_id)
+        return (db.table("vula_projects").select("id,name,number,aliases,status").eq("tenant_id", tenant_id)
                 .limit(500).execute().data or [])
     except Exception:
-        return (db.table("vula_projects").select("name,number,status").eq("tenant_id", tenant_id)
+        return (db.table("vula_projects").select("id,name,number,status").eq("tenant_id", tenant_id)
                 .limit(500).execute().data or [])
+
+
+# Every table that carries a project by NAME (migrations 015 … 185). A rename has to move all
+# of them together, or documents, costs and the BOQ split across two spellings again.
+_PROJECT_NAME_TABLES = (
+    "vula_filed_documents", "commerce_invoices", "commerce_expenses", "commerce_bank_transactions",
+    "vula_price_observations", "vula_project_boq", "vula_project_terms", "vula_project_budgets",
+    "vula_project_finances", "vula_project_claims", "vula_project_threads", "vula_project_briefs",
+    "vula_project_tasks", "vula_project_cards", "vula_filing_rules", "commerce_allocation_rules",
+)
+
+
+def rename_project_everywhere(tenant_id: str, old: str, new: str) -> Dict[str, int]:
+    """Move every row filed under `old` to `new` (exact name, this tenant only). Per table, a
+    failure (table absent, a unique clash on a one-row-per-project table) is logged and skipped
+    — the old name stays an alias, so anything not moved still resolves to the project."""
+    moved: Dict[str, int] = {}
+    if not old or not new or old == new:
+        return moved
+    db = _client()
+    for table in _PROJECT_NAME_TABLES:
+        try:
+            res = (db.table(table).update({"project": new}).eq("tenant_id", tenant_id)
+                   .eq("project", old).execute())
+            if res.data:
+                moved[table] = len(res.data)
+        except Exception as exc:
+            logger.warning("rename project %r→%r skipped for %s: %s", old, new, table, exc)
+    return moved
 
 
 def canonical_project(tenant_id: str, name: Optional[str]) -> Optional[str]:

@@ -3144,7 +3144,7 @@ async def _backfill_receipt_url(tenant_id: str, receipt_doc_id: str, filed_row: 
 
 async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_type,
                                   category, summary, fields, already_committed=False,
-                                  source="whatsapp"):
+                                  source="whatsapp", project=None):
     """Match the document to a project and file it (durable copy + record + ClickUp).
     Also books it via the shared commit path (same as email/Smart Scanner) when it's a
     financial category the vision-scan shortcut hasn't already committed.
@@ -3184,6 +3184,11 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
         # with a resolved project auto-files — this used to auto-file on ANY truthy match,
         # including a single coincidental token, with no ambiguity check at all.
         match = lookup_learned_project(tenant_id, fields) or match_project(tenant_id, hint)
+        if project:
+            # Uploaded from a project's own page (2026-10-02): the owner already said which job.
+            from vula.commerce.service import canonical_project as _canon_up
+            match = {"project": _canon_up(tenant_id, project) or project, "clickup_list_id": None,
+                     "confidence": 1.0, "ambiguous": False, "chosen": True}
         # A project NAMED in the document beats a learned rule or a loose ClickUp overlap
         # (2026-09-28: the Atlantis deposit invoice was filed under HPC by a learned rule).
         try:
@@ -3191,7 +3196,8 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
             if _up(tenant_id):
                 from vula.integrations.project_resolver import resolve as _resolve
                 _named = _resolve(tenant_id, {}, hint)
-                if _named and _named.get("kind") == "named" and (match or {}).get("project") != _named["project"]:
+                if (_named and _named.get("kind") == "named" and not (match or {}).get("chosen")
+                        and (match or {}).get("project") != _named["project"]):
                     match = {"project": _named["project"], "clickup_list_id": None,
                              "confidence": _named["confidence"], "ambiguous": False}
         except Exception as exc:
@@ -5422,6 +5428,17 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if alias_reply:
             _LAST_CONF.set(1.0)
             return alias_reply
+        # The project register: "add phase 2 to Sporty TV", "X is also called Y" (owner/manager).
+        if (caller_role or "").lower() in ("owner", "manager", "admin"):
+            try:
+                from vula.commerce.project_admin import handle as _project_cmd
+                project_reply = await _project_cmd(tenant_id, question)
+            except Exception as exc:
+                logger.debug("project register command skipped: %s", exc)
+                project_reply = None
+            if project_reply:
+                _LAST_CONF.set(1.0)
+                return project_reply
         from core.skills.base import delete_request_reply
         refuse = delete_request_reply(question)
         if refuse:

@@ -51,7 +51,7 @@ LABELS = {"supplier": "supplier", "date": "date", "total_cents": "total", "payee
 # Summary wording → category. Ordered: the first match wins, most specific first. Only ever
 # applied to a document in a catch-all category.
 _SUMMARY_RULES = [
-    (r"\bdelivery (?:note|slip)\b|\bgoods received\b|\bwaybill\b", "Delivery Note"),
+    (r"\bdelivery (?:note|slip)\b|\bpick(?:ing)? slip\b|\bgoods received\b|\bwaybill\b", "Delivery Note"),
     (r"\b(?:accounts? receivable|account|customer|supplier|creditors?|debtors?) statement\b|"
      r"\bstatement of account\b|\bage analysis\b", "Account Statement"),
     (r"\bsettlement (?:summary|statement|report)\b|\bmerchant (?:payout|settlement)\b", "Settlement Statement"),

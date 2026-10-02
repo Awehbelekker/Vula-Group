@@ -215,7 +215,7 @@ function DocTile({ doc, projects, onAssign, onOpenImage }) {
   );
 }
 
-export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = "📂 Documents & media" }) {
+export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, project, title = "📂 Documents & media" }) {
   const [docs, setDocs] = useState([]);
   const [projects, setProjects] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -223,7 +223,9 @@ export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = 
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
   const [lightboxDoc, setLightboxDoc] = useState(null);
-  const [filters, setFilters] = useState({ search: "", category: "", customer_phone: customerPhone || "", since: "", until: "", filed_by: defaultFiledBy || "" });
+  const [filters, setFilters] = useState({ search: "", category: "", customer_phone: customerPhone || "", since: "", until: "", filed_by: defaultFiledBy || "", project: project || "" });
+  // A project's page shows only that project's documents (2026-10-02).
+  useEffect(() => { setFilters((f) => ({ ...f, project: project || "" })); }, [project]);
   const [offset, setOffset] = useState(0);
   const PAGE = 24;
 
@@ -291,6 +293,13 @@ export function FiledLibrary({ tenantId, customerPhone, defaultFiledBy, title = 
             <option value="">All categories</option>
             {categories.map(([c, n]) => <option key={c} value={c}>{c} ({n})</option>)}
           </select>
+          {!project && (
+            <select value={filters.project} onChange={(e) => setFilter("project", e.target.value)}
+              style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, maxWidth: 200 }}>
+              <option value="">All projects</option>
+              {projects.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+            </select>
+          )}
           <select value={filters.customer_phone} onChange={(e) => setFilter("customer_phone", e.target.value)}
             style={{ fontSize: 12, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text, maxWidth: 180 }}>
             <option value="">All customers</option>
@@ -486,11 +495,34 @@ function DriveImport({ tenantId, onImported }) {
 // Vula couldn't read, waiting on a project, or filed under a name that isn't on the project list.
 function DocumentsHealth({ tenantId }) {
   const [h, setH] = useState(null);
-  useEffect(() => {
+  const [register, setRegister] = useState([]);
+  const [pick, setPick] = useState({});
+  const [msg, setMsg] = useState("");
+  const load = useCallback(() => {
     if (!tenantId?.trim()) return;
     fetch(`${VULA_API}/v1/documents/${tenantId.trim()}/health`)
       .then((r) => r.json()).then(setH).catch(() => setH(null));
+    fetch(`${VULA_API}/v1/projects/${tenantId.trim()}`)
+      .then((r) => r.json()).then((d) => setRegister(d.projects || [])).catch(() => setRegister([]));
   }, [tenantId]);
+  useEffect(() => { load(); }, [load]);
+  // A name that isn't on the project list: make it another name for a project, or a project.
+  const addAlias = async (name) => {
+    const pid = pick[name];
+    if (!pid) return;
+    const r = await fetch(`${VULA_API}/v1/projects/${tenantId.trim()}/p/${pid}/aliases`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alias: name }) });
+    const d = await r.json().catch(() => ({}));
+    setMsg(r.ok ? `“${name}” now files under ${register.find((p) => p.id === pid)?.name} — ${(d.moved || {}).vula_filed_documents || 0} document(s) moved.` : (d.detail || "Couldn't add that name."));
+    load();
+  };
+  const createFrom = async (name) => {
+    const r = await fetch(`${VULA_API}/v1/projects/${tenantId.trim()}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    const d = await r.json().catch(() => ({}));
+    setMsg(r.ok && d.id ? `${name} is now on your project list.` : (d.detail || d.error || "Couldn't create it."));
+    load();
+  };
   if (!h || !h.total) return null;
   const unreg = Object.entries(h.unregistered_projects || {});
   const stat = (n, label, warn) => (
@@ -519,9 +551,23 @@ function DocumentsHealth({ tenantId }) {
       {unreg.length > 0 && (
         <div style={{ fontSize: 12.5, color: C.text }}>
           <div style={{ color: C.muted, marginBottom: 4 }}>Filed under names that aren't on your project list:</div>
-          {unreg.map(([name, n]) => <div key={name}>• {name} — {n} document{n === 1 ? "" : "s"}</div>)}
+          {unreg.map(([name, n]) => (
+            <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", margin: "4px 0" }}>
+              <span>• {name} — {n} document{n === 1 ? "" : "s"}</span>
+              <select value={pick[name] || ""} onChange={(e) => setPick((p) => ({ ...p, [name]: e.target.value }))}
+                style={{ fontSize: 12, padding: "4px 6px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }}>
+                <option value="">Another name for…</option>
+                {register.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <button onClick={() => addAlias(name)} disabled={!pick[name]}
+                style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer" }}>Link</button>
+              <button onClick={() => createFrom(name)}
+                style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer" }}>Make it a project</button>
+            </div>
+          ))}
         </div>
       )}
+      {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}
     </div>
   );
 }
