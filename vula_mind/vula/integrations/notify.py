@@ -57,13 +57,17 @@ def _fallback_phone(tenant_id: str) -> Optional[str]:
         return None
 
 
-async def notify_team(tenant_id: str, event_type: str, message: str) -> int:
+async def notify_team(tenant_id: str, event_type: str, message: str,
+                      idem_key: Optional[str] = None) -> int:
     """Send `message` to every active member subscribed to `event_type`. Returns count sent.
     Falls back to vula_email_accounts.notify_phone only when the tenant has NO team members
     configured at all — a real bug otherwise: a team member who deliberately unsubscribed
     from an event (via the dashboard or the WhatsApp preference command) would still get
     pinged through this fallback whenever they're the tenant's only contact, silently
-    overriding their own opt-out."""
+    overriding their own opt-out.
+
+    idem_key: for scheduled alerts — each recipient gets it once per key, even across restarts
+    (the key is stored in the DB by _send_reply)."""
     from vula.api.whatsapp import _send_reply
     members = _members(tenant_id)
     recipients = []
@@ -81,7 +85,8 @@ async def notify_team(tenant_id: str, event_type: str, message: str) -> int:
     sent = 0
     for to in recipients:
         try:
-            if await _send_reply(to, message, tenant_id=tenant_id):
+            keyed = {"idem_key": f"{idem_key}:{to}"} if idem_key else {}
+            if await _send_reply(to, message, tenant_id=tenant_id, **keyed):
                 sent += 1
         except Exception as exc:
             logger.debug("notify_team send failed (%s): %s", to, exc)

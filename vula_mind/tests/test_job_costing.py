@@ -227,14 +227,63 @@ async def test_weekly_alert_names_the_losing_project_once(db, tmp_path, monkeypa
     _import(db, tmp_path)
     sent = []
 
-    async def notify_team(tid, event, text):
-        sent.append((event, text))
+    async def notify_team(tid, event, text, idem_key=None):
+        sent.append((event, text, idem_key))
         return 1
     monkeypatch.setattr("vula.integrations.notify.notify_team", notify_team)
+    monkeypatch.setattr("vula.integrations.notify._members", lambda tid: [
+        {"name": "Judy", "role": "owner", "whatsapp": "27827077080", "notify": ["project_margin"]}])
     job_costing._last_alert.pop(TID, None)
     text = await job_costing.weekly_alert(TID)
     assert "Sporty – Phase 2: loss" in text and sent[0][0] == "project_margin"
+    assert sent[0][2].startswith("project-check:")                     # stored send key
     assert await job_costing.weekly_alert(TID) is None                # once a week
+
+
+@pytest.mark.asyncio
+async def test_weekly_alert_is_not_resent_after_a_restart(db, tmp_path, monkeypatch):
+    """2 Oct, Ian: "Judy is getting WhatsApps about a costing recoup" — the same 'R611,903.69 of
+    materials/labour isn't allocated' check went to her 13 times in 4 days, once per deploy,
+    because the once-a-week marker lived only in memory."""
+    _import(db, tmp_path)
+    claimed, delivered = set(), []
+
+    async def send(to, text, tenant_id="", idem_key=None):
+        if idem_key and idem_key in claimed:     # what _claim_outbound's DB key does
+            return False
+        if idem_key:
+            claimed.add(idem_key)
+        delivered.append(to)
+        return True
+    monkeypatch.setattr("vula.api.whatsapp._send_reply", send)
+    monkeypatch.setattr("vula.integrations.notify._members", lambda tid: [
+        {"name": "Judy", "role": "owner", "whatsapp": "27827077080", "notify": []}])
+    for _restart in range(3):
+        job_costing._last_alert.clear()          # a deploy wipes the process
+        await job_costing.weekly_alert(TID)
+    assert delivered == ["27827077080"]
+    job_costing._last_alert.clear()
+    await job_costing.weekly_alert(TID, force=True)                   # the manual trigger still sends
+    assert len(delivered) == 2
+
+
+@pytest.mark.asyncio
+async def test_notify_team_keys_each_recipient(monkeypatch):
+    from vula.integrations import notify
+    keys = []
+
+    async def send(to, text, tenant_id="", idem_key=None):
+        keys.append(idem_key)
+        return True
+    monkeypatch.setattr("vula.api.whatsapp._send_reply", send)
+    monkeypatch.setattr(notify, "_members", lambda tid: [
+        {"whatsapp": "27820000001", "notify": ["low_stock"]},
+        {"whatsapp": "27820000002", "notify": ["low_stock"]}])
+    await notify.notify_team(TID, "low_stock", "x", idem_key="low-stock:2026-10-02")
+    assert keys == ["low-stock:2026-10-02:27820000001", "low-stock:2026-10-02:27820000002"]
+    keys.clear()
+    await notify.notify_team(TID, "low_stock", "x")                    # ad-hoc alerts: no key
+    assert keys == [None, None]
 
 
 def test_identical_lines_on_one_day_are_both_kept(db, tmp_path):

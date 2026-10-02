@@ -1869,7 +1869,8 @@ class ScrapeRequest(BaseModel):
 
 # ─── Document Ingestion ───────────────────────────────────────────────────────
 
-async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type: Optional[str]) -> None:
+async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type: Optional[str],
+                                   project: Optional[str] = None) -> None:
     """Bring the dashboard upload dropzone up to the same standard as the email/WhatsApp
     intake channels: classify, extract structured fields, match a project, and — for a
     financial category — commit it into the books via the shared commit_inbound_document
@@ -1883,7 +1884,7 @@ async def _analyze_and_file_upload(tenant_id: str, result, file_path, mime_type:
         await _file_uploaded_document(
             tenant_id, "dashboard", result, file_path, mime_type,
             analysis["category"], analysis.get("summary", ""), analysis.get("fields", {}),
-            source="dashboard",
+            source="dashboard", project=project,
         )
     except Exception as exc:
         log.warning("Dashboard-upload analysis/filing failed for %s: %s", result.filename, exc)
@@ -1896,8 +1897,10 @@ async def ingest_document(
     background_tasks: BackgroundTasks,
     tenant_id: str = Form(...),
     file: UploadFile = File(...),
+    project: Optional[str] = Form(None),
 ):
-    """Upload a document and ingest it into the tenant knowledge base (async)."""
+    """Upload a document and ingest it into the tenant knowledge base (async). `project`: sent
+    from a project's page — the document is filed straight under that project."""
     validate_tenant(tenant_id)
 
     content = await file.read()
@@ -1916,7 +1919,7 @@ async def ingest_document(
         result = await pipeline.ingest_file(file_path)
         log.info("Ingestion complete: %s → %d chunks (%s)", result.filename, result.chunks_stored, result.status)
         if result.status in ("success", "done"):
-            await _analyze_and_file_upload(tenant_id, result, file_path, mime_type)
+            await _analyze_and_file_upload(tenant_id, result, file_path, mime_type, project=project)
 
     background_tasks.add_task(_ingest)
 

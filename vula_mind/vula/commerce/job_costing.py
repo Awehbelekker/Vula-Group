@@ -451,15 +451,25 @@ async def weekly_alert(tenant_id: str, force: bool = False) -> Optional[str]:
         lines.append(f"• {_r(unalloc)} of materials/labour isn't allocated to a project — "
                      "allocate it in Bank so the job costs are complete.")
     text = "📊 Project check (last 6 months, from the bank):\n" + "\n".join(lines)
+    # 2 Oct (Ian: "Judy is getting WhatsApps about a costing recoup"): _last_alert is per process,
+    # so every deploy/restart re-sent this — 13 times in 4 days. The DB-backed send key makes it
+    # once per ISO week per person whatever restarts. force (the manual trigger) still sends.
+    idem = None if force else f"project-check:{key}"
     try:
         from vula.integrations import notify
-        sent = await notify.notify_team(tenant_id, "project_margin", text)
-        if not sent:
+        members = notify._members(tenant_id)
+        targeted = [m for m in members
+                    if "project_margin" in (m.get("notify") or []) and m.get("whatsapp")]
+        if targeted or not members:          # no team at all → notify_team's fallback phone
+            await notify.notify_team(tenant_id, "project_margin", text, idem_key=idem)
+        else:
             # nobody subscribed yet — the owner/manager still needs to hear a job is losing money
             from vula.api.whatsapp import _send_reply
-            for m in notify._members(tenant_id):
+            for m in members:
                 if (m.get("role") or "").lower() in ("owner", "manager") and m.get("whatsapp"):
-                    await _send_reply(notify._digits(m["whatsapp"]), text, tenant_id=tenant_id)
+                    to = notify._digits(m["whatsapp"])
+                    await _send_reply(to, text, tenant_id=tenant_id,
+                                      idem_key=f"{idem}:{to}" if idem else None)
         _last_alert[tenant_id] = key
     except Exception as exc:
         log.debug("project alert skipped: %s", exc)

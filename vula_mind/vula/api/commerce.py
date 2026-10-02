@@ -5889,8 +5889,10 @@ async def _process_stock_alerts(tenant_id: str, force: bool = False) -> int:
     lines = "\n".join(f"• {p['name']} — {p.get('stock_quantity', 0)} left" for p in low[:20])
     try:
         from vula.integrations.notify import notify_team
+        # once a day per person even across restarts (the in-memory date alone resets on deploy)
         await notify_team(tenant_id, "low_stock",
-                          f"⚠️ Low stock ({len(low)} item{'s' if len(low) != 1 else ''}):\n{lines}\n\nTime to restock.")
+                          f"⚠️ Low stock ({len(low)} item{'s' if len(low) != 1 else ''}):\n{lines}\n\nTime to restock.",
+                          idem_key=None if force else f"low-stock:{today}")
         _last_stock_alert[tenant_id] = today
     except Exception as exc:
         log.debug("stock alert send skipped: %s", exc)

@@ -443,6 +443,12 @@ async def fetch_link_title(tenant: str, body: FetchTitleIn) -> dict:
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────
+# The project register (vula_projects). 2026-10-02 (Ian: "how can a tenant add projects and
+# aliases, phases, more projects for one client, each with their own BOQ and filed invoices and
+# slips?"): every route here is scoped to the tenant in the path (a project id alone used to be
+# enough to read or edit another business's project); a phase is a child project (migration
+# 191); aliases are the other names a project is filed under (migration 190); a rename moves
+# everything filed under the old name and keeps it as an alias.
 
 class ProjectIn(BaseModel):
     name: str
@@ -450,6 +456,33 @@ class ProjectIn(BaseModel):
     client: Optional[str] = None
     status: str = "active"
     created_by: Optional[str] = None
+    aliases: Optional[list[str]] = None
+    parent_id: Optional[str] = None
+    phase: Optional[str] = None
+
+
+def _own_project(tenant_id: str, project_id: str) -> dict:
+    """The project row, only if it belongs to this tenant — else 404."""
+    try:
+        rows = (_client().table("vula_projects").select("*").eq("tenant_id", tenant_id)
+                .eq("id", project_id).limit(1).execute().data or [])
+    except Exception as exc:
+        log.warning("project lookup failed: %s", exc)
+        rows = []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return rows[0]
+
+
+def _clean_aliases(aliases, name: str) -> list[str]:
+    from vula.commerce.service import project_key
+    out, seen = [], {project_key(name)}
+    for a in aliases or []:
+        a = (a or "").strip()
+        if a and project_key(a) not in seen:
+            seen.add(project_key(a))
+            out.append(a)
+    return out
 
 
 @router.get("/{tenant_id}")
@@ -466,7 +499,19 @@ async def list_projects(tenant_id: str) -> dict:
 
 @router.post("/{tenant_id}")
 async def create_project(tenant_id: str, body: ProjectIn) -> dict:
-    row = {"tenant_id": tenant_id, **body.model_dump(exclude_none=True)}
+    from vula.commerce.service import project_key, registered_projects
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A project needs a name.")
+    taken = {project_key(r.get("name")) for r in registered_projects(tenant_id)}
+    taken |= {project_key(a) for r in registered_projects(tenant_id) for a in (r.get("aliases") or [])}
+    if project_key(name) in taken:
+        raise HTTPException(status_code=409, detail=f"There's already a project called {name}.")
+    if body.parent_id:
+        _own_project(tenant_id, body.parent_id)
+    row = {"tenant_id": tenant_id, **body.model_dump(exclude_none=True), "name": name}
+    if "aliases" in row:
+        row["aliases"] = _clean_aliases(row["aliases"], name)
     try:
         res = _client().table("vula_projects").insert(row).execute()
         return res.data[0] if res.data else {"error": "insert returned no row"}
@@ -476,12 +521,9 @@ async def create_project(tenant_id: str, body: ProjectIn) -> dict:
 
 @router.get("/{tenant_id}/p/{project_id}")
 async def get_project(tenant_id: str, project_id: str) -> dict:
+    proj = _own_project(tenant_id, project_id)
     c = _client()
     try:
-        proj = (c.table("vula_projects").select("*").eq("id", project_id)
-                .limit(1).execute().data or [])
-        if not proj:
-            return {"error": "Project not found."}
         team = (c.table("vula_project_team").select("*")
                 .eq("project_id", project_id).execute().data or [])
         links = (c.table("vula_project_codes").select("code_id")
@@ -491,9 +533,58 @@ async def get_project(tenant_id: str, project_id: str) -> dict:
         if code_ids:
             codes = (c.table("vula_code_library").select("*")
                      .in_("id", code_ids).execute().data or [])
-        return {**proj[0], "team": team, "codes": codes}
+        return {**proj, "team": team, "codes": codes}
     except Exception as exc:
         return {"error": str(exc)}
+
+
+@router.get("/{tenant_id}/p/{project_id}/overview")
+async def project_overview(tenant_id: str, project_id: str) -> dict:
+    """One project's page: its phases, its documents by type (and with the phases added in for
+    a main project), and its BOQ — what the Projects screen shows before the tabs."""
+    proj = _own_project(tenant_id, project_id)
+    c = _client()
+    try:
+        phases = (c.table("vula_projects").select("id,name,phase,status").eq("tenant_id", tenant_id)
+                  .eq("parent_id", project_id).limit(100).execute().data or [])
+    except Exception:            # before migration 191
+        phases = []
+    parent = None
+    if proj.get("parent_id"):
+        try:
+            parent = _own_project(tenant_id, proj["parent_id"])
+        except HTTPException:
+            parent = None
+
+    def _docs(name: str) -> dict:
+        try:
+            rows = (c.table("vula_filed_documents").select("category").eq("tenant_id", tenant_id)
+                    .eq("project", name).limit(5000).execute().data or [])
+        except Exception:
+            rows = []
+        out: dict = {}
+        for r in rows:
+            k = r.get("category") or "General Document"
+            out[k] = out.get(k, 0) + 1
+        return out
+
+    def _boq(name: str) -> Optional[dict]:
+        try:
+            rows = (c.table("vula_project_boq").select("total_cents,title,sections,updated_at")
+                    .eq("tenant_id", tenant_id).eq("project", name).limit(1).execute().data or [])
+        except Exception:
+            rows = []
+        return rows[0] if rows else None
+
+    own = _docs(proj["name"])
+    phase_rows = [{**ph, "documents": sum(_docs(ph["name"]).values()), "boq": _boq(ph["name"])} for ph in phases]
+    combined = dict(own)
+    for ph in phases:
+        for k, v in _docs(ph["name"]).items():
+            combined[k] = combined.get(k, 0) + v
+    return {"project": proj, "parent": {"id": parent["id"], "name": parent["name"]} if parent else None,
+            "phases": phase_rows, "documents": own, "documents_with_phases": combined,
+            "boq": _boq(proj["name"])}
 
 
 class ProjectPatch(BaseModel):
@@ -501,18 +592,106 @@ class ProjectPatch(BaseModel):
     number: Optional[str] = None
     client: Optional[str] = None
     status: Optional[str] = None
+    aliases: Optional[list[str]] = None
+    parent_id: Optional[str] = None
+    phase: Optional[str] = None
 
 
 @router.patch("/{tenant_id}/p/{project_id}")
 async def update_project(tenant_id: str, project_id: str, body: ProjectPatch) -> dict:
+    """Edit a project. A new name moves everything filed under the old one (documents,
+    invoices, expenses, bank lines, BOQ, budget …) and keeps the old name as an alias."""
+    proj = _own_project(tenant_id, project_id)
     patch = body.model_dump(exclude_none=True)
     if not patch:
         return {"error": "nothing to update"}
+    moved: dict = {}
+    new_name = (patch.get("name") or "").strip()
+    if "name" in patch and not new_name:
+        raise HTTPException(status_code=400, detail="A project needs a name.")
+    if new_name and new_name != proj["name"]:
+        from vula.commerce.service import project_key, registered_projects
+        clash = [r for r in registered_projects(tenant_id) if r.get("name") != proj["name"]
+                 and project_key(new_name) in {project_key(r.get("name")),
+                                               *(project_key(a) for a in r.get("aliases") or [])}]
+        if clash:
+            raise HTTPException(status_code=409, detail=f"{new_name} is already {clash[0]['name']}.")
+        patch["name"] = new_name
+        patch["aliases"] = (patch.get("aliases") if "aliases" in patch else list(proj.get("aliases") or [])) + [proj["name"]]
+    if patch.get("parent_id"):
+        if patch["parent_id"] == project_id:
+            raise HTTPException(status_code=400, detail="A project can't be a phase of itself.")
+        _own_project(tenant_id, patch["parent_id"])
+    if "aliases" in patch:
+        patch["aliases"] = _clean_aliases(patch["aliases"], patch.get("name") or proj["name"])
     try:
-        _client().table("vula_projects").update(patch).eq("id", project_id).execute()
-        return {"id": project_id, **patch}
+        (_client().table("vula_projects").update(patch).eq("tenant_id", tenant_id)
+         .eq("id", project_id).execute())
     except Exception as exc:
         return {"error": str(exc)}
+    if new_name and new_name != proj["name"]:
+        from vula.commerce.service import rename_project_everywhere
+        moved = rename_project_everywhere(tenant_id, proj["name"], new_name)
+    return {"id": project_id, **patch, "moved": moved}
+
+
+class PhaseIn(BaseModel):
+    phase: str                     # "Phase 2", "Stage 3 – fit-out"
+    move_from: Optional[str] = None  # an existing name to move into this phase ("Sporty – Phase 2")
+
+
+@router.post("/{tenant_id}/p/{project_id}/phases")
+async def add_phase(tenant_id: str, project_id: str, body: PhaseIn) -> dict:
+    """A phase of this project: its own project row (own BOQ, budget, documents, job costing)
+    named "<project> – <phase>", same client, parent_id → this project. With move_from, what is
+    filed under that name (e.g. the old "Sporty – Phase 2") moves into the phase and the name
+    becomes the phase's alias."""
+    parent = _own_project(tenant_id, project_id)
+    phase = (body.phase or "").strip()
+    if not phase:
+        raise HTTPException(status_code=400, detail="Name the phase, e.g. Phase 2.")
+    name = f"{parent['name']} – {phase}"
+    aliases: list[str] = []
+    move_from = (body.move_from or "").strip()
+    if move_from:
+        aliases.append(move_from)
+    created = await create_project(tenant_id, ProjectIn(
+        name=name, client=parent.get("client"), status="active", parent_id=project_id, phase=phase,
+        aliases=aliases or None, created_by="dashboard"))
+    if created.get("error") or not created.get("id"):
+        return created
+    moved = {}
+    if move_from:
+        # The old name may have been one of the main project's aliases; it now belongs to the phase.
+        from vula.commerce.service import project_key
+        left = [a for a in (parent.get("aliases") or []) if project_key(a) != project_key(move_from)]
+        if len(left) != len(parent.get("aliases") or []):
+            _client().table("vula_projects").update({"aliases": left}).eq("tenant_id", tenant_id) \
+                .eq("id", project_id).execute()
+        from vula.commerce.service import rename_project_everywhere
+        moved = rename_project_everywhere(tenant_id, move_from, name)
+    return {**created, "moved": moved}
+
+
+class AliasIn(BaseModel):
+    alias: str
+
+
+@router.post("/{tenant_id}/p/{project_id}/aliases")
+async def add_alias(tenant_id: str, project_id: str, body: AliasIn) -> dict:
+    """Another name this project is known by — from Documents › Health ("filed under names
+    that aren't on your project list") or typed on the project page. Documents filed under the
+    alias are moved onto the project too."""
+    proj = _own_project(tenant_id, project_id)
+    alias = (body.alias or "").strip()
+    if not alias:
+        raise HTTPException(status_code=400, detail="Give the other name.")
+    aliases = _clean_aliases(list(proj.get("aliases") or []) + [alias], proj["name"])
+    _client().table("vula_projects").update({"aliases": aliases}).eq("tenant_id", tenant_id) \
+        .eq("id", project_id).execute()
+    from vula.commerce.service import rename_project_everywhere
+    moved = rename_project_everywhere(tenant_id, alias, proj["name"])
+    return {"id": project_id, "aliases": aliases, "moved": moved}
 
 
 # ── Master code library ───────────────────────────────────────────────────────
@@ -572,6 +751,7 @@ async def add_code(tenant_id: str, body: CodeIn) -> dict:
 
 @router.post("/{tenant_id}/p/{project_id}/codes/{code_id}")
 async def link_code(tenant_id: str, project_id: str, code_id: str) -> dict:
+    _own_project(tenant_id, project_id)
     try:
         _client().table("vula_project_codes").upsert(
             {"tenant_id": tenant_id, "project_id": project_id, "code_id": code_id},
@@ -583,6 +763,7 @@ async def link_code(tenant_id: str, project_id: str, code_id: str) -> dict:
 
 @router.delete("/{tenant_id}/p/{project_id}/codes/{code_id}")
 async def unlink_code(tenant_id: str, project_id: str, code_id: str) -> dict:
+    _own_project(tenant_id, project_id)
     try:
         (_client().table("vula_project_codes").delete()
          .eq("project_id", project_id).eq("code_id", code_id).execute())
@@ -602,6 +783,7 @@ class TeamIn(BaseModel):
 
 @router.get("/{tenant_id}/p/{project_id}/team")
 async def list_team(tenant_id: str, project_id: str) -> dict:
+    _own_project(tenant_id, project_id)
     try:
         rows = (_client().table("vula_project_team").select("*")
                 .eq("project_id", project_id).execute().data or [])
@@ -612,6 +794,7 @@ async def list_team(tenant_id: str, project_id: str) -> dict:
 
 @router.post("/{tenant_id}/p/{project_id}/team")
 async def add_team_member(tenant_id: str, project_id: str, body: TeamIn) -> dict:
+    _own_project(tenant_id, project_id)
     row = {"tenant_id": tenant_id, "project_id": project_id, **body.model_dump(exclude_none=True)}
     try:
         res = _client().table("vula_project_team").insert(row).execute()
