@@ -36,7 +36,7 @@ export default function VulaBankRec({ tenantId }) {
   const load = useCallback(async () => {
     const [s, t, inv, ord, acc, wk] = await Promise.all([
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/reconciliation`).then(r => r.json()).catch(() => null),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions${filter ? `?status=${filter}` : ""}`).then(r => r.json()).catch(() => ({})),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions?limit=500${noProject ? "&status=no_project" : filter ? `&status=${filter}` : ""}`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?status=sent`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders?status=pending_payment`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/accounts`).then(r => r.json()).catch(() => ({})),
@@ -45,7 +45,16 @@ export default function VulaBankRec({ tenantId }) {
     setSum(s); setTxns(t.transactions || []); setInvoices(inv.invoices || []);
     setPendingOrders(ord.orders || []);
     setAccounts(acc.accounts || []); setVatReg(!!acc.vat_registered); setWorkers(wk.workers || []);
-  }, [tenantId, filter]);
+  }, [tenantId, filter, noProject]);
+
+  // The project register (with phases) for the project box — not just names already on a line.
+  const [registered, setRegistered] = useState([]);
+  useEffect(() => {
+    if (!tenantId || !hasProjects) return;
+    fetch(`${VULA_API}/v1/projects/${tenantId}`).then(r => r.json())
+      .then(d => setRegistered((d.projects || d || []).map(p => p.name).filter(Boolean)))
+      .catch(() => setRegistered([]));
+  }, [tenantId, hasProjects]);
 
   const categorize = async (id, account_code) => {
     if (!account_code) return;
@@ -74,7 +83,7 @@ export default function VulaBankRec({ tenantId }) {
     }).catch(() => {});
     load();
   };
-  const projectNames = [...new Set(txns.map(t => t.project).filter(Boolean))].sort();
+  const projectNames = [...new Set([...registered, ...txns.map(t => t.project).filter(Boolean)])].sort();
 
   // A statement already categorised in a spreadsheet: preview → confirm project names → import.
   const [sheet, setSheet] = useState(null);   // { b64, name, preview, map }

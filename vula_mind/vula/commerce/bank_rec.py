@@ -836,6 +836,17 @@ _NOT_OUR_BANK = re.compile(
     r"\b(30|60|90|120)\s*days\b|remittance advice|\breceipt (no|number)\b", re.IGNORECASE)
 
 
+# Said only by a supplier's statement of account (never by the bank about its own customer).
+_SUPPLIER_ONLY = re.compile(
+    r"accounts? receivable|statement of account|customer statement|activity statement|"
+    r"\b(amount|balance|total) (now )?due\b|\bageing\b|\baged (analysis|balance)|remittance advice|"
+    r"\bcurrent\s+30\s*days\b", re.IGNORECASE)
+# The bank's own statement layout (FNB, Capitec, ABSA, Standard Bank, Nedbank all print these).
+_BANK_LAYOUT = re.compile(
+    r"statement period|universal branch code|transactions in rand|statement date\s*:|"
+    r"account number\s*:?\s*\d{6,}", re.IGNORECASE)
+
+
 def looks_like_own_bank_statement(text: str) -> bool:
     """Is this the business's OWN bank account statement — not a supplier's statement of
     account, an invoice or a receipt with the word "statement" on it? 2026-09-28: every emailed
@@ -845,6 +856,12 @@ def looks_like_own_bank_statement(text: str) -> bool:
     that never touched DIGG's bank. A real statement names the bank and shows balances; a
     supplier statement shows an amount due, ageing columns or invoice numbers."""
     head = (text or "")[:6000]
+    # 2026-10-01: Solid Cape's "Accounts Receivable Statements" still got in by email — it
+    # prints its own bank details (a bank name) and a balance, which the "bankish" exception
+    # below took for a bank statement. Words only a supplier's statement uses now decide,
+    # unless the page has the bank statement's own layout.
+    if _SUPPLIER_ONLY.search(head) and not _BANK_LAYOUT.search(head):
+        return False
     bankish = bool(_BANK_NAMES.search(head)) and bool(_BALANCE_WORDS.search(head))
     if _NOT_OUR_BANK.search(head) and not bankish:
         return False

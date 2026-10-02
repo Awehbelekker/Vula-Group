@@ -54,10 +54,39 @@ def _txns(tenant_id: str, since: Optional[str] = None) -> List[Dict[str, Any]]:
             q = q.gte("txn_date", since)
         return q.order("txn_date")
     try:
-        return [r for r in _all_pages(make) if r.get("match_status") != "ignored"]
+        rows = [r for r in _all_pages(make) if r.get("match_status") != "ignored"]
     except Exception as exc:
         log.debug("job costing read failed: %s", exc)
         return []
+    return sorted(rows + _owed_claims(tenant_id, since), key=lambda r: str(r.get("txn_date") or ""))
+
+
+def _owed_claims(tenant_id: str, since: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Job costs someone paid from their own pocket and hasn't been paid back for yet.
+
+    2026-10-02 (Ian, DIGG): Judy paid R15,913 of BWH / Build It / delivery costs from her private
+    account. None of it is in DIGG's bank, so the projects looked cheaper than they were. Until
+    she's reimbursed the claim stands in for the bank line; once it's marked reimbursed the
+    business's own payment to her carries the cost instead, so it's never counted twice."""
+    def make():
+        q = (_client().table("commerce_expenses")
+             .select("id,date,description,supplier,amount_cents,account_code,project,status")
+             .eq("tenant_id", tenant_id).eq("reimbursable", True).is_("reimbursed_at", "null"))
+        if since:
+            q = q.gte("date", since)
+        return q.order("date")
+    try:
+        from vula.commerce.ledger import _all_pages
+        rows = _all_pages(make)
+    except Exception as exc:
+        log.debug("owed claims read skipped: %s", exc)
+        return []
+    return [{"id": f"claim:{r['id']}", "txn_date": r.get("date"),
+             "description": r.get("description") or r.get("supplier") or "Expense claim",
+             "payee": r.get("supplier"), "amount_cents": int(r.get("amount_cents") or 0),
+             "direction": "out", "account_code": r.get("account_code"), "project": r.get("project"),
+             "trade": None, "match_status": "claim"}
+            for r in rows if r.get("status") not in ("reimbursed", "rejected")]
 
 
 def terms(tenant_id: str) -> Dict[str, float]:
@@ -209,8 +238,10 @@ def looks_like_cost_basis_question(text: str) -> bool:
 
 def cost_basis(tenant_id: str) -> str:
     """What the project costs are measured from, with the real counts — no model."""
-    rows = _txns(tenant_id)
-    res = costing(tenant_id, txns=rows)
+    all_rows = _txns(tenant_id)
+    res = costing(tenant_id, txns=all_rows)
+    rows = [t for t in all_rows if t.get("match_status") != "claim"]
+    claims = [t for t in all_rows if t.get("match_status") == "claim"]
     tagged = [t for t in rows if t.get("project")]
     lines = ["💡 *Where your project costs come from*", ""]
     if rows:
@@ -222,6 +253,9 @@ def cost_basis(tenant_id: str) -> str:
     else:
         lines.append("1. *Bank statements* — none imported yet, so there are no project costs to "
                      "measure. Send a statement (PDF or the Excel breakdown).")
+    if claims:
+        lines.append(f"   Plus {len(claims)} costs paid personally and not yet paid back "
+                     f"({_r(sum(t['amount_cents'] for t in claims))}) — counted until reimbursed.")
     if res.get("unallocated_project_lines"):
         lines.append(f"   {res['unallocated_project_lines']} job-cost lines "
                      f"({_r(res['unallocated_project_spend_cents'])}) aren't on a project yet — "

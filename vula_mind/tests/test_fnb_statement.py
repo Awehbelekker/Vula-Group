@@ -248,3 +248,24 @@ async def test_a_suppliers_statement_of_account_is_left_to_the_document_path(tmp
                      new=AsyncMock(return_value={"error": "x", "not_bank_statement": True})),
     ):
         assert await wa._bank_statement_first("digg-demo", "27820000000", pdf) is False
+
+
+@pytest.mark.asyncio
+async def test_not_on_a_project_is_filtered_by_the_server(monkeypatch):
+    """2 Oct, Ian: "can Judy allocate in her dashboard?" — the Bank page loaded the latest 200
+    lines and filtered in the browser, so July/August lines never showed under "Not on a project"."""
+    from vula.api import commerce as api
+    rows = [
+        _row("judy", "2026-07-04", "FNB App Rtc Pmt To Digg Bricks-Boards", 7000000, account_code="casual_labour"),
+        _row("done", "2026-07-06", "FNB App Payment To Hpc Electrical", 7200000, account_code="cost_of_sales",
+             project="HPC Bokaap"),
+        _row("lunch", "2026-07-18", "POS Purchase Mcd Tableview", 1018, account_code="owner_drawings"),
+        _row("aside", "2026-07-20", "Bank Charges", 300, account_code="casual_labour", match_status="ignored"),
+        _row("in", "2026-07-03", "Magtape Credit Hpc-PC2", 24966844, "in", account_code="sales"),
+    ]
+
+    class Q(_Q):
+        def neq(self, k, v): self.f.append(lambda r, k=k, v=v: r.get(k) != v); return self
+    monkeypatch.setattr(api.service, "_client", lambda: type("D", (), {"table": lambda s, n: Q(rows)})())
+    res = await api.admin_bank_transactions("digg-demo", status="no_project", limit=500)
+    assert [r["id"] for r in res["transactions"]] == ["judy"]

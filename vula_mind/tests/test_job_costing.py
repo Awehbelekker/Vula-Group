@@ -341,6 +341,14 @@ def test_supplier_statements_and_invoices_are_not_bank_statements():
     assert not looks_like_own_bank_statement(supplier)
     assert not looks_like_own_bank_statement(ar)
     assert not looks_like_own_bank_statement(receipt)
+    # 2026-10-01: Solid Cape's statement prints its own banking details and a balance — still
+    # a supplier's statement, not DIGG's bank.
+    solid_cape = ("Accounts Receivable Statements  SOLID CAPE (PTY) LTD  Customer: AWEH BELEKKER T/A DIGG  "
+                  "Balance brought forward R0.00  INV06069 Sales Order 1,142.07  Balance due R369.54  "
+                  "Banking details: First National Bank  Acc 62012345678  Branch 250655")
+    assert not looks_like_own_bank_statement(solid_cape)
+    from tests.test_fnb_statement import TEXT as real_fnb_layout
+    assert looks_like_own_bank_statement(real_fnb_layout)     # the bank's own layout still passes
 
 
 def test_the_sheet_can_replace_pdf_lines_for_its_dates_and_allocates_the_rest(db, tmp_path):
@@ -410,3 +418,34 @@ def test_own_wages_are_overhead_and_never_a_project_clue(db, monkeypatch):
     res = job_costing.costing(TID)
     assert res["overheads_cents"] == 100000 and res["unallocated_project_spend_cents"] == 0
     assert res["projects"][0]["overhead_share_cents"] == 100000
+
+
+# ── Costs paid from a private account count until they're paid back (Ian, 2026-10-02) ──
+
+def test_unreimbursed_personal_claims_count_as_job_cost(db, monkeypatch):
+    monkeypatch.setattr("vula.api.tenants.get_config", lambda tid: {"display_name": "DIGG"})
+    db.tables["commerce_bank_transactions"] = [
+        {"id": "a", "tenant_id": TID, "txn_date": "2026-08-05", "description": "HPC DOORS",
+         "amount_cents": 900000, "direction": "out", "account_code": "cost_of_sales", "project": "HPC Bokaap"},
+    ]
+    claim = dict(tenant_id=TID, reimbursable=True, status="submitted", reimbursed_at=None,
+                 paid_by_name="Judy Downing", account_code="cost_of_sales")
+    db.tables["commerce_expenses"] = [
+        # real lines from Judy's ABSA statement
+        {**claim, "id": "c1", "date": "2026-08-01", "description": "Porterfield payment (Judy ABSA)",
+         "amount_cents": 45000, "project": "HPC Bokaap"},
+        {**claim, "id": "c2", "date": "2026-08-08", "description": "Atlantic Electrical (Judy ABSA card)",
+         "amount_cents": 377244, "project": None},
+        # already paid back → the bank carries it, never counted twice
+        {**claim, "id": "c3", "date": "2026-08-09", "description": "BWH Tableview (Judy ABSA card)",
+         "amount_cents": 27250, "project": "HPC Bokaap", "status": "reimbursed",
+         "reimbursed_at": "2026-09-01T00:00:00Z"},
+        # business card → not owed to anyone
+        {**claim, "id": "c4", "date": "2026-08-09", "description": "Build It", "amount_cents": 1000,
+         "project": "HPC Bokaap", "reimbursable": False},
+    ]
+    res = job_costing.costing(TID)
+    hpc = res["projects"][0]
+    assert hpc["cost_cents"] == 900000 + 45000
+    assert res["unallocated_project_spend_cents"] == 377244
+    assert "not yet paid back (R4,222.44)" in job_costing.cost_basis(TID)
