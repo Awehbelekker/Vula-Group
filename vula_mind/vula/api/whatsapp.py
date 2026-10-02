@@ -2172,7 +2172,12 @@ async def _handle_document_ingest(
             ack = ("📄 Got it — working through your document(s) now. Bank statements get "
                    "reconciled, invoices go to your books, and everything is filed so you can "
                    "ask me about it. This takes 1-3 minutes.")
-        await _send_reply(phone, ack, tenant_id)
+        # The local gate is per worker and production runs two (WEB_CONCURRENCY=2), so a batch
+        # split across both sent two "Got it"s (2 Oct, Ian). The shared send key makes it one
+        # per sender per 2-minute burst across workers.
+        import time as _t_ack
+        await _send_reply(phone, ack, tenant_id,
+                          idem_key=f"doc-ack:{phone}:{kind}:{int(_t_ack.time() // 120)}")
 
     try:
         # Download from Meta
