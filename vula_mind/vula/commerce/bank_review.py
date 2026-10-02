@@ -110,9 +110,13 @@ def _client():
 
 def pending_txns(tenant_id: str) -> List[dict]:
     try:
-        return (_client().table("commerce_bank_transactions").select("*")
+        rows = (_client().table("commerce_bank_transactions").select("*")
                 .eq("tenant_id", tenant_id).in_("categorized_by", list(PENDING))
                 .order("txn_date").limit(500).execute().data or [])
+        # A line set aside (a supplier statement's row, a misread superseded by the verified
+        # statement) is not the owner's to allocate — 2 Oct, Judy was asked about "INV05118
+        # Sales Order", a CT High Performance statement row already set aside.
+        return [r for r in rows if r.get("match_status") != "ignored"]
     except Exception as exc:
         log.debug("pending_txns skipped: %s", exc)
         return []
@@ -185,10 +189,10 @@ async def handle_answer(tenant_id: str, text: str) -> Optional[str]:
     try:
         asked = (db.table("commerce_bank_transactions").select("*")
                  .eq("tenant_id", tenant_id).eq("categorized_by", "asked")
-                 .limit(1).execute().data or [])
+                 .limit(20).execute().data or [])
     except Exception:
         return None
-    asked = [t for t in asked if not _is_stale(t)]
+    asked = [t for t in asked if not _is_stale(t) and t.get("match_status") != "ignored"]
     if not asked:
         return None
     txn = asked[0]

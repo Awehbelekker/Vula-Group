@@ -1997,6 +1997,73 @@ async def _handle_image_or_video(
             ))
 
 
+def _statement_text(tenant_id: str, local_path) -> str:
+    from vula.commerce import bank_rec
+    pwd = bank_rec.get_statement_password(tenant_id)
+    try:
+        from vula.ingestion import fnb_statement
+        text = fnb_statement.pdf_text(local_path, pwd)
+        if text.strip():
+            return text
+    except Exception:
+        pass
+    try:
+        return bank_rec.extract_pdf_text(local_path, pwd)     # encrypted / scanned fallback
+    except Exception:
+        return ""
+
+
+def _looks_like_statement(text: str) -> bool:
+    head = (text or "")[:4000].lower()
+    return "statement" in head and any(k in head for k in
+                                       ("opening balance", "closing balance", "transaction history"))
+
+
+async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
+    """A bank statement PDF → reconcile it (NOT the invoice scanner: a statement has "Tax
+    Invoice" printed on it and would book junk into the books), reply, and file it for search.
+    True when it was a statement and has been handled."""
+    import asyncio as _aio
+    text = await _aio.to_thread(_statement_text, tenant_id, local_path)
+    if not _looks_like_statement(text):
+        return False
+    from vula.commerce import bank_rec
+    rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
+    if rec.get("not_bank_statement"):
+        return False                  # a supplier's statement of account → filed as a document
+    if rec.get("error"):
+        await _send_reply(phone, f"🏦 That looks like a bank statement, but I couldn't "
+                                 f"process it: {rec['error']}", tenant_id)
+        return True
+    msg = (f"🏦 Bank statement processed: *{rec.get('parsed', 0)} transactions*.\n"
+           f"✅ {rec.get('matched_invoices', 0)} matched to invoices"
+           f" · 🧾 {rec.get('matched_expenses', 0)} matched to receipts"
+           f" · 👷 {rec.get('matched_workers', 0)} worker payments")
+    if rec.get("superseded"):
+        msg += f"\n🔁 {rec['superseded']} earlier misread line(s) replaced by this statement."
+    if rec.get("extraction_reconciled") is False:
+        msg += ("\n⚠️ The running balances on this statement didn't add up — "
+                "please double-check the figures in your 🏦 Bank tab.")
+    ni = rec.get("needs_input", 0)
+    if ni:
+        # Start the review right here in the chat — one item at a time.
+        from vula.commerce import bank_review
+        q = bank_review.start_review(tenant_id)
+        if q:
+            msg += f"\n\n{ni} I couldn't allocate — let's sort them here:\n\n{q}"
+        else:
+            msg += (f"\n❓ {ni} need a quick review in your 🏦 Bank tab.")
+    else:
+        msg += "\nEverything allocated — see the 🏦 Bank tab."
+    await _send_reply(phone, msg, tenant_id)
+    try:                              # file it so "find the August statement" works; a failure
+        from vula.ingestion.pipeline import VulaIngestionPipeline        # here no longer
+        await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(local_path)  # costs the lines
+    except Exception as exc:
+        logger.warning("statement filing skipped for %s: %s", local_path.name, exc)
+    return True
+
+
 async def _handle_document_ingest(
     phone: str, media_id: str, filename: str, mime_type: str,
     route_tenant_id: Optional[str] = None, content_sha: Optional[str] = None,
@@ -2114,6 +2181,14 @@ async def _handle_document_ingest(
             await _send_reply(phone, f"Sorry, I couldn't download '{filename}'. Please try again.", tenant_id)
             return
 
+        # A bank statement is read before anything else (2 Oct: of 11 FNB statements sent at
+        # once, 17 Aug's knowledge-base filing failed under load and its bank lines were never
+        # imported, because the import waited on the filing). The import is idempotent, so a
+        # statement sent again is re-checked, not turned away as "Already got".
+        if local_path.suffix.lower() == ".pdf" and await _bank_statement_first(
+                tenant_id, phone, local_path):
+            return
+
         # No Meta sha256 on the webhook → hash the bytes now and claim before any real work.
         # (Still after the ack in this path, but it stops the expensive scan/ingest/reply
         # fan-out, which is the costly and confusing part.)
@@ -2175,46 +2250,7 @@ async def _handle_document_ingest(
             )
             return
 
-        # Bank statement PDF? → run bank reconciliation, NOT the invoice scanner (a statement
-        # has "Tax Invoice" printed on it and would book junk into the books).
-        if local_path.suffix.lower() == ".pdf":
-            from vula.commerce import bank_rec
-            head = doc_text[:4000].lower()
-            if not head:
-                # Encrypted / image-only statement — the reusable text is empty, so fall back
-                # to bank_rec's own extractor (it handles the statement password).
-                try:
-                    head = bank_rec.extract_pdf_text(
-                        local_path, bank_rec.get_statement_password(tenant_id))[:4000].lower()
-                except Exception:
-                    head = ""
-            if "statement" in head and any(k in head for k in
-                                           ("opening balance", "closing balance", "transaction history")):
-                rec = await bank_rec.ingest_statement(tenant_id, local_path, source_file=local_path.name)
-                if rec.get("error"):
-                    await _send_reply(phone, f"🏦 That looks like a bank statement, but I couldn't "
-                                             f"process it: {rec['error']}", tenant_id)
-                else:
-                    msg = (f"🏦 Bank statement processed: *{rec.get('parsed', 0)} transactions*.\n"
-                           f"✅ {rec.get('matched_invoices', 0)} matched to invoices"
-                           f" · 🧾 {rec.get('matched_expenses', 0)} matched to receipts"
-                           f" · 👷 {rec.get('matched_workers', 0)} worker payments")
-                    if rec.get("extraction_reconciled") is False:
-                        msg += ("\n⚠️ The running balances on this statement didn't add up — "
-                                "please double-check the figures in your 🏦 Bank tab.")
-                    ni = rec.get("needs_input", 0)
-                    if ni:
-                        # Start the review right here in the chat — one item at a time.
-                        from vula.commerce import bank_review
-                        q = bank_review.start_review(tenant_id)
-                        if q:
-                            msg += f"\n\n{ni} I couldn't allocate — let's sort them here:\n\n{q}"
-                        else:
-                            msg += (f"\n❓ {ni} need a quick review in your 🏦 Bank tab.")
-                    else:
-                        msg += "\nEverything allocated — see the 🏦 Bank tab."
-                    await _send_reply(phone, msg, tenant_id)
-                return
+        # (Bank statements were read before the knowledge-base filing — _bank_statement_first.)
 
         # Distributor stock sheet (SOH / "stock on hand")? → store it as ROWS so "do we have X"
         # — and, crucially, "we don't stock X, here's what we do" — is answered deterministically

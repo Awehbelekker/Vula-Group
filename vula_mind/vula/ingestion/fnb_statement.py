@@ -110,6 +110,18 @@ def parse(text: str) -> Optional[Dict[str, Any]]:
                     cur["desc"].append(ln)
         i += 1
 
+    # FNB's own charges print with a date and an amount but no description.
+    # Two identical lines on one day (two R120 Dez Wood card swipes) are two transactions; the
+    # books' key is (date, amount, description), so the repeat gets a "(2)" to stay distinct.
+    seen: Dict[tuple, int] = {}
+    for t in txns:
+        if not t["description"]:
+            t["description"] = "FNB bank charges"
+        k = (t["date"], t["amount_cents"], t["direction"], t["description"])
+        seen[k] = seen.get(k, 0) + 1
+        if seen[k] > 1:
+            t["description"] = f"{t['description']} ({seen[k]})"
+
     bal = opening
     for t in txns:
         bal += t["amount_cents"] if t["direction"] == "in" else -t["amount_cents"]
