@@ -3397,6 +3397,11 @@ _DOC_CATEGORIES = [
     # failed to categorise ("Email attachment"). Its net figure is what lands in the bank, so
     # bank_rec allocates that credit to sales instead of leaving it unexplained.
     "Settlement Statement",
+    # 2026-10-02: 28% of DIGG's and 37% of Off the Hook's documents sat in "General Document"
+    # although their summaries said exactly what they were — there was no category to put a
+    # delivery note, a supplier's statement or an insurance schedule in (vula/commerce/doc_quality.py).
+    "Delivery Note", "Account Statement", "Insurance", "Legal / Property",
+    "Brochure / Product Info", "Correspondence",
 ]
 
 # Business Card fields land straight in commerce_contacts (see the write-back hook in
@@ -3621,6 +3626,15 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     'integer|null, "net_cents": integer|null, "transaction_count": integer|null} '
                     "— date is the settlement/payout date, net_cents the amount paid out, money "
                     "in CENTS. "
+                    "For Delivery Note (goods delivered/collected, usually no prices), fields "
+                    'MUST use: {"supplier": string|null, "date": "YYYY-MM-DD"|null, "reference": '
+                    'string|null, "delivery_address": string|null, "line_items": [{"description": '
+                    'string, "quantity": number, "unit": string|null}]}. For Account Statement (a '
+                    "supplier's statement of account / accounts receivable statement), fields MUST "
+                    'use: {"supplier": string|null, "date": "YYYY-MM-DD"|null, "balance_cents": '
+                    'integer|null, "account_number": string|null} — money in CENTS. For Insurance: '
+                    '{"insurer": string|null, "policy_number": string|null, "insured_item": '
+                    'string|null, "date": "YYYY-MM-DD"|null, "premium_cents": integer|null}. '
                     "For Site / Building Photo (a photo of a building's exterior/signage, not a "
                     "document held up to the camera), fields MUST use this exact shape: "
                     '{"address": string|null, "business_name": string|null, "notes": '
@@ -3662,8 +3676,12 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
             cat = data.get("category") or "General Document"
             if cat not in _DOC_CATEGORIES:
                 cat = "General Document"
-            return {"category": cat, "summary": (data.get("summary") or "").strip(),
-                    "fields": data.get("fields") or {}}
+            summary = (data.get("summary") or "").strip()
+            # The summary often names the kind the category missed ("delivery note from Solid
+            # Cape" filed as General Document) — doc_quality.better_category, no extra call.
+            from vula.commerce.doc_quality import better_category
+            cat = better_category(cat, summary, filename)
+            return {"category": cat, "summary": summary, "fields": data.get("fields") or {}}
 
         def _needs_escalation(result: Optional[dict]) -> bool:
             """Empty/failed read → escalate (unchanged). For a financial category, also never

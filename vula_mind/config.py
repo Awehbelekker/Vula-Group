@@ -284,6 +284,9 @@ class Settings(BaseSettings):
     # Monday-morning advisor WhatsApp to each owner (vula/owner_advisor.py). Off until the team
     # has previewed it per tenant in Master › Conversations.
     owner_advisor_enabled: bool = False
+    # Daily automatic re-read of documents missing a required detail (vula/commerce/doc_quality.py),
+    # each tried once; at most this many per tenant per day. 0 turns it off.
+    document_auto_reread_per_day: int = 25
 
     @property
     def verification_policies(self) -> dict[str, str]:

@@ -406,6 +406,38 @@ def run_filing_accuracy(tenant_id: str, limit: int = 60) -> List[Dict[str, Any]]
     return out
 
 
+# Document quality (2026-10-02): what a tenant can find depends on documents being filed in the
+# right kind, read fully, and on a registered project. Thresholds are the bar for "easy to find".
+DOC_QUALITY_BARS = {"catch_all_pct": 10, "missing_pct": 10, "pending": 25, "unregistered": 0}
+DOC_QUALITY_TENANTS = ("digg-demo", "off-the-hook", "gerflor")
+
+
+def run_document_quality(tenant_id: str) -> List[Dict[str, Any]]:
+    from vula.commerce.doc_quality import REQUIRED, health
+    h = health(tenant_id, sample=0)
+    total = h.get("total") or 0
+    if not total:
+        return []
+    needs = sum(n for c, n in (h.get("categories") or {}).items() if c in REQUIRED) or 1
+    catch_pct = round(100 * h["catch_all"] / total)
+    missing_pct = round(100 * h["missing_details"] / needs)
+    unreg = sum((h.get("unregistered_projects") or {}).values())
+    comp = f"Document quality · {tenant_id}"
+    rows = [
+        ("filed-in-a-real-type", catch_pct <= DOC_QUALITY_BARS["catch_all_pct"],
+         f"{catch_pct}% in a catch-all category ({h['catch_all']} of {total})"),
+        ("details-read", missing_pct <= DOC_QUALITY_BARS["missing_pct"],
+         f"{missing_pct}% missing a required detail ({h['missing_details']} documents)"),
+        ("projects-assigned", h["pending_project"] <= DOC_QUALITY_BARS["pending"],
+         f"{h['pending_project']} waiting on which project"),
+        ("projects-registered", unreg <= DOC_QUALITY_BARS["unregistered"],
+         f"{unreg} filed under names not on the register: "
+         + ", ".join(list((h.get('unregistered_projects') or {}))[:4])),
+    ]
+    return [{"id": f"docq:{tenant_id}:{k}", "component": comp, "prompt": k, "ok": ok,
+             "why": [] if ok else [why]} for k, ok, why in rows]
+
+
 # ── Scorecard ─────────────────────────────────────────────────────────────────
 
 def scorecard(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -441,6 +473,12 @@ async def run(judge_model: Optional[str] = None, only: Optional[str] = None,
             rows += run_filing_accuracy(tid)
         except Exception as exc:  # noqa: BLE001
             rows.append({"id": f"filing:{tid}", "component": f"Document filing · {tid}", "ok": False,
+                         "why": [f"couldn't run: {exc}"]})
+    for tid in DOC_QUALITY_TENANTS:
+        try:
+            rows += run_document_quality(tid)
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"id": f"docq:{tid}", "component": f"Document quality · {tid}", "ok": False,
                          "why": [f"couldn't run: {exc}"]})
     judge_cost = 0.0
     for case in load_cases():

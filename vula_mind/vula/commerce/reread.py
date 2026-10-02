@@ -35,15 +35,25 @@ def _missing_money(row: dict) -> bool:
     return row.get("category") in _MONEY and (f.get("total_cents") in (None, "", 0) or not f.get("supplier"))
 
 
-def candidates(tenant_id: str, limit: int = 200) -> List[dict]:
-    """Filed PDFs that are uncategorised or a money document missing its amount/supplier."""
+def _missing(row: dict) -> list:
+    """Required details this document lacks (doc_quality.REQUIRED — 2026-10-02: every kind of
+    document with details worth finding, not just invoices and quotes)."""
+    from vula.commerce.doc_quality import missing_details
+    return missing_details(row.get("category"), row.get("fields"))
+
+
+def candidates(tenant_id: str, limit: int = 200, fresh_only: bool = False) -> List[dict]:
+    """Filed PDFs that are uncategorised or missing a required detail. fresh_only skips one
+    already re-read (fields._reread_at) — the daily automatic pass tries each document once."""
+    from vula.commerce.doc_quality import REQUIRED
     rows = (service._client().table("vula_filed_documents")
             .select("id,category,filename,file_url,fields,summary,doc_id,project,created_at")
-            .eq("tenant_id", tenant_id).in_("category", ["Email attachment", *_MONEY])
+            .eq("tenant_id", tenant_id).in_("category", ["Email attachment", *REQUIRED])
             .order("created_at", desc=True).limit(2000).execute().data or [])
     out = [r for r in rows
            if r.get("file_url") and (r.get("filename") or "").lower().endswith(".pdf")
-           and (r.get("category") == "Email attachment" or _missing_money(r))]
+           and (r.get("category") == "Email attachment" or _missing(r))
+           and not (fresh_only and (r.get("fields") or {}).get("_reread_at"))]
     return out[:limit]
 
 
@@ -54,8 +64,11 @@ def _improves(row: dict, analysis: dict) -> bool:
         return False
     if row.get("category") == "Email attachment":
         return True
-    # A money document: only if the re-read found what was missing.
-    return bool(fields.get("total_cents") or fields.get("supplier"))
+    # Only if the re-read found something that was missing (and kept the document's kind).
+    from vula.commerce.doc_quality import missing_details
+    before = set(missing_details(row.get("category"), row.get("fields")))
+    after = set(missing_details(row.get("category"), fields))
+    return cat == row.get("category") and len(after) < len(before)
 
 
 async def _download(url: str) -> bytes:
@@ -65,9 +78,9 @@ async def _download(url: str) -> bytes:
         return resp.content
 
 
-async def reread_missing(tenant_id: str, limit: int = 60) -> Dict[str, Any]:
+async def reread_missing(tenant_id: str, limit: int = 60, fresh_only: bool = False) -> Dict[str, Any]:
     from vula.api.whatsapp import _analyze_document
-    rows = candidates(tenant_id, limit)
+    rows = candidates(tenant_id, limit, fresh_only=fresh_only)
     status = _STATUS[tenant_id] = {"running": True, "total": len(rows), "done": 0, "fixed": 0,
                                    "stock_sheets": 0, "failed": 0, "categories": {}}
     for row in rows:
@@ -92,11 +105,17 @@ async def reread_missing(tenant_id: str, limit: int = 60) -> Dict[str, Any]:
                             status["stock_sheets"] += 1
                     except Exception as exc:
                         log.debug("reread stock sheet check skipped: %s", exc)
+            from datetime import datetime, timezone
+            stamp = datetime.now(timezone.utc).isoformat()
             if analysis and _improves(row, analysis):
+                # Keep what the first read found when the re-read has nothing for that key.
+                merged = {**(row.get("fields") or {}),
+                          **{k: v for k, v in (analysis.get("fields") or {}).items() if v not in (None, "")},
+                          "_reread_at": stamp}
                 (service._client().table("vula_filed_documents")
                  .update({"category": analysis["category"],
                           "summary": analysis.get("summary") or row.get("summary"),
-                          "fields": analysis.get("fields") or {}})
+                          "fields": merged})
                  .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
                 try:
                     from vula.commerce.price_book import record_from_document
@@ -107,6 +126,11 @@ async def reread_missing(tenant_id: str, limit: int = 60) -> Dict[str, Any]:
                 status["fixed"] += 1
                 cats = status["categories"]
                 cats[analysis["category"]] = cats.get(analysis["category"], 0) + 1
+            else:
+                # Tried once; still missing → the owner's list (doc_quality.health), not retried daily.
+                (service._client().table("vula_filed_documents")
+                 .update({"fields": {**(row.get("fields") or {}), "_reread_at": stamp}})
+                 .eq("tenant_id", tenant_id).eq("id", row["id"]).execute())
         except Exception as exc:
             log.warning("reread of document %s failed: %s", row.get("id"), exc)
             status["failed"] += 1

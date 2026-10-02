@@ -808,6 +808,33 @@ async def _shared_kb_loop() -> None:
         await _asyncio.sleep(86400)
 
 
+async def _document_quality_loop() -> None:
+    """Daily: each tenant's documents still missing a required detail (supplier, date, total…)
+    are re-read once with today's pipeline (vula/commerce/reread.py, fresh_only). What a re-read
+    can't fill stays on the owner's list in Documents › Health. Capped per tenant per day."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(600)
+    while True:
+        try:
+            from config import settings as _s
+            cap = int(_s.document_auto_reread_per_day or 0)
+            if cap > 0:
+                from vula.api import tenants as _t
+                from vula.commerce import reread as _rr
+                from vula.commerce import service as _svc
+                tids = [r["tenant_id"] for r in (_svc._client().table("vula_tenant_config")
+                        .select("tenant_id").execute().data or []) if r.get("tenant_id")]
+                for tid in tids:
+                    if not _t.is_active(tid):
+                        continue
+                    res = await _rr.reread_missing(tid, limit=cap, fresh_only=True)
+                    if res.get("total"):
+                        log.info("document re-read %s: %s of %s improved", tid, res.get("fixed"), res.get("total"))
+        except Exception as exc:
+            log.warning("document quality loop error: %s", exc)
+        await _asyncio.sleep(86400)
+
+
 async def _master_digest_loop() -> None:
     """Monday 07:00–11:00 SAST: the weekly tenant-health email to TEAM_EMAIL
     (vula/master_digest.py). Checks every 15 minutes; the send is marked once per ISO week in
@@ -1417,6 +1444,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_shared_kb_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_conversation_check_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_advisor_loop()))
@@ -1595,7 +1623,7 @@ _TENANT_GUARD_RES = [
     re.compile(r"^/v1/subscriptions/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/recurring-bills/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/projects/([^/]+)(?:/|$)"),
-    re.compile(r"^/v1/documents/([^/]+)/(?:filed|projects|media)(?:/|$)"),
+    re.compile(r"^/v1/documents/([^/]+)/(?:filed|projects|media|health)(?:/|$)"),
     re.compile(r"^/v1/qs/rates/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/field/(?:contractors|daily-tasks)/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/email/(?:status|set-primary|sync|backfill|contacts|followups|disconnect)/([^/]+)(?:/|$)"),
