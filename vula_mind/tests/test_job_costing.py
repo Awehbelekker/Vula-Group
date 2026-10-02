@@ -341,6 +341,14 @@ def test_supplier_statements_and_invoices_are_not_bank_statements():
     assert not looks_like_own_bank_statement(supplier)
     assert not looks_like_own_bank_statement(ar)
     assert not looks_like_own_bank_statement(receipt)
+    # 2026-10-01: Solid Cape's statement prints its own banking details and a balance — still
+    # a supplier's statement, not DIGG's bank.
+    solid_cape = ("Accounts Receivable Statements  SOLID CAPE (PTY) LTD  Customer: AWEH BELEKKER T/A DIGG  "
+                  "Balance brought forward R0.00  INV06069 Sales Order 1,142.07  Balance due R369.54  "
+                  "Banking details: First National Bank  Acc 62012345678  Branch 250655")
+    assert not looks_like_own_bank_statement(solid_cape)
+    from tests.test_fnb_statement import TEXT as real_fnb_layout
+    assert looks_like_own_bank_statement(real_fnb_layout)     # the bank's own layout still passes
 
 
 def test_the_sheet_can_replace_pdf_lines_for_its_dates_and_allocates_the_rest(db, tmp_path):

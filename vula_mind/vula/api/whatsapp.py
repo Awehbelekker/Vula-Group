@@ -6373,21 +6373,17 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
         parts.extend(_split_for_whatsapp(_p))
     parts = parts or [message]
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # 2 Oct: four replies were lost while 11 statements were processed at once — each a
+        # timeout with an empty message ("WhatsApp reply failed to 2764…10: "). A busy worker
+        # can't read Meta's answer within 10s; give it 30s, and retry a request that never
+        # left (connection/pool failures) — never one Meta may already have accepted.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
             for i, part in enumerate(parts):
-                resp = await client.post(
+                resp = await _post_unsent_retry(client, (
                     f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
-                    headers={
-                        "Authorization": f"Bearer {creds['token']}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": number,
-                        "type": "text",
-                        "text": {"body": part[:_WA_TEXT_LIMIT]},
-                    },
-                )
+                    {"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                    {"messaging_product": "whatsapp", "to": number, "type": "text",
+                     "text": {"body": part[:_WA_TEXT_LIMIT]}}))
                 resp.raise_for_status()
                 # A 200 here means Meta ACCEPTED the message, not that it arrived. Keep the
                 # message id so the asynchronous delivery callback can be matched back to it —
@@ -6418,9 +6414,28 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
             await _send_notify_template(creds, number, tenant_id)
         return False
     except Exception as exc:
-        logger.error("WhatsApp reply failed to %s: %s", to, exc)
-        await _record_send_failure(to, tenant_id, "", str(exc))
+        # str() of an httpx timeout is empty — name the exception so the log says what happened
+        logger.error("WhatsApp reply failed to %s: %s %s", to, type(exc).__name__, exc)
+        await _record_send_failure(to, tenant_id, "", f"{type(exc).__name__}: {exc}")
         return False
+
+
+_UNSENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+async def _post_unsent_retry(client, req, attempts: int = 3):
+    """POST to Meta, retrying only when the request never reached it (connect/pool failures).
+    A read timeout is NOT retried: Meta may have accepted it, and a customer would get it twice."""
+    import asyncio as _aio
+    url, headers, body = req
+    for n in range(attempts):
+        try:
+            return await client.post(url, headers=headers, json=body)
+        except _UNSENT as exc:
+            if n == attempts - 1:
+                raise
+            logger.info("WhatsApp send not delivered to Meta (%s) — retrying", type(exc).__name__)
+            await _aio.sleep(1.5 * (n + 1))
 
 
 async def _send_invoice_document(

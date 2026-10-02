@@ -1234,3 +1234,56 @@ async def test_research_pdf_yes_with_no_history_sends_fallback_message():
 
     mock_render.assert_not_called()
     mock_reply.assert_called_once()
+
+
+# ── a busy server must not lose replies (2 Oct) ──────────────────────────────────
+
+def _meta_client(post):
+    c = AsyncMock()
+    c.__aenter__ = AsyncMock(return_value=c)
+    c.__aexit__ = AsyncMock(return_value=None)
+    c.post = post
+    return c
+
+
+def _ok():
+    r = MagicMock()
+    r.raise_for_status = MagicMock()
+    r.json.return_value = {"messages": [{"id": "wamid.1"}]}
+    return r
+
+
+@pytest.mark.asyncio
+async def test_a_send_that_never_reached_meta_is_retried():
+    """2 Oct: four replies were lost while 11 statements were processed at once."""
+    import httpx
+    import vula.api.whatsapp as wa
+    post = AsyncMock(side_effect=[httpx.ConnectTimeout("busy"), _ok()])
+    with (
+        patch.object(wa, "_get_tenant_wa_creds", AsyncMock(return_value={"token": "t", "phone_id": "p"})),
+        patch("vula.api.whatsapp.httpx.AsyncClient", return_value=_meta_client(post)),
+        patch("asyncio.sleep", AsyncMock()),
+        patch.object(wa, "_record_outbound", MagicMock()),
+    ):
+        assert await wa._send_reply("27645755210", "Bank statement processed", "digg-demo") is True
+    assert post.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_after_sending_is_not_retried_and_is_named():
+    """Meta may already have the message — a retry would send it twice. The log names the error
+    (an httpx timeout's own text is empty, which is why the failures were blank)."""
+    import httpx
+    import vula.api.whatsapp as wa
+    post = AsyncMock(side_effect=httpx.ReadTimeout(""))
+    failures = []
+
+    async def record(to, tid, body, exc_text):
+        failures.append(exc_text)
+    with (
+        patch.object(wa, "_get_tenant_wa_creds", AsyncMock(return_value={"token": "t", "phone_id": "p"})),
+        patch("vula.api.whatsapp.httpx.AsyncClient", return_value=_meta_client(post)),
+        patch.object(wa, "_record_send_failure", record),
+    ):
+        assert await wa._send_reply("27645755210", "hi", "digg-demo") is False
+    assert post.await_count == 1 and failures == ["ReadTimeout: "]
