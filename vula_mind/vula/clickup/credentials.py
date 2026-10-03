@@ -14,6 +14,10 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _CACHE: dict[str, dict] = {}
+# Production runs two workers and invalidate() only clears the one that served the reconnect; with
+# no expiry the other kept using the old (dead) token until the next deploy (2026-10-03).
+_CACHE_TTL = 120.0
+_CACHED_AT: dict[str, float] = {}
 
 
 def _client():
@@ -26,8 +30,10 @@ def _client():
 
 def get_tenant_clickup_creds(tenant_id: str) -> Optional[dict]:
     """Return {token, team_id, list_ids, space_id} for a connected tenant, else None."""
-    if tenant_id in _CACHE:
+    import time
+    if tenant_id in _CACHE and time.monotonic() - _CACHED_AT.get(tenant_id, 0) < _CACHE_TTL:
         return _CACHE[tenant_id]
+    _CACHE.pop(tenant_id, None)
     try:
         res = (_client().table("vula_clickup_accounts")
                .select("api_token,team_id,list_ids,space_id,status")
@@ -44,6 +50,7 @@ def get_tenant_clickup_creds(tenant_id: str) -> Optional[dict]:
                 "space_id": r.get("space_id"),
             }
             _CACHE[tenant_id] = creds
+            _CACHED_AT[tenant_id] = time.monotonic()
             return creds
     except Exception as exc:
         logger.debug("ClickUp creds lookup failed for %s: %s", tenant_id, exc)
@@ -62,3 +69,4 @@ def default_list_id(creds: dict) -> Optional[str]:
 
 def invalidate(tenant_id: str) -> None:
     _CACHE.pop(tenant_id, None)
+    _CACHED_AT.pop(tenant_id, None)
