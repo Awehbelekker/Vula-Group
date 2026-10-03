@@ -654,8 +654,139 @@ async def process_all_clickup_sync() -> int:
         try:
             res = await sync_tenant_clickup_kb(tenant_id)
             total += res.get("synced_lists", 0) or 0
-            record_sync_result("vula_clickup_accounts", tenant_id, ok=True)
+            if res.get("needs_reconnect"):
+                continue          # mark_needs_reconnect already recorded the error
+            record_sync_result("vula_clickup_accounts", tenant_id, ok=not res.get("error"),
+                               error=res.get("error") or "")
         except Exception as exc:
             logger.warning("ClickUp KB sync failed for %s: %s", tenant_id, exc)
             record_sync_result("vula_clickup_accounts", tenant_id, ok=False, error=str(exc))
     return total
+
+
+# ── Connection health ─────────────────────────────────────────────────────────
+# 2026-10-03 (Ian, DIGG): "why do we struggle with ClickUp?" From 1 Aug no filed document reached
+# ClickUp (0 of 129, against 78 of 85 in July) and the assistant's list_tasks got 401 — Vula's
+# stored token had lost access to the workspace. Every failure was a log warning, the filing
+# reply still read fine, and the KB sync recorded "ok" because it treats a refused list as an
+# empty one, so the dashboard said "connected" the whole time. A refused token is now detected,
+# the connection marked needs_reconnect (get_tenant_clickup_creds stops handing it out, so the
+# callers' existing "ClickUp isn't connected" paths speak up), and the owner is told once a day.
+
+_CHECKED: dict[str, float] = {}
+_RECHECK_SECS = 600
+
+
+async def check_access(tenant_id: str, token: Optional[str] = None,
+                       team_id: Optional[str] = None) -> dict:
+    """Can this token still reach the tenant's workspace? {"ok": True | False | None, "reason"}.
+    False only on ClickUp's own answer (401/403, or the workspace isn't among the token's
+    authorised ones); a network error or 5xx is None — unknown, never treated as refused."""
+    if token is None:
+        creds = get_tenant_clickup_creds(tenant_id)
+        if not creds or not creds.get("token"):
+            return {"ok": None, "reason": "not connected"}
+        token, team_id = creds["token"], team_id or creds.get("team_id")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(f"{_BASE}/team", headers=_headers(token))
+    except Exception as exc:
+        return {"ok": None, "reason": f"ClickUp unreachable: {type(exc).__name__}"}
+    if r.status_code in (401, 403):
+        return {"ok": False, "reason": f"ClickUp refused Vula's sign-in ({r.status_code})"}
+    if r.status_code >= 400:
+        return {"ok": None, "reason": f"ClickUp error {r.status_code}"}
+    teams = (r.json() or {}).get("teams") or []
+    ids = {str(t.get("id")) for t in teams}
+    if team_id and str(team_id) not in ids:
+        return {"ok": False, "reason": "Vula's sign-in no longer includes this ClickUp workspace"}
+    return {"ok": True, "reason": "", "teams": [{"id": t.get("id"), "name": t.get("name")} for t in teams]}
+
+
+def mark_needs_reconnect(tenant_id: str, reason: str) -> None:
+    from datetime import date
+    from vula.clickup.credentials import invalidate
+    try:
+        _client().table("vula_clickup_accounts").update({
+            "status": "needs_reconnect", "last_sync_status": "error",
+            "last_sync_error": reason[:500],
+            "last_synced_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("tenant_id", tenant_id).execute()
+    except Exception as exc:
+        logger.warning("could not flag ClickUp for reconnect (%s): %s", tenant_id, exc)
+    invalidate(tenant_id)
+    logger.warning("ClickUp for %s needs reconnecting: %s", tenant_id, reason)
+    try:
+        import asyncio
+        from vula.integrations.notify import notify_team
+        msg = ("⚠️ ClickUp needs reconnecting — Vula can no longer reach your workspace "
+               f"({reason}). Until then documents are filed in Vula only. Reconnect in the "
+               "dashboard under Settings › ClickUp; anything filed meanwhile is sent across "
+               "once it's back.")
+        asyncio.get_running_loop().create_task(notify_team(
+            tenant_id, "integration_alert", msg,
+            idem_key=f"clickup-reconnect:{tenant_id}:{date.today().isoformat()}"))
+    except Exception as exc:
+        logger.debug("ClickUp reconnect notice skipped for %s: %s", tenant_id, exc)
+
+
+async def verify_or_flag(tenant_id: str) -> Optional[bool]:
+    """After a ClickUp call was refused: check the sign-in (at most every 10 minutes per tenant)
+    and flag the connection if ClickUp really refuses it. Returns check_access's ok."""
+    import time
+    now = time.monotonic()
+    if now - _CHECKED.get(tenant_id, -1e9) < _RECHECK_SECS:
+        return None
+    _CHECKED[tenant_id] = now
+    res = await check_access(tenant_id)
+    if res.get("ok") is False:
+        mark_needs_reconnect(tenant_id, res["reason"])
+    return res.get("ok")
+
+
+def looks_refused(exc: BaseException) -> bool:
+    """An httpx error ClickUp answered with 401/403/404 — the shape a lost sign-in takes."""
+    resp = getattr(exc, "response", None)
+    code = getattr(resp, "status_code", None)
+    if code is None:
+        m = re.search(r"\b(401|403|404)\b", str(exc))
+        return bool(m)
+    return code in (401, 403, 404)
+
+
+async def refile_missing(tenant_id: str, limit: int = 300) -> dict:
+    """Send documents that were filed in Vula but never reached ClickUp (a matched list, no
+    ClickUp task) across, oldest first. Run after a reconnect. Stops at the first refusal."""
+    from vula.integrations.doc_filing import attach_into_project
+    from vula.storage_links import fetch
+    rows = (_client().table("vula_filed_documents")
+            .select("id,project,clickup_list_id,filename,file_url,mime")
+            .eq("tenant_id", tenant_id).eq("status", "filed")
+            .not_.is_("clickup_list_id", "null").is_("clickup_task_id", "null")
+            .not_.is_("file_url", "null").order("created_at").limit(limit).execute().data or [])
+    done = failed = 0
+    for r in rows:
+        try:
+            data = await fetch(r["file_url"])
+        except Exception as exc:
+            logger.warning("refile: couldn't read %s: %s", r["id"], exc)
+            failed += 1
+            continue
+        att = await attach_into_project(tenant_id, r.get("project"), r["clickup_list_id"],
+                                        r.get("filename") or "document", data,
+                                        r.get("mime") or "application/octet-stream")
+        if not att.get("clickup_task_id"):
+            failed += 1
+            if await verify_or_flag(tenant_id) is False:
+                break
+            continue
+        try:
+            _client().table("vula_filed_documents").update({
+                "clickup_task_id": att["clickup_task_id"],
+                "clickup_list_id": att.get("clickup_list_id") or r["clickup_list_id"],
+            }).eq("id", r["id"]).execute()
+            done += 1
+        except Exception as exc:
+            logger.warning("refile: couldn't record %s: %s", r["id"], exc)
+    logger.info("ClickUp refile for %s: %d sent, %d failed of %d", tenant_id, done, failed, len(rows))
+    return {"tenant_id": tenant_id, "candidates": len(rows), "sent": done, "failed": failed}

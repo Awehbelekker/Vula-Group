@@ -19,7 +19,7 @@ import logging
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from vula.api.master_auth import require_auth
@@ -182,6 +182,7 @@ async def oauth_callback(code: str = "", state: str = "") -> HTMLResponse:
         _store_connection(tenant_id, token, info.get("team_id"), info.get("lists"),
                          info.get("default"), team_name=info.get("team_name") or "")
         await _register_webhook(tenant_id)
+        _start_refile(tenant_id)
         return _popup_close_html(f"ClickUp connected — {info.get('team_name') or 'workspace'} ✅")
     except Exception as exc:
         log.error("ClickUp OAuth callback failed for %s: %s", tenant_id, exc)
@@ -243,16 +244,51 @@ class ConnectIn(BaseModel):
     tenant_id: str
     api_token: str
     team_id: Optional[str] = None
-    default_list_id: str
+    default_list_id: Optional[str] = None
     connected_by: Optional[str] = None
 
 
 @router.post("/connect", dependencies=[Depends(require_auth)])
 async def connect(body: ConnectIn) -> dict:
-    _store_connection(body.tenant_id, body.api_token, body.team_id, None,
-                     body.default_list_id, connected_by=body.connected_by or "")
+    """Connect with a ClickUp personal token (Settings › Apps in ClickUp, "pk_…"). 2026-10-03: the
+    OAuth popup never came back to Vula once since August, so a token is the way round it. The
+    token is checked against ClickUp before it's stored, the workspace and lists are found the
+    same way OAuth does, and anything filed while disconnected is sent across."""
+    token = (body.api_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Paste the ClickUp token.")
+    access = await service.check_access(body.tenant_id, token=token)
+    if access.get("ok") is not True:
+        raise HTTPException(status_code=400,
+                            detail=access.get("reason") or "ClickUp didn't accept that token.")
+    info = await service.discover_team_and_lists(token)
+    team_id = body.team_id or info.get("team_id")
+    _store_connection(body.tenant_id, token, team_id, info.get("lists"),
+                      body.default_list_id or info.get("default"),
+                      team_name=info.get("team_name") or "", connected_by=body.connected_by or "")
     ok = await _register_webhook(body.tenant_id)
-    return {"tenant_id": body.tenant_id, "status": "connected", "webhook_registered": ok}
+    _start_refile(body.tenant_id)
+    return {"tenant_id": body.tenant_id, "status": "connected", "webhook_registered": ok,
+            "workspace": info.get("team_name"), "lists": len(info.get("lists") or [])}
+
+
+def _start_refile(tenant_id: str) -> None:
+    """After a (re)connect, send what was filed while ClickUp was unreachable."""
+    try:
+        from vula.commerce.background_tasks import run_background
+        run_background(tenant_id, "clickup_refile", service.refile_missing(tenant_id))
+    except Exception as exc:
+        log.warning("ClickUp refile not started for %s: %s", tenant_id, exc)
+
+
+@router.post("/refile-missing/{tenant_id}", dependencies=[Depends(require_auth)])
+async def refile_missing(tenant_id: str) -> dict:
+    """Send documents filed in Vula but never in ClickUp across now (runs in the background)."""
+    creds = get_tenant_clickup_creds(tenant_id)
+    if not creds:
+        raise HTTPException(status_code=409, detail="ClickUp isn't connected — reconnect first.")
+    _start_refile(tenant_id)
+    return {"tenant_id": tenant_id, "started": True}
 
 
 # ── Sync ClickUp projects into the tenant's knowledge base ────────────────────
@@ -278,6 +314,11 @@ async def sync_tenant_clickup_kb(tenant_id: str) -> dict:
     creds = get_tenant_clickup_creds(tenant_id)
     if not creds:
         return {"error": "ClickUp not connected for this tenant."}
+    # A refused list used to read as an empty one, so a dead sign-in synced "ok" for months.
+    access = await service.check_access(tenant_id)
+    if access.get("ok") is False:
+        service.mark_needs_reconnect(tenant_id, access["reason"])
+        return {"error": access["reason"], "needs_reconnect": True}
     list_ids = creds.get("list_ids") or {}
     if not isinstance(list_ids, dict):
         return {"error": "No lists stored for this tenant."}

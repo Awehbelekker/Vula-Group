@@ -344,5 +344,9 @@ class ClickUpAdminSkill(BaseSkill):
             return {"error": "ClickUp is not connected for this tenant."}
         except Exception as exc:
             logger.warning("clickup tool %s failed: %s", name, exc)
+            if service.looks_refused(exc) and await service.verify_or_flag(tid) is False:
+                return {"error": "ClickUp has stopped accepting Vula's sign-in — it needs "
+                                 "reconnecting in the dashboard (Settings › ClickUp). Say so "
+                                 "plainly; nothing was read or changed in ClickUp."}
             return {"error": str(exc)}
         return {"error": f"unknown tool {name}"}
