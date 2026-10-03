@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from vula.api.master_auth import authorized_tenant
 from vula.api.whatsapp import _send_reply, _send_wa_template
 from vula.models.field_ops import get_field_ops_db
+from vula.storage_links import signed
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +261,7 @@ async def get_task(task_id: str, request: Request, tenant_id: Optional[str] = No
         "created_at": task.created_at,
         "updated_at": task.updated_at,
         "evidence": [
-            {"id": e.id, "photo_url": e.photo_url, "caption": e.caption, "submitted_at": e.submitted_at}
+            {"id": e.id, "photo_url": signed(e.photo_url), "caption": e.caption, "submitted_at": e.submitted_at}
             for e in evidence
         ],
         "sign_off": {

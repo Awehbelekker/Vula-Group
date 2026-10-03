@@ -3632,8 +3632,9 @@ async def admin_list_expenses(tenant_id: str, status: Optional[str] = None,
     # curated/finite (not free text), unlike `project` which is inherently open-ended. Expense
     # accounts only; an expense is never income.
     accounts = [a for a in accounting.ensure_chart(tenant_id) if a.get("type") == "expense"]
-    return {"expenses": expenses.list_claims(tenant_id, status=status, reimbursable=reimbursable,
-                                             project=project, since=since, until=until, paid_by=paid_by),
+    from vula.storage_links import sign_row
+    return {"expenses": sign_row(expenses.list_claims(tenant_id, status=status, reimbursable=reimbursable,
+                                             project=project, since=since, until=until, paid_by=paid_by)),
             "sections": expenses.known_sections(tenant_id, project=project),
             "projects": expenses.known_projects(tenant_id),
             "categories": [{"code": a["code"], "name": a["name"]} for a in accounts],
@@ -4447,6 +4448,9 @@ async def admin_get_invoice_settings(tenant_id: str):
     """
     settings = await service.get_invoice_settings(tenant_id)
     from config import settings as app_settings
+    from vula.storage_links import sign_row
+    if settings:
+        settings = sign_row(dict(settings), keys=("signature_url",))
     return {"settings": settings, "onboarded": bool(settings and settings.get("onboarded")),
             "email_configured": bool(app_settings.resend_api_key)}
 

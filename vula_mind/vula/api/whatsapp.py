@@ -4662,14 +4662,16 @@ def _compress_image(data: bytes, content_type: str) -> tuple[bytes, str]:
 
 
 def _upload_to_storage(bucket: str, object_path: str, data: bytes, content_type: str) -> Optional[str]:
-    """Upload bytes to a public Supabase Storage bucket. Returns the public URL,
-    or None on failure. Used for evidence photos and filed documents."""
+    """Upload bytes to a Supabase Storage bucket. Returns the stored link, or None on failure.
+    Used for evidence photos and filed documents. Tenant buckets are private
+    (vula/storage_links.py): the link is an identifier, signed whenever it's handed out."""
     try:
         data, content_type = _compress_image(data, content_type)
         from vula.models.field_ops import _client
         sb = _client()
         try:
-            sb.storage.create_bucket(bucket, options={"public": True})
+            from vula.storage_links import PRIVATE_BUCKETS
+            sb.storage.create_bucket(bucket, options={"public": bucket not in PRIVATE_BUCKETS})
         except Exception:
             pass  # already exists
         try:

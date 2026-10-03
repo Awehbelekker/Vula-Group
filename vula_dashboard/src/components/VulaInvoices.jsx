@@ -329,8 +329,8 @@ export default function VulaInvoices({ tenantId, products = [], initialSupplierI
   }
 
   // The real document a supplier sent (scanned/emailed/WhatsApp'd) — linked via migration 102's
-  // vula_filed_documents.commerce_invoice_id bridge. file_url is a direct Supabase Storage link
-  // (not behind the admin auth guard), so it opens with a plain window.open().
+  // vula_filed_documents.commerce_invoice_id bridge. file_url comes back as a signed Storage link
+  // that expires in an hour (the documents bucket is private), so it opens with a plain window.open().
   async function openFiledDocument(inv) {
     try {
       const d = await fetch(`${VULA_API}/v1/documents/${tenantId}/filed?commerce_invoice_id=${inv.id}`).then(r => r.json())
@@ -1211,6 +1211,9 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
   const [saving, setSaving] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingSignature, setUploadingSignature] = useState(false)
+  // the signatures bucket is private: the stored link is an identifier the API signs, so a
+  // freshly uploaded signature is previewed from the local file instead
+  const [signaturePreview, setSignaturePreview] = useState('')
   const [uploadingMenuImage, setUploadingMenuImage] = useState(false)
   const [showCloneUpload, setShowCloneUpload] = useState(false)
   const [cloning, setCloning] = useState(false)
@@ -1238,7 +1241,10 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
       const { error } = await supabase.storage.from('signatures').upload(path, file, { cacheControl: '3600', upsert: true })
       if (!error) {
         const { data } = supabase.storage.from('signatures').getPublicUrl(path)
-        if (data?.publicUrl) set('signature_url', data.publicUrl)
+        if (data?.publicUrl) {
+          set('signature_url', data.publicUrl)
+          setSignaturePreview(URL.createObjectURL(file))
+        }
       }
     } finally { setUploadingSignature(false) }
   }
@@ -1496,8 +1502,8 @@ function InvoiceSettings({ tenantId, settings, firstRun, onDone, onCancel }) {
             {uploadingSignature ? 'Uploading…' : (form.signature_url ? '↻ Replace signature' : '✍️ Upload signature')}
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadSignature} style={{ display: 'none' }} />
           </label>
-          {form.signature_url && <img src={form.signature_url} alt="signature" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
-          {form.signature_url && <button type="button" onClick={() => set('signature_url', '')} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18 }}>×</button>}
+          {form.signature_url && <img src={signaturePreview || form.signature_url} alt="signature" style={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />}
+          {form.signature_url && <button type="button" onClick={() => { set('signature_url', ''); setSignaturePreview('') }} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18 }}>×</button>}
         </div>
         <input placeholder="Name/title shown under the signature (e.g. Judy Downing, Director)" value={form.signature_name}
           onChange={e => set('signature_name', e.target.value)} style={s.fInput} />

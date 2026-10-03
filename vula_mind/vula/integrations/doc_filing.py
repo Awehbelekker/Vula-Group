@@ -743,11 +743,8 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     clickup_list_id, clickup_task_id = match.get("clickup_list_id"), None
     if match.get("clickup_list_id") and doc.get("file_url"):
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                fb = await client.get(doc["file_url"])
-                fb.raise_for_status()
-                data = fb.content
+            from vula.storage_links import fetch
+            data = await fetch(doc["file_url"])
             att = await attach_into_project(
                 tenant_id, match["project"], match["clickup_list_id"],
                 doc.get("filename") or "document", data,

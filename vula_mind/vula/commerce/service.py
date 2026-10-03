@@ -2829,6 +2829,10 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
     (migration-gated) field and retry once, so the rest of the settings still save.
     """
     patch = {k: data[k] for k in _INVOICE_SETTINGS_FIELDS if k in data}
+    if patch.get("signature_url"):
+        # the dashboard shows (and saves back) a signed, expiring link — keep the identifier
+        from vula.storage_links import canonical
+        patch["signature_url"] = canonical(patch["signature_url"])
     choice = patch.get("template_choice")
     if choice is not None and choice not in _TEMPLATE_CHOICES:
         raise ValueError(f"template_choice must be one of {_TEMPLATE_CHOICES}")
