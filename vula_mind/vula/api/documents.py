@@ -69,7 +69,8 @@ async def list_filed(
     except Exception as exc:
         log.warning("documents list failed (run migration 015/109?): %s", exc)
         rows, total = [], 0
-    return {"tenant_id": tenant_id, "documents": rows, "count": len(rows), "total": total}
+    from vula.storage_links import sign_row
+    return {"tenant_id": tenant_id, "documents": sign_row(rows), "count": len(rows), "total": total}
 
 
 @router.get("/{tenant_id}/health")
@@ -142,12 +143,9 @@ async def assign_project(doc_id: str, body: AssignIn, request: Request) -> dict:
     clickup_list_id, clickup_task_id = body.clickup_list_id, None
     if body.clickup_list_id and doc.get("file_url"):
         try:
-            import httpx
             from vula.integrations.doc_filing import attach_into_project
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                fb = await client.get(doc["file_url"])
-                fb.raise_for_status()
-                data = fb.content
+            from vula.storage_links import fetch
+            data = await fetch(doc["file_url"])
             att = await attach_into_project(
                 doc["tenant_id"], body.project, body.clickup_list_id,
                 doc.get("filename") or "document", data,

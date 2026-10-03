@@ -33,6 +33,7 @@ from core.llm_router import (
     substitute_if_degenerate,
 )
 from core.prompt_safety import fence
+from vula.storage_links import SHARE_TTL, signed
 from core.reasoning_telemetry import emit as _emit, log_tool_call as _log_tool_call
 from core.skills.base import (
     DB_ANSWER_SOURCE,
@@ -3142,7 +3143,7 @@ class CommerceAdminSkill(BaseSkill):
             # extra_markdown so the LLM generation step can't paraphrase/drop them) — never fed
             # into `brief`, which the model treats as prose to write FROM, not to reproduce.
             photos_md = ("Site Photos:\n\n" + "\n\n".join(
-                f"![Photo]({r['file_url']})" for r in visit_photo_rows if r.get("file_url"))
+                f"![Photo]({signed(r['file_url'])})" for r in visit_photo_rows if r.get("file_url"))
                 if visit_photo_rows else None)
             from core.skills.draft_admin import draft_letter
             pdf_result = await draft_letter({
@@ -3586,7 +3587,8 @@ class CommerceAdminSkill(BaseSkill):
         top = [r for h, r in sorted(scored, key=lambda x: -x[0]) if h == best][:5]
         return {"found": True, "documents": [
             {"name": r.get("filename"), "type": r.get("category"),
-             "about": (r.get("summary") or "")[:200], "link": r.get("file_url")} for r in top],
+             "about": (r.get("summary") or "")[:200],
+             "link": signed(r.get("file_url"), SHARE_TTL)} for r in top],
             "note": "Paste the link as-is (raw URL) — WhatsApp doesn't render markdown links."}
 
     async def _lookup_business_info(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:

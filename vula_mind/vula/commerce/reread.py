@@ -20,8 +20,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
-import httpx
-
 from vula.commerce import service
 
 log = logging.getLogger(__name__)
@@ -72,10 +70,8 @@ def _improves(row: dict, analysis: dict) -> bool:
 
 
 async def _download(url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.content
+    from vula.storage_links import fetch
+    return await fetch(url)
 
 
 async def reread_missing(tenant_id: str, limit: int = 60, fresh_only: bool = False) -> Dict[str, Any]:

@@ -791,7 +791,8 @@ def render_letter_pdf(
         "body_paragraphs": paragraphs,
         "sign_off": sign_off or "",
         "ink_color": branding.get("ink_color") or "",
-        "signature_url": signature_url or branding.get("signature_url") or "",
+        # signed: WeasyPrint fetches it like a browser, and the signatures bucket is private
+        "signature_url": _signed(signature_url or branding.get("signature_url") or ""),
         "signature_name": signature_name or branding.get("signature_name") or "",
         **_font_ctx(branding),
     }
@@ -808,6 +809,11 @@ def render_letter_pdf(
     return pdf_bytes
 
 
+def _signed(url: str) -> str:
+    from vula.storage_links import signed
+    return signed(url) or ""
+
+
 def _download_image_bytes(url: str) -> Optional[bytes]:
     """Best-effort fetch for a remote image (logo/signature) to embed in a .docx — unlike
     WeasyPrint's <img src="url">, python-docx's add_picture needs real bytes, not a URL. Never
@@ -815,10 +821,8 @@ def _download_image_bytes(url: str) -> Optional[bytes]:
     if not url:
         return None
     try:
-        import httpx
-        resp = httpx.get(url, timeout=10.0, follow_redirects=True)
-        resp.raise_for_status()
-        return resp.content
+        from vula.storage_links import fetch_sync
+        return fetch_sync(url, timeout=10.0)
     except Exception as exc:
         log.debug("docx image fetch failed for %s: %s", url, exc)
         return None

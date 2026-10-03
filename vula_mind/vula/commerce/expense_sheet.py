@@ -83,11 +83,8 @@ async def fetch_claims(tenant_id: str, paid_by: str, month_start: str, month_end
 
 async def _fetch_image_bytes(url: str) -> Optional[bytes]:
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url)
-            if resp.is_success:
-                return resp.content
+        from vula.storage_links import fetch      # receipts live in the private documents bucket
+        return await fetch(url, timeout=15.0)
     except Exception as exc:
         log.debug("receipt image fetch failed for %s: %s", url, exc)
     return None
