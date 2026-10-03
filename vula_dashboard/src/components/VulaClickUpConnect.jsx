@@ -11,7 +11,10 @@
  *      and closes the popup (postMessage 'clickup-connected')
  *   4. We re-poll status → Connected, then let them pick a default list
  *
- * No API tokens or list IDs to paste.
+ * No API tokens or list IDs to paste — but a ClickUp personal token is offered as the way round
+ * a popup that never comes back (2026-10-03: since August the OAuth callback was never reached,
+ * while Vula's old sign-in had lost the workspace). A refused sign-in shows as
+ * "Needs reconnecting" (backend: needs_reconnect) instead of a green "Connected".
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -25,6 +28,9 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const pollRef = useRef(null)
+  const [showToken, setShowToken] = useState(false)
+  const [token, setToken] = useState('')
+  const [notice, setNotice] = useState(null)
 
   const loadStatus = useCallback(async () => {
     if (!tenantId) return
@@ -85,6 +91,33 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
     }
   }, [tenantId, loadStatus, status])
 
+  const connectWithToken = async () => {
+    setLoading(true); setError(null); setNotice(null)
+    try {
+      const r = await fetch(`${VULA_API}/v1/clickup/connect`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tenant_id: tenantId, api_token: token.trim() }),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.detail || 'ClickUp didn\'t accept that token.')
+      setToken(''); setShowToken(false)
+      setNotice(`Connected to ${d.workspace || 'ClickUp'} — documents filed while it was off are being sent across now.`)
+      loadStatus()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const refileMissing = async () => {
+    setError(null); setNotice(null)
+    const r = await fetch(`${VULA_API}/v1/clickup/refile-missing/${tenantId}`, { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    if (r.ok) setNotice('Sending documents that never reached ClickUp — this runs in the background.')
+    else setError(d.detail || 'Could not start that.')
+  }
+
   const setDefaultList = async (listId) => {
     await fetch(`${VULA_API}/v1/clickup/default-list`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -128,7 +161,15 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
         </div>
       )}
 
+      {status === 'needs_reconnect' && (
+        <div style={styles.errorBox}>
+          <strong>ClickUp has stopped accepting Vula's sign-in.</strong>{' '}
+          {account?.last_sync_error ? `(${String(account.last_sync_error).slice(0, 120)}) ` : ''}
+          Documents are still filed in Vula, and are sent to ClickUp once you reconnect.
+        </div>
+      )}
       {error && <div style={styles.errorBox}>{error}</div>}
+      {notice && <div style={styles.noticeBox}>{notice}</div>}
 
       {status !== 'connected' ? (
         <div>
@@ -144,11 +185,33 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
             {loading ? 'Opening ClickUp…' : '🔗 Connect ClickUp'}
           </button>
           <p style={styles.hint}>A ClickUp window opens for you to approve. Takes about 30 seconds.</p>
+          {!showToken ? (
+            <button type="button" onClick={() => setShowToken(true)} style={styles.linkBtn}>
+              Window didn't come back? Connect with a ClickUp token instead
+            </button>
+          ) : (
+            <div style={{ marginTop: 10 }}>
+              <p style={styles.hint}>
+                In ClickUp: your avatar › Settings › Apps › API Token › Generate, then copy it (starts with <code>pk_</code>).
+              </p>
+              <input
+                type="password" value={token} onChange={(e) => setToken(e.target.value)}
+                placeholder="pk_…" autoComplete="off" style={{ ...styles.select, width: '100%', marginBottom: 8 }}
+              />
+              <button onClick={connectWithToken} disabled={loading || !token.trim()}
+                      style={loading || !token.trim() ? styles.btnDisabled : styles.btn}>
+                {loading ? 'Checking…' : 'Connect with token'}
+              </button>
+            </div>
+          )}
         </div>
       ) : (
-        <button onClick={handleConnect} disabled={loading} style={styles.btnGhost}>
-          {loading ? '…' : 'Reconnect'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={handleConnect} disabled={loading} style={styles.btnGhost}>
+            {loading ? '…' : 'Reconnect'}
+          </button>
+          <button onClick={refileMissing} style={styles.btnGhost}>Send missed documents</button>
+        </div>
       )}
     </div>
   )
@@ -191,6 +254,7 @@ function StatusBadge({ status }) {
   const configs = {
     connected: { label: 'Connected', color: 'var(--ok)', bg: 'rgba(34,197,94,0.15)' },
     error: { label: 'Error', color: 'var(--danger)', bg: 'rgba(239,68,68,0.15)' },
+    needs_reconnect: { label: 'Needs reconnecting', color: 'var(--danger)', bg: 'rgba(239,68,68,0.15)' },
     not_connected: { label: 'Not connected', color: 'var(--muted)', bg: 'rgba(107,114,128,0.15)' },
   }
   const c = configs[status] || configs.not_connected
@@ -214,5 +278,7 @@ const styles = {
   btn: { background: '#7B68EE', color: '#fff', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', width: '100%' },
   btnDisabled: { background: 'var(--surface-alt)', color: 'var(--muted)', border: 'none', borderRadius: 6, padding: '12px 24px', fontSize: 14, cursor: 'not-allowed', width: '100%' },
   btnGhost: { background: 'transparent', color: 'var(--faint)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' },
+  noticeBox: { background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: 'var(--ok)', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 12 },
+  linkBtn: { display: 'block', margin: '8px auto 0', background: 'none', border: 'none', color: 'var(--accent)', fontSize: 12, textDecoration: 'underline', cursor: 'pointer' },
   hint: { color: 'var(--muted)', fontSize: 12, marginTop: 10, textAlign: 'center' },
 }

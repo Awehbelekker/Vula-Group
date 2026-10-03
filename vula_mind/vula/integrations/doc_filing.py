@@ -455,8 +455,13 @@ async def attach_into_project(tenant_id: str, project: Optional[str],
         res = await clickup_service.attach_file_to_list(
             tenant_id, list_id, filename, data, content_type, task_id=task_id)
         return {"clickup_list_id": list_id, "clickup_task_id": res.get("task_id")}
+    except clickup_service.ClickUpNotConnected:
+        return {"clickup_list_id": list_id, "clickup_task_id": None}
     except Exception as exc:
         logger.warning("ClickUp attach into project '%s' failed: %s", project, exc)
+        if clickup_service.looks_refused(exc):
+            # a lost sign-in looked exactly like this for two months — find out, and say so
+            await clickup_service.verify_or_flag(tenant_id)
         return {"clickup_list_id": list_id, "clickup_task_id": None}
 
 
