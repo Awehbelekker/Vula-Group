@@ -455,3 +455,47 @@ def test_unreimbursed_personal_claims_count_as_job_cost(db, monkeypatch):
     assert hpc["cost_cents"] == 900000 + 45000
     assert res["unallocated_project_spend_cents"] == 377244
     assert "not yet paid back (R4,222.44)" in job_costing.cost_basis(TID)
+
+
+# ── Direct suppliers: in the BOQ, not DIGG's cost or fee (Ian, 2026-10-03) ──────
+
+def test_direct_suppliers_count_against_the_boq_not_digg(db, monkeypatch):
+    from vula.commerce import project_programme
+    from datetime import date
+    monkeypatch.setattr("vula.api.tenants.get_config", lambda tid: {"display_name": "DIGG"})
+    db.tables["commerce_bank_transactions"] = [
+        {"id": "a", "tenant_id": TID, "txn_date": "2026-08-05", "description": "Hpc Soq01726",
+         "amount_cents": 1000000, "direction": "out", "account_code": "cost_of_sales", "project": "HPC Bokaap"},
+    ]
+    direct = dict(tenant_id=TID, status="filed", category="Invoice", project="HPC Bokaap")
+    db.tables["vula_filed_documents"] = [
+        {**direct, "id": "s1", "created_at": "2026-08-20", "filename": "PROFORMA - Storeplay.pdf",
+         "fields": {"supplier": "Storeplay (PTY) LTD", "total_cents": "79401520", "direct_supplier": "true"}},
+        # Extra Air INV0000216 filed, then revised: the revision replaces it, never adds to it
+        {**direct, "id": "e1", "created_at": "2026-07-20", "filename": "Tax_Invoice_-_INV0000216.pdf",
+         "fields": {"supplier": "Extra Air Cape (Pty) Ltd", "total_cents": "12590070", "direct_supplier": "true"}},
+        {**direct, "id": "e2", "created_at": "2026-08-20", "filename": "Tax Invoice - INV0000216 - 19082026.pdf",
+         "fields": {"supplier": "Extra Air Cape (Pty) Ltd", "total_cents": "11661123", "direct_supplier": "true"}},
+        # an ordinary supplier invoice is not a direct cost
+        {**direct, "id": "o1", "created_at": "2026-08-01", "filename": "00092784.pdf",
+         "fields": {"supplier": "SOLID CAPE (PTY) LTD", "total_cents": "2873896"}},
+    ]
+    # the fake DB has no ->> operator: give flagged rows the column PostgREST would filter on
+    for r in db.tables["vula_filed_documents"]:
+        r["fields->>direct_supplier"] = r["fields"].get("direct_supplier")
+    d = job_costing.direct_costs(TID)
+    assert d["hpc bokaap"]["cents"] == 79401520 + 11661123 and d["hpc bokaap"]["documents"] == 2
+
+    monkeypatch.setattr(job_costing, "direct_costs", lambda tid: d)
+    hpc = job_costing.costing(TID)["projects"][0]
+    assert hpc["cost_cents"] == 1000000                        # DIGG's cost untouched
+    assert hpc["fee_target_cents"] == 100000                   # 10% of DIGG's cost only
+    assert hpc["direct_cost_cents"] == 79401520 + 11661123
+    assert "Direct suppliers paid on the project" in job_costing.project_profit(TID, "HPC")["text"]
+
+    monkeypatch.setattr(project_programme, "baseline", lambda tid, p: {
+        "project": "HPC Bokaap", "baseline_locked": True, "total_cents": 200000000, "sections": []})
+    monkeypatch.setattr(project_programme, "variations_to_flag", lambda *a: [])
+    cost = project_programme.cost_position(TID, "HPC Bokaap", date(2026, 10, 3), tasks=[])
+    assert cost["spent_cents"] == 1000000 + 79401520 + 11661123
+    assert cost["paid_by_digg_cents"] == 1000000 and cost["paid_directly_cents"] == 79401520 + 11661123
