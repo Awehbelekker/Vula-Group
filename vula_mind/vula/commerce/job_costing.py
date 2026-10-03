@@ -67,11 +67,16 @@ def _owed_claims(tenant_id: str, since: Optional[str] = None) -> List[Dict[str, 
     2026-10-02 (Ian, DIGG): Judy paid R15,913 of BWH / Build It / delivery costs from her private
     account. None of it is in DIGG's bank, so the projects looked cheaper than they were. Until
     she's reimbursed the claim stands in for the bank line; once it's marked reimbursed the
-    business's own payment to her carries the cost instead, so it's never counted twice."""
+    business's own payment to her carries the cost instead, so it's never counted twice.
+
+    Only claims proven by the person's own bank statement (channel 'statement') count. DIGG had
+    33 WhatsApp receipts flagged reimbursable (R81k) — pro-formas, invoices to DIGG, slips paid
+    on DIGG's own FNB card — that are already in the bank; counting them doubled HPC's cost."""
     def make():
         q = (_client().table("commerce_expenses")
              .select("id,date,description,supplier,amount_cents,account_code,project,status")
-             .eq("tenant_id", tenant_id).eq("reimbursable", True).is_("reimbursed_at", "null"))
+             .eq("tenant_id", tenant_id).eq("reimbursable", True).is_("reimbursed_at", "null")
+             .eq("paid_with", "personal").eq("channel", "statement"))
         if since:
             q = q.gte("date", since)
         return q.order("date")

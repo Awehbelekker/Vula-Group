@@ -429,7 +429,8 @@ def test_unreimbursed_personal_claims_count_as_job_cost(db, monkeypatch):
          "amount_cents": 900000, "direction": "out", "account_code": "cost_of_sales", "project": "HPC Bokaap"},
     ]
     claim = dict(tenant_id=TID, reimbursable=True, status="submitted", reimbursed_at=None,
-                 paid_by_name="Judy Downing", account_code="cost_of_sales")
+                 paid_by_name="Judy Downing", account_code="cost_of_sales",
+                 paid_with="personal", channel="statement")
     db.tables["commerce_expenses"] = [
         # real lines from Judy's ABSA statement
         {**claim, "id": "c1", "date": "2026-08-01", "description": "Porterfield payment (Judy ABSA)",
@@ -443,6 +444,11 @@ def test_unreimbursed_personal_claims_count_as_job_cost(db, monkeypatch):
         # business card → not owed to anyone
         {**claim, "id": "c4", "date": "2026-08-09", "description": "Build It", "amount_cents": 1000,
          "project": "HPC Bokaap", "reimbursable": False},
+        # a WhatsApp receipt flagged reimbursable but really paid on DIGG's card (already in the
+        # bank: FNB "POS Purchase Italtile Cape Town" R884, 29 Jul) — not proven personal
+        {**claim, "id": "c5", "date": "2026-07-29", "channel": "whatsapp",
+         "description": "Customer copy of a card transaction from Italtile Cape Town",
+         "amount_cents": 88400, "project": "HPC Bokaap"},
     ]
     res = job_costing.costing(TID)
     hpc = res["projects"][0]
