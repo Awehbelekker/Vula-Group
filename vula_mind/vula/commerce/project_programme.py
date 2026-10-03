@@ -400,8 +400,13 @@ def cost_position(tenant_id: str, project: str, day: date,
     res = job_costing.costing(tenant_id)
     mine = next((p for p in res.get("projects") or [] if project_key(p["project"]) == project_key(project)), {})
     budget = int(b.get("total_cents") or 0)
-    spent = int(mine.get("cost_cents") or 0)
+    by_digg = int(mine.get("cost_cents") or 0)
+    # Direct suppliers are in the BOQ, so they count against it, though DIGG never paid them
+    # (2026-10-03, Ian: Storeplay / Extra Air on HPC). They stay out of DIGG's cost and fee.
+    direct = int((job_costing.direct_costs(tenant_id).get(project_key(project)) or {}).get("cents") or 0)
+    spent = by_digg + direct
     out: Dict[str, Any] = {"project": project, "budget_cents": budget, "spent_cents": spent,
+                           "paid_by_digg_cents": by_digg, "paid_directly_cents": direct,
                            "received_cents": int(mine.get("received_cents") or 0),
                            "left_cents": budget - spent, "over": spent > budget}
     tasks = tasks if tasks is not None else programme_tasks(tenant_id, project)
@@ -463,8 +468,11 @@ def owner_message(project: str, day: date, plan: Dict[str, List[Dict[str, Any]]]
     if plan["overdue"]:
         parts.append(f"⚠️ *Overdue — {len(plan['overdue'])}*\n{_by_room(plan['overdue'], with_who=True)}")
     if cost:
-        line = (f"💰 *Cost vs signed baseline*: {_r(cost['spent_cents'])} paid out so far (bank, "
-                f"allocated to the project) against the {_r(cost['budget_cents'])} baseline excl. VAT "
+        paid_how = ("bank, allocated to the project" if not cost.get("paid_directly_cents") else
+                    f"{_r(cost['paid_by_digg_cents'])} by DIGG + {_r(cost['paid_directly_cents'])} "
+                    "to direct suppliers")
+        line = (f"💰 *Cost vs signed baseline*: {_r(cost['spent_cents'])} paid out so far ({paid_how}) "
+                f"against the {_r(cost['budget_cents'])} baseline excl. VAT "
                 f"({cost['spent_pct']}%) — {_r(cost['left_cents'])} left.")
         if cost.get("over"):
             line += " 🔴 *Over the baseline.*"

@@ -25,6 +25,7 @@ the text the agent gets.
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
@@ -92,6 +93,53 @@ def _owed_claims(tenant_id: str, since: Optional[str] = None) -> List[Dict[str, 
              "direction": "out", "account_code": r.get("account_code"), "project": r.get("project"),
              "trade": None, "match_status": "claim"}
             for r in rows if r.get("status") not in ("reimbursed", "rejected")]
+
+
+# "Tax_Invoice_-_INV0000216.pdf": underscores are word characters, so no \b before INV
+_INV_NO = re.compile(r"(?<![A-Za-z])(INV|IN|INVOICE)[\s_-]*0*(\d{3,})", re.IGNORECASE)
+
+
+def direct_costs(tenant_id: str) -> Dict[str, Dict[str, Any]]:
+    """project → {"cents", "documents"} for invoices from DIRECT suppliers: in the project's BOQ, but
+    contracted and paid on the project directly, not through DIGG's bank.
+
+    2026-10-03 (Ian, DIGG): Teck Flooring, Extra Air and Storeplay "were suppliers but direct… a cost
+    in the BOQ", and Judy's 10% doesn't apply to directs. So they count against the BOQ (what the
+    project has spent) and never toward DIGG's cost, profit or fee target. Flagged per document
+    (fields.direct_supplier). A revised invoice (same supplier and invoice number filed again)
+    replaces the earlier one rather than adding to it."""
+    from vula.commerce.ledger import _all_pages
+    from vula.commerce.service import project_key
+
+    def make():
+        return (_client().table("vula_filed_documents")
+                .select("id,project,filename,fields,created_at")
+                .eq("tenant_id", tenant_id).eq("status", "filed").eq("category", "Invoice")
+                .eq("fields->>direct_supplier", "true").order("created_at"))
+    try:
+        rows = _all_pages(make)
+    except Exception as exc:
+        log.debug("direct supplier read skipped: %s", exc)
+        return {}
+    latest: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        f = r.get("fields") or {}
+        try:
+            cents = int(f.get("total_cents") or 0)
+        except (TypeError, ValueError):
+            cents = 0
+        if not r.get("project") or cents <= 0:
+            continue
+        m = _INV_NO.search(r.get("filename") or "")
+        supplier = "".join(ch for ch in str(f.get("supplier") or "").lower() if ch.isalnum())
+        key = (project_key(r["project"]), supplier, m.group(2) if m else r["id"])
+        latest[key] = {"project": r["project"], "cents": cents}       # rows are oldest first
+    out: Dict[str, Dict[str, Any]] = {}
+    for (pk, _s, _n), v in latest.items():
+        d = out.setdefault(pk, {"project": v["project"], "cents": 0, "documents": 0})
+        d["cents"] += v["cents"]
+        d["documents"] += 1
+    return out
 
 
 def terms(tenant_id: str) -> Dict[str, float]:
@@ -204,10 +252,14 @@ def costing(tenant_id: str, since: Optional[str] = None, txns: Optional[List[Dic
         })
     variations = _variations(tenant_id)
     from vula.commerce.service import project_key
+    directs = direct_costs(tenant_id) if txns is None else {}
     for p in projects:
         v = variations.get(project_key(p["project"]))
         if v:
             p["variations"] = v
+        d = directs.get(project_key(p["project"]))
+        if d:
+            p["direct_cost_cents"] = d["cents"]       # BOQ only — never cost, profit or fee
     projects.sort(key=lambda x: -x["cost_cents"])
     overhead_total = sum(overhead_m.values())
     project_spend = sum(p["cost_cents"] for p in projects)
@@ -373,6 +425,8 @@ def project_profit(tenant_id: str, project: Optional[str] = None) -> Dict[str, A
                 f"{_r(p['profit_cents'])} — {p['status']}. Biggest costs: {top}."
                 + (f" {_r(p['unallocated_trade_cents'])} of its cost isn't allocated to a trade yet."
                    if p["unallocated_trade_cents"] else "")
+                + (f" Direct suppliers paid on the project (in the BOQ, not DIGG's cost or fee): "
+                   f"{_r(p['direct_cost_cents'])}." if p.get("direct_cost_cents") else "")
                 + (f" Variations over the BOQ: {p['variations']['documents']} document(s) — claimed from the "
                    f"client {_r(p['variations']['claimed_cents'])}, extra costs from suppliers "
                    f"{_r(p['variations']['extra_cost_cents'])}." if p.get("variations") else "")
