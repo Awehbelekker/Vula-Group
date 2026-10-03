@@ -25,6 +25,7 @@ NO_PROBE = {
     "175": "relaxes NOT NULLs and backfills rows — nothing a select can probe",
     "181": "replaces stock functions only (untracked-product fix) — no table or column to probe",
     "192": "storage bucket visibility + a storage policy — no public-schema table or column",
+    "193": "storage policies + a policy helper function — no public-schema table or column",
 }
 
 
