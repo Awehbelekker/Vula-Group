@@ -126,6 +126,28 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
     loadStatus()
   }
 
+  // Shown connected or not: on 3 Oct the panel still read "Connected" on a dead token, so the
+  // only way to reconnect was the popup — which needs CLICKUP_CLIENT_ID, missing on Railway.
+  const tokenForm = !showToken ? (
+    <button type="button" onClick={() => setShowToken(true)} style={styles.linkBtn}>
+      {status === 'connected' ? 'Reconnect with a ClickUp token' : "Window didn't come back? Connect with a ClickUp token instead"}
+    </button>
+  ) : (
+    <div style={{ marginTop: 10 }}>
+      <p style={styles.hint}>
+        In ClickUp: your avatar › Settings › Apps › API Token › Generate, then copy it (starts with <code>pk_</code>).
+      </p>
+      <input
+        type="password" value={token} onChange={(e) => setToken(e.target.value)}
+        placeholder="pk_…" autoComplete="off" style={{ ...styles.select, width: '100%', marginBottom: 8 }}
+      />
+      <button onClick={connectWithToken} disabled={loading || !token.trim()}
+              style={loading || !token.trim() ? styles.btnDisabled : styles.btn}>
+        {loading ? 'Checking…' : 'Connect with token'}
+      </button>
+    </div>
+  )
+
   return (
     <div style={styles.card}>
       <div style={styles.header}>
@@ -185,32 +207,17 @@ export default function VulaClickUpConnect({ tenantId, tenantName }) {
             {loading ? 'Opening ClickUp…' : '🔗 Connect ClickUp'}
           </button>
           <p style={styles.hint}>A ClickUp window opens for you to approve. Takes about 30 seconds.</p>
-          {!showToken ? (
-            <button type="button" onClick={() => setShowToken(true)} style={styles.linkBtn}>
-              Window didn't come back? Connect with a ClickUp token instead
-            </button>
-          ) : (
-            <div style={{ marginTop: 10 }}>
-              <p style={styles.hint}>
-                In ClickUp: your avatar › Settings › Apps › API Token › Generate, then copy it (starts with <code>pk_</code>).
-              </p>
-              <input
-                type="password" value={token} onChange={(e) => setToken(e.target.value)}
-                placeholder="pk_…" autoComplete="off" style={{ ...styles.select, width: '100%', marginBottom: 8 }}
-              />
-              <button onClick={connectWithToken} disabled={loading || !token.trim()}
-                      style={loading || !token.trim() ? styles.btnDisabled : styles.btn}>
-                {loading ? 'Checking…' : 'Connect with token'}
-              </button>
-            </div>
-          )}
+          {tokenForm}
         </div>
       ) : (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={handleConnect} disabled={loading} style={styles.btnGhost}>
-            {loading ? '…' : 'Reconnect'}
-          </button>
-          <button onClick={refileMissing} style={styles.btnGhost}>Send missed documents</button>
+        <div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={handleConnect} disabled={loading} style={styles.btnGhost}>
+              {loading ? '…' : 'Reconnect'}
+            </button>
+            <button onClick={refileMissing} style={styles.btnGhost}>Send missed documents</button>
+          </div>
+          {tokenForm}
         </div>
       )}
     </div>

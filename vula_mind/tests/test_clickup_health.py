@@ -150,3 +150,22 @@ async def test_missed_documents_are_sent_and_recorded(monkeypatch):
         res = await service.refile_missing(TID)
     assert res == {"tenant_id": TID, "candidates": 2, "sent": 1, "failed": 1}
     assert updates == [{"clickup_task_id": "t9", "clickup_list_id": "901217344951"}]
+
+
+def test_a_cached_sign_in_expires_so_every_worker_sees_a_reconnect(monkeypatch):
+    from vula.clickup import credentials as cr
+    rows = [{"api_token": "enc-old", "team_id": TEAM, "list_ids": {}, "space_id": None, "status": "connected"}]
+    q = MagicMock()
+    q.select.return_value = q.eq.return_value = q.limit.return_value = q
+    q.execute.side_effect = lambda: type("R", (), {"data": rows})()
+    monkeypatch.setattr(cr, "_client", lambda: MagicMock(table=lambda _n: q))
+    monkeypatch.setattr("vula.email_imap.credentials.decrypt_secret", lambda s: s.replace("enc-", ""))
+    now = [1000.0]
+    monkeypatch.setattr("time.monotonic", lambda: now[0])
+    cr._CACHE.pop(TID, None)
+    assert cr.get_tenant_clickup_creds(TID)["token"] == "old"
+    rows[0]["api_token"] = "enc-new"          # reconnected on the OTHER worker
+    assert cr.get_tenant_clickup_creds(TID)["token"] == "old"            # still cached
+    now[0] += cr._CACHE_TTL + 1
+    assert cr.get_tenant_clickup_creds(TID)["token"] == "new"            # picked up
+    cr._CACHE.pop(TID, None)
