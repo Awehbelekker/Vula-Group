@@ -1427,6 +1427,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     # log a meeting, save a contact) instead of falling through. These deterministic checks know
     # exactly what reply they're waiting for, so they must win over the general-purpose agent.
     if tenant_id:
+        # The question this person was actually asked takes their reply first.
+        if await _answer_open_question(tenant_id, phone, text):
+            return
         _alloc = await _maybe_allocate_pending_expense(tenant_id, phone, text)
         if _alloc:
             await _send_reply(phone, _alloc, tenant_id)
@@ -1556,27 +1559,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     except Exception:
         pending = None
     if pending is not None:
-        if pending.get("filed"):
-            note = f"✅ Filed '{pending['filename']}' under *{pending['project']}*."
-            if pending.get("clickup"):
-                note += " Added to ClickUp."
-            await _send_reply(phone, note, tenant_id=tenant_id)
-        elif pending.get("duplicate_dropped"):
-            await _send_reply(phone, f"👍 Dropped '{pending['filename']}' as a duplicate — its bill "
-                              f"won't count twice.", tenant_id=tenant_id)
-        elif pending.get("skipped"):
-            await _send_reply(
-                phone, f"👍 Left '{pending['filename']}' unfiled — you can file it "
-                f"anytime from the dashboard.", tenant_id=tenant_id)
-        else:  # unmatched
-            candidates = pending.get("candidates") or []
-            if candidates:
-                msg = ("That could be more than one project — " + " / ".join(candidates) +
-                      ". Reply with the exact project name, or 'skip' to leave it unfiled.")
-            else:
-                msg = ("I couldn't match that to a project. Reply with the exact "
-                      "project name, or 'skip' to leave it unfiled.")
-            await _send_reply(phone, msg, tenant_id=tenant_id)
+        await _send_reply(phone, _pending_doc_reply(pending), tenant_id=tenant_id)
         return
 
     # admin and staff get full RAG
@@ -2724,10 +2707,15 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         # in one incoming message, so asking both here is safe — a reply with just one piece of
         # info (e.g. "HPC") still resolves correctly, leaving the other question open.
         asks = []
+        from vula import open_questions
         if not claim.get("project") and claim.get("needs_project"):
             asks.append("📍 Which project/site is this for? Reply with the site name, or 'none'.")
+            open_questions.ask(tenant_id, phone, "expense_project", claim.get("id") or "",
+                               f"Which project: R{total/100:,.2f} receipt")
         if paid_with is None and expenses.list_cards(tenant_id):
             asks.append("💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'.")
+            open_questions.ask(tenant_id, phone, "expense_paid_with", claim.get("id") or "",
+                               f"Company card or own money: R{total/100:,.2f} receipt")
         if not claim.get("purpose_category"):
             asks.append("🗂️ What was this for — fuel, a client visit/meal, or accommodation? "
                         "Reply with the category.")
@@ -2777,6 +2765,132 @@ async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Op
         return None
 
 
+def _pending_doc_reply(pending: dict) -> str:
+    """The reply to an answer about a document waiting on "which project?"."""
+    if pending.get("filed"):
+        note = f"✅ Filed '{pending['filename']}' under *{pending['project']}*."
+        return note + (" Added to ClickUp." if pending.get("clickup") else "")
+    if pending.get("duplicate_dropped"):
+        return f"👍 Dropped '{pending['filename']}' as a duplicate — its bill won't count twice."
+    if pending.get("skipped"):
+        return (f"👍 Left '{pending['filename']}' unfiled — you can file it anytime from the "
+                f"dashboard.")
+    candidates = pending.get("candidates") or []
+    if candidates:
+        return ("That could be more than one project — " + " / ".join(candidates) +
+                ". Reply with the exact project name, or 'skip' to leave it unfiled.")
+    return ("I couldn't match that to a project. Reply with the exact project name, or 'skip' "
+            "to leave it unfiled.")
+
+
+_YES_WORDS = {"yes", "y", "yep", "yes please", "ja", "ok", "okay", "correct", "confirm", "confirmed"}
+_NO_WORDS = {"no", "n", "nope", "nee"}
+
+
+def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str) -> Optional[str]:
+    """Answer "which project?" / "company card or own money?" about one specific claim — the
+    one asked about, never whichever unallocated claim happens to be newest. None when the
+    reply doesn't answer it (so the next question, or the normal flow, can have it)."""
+    from vula.commerce import expenses, service
+    t = (text or "").strip()
+    low = t.lower()
+    if not t or len(t) > 60 or t.endswith("?") or _REQUEST_SHAPED.match(t):
+        return None
+    rows = (service._client().table("commerce_expenses").select("*")
+            .eq("tenant_id", tenant_id).eq("id", claim_id).limit(1).execute().data or [])
+    if not rows:
+        return None
+    claim = rows[0]
+    amt = int(claim.get("amount_cents") or 0) / 100
+    if kind == "expense_paid_with":
+        if not re.search(r"\b(company|own|personal|my card|my money|cash)\b", low):
+            return None
+        is_company = bool(re.search(r"\bcompany\b", low))
+        paid_with = "company_card" if is_company else ("cash" if re.search(r"\bcash\b", low) else "personal")
+        service._client().table("commerce_expenses").update(
+            {"paid_with": paid_with, "reimbursable": not is_company, "updated_at": service._now()}
+        ).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
+        if is_company:
+            return (f"👍 Noted — that *R{amt:,.2f}* was on the company card. "
+                    "I'll match it against the bank statement.")
+        return f"👍 Noted — *R{amt:,.2f}* was your own money, so it's marked to be paid back to you. 👛"
+    if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
+        expenses.assign(tenant_id, claim_id, project="")
+        return "👍 Noted — no project. It's in your books."
+    proj = expenses.match_project(tenant_id, t)
+    if not proj:
+        return None
+    expenses.assign(tenant_id, claim_id, project=proj)
+    return f"✅ Allocated that *R{amt:,.2f}* expense to *{proj}*."
+
+
+async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
+    """Match a reply to the questions this person was actually asked, newest first
+    (vula/open_questions.py, migration 194). True when one of them took it — the old
+    per-flow guessing below only runs when none did. 2026-10-05/06: "Approve" went to a June
+    test approval and "Atlantis Paarden Eiland" to an August expense claim, because each flow
+    guessed on its own whether a short reply was for it."""
+    from vula import open_questions as oq
+    for q in oq.open_for(tenant_id, phone):
+        try:
+            if await _try_open_question(tenant_id, phone, text, q):
+                return True
+        except Exception as exc:
+            logger.warning("open question %s (%s) answer failed: %s", q.get("id"), q.get("kind"), exc)
+    return False
+
+
+async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> bool:
+    from vula import open_questions as oq
+    from vula.integrations.doc_filing import looks_like_project_answer
+    kind, ref = q.get("kind"), q.get("ref_id")
+    low = (text or "").strip().lower().rstrip(".!")
+    if kind == "approval":
+        a, r = _APPROVE_RE.match(text or ""), _REJECT_RE.match(text or "")
+        if a or low in _YES_WORDS:
+            decision, notes = "approved", (a.group(1) if a else "")
+        elif r or low in _NO_WORDS:
+            decision, notes = "rejected", (r.group(1) if r else "")
+        else:
+            return False
+        from vula.commerce.approvals import record_decision
+        if await record_decision(phone, decision, (notes or "").strip(), approval_id=ref) is None:
+            oq.close(q["id"], status="expired")      # already decided elsewhere
+            return False
+        return True
+    if kind == "doc_project":
+        from vula.integrations.doc_filing import resolve_pending_document
+        res = await resolve_pending_document(tenant_id, phone, text, doc_id=ref)
+        if res is None:
+            if looks_like_project_answer(text):
+                oq.close(q["id"], status="expired")  # the document isn't waiting any more
+            return False
+        await _send_reply(phone, _pending_doc_reply(res), tenant_id=tenant_id)
+        return True
+    if kind in ("expense_project", "expense_paid_with"):
+        reply = _answer_expense_question(tenant_id, kind, ref, text)
+        if reply is None:
+            return False
+        oq.close(q["id"], text)
+        await _send_reply(phone, reply, tenant_id=tenant_id)
+        return True
+    if kind == "pop_match":
+        if not looks_like_project_answer(text):      # a short answer, not a new request
+            return False
+        from vula.commerce import bank_review, service
+        rows = (service._client().table("commerce_bank_transactions").select("*")
+                .eq("tenant_id", tenant_id).eq("id", ref).limit(1).execute().data or [])
+        if not rows or rows[0].get("match_status") != "asked":
+            oq.close(q["id"], status="expired")
+            return False
+        reply = await bank_review._handle_supplier_pop_answer(tenant_id, text, rows[0])
+        if reply:
+            await _send_reply(phone, reply, tenant_id=tenant_id)
+            return True
+        return False
+    return False
+
+
 def _doc_asked_since(tenant_id: str, phone: str, since: Optional[str]) -> bool:
     """True when this phone was asked "which project?" about a document after `since` — that
     question is the one being answered (see doc_filing.mark_asked)."""
@@ -2822,6 +2936,8 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
                 service._client().table("commerce_expenses").update(
                     {"paid_with": paid_with, "reimbursable": not is_company,
                      "updated_at": service._now()}).eq("id", claim["id"]).execute()
+                from vula import open_questions
+                open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 amt = int(claim.get("amount_cents") or 0) / 100
                 if is_company:
                     return (f"👍 Noted — that *R{amt:,.2f}* was on the company card. "
@@ -2843,12 +2959,15 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
             rows = []
         if rows:
             claim = rows[0]
+            from vula import open_questions
             if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
                 expenses.assign(tenant_id, claim["id"], project="")   # '' = resolved, not re-asked
+                open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 return "👍 Noted — no project. It's in your books."
             proj = expenses.match_project(tenant_id, text)
             if proj:
                 expenses.assign(tenant_id, claim["id"], project=proj)
+                open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 return f"✅ Allocated that *R{int(claim.get('amount_cents') or 0)/100:,.2f}* expense to *{proj}*."
 
         # Odometer reading for a petrol claim (migration 142) — checked before the purpose
@@ -3375,6 +3494,10 @@ async def _file_uploaded_document(tenant_id, phone, result, local_path, mime_typ
                 hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
                 note = (f"📂 Which project is this for?{hint_txt} "
                         f"Reply with the project name and I'll file it (or 'skip').")
+            if row.get("id"):
+                from vula import open_questions
+                open_questions.ask(tenant_id, phone, "doc_project", row["id"],
+                                   f"Which project: {result.filename}")
 
         # Plan limit (go-live readiness, Phase 4.1) — file_document() returns no "id" and a
         # displayable error rather than raising; override whatever `note` was built above so a
@@ -6636,6 +6759,10 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # this tenant's line, their message is the answer — relay + learn, don't treat it as
     # a customer order. Runs on the commerce path too so every tenant is covered.
     if await _maybe_helper_escalation_answer(phone, text, tenant_id):
+        return
+
+    # The question this person was actually asked takes their reply first (vula/open_questions.py).
+    if await _answer_open_question(tenant_id, phone, text):
         return
 
     # Answering "which project is that receipt for?" → allocate the pending expense claim.

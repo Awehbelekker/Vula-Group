@@ -390,7 +390,8 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str],
 
 
 def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[str],
-                        reference: Optional[str], payee: Optional[str]) -> str:
+                        reference: Optional[str], payee: Optional[str],
+                        sender_phone: Optional[str] = None) -> str:
     """The owner paid a supplier and sent the confirmation. Stage it as money OUT against a
     bill, and ask before settling it — same never-auto-apply rule as the money-in side."""
     bills = _open_supplier_bills(tenant_id)
@@ -410,10 +411,16 @@ def _stage_supplier_pop(tenant_id: str, amount_cents: int, txn_date: Optional[st
         "proposed_match_type": "supplier_bill" if cand else None,
         "proposed_match_id": (cand or {}).get("id"),
     }
+    txn_id = None
     try:
-        _client().table("commerce_bank_transactions").insert(row).execute()
+        ins = _client().table("commerce_bank_transactions").insert(row).execute()
+        txn_id = ((getattr(ins, "data", None) or [{}])[0] or {}).get("id")
     except Exception as exc:
         log.debug("supplier pop staging insert failed (run migration 132?): %s", exc)
+    if txn_id and sender_phone:
+        from vula import open_questions
+        open_questions.ask(tenant_id, sender_phone, "pop_match", txn_id,
+                           f"POP R{amount_cents / 100:,.2f} to {payee or 'supplier'}")
 
     amt = amount_cents / 100
     if cand:
@@ -443,7 +450,8 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
     direction, _confident, reason = classify_pop_direction(tenant_id, payee, amount_cents)
     if direction == "out":
         log.info("pop for %s staged as money out (%s): %s", tenant_id, reason, payee)
-        return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee)
+        return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee,
+                                   sender_phone=sender_phone)
     candidate = propose_pop_match(tenant_id, amount_cents, reference, payee, sender_phone)
     match_type, cand = candidate if candidate else (None, None)
     row = {
