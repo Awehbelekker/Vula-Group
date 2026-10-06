@@ -4074,7 +4074,13 @@ def _rands(v: Any) -> str:
         return str(v)
 
 
-_FILE_EXPORT_RE = re.compile(r"\b(excel|spreadsheet|xlsx?|csv)\b", re.IGNORECASE)
+_FILE_EXPORT_RE = re.compile(r"\b(excel|spreadsheet|xlsx?|csv|pdf|shar(?:e)?able)\b", re.IGNORECASE)
+# "put it in a sharable PDF" (DIGG, 6 Oct) — a PDF, not a spreadsheet.
+_PDF_EXPORT_RE = re.compile(r"\b(pdf|shar(?:e)?able)\b", re.IGNORECASE)
+
+
+def export_label(question: str) -> str:
+    return "a PDF" if _PDF_EXPORT_RE.search(question or "") else "an Excel file"
 
 
 async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
@@ -4088,6 +4094,21 @@ async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
     public URL needed."""
     if not phone or not _FILE_EXPORT_RE.search(question or ""):
         return False
+    if _PDF_EXPORT_RE.search(question or ""):
+        try:
+            from vula.api.tenants import display_name
+            from vula.api.whatsapp import _send_invoice_document
+            from vula.commerce.xlsx import render_supplier_history_pdf
+            pdf_bytes = render_supplier_history_pdf(result, supplier, display_name(tenant_id))
+            if not pdf_bytes:
+                return False
+            safe = re.sub(r"[^A-Za-z0-9]+", "_", _canonical_party(supplier) or supplier).strip("_") or "Supplier"
+            return await _send_invoice_document(phone, pdf_bytes,
+                                                f"{safe.title()}_invoices_{_today_iso()}.pdf",
+                                                "", tenant_id, content_type="application/pdf")
+        except Exception as exc:
+            logger.warning("supplier-history PDF send failed for %s: %s", tenant_id, exc)
+            return False
     try:
         from vula.commerce.xlsx import render_supplier_history_xlsx
         xlsx_bytes = render_supplier_history_xlsx(result, supplier, accent=await _brand_accent(tenant_id))
@@ -4244,12 +4265,13 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
                  f"{', '.join(_rands(r.get('amount')) for r in refunds)})")
     lines = [head + "."]
     if _FILE_EXPORT_RE.search(question or ""):
+        kind = export_label(question)
         if xlsx_sent:
-            lines.append("📎 Sent the full breakdown as an Excel file too — check your WhatsApp "
+            lines.append(f"📎 Sent the full breakdown as {kind} too — check your WhatsApp "
                           "attachments.")
         else:
-            lines.append("📎 Couldn't send an Excel file this time — here's the full breakdown "
-                          "as text below; copy it into a spreadsheet if you need one.")
+            lines.append(f"📎 Couldn't send {kind} this time — here's the full breakdown "
+                          "as text below.")
     if result.get("match_type") == "resolved_via_knowledge_base" and query:
         lines.append(f"I took \"{query}\" to mean {supplier} — tell me if that's wrong, or save "
                      f"it with \"{query} is an alias for {supplier}\".")

@@ -5716,6 +5716,37 @@ def _remember_skill(tenant_id: str, phone: str, skill: Optional[str]) -> None:
         _LAST_SKILL[(tenant_id, phone)] = (skill, time.time())
 
 
+# The last real request from this person (not a bare "proceed"), for 30 minutes — so "Proceed" /
+# "go ahead" carries on with THAT request instead of being answered as a question of its own
+# (DIGG, 6 Oct: "Proceed" after "put all jack hammer invoices in a sharable PDF" went to the
+# general reasoning skill, which re-typed a list and cut it off).
+_LAST_ASK: dict = {}
+# Only words that mean "carry on with my request" — a bare "yes"/"ok" may be confirming a
+# preview, and stays with the sticky follow-up path below, which has the history.
+_GO_AHEAD_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:proceed|go ahead|continue|carry on)(?:\s+please)?\s*[.!👍]*\s*$",
+    re.IGNORECASE)
+
+
+def _resolve_go_ahead(tenant_id: str, phone: str, question: str) -> str:
+    """A bare go-ahead becomes the request it approves; anything else is remembered as the
+    latest request and returned unchanged."""
+    key = (tenant_id, phone)
+    if _GO_AHEAD_RE.match(question or ""):
+        hit = _LAST_ASK.get(key)
+        if hit and time.time() - hit[1] < _STICKY_TTL:
+            try:
+                from vula import turns
+                turns.note("handler", name="go_ahead", continues=hit[0][:120])
+            except Exception:
+                pass
+            return hit[0]
+        return question
+    if tenant_id and phone and len((question or "").split()) >= 3:
+        _LAST_ASK[key] = (question, time.time())
+    return question
+
+
 def _last_skill(tenant_id: str, phone: str) -> Optional[str]:
     hit = _LAST_SKILL.get((tenant_id, phone))
     if hit and time.time() - hit[1] < _STICKY_TTL:
@@ -5772,6 +5803,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         if refuse:
             _LAST_CONF.set(1.0)
             return refuse
+        question = _resolve_go_ahead(tenant_id, phone, question)
         # 0a. A follow-up ("send the full list", "yes please", "in excel") goes back to the skill
         # that answered this person's last question, not wherever its own words would route
         # (2026-09-30 audit). Only when it names no job of its own, and within 30 minutes.

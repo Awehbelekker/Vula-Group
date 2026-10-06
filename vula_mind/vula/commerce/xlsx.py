@@ -275,3 +275,48 @@ def render_supplier_history_xlsx(result: Dict[str, Any], supplier: str = "",
     name = supplier or result.get("resolved_supplier") or "Supplier"
     return render_invoices_xlsx(rows, name, materials=result.get("_materials_all") or result.get("materials"),
                                 accent=accent)
+
+
+def render_supplier_history_pdf(result: Dict[str, Any], supplier: str = "",
+                                business: str = "") -> Optional[bytes]:
+    """The same supplier history as a shareable PDF: summary, every invoice (date, number,
+    amount — refunds negative) and the materials roll-up. Figures are the rows' own integer
+    cents; the total is summed here, never by a model. None when the result isn't a complete
+    filed-document answer."""
+    import html as _h
+    if result.get("status") != "found" or "total_amount_cents" not in result:
+        return None
+    from weasyprint import HTML
+    rows = result.get("_export_rows")
+    if rows is None:
+        rows = [{"date": (m.get("filed_at") or "")[:10], "ref": m.get("filename") or "",
+                 "is_refund": bool(m.get("is_refund")),
+                 "total_cents": (int(round(float(m["amount"]) * 100)) * (-1 if m.get("is_refund") else 1))
+                 if m.get("amount") is not None else None} for m in (result.get("matches") or [])]
+    rows = sorted(rows, key=lambda r: (r.get("date") or "", r.get("ref") or ""), reverse=True)
+    mats = result.get("_materials_all") or result.get("materials") or []
+
+    def money(c):
+        return "—" if c is None else f"{'−' if c < 0 else ''}R{abs(c) / 100:,.2f}"
+
+    def signed(r):
+        c = r.get("total_cents")
+        return None if c is None else (-abs(c) if r.get("is_refund") else c)
+    total = sum(signed(r) or 0 for r in rows)
+    name = _h.escape(supplier or result.get("resolved_supplier") or "Supplier")
+    inv = "".join(f"<tr><td>{_h.escape(r.get('date') or '')}</td><td>{_h.escape(str(r.get('ref') or ''))}</td>"
+                  f"<td class=n>{money(signed(r))}</td></tr>" for r in rows)
+    mat = "".join(f"<tr><td>{_h.escape(str(m.get('description') or ''))}</td><td class=n>"
+                  f"{m.get('quantity') if m.get('quantity') is not None else ''}</td>"
+                  f"<td class=n>{money(m.get('spend_cents'))}</td></tr>" for m in mats)
+    doc = f"""<html><head><meta charset="utf-8"><style>
+body{{font-family:sans-serif;font-size:10px;color:#222}} h1{{font-size:16px;margin:0}}
+h2{{font-size:12px;margin-top:16px;border-bottom:1px solid #ccc}} table{{width:100%;border-collapse:collapse}}
+td,th{{padding:2px 4px;text-align:left}} .n{{text-align:right}} .t td{{font-weight:bold;border-top:1px solid #999}}
+</style></head><body><h1>{name} — invoices and materials</h1>
+<p>{_h.escape(business)} · {len(rows)} document(s) · total {money(total)} · refunds shown negative</p>
+<h2>Invoices</h2><table><tr><th>Date</th><th>Invoice</th><th class=n>Amount</th></tr>{inv}
+<tr class=t><td></td><td>Total</td><td class=n>{money(total)}</td></tr></table>
+{"<h2>Materials</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Spend</th></tr>" + mat + "</table>" if mat else ""}
+</body></html>"""
+    return HTML(string=doc).write_pdf()

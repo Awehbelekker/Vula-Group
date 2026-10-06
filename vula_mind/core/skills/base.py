@@ -607,6 +607,8 @@ _SUPPLIER_HISTORY_RE = re.compile(
     r"\b(spent|spend|spending|paid|pay|bought|buy|purchased|hire|hired|rent|rented)\s+(with|at|from)\b|"
     r"\b(expenses?|purchases?|spend|spending)\s+(from|with|at)\b|"
     r"\binvoices?\s+(from|by)\b|"
+    # "What is the current total invoices count at jack hammer" (DIGG, 6 Oct — went to web search)
+    r"\b(total|count|number|how\s+many)\b[^.?!\n]{0,30}\binvoices?\b[^.?!\n]{0,20}\b(at|for|from|with)\b|"
     # "Sorry can I have just the invoice for jack hammer" (Judy, 26 Sep; audit 2026-09-30)
     r"\b(have|get|see|show|send)\s+(me\s+)?(just\s+)?the\s+invoices?\s+(for|from)\b|"
     r"\b(all|every)\s+(of\s+)?(the\s+|our\s+|my\s+)?([\w'-]+\s+){0,3}invoices?\b|"
