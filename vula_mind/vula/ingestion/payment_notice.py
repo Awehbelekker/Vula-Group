@@ -84,6 +84,24 @@ def _labelled(lines: list[str], label: str) -> Optional[str]:
     return None
 
 
+def _payer_account(lines: list[str]) -> Optional[str]:
+    """The paying account's number when the notice shows one (between "Payer Details" and
+    "Payee Details"), e.g. "..62845" or "Account: 62012345678". None on FNB's usual layout,
+    which names only the account holder."""
+    low = [ln.strip().lower() for ln in lines]
+    try:
+        start = low.index("payer details")
+    except ValueError:
+        return None
+    end = next((i for i in range(start + 1, len(low)) if low[i] == "payee details"), len(low))
+    for ln in lines[start + 1:end]:
+        m = re.search(r"(?:account|acc)[^\d.]{0,20}([.*]{0,3}\d[\d ]{3,})", ln, re.IGNORECASE) \
+            or re.fullmatch(r"\s*:?\s*([.*]{2,3}\d{4,})\s*", ln)
+        if m:
+            return re.sub(r"\s", "", m.group(1))
+    return None
+
+
 def _parse_fnb(text: str) -> Optional[Dict[str, Any]]:
     if "notification of payment" not in text.lower():
         return None
@@ -91,6 +109,7 @@ def _parse_fnb(text: str) -> Optional[Dict[str, Any]]:
     amount_raw = _labelled(lines, "Cur/Amount") or ""
     fields = {
         "payer": _labelled(lines, "Payment From"),
+        "payer_account": _payer_account(lines),
         "payee_name": _labelled(lines, "Name"),
         "payee_bank": _labelled(lines, "Bank"),
         "payee_branch_code": _labelled(lines, "Branch Code"),

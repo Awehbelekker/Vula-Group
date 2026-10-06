@@ -2534,7 +2534,8 @@ async def _handle_document_ingest(
                     reply = bank_rec.stage_pop_for_review(
                         tenant_id, round(total_r * 100), fin.get("date"),
                         fin.get("reference"), fin.get("payee"), sender_phone=phone)
-                    scan_msg = "\n\n" + reply
+                    scan_msg = "\n\n" + reply + _payer_line(tenant_id, phone, {
+                        "payer": fin.get("payer"), "payer_account": fin.get("payer_account")})
                 elif fin and dtp == "delivery_note":
                     scan_msg = ("\n\n📦 That's a *delivery note* — filed with your documents "
                                 "(no money booked). I'll match it against the supplier's invoice. "
@@ -2559,6 +2560,7 @@ async def _handle_document_ingest(
                 scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
                     tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
                     fields.get("payee_name") or fields.get("payee"), sender_phone=phone)
+                scan_msg += _payer_line(tenant_id, phone, fields)
             except Exception as exc:
                 logger.warning("POP match skipped for %s: %s", result.filename, exc)
 
@@ -2789,6 +2791,27 @@ async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Op
         return None
 
 
+def _business_label(tenant_id: str) -> str:
+    """The short name the owner calls their business ("DIGG") — for "a DIGG account?"."""
+    try:
+        from vula.api.tenants import get_config
+        name = (get_config(tenant_id) or {}).get("display_name") or ""
+    except Exception:
+        name = ""
+    return (name.split()[0] if name else "") or "the business"
+
+
+def _payer_line(tenant_id: str, phone: str, fields: dict) -> str:
+    """Whose money a proof of payment came from — see vula/commerce/payers.py."""
+    try:
+        from vula.commerce import payers
+        line = payers.pop_note(tenant_id, phone, fields or {}, _business_label(tenant_id))
+        return ("\n" + line) if line else ""
+    except Exception as exc:
+        logger.debug("payer note skipped: %s", exc)
+        return ""
+
+
 def _note_handler(name: str) -> None:
     """Which of the older reply-matchers took this message — onto the turn record."""
     from vula import turns
@@ -2901,6 +2924,14 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
         return True
     if kind in ("expense_project", "expense_paid_with"):
         reply = _answer_expense_question(tenant_id, kind, ref, text)
+        if reply is None:
+            return False
+        oq.close(q["id"], text)
+        await _send_reply(phone, reply, tenant_id=tenant_id)
+        return True
+    if kind == "payer_account":
+        from vula.commerce import payers
+        reply = payers.answer(tenant_id, ref, text, _business_label(tenant_id))
         if reply is None:
             return False
         oq.close(q["id"], text)
