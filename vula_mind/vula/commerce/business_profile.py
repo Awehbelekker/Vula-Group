@@ -31,6 +31,10 @@ _COMMON: List[Dict[str, str]] = [
     {"key": "cancellations", "q": "What's your policy on cancellations, returns or refunds?"},
     {"key": "team", "q": "Who does what in the team (e.g. 'Sipho quotes, Lindi does accounts')?"},
     {"key": "faq", "q": "What do customers ask you most often — and what's the answer?"},
+    # 6 Oct: tax questions need this (vula/commerce/tax.py) — Turnover Tax, company, sole prop.
+    {"key": "tax_regime", "q": "How is the business taxed: Turnover Tax, a (Pty) Ltd company, or a sole proprietor (your own name)?"},
+    {"key": "payroll", "q": "Do you employ staff on payroll (PAYE/UIF), or are workers paid through subcontractors?"},
+    {"key": "vat_category", "q": "If you're VAT registered: do you submit VAT every two months (category A or B) or monthly (C)?"},
 ]
 
 _EXTRA: Dict[str, List[Dict[str, str]]] = {

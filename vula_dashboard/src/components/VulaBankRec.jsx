@@ -22,6 +22,12 @@ export default function VulaBankRec({ tenantId }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [noProject, setNoProject] = useState(false);
+  // Re-file a whole category at once (DIGG, 6 Oct: 157 lines booked as "casual labour" that were
+  // really materials and subcontractors): filter by category, then group by payee and apply one
+  // category / project / trade to the group. Vula learns each choice for the next statement.
+  const [cat, setCat] = useState("");
+  const [grouped, setGrouped] = useState(false);
+  const [groups, setGroups] = useState([]);
   // Project/trade allocation only for a business that works in projects (the `projects`
   // module — DIGG), not a shop like Off the Hook.
   const [hasProjects, setHasProjects] = useState(false);
@@ -36,7 +42,7 @@ export default function VulaBankRec({ tenantId }) {
   const load = useCallback(async () => {
     const [s, t, inv, ord, acc, wk] = await Promise.all([
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/reconciliation`).then(r => r.json()).catch(() => null),
-      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions?limit=500${noProject ? "&status=no_project" : filter ? `&status=${filter}` : ""}`).then(r => r.json()).catch(() => ({})),
+      fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions?limit=500${noProject ? "&status=no_project" : filter ? `&status=${filter}` : ""}${cat ? `&account_code=${encodeURIComponent(cat)}` : ""}`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/invoices?status=sent`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/orders?status=pending_payment`).then(r => r.json()).catch(() => ({})),
       fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/accounts`).then(r => r.json()).catch(() => ({})),
@@ -45,7 +51,12 @@ export default function VulaBankRec({ tenantId }) {
     setSum(s); setTxns(t.transactions || []); setInvoices(inv.invoices || []);
     setPendingOrders(ord.orders || []);
     setAccounts(acc.accounts || []); setVatReg(!!acc.vat_registered); setWorkers(wk.workers || []);
-  }, [tenantId, filter, noProject]);
+    if (grouped) {
+      const g = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/groups?direction=out${cat ? `&account_code=${encodeURIComponent(cat)}` : ""}`)
+        .then(r => r.json()).catch(() => ({}));
+      setGroups(g.groups || []);
+    }
+  }, [tenantId, filter, noProject, cat, grouped]);
 
   // The project register (with phases) for the project box — not just names already on a line.
   const [registered, setRegistered] = useState([]);
@@ -81,6 +92,20 @@ export default function VulaBankRec({ tenantId }) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ project: project || null, trade: trade || null }),
     }).catch(() => {});
+    load();
+  };
+  // One category (and optionally project + trade) for every line in a payee group.
+  const applyGroup = async (g, form) => {
+    if (!form.account_code) return flash("Pick a category for the group first.");
+    setBusy(true);
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/bulk-categorize`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ txn_ids: g.txn_ids, account_code: form.account_code,
+        project: form.project || null, trade: form.trade || null }),
+    }).then(r => r.json()).catch(() => ({ detail: "network" }));
+    setBusy(false);
+    if (r.detail || r.error) return flash(String(r.detail || r.error));
+    flash(`Updated ${r.updated} line${r.updated === 1 ? "" : "s"} — Vula will file the next ones the same way.`);
     load();
   };
   const projectNames = [...new Set([...registered, ...txns.map(t => t.project).filter(Boolean)])].sort();
@@ -161,10 +186,14 @@ export default function VulaBankRec({ tenantId }) {
   };
 
   const act = async (id, action, invoice_id, order_id) => {
-    await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${id}/match`, {
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${id}/match`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, invoice_id, order_id }),
-    }).catch(() => {});
+    }).then(r => r.json()).catch(() => ({ detail: "network" }));
+    if (r && (r.detail || r.error)) flash(String(r.detail || r.error));
+    else if (r && r.invoice_status) flash(r.invoice_status === "paid"
+      ? `Matched — ${R(r.paid_cents)} paid, invoice settled.`
+      : `Matched — ${R(r.paid_cents)} paid, ${R(r.balance_due_cents)} still owed.`);
     load();
   };
 
@@ -236,9 +265,25 @@ export default function VulaBankRec({ tenantId }) {
           <button key={v} onClick={() => { setFilter(v); setNoProject(false); }} style={{ ...chip, ...(filter === v && !noProject ? chipOn : {}) }}>{l}</button>
         ))}
         {hasProjects && <button onClick={() => { setFilter(""); setNoProject(true); }} style={{ ...chip, ...(noProject ? chipOn : {}) }} title="Materials and labour paid but not put on a project yet">Not on a project</button>}
+        {accounts.length > 0 && (
+          <select value={cat} onChange={e => setCat(e.target.value)} title="Show one category"
+            style={{ ...input, fontSize: 12, padding: "3px 6px", maxWidth: 190 }}>
+            <option value="">All categories</option>
+            {accounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
+          </select>
+        )}
+        <button onClick={() => setGrouped(g => !g)} style={{ ...chip, ...(grouped ? chipOn : {}) }}
+          title="Group payments by payee and set the category, project and trade for the whole group at once">Group by payee</button>
       </div>
+      {grouped && (
+        <div style={{ marginBottom: 12 }}>
+          {groups.length === 0
+            ? <div style={{ color: C.muted, fontSize: 13 }}>{cat ? "Nothing in this category." : "Nothing waiting for review — pick a category to re-file it."}</div>
+            : groups.map(g => <GroupRow key={g.key} g={g} accounts={accounts} hasProjects={hasProjects} busy={busy} onApply={applyGroup} />)}
+        </div>
+      )}
       {txns.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No transactions yet — upload a statement or wait for the weekly email.</div>
-        : txns.filter(t => !noProject || (t.direction === "out" && !t.project && ["cost_of_sales", "casual_labour"].includes(t.account_code))).map(t => (
+        : grouped ? null : txns.filter(t => !noProject || (t.direction === "out" && !t.project && ["cost_of_sales", "casual_labour", "subcontractors"].includes(t.account_code))).map(t => (
           <div key={t.id} style={card}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>
@@ -284,12 +329,7 @@ export default function VulaBankRec({ tenantId }) {
               : t.match_status === "ignored" ? <span style={{ ...pill, color: C.muted, borderColor: C.border }}>ignored</span>
                 : (
                   <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    {t.direction === "in" && (
-                      <select defaultValue="" onChange={e => e.target.value && act(t.id, "match", e.target.value)} style={{ ...input, maxWidth: 150 }}>
-                        <option value="">Match invoice…</option>
-                        {invoices.map(i => <option key={i.id} value={i.id}>{i.invoice_number} · {R(i.total_cents)}</option>)}
-                      </select>
-                    )}
+                    <MatchPicker tenantId={tenantId} txn={t} onPick={(id) => act(t.id, "match", id)} />
                     {t.direction === "in" && (
                       <select defaultValue="" onChange={e => e.target.value && act(t.id, "match", null, e.target.value)} style={{ ...input, maxWidth: 150 }}>
                         <option value="">Match order…</option>
@@ -320,6 +360,57 @@ const btn = { padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius
 const btnOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const miniBtn = { padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
 const chip = { padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 16, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer" };
+// The invoice (money in) or supplier bill (money out) a line settles, closest amount first —
+// for the lines Vula couldn't match itself. Only the amount on the line is booked as paid.
+function MatchPicker({ tenantId, txn, onPick }) {
+  const [opts, setOpts] = useState(null);
+  const load = () => {
+    if (opts) return;
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/bank/transactions/${txn.id}/candidates`)
+      .then(r => r.json()).then(d => setOpts(d.candidates || [])).catch(() => setOpts([]));
+  };
+  const label = txn.direction === "in" ? "Match invoice…" : "Match supplier bill…";
+  return (
+    <select defaultValue="" onFocus={load} onMouseDown={load}
+      onChange={e => e.target.value && onPick(e.target.value)} style={{ ...input, maxWidth: 190 }}>
+      <option value="">{label}</option>
+      {opts === null && <option disabled>Loading…</option>}
+      {opts && opts.length === 0 && <option disabled>Nothing open to match</option>}
+      {(opts || []).map(c => (
+        <option key={c.id} value={c.id}>
+          {c.exact ? "✓ " : ""}{c.number || "—"} · {c.party || "?"} · {R(c.balance_cents)} owed{c.status === "part_paid" ? " (part paid)" : ""}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function GroupRow({ g, accounts, hasProjects, busy, onApply }) {
+  const [form, setForm] = useState({ account_code: g.account_code || "", project: "", trade: "" });
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+  return (
+    <div style={{ ...card, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+      <div style={{ flex: 1, minWidth: 180 }}>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>{g.key}</div>
+        <div style={{ fontSize: 12, color: C.muted }}>{g.count} payment{g.count === 1 ? "" : "s"} · {R(g.total_cents)}{g.oldest ? ` · ${g.oldest} – ${g.newest}` : ""}</div>
+      </div>
+      <select value={form.account_code} onChange={set("account_code")} style={{ ...input, fontSize: 11, padding: "3px 6px", maxWidth: 180 }}>
+        <option value="">— category —</option>
+        {accounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
+      </select>
+      {hasProjects && (
+        <>
+          <input list="bank-projects" value={form.project} onChange={set("project")} placeholder="project"
+            style={{ ...input, fontSize: 11, padding: "3px 6px", width: 120 }} />
+          <input value={form.trade} onChange={set("trade")} placeholder="trade"
+            style={{ ...input, fontSize: 11, padding: "3px 6px", width: 120 }} />
+        </>
+      )}
+      <button style={{ ...btn, ...btnOn }} disabled={busy} onClick={() => onApply(g, form)}>Apply to all {g.count}</button>
+    </div>
+  );
+}
+
 const chipOn = { background: C.green, color: "var(--on-accent)", borderColor: C.green };
 const input = { padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, background: C.surface, color: C.text };
 const pill = { fontSize: 11, padding: "2px 8px", borderRadius: 10, border: "1px solid", fontWeight: 600 };

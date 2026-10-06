@@ -29,6 +29,39 @@ BUSINESS_TRAINING_TENANT_ID = "business_basics"
 
 BUSINESS_TRAINING_DOCUMENTS: List[TrainingDocument] = [
 
+    TrainingDocument(
+        filename="employees_vs_subcontractors.md",
+        topic="Employees vs subcontractors — PAYE, UIF, EMP201",
+        content="""# Employees vs Subcontractors (PAYE, UIF, SDL and EMP201)
+
+## Why it matters
+Payroll taxes apply to EMPLOYEES, not to independent subcontractors. If you pay a subcontractor
+(a business or person who runs their own team and invoices you for the work), you pay their
+invoice like any supplier — they handle PAYE/UIF for their own workers. If you pay people
+directly as your staff, you are the employer.
+
+## Signs someone is an employee, not a subcontractor
+- You set their hours and supervise how the work is done, day to day.
+- They work only or mainly for you, and are paid by the day/week/month rather than per job.
+- You supply the tools, materials and transport.
+SARS and the Department of Employment and Labour look at the substance, not the label — calling
+a worker a "subcontractor" doesn't change what the relationship actually is.
+
+## If you have employees
+- Register as an employer with SARS (PAYE, UIF, SDL — SDL only above R500,000 annual payroll).
+- Deduct PAYE and UIF (1% employee + 1% employer) and pay them over monthly with the EMP201,
+  due by the 7th of the following month.
+- Issue IRP5s at year-end (EMP501 reconciliation) and register with the Compensation Fund (COIDA).
+
+## If you use subcontractors
+- Get an invoice for every payment, with their name, ID or company number, and VAT number if
+  they're VAT registered — you can only claim VAT from a valid tax invoice.
+- In construction, main contractors often ask for a COIDA letter of good standing before paying.
+- Record their payments as subcontractor costs on the job, not as wages — it keeps job costing,
+  VAT claims and your payroll obligations right.
+""",
+    ),
+
     # ── Tax ──────────────────────────────────────────────────────────────────
     TrainingDocument(
         filename="vat_basics.md",
@@ -36,10 +69,23 @@ BUSINESS_TRAINING_DOCUMENTS: List[TrainingDocument] = [
         content="""# VAT Basics for South African Small Businesses
 
 ## Do I need to register?
-VAT registration is COMPULSORY once your taxable turnover exceeds R1 million in any consecutive
-12-month period. You may register VOLUNTARILY once turnover exceeds R50,000 in the past 12
-months — many small businesses do this to reclaim input VAT on setup costs, even before it's
-required.
+VAT registration is COMPULSORY once your taxable turnover exceeds R2.3 million in any 12-month
+period (from 1 April 2026, Budget 2026 — it was R1 million before). You must apply within 21 days
+of passing it. You may register VOLUNTARILY once turnover exceeds R120,000 in the past 12 months
+(R50,000 before 1 April 2026) — many small businesses do this to reclaim input VAT on costs, and
+because larger clients prefer VAT-registered suppliers.
+
+## While registration is in progress, and once it comes through
+- Until SARS issues the VAT number and its effective date, do NOT charge VAT or show VAT on
+  invoices — charging VAT without being registered is an offence.
+- From the effective date, every tax invoice must show your VAT number, the word "Tax Invoice",
+  and 15% VAT shown separately (or prices stated as VAT-inclusive).
+- Invoices issued before the effective date stay as they are — don't re-issue them with VAT.
+- Money still to come in for work invoiced before registration, and RETENTION released after
+  registration, can attract VAT depending on when the supply is treated as made (the time-of-
+  supply rules for progress payments and retention). Ask your accountant how to treat each
+  outstanding certificate and retention release before invoicing it.
+- Tell your clients your VAT number and effective date so they can claim the VAT you charge.
 
 ## The standard rate
 South Africa's standard VAT rate is 15%. A small number of items are zero-rated (0%) — basic
@@ -57,9 +103,9 @@ date, description, VAT amount shown separately) to claim input VAT on it.
 ## Filing periods (VAT201 return)
 Most small businesses file 2-monthly (Category A or B, alternating odd/even months). Businesses
 with turnover under R1.5m may qualify for 6-monthly or annual categories in specific cases.
-Returns and payment are due by the 25th of the month after the period ends (25th of the last
-business day if filed via eFiling and paying electronically — check current SARS deadlines, they
-shift slightly year to year).
+Returns and payment are due by the 25th of the month after the period ends — or, if you file
+and pay via eFiling, by the last business day of that month. Category A periods end in odd
+months (Jan, Mar, May…), Category B in even months (Feb, Apr, Jun…), Category C is monthly.
 
 ## Common small-business VAT mistakes
 - Charging VAT before you're actually registered (illegal — you need a VAT number first).
@@ -73,11 +119,27 @@ shift slightly year to year).
         topic="Income tax & provisional tax basics",
         content="""# Income Tax & Provisional Tax Basics for SA Small Businesses
 
-## Sole proprietor vs company tax
-A sole proprietor's business income is taxed as PERSONAL income, at individual marginal rates
-(18%–45%, on a sliding scale). A registered company (Pty Ltd) pays a flat 27% corporate income
-tax rate on profit, separate from the owner's personal tax — the owner is then taxed again
-personally on any salary or dividend drawn from the company.
+## Sole proprietor vs company tax (tax year 1 March 2026 – 28 February 2027, Budget 2026)
+A sole proprietor's business income is taxed as PERSONAL income, at individual marginal rates:
+- R1 – R245,100: 18%
+- R245,101 – R383,100: R44,118 + 26% above R245,100
+- R383,101 – R530,200: R79,998 + 31% above R383,100
+- R530,201 – R695,800: R125,599 + 36% above R530,200
+- R695,801 – R887,000: R185,215 + 39% above R695,800
+- R887,001 – R1,878,600: R259,783 + 41% above R887,000
+- above R1,878,600: R666,339 + 45% above R1,878,600
+Less the primary rebate of R17,820 (under 65) — so no tax below R99,000 of taxable income.
+
+A company (Pty Ltd) pays a flat 27% on taxable profit, separate from the owner's personal tax —
+the owner is then taxed again personally on any salary or dividend drawn from the company.
+
+A SMALL BUSINESS CORPORATION (a qualifying Pty Ltd or CC: gross income up to R20 million, all
+shareholders natural persons who don't hold shares in other companies, limits on investment and
+personal-service income) pays lower rates:
+- R0 – R99,000: 0%
+- R99,001 – R365,000: 7% above R99,000
+- R365,001 – R550,000: R18,620 + 21% above R365,000
+- above R550,000: R57,470 + 27% above R550,000
 
 ## Provisional tax
 Anyone who earns income other than a standard salary (this includes almost every small-business
@@ -91,11 +153,17 @@ Underestimating your provisional tax significantly can trigger a SARS penalty �
 estimate slightly high than badly low.
 
 ## Turnover Tax (an alternative for very small businesses)
-Sole proprietors, partnerships, and companies with turnover under R1 million/year MAY elect
-Turnover Tax instead of normal income tax + VAT — a simplified single tax calculated directly
-on turnover (not profit), on a sliding scale starting at 0% up to a max around 3%. Trade-off:
-you generally can't claim expense deductions or input VAT under this system, so it usually
-suits a business with genuinely low expenses relative to revenue.
+Sole proprietors, partnerships, close corporations and companies with qualifying turnover up to
+R2.3 million a year (from 1 March 2026; R1 million before) MAY elect Turnover Tax instead of
+income tax — a single tax on turnover, not profit:
+- R0 – R600,000: 0%
+- R600,001 – R1,000,000: 1% above R600,000
+- R1,000,001 – R1,500,000: R4,000 + 2% above R1,000,000
+- R1,500,001 – R2,300,000: R14,000 + 3% above R1,500,000
+Trade-off: no expense deductions, so it suits a business with low costs relative to revenue.
+Once turnover passes R2.3 million the business no longer qualifies — tell SARS and move to income
+tax (and VAT registration becomes compulsory at the same level). Interim payments are due at the
+end of August and the end of February.
 
 ## Key deadlines to know
 - Provisional tax: end of August, end of February.

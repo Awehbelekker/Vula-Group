@@ -112,6 +112,33 @@ cases:
     last_skill: commerce_admin
     text: "Check my email"
     expect: {skill: email_admin}
+  - id: profit-after-tax-6oct
+    note: was answered "I do not have the tools to calculate the profit after tax" (6 Oct)
+    tenant: digg-demo
+    text: "HPC project profit and also after tax"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: tax-regime-answer
+    tenant: digg-demo
+    text: "Turnover tax"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: vat-owed
+    tenant: off-the-hook
+    text: "How much VAT do I owe this period?"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: register-for-vat
+    tenant: digg-demo
+    text: "Should we register for VAT?"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: tax-from-digest
+    note: the morning digest says "Reply *tax* for the estimate"
+    tenant: digg-demo
+    text: "tax"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: bank-confirmation-letter-6oct
+    note: went to finance_admin and was answered "I couldn't finish that one properly" (Judy, 6 Oct)
+    tenant: digg-demo
+    text: "Can you share the bank confirmation letter"
+    expect: {skill: email_admin, not_skill: [finance_admin, reasoning]}
   - id: what-to-charge
     tenant: digg-demo
     text: "What should I charge per m2 for tiling?"

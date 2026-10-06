@@ -654,8 +654,9 @@ _NOT_SUPPLIER_HISTORY_RE = re.compile(
 _SPECIFIC_DOCUMENT_RE = re.compile(
     r"\bR\s?\d[\d\s,]*\.\d{2}\b|"
     r"\b(?:invoice|inv|quote|receipt)\s*(?:no\.?|number|num|#)\s*[\w-]*\d|"
-    r"\b(?:find|show|send|get|open|pull up)\s+(?:me\s+)?(?:the|that|this)\s+(?:[\w&'-]+\s+){1,4}"
-    r"(?:invoice|quote|receipt|statement)\b(?!s)", re.IGNORECASE)
+    r"\b(?:find|show|send|get|open|pull up|share|forward|resend)\s+(?:me\s+|us\s+)?(?:the|that|this|our)\s+"
+    r"(?:[\w&'-]+\s+){1,4}(?:invoice|quote|receipt|statement|letter|certificate|contract|agreement)\b(?!s)",
+    re.IGNORECASE)
 _SUPPLIER_PRICING_RE = re.compile(
     r"\b(charge|charges|charging|price\s*list|pricing|quote\s+me|sell|sells|selling|"
     r"catalog(ue)?)\b", re.IGNORECASE)
@@ -676,6 +677,14 @@ _OWNER_ADMIN_RE = re.compile(
     # for DIGG, and answered "R0" (6 Oct) — profit/margin on a project is job costing.
     r"\b(?:project|job)\s+(?:profit|margin|loss)\b|\b(?:profit|margin|loss)\s+(?:for|of)\s+(?:the\s+)?\w+|"
     r"\bprofit(?:able)?\b.{0,30}\bproject\b|\bproject\b.{0,30}\bprofit(?:able)?\b|"
+    # Tax on the business's own figures — the tax_estimate tool (6 Oct). Not "tax invoice".
+    r"\b(?:after|before|income|turnover|company|provisional)[\s-]+tax\b|\bhow much tax\b|"
+    r"\btax (?:do|must|should|will) (?:i|we)\b|\b(?:pay|owe) (?:sars|tax)\b|"
+    r"^\s*(?:(?:on |it'?s |we'?re (?:on )?)?turnover tax|sole prop\w*|\(?pty\)? ?ltd)\s*[.!]?\s*$|"
+    r"\b(?:how much|when (?:is|are)|do (?:i|we)|should (?:i|we)|must (?:i|we))\b[^?.]{0,30}\bvat\b|"
+    r"\bvat\s?201\b|\bvat (?:return|due|owed|payable|refund|registration|position|period)\b|"
+    r"\bregister(?:ed)? for vat\b|\b(?:we'?re|we are|i'?m|am) (?:now )?vat registered\b|"
+    r"\btax (?:dates|deadlines?|calendar)\b|\bwhen is (?:\w+ )?tax due\b|^\s*tax\s*[.!?]?\s*$|"
     # "Who owes me money?" went to the general reasoning skill, which can't see invoices (replay
     # corpus, 6 Oct) — debtors and bills are the admin agent's outstanding_invoices.
     r"\bwho owes\b|\bwho (?:do|must|should) (?:i|we) (?:still )?pay\b|\b(?:do|must) (?:i|we) owe\b|"
@@ -814,8 +823,11 @@ def asks_for_named_supplier_summary(text: str, supplier_names: List[str]) -> boo
     return mentions_supplier_name(text, supplier_names)
 
 
+# "Can you share the bank confirmation letter" (Judy, 6 Oct) went to finance_admin and failed;
+# a named letter or certificate is a filed document like an invoice is.
 _DOCUMENT_WORD_RE = re.compile(r"\b(?:invoice|inv|quote|quotation|receipt|statement|slip|"
-                               r"proof of payment|pop|credit note|delivery note)s?\b", re.IGNORECASE)
+                               r"proof of payment|pop|credit note|delivery note|letter|"
+                               r"certificate|contract|agreement)s?\b", re.IGNORECASE)
 
 
 def looks_like_supplier_history_question(text: str) -> bool:

@@ -58,7 +58,14 @@ def build(tenant_id: str, today: date) -> Dict[str, Any]:
         elif due <= today + timedelta(days=7):
             upcoming_cents += left
             upcoming_n += 1
+    try:
+        from vula.commerce.tax import digest_lines
+        tax_lines = digest_lines(tenant_id, today)
+    except Exception as exc:
+        log.debug("digest tax lines skipped: %s", exc)
+        tax_lines = []
     return {
+        "tax": tax_lines,
         "paid": [{"customer": (names.get(p.get("invoice_id")) or {}).get("customer_name") or "?",
                   "invoice": (names.get(p.get("invoice_id")) or {}).get("invoice_number"),
                   "cents": int(p.get("amount_cents") or 0)} for p in paid],
@@ -68,7 +75,7 @@ def build(tenant_id: str, today: date) -> Dict[str, Any]:
 
 
 def render(d: Dict[str, Any]) -> Optional[str]:
-    if not (d["paid"] or d["overdue"] or d["upcoming_n"]):
+    if not (d["paid"] or d["overdue"] or d["upcoming_n"] or d.get("tax")):
         return None
     lines = ["☀️ *Good morning — your money today*"]
     if d["paid"]:
@@ -84,6 +91,10 @@ def render(d: Dict[str, Any]) -> Optional[str]:
     if d["upcoming_n"]:
         lines.append(f"\n📅 *Due in the next 7 days:* {_r(d['upcoming_cents'])} "
                      f"({d['upcoming_n']} invoice{'s' if d['upcoming_n'] != 1 else ''})")
+    if d.get("tax"):
+        lines.append("\n🧾 *Tax coming up:*")
+        lines += d["tax"]
+        lines.append("Reply *tax* for the estimate.")
     lines.append("\nReply *who owes me* for detail, or *send reminders*.")
     return "\n".join(lines)
 

@@ -31,6 +31,9 @@ DEFAULT_CHART = [
     ("cost_of_sales",    "Cost of sales / stock", "expense", "standard", True, 30),
     ("wages",            "Salaries & wages",      "expense", "none",     True, 40),
     ("casual_labour",    "Casual labour",         "expense", "none",     True, 45),
+    # Labour paid to a subcontractor for his own workers (DIGG, 6 Oct: Nelitho, Nolo) — a supplier
+    # with an invoice, not the business's employees, so never a payroll (EMP201) signal.
+    ("subcontractors",   "Subcontractors – labour", "expense", "standard", True, 46),
     ("rent",             "Rent",                  "expense", "standard", True, 50),
     ("packaging",        "Packaging",             "expense", "standard", True, 60),
     ("delivery",         "Delivery / transport",  "expense", "standard", True, 70),

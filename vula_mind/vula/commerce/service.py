@@ -2011,7 +2011,11 @@ async def record_invoice_payment(tenant_id: str, invoice_id: str, amount_cents: 
 
     try:
         from vula.commerce import ledger
-        ledger.post_invoice_payment(tenant_id, invoice, created_payment)
+        # A supplier bill paid in part is money OUT (payables), never sales.
+        if (invoice.get("direction") or "outbound") == "inbound":
+            ledger.post_supplier_payment(tenant_id, invoice, created_payment)
+        else:
+            ledger.post_invoice_payment(tenant_id, invoice, created_payment)
     except Exception as exc:
         logger.warning("ledger hook failed for invoice payment %s: %s", created_payment.get("id"), exc)
     if new_status == "paid":

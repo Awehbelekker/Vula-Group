@@ -2910,16 +2910,19 @@ async def admin_bank_review_start(tenant_id: str):
 
 
 @router.get("/{tenant_id}/admin/bank/transactions")
-async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, limit: int = 200):
+async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, limit: int = 200,
+                                  account_code: Optional[str] = None):
     db = service._client()
     try:
         q = db.table("commerce_bank_transactions").select("*").eq("tenant_id", tenant_id)
+        if account_code:            # "show me all Casual labour" (DIGG re-booking, 6 Oct)
+            q = q.eq("account_code", account_code)
         if status == "needs_input":
             q = q.in_("categorized_by", ["default", "asked"])   # Vula unsure — owner to allocate
         elif status == "no_project":
             # Materials/labour paid but not on a project — filtered here, not in the browser,
             # so a line older than the latest page still shows (2 Oct: 72 DIGG lines back to June).
-            q = (q.eq("direction", "out").in_("account_code", ["cost_of_sales", "casual_labour"])
+            q = (q.eq("direction", "out").in_("account_code", ["cost_of_sales", "casual_labour", "subcontractors"])
                  .is_("project", "null").neq("match_status", "ignored"))
         elif status:
             q = q.eq("match_status", status)
@@ -2977,7 +2980,31 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
     txn = rows[0]
     patch = {}
     if body.action == "match" and body.invoice_id:
-        await service.update_invoice_status(tenant_id, body.invoice_id, "paid")
+        # 6 Oct (Ian: "she should be able to allocate payment and invoice if Vula couldn't"):
+        # money in settles one of our invoices, money out one of a supplier's bills — and only
+        # the amount actually paid. It used to mark any invoice fully paid, whatever the amount.
+        inv_rows = (db.table("commerce_invoices")
+                    .select("id,direction,doc_type,status,total_cents,total_paid_cents")
+                    .eq("tenant_id", tenant_id).eq("id", body.invoice_id).limit(1).execute().data or [])
+        if not inv_rows:
+            raise HTTPException(status_code=404, detail="invoice not found")
+        inv0 = inv_rows[0]
+        want = "outbound" if txn.get("direction") == "in" else "inbound"
+        if (inv0.get("direction") or "outbound") != want:
+            raise HTTPException(status_code=400, detail=(
+                "Money in can only settle one of your invoices, and money out a supplier's bill."))
+        if inv0.get("status") in ("paid", "cancelled"):
+            raise HTTPException(status_code=400, detail=f"That invoice is already {inv0['status']}.")
+        balance = max(0, int(inv0.get("total_cents") or 0) - int(inv0.get("total_paid_cents") or 0))
+        pay = min(int(txn.get("amount_cents") or 0), balance)
+        if pay <= 0:
+            raise HTTPException(status_code=400, detail="Nothing left to pay on that invoice.")
+        try:
+            paid = await service.record_invoice_payment(
+                tenant_id, body.invoice_id, pay, payment_method="eft",
+                note=f"Bank {txn.get('txn_date') or ''}: {(txn.get('description') or '')[:80]}")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         patch = {"matched_invoice_id": body.invoice_id, "match_status": "matched"}
         # A payment matched to a bill is for that bill's project, and the other way round —
         # so job costing sees it whichever side was allocated first.
@@ -3026,8 +3053,57 @@ async def admin_bank_match(tenant_id: str, txn_id: str, body: BankMatchIn):
         patch = {"match_status": "ignored"}
     else:
         raise HTTPException(status_code=400, detail="action must be match|expense|ignore")
-    db.table("commerce_bank_transactions").update(patch).eq("id", txn_id).execute()
-    return {"ok": True, **patch}
+    db.table("commerce_bank_transactions").update(patch).eq("tenant_id", tenant_id).eq("id", txn_id).execute()
+    out = {"ok": True, **patch}
+    if body.action == "match" and body.invoice_id:
+        out.update(invoice_status=paid.get("status"), paid_cents=pay,
+                   balance_due_cents=paid.get("balance_due_cents"))
+    return out
+
+
+@router.get("/{tenant_id}/admin/bank/transactions/{txn_id}/candidates")
+async def admin_bank_match_candidates(tenant_id: str, txn_id: str, limit: int = 40):
+    """Open documents this bank line could settle, closest first: money in → our unpaid
+    invoices (sent / overdue / part paid); money out → suppliers' unpaid bills. An exact
+    balance comes first, then the nearest amount, then the nearest date — so when Vula
+    couldn't match a line, the owner picks from a short list instead of scrolling."""
+    db = service._client()
+    rows = (db.table("commerce_bank_transactions").select("*")
+            .eq("tenant_id", tenant_id).eq("id", txn_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    txn = rows[0]
+    inbound = txn.get("direction") != "in"
+    statuses = ["draft", "sent", "overdue", "part_paid"] if inbound else ["sent", "overdue", "part_paid"]
+    docs = (db.table("commerce_invoices")
+            .select("id,invoice_number,customer_name,supplier,project,issue_date,due_date,status,"
+                    "total_cents,total_paid_cents,doc_type,direction")
+            .eq("tenant_id", tenant_id).eq("direction", "inbound" if inbound else "outbound")
+            .eq("doc_type", "invoice").in_("status", statuses).limit(1000).execute().data or [])
+    amount = int(txn.get("amount_cents") or 0)
+    tdate = str(txn.get("txn_date") or "")[:10]
+
+    def _days(d):
+        try:
+            from datetime import date as _date
+            return abs((_date.fromisoformat(str(d)[:10]) - _date.fromisoformat(tdate)).days)
+        except Exception:
+            return 9999
+    out = []
+    for d in docs:
+        bal = max(0, int(d.get("total_cents") or 0) - int(d.get("total_paid_cents") or 0))
+        if bal <= 0:
+            continue
+        out.append({"id": d["id"], "number": d.get("invoice_number"),
+                    "party": (d.get("supplier") if inbound else d.get("customer_name")) or "",
+                    "project": d.get("project"), "date": d.get("issue_date"), "status": d.get("status"),
+                    "balance_cents": bal, "exact": abs(bal - amount) <= 100,
+                    "_rank": (abs(bal - amount) > 100, abs(bal - amount), _days(d.get("issue_date")))})
+    out.sort(key=lambda c: c["_rank"])
+    for c in out:
+        c.pop("_rank", None)
+    return {"direction": txn.get("direction"), "kind": "bill" if inbound else "invoice",
+            "candidates": out[:max(1, min(limit, 100))]}
 
 
 # ── Accounting: chart of accounts, categorisation, reports (Stage 2) ───────────
@@ -3090,6 +3166,9 @@ async def admin_categorize_txn(tenant_id: str, txn_id: str, body: CategorizeIn):
 class BulkCategorizeIn(BaseModel):
     txn_ids: List[str]
     account_code: str
+    # Optional: put the whole group on a project / trade too (and learn it once).
+    project: Optional[str] = None
+    trade: Optional[str] = None
 
 
 class BulkDismissIn(BaseModel):
@@ -3112,7 +3191,8 @@ _BULK_LIMIT = 500
 
 @router.get("/{tenant_id}/admin/bank/transactions/groups")
 async def admin_bank_transaction_groups(tenant_id: str, direction: Optional[str] = None,
-                                        group_by: str = "merchant", limit: int = 2000):
+                                        group_by: str = "merchant", limit: int = 2000,
+                                        account_code: Optional[str] = None):
     """Unreviewed transactions collapsed into merchant-shaped GROUPS.
 
     2026-09-06: off-the-hook had 738 unmatched rows and digg-demo 54, spanning 2026-05-11 to
@@ -3128,8 +3208,12 @@ async def admin_bank_transaction_groups(tenant_id: str, direction: Optional[str]
     from vula.commerce.merchants import merchant_key
     db = service._client()
     try:
-        q = (db.table("commerce_bank_transactions").select("*")
-             .eq("tenant_id", tenant_id).in_("match_status", ["unmatched", "asked"]))
+        q = db.table("commerce_bank_transactions").select("*").eq("tenant_id", tenant_id)
+        # With a category: every line in it (re-filing lines already booked, e.g. DIGG's
+        # "casual labour" that was really materials and subcontractors). Without: the
+        # unreviewed queue, as before.
+        q = (q.eq("account_code", account_code).neq("match_status", "ignored") if account_code
+             else q.in_("match_status", ["unmatched", "asked"]))
         if direction in ("in", "out"):
             q = q.eq("direction", direction)
         rows = q.order("txn_date", desc=True).limit(min(limit, 5000)).execute().data or []
@@ -3198,14 +3282,20 @@ async def admin_bulk_categorize(tenant_id: str, body: BulkCategorizeIn):
         raise HTTPException(status_code=404, detail="no matching transactions")
 
     vat_reg = accounting.is_vat_registered(tenant_id)
+    project = service.canonical_project(tenant_id, body.project) if body.project else None
+    trade = (body.trade or "").strip() or None
     updated = 0
     for txn in rows:
         vat = accounting.vat_for(acc, int(txn.get("amount_cents") or 0), vat_reg)
+        change = {"account_code": body.account_code, "vat_cents": vat,
+                  "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
+        if project:
+            change["project"] = project
+        if trade:
+            change["trade"] = trade
         try:
-            db.table("commerce_bank_transactions").update(
-                {"account_code": body.account_code, "vat_cents": vat,
-                 "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
-            ).eq("id", txn["id"]).execute()
+            db.table("commerce_bank_transactions").update(change).eq(
+                "tenant_id", tenant_id).eq("id", txn["id"]).execute()
             updated += 1
         except Exception as exc:
             log.warning("bulk categorize skipped %s: %s", txn.get("id"), exc)
@@ -3215,8 +3305,15 @@ async def admin_bulk_categorize(tenant_id: str, body: BulkCategorizeIn):
         accounting.learn_category_rule(tenant_id, rows[0], body.account_code)
     except Exception as exc:
         log.debug("bulk rule learning skipped: %s", exc)
+    if project:
+        try:
+            from vula.commerce import allocation
+            allocation.learn(tenant_id, rows[0].get("description"), project, trade,
+                             payee=rows[0].get("payee"))
+        except Exception as exc:
+            log.debug("bulk allocation learning skipped: %s", exc)
     return {"ok": True, "updated": updated, "requested": len(body.txn_ids),
-            "account_code": body.account_code}
+            "account_code": body.account_code, "project": project, "trade": trade}
 
 
 @router.post("/{tenant_id}/admin/bank/transactions/bulk-dismiss")

@@ -1046,7 +1046,8 @@ async def ask_merchant_account(tenant_id: str, merchant_key: str, display_name: 
     if first_code == "owner_drawings":
         first_code = "cost_of_sales"       # "Personal" is already the second button
     titles = {
-        "cost_of_sales": "Stock / supplies", "casual_labour": "Labour", "equipment": "Equipment",
+        "cost_of_sales": "Stock / supplies", "casual_labour": "Labour", "subcontractors": "Subcontractor",
+        "equipment": "Equipment",
         "packaging": "Packaging", "fuel": "Fuel", "utilities": "Utilities",
         "professional_fees": "Professional fees", "marketing": "Marketing", "rent": "Rent",
         "insurance": "Insurance", "delivery": "Delivery", "bank_charges": "Bank charges",

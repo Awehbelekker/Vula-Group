@@ -55,6 +55,10 @@ def _db(rows=None, updates=None):
             self.lt_ = (col, val)
             return self
 
+        def neq(self, col, val):
+            self.neq_ = (col, val)
+            return self
+
         def is_(self, col, val):
             # PostgREST's null test. Without it the endpoint's try/except swallowed an
             # AttributeError and reported an empty queue, which looks exactly like success.
@@ -78,6 +82,9 @@ def _db(rows=None, updates=None):
             if lt_:
                 col, val = lt_
                 out = [r for r in out if col not in r or (r.get(col) or "") < val]
+            neq_ = getattr(self, "neq_", None)
+            if neq_:
+                out = [r for r in out if r.get(neq_[0]) != neq_[1]]
             isnull = getattr(self, "isnull", None)
             if isnull:
                 out = [r for r in out if r.get(isnull) is None]
@@ -419,3 +426,71 @@ async def test_dismissing_unknown_ids_reports_404_rather_than_claiming_success()
         with pytest.raises(capi.HTTPException) as e:
             await capi.admin_bulk_dismiss(TENANT, capi.BulkDismissIn(txn_ids=["nope"]))
     assert e.value.status_code == 404
+
+
+
+# ── re-filing a category in groups (DIGG, 6 Oct: 157 "casual labour" lines) ────
+
+def _digg_rows():
+    return [
+        {"id": "n1", "txn_date": "2026-08-06", "amount_cents": 9344302, "direction": "out",
+         "description": "FNB App Payment To Nelitho Wages Digg Wage", "account_code": "casual_labour",
+         "match_status": "matched"},
+        {"id": "n2", "txn_date": "2026-09-18", "amount_cents": 8000000, "direction": "out",
+         "description": "FNB App Rtc Pmt To Nelitho Wages Digg Wage", "account_code": "casual_labour",
+         "match_status": "unmatched"},
+        {"id": "s1", "txn_date": "2026-09-25", "amount_cents": 840000, "direction": "out",
+         "description": "FNB App Payment To Skipp Rubble Removal Digg", "account_code": "casual_labour",
+         "match_status": "unmatched"},
+        {"id": "x1", "txn_date": "2026-09-25", "amount_cents": 500, "direction": "out",
+         "description": "Old line", "account_code": "casual_labour", "match_status": "ignored"},
+        {"id": "f1", "txn_date": "2026-09-25", "amount_cents": 45000, "direction": "out",
+         "description": "Engen", "account_code": "fuel", "match_status": "unmatched"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_groups_for_a_category_include_already_reviewed_lines_but_not_ignored_ones():
+    with patch.object(capi.service, "_client", lambda: _db(rows=_digg_rows())):
+        out = await capi.admin_bank_transaction_groups("digg-demo", account_code="casual_labour")
+    ids = sorted(i for g in out["groups"] for i in g["txn_ids"])
+    assert ids == ["n1", "n2", "s1"]                     # matched n1 included, ignored x1 and fuel not
+
+
+@pytest.mark.asyncio
+async def test_the_list_can_be_filtered_by_category():
+    with patch.object(capi.service, "_client", lambda: _db(rows=_digg_rows())):
+        out = await capi.admin_bank_transactions("digg-demo", account_code="fuel")
+    assert [t["id"] for t in out["transactions"]] == ["f1"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_categorize_can_put_a_whole_group_on_a_project_and_trade():
+    updates = []
+    acc = _accounting()
+    with patch.object(capi.service, "_client", lambda: _db(rows=_digg_rows(), updates=updates)), \
+         patch.object(capi.service, "canonical_project", lambda t, p: "HPC Bokaap"), \
+         patch("vula.commerce.accounting.ensure_chart", acc.ensure_chart), \
+         patch("vula.commerce.accounting.is_vat_registered", acc.is_vat_registered), \
+         patch("vula.commerce.accounting.vat_for", acc.vat_for), \
+         patch("vula.commerce.accounting.learn_category_rule"), \
+         patch("vula.commerce.allocation.learn") as learn:
+        out = await capi.admin_bulk_categorize("digg-demo", capi.BulkCategorizeIn(
+            txn_ids=["n1", "n2"], account_code="fuel", project="hpc", trade="Ceilings"))
+    assert out["updated"] == 2 and out["project"] == "HPC Bokaap"
+    assert all(u["project"] == "HPC Bokaap" and u["trade"] == "Ceilings" for u in updates)
+    learn.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bulk_categorize_without_a_project_leaves_projects_alone():
+    updates = []
+    acc = _accounting()
+    with patch.object(capi.service, "_client", lambda: _db(rows=_digg_rows(), updates=updates)), \
+         patch("vula.commerce.accounting.ensure_chart", acc.ensure_chart), \
+         patch("vula.commerce.accounting.is_vat_registered", acc.is_vat_registered), \
+         patch("vula.commerce.accounting.vat_for", acc.vat_for), \
+         patch("vula.commerce.accounting.learn_category_rule"):
+        await capi.admin_bulk_categorize("digg-demo", capi.BulkCategorizeIn(
+            txn_ids=["s1"], account_code="fuel"))
+    assert updates and "project" not in updates[0] and "trade" not in updates[0]

@@ -51,7 +51,8 @@ _ACCOUNT_FOR = [
     (re.compile(r"software|it\b|internet|connectivity|domain|hosting", re.I), "utilities"),
     (re.compile(r"professional|accounting|legal", re.I), "professional_fees"),
     (re.compile(r"material|hardware|merchant", re.I), "cost_of_sales"),
-    (re.compile(r"labou?r|wage|salar|subcontract", re.I), "casual_labour"),
+    (re.compile(r"labou?r|wage|salar", re.I), "casual_labour"),
+    (re.compile(r"subcontract|sub-contract", re.I), "subcontractors"),
 ]
 _LABOUR = re.compile(r"labou?r|wage|salar|subcontract", re.I)
 _OVERHEAD_CODES = {"owner_drawings", "fuel", "bank_charges", "insurance", "utilities",
@@ -220,7 +221,10 @@ def account_for(line: Dict[str, Any], project: Optional[str]) -> str:
         return "other_income"
     text = f"{line.get('category') or ''} {line.get('sub') or ''}"
     if project:
-        return "casual_labour" if _LABOUR.search(line.get("sub") or "") else "cost_of_sales"
+        sub = line.get("sub") or ""
+        if re.search(r"labou?r|wage|salar", sub, re.I):
+            return "casual_labour"
+        return "subcontractors" if re.search(r"subcontract|sub-contract", sub, re.I) else "cost_of_sales"
     for pat, code in _ACCOUNT_FOR:
         if pat.search(text):
             return code
