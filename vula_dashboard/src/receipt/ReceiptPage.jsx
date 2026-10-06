@@ -16,7 +16,7 @@ const token = () => {
 const css = `
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#12171a}
 body{color:#e8eee9;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-.rp{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%)}
+.rp{animation:roomIn .45s ease both;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%)}
 .rp .dock{position:sticky;bottom:0;margin-top:auto;width:100%;padding:16px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:10px;background:linear-gradient(rgba(18,23,26,0),#12171a 38%)}
 .rp .m{color:#9fb0a8;font-size:13px;text-align:center}.rp .m b{color:#e8eee9}
 .rp .btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
@@ -24,6 +24,8 @@ body{color:#e8eee9;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-seri
 .rp button.p{background:#3f8f73;border-color:#3f8f73;color:#fff}
 .rp .e{background:#1c2428;border-radius:14px;padding:24px;text-align:center;margin:90px 16px 0;border:1px solid rgba(255,255,255,.12);max-width:360px}
 .rp .e h1{font-size:18px;margin:0 0 6px}
+@keyframes roomIn{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.rp{animation:none}}
 @media print{html,body,.rp{background:#fff!important;color:#000!important}.rp .dock{display:none}}
 `;
 

@@ -67,7 +67,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .paid-card{border-color:${C.ok};background:#f0fdf4;animation:pop .5s ease-out} @keyframes pop{0%{transform:scale(.97)}60%{transform:scale(1.02)}100%{transform:scale(1)}}
 .big{font-size:28px;font-weight:800}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
 .pin{letter-spacing:.5em;text-align:center;font-size:28px}
-.ov{position:fixed;inset:0;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%);z-index:50;display:flex;flex-direction:column;align-items:center;overflow:auto}
+@keyframes roomIn{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.ov{animation:none}}
+.ov{animation:roomIn .4s ease both;position:fixed;inset:0;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%);z-index:50;display:flex;flex-direction:column;align-items:center;overflow:auto}
 .ov .bar{position:sticky;bottom:0;margin-top:auto;width:100%;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:16px 12px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(rgba(18,23,26,0),#12171a 40%)}
 .ov .bar button{width:auto;margin:0;font-size:15px;padding:10px 20px}
 .ov .bar button.ghost{background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.28)}
