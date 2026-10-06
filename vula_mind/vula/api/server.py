@@ -89,6 +89,7 @@ from vula.api.documents import router as documents_router
 from vula.api.projects import router as projects_router
 from vula.api.team import router as team_router
 from vula.api.payments import router as payments_router
+from vula.tap.api import router as tap_router
 from vula.api.tenants import router as tenants_router
 from vula.api.signup import router as signup_router
 from vula.api.users import router as users_router
@@ -1647,6 +1648,7 @@ _TENANT_GUARD_RES = [
     # is the tenant the caller must belong to. Public customer paths are carved out below.
     re.compile(r"^/v1/payments/(?!webhook/)([^/]+)/"),
     re.compile(r"^/v1/bookings/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/tap/(?!pay/|done/|cancelled/)([^/]+)/"),   # tap-to-pay merchant bills
     re.compile(r"^/v1/subscriptions/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/recurring-bills/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/projects/([^/]+)(?:/|$)"),
@@ -1742,6 +1744,7 @@ async def _guard_check(method: str, path: str, auth_header: str, api_key: str = 
         break
     return None
 
+app.include_router(tap_router)  # no prefix — public /t/{code} tap + /v1/tap/pay; merchant routes are tenant-guarded
 app.include_router(links_router)  # no prefix — public /l/{code} redirect for broadcast click tracking
 app.include_router(email_public_router)  # no prefix — public /email/unsubscribe for campaigns
 app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} photo menu

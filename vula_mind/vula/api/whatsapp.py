@@ -505,7 +505,9 @@ async def receive_message(
                             # producing the same retry-storm 499s that document/image/video/audio
                             # were already fixed for. Both handlers send their own reply via
                             # _send_reply, so backgrounding them changes nothing about delivery.
-                            if route_mode == "commerce":
+                            if route_tenant and await _tap_try_text(route_tenant, phone, text):
+                                pass  # tap-to-pay "PAY <token>" / typed tip or amount — handled
+                            elif route_mode == "commerce":
                                 # Number is a shop line → ordering flow
                                 _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message",
                                         track=_text_track(msg_id, route_tenant, phone, text, route_mode))
@@ -536,7 +538,11 @@ async def receive_message(
                             # (the owner's admin session exists on both commerce- and knowledge-mode
                             # tenants), so this is checked before the commerce_tenant-only branch
                             # below, using route_tenant rather than commerce_tenant.
-                            if phone and reply_id and (
+                            if phone and reply_id.startswith("kb:") and route_tenant:
+                                # Tap-to-pay buttons/lists (tip choice, Pay now, Change tip) — no LLM.
+                                from vula.tap.api import try_handle_interactive
+                                await try_handle_interactive(route_tenant, phone, reply_id)
+                            elif phone and reply_id and (
                                 reply_id.startswith("admin_confirm:") or reply_id.startswith("admin_cancel:")
                             ) and route_tenant:
                                 await _handle_admin_confirm_reply(phone, reply_id, route_tenant)
@@ -1361,6 +1367,13 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
     except Exception as exc:
         logger.debug("escalation skipped: %s", exc)
     return reply
+
+
+async def _tap_try_text(tenant_id: str, phone: str, text: str) -> bool:
+    """Tap-to-pay gets first look at an inbound text; False = not ours (off for this tenant, or
+    not a PAY message / typed answer to a tap prompt), carry on to the normal routers."""
+    from vula.tap.api import try_handle_text
+    return await try_handle_text(tenant_id, phone, text)
 
 
 async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: Optional[str] = None) -> None:

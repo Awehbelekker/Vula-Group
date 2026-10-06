@@ -92,6 +92,14 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
         pass
     headers = dict(request.headers)
     headers["x-vula-path"] = request.url.path  # server-set; iKhokha signs path + body
+    if provider == "payfast":
+        # Tap-to-pay sessions (m_payment_id "kb-<session>") are confirmed by their own service:
+        # amount must equal the session total, events are de-duplicated, ledger + slip follow.
+        from vula.tap.api import try_handle_itn
+        outcome = await try_handle_itn(tenant_id, headers, raw, form)
+        if outcome is not None:
+            log.info("tap ITN processed: %s", outcome)
+            return {"received": True}
     try:
         result = await prov.verify_webhook(creds, headers, raw, form)
     except Exception as exc:

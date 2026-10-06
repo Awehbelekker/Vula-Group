@@ -217,6 +217,13 @@ class Settings(BaseSettings):
     # Public base URL the OAuth redirect comes back to (defaults to Railway prod)
     public_base_url: str = "https://vula-group-production.up.railway.app"
 
+    # Tap-to-pay (KakEnBetaal) pilot: comma-separated tenant ids that have it switched on. Empty =
+    # off everywhere (no inbound message is inspected, no /t/ tag resolves). tap_hash_pepper keys
+    # the HMAC used to look customer numbers up without storing them; if blank it is derived from
+    # the Supabase service key (set it explicitly so rotating that key doesn't orphan the hashes).
+    tap_to_pay_tenants: str = ""
+    tap_hash_pepper: str = ""
+
     # Tenant-scoped auth enforcement (2026-07-17): when true, /v1/commerce/{t}/admin/*,
     # /v1/team/{t}/* and /v1/users/{t}/* require a verified Supabase JWT belonging to that
     # tenant (or master). Shipped dark (false) so the dashboard's token-attach wrapper can be
