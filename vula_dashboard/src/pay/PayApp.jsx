@@ -7,7 +7,8 @@
  * offline. Everything money-related comes from the server — nothing is computed here.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import PrintedSlip from "../receipt/PrintedSlip";
+import PrintedSlip, { playPrintSound } from "../receipt/PrintedSlip";
+import { getVolume, setVolume, nextVolume } from "../receipt/printSound";
 
 const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const LS = {
@@ -159,7 +160,7 @@ function Home({ token, onLock, onExpired }) {
   const [alerts, setAlerts] = useState("unknown");
   const [slip, setSlip] = useState(null);           // paid bill whose slip is printing on screen
   const [slipRun, setSlipRun] = useState(0);
-  const [sound, setSound] = useState(() => LS.get("vp.sound") !== "off");
+  const [volume, setVol] = useState(() => getVolume());
   const seenPaid = useRef(new Set());   // bills already celebrated (seeded by the FIRST load only)
   const seeded = useRef(false);
   const cursor = useRef("");
@@ -339,12 +340,12 @@ function Home({ token, onLock, onExpired }) {
         {alerts === "on" && <div className="muted">Payment alerts are on.</div>}
         {alerts === "blocked" && <div className="muted">Alerts are blocked in your phone's settings for this app.</div>}
         {alerts === "unsupported" && <div className="muted">{isIos ? "On iPhone: tap Share → Add to Home Screen, then open Vula Pay from your home screen to get alerts." : "This browser can't show payment alerts. You'll still get a WhatsApp message."}</div>}
-        <button className="ghost" aria-pressed={sound} onClick={() => { const n = !sound; setSound(n); LS.set("vp.sound", n ? "on" : "off"); }}>{sound ? "Slip sound: on" : "Slip sound: off"}</button>
+        <button className="ghost" aria-label={`Slip sound volume: ${volume}`} onClick={() => { const n = nextVolume(volume); setVol(n); setVolume(n); if (n !== "off") playPrintSound(0.4); }}>{volume === "off" ? "Slip sound: off" : `Slip sound: ${volume}`}</button>
         {installEvt && <button className="ghost" onClick={async () => { installEvt.prompt(); await installEvt.userChoice; setInstallEvt(null); }}>Install the app</button>}
       </div>
       {slip && (
         <div className="ov" role="dialog" aria-modal="true" aria-label="Payment slip">
-          <PrintedSlip key={slipRun} sound={sound} data={{
+          <PrintedSlip key={slipRun} sound={volume !== "off"} data={{
             merchant: me?.merchant, description: slip.description, served_by: me && !me.sees_all ? me.name : null,
             bill_cents: slip.subtotal_cents, tip_cents: slip.tip_cents || 0, total_cents: slip.total_cents ?? slip.subtotal_cents,
             paid_at: slip.paid_at, ref: slip.ref }}

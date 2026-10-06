@@ -8,6 +8,20 @@
  *   little shimmer (feedback delay). Everything is low-passed/band-passed so it stays smooth.
  * "classic" — the earlier dot-matrix chatter and two-note ding.
  */
+/** Volume levels. Default is LOW (peak about -22 dBFS): this plays in shops and on a coach's phone in a pocket. */
+export const LEVELS = { low: 0.3, medium: 0.5, high: 0.85 };
+export const VOLUME_ORDER = ["off", "low", "medium", "high"];
+export function getVolume() {
+  try {
+    const v = localStorage.getItem("vp.vol");
+    if (VOLUME_ORDER.includes(v)) return v;
+    if (localStorage.getItem("vp.sound") === "off") return "off";       // older on/off setting
+  } catch { /* private mode */ }
+  return "low";
+}
+export function setVolume(v) { try { localStorage.setItem("vp.vol", v); } catch { /* private mode */ } }
+export const nextVolume = (v) => VOLUME_ORDER[(VOLUME_ORDER.indexOf(v) + 1) % VOLUME_ORDER.length];
+
 export const STEPS = 46;      // soft feed ticks per print (the paper itself now moves continuously)
 export const FEED_DELAY = 0.55; // seconds: the printer bar slides in first, then the paper feeds (matches the CSS)
 
@@ -18,8 +32,8 @@ function noiseBuffer(ctx, seconds, seed = 1) {
   return buf;
 }
 
-function modern(ctx, out, t0, dur) {
-  const master = ctx.createGain(); master.gain.value = 0.8; master.connect(out);
+function modern(ctx, out, t0, dur, level) {
+  const master = ctx.createGain(); master.gain.value = level; master.connect(out);
 
   // shimmer bus (feedback delay) for the chime
   const dly = ctx.createDelay(1), fb = ctx.createGain(), wet = ctx.createGain(), lp = ctx.createBiquadFilter();
@@ -75,7 +89,8 @@ function modern(ctx, out, t0, dur) {
   return t0 + dur + 0.2 + 3 * 0.09 + 1.0 + 0.9;   // ~ when the tail has died away
 }
 
-function classic(ctx, out, t0, dur) {
+function classic(ctx, out, t0, dur, level) {
+  const master = ctx.createGain(); master.gain.value = level; master.connect(out); out = master;
   const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.03), ctx.sampleRate), ch = buf.getChannelData(0);
   for (let i = 0; i < ch.length; i++) ch[i] = (Math.sin(i * 12.9898) * 43758.5453 % 1) * (1 - i / ch.length);
   for (let k = 0; k < Math.floor(dur / 0.07); k++) {
@@ -92,6 +107,6 @@ function classic(ctx, out, t0, dur) {
   return t0 + dur + 0.8;
 }
 
-export function schedulePrintSound(ctx, out, t0, dur = 2.8, style = "modern") {
-  return (style === "classic" ? classic : modern)(ctx, out, t0, dur);
+export function schedulePrintSound(ctx, out, t0, dur = 2.8, style = "modern", level = LEVELS.low) {
+  return (style === "classic" ? classic : modern)(ctx, out, t0, dur, level);
 }

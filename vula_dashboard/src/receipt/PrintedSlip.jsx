@@ -9,7 +9,7 @@
  * Respects prefers-reduced-motion: the slip simply appears, silently.
  */
 import { useEffect, useRef } from "react";
-import { schedulePrintSound, FEED_DELAY } from "./printSound";
+import { schedulePrintSound, FEED_DELAY, LEVELS, getVolume } from "./printSound";
 
 export const rands = (c) =>
   `R ${(Number(c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.replace(/ /g, " ");
@@ -32,6 +32,8 @@ const audioCtx = () => {
 /** Plays the slip sound (style "modern" by default; "classic" = the older dot-matrix chatter).
  *  Returns false, silently, when the browser hasn't allowed audio yet (no tap so far). */
 export function playPrintSound(duration = 2.8, style = (() => { try { return localStorage.getItem("vp.soundstyle") || "modern"; } catch { return "modern"; } })()) {
+  const vol = getVolume();
+  if (vol === "off") return false;
   const ctx = audioCtx();
   if (!ctx) return false;
   try {
@@ -40,7 +42,7 @@ export function playPrintSound(duration = 2.8, style = (() => { try { return loc
     const comp = ctx.createDynamicsCompressor();          // a safety net so nothing can clip on a phone speaker
     comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.2;
     comp.connect(ctx.destination);
-    schedulePrintSound(ctx, comp, ctx.currentTime + FEED_DELAY, duration, style);   // FEED_DELAY = the CSS feed delay
+    schedulePrintSound(ctx, comp, ctx.currentTime + FEED_DELAY, duration, style, LEVELS[vol]);   // FEED_DELAY = the CSS feed delay
     return true;
   } catch { return false; }
 }

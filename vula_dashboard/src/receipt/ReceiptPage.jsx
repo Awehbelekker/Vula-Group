@@ -1,6 +1,7 @@
 /** Customer receipt page (/r/<token>): fetches the safe receipt and prints it out with animation + sound. */
 import { useEffect, useState } from "react";
 import PrintedSlip, { playPrintSound, reducedMotion } from "./PrintedSlip";
+import { getVolume, setVolume, nextVolume } from "./printSound";
 
 const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -32,7 +33,7 @@ body{color:#e8eee9;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-seri
 export default function ReceiptPage() {
   const [state, setState] = useState({ s: "loading", data: null });
   const [run, setRun] = useState(0);
-  const [sound, setSound] = useState(() => lsGet("vp.sound") !== "off");
+  const [volume, setVol] = useState(() => getVolume());
   const still = reducedMotion();
 
   useEffect(() => {
@@ -44,7 +45,7 @@ export default function ReceiptPage() {
       .catch(() => setState({ s: "error" }));
   }, []);
 
-  const toggle = () => { const n = !sound; setSound(n); lsSet("vp.sound", n ? "on" : "off"); if (n) playPrintSound(0.4); };
+  const toggle = () => { const n = nextVolume(volume); setVol(n); setVolume(n); if (n !== "off") playPrintSound(0.4); };   // a tap: audio is allowed, so you hear the new level
   const replay = () => setRun((n) => n + 1);          // a tap = a user gesture, so sound is allowed here
 
   return (
@@ -56,12 +57,12 @@ export default function ReceiptPage() {
       )}
       {state.s === "ok" && (
         <>
-          <PrintedSlip key={run} data={state.data} sound={sound && !still} />
+          <PrintedSlip key={run} data={state.data} sound={volume !== "off" && !still} />
           <div className="dock noprint">
             <div className="m"><b>Payment received</b> · your receipt from {state.data.merchant}</div>
             <div className="btns">
               <button className="p" onClick={replay}>Replay</button>
-              <button onClick={toggle} aria-pressed={sound}>{sound ? "Sound on" : "Sound off"}</button>
+              <button onClick={toggle} aria-label={`Sound volume: ${volume}`}>{volume === "off" ? "Sound off" : `Sound: ${volume}`}</button>
               <button onClick={() => window.print()}>Save / print</button>
             </div>
             <div className="m" style={{ fontSize: 11 }}>Powered by Vula</div>
