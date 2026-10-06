@@ -1407,3 +1407,21 @@ async def master_feedback_cases(limit: int = 50) -> dict:
                       "routes_to": got, "correction": _redact(r.get("correction") or "")[:300],
                       "yaml": line})
     return {"cases": cases}
+
+
+@router.get("/turns")
+async def master_turns(tenant_id: Optional[str] = None, phone: Optional[str] = None,
+                       limit: int = 30) -> dict:
+    """The WhatsApp turn record (migration 195): what came in, the steps Vula took and every
+    reply it sent — newest first. Answers "why did Vula say that?" without reading logs."""
+    q = _client().table("vula_turns").select("*").order("started_at", desc=True)
+    if tenant_id:
+        q = q.eq("tenant_id", tenant_id)
+    if phone:
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        q = q.eq("phone", "27" + digits[1:] if digits.startswith("0") else digits)
+    try:
+        rows = q.limit(max(1, min(int(limit), 200))).execute().data or []
+    except Exception as exc:
+        return {"turns": [], "error": f"turn record unavailable (run migration 195?): {exc}"}
+    return {"turns": rows}

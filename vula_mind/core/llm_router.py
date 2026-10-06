@@ -317,6 +317,11 @@ def _log_decision(*, run_id: str, task: str, outcome: str, escalated: bool,
 
     Sink: one JSON line to the logger (stdout, Railway-captured); also appended to $VULA_ROUTER_LOG
     when set, so verified-reasoning/tools/report.py can read it beside LocalCoder + VRL logs."""
+    try:
+        from vula import turns
+        turns.note("model", task=task, route=outcome, backend=backend, reason=reason, escalated=escalated)
+    except Exception:
+        pass
     entry = {
         "schema": 1,
         "system": "vula-llm-router",
