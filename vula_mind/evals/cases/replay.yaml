@@ -1,0 +1,97 @@
+# Real WhatsApp messages and where they must go — chat rework step 4 (evals/replay.py).
+# Replayed through whatsapp._rag_reply with the database, models and WhatsApp stubbed; a case that
+# goes anywhere else fails CI (tests/test_replay_corpus.py).
+#
+# The repository is public: a case is the message and a role only — no phone numbers, customer
+# names or tenant figures. New cases come from tools/export_turns.py and are reviewed first.
+#
+# Fields: tenant, role (owner|manager|staff), text, optional last_skill / last_request (what the
+# person asked just before), optional suppliers (names/aliases the tenant has on file), and
+# expect: route (the _rag_reply branch), skill, not_skill, continues, reply_must_not.
+#
+# Routes: check_in, delete_refused, follow_up, owner_admin, agent, supplier_alias,
+# project_register, profile_interview, stock_sheet, programme, projects.
+
+cases:
+  # ── DIGG, the Jack Hammer account (Gardens Handiman; "Jack Hammer" is the owner's alias) ──
+  - id: jh-summarise-29sep
+    tenant: digg-demo
+    text: "Can you summarize Jack hammer invoices"
+    expect: {route: agent, skill: email_admin}
+  - id: jh-all-invoices-29sep
+    tenant: digg-demo
+    text: "Can I have all invoices for gardens handyman / Jack hammer"
+    expect: {route: agent, skill: email_admin}
+  - id: jh-count-06oct
+    note: went to web search ("current") before #116
+    tenant: digg-demo
+    text: "What is the current total invoices count at jack hammer"
+    expect: {route: agent, skill: email_admin, not_skill: [web_search]}
+  - id: jh-sharable-pdf-06oct
+    note: went to file_parse ("pdf") before #116
+    tenant: digg-demo
+    text: "Please put all jack hammer invoice/expense and material list in a sharable PDF"
+    expect: {route: agent, skill: email_admin, not_skill: [file_parse]}
+  - id: jh-proceed-06oct
+    note: a bare "Proceed" was answered by the reasoning skill before #116
+    tenant: digg-demo
+    text: "Proceed"
+    last_request: "Please put all jack hammer invoice/expense and material list in a sharable PDF"
+    expect: {route: agent, skill: email_admin,
+             continues: "Please put all jack hammer invoice/expense and material list in a sharable PDF"}
+  - id: jh-updated-pdf-06oct
+    note: went to file_parse — fixed with this corpus (named supplier + export)
+    tenant: digg-demo
+    suppliers: ["GARDENS HANDIMAN CENTRE", "Jack Hammer"]
+    text: "Send me the updated jack hammer pdf"
+    expect: {route: agent, skill: email_admin, not_skill: [file_parse]}
+  - id: jh-breakdown-complaint-06oct
+    note: a complaint about the last answer goes back to the skill that gave it
+    tenant: digg-demo
+    last_skill: email_admin
+    text: "Not generating a full break down on the full jack hammer invoice"
+    expect: {route: follow_up, skill: email_admin}
+  - id: in-excel-follow-up
+    tenant: digg-demo
+    last_skill: email_admin
+    text: "in excel"
+    expect: {route: follow_up, skill: email_admin}
+
+  # ── DIGG, documents and money ──
+  - id: sale-amount-whats-this-06oct
+    note: went to the reasoning skill — fixed with this corpus (amount + "what's this")
+    tenant: digg-demo
+    text: "The sale R41752.47 what's this"
+    expect: {route: agent, skill: email_admin, not_skill: [reasoning]}
+  - id: paint-polyfiller-email-06oct
+    tenant: digg-demo
+    text: "Check email as there was resent purchase on paint and polyfiller"
+    expect: {route: agent, skill: email_admin}
+  - id: landlord-email-29sep
+    tenant: digg-demo
+    text: "Can you give me the landlord details that Barend shared with me in email"
+    expect: {route: agent, skill: email_admin}
+  - id: who-owes-me
+    note: went to the reasoning skill — fixed with this corpus (debtors → admin agent)
+    tenant: digg-demo
+    text: "Who owes me money?"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: making-our-fee
+    tenant: digg-demo
+    text: "Are we making our 10% on HPC?"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: what-to-charge
+    tenant: digg-demo
+    text: "What should I charge per m2 for tiling?"
+    expect: {route: owner_admin, skill: commerce_admin}
+
+  # ── answered in code, no skill ──
+  - id: are-you-ok-29sep
+    tenant: digg-demo
+    text: "Are you ok?"
+    expect: {route: check_in, reply_must_not: ["{", "I can't"]}
+  - id: delete-invoices-benchmark
+    note: was answered "I have deleted all the HPC invoices" (30 Sep benchmark)
+    tenant: digg-demo
+    text: "Delete all the HPC invoices"
+    expect: {route: delete_refused, reply_must_not: ["deleted all", "have deleted"]}

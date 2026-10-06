@@ -3368,6 +3368,30 @@ def _fuzzy_mention(question_norm: str, name_norm: str) -> bool:
     return False
 
 
+_SUPPLIER_NAMES_CACHE: Dict[str, Tuple[float, List[str]]] = {}
+
+
+def known_supplier_names(tenant_id: str) -> List[str]:
+    """Every supplier name and alias for a tenant, cached for 5 minutes — for routing, which is
+    synchronous and runs on every message. Fail-open: [] on any error."""
+    import time as _time
+    hit = _SUPPLIER_NAMES_CACHE.get(tenant_id)
+    if hit and _time.time() - hit[0] < 300:
+        return hit[1]
+    names: List[str] = []
+    try:
+        rows = (_client().table("commerce_suppliers").select("name,aliases")
+                .eq("tenant_id", tenant_id).execute().data or [])
+        for r in rows:
+            names += [r.get("name") or ""] + [a for a in (r.get("aliases") or []) if a]
+        names = [n for n in names if n]
+    except Exception as exc:
+        logger.debug("supplier names for routing skipped: %s", exc)
+        return []
+    _SUPPLIER_NAMES_CACHE[tenant_id] = (_time.time(), names)
+    return names
+
+
 def mentions_supplier_name(question: str, names: List[str]) -> bool:
     """`question` names one of `names` — as whole words, or a close misspelling of them."""
     nq = _norm_name(question)
