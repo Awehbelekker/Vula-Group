@@ -1,5 +1,6 @@
 /** Customer receipt page (/r/<token>): fetches the safe receipt and prints it out with animation + sound. */
 import { useEffect, useState } from "react";
+import "./ReceiptPage.css";
 import PrintedSlip, { playPrintSound, reducedMotion } from "./PrintedSlip";
 import { getVolume, setVolume, nextVolume } from "./printSound";
 
@@ -14,28 +15,6 @@ const token = () => {
   return last === "index.html" || last === "r" ? "" : last;
 };
 
-const css = `
-*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#12171a}
-body{color:#e8eee9;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-.rp{animation:roomIn .45s ease both;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%)}
-.rp .dock{position:sticky;bottom:0;margin-top:auto;width:100%;padding:16px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:10px;background:linear-gradient(rgba(18,23,26,0),#12171a 38%)}
-.rp .m{color:#9fb0a8;font-size:13px;text-align:center}.rp .m b{color:#e8eee9}
-.rp .btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
-.rp button{font:inherit;font-size:15px;font-weight:600;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#e8eee9;border-radius:999px;padding:10px 18px;cursor:pointer}
-.rp button.p{background:#3f8f73;border-color:#3f8f73;color:#fff}
-.rp .e{background:#1c2428;border-radius:14px;padding:24px;text-align:center;margin:90px 16px 0;border:1px solid rgba(255,255,255,.12);max-width:360px}
-.rp .e h1{font-size:18px;margin:0 0 6px}
-.rp .sheet{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center}
-.rp .card{width:100%;max-width:440px;background:#1c2428;border-radius:18px 18px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
-.rp .card h2{margin:0;font-size:17px}
-.rp .card label{font-size:12px;color:#9fb0a8;display:flex;flex-direction:column;gap:4px;text-align:left}
-.rp .card input{font:inherit;font-size:16px;padding:11px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:#12171a;color:#e8eee9}
-.rp .card .err{color:#ff9d8f;font-size:13px;text-align:left}
-.rp .card .row{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
-@keyframes roomIn{from{opacity:0}to{opacity:1}}
-@media (prefers-reduced-motion:reduce){.rp{animation:none}}
-@media print{html,body,.rp{background:#fff!important;color:#000!important}.rp .dock,.rp .sheet{display:none}}
-`;
 
 function TaxSheet({ tok, onDone, onClose }) {
   const [f, setF] = useState({ company: "", vat: "", address: "" });
@@ -97,7 +76,6 @@ export default function ReceiptPage() {
 
   return (
     <div className="rp">
-      <style>{css}</style>
       {state.s === "loading" && <div className="m" style={{ marginTop: 120 }}>Fetching your receipt…</div>}
       {state.s === "error" && (
         <div className="e"><h1>Receipt not available</h1><p className="m">This receipt link is no longer available. If you need a copy, ask the business that served you.</p></div>

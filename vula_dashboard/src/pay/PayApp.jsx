@@ -6,6 +6,7 @@
  * with your share. Creating a bill needs a connection; the app shell and your recent bills open
  * offline. Everything money-related comes from the server — nothing is computed here.
  */
+import "./pay.css";
 import { useState, useEffect, useRef, useCallback } from "react";
 import PrintedSlip, { playPrintSound } from "../receipt/PrintedSlip";
 import { getVolume, setVolume, nextVolume } from "../receipt/printSound";
@@ -48,33 +49,7 @@ function urlB64ToUint8(s) {
 }
 
 // ── styles (self-contained: this page does not load the dashboard's CSS) ─────────────────────
-const C = { bg: "#F7F4EE", ink: "#1d2b25", green: "#2C5545", soft: "#e8efe9", muted: "#6b756f", line: "rgba(0,0,0,.09)", ok: "#15803d", warn: "#b45309", danger: "#b91c1c", card: "#fff" };
-const css = `
-*{box-sizing:border-box} body{margin:0;background:${C.bg};color:${C.ink};font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;-webkit-text-size-adjust:100%}
-.wrap{max-width:480px;margin:0 auto;padding:16px 16px calc(24px + env(safe-area-inset-bottom))}
-h1{font-size:22px;margin:4px 0 2px} h2{font-size:16px;margin:0 0 8px}
-.card{background:${C.card};border:1px solid ${C.line};border-radius:14px;padding:14px;margin:12px 0}
-.muted{color:${C.muted};font-size:13px}
-input,select{width:100%;font:inherit;font-size:17px;padding:13px 12px;border:1px solid ${C.line};border-radius:10px;background:#fff;margin:6px 0}
-button{font:inherit;font-size:17px;font-weight:600;border:0;border-radius:12px;padding:14px 16px;background:${C.green};color:#fff;width:100%;margin:6px 0;cursor:pointer}
-button.ghost{background:transparent;color:${C.green};border:1px solid ${C.line}} button.small{width:auto;font-size:14px;padding:8px 12px;margin:0}
-button:disabled{opacity:.5;cursor:not-allowed}
-.err{background:#fee2e2;color:${C.danger};border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px}
-.banner{background:#fef3c7;color:${C.warn};border-radius:10px;padding:8px 12px;margin:8px 0;font-size:13px}
-.chips{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 6px} .chip{background:${C.soft};color:${C.green};border-radius:999px;padding:7px 12px;font-size:14px;border:0;width:auto;font-weight:500;margin:0}
-.row{display:flex;gap:10px;align-items:center;justify-content:space-between}
-.pill{border-radius:999px;padding:3px 10px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
-.pill.open{background:#e5e7eb;color:#374151}.pill.claimed{background:#fef3c7;color:${C.warn}}.pill.paid{background:#dcfce7;color:${C.ok}}.pill.cancelled,.pill.expired{background:#f3f4f6;color:#9ca3af}.pill.abandoned{background:#ffedd5;color:#c2410c}.pill.needs_follow_up{background:#fee2e2;color:#b91c1c}
-.paid-card{border-color:${C.ok};background:#f0fdf4;animation:pop .5s ease-out} @keyframes pop{0%{transform:scale(.97)}60%{transform:scale(1.02)}100%{transform:scale(1)}}
-.big{font-size:28px;font-weight:800}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
-.pin{letter-spacing:.5em;text-align:center;font-size:28px}
-@keyframes roomIn{from{opacity:0}to{opacity:1}}
-@media (prefers-reduced-motion:reduce){.ov{animation:none}}
-.ov{animation:roomIn .4s ease both;position:fixed;inset:0;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%);z-index:50;display:flex;flex-direction:column;align-items:center;overflow:auto}
-.ov .bar{position:sticky;bottom:0;margin-top:auto;width:100%;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:16px 12px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(rgba(18,23,26,0),#12171a 40%)}
-.ov .bar button{width:auto;margin:0;font-size:15px;padding:10px 20px}
-.ov .bar button.ghost{background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.28)}
-`;
+const C = { ok: "var(--vp-ok)", off: "var(--vp-off)" };      // colours live in pay.css
 
 export default function PayApp() {
   const [tenant, setTenant] = useState(() => new URLSearchParams(location.search).get("t") || LS.get("vp.tenant"));
@@ -94,7 +69,7 @@ export default function PayApp() {
   else if (deviceToken) screen = <Unlock deviceToken={deviceToken} err={err} setErr={setErr} busy={busy} setBusy={setBusy} onIn={(d) => signedIn(d)} onForget={forgetDevice} />;
   else screen = <Enrol tenant={tenant} setTenant={setTenant} err={err} setErr={setErr} busy={busy} setBusy={setBusy} onIn={(d) => signedIn(d, d.device_token)} />;
 
-  return <><style>{css}</style><div className="wrap">{screen}</div></>;
+  return <><div className="wrap">{screen}</div></>;
 }
 
 // ── enrol ────────────────────────────────────────────────────────────────────────────────────
@@ -289,7 +264,7 @@ function Home({ token, onLock, onExpired }) {
 
   return (
     <>
-      <div className="row"><div><h1>{me?.merchant || "Vula Pay"}</h1><div className="muted"><span className="dot" style={{ background: live ? C.ok : "#9ca3af" }} />{me ? `${me.name}${me.sees_all ? " · manager" : ""}` : ""} · {live ? "live" : "connecting…"}</div></div>
+      <div className="row"><div><h1>{me?.merchant || "Vula Pay"}</h1><div className="muted"><span className="dot" style={{ background: live ? C.ok : C.off }} />{me ? `${me.name}${me.sees_all ? " · manager" : ""}` : ""} · {live ? "live" : "connecting…"}</div></div>
         <button className="ghost small" onClick={onLock}>Lock</button></div>
       {!online && <div className="banner">You're offline. You can see recent bills, but creating a bill needs a connection.</div>}
       {me && me.mode === "off" && <div className="banner">Tap to Pay is switched off for this business.</div>}
@@ -311,7 +286,7 @@ function Home({ token, onLock, onExpired }) {
       {open && me?.tag && (
         <div className="card" style={{ textAlign: "center" }}>
           <div className="muted">Waiting for the customer — they tap your tag, or scan this</div>
-          <img src={me.tag.qr} alt="Your QR code" width={190} height={190} style={{ background: "#fff", margin: "8px auto", display: "block" }} />
+          <img src={me.tag.qr} alt="Your QR code" width={190} height={190} className="qr" style={{ margin: "8px auto", display: "block" }} />
         </div>
       )}
 

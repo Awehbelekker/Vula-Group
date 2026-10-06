@@ -30,7 +30,7 @@ function Step({ n, title, done, children }) {
     <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span style={{ width: 24, height: 24, borderRadius: 12, display: "inline-flex", alignItems: "center", justifyContent: "center",
-          background: done ? T.ok || "#16a34a" : T.surfaceAlt, color: done ? "#fff" : T.muted, fontSize: 13, fontWeight: 700 }}>{done ? "✓" : n}</span>
+          background: done ? T.ok : T.surfaceAlt, color: done ? T.onAccent : T.muted, fontSize: 13, fontWeight: 700 }}>{done ? "✓" : n}</span>
         <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>{title}</span>
       </div>
       {children}
@@ -206,7 +206,7 @@ export default function VulaTapToPay({ tenantId }) {
                 </label>
                 {m.tag ? (
                   <>
-                    <img src={m.tag.qr} alt={`QR code for ${m.name}`} width={72} height={72} style={{ background: "#fff", borderRadius: 6 }} />
+                    <img src={m.tag.qr} alt={`QR code for ${m.name}`} width={72} height={72} className="qr-white" style={{ borderRadius: 6 }} />
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <a href={m.tag.qr} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>Open / print QR</a>
                       <button type="button" style={{ ...hint, background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", textDecoration: "underline" }}
@@ -281,7 +281,7 @@ export default function VulaTapToPay({ tenantId }) {
             )}
             {test && (
               <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-                <img src={test.qr} alt="Scan with your phone" width={110} height={110} style={{ background: "#fff", borderRadius: 6 }} />
+                <img src={test.qr} alt="Scan with your phone" width={110} height={110} className="qr-white" style={{ borderRadius: 6 }} />
                 <span style={hint}>Scan this with your phone camera (or tap an NFC tag with this link). WhatsApp opens — press Send, choose a tip, pay. This page ticks by itself when the payment is confirmed.</span>
               </div>
             )}
