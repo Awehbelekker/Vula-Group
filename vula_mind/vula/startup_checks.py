@@ -172,6 +172,9 @@ def check_payment_setup() -> list[str]:
         eft = {r["tenant_id"] for r in (client.table("commerce_order_settings")
                                         .select("tenant_id,eft_details").execute().data or [])
                if (r.get("eft_details") or "").strip()}
+        eft |= {r["tenant_id"] for r in (client.table("commerce_invoice_settings")
+                                         .select("tenant_id,account_number").execute().data or [])
+                if (r.get("account_number") or "").strip()}
     except Exception as exc:  # noqa: BLE001
         logger.info("payment setup check skipped (%s)", exc)
         return []

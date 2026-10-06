@@ -97,6 +97,26 @@ async def notify_paid(tenant_id: str, invoice_id: str, provider: str) -> int:
     return sent
 
 
+def eft_details(tenant_id: str) -> Optional[str]:
+    """The tenant's EFT block: the order-settings text if set, else the bank fields saved with
+    the invoice settings (the same ones printed on the PDF)."""
+    try:
+        from vula.commerce.order_workflow import get_order_settings
+        text = ((get_order_settings(tenant_id) or {}).get("eft_details") or "").strip()
+        if text:
+            return text
+        from vula.commerce import service
+        from vula.commerce.pdf import _payment_info_from_settings
+        rows = (service._client().table("commerce_invoice_settings")
+                .select("bank_name,account_name,account_number,branch_code")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        info = _payment_info_from_settings(rows[0]) if rows else ""
+        return info.replace("EFT Payment:\n", "").replace("\nPlease use your invoice number as reference.", "") or None
+    except Exception as exc:
+        logger.debug("EFT details lookup failed for %s: %s", tenant_id, exc)
+        return None
+
+
 def owed_cents(inv: dict) -> int:
     return max(0, int(inv.get("total_cents") or 0) - int(inv.get("total_paid_cents") or 0))
 

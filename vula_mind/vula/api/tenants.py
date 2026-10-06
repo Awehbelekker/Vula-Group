@@ -80,6 +80,10 @@ BUSINESS_TYPES: dict[str, dict] = {
     # no projects — contacts, follow-ups, product knowledge and expense slips.
     "rep":      {"label": "Sales rep / Agency (represents a brand)",
                  "modules": ["crm", "followups", "documents", "team", "reports"]},
+    # 2026-10-06 (finance brief, capability 7): a one-person business that only needs the money
+    # side — quotes, invoices, payment links, expenses, books. Nothing else switched on.
+    "solo":     {"label": "Solo operator (invoices & money only)",
+                 "modules": ["invoices", "payments", "finances", "documents", "crm", "reports"]},
     "other":    {"label": "Other / General",
                  "modules": ["invoices", "crm", "reports", "marketing", "followups", "team"]},
 }

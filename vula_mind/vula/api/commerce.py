@@ -4892,7 +4892,6 @@ async def public_pay_page(tenant_id: str, invoice_id: str, result: str = ""):
     invoice id is an unguessable UUID). Amount and status come from the database; the card
     button is the tenant's own gateway; the EFT block is the tenant's own banking details."""
     from vula.commerce import pay_page
-    from vula.commerce.order_workflow import get_order_settings
     try:
         inv = await service.get_invoice(tenant_id, invoice_id)
     except Exception:
@@ -4908,7 +4907,7 @@ async def public_pay_page(tenant_id: str, invoice_id: str, result: str = ""):
         except Exception as exc:            # no gateway → EFT only; already logged loudly
             log.info("pay page for %s shows EFT only: %s", invoice_id, exc)
             card_url = None
-    eft = (get_order_settings(tenant_id) or {}).get("eft_details")
+    eft = pay_page.eft_details(tenant_id)
     return HTMLResponse(pay_page.render(brand, inv, eft, card_url,
                                         result if result in ("success", "cancel") else ""))
 

@@ -281,6 +281,29 @@ async def master_tenant_setup(tenant_id: str):
     return setup_checklist(tenant_id)
 
 
+def _first_invoice_sent(db, tenant_id: str, cfg: dict) -> Optional[str]:
+    """'INV-00001, 7 min after signup' for the first invoice that went out, or None."""
+    try:
+        rows = (db.table("commerce_invoices").select("invoice_number,sent_at,created_at")
+                .eq("tenant_id", tenant_id).eq("direction", "outbound").eq("doc_type", "invoice")
+                .in_("status", ["sent", "overdue", "part_paid", "paid"])
+                .order("created_at").limit(1).execute().data or [])
+    except Exception:
+        return None
+    if not rows:
+        return None
+    r = rows[0]
+    try:
+        from datetime import datetime as _dt
+        t0 = _dt.fromisoformat(str(cfg.get("created_at")).replace("Z", "+00:00"))
+        t1 = _dt.fromisoformat(str(r.get("sent_at") or r.get("created_at")).replace("Z", "+00:00"))
+        mins = max(0, int((t1 - t0).total_seconds() // 60))
+        took = f"{mins} min" if mins < 120 else (f"{mins // 60} h" if mins < 2880 else f"{mins // 1440} days")
+        return f"{r.get('invoice_number')}, {took} after signup"
+    except Exception:
+        return r.get("invoice_number") or "sent"
+
+
 def setup_checklist(tenant_id: str) -> dict:
     """The go-live checklist, COMPUTED live from real state (config/team/WhatsApp/templates/
     payments/products/knowledge/pages/orders) — no manually maintained status field to drift
@@ -320,7 +343,14 @@ def setup_checklist(tenant_id: str) -> dict:
         pays = None
     gateways = _count("vula_payment_providers", tenant_id=tenant_id, active=True) + \
         _count("vula_yoco_accounts", tenant_id=tenant_id)
-    payments_ready = bool(gateways or (pays and pays.get("eft_details")))
+    try:
+        bank = (db.table("commerce_invoice_settings").select("account_number")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [None])[0]
+    except Exception:
+        bank = None
+    payments_ready = bool(gateways or (pays and pays.get("eft_details"))
+                          or (bank and (bank.get("account_number") or "").strip()))
+    first_inv = _first_invoice_sent(db, tenant_id, cfg)
     try:
         tpls = db.table("commerce_wa_templates").select("status").eq("tenant_id", tenant_id) \
             .limit(100).execute().data or []
@@ -388,14 +418,19 @@ def setup_checklist(tenant_id: str) -> dict:
          "detail": cfg.get("store_url") or f"{pages_n} page(s)"},
         {"id": "golive", "label": "First order through", "done": orders_n > 0, "tab": "orders",
          "detail": f"{orders_n} order(s)"},
+        # finance brief, capability 7: the target is a first invoice out within 10 minutes of
+        # signup — measured, so it can be seen per tenant.
+        {"id": "first_invoice", "label": "First invoice sent", "tab": "invoices",
+         "done": bool(first_inv), "detail": first_inv or "none sent yet"},
     ]
     # Only the steps that apply to this business (2026-09-29): a project business (DIGG) or a
     # rep (Gerflor) was scored against "Storefront pages" and "First order through" it will
     # never have. A step with no module requirement applies to everyone.
     from vula.api.tenants import _effective_modules
     mods = set(_effective_modules(cfg))
-    needs = {"payments": {"orders", "payments"}, "storefront": {"pages"}, "golive": {"orders"},
-             "vat": {"invoices", "finances", "orders"}}
+    needs = {"payments": {"orders", "payments", "invoices"}, "storefront": {"pages"},
+             "golive": {"orders"}, "vat": {"invoices", "finances", "orders"},
+             "first_invoice": {"invoices"}}
     steps = [st for st in steps if not needs.get(st["id"]) or (needs[st["id"]] & mods)]
     done = sum(1 for s in steps if s["done"])
     return {"tenant_id": tenant_id, "display_name": cfg.get("display_name"),

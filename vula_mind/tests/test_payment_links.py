@@ -83,8 +83,7 @@ def tool(monkeypatch):
         "a": {"name": "Sam Botha", "phone": "27821112222"},
         "b": {"name": "Thabo Mokoena", "phone": "27823334444"}}))
     monkeypatch.setattr(pay_page, "has_gateway", AsyncMock(return_value=True))
-    monkeypatch.setattr("vula.commerce.order_workflow.get_order_settings",
-                        lambda t: {"eft_details": "FNB 62845"})
+    monkeypatch.setattr(pay_page, "eft_details", lambda t: "FNB 62845")
     return ca.CommerceAdminSkill()
 
 
@@ -135,7 +134,7 @@ async def test_two_customers_called_sam_means_ask(tool, monkeypatch):
 @pytest.mark.asyncio
 async def test_no_gateway_and_no_eft_fails_loudly(tool, monkeypatch):
     monkeypatch.setattr(pay_page, "has_gateway", AsyncMock(return_value=False))
-    monkeypatch.setattr("vula.commerce.order_workflow.get_order_settings", lambda t: {})
+    monkeypatch.setattr(pay_page, "eft_details", lambda t: None)
     out = await tool._payment_link(TID, {"customer_name": "Sam", "amount_rands": 1200})
     assert "Settings › Payments" in out["error"]
 
@@ -176,3 +175,17 @@ async def test_not_paid_means_no_message(monkeypatch):
     with patch("vula.api.whatsapp._send_reply", AsyncMock()) as send:
         assert await pay_page.notify_paid(TID, INV["id"], "payfast") == 0
     send.assert_not_awaited()
+
+
+def test_eft_falls_back_to_the_invoice_bank_details(monkeypatch):
+    class _Q:
+        def table(self, _t): return self
+        def __getattr__(self, _n): return lambda *a, **k: self
+        def execute(self):
+            return type("R", (), {"data": [{"bank_name": "FNB", "account_name": "Aweh Be Lekker",
+                                            "account_number": "62845000000", "branch_code": "250655"}]})()
+    monkeypatch.setattr("vula.commerce.order_workflow.get_order_settings", lambda t: {})
+    monkeypatch.setattr("vula.commerce.service._client", lambda: _Q())
+    text = pay_page.eft_details(TID)
+    assert "Account Number: 62845000000" in text and "Branch Code: 250655" in text
+    assert "EFT Payment" not in text

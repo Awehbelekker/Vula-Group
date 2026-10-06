@@ -2495,7 +2495,6 @@ class CommerceAdminSkill(BaseSkill):
         the owner confirms. Every figure in the result comes from the saved invoice."""
         from vula.api.commerce import _aggregate_customers, _norm_phone
         from vula.commerce import pay_page
-        from vula.commerce.order_workflow import get_order_settings
         try:
             cents = int(round(float(args.get("amount_rands")) * 100))
         except (TypeError, ValueError):
@@ -2519,7 +2518,7 @@ class CommerceAdminSkill(BaseSkill):
                 return {"status": "need_info",
                         "message": f"What's {name or 'the customer'}'s WhatsApp number?"}
         card = await pay_page.has_gateway(tid)
-        eft = (get_order_settings(tid) or {}).get("eft_details")
+        eft = pay_page.eft_details(tid)
         if not card and not eft:
             logger.error("payment_link for %s: no gateway and no EFT details configured", tid)
             return {"error": "No way to take payment is set up yet — connect a card gateway "
