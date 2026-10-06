@@ -4,7 +4,7 @@ The invoice came in by email twice. The owner got "is this supplier X?" and "whi
 once, answered one, and the other was never followed up; the reply could also land on whichever
 pending document was newest rather than the one asked about.
 """
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -123,3 +123,49 @@ async def test_ask_project_sends_and_marks(db):
                                          prefix="📎 A document came in by email from accounts@ste.co.za.")
     assert n == 1 and sent[0][1].startswith("📎 A document came in by email")
     assert db["vula_filed_documents"][1]["fields"]["_asked_phone"] == PHONE
+
+
+# ── 2026-10-06: "Atlantis Paarden Eiland" (meant for the POP just sent) went to a 28 Aug claim ──
+class _ExpQ(_Q):
+    def is_(self, col, val):
+        self.f.append(lambda r: r.get(col) is None)
+        return self
+
+
+def _exp_db(monkeypatch, docs):
+    from vula.commerce import service
+    data = {"commerce_expenses": [{"id": "bauxite", "tenant_id": TID, "paid_by": PHONE, "channel": "whatsapp",
+                                   "status": "submitted", "project": None, "paid_with": "personal",
+                                   "amount_cents": 1807674, "created_at": "2026-08-28T11:46:33Z",
+                                   "updated_at": "2026-08-28T11:46:33Z"}],
+            "vula_filed_documents": docs}
+    client = type("C", (), {"table": lambda self, t: _ExpQ(data, t)})()
+    monkeypatch.setattr(service, "_client", lambda: client)
+    return data
+
+
+@pytest.mark.asyncio
+async def test_an_old_unallocated_claim_does_not_take_a_project_answer(monkeypatch):
+    from vula.api import whatsapp as wa
+    data = _exp_db(monkeypatch, [])
+    monkeypatch.setattr(wa, "_maybe_allocate_pending_odometer", AsyncMock(return_value=None))
+    monkeypatch.setattr(wa, "_maybe_allocate_pending_purpose", AsyncMock(return_value=None))
+    assign = AsyncMock()
+    monkeypatch.setattr("vula.commerce.expenses.assign", assign)
+    out = await wa._maybe_allocate_pending_expense(TID, PHONE, "Atlantis Paarden Eiland")
+    assert out is None and data["commerce_expenses"][0]["project"] is None
+    assign.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_document_asked_about_after_the_claim_takes_the_answer(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from vula.api import whatsapp as wa
+    now = datetime.now(timezone.utc).isoformat()
+    an_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    data = _exp_db(monkeypatch, [dict(STE_PDF, fields=dict(STE_PDF["fields"], _asked_phone=PHONE, _asked_at=now))])
+    data["commerce_expenses"][0]["created_at"] = an_hour_ago   # a recent claim, but the POP was asked about since
+    monkeypatch.setattr(wa, "_maybe_allocate_pending_odometer", AsyncMock(return_value=None))
+    monkeypatch.setattr(wa, "_maybe_allocate_pending_purpose", AsyncMock(return_value=None))
+    monkeypatch.setattr("vula.commerce.expenses.match_project", lambda t, x: "Atlantis Paarden Eiland")
+    assert await wa._maybe_allocate_pending_expense(TID, PHONE, "Atlantis Paarden Eiland") is None
