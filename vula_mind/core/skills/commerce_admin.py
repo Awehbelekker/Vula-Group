@@ -2141,7 +2141,8 @@ class CommerceAdminSkill(BaseSkill):
         owed = 0
         invoices = []
         for st in ("sent", "overdue"):
-            for inv in await service.list_invoices(tid, status=st, direction="outbound", limit=100):
+            for inv in await service.list_invoices(tid, doc_type="invoice", status=st,
+                                                   direction="outbound", limit=100):
                 owed += int(inv.get("total_cents") or 0)
                 invoices.append({"invoice": inv.get("invoice_number"), "status": inv.get("status"),
                                  "total": self._rands(inv.get("total_cents")), "customer": inv.get("customer_name")})
@@ -3452,8 +3453,12 @@ class CommerceAdminSkill(BaseSkill):
 
         db = service._client()
         try:
+            # Invoices and bills only — quotes are prices, not money owed either way
+            # (2026-10-06: STE's R41,752.47 scaffolding SALE quote, one of 85 DIGG supplier
+            # quotes worth R12.8M, was being counted as "still owed by us").
             q = db.table("commerce_invoices").select(
-                "direction,status,total_cents,supplier,created_at").eq("tenant_id", tid)
+                "direction,status,total_cents,supplier,created_at,doc_type").eq(
+                "tenant_id", tid).eq("doc_type", "invoice")
             if since:
                 q = q.gte("created_at", since)
             invoices = q.limit(2000).execute().data or []
@@ -3469,6 +3474,8 @@ class CommerceAdminSkill(BaseSkill):
         def _r(cents) -> float:
             return round((cents or 0) / 100, 2)
 
+        # A cancelled bill (e.g. the second scan of one STE invoice) was never owed.
+        invoices = [i for i in invoices if i.get("status") not in ("cancelled", "void")]
         out_inv = [i for i in invoices if i.get("direction") != "inbound"]
         in_inv = [i for i in invoices if i.get("direction") == "inbound"]
 

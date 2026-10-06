@@ -3903,12 +3903,17 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     "Bill of Quantities (BOQ), fields MUST use this exact shape: "
                     '{"supplier": string|null, "tax_id": string|null, "date": "YYYY-MM-DD"|null, '
                     '"due_date": "YYYY-MM-DD"|null, "total_cents": integer|null, '
-                    '"vat_cents": integer|null, "confidence": "high"|"medium"|"low", '
+                    '"vat_cents": integer|null, "amounts_exclude_vat": boolean, '
+                    '"confidence": "high"|"medium"|"low", '
                     '"line_items": [{"description": string, "quantity": number, '
                     '"unit": string|null, "unit_price_cents": integer|null, '
                     '"total_cents": integer|null, "section": string|null}]} — unit as written '
                     '(m2, m, each, day, bag…), section = the BOQ/trade heading the line sits '
-                    'under (null on an invoice); money in '
+                    'under (null on an invoice); total_cents = the final total payable '
+                    'INCLUDING VAT when the document shows one; when it only gives a total '
+                    'EXCLUDING VAT (e.g. "R41,752.47 excl VAT") with no VAT amount, put that '
+                    'figure in total_cents, vat_cents null and amounts_exclude_vat true — never '
+                    'add the VAT yourself; money in '
                     "CENTS (Rands × 100), never Rand floats — this is the same shape/units the "
                     "Smart Scanner already uses, so both pipelines can be verified and booked the "
                     "same way. For Business Card, fields MUST use this exact shape: "

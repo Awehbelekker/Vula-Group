@@ -62,7 +62,7 @@ async def test_outstanding_invoices_excludes_inbound_supplier_bills():
          "customer_name": "Off the Hook"},
     ]
 
-    async def list_invoices(tid, status=None, direction=None, limit=100):
+    async def list_invoices(tid, status=None, direction=None, limit=100, doc_type=None):
         if direction == "outbound":
             return [inv for inv in real_outbound if inv["status"] == status]
         # Old (buggy) call shape used no direction filter — assert nothing calls it that way.
@@ -87,7 +87,7 @@ async def test_outstanding_invoices_drops_drafts_from_the_total():
     from core.skills.commerce_admin import CommerceAdminSkill
     import core.skills.commerce_admin as ca
 
-    async def list_invoices(tid, status=None, direction=None, limit=100):
+    async def list_invoices(tid, status=None, direction=None, limit=100, doc_type=None):
         assert direction == "outbound"
         if status == "sent":
             return [{"invoice_number": "OFF-INV-1", "status": "sent", "total_cents": 10000,
