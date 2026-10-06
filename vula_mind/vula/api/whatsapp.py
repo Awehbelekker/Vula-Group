@@ -34,6 +34,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from config import settings
+from core.prompt_safety import UNTRUSTED_CONTENT_RULE, fence
 from core.transcribe import transcribe_audio
 from core.verification import strip_caveat
 
@@ -3896,6 +3897,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         cats = ", ".join(_DOC_CATEGORIES)
         _msgs = [
                 {"role": "system", "content":
+                    UNTRUSTED_CONTENT_RULE +
                     "You are Vula's document analyst for a South African construction/business. "
                     "Read the document and return STRICT JSON only (no prose) with keys: "
                     f"category (one of: {cats}), summary (1-2 sentences), and fields (an object of "
@@ -3949,7 +3951,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     "structured data best fits — e.g. fee proposal: client, stages, total; "
                     "contract: parties, value, dates. Use null when unknown."},
                 {"role": "user", "content": (
-                    f"Filename: {filename}\n\nDocument:\n{text}\n\nJSON:"
+                    f"Filename: {filename}\n\nDocument:{fence('DOCUMENT', text)}\nJSON:"
                     + (f"\n\n(A rule-based pre-scan — UNVERIFIED for this bank's exact layout, "
                        f"do not just copy it — guessed these fields; re-derive every value from "
                        f"the document text above and correct anything wrong: "
@@ -4057,7 +4059,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                             text = md_text
                             docling_msgs = _msgs[:-1] + [{
                                 "role": "user",
-                                "content": f"Filename: {filename}\n\nDocument:\n{md_text[:6000]}\n\nJSON:",
+                                "content": f"Filename: {filename}\n\nDocument:{fence('DOCUMENT', md_text[:6000])}\nJSON:",
                             }]
                             resp = await litellm.acompletion(model=_cm, messages=docling_msgs,
                                 temperature=0.1, max_tokens=900, api_key=_ck, api_base=_cb)
@@ -4187,8 +4189,8 @@ async def _boq_lines_from_text(text: str, filename: str, doc_kind: str = "Bill o
                         '"total_cents": integer|null, "section": string|null}]} — every priced '
                         "line on this text, money in CENTS (Rands × 100), section = the heading "
                         "the line sits under. Skip subtotals, totals and carried-forward lines. "
-                        "Never invent a line or a figure."},
-                    {"role": "user", "content": f"Filename: {filename}\n\n{chunk}\n\nJSON:"}])
+                        "Never invent a line or a figure.\n" + UNTRUSTED_CONTENT_RULE},
+                    {"role": "user", "content": f"Filename: {filename}{fence('DOCUMENT', chunk)}\nJSON:"}])
             raw = (resp.choices[0].message.content or "").replace("```json", "").replace("```", "")
             a, b = raw.find("{"), raw.rfind("}")
             data = _json.loads(raw[a:b + 1]) if a >= 0 and b > a else {}
