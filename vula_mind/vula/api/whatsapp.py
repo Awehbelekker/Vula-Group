@@ -2541,6 +2541,20 @@ async def _handle_document_ingest(
             doc_category = _classify_document(result.filename, local_path)
             summary, fields, breakdown = "", {}, ""
 
+        # A PDF proof of payment (FNB/bank payment notifications) never reached the POP matcher —
+        # only photographed ones did — so paying a supplier left its bill "owed" (2026-10-06: the
+        # R2,397.17 FNB POP to "Ste" against STE Scaffolding's bill STE00866). Same proposal as
+        # the photo path: match the open bill, ask, mark paid only on "yes".
+        pop_cents = (fields or {}).get("amount_cents") or (fields or {}).get("total_cents")
+        if not scan_msg and doc_category == "Proof of Payment" and pop_cents:
+            try:
+                from vula.commerce import bank_rec
+                scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
+                    tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
+                    fields.get("payee_name") or fields.get("payee"), sender_phone=phone)
+            except Exception as exc:
+                logger.warning("POP match skipped for %s: %s", result.filename, exc)
+
         # File the document: durable copy + project link + ClickUp attachment. Also books it
         # via the shared commit path (same as email/Smart Scanner) unless the vision-scan
         # shortcut above already committed it.

@@ -349,7 +349,8 @@ def _open_supplier_bills(tenant_id: str) -> List[dict]:
     return [b for b in bills if (b.get("doc_type") or "invoice") == "invoice"]
 
 
-def classify_pop_direction(tenant_id: str, payee: Optional[str]) -> tuple:
+def classify_pop_direction(tenant_id: str, payee: Optional[str],
+                           amount_cents: Optional[int] = None) -> tuple:
     """Which way did the money move? Returns (direction, confident, reason).
 
     2026-09-03: this path hardcoded direction="in", so a proof of payment the OWNER sent for a
@@ -377,8 +378,14 @@ def classify_pop_direction(tenant_id: str, payee: Optional[str]) -> tuple:
     for name in _known_supplier_names(tenant_id):
         if name and _same_business(payee, name):
             return "out", True, "paid to a known supplier"
-    if any(_same_business(payee, b.get("supplier") or "") for b in _open_supplier_bills(tenant_id)):
+    bills = _open_supplier_bills(tenant_id)
+    if any(_same_business(payee, b.get("supplier") or "") for b in bills):
         return "out", True, "paid to a supplier we owe"
+    # A bank's short beneficiary name ("Ste" for STE Scaffolding S A (Pty) Ltd, 2026-10-06) isn't
+    # the same business by name alone, but the exact amount of an open bill from them is.
+    if amount_cents and _match_supplier_bill(
+            {"amount_cents": int(amount_cents), "description": payee, "reference": ""}, bills):
+        return "out", True, "the amount of an open bill from that supplier"
     return "in", False, "unrecognised payee"
 
 
@@ -433,7 +440,7 @@ def stage_pop_for_review(tenant_id: str, amount_cents: int, txn_date: Optional[s
 
     A POP the owner sent for a bill THEY paid moves money the other way — see
     classify_pop_direction — and is staged against supplier bills instead."""
-    direction, _confident, reason = classify_pop_direction(tenant_id, payee)
+    direction, _confident, reason = classify_pop_direction(tenant_id, payee, amount_cents)
     if direction == "out":
         log.info("pop for %s staged as money out (%s): %s", tenant_id, reason, payee)
         return _stage_supplier_pop(tenant_id, amount_cents, txn_date, reference, payee)
