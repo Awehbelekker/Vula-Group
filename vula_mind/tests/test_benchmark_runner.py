@@ -44,7 +44,7 @@ async def test_run_scenario_captures_the_tool_that_was_actually_called():
         call_n["n"] += 1
         if call_n["n"] == 1:
             return _resp(tool_calls=[_tool_call("c1", "sales_summary", "{}")])
-        return _resp(content="R450 today.")
+        return _resp(content="No sales recorded today.")
 
     with (
         patch.object(ca, "resolve_generation_route", new=_fake_route),
@@ -58,7 +58,7 @@ async def test_run_scenario_captures_the_tool_that_was_actually_called():
 
     assert record.error is None
     assert record.passed is True
-    assert record.turns[0].answer == "R450 today."
+    assert record.turns[0].answer == "No sales recorded today."
     assert record.turns[0].latency_ms >= 0
 
 

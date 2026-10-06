@@ -20,6 +20,7 @@ lives in the WhatsApp router, not here.
 """
 from __future__ import annotations
 from core import dry_run as _dry_run
+from core import supervisor
 
 import json
 import logging
@@ -82,6 +83,36 @@ def _readback_gate(tid: str, tool: str, ok: bool, expected: Dict[str, Any],
               extra={"expected": expected, "observed": observed, "anchored": ok})
     except Exception:
         pass
+
+def checked_reply(result: Any) -> Optional[str]:
+    """The reply a tool built itself from the records it read back (reply_verbatim, or the older
+    `reply` key used by setup_project) — sent as-is, never re-worded by a model."""
+    if isinstance(result, dict):
+        for key in ("reply_verbatim", "reply"):
+            v = result.get(key)
+            if isinstance(v, str) and v.strip():
+                return v
+    return None
+
+
+def _checked(result: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """Mark a state change as read back and confirmed, with the reply built from that read."""
+    result["verified"] = True
+    result["reply_verbatim"] = text
+    return result
+
+
+def _not_confirmed(message: str) -> Dict[str, Any]:
+    """A write the read-back couldn't confirm — said plainly, never softened by a model."""
+    return {"error": message, "reply_verbatim": f"⚠️ {message}"}
+
+
+def _r(cents: Any) -> str:
+    try:
+        return f"R{int(cents) / 100:,.2f}"
+    except (TypeError, ValueError):
+        return "R—"
+
 
 TOOL_SPECS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
@@ -1748,16 +1779,17 @@ class CommerceAdminSkill(BaseSkill):
                         raise ConfirmationRequired(name, args, result)
                     need_info = need_info_message(result)
                     if need_info:
-                        return need_info
-                    # A tool that built its own reply from DB figures (financial_report) is sent as-is —
-                    # the model never re-states the numbers.
-                    if isinstance(result, dict) and isinstance(result.get("reply_verbatim"), str):
-                        return result["reply_verbatim"]
+                        return supervisor.trust(need_info)
+                    # A tool that built its own reply from the records it just read back is sent
+                    # as-is — the model never re-states the numbers (step 3, 6 Oct).
+                    checked = checked_reply(result)
+                    if checked:
+                        return supervisor.trust(checked)
                     direct = await _direct_supplier_answer(
                         question, name, args, result, tenant_id=ctx.get("tenant_id") or "",
                         history=history, phone=ctx.get("phone") or "")
                     if direct:
-                        return direct
+                        return supervisor.trust(direct)
                     messages.append({"role": "assistant", "content": msg.content or ""})
                     messages.append({"role": "user", "content": (
                         f"[tool {name} returned]:{fence('TOOL_RESULT', json.dumps(service.for_model(result), default=str))}\n"
@@ -1810,6 +1842,7 @@ class CommerceAdminSkill(BaseSkill):
                                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                                for tc in tool_calls],
             })
+            checked_parts: List[str] = []
             for tc in tool_calls:
                 try:
                     args = json.loads(tc.function.arguments or "{}")
@@ -1822,19 +1855,24 @@ class CommerceAdminSkill(BaseSkill):
                     raise ConfirmationRequired(tc.function.name, args, result)
                 need_info = need_info_message(result)
                 if need_info:
-                    return need_info
-                # A tool that built its own reply from DB figures (financial_report) is sent as-is —
-                # the model never re-states the numbers.
-                if isinstance(result, dict) and isinstance(result.get("reply_verbatim"), str):
-                    return result["reply_verbatim"]
+                    return supervisor.trust(need_info)
+                # A tool that built its own reply from the records it just read back is sent
+                # as-is — the model never re-states the numbers (step 3, 6 Oct). Several in one
+                # batch ("create the invoice and record the deposit") are sent together.
+                checked = checked_reply(result)
+                if checked:
+                    checked_parts.append(checked)
+                    continue
                 direct = await _direct_supplier_answer(
                     question, tc.function.name, args, result, tenant_id=ctx.get("tenant_id") or "",
                     history=history, phone=ctx.get("phone") or "")
                 if direct:
-                    return direct
+                    return supervisor.trust(direct)
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "name": tc.function.name,
                                  "content": fence('TOOL_RESULT', json.dumps(service.for_model(result), default=str))})
+            if checked_parts:
+                return supervisor.trust("\n\n".join(checked_parts))
 
         # Final pass — force a plain-language answer (no tools available now).
         # 2026-08-22: a real transcript showed this exact call fabricate a full "I've created an
@@ -2086,9 +2124,10 @@ class CommerceAdminSkill(BaseSkill):
             _readback_gate(tid, "update_order_status", ok,
                            {"order": match["display_id"], "status": status}, {"status": observed})
             if not ok:
-                return {"error": f"Update to {status} did not persist for {match['display_id']} — "
-                                 f"current status is {observed or 'unknown'}. Not confirmed."}
-            result["verified"] = True
+                return _not_confirmed(f"Update to {status} did not persist for {match['display_id']} — "
+                                      f"current status is {observed or 'unknown'}. Not confirmed.")
+            paid_by = f" (paid by {method})" if method else ""
+            return _checked(result, f"✅ Order {match['display_id']} is now *{observed}*{paid_by}.")
         return result
 
     async def _stock_status(self, tid: str, low_only: bool) -> Any:
@@ -2150,11 +2189,12 @@ class CommerceAdminSkill(BaseSkill):
                            {"product_id": prod["id"], "stock_quantity": expected},
                            {"stock_quantity": observed})
             if not ok:
-                return {"error": f"Stock update for {label} did not persist — the product "
-                                 f"still shows {observed if observed is not None else 'unknown'}. Not confirmed."}
-            result["verified"] = True
+                return _not_confirmed(f"Stock update for {label} did not persist — the product "
+                                      f"still shows {observed if observed is not None else 'unknown'}. Not confirmed.")
+            return _checked(result, f"✅ {label}: stock is now *{int(observed)}*.")
         elif after is not None:
-            result["verified"] = True       # the RPC's own returned row is the read-back
+            # the RPC's own returned row is the read-back
+            return _checked(result, f"✅ {label}: stock is now *{int(after)}*.")
         return result
 
     async def _receive_stock(self, tid: str, lines: List[Dict[str, Any]], reference: Optional[str],
@@ -2345,8 +2385,25 @@ class CommerceAdminSkill(BaseSkill):
         if row.get("duplicate"):
             return {"duplicate": True, "message": f"An expense of {self._rands(cents)} for that "
                                                   f"supplier is already recorded today — not added twice."}
-        return {"logged": self._rands(cents), "category": row.get("category") or args.get("category") or "other",
-                "description": description}
+        result = {"logged": self._rands(cents), "category": row.get("category") or args.get("category") or "other",
+                  "description": description}
+        # Read the expense back before saying it's booked (step 3, 6 Oct).
+        saved = None
+        if row.get("id"):
+            try:
+                rows = (service._client().table("commerce_expenses")
+                        .select("id,amount_cents,supplier,category,project,status")
+                        .eq("tenant_id", tid).eq("id", row["id"]).limit(1).execute().data or [])
+                saved = rows[0] if rows else None
+            except Exception as exc:
+                logger.debug("expense read-back failed: %s", exc)
+        if not saved or int(saved.get("amount_cents") or 0) != cents:
+            return _not_confirmed("The expense could not be confirmed on re-read. Not confirmed; "
+                                  "please check the Expenses tab.")
+        where = f" on {saved['project']}" if saved.get("project") else ""
+        frm = f" from {saved['supplier']}" if saved.get("supplier") else ""
+        return _checked(result, f"✅ Expense of *{_r(saved.get('amount_cents'))}*{frm} recorded{where} "
+                                f"({saved.get('category') or result['category']}).")
 
     async def _preview_broadcast(self, tid: str, audience: str) -> Dict[str, Any]:
         from vula.api.commerce import _aggregate_customers, _filter_audience, _norm_phone
@@ -2475,9 +2532,15 @@ class CommerceAdminSkill(BaseSkill):
                            {"status": "draft"},
                            {"found": bool(inv2), "status": (inv2 or {}).get("status")})
             if not ok:
-                return {"error": "Invoice creation could not be confirmed — the draft did not "
-                                 "appear on re-read. Not confirmed; please check the Invoices tab."}
-            result["verified"] = True
+                return _not_confirmed("Invoice creation could not be confirmed — the draft did not "
+                                      "appear on re-read. Not confirmed; please check the Invoices tab.")
+            vat = int(inv2.get("vat_cents") or 0)
+            who = f" for {inv2['customer_name']}" if inv2.get("customer_name") else ""
+            return _checked(result, (
+                f"✅ Draft invoice *{inv2.get('invoice_number')}* created{who}: "
+                f"*{_r(inv2.get('total_cents'))}*"
+                + (f" (incl. {_r(vat)} VAT)" if vat else "") + ".\n"
+                "Say 'send it' to WhatsApp it to the customer."))
         return result
 
     async def _send_invoice(self, tid: str, invoice_number: str, confirm: bool = False) -> Dict[str, Any]:
@@ -2665,9 +2728,13 @@ class CommerceAdminSkill(BaseSkill):
                            {"invoice_id": inv["id"], "amount_cents": cents},
                            {"total_paid_cents": total_paid})
             if not ok:
-                return {"error": f"Payment for {num} did not persist — re-read shows "
-                                 f"R{total_paid / 100:.2f} total paid. Not confirmed."}
-            result["verified"] = True
+                return _not_confirmed(f"Payment for {num} did not persist — re-read shows "
+                                      f"R{total_paid / 100:.2f} total paid. Not confirmed.")
+            owed = max(0, int(inv.get("total_cents") or 0) - total_paid)
+            return _checked(result, (
+                f"✅ Recorded *{_r(cents)}* against {num}.\n"
+                f"Paid so far: {_r(total_paid)} · still owed: *{_r(owed)}*"
+                + (f" · status: {updated.get('status')}" if updated.get("status") else "") + "."))
         return result
 
     async def _list_quotes(self, tid: str, status: Optional[str]) -> Dict[str, Any]:
@@ -2695,9 +2762,11 @@ class CommerceAdminSkill(BaseSkill):
             _readback_gate(tid, "convert_quote_to_invoice", ok,
                            {"quote_id": quote["id"]}, {"found": bool(inv2)})
             if not ok:
-                return {"error": "Conversion could not be confirmed — the new invoice did not "
-                                 "appear on re-read. Not confirmed; please check the Invoices tab."}
-            result["verified"] = True
+                return _not_confirmed("Conversion could not be confirmed — the new invoice did not "
+                                      "appear on re-read. Not confirmed; please check the Invoices tab.")
+            number = inv2.get("invoice_number") or inv.get("invoice_number")
+            total = inv2.get("total_cents", inv.get("total_cents"))
+            return _checked(result, f"✅ Quote {quote_number} is now invoice *{number}* for *{_r(total)}*.")
         return result
 
     async def _update_quote_status(self, tid: str, quote_number: str, status: str,
@@ -2801,9 +2870,11 @@ class CommerceAdminSkill(BaseSkill):
             _readback_gate(tid, "create_purchase_order", ok,
                            {"supplier_id": supplier["id"]}, {"found": bool(found)})
             if not ok:
-                return {"error": "Purchase order creation could not be confirmed on re-read. "
-                                 "Not confirmed; please check the dashboard."}
-            result["verified"] = True
+                return _not_confirmed("Purchase order creation could not be confirmed on re-read. "
+                                      "Not confirmed; please check the dashboard.")
+            return _checked(result, f"✅ Purchase order {result['po_ref']} drafted for "
+                                    f"{supplier['name']}: *{_r(found.get('total_cents', po.get('total_cents')))}*. "
+                                    "It hasn't been sent to the supplier.")
         return result
 
     async def _list_purchase_orders(self, tid: str, status: Optional[str]) -> Dict[str, Any]:
@@ -2839,9 +2910,9 @@ class CommerceAdminSkill(BaseSkill):
             _readback_gate(tid, "update_po_status", ok,
                            {"po_id": po["id"], "status": status}, {"status": observed})
             if not ok:
-                return {"error": f"Status update did not persist — purchase order still shows "
-                                 f"{observed or 'unknown'}. Not confirmed."}
-            result["verified"] = True
+                return _not_confirmed(f"Status update did not persist — purchase order still shows "
+                                      f"{observed or 'unknown'}. Not confirmed.")
+            return _checked(result, f"✅ Purchase order {str(po['id'])[:8]} is now *{observed}*.")
         return result
 
     async def _send_purchase_order(self, tid: str, po_ref: str, channel: str, confirm: bool = False) -> Dict[str, Any]:
@@ -2912,9 +2983,10 @@ class CommerceAdminSkill(BaseSkill):
             _readback_gate(tid, "create_manual_order", ok,
                            {"customer_phone": phone}, {"found": bool(found)})
             if not ok:
-                return {"error": "Order creation could not be confirmed on re-read. Not confirmed; "
-                                 "please check the Orders tab."}
-            result["verified"] = True
+                return _not_confirmed("Order creation could not be confirmed on re-read. Not confirmed; "
+                                      "please check the Orders tab.")
+            return _checked(result, f"✅ Order *{found['display_id']}* created: "
+                                    f"*{_r(found.get('total_cents'))}* · status: {found.get('status') or 'pending'}.")
         return result
 
     async def _create_automation_rule(self, tid: str, description: str, confirm: bool) -> Dict[str, Any]:
@@ -2979,8 +3051,8 @@ class CommerceAdminSkill(BaseSkill):
             ok = bool(found)
             _readback_gate(tid, "create_discount_code", ok, {"code": c.get("code")}, {"found": ok})
             if not ok:
-                return {"error": "Discount code creation could not be confirmed on re-read. Not confirmed."}
-            result["verified"] = True
+                return _not_confirmed("Discount code creation could not be confirmed on re-read. Not confirmed.")
+            return _checked(result, f"✅ Discount code *{found.get('code')}* created.")
         return result
 
     async def _update_discount_code(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -4185,10 +4257,12 @@ class CommerceAdminSkill(BaseSkill):
                             "sent_count": (row or {}).get("sent_count"),
                             "failed_count": (row or {}).get("failed_count")})
             if not ok:
-                return {"error": "Broadcast did not confirm as sent — the delivery log shows "
-                                 f"status={(row or {}).get('status') or 'missing'}, "
-                                 f"sent={(row or {}).get('sent_count') or 0}. Not confirmed."}
-            result["verified"] = True
+                return _not_confirmed("Broadcast did not confirm as sent — the delivery log shows "
+                                      f"status={(row or {}).get('status') or 'missing'}, "
+                                      f"sent={(row or {}).get('sent_count') or 0}. Not confirmed.")
+            failed = int(row.get("failed_count") or 0)
+            return _checked(result, f"✅ Broadcast sent to *{int(row.get('sent_count') or 0)}* customers"
+                                    + (f" ({failed} couldn't be reached)" if failed else "") + ".")
         return result
 
     async def _list_storefront_pages(self, tid: str) -> Dict[str, Any]:

@@ -50,7 +50,9 @@ def _order_service(monkeypatch, readback_status):
 async def test_update_order_status_readback_confirmed(skill, emits, monkeypatch):
     _order_service(monkeypatch, readback_status="dispatched")
     res = await skill._update_order_status(TID, "OTH-00042", "dispatched")
-    assert res == {"updated": "OTH-00042", "new_status": "dispatched", "verified": True}
+    assert res == {"updated": "OTH-00042", "new_status": "dispatched", "verified": True,
+                   # the reply is built from the read-back status and sent as-is (step 3)
+                   "reply_verbatim": "✅ Order OTH-00042 is now *dispatched*."}
     events = _gate_events(emits)
     assert len(events) == 1
     e = events[0]
