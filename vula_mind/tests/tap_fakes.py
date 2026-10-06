@@ -29,6 +29,7 @@ class MemoryRepo:
         self.names = {}
         self.team = {}
         self.settings = {}
+        self.codes, self.devices, self.subs = [], {}, {}
         self.members = {}
 
     def _id(self):
@@ -69,7 +70,7 @@ class MemoryRepo:
 
     def create_bill(self, row):
         b = {"id": self._id(), "code_attempts": 0, "code_locked_until": None, "customer_hash": None,
-             "claimed_by_hash": None, "bill_code": None, **row}
+             "claimed_by_hash": None, "bill_code": None, "updated_at": self.clock().isoformat(), **row}
         self.bills[b["id"]] = b
         return dict(b)
 
@@ -79,10 +80,12 @@ class MemoryRepo:
             return False
         b.update(fields or {})
         b["status"] = new
+        b["updated_at"] = self.clock().isoformat()
         return True
 
     def update_bill(self, tenant_id, bill_id, fields):
         self.bills[bill_id].update(fields)
+        self.bills[bill_id]["updated_at"] = self.clock().isoformat()
 
     # sessions
     def create_session(self, row):
@@ -166,6 +169,72 @@ class MemoryRepo:
 
     def team_members(self, tenant_id):
         return self.members.get(tenant_id, [])
+
+    # coach app
+    def get_member(self, tenant_id, member_id):
+        return next((m for m in self.members.get(tenant_id, []) if m["id"] == member_id), None)
+
+    def put_enrol_code(self, tenant_id, member_id, code_hash, expires_at, created_by):
+        self.codes = [c for c in self.codes if not (c["tenant_id"] == tenant_id and c["member_id"] == member_id)]
+        self.codes.append({"id": self._id(), "tenant_id": tenant_id, "member_id": member_id, "code_hash": code_hash,
+                           "expires_at": expires_at, "attempts": 0, "used_at": None})
+
+    def get_enrol_code(self, tenant_id, member_id):
+        rows = [c for c in self.codes if c["tenant_id"] == tenant_id and c["member_id"] == member_id]
+        return dict(rows[-1]) if rows else None
+
+    def _code(self, code_id):
+        return next(c for c in self.codes if c["id"] == code_id)
+
+    def bump_enrol_attempts(self, code_id):
+        self._code(code_id)["attempts"] += 1
+
+    def burn_enrol_code(self, code_id, now_iso):
+        self._code(code_id)["used_at"] = now_iso
+
+    def create_device(self, row):
+        d = {"id": self._id(), "failed_pins": 0, "locked_until": None, "revoked_at": None,
+             "last_seen_at": None, "created_at": "2026-10-06", **row}
+        self.devices[d["id"]] = d
+        return dict(d)
+
+    def get_device(self, tenant_id, device_id):
+        d = self.devices.get(device_id)
+        return dict(d) if d and d["tenant_id"] == tenant_id else None
+
+    def get_device_by_token_hash(self, token_hash):
+        d = next((d for d in self.devices.values() if d["token_hash"] == token_hash), None)
+        return dict(d) if d else None
+
+    def update_device(self, tenant_id, device_id, fields):
+        self.devices[device_id].update(fields)
+
+    def list_devices(self, tenant_id):
+        return [{k: v for k, v in d.items() if k not in ("token_hash", "pin_hash", "pin_salt")}
+                for d in self.devices.values() if d["tenant_id"] == tenant_id]
+
+    def upsert_push_sub(self, row):
+        self.subs[row["endpoint"]] = dict(row)
+
+    def delete_push_sub(self, endpoint):
+        self.subs.pop(endpoint, None)
+
+    def push_subs_for(self, tenant_id, member_id):
+        return [dict(s) for s in self.subs.values() if s["tenant_id"] == tenant_id and s["member_id"] == member_id]
+
+    def bill_updates(self, tenant_id, since_iso, staff_id):
+        return [dict(b) for b in self.bills.values() if b["tenant_id"] == tenant_id
+                and str(b.get("updated_at", "")) > since_iso and (not staff_id or b.get("staff_id") == staff_id)]
+
+    def paid_detail(self, tenant_id, bill_id, party_id):
+        s = next((s for s in self.sessions.values() if s.get("bill_id") == bill_id and s["state"] == "paid"), None)
+        if not s:
+            return {}
+        out = {"tip_cents": s["tip_cents"], "total_cents": s["bill_cents"] + s["tip_cents"]}
+        pay = self.payments.get(("payfast", "kb-" + s["id"]))
+        if pay and party_id:
+            out["share_cents"] = sum(l["cents"] for l in self.ledger if l["payment_id"] == pay["id"] and l["party_id"] == party_id)
+        return out
 
     # display
     def merchant_name(self, tenant_id):

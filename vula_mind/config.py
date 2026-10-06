@@ -223,6 +223,11 @@ class Settings(BaseSettings):
     # the Supabase service key (set it explicitly so rotating that key doesn't orphan the hashes).
     tap_to_pay_tenants: str = ""
     tap_hash_pepper: str = ""
+    # Web Push for the coach app (VAPID). Generate once:  python -c "from py_vapid import Vapid; v=Vapid(); v.generate_keys(); \
+    # print(v.private_pem().decode()); print(v.public_key)"  — or use scripts/gen_vapid.py. Public key is shared with browsers.
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = "mailto:support@vula.ai"
 
     # Tenant-scoped auth enforcement (2026-07-17): when true, /v1/commerce/{t}/admin/*,
     # /v1/team/{t}/* and /v1/users/{t}/* require a verified Supabase JWT belonging to that

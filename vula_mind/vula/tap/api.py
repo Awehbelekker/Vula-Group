@@ -86,7 +86,9 @@ def get_service() -> TapService:
     ).hexdigest()
     cfg = TapConfig(pepper=pepper, public_base_url=settings.public_base_url,
                     encrypt=encrypt_secret, decrypt=decrypt_secret, enabled=tenant_enabled)
-    return TapService(SupabaseRepo(), WhatsAppMessenger(), PayFastGateway(settings.public_base_url), cfg)
+    from vula.tap.push import build_pusher
+    return TapService(SupabaseRepo(), WhatsAppMessenger(), PayFastGateway(settings.public_base_url), cfg,
+                      pusher=build_pusher(settings))
 
 
 # ── WhatsApp hooks (called from vula/api/whatsapp.py) ────────────────────────────────────────
@@ -290,3 +292,31 @@ async def setup_pause(tenant: str, identity: dict = Depends(require_tenant_actor
 @router.get("/v1/tap/{tenant}/bills")
 async def list_bills(tenant: str, identity: dict = Depends(require_tenant_actor)) -> dict:
     return {"bills": get_service().repo.recent_bills(tenant, 20)}
+
+
+# ── coach devices (owner side) ───────────────────────────────────────────────────────────────
+def _auth():
+    from vula.tap.appauth import AppAuth  # noqa: F401
+    from vula.tap.appapi import get_auth
+    return get_auth()
+
+
+@router.post("/v1/tap/{tenant}/members/{member_id}/enrol-code")
+async def enrol_code(tenant: str, member_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    from vula.tap.appauth import AuthError
+    try:
+        r = _auth().issue_enrol_code(tenant, member_id, identity.get("email") or identity.get("user_id") or "")
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    return {**r, "app_url": f"{settings.dashboard_url.rstrip('/')}/pay/?t={tenant}"}
+
+
+@router.get("/v1/tap/{tenant}/devices")
+async def list_devices(tenant: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    return {"devices": get_service().repo.list_devices(tenant)}
+
+
+@router.post("/v1/tap/{tenant}/devices/{device_id}/revoke")
+async def revoke_device(tenant: str, device_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    _auth().revoke_device(tenant, device_id)
+    return {"revoked": True}

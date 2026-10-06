@@ -65,12 +65,12 @@ class SupabaseRepo:
         return self.db.table("kb_bills").insert(row).execute().data[0]
 
     def cas_bill(self, tenant_id, bill_id, *, expected, new, fields=None) -> bool:
-        rows = (self.db.table("kb_bills").update({**(fields or {}), "status": new})
+        rows = (self.db.table("kb_bills").update({**(fields or {}), "status": new, "updated_at": "now()"})
                 .eq("tenant_id", tenant_id).eq("id", bill_id).eq("status", expected).execute().data or [])
         return bool(rows)
 
     def update_bill(self, tenant_id, bill_id, fields) -> None:
-        self.db.table("kb_bills").update(fields).eq("tenant_id", tenant_id).eq("id", bill_id).execute()
+        self.db.table("kb_bills").update({**fields, "updated_at": "now()"}).eq("tenant_id", tenant_id).eq("id", bill_id).execute()
 
     # sessions
     def create_session(self, row: dict) -> dict:
@@ -158,6 +158,75 @@ class SupabaseRepo:
     def team_members(self, tenant_id: str) -> list[dict]:
         return (self.db.table("vula_team_members").select("id,name,whatsapp,role,active")
                 .eq("tenant_id", tenant_id).eq("active", True).order("created_at").execute().data or [])
+
+    # coach app
+    def get_member(self, tenant_id: str, member_id: str) -> Optional[dict]:
+        return self._one(self.db.table("vula_team_members").select("id,name,whatsapp,role,active")
+                         .eq("tenant_id", tenant_id).eq("id", member_id))
+
+    def put_enrol_code(self, tenant_id, member_id, code_hash, expires_at, created_by) -> None:
+        self.db.table("kb_enrol_codes").delete().eq("tenant_id", tenant_id).eq("member_id", member_id).execute()
+        self.db.table("kb_enrol_codes").insert({
+            "tenant_id": tenant_id, "member_id": member_id, "code_hash": code_hash,
+            "expires_at": expires_at.isoformat(), "created_by": created_by}).execute()
+
+    def get_enrol_code(self, tenant_id, member_id) -> Optional[dict]:
+        return self._one(self.db.table("kb_enrol_codes").select("*").eq("tenant_id", tenant_id)
+                         .eq("member_id", member_id).order("created_at", desc=True))
+
+    def bump_enrol_attempts(self, code_id: str) -> None:
+        row = self._one(self.db.table("kb_enrol_codes").select("attempts").eq("id", code_id)) or {}
+        self.db.table("kb_enrol_codes").update({"attempts": int(row.get("attempts", 0)) + 1}).eq("id", code_id).execute()
+
+    def burn_enrol_code(self, code_id: str, now_iso: str) -> None:
+        self.db.table("kb_enrol_codes").update({"used_at": now_iso}).eq("id", code_id).execute()
+
+    def create_device(self, row: dict) -> dict:
+        return self.db.table("kb_devices").insert(row).execute().data[0]
+
+    def get_device(self, tenant_id, device_id) -> Optional[dict]:
+        return self._one(self.db.table("kb_devices").select("*").eq("tenant_id", tenant_id).eq("id", device_id))
+
+    def get_device_by_token_hash(self, token_hash: str) -> Optional[dict]:
+        return self._one(self.db.table("kb_devices").select("*").eq("token_hash", token_hash))
+
+    def update_device(self, tenant_id, device_id, fields) -> None:
+        self.db.table("kb_devices").update(fields).eq("tenant_id", tenant_id).eq("id", device_id).execute()
+
+    def list_devices(self, tenant_id: str) -> list[dict]:
+        return (self.db.table("kb_devices").select("id,member_id,label,last_seen_at,revoked_at,created_at")
+                .eq("tenant_id", tenant_id).order("created_at", desc=True).execute().data or [])
+
+    def upsert_push_sub(self, row: dict) -> None:
+        self.db.table("kb_push_subs").upsert(row, on_conflict="endpoint").execute()
+
+    def delete_push_sub(self, endpoint: str) -> None:
+        self.db.table("kb_push_subs").delete().eq("endpoint", endpoint).execute()
+
+    def push_subs_for(self, tenant_id, member_id) -> list[dict]:
+        return (self.db.table("kb_push_subs").select("*").eq("tenant_id", tenant_id)
+                .eq("member_id", member_id).execute().data or [])
+
+    def bill_updates(self, tenant_id, since_iso, staff_id) -> list[dict]:
+        q = (self.db.table("kb_bills").select("id,status,description,subtotal_cents,staff_id,is_test,updated_at")
+             .eq("tenant_id", tenant_id).gt("updated_at", since_iso).order("updated_at"))
+        if staff_id:
+            q = q.eq("staff_id", staff_id)
+        return q.limit(50).execute().data or []
+
+    def paid_detail(self, tenant_id, bill_id, party_id) -> dict:
+        """Tip and the given party's share for a paid bill (from the append-only ledger)."""
+        s = self._one(self.db.table("kb_sessions").select("id,tip_cents,bill_cents").eq("tenant_id", tenant_id)
+                      .eq("bill_id", bill_id).eq("state", "paid"))
+        if not s:
+            return {}
+        out = {"tip_cents": int(s["tip_cents"]), "total_cents": int(s["tip_cents"]) + int(s["bill_cents"])}
+        pay = self._one(self.db.table("kb_payments").select("id").eq("tenant_id", tenant_id).eq("session_id", s["id"]))
+        if pay and party_id:
+            lines = (self.db.table("kb_ledger_lines").select("cents").eq("tenant_id", tenant_id)
+                     .eq("payment_id", pay["id"]).eq("party_id", party_id).execute().data or [])
+            out["share_cents"] = sum(int(l["cents"]) for l in lines)
+        return out
 
     # display
     def merchant_name(self, tenant_id: str) -> str:

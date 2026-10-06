@@ -27,7 +27,7 @@ from urllib.parse import quote
 from vula.tap.core import matching as mt
 from vula.tap.core import money as mo
 from vula.tap.core import states as st
-from vula.tap.ports import Gateway, Messenger, Repo
+from vula.tap.ports import Gateway, Messenger, Pusher, Repo
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ class TapService:
     messenger: Messenger
     gateway: Gateway
     cfg: TapConfig
+    pusher: Optional[Pusher] = None
 
     # ── helpers ──────────────────────────────────────────────────────────────────────────────
     def now(self) -> datetime:
@@ -524,6 +525,22 @@ class TapService:
                + (f" Your share {_m(share)}." if staff else "") + f" Customer {self.mask(phone)}.")
         for p in self.repo.team_phones(tenant_id, staff):
             await self._say(tenant_id, p, msg)
+        await self._push(tenant_id, staff, f"Paid {_m(s['bill_cents'])} + {_m(s['tip_cents'])} tip",
+                         (f"Your share {_m(share)}. " if staff else "") + f"{what} · customer {self.mask(phone)}",
+                         tag=s.get("bill_id") or s["id"])
+
+    async def _push(self, tenant_id: str, member_id: Optional[str], title: str, body: str, tag: str) -> None:
+        """Web Push to the serving person's installed app(s); dead subscriptions are removed."""
+        if not self.pusher or not member_id:
+            return
+        for sub in self.repo.push_subs_for(tenant_id, member_id):
+            try:
+                res = await self.pusher.send(sub, {"title": title, "body": body, "tag": tag, "url": "/pay/"})
+            except Exception:  # noqa: BLE001 — a push failure must never undo a payment
+                logger.exception("web push failed (tenant=%s)", tenant_id)
+                continue
+            if res == "gone":
+                self.repo.delete_push_sub(sub["endpoint"])
 
     async def _alert(self, tenant_id: str, s: dict, msg: str) -> None:
         logger.warning("tap alert tenant=%s session=%s: %s", tenant_id, s["id"], msg)
