@@ -88,6 +88,7 @@ async def _summarize_followup(subject: str, body: str) -> dict:
     import json as _json
     import litellm
     from core.llm_router import resolve_generation_route
+    from core.prompt_safety import UNTRUSTED_CONTENT_RULE, fence
 
     if not (subject or "").strip() and not (body or "").strip():
         return {}
@@ -97,8 +98,8 @@ async def _summarize_followup(subject: str, body: str) -> dict:
         model, api_key, api_base = await resolve_generation_route(task_type="email_summary")
         resp = await litellm.acompletion(
             model=model,
-            messages=[{"role": "system", "content": _SUMMARY_SYSTEM},
-                      {"role": "user", "content": text}],
+            messages=[{"role": "system", "content": _SUMMARY_SYSTEM + "\n" + UNTRUSTED_CONTENT_RULE},
+                      {"role": "user", "content": fence("EMAIL", text)}],
             temperature=0, max_tokens=150, api_key=api_key, api_base=api_base,
         )
         raw = resp.choices[0].message.content or ""

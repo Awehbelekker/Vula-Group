@@ -118,6 +118,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("195", "vula_turns", None),
     ("196", "commerce_payer_accounts", "name_key"),
     ("197", "vula_open_questions", "message"),
+    ("198", "commerce_invoice_settings", "reminder_mode"),
 ]
 
 
@@ -152,3 +153,34 @@ def check_schema() -> list[str]:
     else:
         logger.info("schema check OK — all %d migration sentinels present", len(_SENTINELS))
     return missing
+
+
+def check_payment_setup() -> list[str]:
+    """Active tenants with no way to take payment — no card gateway connected and no EFT
+    details. Payment links can't be sent for them, so it is said once at boot, loudly, rather
+    than discovered when an owner asks Vula for a link (vula/commerce/pay_page.py)."""
+    try:
+        from vula.commerce import service
+        from vula.api import tenants as _t
+        client = service._client()
+        tids = [r["tenant_id"] for r in (client.table("vula_tenant_config").select("tenant_id")
+                                          .execute().data or []) if r.get("tenant_id")]
+        gw = {r["tenant_id"] for r in (client.table("vula_payment_providers").select("tenant_id")
+                                       .eq("active", True).execute().data or [])}
+        yoco = {r["tenant_id"] for r in (client.table("vula_yoco_accounts").select("tenant_id")
+                                         .execute().data or [])}
+        eft = {r["tenant_id"] for r in (client.table("commerce_order_settings")
+                                        .select("tenant_id,eft_details").execute().data or [])
+               if (r.get("eft_details") or "").strip()}
+        eft |= {r["tenant_id"] for r in (client.table("commerce_invoice_settings")
+                                         .select("tenant_id,account_number").execute().data or [])
+                if (r.get("account_number") or "").strip()}
+    except Exception as exc:  # noqa: BLE001
+        logger.info("payment setup check skipped (%s)", exc)
+        return []
+    unready = [t for t in tids if t not in gw | yoco | eft and _t.is_active(t)]
+    if unready:
+        logger.error("PAYMENTS NOT SET UP for %s — no card gateway and no EFT details, so "
+                     "payment links can't be sent. Connect one under Settings › Payments.",
+                     ", ".join(sorted(unready)))
+    return unready

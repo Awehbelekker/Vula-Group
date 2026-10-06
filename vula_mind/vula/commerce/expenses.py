@@ -326,6 +326,7 @@ async def create_claim(
     channel: str = "dashboard",
     receipt_doc_id: Optional[str] = None,
     receipt_url: Optional[str] = None,
+    confirmed: bool = True,               # False → 'unconfirmed', not in the ledger until confirm_claim
     notes: Optional[str] = None,
     auto_categorize: bool = True,
     dedupe: bool = True,
@@ -405,7 +406,7 @@ async def create_claim(
         "amount_cents": amount_cents, "vat_cents": int(vat_cents or 0),
         "supplier": supplier, "supplier_id": supplier_id, "category": category, "account_code": account_code,
         "project": project, "section": section, "paid_by": paid_by, "paid_by_name": paid_by_name,
-        "reimbursable": bool(reimbursable), "status": "submitted",
+        "reimbursable": bool(reimbursable), "status": "submitted" if confirmed else "unconfirmed",
         "paid_with": paid_with, "card_last4": re.sub(r"\D", "", card_last4 or "")[-4:] or None,
         "channel": channel, "receipt_doc_id": receipt_doc_id, "receipt_url": receipt_url,
         "notes": notes, "source": channel, "updated_at": _now(),
@@ -421,12 +422,39 @@ async def create_claim(
         res = db.table("commerce_expenses").insert(row).execute()
     out = (res.data or [row])[0]
     out["needs_project"] = (not project) and bool(known_projects(tenant_id))
+    if not confirmed:
+        return out
     try:
         from vula.commerce import ledger
         ledger.post_expense(tenant_id, out)
     except Exception as exc:
         log.warning("ledger hook failed for expense %s: %s", out.get("id"), exc)
     return out
+
+
+def expense_mode(tenant_id: str) -> str:
+    """'book' | 'confirm' (migration 198). Unreadable → 'book', today's behaviour."""
+    try:
+        rows = (_client().table("commerce_invoice_settings").select("expense_mode")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        mode = (rows[0] if rows else {}).get("expense_mode")
+    except Exception:
+        mode = None
+    return mode if mode in ("book", "confirm") else "book"
+
+
+def confirm_claim(tenant_id: str, expense_id: str) -> Optional[dict]:
+    """The owner tapped ✅ Book on an 'unconfirmed' receipt: it becomes a normal claim and is
+    posted to the ledger (with whatever project/paid-with answers arrived meanwhile). Only an
+    unconfirmed row can be confirmed, so a double tap books once. Returns the row, re-read."""
+    res = (_client().table("commerce_expenses").update({"status": "submitted", "updated_at": _now()})
+           .eq("tenant_id", tenant_id).eq("id", expense_id).eq("status", "unconfirmed").execute())
+    if not res.data:
+        return None
+    row = (_client().table("commerce_expenses").select("*").eq("tenant_id", tenant_id)
+           .eq("id", expense_id).limit(1).execute().data or [None])[0]
+    post_to_ledger(tenant_id, row)
+    return row
 
 
 # ── Lifecycle ──────────────────────────────────────────────────────────────────

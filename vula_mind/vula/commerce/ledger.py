@@ -69,11 +69,18 @@ def post_order_refund(tenant_id: str, order: Dict[str, Any]) -> None:
 
 
 def post_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
-    """commerce_invoices DOES carry vat_cents — split it to vat_output when present."""
-    total = int(invoice.get("total_cents") or 0)
+    """commerce_invoices DOES carry vat_cents — split it to vat_output when present.
+
+    Only the part not already accounted for is posted: instalments (post_invoice_payment) and
+    credit-note settlements are in total_paid_cents, so an invoice part-paid or part-credited
+    and then cleared by the gateway books just the remainder, not the full total again."""
+    full = int(invoice.get("total_cents") or 0)
+    total = full - int(invoice.get("total_paid_cents") or 0)
     if total <= 0:
         return
-    vat = max(0, min(int(invoice.get("vat_cents") or 0), total))
+    full_vat = max(0, min(int(invoice.get("vat_cents") or 0), full))
+    vat = (total * full_vat // full) if full > 0 else 0
+    vat = max(0, min(vat, total))
     lines = [{"account_code": "bank_cash", "debit_cents": total, "credit_cents": 0}]
     if vat > 0:
         lines.append({"account_code": "sales", "debit_cents": 0, "credit_cents": total - vat})
@@ -83,6 +90,26 @@ def post_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
     _post(tenant_id, entry_date=invoice.get("paid_at") or _today(),
           description=f"Invoice {invoice.get('invoice_number') or invoice.get('id')} paid",
           source_type="invoice_paid", source_id=invoice.get("id"), lines=lines)
+
+
+def post_invoice_refund(tenant_id: str, invoice: Dict[str, Any], credit_note: Dict[str, Any],
+                        amount_cents: int) -> None:
+    """Money paid back to a customer under a credit note: reverses that part of the sale
+    (sales + VAT output debited, bank credited). VAT is split in the invoice's own ratio."""
+    amount = int(amount_cents or 0)
+    if amount <= 0:
+        return
+    inv_total = int(invoice.get("total_cents") or 0)
+    inv_vat = int(invoice.get("vat_cents") or 0)
+    vat = max(0, min((amount * inv_vat // inv_total) if inv_total > 0 else 0, amount))
+    lines = [{"account_code": "sales", "debit_cents": amount - vat, "credit_cents": 0}]
+    if vat > 0:
+        lines.append({"account_code": "vat_output", "debit_cents": vat, "credit_cents": 0})
+    lines.append({"account_code": "bank_cash", "debit_cents": 0, "credit_cents": amount})
+    _post(tenant_id, entry_date=_today(),
+          description=f"Refund under credit note {credit_note.get('invoice_number')} "
+                      f"(invoice {invoice.get('invoice_number')})",
+          source_type="invoice_refund", source_id=credit_note.get("id"), lines=lines)
 
 
 def post_invoice_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict[str, Any]) -> None:

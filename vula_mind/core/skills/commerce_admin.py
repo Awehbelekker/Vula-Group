@@ -143,9 +143,41 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "outstanding_invoices",
-        "description": "List unpaid/overdue invoices and the total amount owed.",
+        "description": "Who owes the business money — 'who owes me what?', 'unpaid invoices', "
+                       "'debtors'. Returns what each customer still owes (after part-payments), "
+                       "how many days the oldest is overdue, and the total — all computed "
+                       "server-side; quote the figures as given.",
         "parameters": {"type": "object", "properties": {}},
     }},
+    {"type": "function", "function": {
+        "name": "send_payment_reminders",
+        "description": "Send WhatsApp payment reminders for overdue invoices now — 'remind "
+                       "everyone who owes me', 'chase Sam's invoice'. Pass invoice_numbers to "
+                       "limit it; leave empty for every invoice that is due a reminder. Without "
+                       "confirm=true returns a preview of who would be messaged.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_numbers": {"type": "array", "items": {"type": "string"}},
+            "invoice_ids": {"type": "array", "items": {"type": "string"}},
+            "confirm": {"type": "boolean"}}}}},
+    {"type": "function", "function": {
+        "name": "finance_settings",
+        "description": "Change how money automation works: reminder_mode 'propose' (Vula asks "
+                       "you first each morning), 'auto' (sent automatically) or 'off'; "
+                       "reminder_tone 'friendly' or 'firm'; expense_mode 'book' (a receipt is "
+                       "booked at once) or 'confirm' (you tap Confirm first). No fields = show "
+                       "the current settings. Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "reminder_mode": {"type": "string", "enum": ["propose", "auto", "off"]},
+            "reminder_tone": {"type": "string", "enum": ["friendly", "firm"]},
+            "expense_mode": {"type": "string", "enum": ["book", "confirm"]},
+            "confirm": {"type": "boolean"}}}}},
+    {"type": "function", "function": {
+        "name": "confirm_expense",
+        "description": "Book a receipt that is waiting for confirmation (expense_mode 'confirm'). "
+                       "Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "expense_id": {"type": "string"}, "confirm": {"type": "boolean"}},
+            "required": ["expense_id"]}}},
     {"type": "function", "function": {
         "name": "find_document",
         "description": "Search filed documents (invoices, quotes, proof-of-payment, BOQs, "
@@ -229,6 +261,18 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "days": {"type": "integer", "description": "Look-back window, default 30."}}},
     }},
+    {"type": "function", "function": {
+        "name": "financial_report",
+        "description": "The business's financial statements from its books — profit and loss, "
+                       "cash flow, VAT payable and balance sheet — as a WhatsApp summary plus a "
+                       "PDF link. Use for 'send me my P&L', 'how did we do last month', 'what VAT "
+                       "do I owe this tax year', 'balance sheet', 'financial statements'. The "
+                       "reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "period": {"type": "string", "enum": ["this_month", "last_month", "this_year",
+                                                   "tax_year", "last_tax_year", "last_12_months"]},
+            "since": {"type": "string", "description": "YYYY-MM-DD, only if the owner gave a date"},
+            "until": {"type": "string", "description": "YYYY-MM-DD, only if the owner gave a date"}}}}},
     {"type": "function", "function": {
         "name": "cash_summary",
         "description": (
@@ -340,6 +384,36 @@ INVOICE_TOOLS = [
         "parameters": {"type": "object", "properties": {"invoice_number": {"type": "string"},
                                                         "confirm": {"type": "boolean"}},
                        "required": ["invoice_number"]}}},
+    {"type": "function", "function": {
+        "name": "payment_link",
+        "description": "Send a customer a link to pay an amount — 'send Sam a payment link for "
+                       "R1,200', 'request R850 from Thabo for the deposit'. Creates the invoice "
+                       "for exactly that amount and WhatsApps the business's own pay page (card "
+                       "through the connected gateway, plus EFT details). Without confirm=true "
+                       "it returns a preview — only pass confirm=true after the owner has said to "
+                       "go ahead. For an EXISTING invoice use send_invoice instead.",
+        "parameters": {"type": "object", "properties": {
+            "customer_name": {"type": "string"},
+            "customer_phone": {"type": "string", "description": "Only if the owner gave it."},
+            "amount_rands": {"type": "number", "description": "The amount the customer pays."},
+            "description": {"type": "string", "description": "What it's for, e.g. 'Deposit'."},
+            "confirm": {"type": "boolean"}},
+            "required": ["customer_name", "amount_rands"]}}},
+    {"type": "function", "function": {
+        "name": "credit_note",
+        "description": "Correct or reduce a sent invoice with a credit note — 'credit R200 on "
+                       "INV-00012', 'cancel Sam's invoice, he returned it'. A sent invoice is "
+                       "never edited. amount_rands omitted = the full invoice. If the customer "
+                       "already paid, the money must be refunded: only pass refund_made=true "
+                       "when the owner says the refund was made. Without confirm=true returns "
+                       "a preview.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_number": {"type": "string"},
+            "amount_rands": {"type": "number"},
+            "reason": {"type": "string"},
+            "refund_made": {"type": "boolean"},
+            "confirm": {"type": "boolean"}},
+            "required": ["invoice_number"]}}},
     {"type": "function", "function": {
         "name": "record_payment",
         "description": "Record a payment received against an existing invoice, by its number "
@@ -1675,6 +1749,10 @@ class CommerceAdminSkill(BaseSkill):
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
+                    # A tool that built its own reply from DB figures (financial_report) is sent as-is —
+                    # the model never re-states the numbers.
+                    if isinstance(result, dict) and isinstance(result.get("reply_verbatim"), str):
+                        return result["reply_verbatim"]
                     direct = await _direct_supplier_answer(
                         question, name, args, result, tenant_id=ctx.get("tenant_id") or "",
                         history=history, phone=ctx.get("phone") or "")
@@ -1745,6 +1823,10 @@ class CommerceAdminSkill(BaseSkill):
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
+                # A tool that built its own reply from DB figures (financial_report) is sent as-is —
+                # the model never re-states the numbers.
+                if isinstance(result, dict) and isinstance(result.get("reply_verbatim"), str):
+                    return result["reply_verbatim"]
                 direct = await _direct_supplier_answer(
                     question, tc.function.name, args, result, tenant_id=ctx.get("tenant_id") or "",
                     history=history, phone=ctx.get("phone") or "")
@@ -1834,6 +1916,9 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity"), bool(args.get("confirm")), actor=ctx.get("phone"), add=args.get("add"), product_id=args.get("product_id"), variant_id=args.get("variant_id"))
             if name == "receive_stock":      return await self._receive_stock(tid, args.get("lines") or [], args.get("reference"), bool(args.get("confirm")), actor=ctx.get("phone"))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
+            if name == "send_payment_reminders": return await self._send_payment_reminders(tid, args)
+            if name == "finance_settings":   return await self._finance_settings(tid, args)
+            if name == "confirm_expense":    return await self._confirm_expense(tid, args)
             if name == "find_document":      return await self._find_document(tid, args)
             if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
@@ -1845,6 +1930,9 @@ class CommerceAdminSkill(BaseSkill):
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
+            if name == "payment_link":       return await self._payment_link(tid, args)
+            if name == "financial_report":   return await self._financial_report(tid, args)
+            if name == "credit_note":        return await self._credit_note(tid, args)
             if name == "record_payment":     return await self._record_payment(tid, args)
             if name == "list_quotes":        return await self._list_quotes(tid, args.get("status"))
             if name == "convert_quote_to_invoice": return await self._convert_quote_to_invoice(tid, args.get("quote_number", ""))
@@ -2130,23 +2218,105 @@ class CommerceAdminSkill(BaseSkill):
         return result
 
     async def _outstanding_invoices(self, tid: str) -> Dict[str, Any]:
-        # 2026-08-22: was summing ALL directions — a real transcript (off-the-hook) showed this
-        # silently mixing inbound supplier bills (direction="inbound", money the tenant OWES,
-        # see commerce/service.py's commit_inbound_document) into what an owner reads as "money
-        # owed to me," inflating a real R37,938.69/25-invoice figure into a nonsense
-        # R109,743.11/79-invoice one as supplier bills kept arriving by email. direction="outbound"
-        # restricts this to the tenant's own issued invoices/quotes, matching what "outstanding
-        # invoices" actually means to a business owner. "draft" dropped too — an invoice that was
-        # never sent isn't outstanding to anyone yet.
+        # 2026-08-22: outbound only — inbound supplier bills are money the tenant OWES, and a
+        # real off-the-hook transcript showed them inflating "owed to me" from R37,938.69 to
+        # R109,743.11. Drafts are excluded (never sent = not owed by anyone yet); quotes too.
+        # 2026-10-06 (finance brief): grouped by customer, owed = total − part-payments, aged by
+        # due date — every figure computed here, never by the model.
+        from datetime import date as _date
+        today = _date.today()
         owed = 0
         invoices = []
-        for st in ("sent", "overdue"):
+        per: Dict[str, Dict[str, Any]] = {}
+        for st in ("sent", "overdue", "part_paid"):
             for inv in await service.list_invoices(tid, doc_type="invoice", status=st,
                                                    direction="outbound", limit=100):
-                owed += int(inv.get("total_cents") or 0)
+                left = max(0, int(inv.get("total_cents") or 0) - int(inv.get("total_paid_cents") or 0))
+                if not left:
+                    continue
+                owed += left
+                try:
+                    days = (today - _date.fromisoformat(str(inv.get("due_date"))[:10])).days
+                except (TypeError, ValueError):
+                    days = None
                 invoices.append({"invoice": inv.get("invoice_number"), "status": inv.get("status"),
-                                 "total": self._rands(inv.get("total_cents")), "customer": inv.get("customer_name")})
-        return {"outstanding_total": self._rands(owed), "count": len(invoices), "invoices": invoices[:15]}
+                                 "total": self._rands(left), "customer": inv.get("customer_name"),
+                                 "days_overdue": days if days and days > 0 else 0})
+                key = (inv.get("customer_name") or "Unknown customer").strip()
+                c = per.setdefault(key, {"customer": key, "owed_cents": 0, "invoices": 0,
+                                         "oldest_days_overdue": 0})
+                c["owed_cents"] += left
+                c["invoices"] += 1
+                if days and days > c["oldest_days_overdue"]:
+                    c["oldest_days_overdue"] = days
+        by_customer = sorted(per.values(), key=lambda c: -c["owed_cents"])
+        return {"outstanding_total": self._rands(owed), "count": len(invoices),
+                "by_customer": [{"customer": c["customer"], "owes": self._rands(c["owed_cents"]),
+                                 "invoices": c["invoices"],
+                                 "oldest_days_overdue": c["oldest_days_overdue"]}
+                                for c in by_customer[:20]],
+                "invoices": invoices[:15]}
+
+    async def _send_payment_reminders(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        from vula.api.commerce import _process_overdue_invoices
+        ids = list(args.get("invoice_ids") or [])
+        nums = [n.strip() for n in (args.get("invoice_numbers") or []) if n and n.strip()]
+        if nums:
+            rows = (service._client().table("commerce_invoices").select("id,invoice_number")
+                    .eq("tenant_id", tid).in_("invoice_number", nums).execute().data or [])
+            ids += [r["id"] for r in rows]
+            if not rows:
+                return {"error": f"No invoice {', '.join(nums)} found."}
+        if not args.get("confirm"):
+            return {"preview": True, "invoices": nums or ("the listed invoices" if ids else
+                                                          "every invoice due a reminder"),
+                    "message": "Confirm to send the payment reminders on WhatsApp "
+                               "(call again with confirm=true)."}
+        sent = await _process_overdue_invoices(tid, only_ids=ids or None, force_send=True)
+        return {"reminders_sent": sent,
+                "note": None if sent else "Nothing was due a reminder (or the customers opted out "
+                                          "/ have no WhatsApp number)."}
+
+    async def _finance_settings(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        keys = ("reminder_mode", "reminder_tone", "expense_mode")
+        patch = {k: args[k] for k in keys if args.get(k)}
+        if not patch:
+            from vula.api.commerce import _reminder_settings
+            from vula.commerce import expenses
+            mode, tone = _reminder_settings(tid)
+            return {"reminder_mode": mode, "reminder_tone": tone,
+                    "expense_mode": expenses.expense_mode(tid)}
+        if not args.get("confirm"):
+            return {"preview": True, **patch,
+                    "message": "Confirm to change these settings (call again with confirm=true)."}
+        try:
+            saved = await service.upsert_invoice_settings(tid, patch)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {**{k: saved.get(k) for k in patch},
+                "verified": all(saved.get(k) == v for k, v in patch.items())}
+
+    async def _confirm_expense(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        from vula.commerce import expenses
+        eid = (args.get("expense_id") or "").strip()
+        rows = (service._client().table("commerce_expenses")
+                .select("id,amount_cents,supplier,status,project")
+                .eq("tenant_id", tid).eq("id", eid).limit(1).execute().data or []) if eid else []
+        if not rows:
+            return {"error": "That receipt wasn't found."}
+        r = rows[0]
+        if r.get("status") != "unconfirmed":
+            return {"message": "That receipt is already booked."}
+        if not args.get("confirm"):
+            return {"preview": True, "expense": self._rands(r.get("amount_cents")),
+                    "supplier": r.get("supplier"), "project": r.get("project"),
+                    "message": "Confirm to book this receipt (call again with confirm=true)."}
+        row = expenses.confirm_claim(tid, eid)
+        if not row:
+            return {"error": "It couldn't be booked — it may already have been handled."}
+        return {"booked": self._rands(row.get("amount_cents")), "supplier": row.get("supplier"),
+                "project": row.get("project"), "status": row.get("status"),
+                "verified": row.get("status") == "submitted"}
 
     async def _add_expense(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         cents = int(round(float(args.get("amount_rands", 0)) * 100))
@@ -2319,6 +2489,135 @@ class CommerceAdminSkill(BaseSkill):
         from vula.api.commerce import admin_send_invoice_whatsapp
         await admin_send_invoice_whatsapp(tid, rows[0]["id"], {})
         return {"sent": True, "invoice_number": num}
+
+    async def _payment_link(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Invoice for exactly the amount asked + the tenant's pay page, sent on WhatsApp after
+        the owner confirms. Every figure in the result comes from the saved invoice."""
+        from vula.api.commerce import _aggregate_customers, _norm_phone
+        from vula.commerce import pay_page
+        try:
+            cents = int(round(float(args.get("amount_rands")) * 100))
+        except (TypeError, ValueError):
+            cents = 0
+        if cents <= 0:
+            return {"status": "need_info", "message": "How much should the customer pay?"}
+        name = (args.get("customer_name") or "").strip()
+        what = (args.get("description") or "").strip() or "Payment"
+        phone = _norm_phone(args.get("customer_phone") or "")
+        if not phone:
+            matches = [c for c in (await _aggregate_customers(tid)).values()
+                       if name and name.lower() in (c.get("name") or "").lower() and c.get("phone")]
+            phones = {_norm_phone(c["phone"]): c for c in matches}
+            if len(phones) == 1:
+                phone, c = next(iter(phones.items()))
+                name = c.get("name") or name
+            elif len(phones) > 1:
+                return {"status": "need_info", "message": "Which one? " + "; ".join(
+                    f"{c.get('name')} ({p[-4:]})" for p, c in list(phones.items())[:5])}
+            else:
+                return {"status": "need_info",
+                        "message": f"What's {name or 'the customer'}'s WhatsApp number?"}
+        card = await pay_page.has_gateway(tid)
+        eft = pay_page.eft_details(tid)
+        if not card and not eft:
+            logger.error("payment_link for %s: no gateway and no EFT details configured", tid)
+            return {"error": "No way to take payment is set up yet — connect a card gateway "
+                             "under Settings › Payments, or add your EFT banking details, then "
+                             "I can send payment links."}
+        if not args.get("confirm"):
+            return {"preview": True, "customer": name, "phone_ending": phone[-4:],
+                    "amount": self._rands(cents), "for": what,
+                    "pays_by": ("card or EFT" if card and eft else "card" if card else "EFT only"),
+                    "message": "Confirm to create the invoice and WhatsApp the payment link "
+                               "(call again with confirm=true)."}
+        inv = await service.create_invoice(tid, {
+            "doc_type": "invoice", "customer_name": name or "Customer", "customer_phone": phone,
+            "line_items": [{"description": what, "quantity": 1, "unit_price_cents": cents}],
+            "prices_include_vat": True, "status": "draft"})
+        if not inv.get("id"):
+            return {"error": "The invoice couldn't be created — nothing was sent."}
+        note = None
+        if card:
+            try:
+                await pay_page.gateway_link(tid, inv)
+            except Exception as exc:
+                note = f"Card payment isn't available on this link ({exc}); EFT details are shown."
+        url = pay_page.page_url(tid, inv["id"])
+        from vula.api.tenants import display_name
+        from vula.api.whatsapp import _send_reply
+        first = (name or "").split()[0] if name else ""
+        msg = (f"Hi {first}, here's your payment link from {display_name(tid)} — "
+               f"{what}, {self._rands(inv.get('total_cents'))} (invoice {inv.get('invoice_number')}):"
+               f"\n\n{url}").replace("Hi ,", "Hi,")
+        sent = await _send_reply(phone, msg, tid)
+        if sent is not False:
+            await service.update_invoice_status(tid, inv["id"], "sent")
+        saved = await service.get_invoice(tid, inv["id"]) or {}
+        out = {"invoice_number": saved.get("invoice_number"),
+               "amount": self._rands(saved.get("total_cents")),
+               "customer": name, "status": saved.get("status"), "link": url,
+               "sent": sent is not False}
+        if sent is False:
+            out["message"] = ("The invoice and link are ready, but WhatsApp wouldn't deliver it "
+                              "(the customer may not have messaged in the last 24 hours). "
+                              "Forward the link yourself.")
+        if note:
+            out["note"] = note
+        return out
+
+    async def _credit_note(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        inv = await self._find_invoice_by_number(tid, args.get("invoice_number", ""))
+        if not inv:
+            return {"error": f"No invoice {args.get('invoice_number')} found."}
+        amount = args.get("amount_rands")
+        cents = int(round(float(amount) * 100)) if amount not in (None, "") else None
+        total = int(inv.get("total_cents") or 0)
+        paid = int(inv.get("total_paid_cents") or 0)
+        credit = cents or total
+        refund = max(0, credit - max(0, total - paid))
+        if not args.get("confirm"):
+            out = {"preview": True, "invoice_number": inv.get("invoice_number"),
+                   "customer": inv.get("customer_name"), "invoice_total": self._rands(total),
+                   "credit": self._rands(credit), "reason": args.get("reason") or None,
+                   "message": "Confirm to issue this credit note (call again with confirm=true)."}
+            if refund:
+                out["refund_needed"] = self._rands(refund)
+                out["message"] = (f"{self._rands(refund)} of this was already paid and must be "
+                                  "refunded to the customer. Confirm only once the refund is made "
+                                  "(confirm=true, refund_made=true).")
+            return out
+        try:
+            res = await service.credit_invoice(tid, inv["id"], cents, args.get("reason") or "",
+                                               refund_made=bool(args.get("refund_made")))
+        except service.RefundNeeded as exc:
+            return {"status": "need_info", "message": str(exc)}
+        except ValueError as exc:
+            return {"error": str(exc)}
+        after = res["invoice"] or {}
+        return {"credit_note": res["credit_note"].get("invoice_number"),
+                "credited": self._rands(res["credited_cents"]),
+                "refund_recorded": self._rands(res["refund_cents"]) if res["refund_cents"] else None,
+                "invoice_number": after.get("invoice_number"), "invoice_status": after.get("status"),
+                "still_owed": self._rands(max(0, int(after.get("total_cents") or 0)
+                                              - int(after.get("total_paid_cents") or 0)))}
+
+    async def _financial_report(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        import asyncio
+        from vula.commerce import reports
+        since, until = reports.period_dates(args.get("period") or "this_month")
+        since = (args.get("since") or since)[:10]
+        until = (args.get("until") or until)[:10]
+        try:
+            d = await asyncio.to_thread(reports.build_all, tid, since, until)
+        except Exception as exc:
+            logger.error("financial report failed for %s: %s", tid, exc)
+            return {"error": "I couldn't read the books just now — please try again shortly."}
+        from vula.api.tenants import display_name
+        link = await asyncio.to_thread(reports.pdf_link, tid, display_name(tid), d)
+        text = reports.summary_text(d)
+        text += f"\n\n📄 Full statements (PDF): {link}" if link else "\n\n(The PDF couldn't be made just now.)"
+        return {"reply_verbatim": text, "net_profit_cents": d["pnl"]["net_profit_cents"],
+                "balanced": d["balance"]["balanced"]}
 
     async def _find_invoice_by_number(self, tid: str, number: str) -> Optional[Dict[str, Any]]:
         """Shared lookup for record_payment/convert_quote_to_invoice/update_quote_status —

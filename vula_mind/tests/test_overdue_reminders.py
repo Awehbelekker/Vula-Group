@@ -101,6 +101,9 @@ def _inv(id_, days_over, status="sent", reminder_stage=None, doc_type="invoice",
 @pytest.fixture(autouse=True)
 def _patch_client(monkeypatch):
     monkeypatch.setattr(service, "_now", lambda: "2026-08-15T00:00:00Z")
+    # These cases cover the cadence itself, in 'auto' mode (sent without asking). The default,
+    # 'propose', is covered in tests/test_debtors_and_reminders.py.
+    monkeypatch.setattr(commerce, "_reminder_settings", lambda t: ("auto", "friendly"))
 
 
 @pytest.fixture
@@ -300,3 +303,18 @@ async def test_no_phone_still_claims_stage_but_sends_nothing(monkeypatch, sent_r
     assert reminded == 0
     assert client.store[0]["reminder_stage"] == "due"  # still claimed/staged
     assert sent_reply == []
+
+
+@pytest.mark.asyncio
+async def test_an_opted_out_customer_is_not_chased(monkeypatch, sent_reply, notified):
+    """A customer who replied STOP is never sent an overdue reminder (POPIA); the stage is still
+    claimed and the team still hears about an escalated invoice."""
+    store = [_inv("1", 15, phone="0821234567"), _inv("2", 8, phone="27829999999")]
+    monkeypatch.setattr(service, "_client", lambda: _FakeClient(store))
+    monkeypatch.setattr(commerce, "_suppressed_phones",
+                        lambda t: {commerce._norm_phone("27821234567")})
+    reminded = await commerce._process_overdue_invoices(TENANT)
+    assert reminded == 1
+    assert [c[0] for c in sent_reply] == ["27829999999"]
+    assert store[0]["reminder_stage"] == "escalated"
+    assert notified and "OTH-1" in notified[0][2]

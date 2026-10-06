@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from vula.api.master_auth import require_auth
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from vula.commerce import service
@@ -3701,6 +3701,19 @@ async def admin_report_expenses(tenant_id: str, since: Optional[str] = None,
     return expenses.report(tenant_id, since=since, until=until, project=project)
 
 
+@router.get("/{tenant_id}/admin/reports/statements")
+async def admin_report_statements(tenant_id: str, since: Optional[str] = None,
+                                  until: Optional[str] = None, period: str = "this_month"):
+    """P&L, cash flow, VAT and balance sheet — all from the ledger (vula/commerce/reports.py)."""
+    import asyncio as _a
+    from vula.commerce import reports
+    s, u = reports.period_dates(period)
+    try:
+        return await _a.to_thread(reports.build_all, tenant_id, (since or s)[:10], (until or u)[:10])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't read the ledger: {exc}")
+
+
 @router.get("/{tenant_id}/admin/reports/trial-balance")
 async def admin_report_trial_balance(tenant_id: str, since: Optional[str] = None,
                                      until: Optional[str] = None):
@@ -4117,6 +4130,15 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields")
+    # A sent invoice is never edited — its amounts are what the customer was issued (and, for a
+    # VAT-registered business, a tax invoice). Corrections go through a credit note.
+    locked = _LOCKED_ONCE_SENT & set(update)
+    if locked:
+        cur = await service.get_invoice(tenant_id, invoice_id) or {}
+        if cur.get("doc_type") in ("invoice", "credit_note") and cur.get("status") in _ISSUED:
+            raise HTTPException(status_code=409, detail=(
+                f"{cur.get('invoice_number')} has been sent, so its amounts can't be changed — "
+                "issue a credit note for the difference instead."))
 
     # A status change is routed through update_invoice_status so a transition to "paid"
     # always stamps paid_at server-side AND posts to the general ledger — a raw field write
@@ -4143,8 +4165,18 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
     return result.data[0] if result.data else {}
 
 
+_ISSUED = ("sent", "overdue", "part_paid", "paid")
+_LOCKED_ONCE_SENT = {"line_items", "subtotal_cents", "vat_rate", "vat_cents", "total_cents",
+                     "discount_cents", "deposit_cents", "customer_name", "customer_address"}
+
+
 @router.delete("/{tenant_id}/admin/invoices/{invoice_id}")
 async def admin_delete_invoice(tenant_id: str, invoice_id: str):
+    cur = await service.get_invoice(tenant_id, invoice_id) or {}
+    if cur.get("doc_type") in ("invoice", "credit_note") and cur.get("status") in _ISSUED:
+        raise HTTPException(status_code=409, detail=(
+            f"{cur.get('invoice_number')} has been sent and can't be deleted — cancel it with a "
+            "credit note so the numbering and the books stay complete."))
     try:
         service._client().table("commerce_invoices") \
             .delete().eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
@@ -4817,6 +4849,11 @@ async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict =
                 refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
                 patch = {"refund_status": "pending", "refunded_amount_cents": amount,
                          "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
+                try:   # money went back → reverse that part of the sale (idempotent per CN)
+                    from vula.commerce import ledger
+                    ledger.post_invoice_refund(tenant_id, src, cn, amount)
+                except Exception as exc:
+                    log.warning("refund ledger posting failed for %s: %s", cn.get("id"), exc)
             else:
                 refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
                 patch = {"refund_status": "failed"}
@@ -4830,40 +4867,49 @@ async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict =
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")
 async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
-    """Create a Yoco 'Pay now' checkout for an invoice; store + return the link."""
+    """Create a card-payment link for an invoice (the tenant's default gateway); store + return
+    it, plus the tenant's own pay page that carries it."""
     inv = await service.get_invoice(tenant_id, invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    from vula.commerce import pay_page
     if inv.get("status") == "paid":
-        return {"already_paid": True, "pay_url": inv.get("pay_url")}
-    from vula import payments
-    from vula.api import tenants as _tenants
-    store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
-    from config import settings as _cfg
-    api_base = _cfg.public_base_url.rstrip("/")
-    row = payments.default_provider_row(tenant_id)
-    provider = row["provider"] if row else "yoco"
-    notify_url = f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}"
+        return {"already_paid": True, "pay_url": inv.get("pay_url"),
+                "page_url": pay_page.page_url(tenant_id, invoice_id)}
     try:
-        link = await payments.create_pay_link(
-            tenant_id, amount_cents=int(inv["total_cents"]), reference=invoice_id,
-            description=f"Invoice {inv.get('invoice_number') or ''}".strip(),
-            success_url=f"{store_url}/payment/success?invoice={invoice_id}",
-            cancel_url=f"{store_url}/payment/cancel?invoice={invoice_id}",
-            notify_url=notify_url,
-            customer={"email": inv.get("customer_email"), "phone": inv.get("customer_phone")})
-    except Exception as exc:
-        log.error("Pay-link create failed (%s): %s", provider, exc)
-        raise HTTPException(status_code=502, detail="Payment gateway error — check your gateway keys.")
-    if not link or not link.url:
-        raise HTTPException(status_code=503, detail="No payment gateway connected — connect one in Payments.")
+        url, provider = await pay_page.gateway_link(tenant_id, inv)
+    except pay_page.NoGateway as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=f"Payment gateway error — {exc}.")
+    return {"pay_url": url, "provider": provider, "amount_cents": pay_page.owed_cents(inv),
+            "page_url": pay_page.page_url(tenant_id, invoice_id)}
+
+
+@router.get("/{tenant_id}/pay/{invoice_id}", response_class=HTMLResponse)
+async def public_pay_page(tenant_id: str, invoice_id: str, result: str = ""):
+    """The tenant's branded "pay this invoice" page (public — the customer has no login; the
+    invoice id is an unguessable UUID). Amount and status come from the database; the card
+    button is the tenant's own gateway; the EFT block is the tenant's own banking details."""
+    from vula.commerce import pay_page
     try:
-        service._client().table("commerce_invoices").update(
-            {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id"), "updated_at": service._now()}
-        ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+        inv = await service.get_invoice(tenant_id, invoice_id)
     except Exception:
-        pass
-    return {"pay_url": link.url, "provider": link.provider, "amount_cents": int(inv["total_cents"])}
+        inv = None
+    if not inv or inv.get("doc_type") not in ("invoice", "proforma") \
+            or (inv.get("direction") or "outbound") != "outbound" or inv.get("status") == "cancelled":
+        return HTMLResponse("<h3>This payment link isn't valid any more.</h3>", status_code=404)
+    brand = await public_brand(tenant_id)
+    card_url = inv.get("pay_url")
+    if not card_url and inv.get("status") != "paid" and pay_page.owed_cents(inv) > 0:
+        try:
+            card_url, _ = await pay_page.gateway_link(tenant_id, inv)
+        except Exception as exc:            # no gateway → EFT only; already logged loudly
+            log.info("pay page for %s shows EFT only: %s", invoice_id, exc)
+            card_url = None
+    eft = pay_page.eft_details(tenant_id)
+    return HTMLResponse(pay_page.render(brand, inv, eft, card_url,
+                                        result if result in ("success", "cancel") else ""))
 
 
 # ── Quote / proforma endpoints ────────────────────────────────────────────────
@@ -5924,47 +5970,108 @@ def _reminder_stage_for(days_over: int) -> Optional[str]:
     return "escalated"
 
 
-def _reminder_message(stage: str, iv: dict, days_over: int) -> str:
+def _owed_cents(iv: dict) -> int:
+    return max(0, int(iv.get("total_cents") or 0) - int(iv.get("total_paid_cents") or 0))
+
+
+def _reminder_message(stage: str, iv: dict, days_over: int, tone: str = "friendly",
+                      link: Optional[str] = None) -> str:
+    """The customer's reminder. The amount is what is still owed (after part-payments), read
+    from the invoice row; the link is the business's own pay page."""
     name = iv.get("customer_name") or "there"
     num = iv.get("invoice_number")
-    amount = (iv.get("total_cents") or 0) / 100
+    amount = f"R{_owed_cents(iv) / 100:,.2f}"
+    pay = f"\n\nPay here: {link}" if link else ""
+    firm = tone == "firm"
     if stage == "pre_due":
         days_left = abs(days_over)
-        return (f"Hi {name}, just a heads-up — invoice *{num}* for R{amount:.2f} is due in "
-                f"{days_left} day{'s' if days_left != 1 else ''}. Let us know if you have any "
-                f"questions. Thank you! 🙏")
+        return (f"Hi {name}, {'' if firm else 'just a heads-up — '}invoice *{num}* for {amount} "
+                f"is due in {days_left} day{'s' if days_left != 1 else ''}."
+                + ("" if firm else " Let us know if you have any questions. Thank you! 🙏") + pay)
     if stage == "due":
-        return (f"Hi {name}, a friendly reminder that invoice *{num}* for R{amount:.2f} is now "
-                f"past its due date. Please arrange payment when you can — reply here with any "
-                f"questions. Thank you! 🙏")
+        return ((f"Hi {name}, invoice *{num}* for {amount} is now due. Please make payment "
+                 f"today." if firm else
+                 f"Hi {name}, a friendly reminder that invoice *{num}* for {amount} is now past "
+                 f"its due date. Please arrange payment when you can — reply here with any "
+                 f"questions. Thank you! 🙏") + pay)
     if stage == "firm":
-        return (f"Hi {name}, invoice *{num}* for R{amount:.2f} is now {days_over} days overdue. "
-                f"Please arrange payment as soon as possible, or reply here if there's an issue "
-                f"we should know about.")
-    return (f"Hi {name}, invoice *{num}* for R{amount:.2f} is now {days_over} days overdue. "
-            f"Please arrange payment urgently, or reply here so we can sort this out together.")
+        return (f"Hi {name}, invoice *{num}* for {amount} is now {days_over} days overdue. "
+                + ("Please pay immediately." if firm else
+                   "Please arrange payment as soon as possible, or reply here if there's an "
+                   "issue we should know about.") + pay)
+    return (f"Hi {name}, invoice *{num}* for {amount} is now {days_over} days overdue. "
+            f"Please arrange payment urgently, or reply here so we can sort this out together." + pay)
 
 
-async def _process_overdue_invoices(tenant_id: str) -> int:
+def _reminder_settings(tenant_id: str) -> tuple:
+    """(mode, tone) — migration 198. Unreadable settings mean 'propose': when in doubt, no
+    customer is messaged without the owner's say-so."""
+    try:
+        row = (service._client().table("commerce_invoice_settings")
+               .select("reminder_mode,reminder_tone").eq("tenant_id", tenant_id).limit(1)
+               .execute().data or [])
+        r = row[0] if row else {}
+    except Exception:
+        r = {}
+    mode = r.get("reminder_mode") if r.get("reminder_mode") in service.REMINDER_MODES else "propose"
+    tone = r.get("reminder_tone") if r.get("reminder_tone") in service.REMINDER_TONES else "friendly"
+    return mode, tone
+
+
+async def _send_reminder(tenant_id: str, phone: str, iv: dict, stage: str, days_over: int,
+                         tone: str) -> bool:
+    """Free text inside the 24-hour window; outside it, the approved reminder template when one
+    is configured (WHATSAPP_REMINDER_TEMPLATE) — otherwise it is logged as an error, never
+    silently dropped."""
+    from vula.api.whatsapp import _send_reply
+    from vula.commerce.pay_page import page_url
+    link = page_url(tenant_id, iv["id"]) if iv.get("id") else None
+    if await _send_reply(phone, _reminder_message(stage, iv, days_over, tone, link), tenant_id) is not False:
+        return True
+    from config import settings
+    from vula.api.whatsapp import send_template
+    name = (settings.whatsapp_reminder_template or "").strip()
+    if not name:
+        log.error("Overdue reminder for %s (%s) not delivered — outside the 24-hour window and "
+                  "WHATSAPP_REMINDER_TEMPLATE isn't set", iv.get("invoice_number"), tenant_id)
+        return False
+    return await send_template(tenant_id, phone, name, [
+        iv.get("customer_name") or "there", str(iv.get("invoice_number") or ""),
+        f"R{_owed_cents(iv) / 100:,.2f}", link or ""])
+
+
+async def _process_overdue_invoices(tenant_id: str, only_ids: Optional[list] = None,
+                                    force_send: bool = False) -> int:
     """Staged overdue-invoice reminder cadence: pre_due (-3d) / due (0d) / firm (+7d) /
     escalated (+14d, also alerts the internal team). Each stage fires exactly once per invoice,
-    claimed via a conditional update matching the invoice's previous reminder_stage — the same
-    idempotency shape commerce_orders.followup_sent_at uses, generalized from a boolean to an
-    ordered stage so a daily job re-run (or two overlapping runs) can never double-send.
-    Requires migration 131 (reminder_stage/last_reminded_at columns)."""
+    claimed via a conditional update matching the invoice's previous reminder_stage, so a daily
+    re-run (or two overlapping runs) can never double-send. Requires migration 131.
+
+    What happens to the customer message depends on the tenant's reminder_mode (migration 198):
+    'propose' puts the due reminders to the owner as one Confirm/Cancel list and sends nothing
+    until they confirm (the confirm re-runs this with only_ids + force_send); 'auto' sends;
+    'off' sends nothing. A customer who replied STOP is never chased. Returns reminders sent."""
     from datetime import date as _date
     db = service._client()
     today = _date.today()
     try:
-        rows = (db.table("commerce_invoices")
-                .select("id,invoice_number,customer_name,customer_phone,total_cents,due_date,"
-                        "doc_type,status,reminder_stage")
-                .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"]).execute().data or [])
+        q = (db.table("commerce_invoices")
+             .select("id,invoice_number,customer_name,customer_phone,total_cents,total_paid_cents,"
+                     "due_date,doc_type,status,reminder_stage,reminder_proposed_stage")
+             .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"]))
+        if only_ids:
+            q = q.in_("id", list(only_ids))
+        rows = q.execute().data or []
     except Exception as exc:
         log.debug("overdue scan skipped: %s", exc)
         return 0
 
+    mode, tone = _reminder_settings(tenant_id)
+    if force_send:
+        mode = "auto"
     reminded = 0
+    suppressed = None          # loaded once, on the first reminder that would go out
+    to_propose = []
     for iv in rows:
         if (iv.get("doc_type") or "invoice") != "invoice":
             continue   # only invoices go overdue — not quotes/proformas
@@ -5978,44 +6085,91 @@ async def _process_overdue_invoices(tenant_id: str) -> int:
         days_over = (today - due_date).days
         target = _reminder_stage_for(days_over)
         current = iv.get("reminder_stage")
-        if target is None or _REMINDER_STAGE_ORDER[target] <= _REMINDER_STAGE_ORDER.get(current, 0):
+        if target is None or target == current or _STAGE_ORDER.index(target) <= _STAGE_ORDER.index(current or "none"):
+            continue
+        phone = (iv.get("customer_phone") or "").strip()
+        if phone and suppressed is None:
+            suppressed = _suppressed_phones(tenant_id)
+        if phone and _norm_phone(phone) in suppressed:
+            log.info("Overdue reminder for %s skipped — customer opted out", iv.get("invoice_number"))
+            phone = ""
+
+        if mode == "propose" and phone:
+            if iv.get("reminder_proposed_stage") != target:
+                to_propose.append((iv, target, days_over))
             continue
 
+        # Claim the stage (also: auto mode, off mode, opted-out or phoneless customers — the
+        # stage still advances so the team's escalation alert fires once).
         patch = {"reminder_stage": target, "last_reminded_at": service._now(), "updated_at": service._now()}
-        if days_over >= 0 and iv.get("status") == "sent":
+        if target != "pre_due" and iv.get("status") == "sent":
             patch["status"] = "overdue"
-        q = db.table("commerce_invoices").update(patch).eq("id", iv["id"]).eq("tenant_id", tenant_id)
-        q = q.is_("reminder_stage", "null") if current is None else q.eq("reminder_stage", current)
         try:
-            claimed = q.execute().data
+            cq = (db.table("commerce_invoices").update(patch)
+                  .eq("id", iv["id"]).eq("tenant_id", tenant_id))
+            cq = cq.is_("reminder_stage", "null") if current is None else cq.eq("reminder_stage", current)
+            claimed = (cq.execute().data or [])
         except Exception as exc:
             log.debug("overdue stage claim failed for %s: %s", iv.get("id"), exc)
             continue
         if not claimed:
             continue   # another run already claimed this stage — race-safe skip
 
-        phone = (iv.get("customer_phone") or "").strip()
-        if phone:
+        if phone and mode == "auto":
             try:
-                from vula.api.whatsapp import _send_reply
-                await _send_reply(phone, _reminder_message(target, iv, days_over), tenant_id)
-                reminded += 1
+                if await _send_reminder(tenant_id, phone, iv, target, days_over, tone):
+                    reminded += 1
             except Exception as exc:
                 log.debug("overdue reminder send failed: %s", exc)
 
         if target == "escalated":
-            try:
-                from vula.integrations.notify import notify_team
-                await notify_team(tenant_id, "invoice_overdue_escalated", (
-                    f"🔴 Invoice {iv.get('invoice_number')} for {iv.get('customer_name') or 'a customer'} "
-                    f"(R{(iv.get('total_cents') or 0) / 100:.2f}) is now {days_over} days overdue with no "
-                    f"response to reminders. May need a personal follow-up call."))
-            except Exception as exc:
-                log.debug("overdue escalation alert failed: %s", exc)
+            await _escalation_alert(tenant_id, iv, days_over)
 
+    if to_propose:
+        await _propose_reminders(tenant_id, to_propose)
     if reminded:
         log.info("Overdue invoices: reminded %d customer(s) for %s", reminded, tenant_id)
     return reminded
+
+
+_STAGE_ORDER = ["none", "pre_due", "due", "firm", "escalated"]
+
+
+async def _escalation_alert(tenant_id: str, iv: dict, days_over: int) -> None:
+    try:
+        from vula.integrations.notify import notify_team
+        await notify_team(tenant_id, "invoice_overdue_escalated", (
+            f"🔴 Invoice {iv.get('invoice_number')} for {iv.get('customer_name') or 'a customer'} "
+            f"(R{_owed_cents(iv) / 100:,.2f}) is now {days_over} days overdue with no "
+            f"response to reminders. May need a personal follow-up call."))
+    except Exception as exc:
+        log.debug("overdue escalation alert failed: %s", exc)
+
+
+async def _propose_reminders(tenant_id: str, items: list) -> None:
+    """One Confirm/Cancel list per owner/admin; nothing reaches a customer until a tap. Each
+    invoice is proposed once per stage (reminder_proposed_stage)."""
+    from vula.api.whatsapp import _ask_admin_confirm
+    from vula.commerce.approvals import tenant_admin_approvers
+    lines = [f"• {iv.get('customer_name') or '?'} — {iv.get('invoice_number')}, "
+             f"R{_owed_cents(iv) / 100:,.2f} ({'due in ' + str(-d) + ' days' if d < 0 else str(d) + ' days overdue' if d else 'due today'})"
+             for iv, _t, d in items]
+    preview = {"preview": True, "reminders": len(items), "customers": lines,
+               "message": "Send these payment reminders on WhatsApp?"}
+    ids = [iv["id"] for iv, _t, _d in items]
+    for a in await tenant_admin_approvers(tenant_id):
+        try:
+            await _ask_admin_confirm(a["phone"], tenant_id, "send_payment_reminders",
+                                     {"invoice_ids": ids}, preview, caller_role="admin")
+        except Exception as exc:
+            log.warning("reminder proposal to %s failed: %s", a.get("phone"), exc)
+    for iv, target, _d in items:
+        try:
+            (service._client().table("commerce_invoices")
+             .update({"reminder_proposed_stage": target})
+             .eq("id", iv["id"]).eq("tenant_id", tenant_id).execute())
+        except Exception as exc:
+            log.debug("reminder_proposed_stage not saved (run migration 198?): %s", exc)
 
 
 @router.post("/{tenant_id}/jobs/stock-alerts", dependencies=[Depends(require_auth)])
