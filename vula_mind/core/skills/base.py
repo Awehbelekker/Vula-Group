@@ -909,6 +909,16 @@ class SkillOutput:
         return self.error is None and bool(self.answer)
 
 
+
+def _turn_note_skill(name: str, **detail) -> None:
+    """Which skill answered, how sure it was, how it verified — onto the WhatsApp turn record
+    (vula/turns.py). No-op outside a turn."""
+    try:
+        from vula import turns
+        turns.note("skill", name=name, **detail)
+    except Exception:
+        pass
+
 class BaseSkill(ABC):
     name: str = "base"
     description: str = ""
@@ -928,6 +938,7 @@ class BaseSkill(ABC):
             result.skill_name = self.name
         except Exception as exc:
             latency = int((time.monotonic() - started) * 1000)
+            _turn_note_skill(self.name, error=str(exc), latency_ms=latency)
             return SkillOutput(
                 answer="",
                 skill_name=self.name,
@@ -958,6 +969,9 @@ class BaseSkill(ABC):
             await _verification.apply(self, inp, result)
         except Exception:
             pass
+        _turn_note_skill(self.name, confidence=result.confidence, latency_ms=result.latency_ms,
+                         error=result.error, sources=len(result.sources or []),
+                         verified=(result.verification or {}).get("outcome"))
         return result
 
 

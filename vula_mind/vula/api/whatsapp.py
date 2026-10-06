@@ -244,7 +244,7 @@ def _track_inbound(msg_id: Optional[str], **fields) -> None:
         logger.debug("inbound tracking skipped for %s (migration 179?): %s", msg_id, exc)
 
 
-def _run_bg(coro, *, label: str, track: Optional[dict] = None) -> None:
+def _run_bg(coro, *, label: str, track: Optional[dict] = None, turn: Optional[dict] = None) -> None:
     """Fire a slow handler as a background task and return control to the webhook immediately.
 
     2026-09-10: a document upload was processed INLINE (26–56s: download + a 503-ing local
@@ -257,6 +257,14 @@ def _run_bg(coro, *, label: str, track: Optional[dict] = None) -> None:
     or crash cut off mid-run is re-driven by redrive_stuck_inbound() instead of silently lost
     (Meta won't redeliver it — the webhook already returned 200)."""
     import asyncio as _a
+    from vula import turns as _turns
+    if turn is None and track:
+        _p = track.get("payload") or {}
+        turn = {"tenant_id": track.get("tenant_id"), "phone": track.get("phone") or "",
+                "kind": "voice" if track.get("kind") == "audio" else (track.get("kind") or "text"),
+                "text": _p.get("text") or "", "wamid": track.get("msg_id")}
+    if turn is not None:
+        coro = _turns.run(coro, **turn)    # one recorded turn per message (vula/turns.py)
 
     async def _wrapped():
         if track:
@@ -521,42 +529,48 @@ async def receive_message(
                             or interactive.get("button_reply", {}).get("title")
                             or ""
                         )
-                        # 2026-08-25: commerce_admin's confirm/cancel buttons (see
-                        # ConfirmationRequired / _send_wa_buttons) — works on ANY route_mode
-                        # (the owner's admin session exists on both commerce- and knowledge-mode
-                        # tenants), so this is checked before the commerce_tenant-only branch
-                        # below, using route_tenant rather than commerce_tenant.
-                        if phone and reply_id and (
-                            reply_id.startswith("admin_confirm:") or reply_id.startswith("admin_cancel:")
-                        ) and route_tenant:
-                            await _handle_admin_confirm_reply(phone, reply_id, route_tenant)
-                        elif phone and reply_id and route_tenant and reply_id.startswith("merchacct:"):
-                            # Owner saying whether a merchant's spend is stock or personal —
-                            # asked once per merchant, see ask_merchant_account.
-                            await _handle_merchant_account_reply(phone, reply_id, route_tenant)
-                        elif phone and reply_id and route_tenant and reply_id.startswith("docdir:"):
-                            # Owner classifying an ambiguous document (see ask_document_kind) —
-                            # supplier bill / our invoice / an expense.
-                            await _handle_document_kind_reply(phone, reply_id, route_tenant)
-                        elif phone and reply_id and route_tenant and (
-                            reply_id.startswith("learn_keep:") or reply_id.startswith("learn_bin:")
-                        ):
-                            # Owner reviewing an answer Vula just learned from a handoff
-                            # (migration 150) — like the admin confirm buttons, no LLM involved.
-                            await _handle_learn_review_reply(phone, reply_id, route_tenant)
-                        elif phone and reply_id and route_tenant and (
-                            reply_id in ("research_pdf_yes", "research_pdf_no")
-                        ):
-                            # Owner tapping the "want this as a document too?" offer after a
-                            # web-researched reply — see _maybe_offer_research_writeup.
-                            await _handle_research_pdf_reply(phone, reply_id, route_tenant)
-                        elif phone and reply_id and route_tenant and reply_id.startswith("admin_example:"):
-                            # Owner tapping an example from their first-contact capability menu
-                            # (_send_staff_capability_menu) — see _handle_admin_example_reply.
-                            await _handle_admin_example_reply(phone, reply_id, route_tenant)
-                        elif phone and reply_id and commerce_tenant:
-                            # Handle list/button replies from WhatsApp catalog menu
-                            await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
+                        async def _interactive():
+                            # 2026-08-25: commerce_admin's confirm/cancel buttons (see
+                            # ConfirmationRequired / _send_wa_buttons) — works on ANY route_mode
+                            # (the owner's admin session exists on both commerce- and knowledge-mode
+                            # tenants), so this is checked before the commerce_tenant-only branch
+                            # below, using route_tenant rather than commerce_tenant.
+                            if phone and reply_id and (
+                                reply_id.startswith("admin_confirm:") or reply_id.startswith("admin_cancel:")
+                            ) and route_tenant:
+                                await _handle_admin_confirm_reply(phone, reply_id, route_tenant)
+                            elif phone and reply_id and route_tenant and reply_id.startswith("merchacct:"):
+                                # Owner saying whether a merchant's spend is stock or personal —
+                                # asked once per merchant, see ask_merchant_account.
+                                await _handle_merchant_account_reply(phone, reply_id, route_tenant)
+                            elif phone and reply_id and route_tenant and reply_id.startswith("docdir:"):
+                                # Owner classifying an ambiguous document (see ask_document_kind) —
+                                # supplier bill / our invoice / an expense.
+                                await _handle_document_kind_reply(phone, reply_id, route_tenant)
+                            elif phone and reply_id and route_tenant and (
+                                reply_id.startswith("learn_keep:") or reply_id.startswith("learn_bin:")
+                            ):
+                                # Owner reviewing an answer Vula just learned from a handoff
+                                # (migration 150) — like the admin confirm buttons, no LLM involved.
+                                await _handle_learn_review_reply(phone, reply_id, route_tenant)
+                            elif phone and reply_id and route_tenant and (
+                                reply_id in ("research_pdf_yes", "research_pdf_no")
+                            ):
+                                # Owner tapping the "want this as a document too?" offer after a
+                                # web-researched reply — see _maybe_offer_research_writeup.
+                                await _handle_research_pdf_reply(phone, reply_id, route_tenant)
+                            elif phone and reply_id and route_tenant and reply_id.startswith("admin_example:"):
+                                # Owner tapping an example from their first-contact capability menu
+                                # (_send_staff_capability_menu) — see _handle_admin_example_reply.
+                                await _handle_admin_example_reply(phone, reply_id, route_tenant)
+                            elif phone and reply_id and commerce_tenant:
+                                # Handle list/button replies from WhatsApp catalog menu
+                                await _handle_commerce_interactive(phone, reply_id, reply_title, msg_id, commerce_tenant)
+
+                        from vula import turns as _turns
+                        await _turns.run(_interactive(), tenant_id=route_tenant or commerce_tenant,
+                                         phone=phone or "", kind="button",
+                                         text=reply_title or reply_id, wamid=msg_id)
 
                     elif msg_type == "order" and commerce_tenant:
                         # A customer checked out via WhatsApp's native product catalog cart —
@@ -600,11 +614,14 @@ async def receive_message(
                             except Exception as _exc:
                                 logger.debug("pin coverage check skipped: %s", _exc)
                             if route_mode == "commerce":
-                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message")
+                                _run_bg(_handle_commerce_message(phone, text, msg_id, route_tenant), label="commerce_message",
+                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
                             elif route_mode == "knowledge":
-                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message")
+                                _run_bg(_handle_message(phone, text, msg_id, route_tenant_id=route_tenant), label="text_message",
+                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
                             else:
-                                _run_bg(_handle_message(phone, text, msg_id), label="text_message")
+                                _run_bg(_handle_message(phone, text, msg_id), label="text_message",
+                                        turn={"tenant_id": route_tenant, "phone": phone, "kind": "location", "text": text, "wamid": msg_id})
 
                     elif msg_type == "document":
                         doc = msg.get("document") or {}
@@ -617,7 +634,9 @@ async def receive_message(
                             _run_bg(_handle_document_ingest(
                                 phone, media_id, filename, mime_type, route_tenant_id=route_tenant,
                                 content_sha=doc.get("sha256") or None, route_mode=route_mode,
-                            ), label="document_ingest")
+                            ), label="document_ingest", turn={
+                                "tenant_id": route_tenant, "phone": phone, "kind": "document",
+                                "text": filename, "wamid": msg_id})
 
                     elif msg_type in ("image", "video"):
                         media = msg.get(msg_type) or {}
@@ -628,7 +647,9 @@ async def receive_message(
                             _run_bg(_handle_image_or_video(
                                 phone, msg_type, media_id, caption, mime_type, msg_id,
                                 route_mode, route_tenant, media.get("sha256") or None,
-                            ), label="image_video")
+                            ), label="image_video", turn={
+                                "tenant_id": route_tenant, "phone": phone, "kind": msg_type,
+                                "text": caption, "wamid": msg_id})
                 except Exception as _dispatch_exc:
                     logger.error("WA message dispatch failed (type=%s phone=%s): %s", msg_type, phone, _dispatch_exc)
                     try:
@@ -1432,11 +1453,13 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
             return
         _alloc = await _maybe_allocate_pending_expense(tenant_id, phone, text)
         if _alloc:
+            _note_handler("expense_allocation")
             await _send_reply(phone, _alloc, tenant_id)
             return
         # Answering a bank-review question ("R720 to Lonese — what's this?").
         _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
         if _rev:
+            _note_handler("bank_review")
             await _send_reply(phone, _rev, tenant_id)
             return
         # A team member managing their own notification prefs ("stop follow-up emails").
@@ -1559,6 +1582,7 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
     except Exception:
         pending = None
     if pending is not None:
+        _note_handler("pending_document")
         await _send_reply(phone, _pending_doc_reply(pending), tenant_id=tenant_id)
         return
 
@@ -2765,6 +2789,12 @@ async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Op
         return None
 
 
+def _note_handler(name: str) -> None:
+    """Which of the older reply-matchers took this message — onto the turn record."""
+    from vula import turns
+    turns.note("handler", name=name)
+
+
 def _pending_doc_reply(pending: dict) -> str:
     """The reply to an answer about a document waiting on "which project?"."""
     if pending.get("filed"):
@@ -2834,6 +2864,8 @@ async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
     for q in oq.open_for(tenant_id, phone):
         try:
             if await _try_open_question(tenant_id, phone, text, q):
+                from vula import turns
+                turns.note("open_question", kind=q.get("kind"), ref=q.get("ref_id"))
                 return True
         except Exception as exc:
             logger.warning("open question %s (%s) answer failed: %s", q.get("id"), q.get("kind"), exc)
@@ -6538,6 +6570,8 @@ async def _send_reply(to: str, message: str, tenant_id: str = "", idem_key: Opti
             await _aio.to_thread(_release_outbound, tenant_id, idem_key)
         return ok
     message = _sanitize_outbound(message)
+    from vula import turns as _turns
+    _turns.reply(message, to=to)
     creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
     if not creds:
         # Try global env var fallback
@@ -6768,12 +6802,14 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # Answering "which project is that receipt for?" → allocate the pending expense claim.
     _alloc = await _maybe_allocate_pending_expense(tenant_id, phone, text)
     if _alloc:
+        _note_handler("expense_allocation")
         await _send_reply(phone, _alloc, tenant_id)
         return
 
     # Answering a bank-review question (team members only — never customers).
     _rev = await _maybe_bank_review_answer(tenant_id, phone, text)
     if _rev:
+        _note_handler("bank_review")
         await _send_reply(phone, _rev, tenant_id)
         return
 
@@ -7839,6 +7875,10 @@ async def _send_wa_buttons(creds: dict, number: str, body: str, buttons: list) -
     unambiguous button_reply id (handled in the webhook's msg_type == "interactive" branch),
     replacing the free-text "yes"/"confirm" parsing that produced a real fabricated-success
     incident (2026-08-22/24: the model misread its own tool results and invented an invoice)."""
+    from vula import turns as _turns
+    _turns.reply(f"{body}\n[buttons: " + " | ".join(
+        str(b.get("title") if isinstance(b, dict) else b) for b in buttons) + "]",
+        kind="buttons", to=number)
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", number, str(body)):   # capability benchmark
         return True

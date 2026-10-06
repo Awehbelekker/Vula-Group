@@ -76,3 +76,8 @@ def log_tool_call(tenant_id: str, skill: str, tool: str, args: dict | None = Non
         s = str(v)
         safe[k] = (s[:60] + "…") if len(s) > 60 else s
     emit(system="vula-agent-tool", task=tool, outcome=skill, tenant_id=tenant_id, extra={"args": safe})
+    try:
+        from vula import turns
+        turns.note("tool", skill=skill, tool=tool, args=safe)
+    except Exception:
+        pass
