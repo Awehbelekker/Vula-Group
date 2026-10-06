@@ -30,9 +30,11 @@ def _r(cents: int) -> str:
 def build(tenant_id: str, today: date) -> Dict[str, Any]:
     db = _client()
     y0 = (today - timedelta(days=1)).isoformat()
-    paid = (db.table("commerce_invoice_payments").select("invoice_id,amount_cents,paid_at")
-            .eq("tenant_id", tenant_id).gte("paid_at", y0).lt("paid_at", today.isoformat())
-            .limit(500).execute().data or [])
+    paid = [p for p in (db.table("commerce_invoice_payments")
+                        .select("invoice_id,amount_cents,paid_at,payment_method")
+                        .eq("tenant_id", tenant_id).gte("paid_at", y0).lt("paid_at", today.isoformat())
+                        .limit(500).execute().data or [])
+            if p.get("payment_method") != "credit_note"]     # a credit isn't money in
     open_rows = (db.table("commerce_invoices")
                  .select("id,invoice_number,customer_name,total_cents,total_paid_cents,due_date,status")
                  .eq("tenant_id", tenant_id).eq("direction", "outbound").eq("doc_type", "invoice")

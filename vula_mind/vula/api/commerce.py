@@ -4117,6 +4117,15 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
     update = {k: v for k, v in body.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields")
+    # A sent invoice is never edited — its amounts are what the customer was issued (and, for a
+    # VAT-registered business, a tax invoice). Corrections go through a credit note.
+    locked = _LOCKED_ONCE_SENT & set(update)
+    if locked:
+        cur = await service.get_invoice(tenant_id, invoice_id) or {}
+        if cur.get("doc_type") in ("invoice", "credit_note") and cur.get("status") in _ISSUED:
+            raise HTTPException(status_code=409, detail=(
+                f"{cur.get('invoice_number')} has been sent, so its amounts can't be changed — "
+                "issue a credit note for the difference instead."))
 
     # A status change is routed through update_invoice_status so a transition to "paid"
     # always stamps paid_at server-side AND posts to the general ledger — a raw field write
@@ -4143,8 +4152,18 @@ async def admin_update_invoice(tenant_id: str, invoice_id: str, body: dict):
     return result.data[0] if result.data else {}
 
 
+_ISSUED = ("sent", "overdue", "part_paid", "paid")
+_LOCKED_ONCE_SENT = {"line_items", "subtotal_cents", "vat_rate", "vat_cents", "total_cents",
+                     "discount_cents", "deposit_cents", "customer_name", "customer_address"}
+
+
 @router.delete("/{tenant_id}/admin/invoices/{invoice_id}")
 async def admin_delete_invoice(tenant_id: str, invoice_id: str):
+    cur = await service.get_invoice(tenant_id, invoice_id) or {}
+    if cur.get("doc_type") in ("invoice", "credit_note") and cur.get("status") in _ISSUED:
+        raise HTTPException(status_code=409, detail=(
+            f"{cur.get('invoice_number')} has been sent and can't be deleted — cancel it with a "
+            "credit note so the numbering and the books stay complete."))
     try:
         service._client().table("commerce_invoices") \
             .delete().eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
@@ -4817,6 +4836,11 @@ async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict =
                 refund_result = {"gateway": "yoco", "status": "pending", "amount_cents": amount}
                 patch = {"refund_status": "pending", "refunded_amount_cents": amount,
                          "refunded_at": now, "yoco_refund_id": result.get("refund_id")}
+                try:   # money went back → reverse that part of the sale (idempotent per CN)
+                    from vula.commerce import ledger
+                    ledger.post_invoice_refund(tenant_id, src, cn, amount)
+                except Exception as exc:
+                    log.warning("refund ledger posting failed for %s: %s", cn.get("id"), exc)
             else:
                 refund_result = {"gateway": "yoco", "status": "failed", "detail": result.get("detail")}
                 patch = {"refund_status": "failed"}

@@ -378,6 +378,21 @@ INVOICE_TOOLS = [
             "confirm": {"type": "boolean"}},
             "required": ["customer_name", "amount_rands"]}}},
     {"type": "function", "function": {
+        "name": "credit_note",
+        "description": "Correct or reduce a sent invoice with a credit note — 'credit R200 on "
+                       "INV-00012', 'cancel Sam's invoice, he returned it'. A sent invoice is "
+                       "never edited. amount_rands omitted = the full invoice. If the customer "
+                       "already paid, the money must be refunded: only pass refund_made=true "
+                       "when the owner says the refund was made. Without confirm=true returns "
+                       "a preview.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_number": {"type": "string"},
+            "amount_rands": {"type": "number"},
+            "reason": {"type": "string"},
+            "refund_made": {"type": "boolean"},
+            "confirm": {"type": "boolean"}},
+            "required": ["invoice_number"]}}},
+    {"type": "function", "function": {
         "name": "record_payment",
         "description": "Record a payment received against an existing invoice, by its number "
                        "(e.g. OTH-INV-00001). Supports partial payments — status becomes "
@@ -1885,6 +1900,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
             if name == "payment_link":       return await self._payment_link(tid, args)
+            if name == "credit_note":        return await self._credit_note(tid, args)
             if name == "record_payment":     return await self._record_payment(tid, args)
             if name == "list_quotes":        return await self._list_quotes(tid, args.get("status"))
             if name == "convert_quote_to_invoice": return await self._convert_quote_to_invoice(tid, args.get("quote_number", ""))
@@ -2490,6 +2506,42 @@ class CommerceAdminSkill(BaseSkill):
         if note:
             out["note"] = note
         return out
+
+    async def _credit_note(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        inv = await self._find_invoice_by_number(tid, args.get("invoice_number", ""))
+        if not inv:
+            return {"error": f"No invoice {args.get('invoice_number')} found."}
+        amount = args.get("amount_rands")
+        cents = int(round(float(amount) * 100)) if amount not in (None, "") else None
+        total = int(inv.get("total_cents") or 0)
+        paid = int(inv.get("total_paid_cents") or 0)
+        credit = cents or total
+        refund = max(0, credit - max(0, total - paid))
+        if not args.get("confirm"):
+            out = {"preview": True, "invoice_number": inv.get("invoice_number"),
+                   "customer": inv.get("customer_name"), "invoice_total": self._rands(total),
+                   "credit": self._rands(credit), "reason": args.get("reason") or None,
+                   "message": "Confirm to issue this credit note (call again with confirm=true)."}
+            if refund:
+                out["refund_needed"] = self._rands(refund)
+                out["message"] = (f"{self._rands(refund)} of this was already paid and must be "
+                                  "refunded to the customer. Confirm only once the refund is made "
+                                  "(confirm=true, refund_made=true).")
+            return out
+        try:
+            res = await service.credit_invoice(tid, inv["id"], cents, args.get("reason") or "",
+                                               refund_made=bool(args.get("refund_made")))
+        except service.RefundNeeded as exc:
+            return {"status": "need_info", "message": str(exc)}
+        except ValueError as exc:
+            return {"error": str(exc)}
+        after = res["invoice"] or {}
+        return {"credit_note": res["credit_note"].get("invoice_number"),
+                "credited": self._rands(res["credited_cents"]),
+                "refund_recorded": self._rands(res["refund_cents"]) if res["refund_cents"] else None,
+                "invoice_number": after.get("invoice_number"), "invoice_status": after.get("status"),
+                "still_owed": self._rands(max(0, int(after.get("total_cents") or 0)
+                                              - int(after.get("total_paid_cents") or 0)))}
 
     async def _find_invoice_by_number(self, tid: str, number: str) -> Optional[Dict[str, Any]]:
         """Shared lookup for record_payment/convert_quote_to_invoice/update_quote_status —

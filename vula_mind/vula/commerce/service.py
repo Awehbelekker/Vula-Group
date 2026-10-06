@@ -3031,9 +3031,32 @@ async def process_due_recurring() -> int:
                 "last_invoice_id": inv.get("id"), "last_run_at": _now(), "updated_at": _now(),
             }).eq("id", r["id"]).execute()
             n += 1
+            await _propose_recurring_send(r["tenant_id"], inv, r)
         except Exception:
             continue
     return n
+
+
+async def _propose_recurring_send(tenant_id: str, inv: dict, rec: dict) -> None:
+    """A recurring invoice is created as a draft and put to the owner/admins with Confirm/Cancel
+    (the same send_invoice confirmation the chat uses) — it never goes to the customer on its
+    own. Best-effort: the draft is there in Invoices either way."""
+    if not inv.get("invoice_number") or not inv.get("customer_phone"):
+        return
+    try:
+        from vula.api.whatsapp import _ask_admin_confirm
+        from vula.commerce.approvals import tenant_admin_approvers
+        preview = {"preview": True, "invoice_number": inv.get("invoice_number"),
+                   "customer": inv.get("customer_name"),
+                   "total": f"R{int(inv.get('total_cents') or 0) / 100:,.2f}",
+                   "recurring": rec.get("label") or rec.get("cadence") or "recurring",
+                   "message": "This month's recurring invoice is ready — send it on WhatsApp?"}
+        for a in await tenant_admin_approvers(tenant_id):
+            await _ask_admin_confirm(a["phone"], tenant_id, "send_invoice",
+                                     {"invoice_number": inv["invoice_number"]}, preview,
+                                     caller_role="admin")
+    except Exception as exc:
+        logger.warning("recurring invoice %s not proposed: %s", inv.get("invoice_number"), exc)
 
 
 # ── Credit notes ──────────────────────────────────────────────────────────────
@@ -3064,6 +3087,75 @@ async def create_credit_note(tenant_id: str, invoice_id: str, line_items: Option
     except Exception:
         pass
     return cn
+
+
+class RefundNeeded(ValueError):
+    """Part of the credit is money the customer already paid — it must be refunded, and the
+    owner must say it has been, before the books record it."""
+
+
+async def credit_invoice(tenant_id: str, invoice_id: str, amount_cents: Optional[int] = None,
+                         reason: str = "", refund_made: bool = False) -> dict:
+    """Correct a sent invoice with a credit note — the invoice itself is never edited.
+
+    The credit first reduces what is still owed (a commerce_invoice_payments row with method
+    'credit_note', so every balance — reminders, debtors, the pay page — drops at once; nothing
+    is posted to the ledger for it because the cash-basis ledger never booked the unpaid part).
+    Any part beyond what is owed was already paid: it must be refunded (refund_made=True), and
+    that part is posted as a refund (ledger.post_invoice_refund). Returns the credit note plus
+    the invoice as re-read."""
+    src = await get_invoice(tenant_id, invoice_id)
+    if not src or src.get("doc_type") != "invoice" or (src.get("direction") or "outbound") != "outbound":
+        raise ValueError("Only the business's own invoices can be credited.")
+    if src.get("status") in ("draft", "cancelled"):
+        raise ValueError(f"Invoice {src.get('invoice_number')} is {src.get('status')} — "
+                         "a draft can simply be edited or deleted; nothing to credit.")
+    total = int(src.get("total_cents") or 0)
+    paid = int(src.get("total_paid_cents") or 0)
+    owed = max(0, total - paid)
+    credit = int(amount_cents or total)
+    if credit <= 0 or credit > total:
+        raise ValueError(f"A credit must be between R0.01 and the invoice total R{total / 100:,.2f}.")
+    against_owed = min(credit, owed)
+    refund = credit - against_owed
+    if refund and not refund_made:
+        raise RefundNeeded(f"R{refund / 100:,.2f} of this was already paid — refund the customer "
+                           "first, then confirm the refund was made.")
+    cn = await create_invoice(tenant_id, {
+        "doc_type": "credit_note",
+        "customer_name": src.get("customer_name"), "customer_email": src.get("customer_email"),
+        "customer_phone": src.get("customer_phone"), "customer_address": src.get("customer_address"),
+        "line_items": [{"description": (reason or f"Credit against invoice {src.get('invoice_number')}")[:200],
+                        "quantity": 1, "unit_price_cents": credit}],
+        "prices_include_vat": True, "vat_rate": float(src.get("vat_rate") or 15),
+        "status": "sent", "issue_date": _now()[:10],
+        "notes": f"Credit note against invoice {src.get('invoice_number')}",
+    })
+    db = _client()
+    try:
+        db.table("commerce_invoices").update({"credited_invoice_id": invoice_id}) \
+            .eq("id", cn["id"]).eq("tenant_id", tenant_id).execute()
+    except Exception as exc:
+        logger.warning("credit note link not saved: %s", exc)
+    if against_owed:
+        db.table("commerce_invoice_payments").insert({
+            "tenant_id": tenant_id, "invoice_id": invoice_id, "amount_cents": against_owed,
+            "payment_method": "credit_note", "note": f"Credit note {cn.get('invoice_number')}",
+            "paid_at": _now()}).execute()
+        new_paid = paid + against_owed
+        patch = {"total_paid_cents": new_paid, "updated_at": _now()}
+        if new_paid >= total:
+            # fully settled: by credit alone → cancelled; partly by real money → paid
+            patch["status"] = "cancelled" if paid == 0 else "paid"
+            if paid == 0:
+                patch["cancel_reason"] = f"Credited in full by {cn.get('invoice_number')}"
+                patch["cancelled_at"] = _now()
+        db.table("commerce_invoices").update(patch).eq("tenant_id", tenant_id).eq("id", invoice_id).execute()
+    if refund:
+        from vula.commerce import ledger
+        ledger.post_invoice_refund(tenant_id, src, cn, refund)
+    return {"credit_note": cn, "invoice": await get_invoice(tenant_id, invoice_id),
+            "credited_cents": credit, "refund_cents": refund}
 
 
 # ── Document lookup (shared by commerce_admin.py and email_admin.py's find_document tools) ─────
