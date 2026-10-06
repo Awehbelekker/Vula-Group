@@ -29,9 +29,9 @@ const audioCtx = () => {
   try { ctxSingleton = ctxSingleton || new (window.AudioContext || window.webkitAudioContext)(); return ctxSingleton; } catch { return null; }
 };
 
-/** Plays the slip sound (style "modern" by default; "classic" = the older dot-matrix chatter).
+/** Plays the slip sound (style "chime" by default: no printer noise; see printSound.js for the others).
  *  Returns false, silently, when the browser hasn't allowed audio yet (no tap so far). */
-export function playPrintSound(duration = 2.8, style = (() => { try { return localStorage.getItem("vp.soundstyle") || "modern"; } catch { return "modern"; } })()) {
+export function playPrintSound(duration = 2.8, style = (() => { try { return localStorage.getItem("vp.soundstyle") || "chime"; } catch { return "chime"; } })()) {
   const vol = getVolume();
   if (vol === "off") return false;
   const ctx = audioCtx();
