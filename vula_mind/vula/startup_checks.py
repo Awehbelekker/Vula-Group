@@ -119,6 +119,13 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("196", "commerce_payer_accounts", "name_key"),
     ("197", "vula_open_questions", "message"),
     ("198", "commerce_invoice_settings", "reminder_mode"),
+    ("199", "kb_tags", None),
+    ("200", "kb_claim_tokens", None),
+    ("201", "kb_settings", None),
+    ("202", "kb_devices", None),
+    ("203", "kb_payments", "receipt_nonce"),
+    ("204", "kb_settings", "reminders_max"),
+    ("205", "kb_tax_invoices", None),
 ]
 
 
