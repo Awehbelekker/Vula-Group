@@ -279,10 +279,11 @@ def render_supplier_history_xlsx(result: Dict[str, Any], supplier: str = "",
 
 def render_supplier_history_pdf(result: Dict[str, Any], supplier: str = "",
                                 business: str = "") -> Optional[bytes]:
-    """The same supplier history as a shareable PDF: summary, every invoice (date, number,
-    amount — refunds negative) and the materials roll-up. Figures are the rows' own integer
-    cents; the total is summed here, never by a model. None when the result isn't a complete
-    filed-document answer."""
+    """The same supplier history as a shareable PDF: a written summary (period, invoices vs
+    refunds, excl-VAT / VAT / total, spend by month), every invoice (refunds negative; an invoice
+    whose extracted lines don't add up to its total is flagged) and every material. Figures are
+    the rows' own integer cents; every total is summed here, never by a model. None when the
+    result isn't a complete filed-document answer."""
     import html as _h
     if result.get("status") != "found" or "total_amount_cents" not in result:
         return None
@@ -293,30 +294,74 @@ def render_supplier_history_pdf(result: Dict[str, Any], supplier: str = "",
                  "is_refund": bool(m.get("is_refund")),
                  "total_cents": (int(round(float(m["amount"]) * 100)) * (-1 if m.get("is_refund") else 1))
                  if m.get("amount") is not None else None} for m in (result.get("matches") or [])]
-    rows = sorted(rows, key=lambda r: (r.get("date") or "", r.get("ref") or ""), reverse=True)
+    # refunds always count negative, whether or not the rows were signed already
+    rows = [dict(r, total_cents=(-abs(r["total_cents"]) if r.get("is_refund") else r["total_cents"])
+                 if r.get("total_cents") is not None else None,
+                 vat_cents=(-abs(r["vat_cents"]) if r.get("is_refund") else r["vat_cents"])
+                 if r.get("vat_cents") is not None else None) for r in rows]
+    rows = sorted(rows, key=lambda r: (r.get("date") or "", str(r.get("ref") or "")), reverse=True)
     mats = result.get("_materials_all") or result.get("materials") or []
+    e = _h.escape
 
     def money(c):
         return "—" if c is None else f"{'−' if c < 0 else ''}R{abs(c) / 100:,.2f}"
+    priced = [r for r in rows if r.get("total_cents") is not None]
+    total = sum(r["total_cents"] for r in priced)
+    refunds = [r for r in priced if r.get("is_refund")]
+    vat_known = [r for r in priced if r.get("vat_cents") is not None]
+    vat = sum(r["vat_cents"] for r in vat_known) if len(vat_known) == len(priced) else None
+    dates = sorted(r["date"] for r in rows if r.get("date"))
+    months: Dict[str, list] = {}
+    for r in priced:
+        if r.get("date"):
+            m = months.setdefault(r["date"][:7], [0, 0])
+            m[0] += r["total_cents"]
+            m[1] += 1
 
-    def signed(r):
-        c = r.get("total_cents")
-        return None if c is None else (-abs(c) if r.get("is_refund") else c)
-    total = sum(signed(r) or 0 for r in rows)
-    name = _h.escape(supplier or result.get("resolved_supplier") or "Supplier")
-    inv = "".join(f"<tr><td>{_h.escape(r.get('date') or '')}</td><td>{_h.escape(str(r.get('ref') or ''))}</td>"
-                  f"<td class=n>{money(signed(r))}</td></tr>" for r in rows)
-    mat = "".join(f"<tr><td>{_h.escape(str(m.get('description') or ''))}</td><td class=n>"
+    def short(r):
+        lines = [ln.get("total_cents") for ln in (r.get("lines") or [])]
+        if not lines or any(c is None for c in lines) or r.get("total_cents") is None:
+            return None
+        gap = abs(r["total_cents"]) - abs(sum(lines))
+        return gap if gap > 100 else None          # more than R1 not accounted for by the lines
+    flagged = [(r, short(r)) for r in rows if short(r)]
+    name = e(supplier or result.get("resolved_supplier") or "Supplier")
+    summ = [("Period", f"{dates[0]} to {dates[-1]}" if dates else "—"),
+            ("Documents", f"{len(priced) - len(refunds)} invoices, {len(refunds)} refunds"
+             + (f", {len(rows) - len(priced)} with no amount" if len(rows) > len(priced) else "")),
+            ("Refunds", money(sum(r["total_cents"] for r in refunds)) if refunds else "none")]
+    if vat is not None:
+        summ += [("Excl VAT", money(total - vat)), ("VAT", money(vat))]
+    summ.append(("Total spend", money(total)))
+    srows = "".join(f"<tr><td>{e(k)}</td><td class=n>{e(v)}</td></tr>" for k, v in summ)
+    mrows = "".join(f"<tr><td>{k}</td><td class=n>{v[1]}</td><td class=n>{money(v[0])}</td></tr>"
+                    for k, v in sorted(months.items()))
+    inv = "".join(
+        f"<tr><td>{e(r.get('date') or '')}</td><td>{e(str(r.get('ref') or ''))}"
+        f"{' (refund)' if r.get('is_refund') else ''}{' ⚠' if short(r) else ''}</td>"
+        f"<td class=n>{money(r.get('vat_cents'))}</td><td class=n>{money(r.get('total_cents'))}</td></tr>"
+        for r in rows)
+    mat = "".join(f"<tr><td>{e(str(m.get('description') or ''))}</td><td class=n>"
                   f"{m.get('quantity') if m.get('quantity') is not None else ''}</td>"
                   f"<td class=n>{money(m.get('spend_cents'))}</td></tr>" for m in mats)
+    note = ""
+    if flagged:
+        note = ("<p class=w>⚠ The line items read from " + ", ".join(
+            f"{e(str(r.get('ref')))} ({money(g)} short)" for r, g in flagged)
+            + " add up to less than the invoice total — a line was missed when the invoice was "
+              "read. The invoice totals above are correct; the materials list is short by that much.</p>")
     doc = f"""<html><head><meta charset="utf-8"><style>
 body{{font-family:sans-serif;font-size:10px;color:#222}} h1{{font-size:16px;margin:0}}
-h2{{font-size:12px;margin-top:16px;border-bottom:1px solid #ccc}} table{{width:100%;border-collapse:collapse}}
+h2{{font-size:12px;margin-top:16px;border-bottom:1px solid #ccc;page-break-after:avoid;break-after:avoid}} table{{width:100%;border-collapse:collapse}}
 td,th{{padding:2px 4px;text-align:left}} .n{{text-align:right}} .t td{{font-weight:bold;border-top:1px solid #999}}
-</style></head><body><h1>{name} — invoices and materials</h1>
-<p>{_h.escape(business)} · {len(rows)} document(s) · total {money(total)} · refunds shown negative</p>
-<h2>Invoices</h2><table><tr><th>Date</th><th>Invoice</th><th class=n>Amount</th></tr>{inv}
-<tr class=t><td></td><td>Total</td><td class=n>{money(total)}</td></tr></table>
-{"<h2>Materials</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Spend</th></tr>" + mat + "</table>" if mat else ""}
+.w{{color:#8a5a00;font-size:9px}} .s{{width:50%}}
+</style></head><body><h1>{name} — account summary</h1>
+<p>{e(business)} · invoices and materials as filed · refunds shown negative</p>
+<h2>Summary</h2><table class=s>{srows}</table>
+{"<h2>By month</h2><table class=s><tr><th>Month</th><th class=n>Docs</th><th class=n>Spend</th></tr>" + mrows + "</table>" if len(months) > 1 else ""}
+<h2>Every invoice ({len(rows)})</h2><table><tr><th>Date</th><th>Invoice</th><th class=n>VAT</th><th class=n>Total</th></tr>{inv}
+<tr class=t><td></td><td>Total</td><td class=n>{money(vat)}</td><td class=n>{money(total)}</td></tr></table>
+{note}
+{"<h2 style='page-break-before:always'>Every material (" + str(len(mats)) + ", biggest spend first)</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Spend</th></tr>" + mat + "</table>" if mat else ""}
 </body></html>"""
     return HTML(string=doc).write_pdf()

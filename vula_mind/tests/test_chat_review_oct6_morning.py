@@ -58,7 +58,7 @@ def test_the_pdf_has_every_invoice_the_refund_negative_and_the_materials():
     text = "\n".join(p.get_text() for p in fitz.open(stream=data, filetype="pdf"))
     assert "23-247517" in text and "21-367569" in text and "CEMENT 50KG" in text
     assert "R870.00" in text and "R1,656.00" in text
-    assert "total R870.00" in text                                     # 870 + 1656 − 1656
+    assert "Total spend\nR870.00" in text                              # 870 + 1656 − 1656
 
 
 @pytest.mark.asyncio
