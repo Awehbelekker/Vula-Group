@@ -2707,10 +2707,15 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
         # in one incoming message, so asking both here is safe — a reply with just one piece of
         # info (e.g. "HPC") still resolves correctly, leaving the other question open.
         asks = []
+        from vula import open_questions
         if not claim.get("project") and claim.get("needs_project"):
             asks.append("📍 Which project/site is this for? Reply with the site name, or 'none'.")
+            open_questions.ask(tenant_id, phone, "expense_project", claim.get("id") or "",
+                               f"Which project: R{total/100:,.2f} receipt")
         if paid_with is None and expenses.list_cards(tenant_id):
             asks.append("💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'.")
+            open_questions.ask(tenant_id, phone, "expense_paid_with", claim.get("id") or "",
+                               f"Company card or own money: R{total/100:,.2f} receipt")
         if not claim.get("purpose_category"):
             asks.append("🗂️ What was this for — fuel, a client visit/meal, or accommodation? "
                         "Reply with the category.")
@@ -2782,6 +2787,43 @@ _YES_WORDS = {"yes", "y", "yep", "yes please", "ja", "ok", "okay", "correct", "c
 _NO_WORDS = {"no", "n", "nope", "nee"}
 
 
+def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str) -> Optional[str]:
+    """Answer "which project?" / "company card or own money?" about one specific claim — the
+    one asked about, never whichever unallocated claim happens to be newest. None when the
+    reply doesn't answer it (so the next question, or the normal flow, can have it)."""
+    from vula.commerce import expenses, service
+    t = (text or "").strip()
+    low = t.lower()
+    if not t or len(t) > 60 or t.endswith("?") or _REQUEST_SHAPED.match(t):
+        return None
+    rows = (service._client().table("commerce_expenses").select("*")
+            .eq("tenant_id", tenant_id).eq("id", claim_id).limit(1).execute().data or [])
+    if not rows:
+        return None
+    claim = rows[0]
+    amt = int(claim.get("amount_cents") or 0) / 100
+    if kind == "expense_paid_with":
+        if not re.search(r"\b(company|own|personal|my card|my money|cash)\b", low):
+            return None
+        is_company = bool(re.search(r"\bcompany\b", low))
+        paid_with = "company_card" if is_company else ("cash" if re.search(r"\bcash\b", low) else "personal")
+        service._client().table("commerce_expenses").update(
+            {"paid_with": paid_with, "reimbursable": not is_company, "updated_at": service._now()}
+        ).eq("tenant_id", tenant_id).eq("id", claim_id).execute()
+        if is_company:
+            return (f"👍 Noted — that *R{amt:,.2f}* was on the company card. "
+                    "I'll match it against the bank statement.")
+        return f"👍 Noted — *R{amt:,.2f}* was your own money, so it's marked to be paid back to you. 👛"
+    if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
+        expenses.assign(tenant_id, claim_id, project="")
+        return "👍 Noted — no project. It's in your books."
+    proj = expenses.match_project(tenant_id, t)
+    if not proj:
+        return None
+    expenses.assign(tenant_id, claim_id, project=proj)
+    return f"✅ Allocated that *R{amt:,.2f}* expense to *{proj}*."
+
+
 async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
     """Match a reply to the questions this person was actually asked, newest first
     (vula/open_questions.py, migration 194). True when one of them took it — the old
@@ -2824,6 +2866,13 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
                 oq.close(q["id"], status="expired")  # the document isn't waiting any more
             return False
         await _send_reply(phone, _pending_doc_reply(res), tenant_id=tenant_id)
+        return True
+    if kind in ("expense_project", "expense_paid_with"):
+        reply = _answer_expense_question(tenant_id, kind, ref, text)
+        if reply is None:
+            return False
+        oq.close(q["id"], text)
+        await _send_reply(phone, reply, tenant_id=tenant_id)
         return True
     if kind == "pop_match":
         if not looks_like_project_answer(text):      # a short answer, not a new request
@@ -2887,6 +2936,8 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
                 service._client().table("commerce_expenses").update(
                     {"paid_with": paid_with, "reimbursable": not is_company,
                      "updated_at": service._now()}).eq("id", claim["id"]).execute()
+                from vula import open_questions
+                open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 amt = int(claim.get("amount_cents") or 0) / 100
                 if is_company:
                     return (f"👍 Noted — that *R{amt:,.2f}* was on the company card. "
@@ -2908,12 +2959,15 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
             rows = []
         if rows:
             claim = rows[0]
+            from vula import open_questions
             if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
                 expenses.assign(tenant_id, claim["id"], project="")   # '' = resolved, not re-asked
+                open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 return "👍 Noted — no project. It's in your books."
             proj = expenses.match_project(tenant_id, text)
             if proj:
                 expenses.assign(tenant_id, claim["id"], project=proj)
+                open_questions.close_mine(tenant_id, phone, claim["id"], text)
                 return f"✅ Allocated that *R{int(claim.get('amount_cents') or 0)/100:,.2f}* expense to *{proj}*."
 
         # Odometer reading for a petrol claim (migration 142) — checked before the purpose

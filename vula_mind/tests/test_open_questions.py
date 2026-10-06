@@ -198,3 +198,50 @@ def test_a_supplier_pop_records_its_question(db, monkeypatch):
     bank_rec._stage_supplier_pop(TID, 239717, "2026-10-05", "Digg", "Ste", sender_phone=PHONE)
     q = oq.current(TID, PHONE)
     assert q["kind"] == "pop_match" and q["ref_id"] == db["commerce_bank_transactions"][0]["id"]
+
+
+# ── step 1b: "which project?" and "company card or own money?" on a receipt ───────
+def _claims(db):
+    db["commerce_expenses"] = [
+        {"id": "bauxite", "tenant_id": TID, "amount_cents": 1807674, "project": None, "paid_with": "personal",
+         "status": "submitted", "created_at": "2026-08-28T11:46:33Z"},
+        {"id": "fuel", "tenant_id": TID, "amount_cents": 87150, "project": None, "paid_with": None,
+         "status": "submitted", "created_at": NOW.isoformat()},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_project_answer_goes_to_the_receipt_that_was_asked_about(db, monkeypatch):
+    _claims(db)
+    _asked(db, "expense_project", "fuel", 1)
+    assigned = []
+    monkeypatch.setattr("vula.commerce.expenses.match_project", lambda t, x: "Atlantis Paarden Eiland")
+    monkeypatch.setattr("vula.commerce.expenses.assign", lambda t, cid, project: assigned.append((cid, project)))
+    with patch.object(wa, "_send_reply", AsyncMock()) as reply:
+        assert await wa._answer_open_question(TID, PHONE, "Atlantis Paarden Eiland")
+    assert assigned == [("fuel", "Atlantis Paarden Eiland")]          # never the Bauxite claim
+    assert "R871.50" in reply.await_args.args[1]
+    assert db["vula_open_questions"][0]["status"] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_own_money_answers_the_paid_with_question_not_the_project_one(db, monkeypatch):
+    _claims(db)
+    _asked(db, "expense_project", "fuel", 1)
+    _asked(db, "expense_paid_with", "fuel", 1)
+    monkeypatch.setattr("vula.commerce.expenses.match_project", lambda t, x: None)
+    monkeypatch.setattr("vula.commerce.service._now", lambda: NOW.isoformat())
+    with patch.object(wa, "_send_reply", AsyncMock()) as reply:
+        assert await wa._answer_open_question(TID, PHONE, "own money")
+    assert db["commerce_expenses"][1]["paid_with"] == "personal"
+    assert "paid back to you" in reply.await_args.args[1]
+    still_open = [q["kind"] for q in db["vula_open_questions"] if q["status"] == "open"]
+    assert still_open == ["expense_project"]
+
+
+@pytest.mark.asyncio
+async def test_a_request_is_not_taken_as_a_receipt_answer(db, monkeypatch):
+    _claims(db)
+    _asked(db, "expense_project", "fuel", 1)
+    monkeypatch.setattr("vula.commerce.expenses.match_project", lambda t, x: "HPC Bokaap")
+    assert not await wa._answer_open_question(TID, PHONE, "Can you send me the HPC invoices?")
