@@ -2029,7 +2029,11 @@ class CommerceAdminSkill(BaseSkill):
                 return self._rule_tool(name, tid, args, ctx)
             if name == "project_profit":
                 from vula.commerce.job_costing import project_profit
-                return project_profit(tid, args.get("project") or None)
+                # Sent as the tool wrote it: a model re-stating it dropped the overhead share, so
+                # "received − cost" no longer matched the profit (DIGG, 6 Oct).
+                res = project_profit(tid, args.get("project") or None)
+                text = res.get("text") or res.get("message")
+                return {**res, "reply_verbatim": text} if text else res
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),

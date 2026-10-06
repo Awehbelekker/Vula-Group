@@ -696,9 +696,24 @@ _FOLLOW_UP_RE = re.compile(
     re.IGNORECASE)
 
 
+# A short question about the answer just given, or a one-word correction of the last one (DIGG,
+# 6 Oct, after the HPC profit answer: "Is this before the tax benefits" and "So what would it be
+# before?" went to memory_recall on the word "before"; "Sorry after" went to email_admin).
+_REFERS_BACK_RE = re.compile(
+    r"^\s*(?:so\s+|and\s+|but\s+)?(?:is|was|does|did|will|would|are)\s+(?:this|that|it|these|those)\b|"
+    r"\bwhat (?:would|will|does|is) (?:it|that|this) be\b|^\s*(?:so|and)\s+what\b|"
+    r"^\s*what about\b|^\s*(?:and|so)\s+(?:before|after)\b|"
+    r"^\s*(?:sorry|oops|i meant|no)[,.!]?\s+\w+",
+    re.IGNORECASE)
+
+
 def looks_like_follow_up(text: str) -> bool:
     t = (text or "").strip()
-    return bool(t) and len(t.split()) <= 14 and bool(_FOLLOW_UP_RE.search(t))
+    if not t:
+        return False
+    if len(t.split()) <= 10 and _REFERS_BACK_RE.search(t):
+        return True
+    return len(t.split()) <= 14 and bool(_FOLLOW_UP_RE.search(t))
 
 
 def looks_like_owner_admin_question(text: str) -> bool:

@@ -89,6 +89,29 @@ cases:
     tenant: digg-demo
     text: "What's the profit for Porterfield?"
     expect: {route: owner_admin, skill: commerce_admin}
+  - id: profit-before-tax-6oct
+    note: went to memory_recall on "before" and was answered "Yes, before tax benefits" (6 Oct)
+    tenant: digg-demo
+    last_skill: commerce_admin
+    text: "Is this before the tax benefits"
+    expect: {route: follow_up, skill: commerce_admin}
+  - id: profit-what-before-6oct
+    tenant: digg-demo
+    last_skill: commerce_admin
+    text: "So what would it be before?"
+    expect: {route: follow_up, skill: commerce_admin}
+  - id: profit-sorry-after-6oct
+    note: went to email_admin and was answered with the latest email (6 Oct)
+    tenant: digg-demo
+    last_skill: commerce_admin
+    text: "Sorry after"
+    expect: {route: follow_up, skill: commerce_admin}
+  - id: new-job-after-profit
+    note: a real new request after a profit answer still routes on its own words
+    tenant: digg-demo
+    last_skill: commerce_admin
+    text: "Check my email"
+    expect: {skill: email_admin}
   - id: what-to-charge
     tenant: digg-demo
     text: "What should I charge per m2 for tiling?"

@@ -403,6 +403,20 @@ def find_project(result: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _basis(tenant_id: str) -> str:
+    """What the figures include — so "is this before tax?" has a true answer (DIGG, 6 Oct: a
+    follow-up was answered "yes, before tax benefits" with nothing behind it)."""
+    try:
+        from vula.commerce.accounting import is_vat_registered
+        registered = is_vat_registered(tenant_id)
+    except Exception:
+        registered = True
+    vat = ("amounts exclude VAT" if registered else
+           "VAT on supplier costs is counted as cost (not VAT registered, so it can't be claimed back)")
+    return (f" Figures are from the bank and before income tax; {vat}. Vula doesn't work out income "
+            "tax — that depends on the whole year, so your accountant does that.")
+
+
 def project_profit(tenant_id: str, project: Optional[str] = None) -> Dict[str, Any]:
     """The agent's view: one project's figures (or every project's headline) plus a
     deterministic text the reply can quote."""
@@ -430,7 +444,8 @@ def project_profit(tenant_id: str, project: Optional[str] = None) -> Dict[str, A
                 + (f" Variations over the BOQ: {p['variations']['documents']} document(s) — claimed from the "
                    f"client {_r(p['variations']['claimed_cents'])}, extra costs from suppliers "
                    f"{_r(p['variations']['extra_cost_cents'])}." if p.get("variations") else "")
-                + " Received counts money in the bank so far — a certificate not yet paid isn't in it.")
+                + " Received counts money in the bank so far — a certificate not yet paid isn't in it."
+                + _basis(tenant_id))
         return {"project": p, "text": text}
     lines = [f"• {p['project']}: received {_r(p['received_cents'])}, cost {_r(p['cost_cents'])}, "
              f"profit after overheads {_r(p['profit_cents'])} ({p['status']})" for p in res["projects"]]
@@ -439,7 +454,8 @@ def project_profit(tenant_id: str, project: Optional[str] = None) -> Dict[str, A
             + (f" ({res['overhead_rate_pct']}% of project spend)" if res["overhead_rate_pct"] is not None else "")
             + f". Fees earned {_r(res['fees_earned_cents'])} against a target of {_r(res['fees_target_cents'])}."
             + (f" {_r(res['unallocated_project_spend_cents'])} of materials/labour isn't allocated to a project yet."
-               if res["unallocated_project_spend_cents"] else ""))
+               if res["unallocated_project_spend_cents"] else "")
+            + _basis(tenant_id))
     return {"summary": {k: v for k, v in res.items() if k != "projects"},
             "projects": res["projects"], "text": text}
 
