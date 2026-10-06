@@ -162,6 +162,9 @@ async def assign_project(doc_id: str, body: AssignIn, request: Request) -> dict:
         }).eq("id", doc_id).execute()
     except Exception as exc:
         return {"error": str(exc)}
+    # Filed from the dashboard — nobody should still be asked about it on WhatsApp.
+    from vula import open_questions
+    open_questions.close_for(doc.get("tenant_id") or "", doc_id)
 
     # The committed bill/quote and the document's prices follow the document, and a BoQ sets
     # the project's contract value — as resolve_pending_document does for the WhatsApp answer.

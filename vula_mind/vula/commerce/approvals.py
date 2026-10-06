@@ -100,18 +100,22 @@ async def create_approval(
     if steps:
         sb.table("vula_approval_steps").insert(steps).execute()
 
-    # Notify each approver on WhatsApp
+    # Notify each approver on WhatsApp, and record the question so their reply finds it.
+    from vula import open_questions
     for s in steps:
-        await _send_reply(
+        sent = await _send_reply(
             s["approver_phone"],
             f"🔔 Approval needed: *{title}*\n\n"
             f"Reply *APPROVE* to authorise, or *REJECT <reason>* to decline.",
             tenant_id,
         )
+        if sent is not False:
+            open_questions.ask(tenant_id, s["approver_phone"], "approval", appr["id"], title)
     return appr
 
 
-async def record_decision(approver_phone: str, decision: str, notes: str = "") -> Optional[dict]:
+async def record_decision(approver_phone: str, decision: str, notes: str = "",
+                          approval_id: Optional[str] = None) -> Optional[dict]:
     """Record an approver's APPROVE/REJECT against their most recent pending step.
 
     Returns the approval dict if a decision was recorded, else None (so the caller
@@ -130,6 +134,10 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
     # The approver is answering the most recent question they were asked — newest approval by
     # created_at, and only within the reply window.
     cutoff = datetime.now(timezone.utc) - APPROVAL_REPLY_WINDOW
+    if approval_id:   # the exact question being answered (vula/open_questions.py)
+        steps = [st for st in steps if st["approval_id"] == approval_id]
+        if not steps:
+            return None
     approvals = (sb.table("vula_approvals").select("*")
                  .in_("id", list({st["approval_id"] for st in steps})).eq("status", "pending")
                  .execute()).data or []
@@ -146,8 +154,11 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
 
     tenant_id = approval["tenant_id"]
     title = approval["title"]
+    from vula import open_questions
+    open_questions.close_mine(tenant_id, phone, approval["id"], decision)
 
     if decision == "rejected":
+        open_questions.close_for(tenant_id, approval["id"])
         sb.table("vula_approvals").update(
             {"status": "rejected", "completed_at": _now()}
         ).eq("id", approval["id"]).execute()
@@ -182,6 +193,7 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
         return approval
 
     # Everyone has approved → finalise + fire the action
+    open_questions.close_for(tenant_id, approval["id"])
     sb.table("vula_approvals").update(
         {"status": "approved", "completed_at": _now()}
     ).eq("id", approval["id"]).execute()

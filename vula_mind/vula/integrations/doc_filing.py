@@ -713,11 +713,23 @@ async def ask_project(tenant_id: str, doc: dict, phones: list, prefix: str = "")
     from vula.api.whatsapp import _send_reply
     msg = (prefix + "\n\n" if prefix else "") + project_question(tenant_id, doc)
     sent = 0
+    from vula import open_questions
     for ph in phones:
         if ph and await _send_reply(ph, msg, tenant_id=tenant_id):
             mark_asked(tenant_id, doc, ph)
+            open_questions.ask(tenant_id, ph, "doc_project", doc["id"],
+                               f"Which project: {doc.get('filename') or 'document'}")
             sent += 1
     return sent
+
+
+def _settled(tenant_id: str, doc_id: str) -> None:
+    """Nobody should be asked about this document any more."""
+    try:
+        from vula import open_questions
+        open_questions.close_for(tenant_id, doc_id, status="answered")
+    except Exception:
+        pass
 
 
 def looks_like_project_answer(text: str) -> bool:
@@ -746,7 +758,8 @@ def _named_project_answer(tenant_id: str, text: str) -> Optional[dict]:
     return None
 
 
-async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Optional[dict]:
+async def resolve_pending_document(tenant_id: str, phone: str, text: str,
+                                   doc_id: Optional[str] = None) -> Optional[dict]:
     """If `phone` has a recent pending_project document, treat `text` as the
     project answer: match it, update the row (project + ClickUp), re-download the
     stored file and attach it into ClickUp. Returns a result dict or None.
@@ -783,6 +796,14 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
                 pass
     except Exception:
         return None
+    if doc_id:
+        # The exact document the person was asked about (vula/open_questions.py).
+        try:
+            rows = (_client().table("vula_filed_documents").select("*")
+                    .eq("tenant_id", tenant_id).eq("id", doc_id).eq("status", "pending_project")
+                    .limit(1).execute().data or [])
+        except Exception:
+            rows = []
     if not rows:
         return None
     doc = rows[0]
@@ -804,6 +825,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         except Exception as exc:
             logger.warning("mark duplicate failed for %s: %s", doc.get("id"), exc)
             return {"unmatched": True, "filename": doc.get("filename")}
+        _settled(tenant_id, doc["id"])
         return {"duplicate_dropped": True, "filename": doc.get("filename")}
 
     # "skip" → leave it unfiled (still stored + in KB).
@@ -813,6 +835,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
                 .eq("id", doc["id"]).execute()
         except Exception:
             pass
+        _settled(tenant_id, doc["id"])
         return {"skipped": True, "filename": doc.get("filename")}
 
     # The project the answer names (name, spelling variant or project number) wins; the loose
@@ -852,6 +875,7 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
             _client().table("vula_filed_documents").delete().eq("id", doc["id"]).execute()
         except Exception:
             pass
+        _settled(tenant_id, doc["id"])
         return {"filed": True, "project": match["project"],
                 "clickup": bool(existing.get("clickup_task_id")),
                 "filename": doc.get("filename"), "duplicate": True}
@@ -921,5 +945,6 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     except Exception as exc:
         logger.debug("finance post (resolve) skipped: %s", exc)
 
+    _settled(tenant_id, doc["id"])
     return {"filed": True, "project": match["project"], "learned_signals": learned,
             "clickup": bool(clickup_task_id), "filename": doc.get("filename")}

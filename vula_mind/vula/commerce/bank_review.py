@@ -333,6 +333,7 @@ async def _apply_supplier_bill_match(tenant_id: str, txn: dict, bill: dict) -> s
     bank_cash, VAT to vat_input) — never post_invoice_paid, which would credit sales and
     invent revenue from a payment the business MADE."""
     from vula.commerce import service
+    from vula import open_questions
     await service.update_invoice_status(tenant_id, bill["id"], "paid")
     try:
         _client().table("commerce_bank_transactions").update(
@@ -340,8 +341,18 @@ async def _apply_supplier_bill_match(tenant_id: str, txn: dict, bill: dict) -> s
     except Exception as exc:
         log.warning("supplier pop txn update failed: %s", exc)
     amt = int(txn.get("amount_cents") or 0) / 100
-    return (f"✅ R{amt:,.2f} → bill *{bill.get('invoice_number') or bill['id']}* "
-            f"({bill.get('supplier') or 'supplier'}) — marked paid.")
+    label = f"bill *{bill.get('invoice_number') or bill['id']}* ({bill.get('supplier') or 'supplier'})"
+    # Read it back before saying so (verified, not reported).
+    try:
+        back = (_client().table("commerce_invoices").select("status")
+                .eq("tenant_id", tenant_id).eq("id", bill["id"]).limit(1).execute().data or [{}])[0]
+    except Exception:
+        back = {}
+    if back.get("status") != "paid":
+        return (f"⚠️ I tried to mark {label} paid with that R{amt:,.2f}, but it didn't save. "
+                f"Please mark it paid under Invoices in the dashboard.")
+    open_questions.close_for(tenant_id, txn["id"], status="answered")
+    return f"✅ R{amt:,.2f} → {label} — marked paid."
 
 
 async def _handle_supplier_pop_answer(tenant_id: str, text: str, txn: dict) -> Optional[str]:
@@ -350,13 +361,16 @@ async def _handle_supplier_pop_answer(tenant_id: str, text: str, txn: dict) -> O
     produces an 'asked' row with direction 'out'."""
     db = _client()
     low = text.lower()
+    from vula import open_questions
     if low in ("stop", "later", "cancel", "end"):
         db.table("commerce_bank_transactions").update(
             {"match_status": "unmatched"}).eq("id", txn["id"]).execute()
+        open_questions.close_for(tenant_id, txn["id"])
         return "👍 No problem — it's waiting in your 🏦 Bank tab whenever you're ready."
     if low in ("skip", "next", "dunno", "not sure"):
         db.table("commerce_bank_transactions").update(
             {"match_status": "ignored"}).eq("id", txn["id"]).execute()
+        open_questions.close_for(tenant_id, txn["id"])
         return "⏭ Skipped — the payment is recorded but not linked to a bill."
 
     from vula.commerce.bank_rec import _open_supplier_bills, _match_supplier_bill, _tok
