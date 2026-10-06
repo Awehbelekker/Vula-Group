@@ -925,6 +925,34 @@ PROJECT_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "project": {"type": "string", "description": "Project name if the user named one."}}}}},
     {"type": "function", "function": {
+        "name": "vat_position",
+        "description": "VAT from the business's own records: if registered, VAT on sales minus "
+                       "VAT it can claim for the last and current VAT period with the VAT201 due "
+                       "date, and claimable VAT lost to missing supplier VAT numbers; if not "
+                       "registered, 12-month sales against the compulsory threshold and what it "
+                       "could claim if registered. Use for 'how much VAT do I owe', 'when is VAT "
+                       "due', 'should I register for VAT'. Quote the returned text.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "tax_calendar",
+        "description": "The business's tax deadlines in the next 60 days (VAT201, provisional "
+                       "tax or Turnover Tax interim payments, EMP201). Use for 'when is tax due', "
+                       "'what tax deadlines are coming'. Quote the returned text.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "set_vat_registration",
+        "description": "Record the business's VAT registration when the owner says so (e.g. "
+                       "'we're VAT registered, number 4123456789, category B'). Without "
+                       "confirm=true returns a preview; only pass confirm=true after the owner "
+                       "explicitly confirmed.",
+        "parameters": {"type": "object", "properties": {
+            "registered": {"type": "boolean"},
+            "vat_number": {"type": "string", "description": "10 digits starting with 4."},
+            "category": {"type": "string", "enum": ["A", "B", "C"],
+                         "description": "A/B: two-monthly; C: monthly — only if the owner said."},
+            "confirm": {"type": "boolean"}},
+            "required": ["registered"]}}},
+    {"type": "function", "function": {
         "name": "set_tax_regime",
         "description": "Record how the business is taxed when the owner says so (e.g. 'turnover "
                        "tax', '(Pty) Ltd', 'sole proprietor'). Only after the owner said it.",
@@ -1306,7 +1334,8 @@ _TOOL_SCOPE: Dict[str, str] = {
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
     "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
-    "set_tax_regime": "finances",
+    "set_tax_regime": "finances", "vat_position": "finances", "tax_calendar": "finances",
+    "set_vat_registration": "finances",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -1980,6 +2009,47 @@ class CommerceAdminSkill(BaseSkill):
         return _checked({"saved": True, "regime": kind},
                         f"✅ Noted: the business is taxed as {names[kind]}.\n\n{res.get('text', '')}")
 
+    async def _set_vat_registration(self, tid: str, args: Dict[str, Any],
+                                    ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """Store VAT registration (invoice settings) and the VAT period category (profile) after
+        the owner confirms; read both back and answer with the VAT position."""
+        from vula.commerce import business_profile, tax
+        registered = bool(args.get("registered"))
+        number = re.sub(r"\D", "", str(args.get("vat_number") or ""))
+        category = str(args.get("category") or "").strip().upper()[:1]
+        if number and not re.fullmatch(r"4\d{9}", number):
+            return {"status": "need_info",
+                    "message": f"A South African VAT number is 10 digits starting with 4 — "
+                               f"'{args.get('vat_number')}' doesn't look right. What is it?"}
+        if category and category not in "ABC":
+            category = ""
+        summary = ("VAT registered" + (f", number {number}" if number else "")
+                   + (f", category {category}" if category else "")) if registered else "not VAT registered"
+        if not args.get("confirm"):
+            return {"preview": True, "summary": summary,
+                    "message": f"Record the business as {summary}? Confirm to save."}
+        row: Dict[str, Any] = {"tenant_id": tid, "vat_registered": registered}
+        if number:
+            row["vat_number"] = number
+        try:
+            db = service._client()
+            have = (db.table("commerce_invoice_settings").select("tenant_id").eq("tenant_id", tid)
+                    .limit(1).execute().data or [])
+            if have:
+                db.table("commerce_invoice_settings").update(row).eq("tenant_id", tid).execute()
+            else:
+                db.table("commerce_invoice_settings").insert(row).execute()
+        except Exception as exc:
+            logger.warning("set_vat_registration failed for %s: %s", tid, exc)
+        if category:
+            await business_profile.save_answers(tid, {"vat_category": category},
+                                                by=str(ctx.get("phone") or ""))
+        if tax.vat_status(tid) is not registered or (category and tax.vat_category(tid) != category):
+            return _not_confirmed(f"I couldn't save that the business is {summary}. Not confirmed.")
+        pos = tax.vat_position(tid)
+        return _checked({"saved": True, "vat_registered": registered},
+                        f"✅ Saved: the business is {summary}.\n\n{pos.get('text', '')}")
+
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
@@ -2078,6 +2148,12 @@ class CommerceAdminSkill(BaseSkill):
                 return {**res, "reply_verbatim": res["text"]} if res.get("text") else res
             if name == "set_tax_regime":
                 return await self._set_tax_regime(tid, str(args.get("regime") or ""), ctx)
+            if name in ("vat_position", "tax_calendar"):
+                from vula.commerce import tax
+                res = tax.vat_position(tid) if name == "vat_position" else tax.calendar_text(tid)
+                return {**res, "reply_verbatim": res["text"]} if res.get("text") else res
+            if name == "set_vat_registration":
+                return await self._set_vat_registration(tid, args, ctx)
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),

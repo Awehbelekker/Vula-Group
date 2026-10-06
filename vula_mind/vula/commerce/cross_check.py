@@ -340,7 +340,10 @@ def vat(tenant_id: str, since: Optional[str] = None, until: Optional[str] = None
     yr = [t for t in _bank(tenant_id, (date.today() - timedelta(days=365)).isoformat(), None)
           if t.get("direction") == "in" and t.get("account_code") == "sales"]
     sales_12m = sum(int(t.get("amount_cents") or 0) for t in yr)
-    threshold = int(settings.vat_registration_threshold_cents)
+    # The compulsory threshold in force today (R2.3m from 1 Apr 2026 — vula/commerce/tax.py);
+    # the config value is only an override.
+    from vula.commerce.tax import vat_threshold
+    threshold = int(settings.vat_registration_threshold_override_cents or vat_threshold()[0])
     out.update({"sales_12m_cents": sales_12m, "registration_threshold_cents": threshold,
                 "over_threshold": (not registered) and sales_12m > threshold})
     if registered:

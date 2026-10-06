@@ -680,6 +680,10 @@ _OWNER_ADMIN_RE = re.compile(
     r"\b(?:after|before|income|turnover|company|provisional)[\s-]+tax\b|\bhow much tax\b|"
     r"\btax (?:do|must|should|will) (?:i|we)\b|\b(?:pay|owe) (?:sars|tax)\b|"
     r"^\s*(?:(?:on |it'?s |we'?re (?:on )?)?turnover tax|sole prop\w*|\(?pty\)? ?ltd)\s*[.!]?\s*$|"
+    r"\b(?:how much|when (?:is|are)|do (?:i|we)|should (?:i|we)|must (?:i|we))\b[^?.]{0,30}\bvat\b|"
+    r"\bvat\s?201\b|\bvat (?:return|due|owed|payable|refund|registration|position|period)\b|"
+    r"\bregister(?:ed)? for vat\b|\b(?:we'?re|we are|i'?m|am) (?:now )?vat registered\b|"
+    r"\btax (?:dates|deadlines?|calendar)\b|\bwhen is (?:\w+ )?tax due\b|^\s*tax\s*[.!?]?\s*$|"
     # "Who owes me money?" went to the general reasoning skill, which can't see invoices (replay
     # corpus, 6 Oct) — debtors and bills are the admin agent's outstanding_invoices.
     r"\bwho owes\b|\bwho (?:do|must|should) (?:i|we) (?:still )?pay\b|\b(?:do|must) (?:i|we) owe\b|"

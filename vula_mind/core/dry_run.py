@@ -31,7 +31,7 @@ READ_ONLY = frozenset({
     "list_storefront_pages", "list_subscriptions", "list_suppliers", "lookup_business_info",
     "find_product_document",
     "outstanding_invoices", "preview_broadcast", "price_advice", "project_profit", "recent_orders",
-    "tax_estimate",
+    "tax_estimate", "vat_position", "tax_calendar",
     "reimbursement_balance", "reorder_suggestions", "sales_summary", "stock_status",
     "view_call_sheet",
     # commerce_assistant
@@ -47,7 +47,7 @@ READ_ONLY = frozenset({
 # Tools that only preview unless called with confirm=true (checked in their own code): without
 # confirm they run for real, so the reply can quote the real audience size (benchmark, 1 Oct —
 # "Send all customers…" got no reach figure because the preview itself was blocked).
-PREVIEW_UNLESS_CONFIRMED = frozenset({"send_broadcast"})
+PREVIEW_UNLESS_CONFIRMED = frozenset({"send_broadcast", "set_vat_registration"})
 
 NOT_RUN = ("Benchmark dry run: this action was recorded but NOT performed. Don't say it's done — "
            "say what you would do and what you'd need to confirm.")

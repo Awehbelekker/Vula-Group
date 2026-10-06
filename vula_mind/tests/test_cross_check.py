@@ -115,7 +115,7 @@ def test_vat_registered_backs_vat_out_of_receipts_and_flags_the_threshold(db, mo
     assert v["output_cents"] == round(17591613 * 15 / 115) + round(750000 * 15 / 115)
     assert v["over_threshold"] is False                           # registered → no warning
     monkeypatch.setattr("vula.commerce.accounting.is_vat_registered", lambda tid: False)
-    monkeypatch.setattr("config.settings.vat_registration_threshold_cents", 10_000_000)
+    monkeypatch.setattr("config.settings.vat_registration_threshold_override_cents", 10_000_000)
     v = cross_check.vat(TID, since="2026-07-01")
     assert v["over_threshold"] and "compulsory registration threshold" in v["text"]
 

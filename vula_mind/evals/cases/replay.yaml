@@ -121,6 +121,19 @@ cases:
     tenant: digg-demo
     text: "Turnover tax"
     expect: {route: owner_admin, skill: commerce_admin}
+  - id: vat-owed
+    tenant: off-the-hook
+    text: "How much VAT do I owe this period?"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: register-for-vat
+    tenant: digg-demo
+    text: "Should we register for VAT?"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: tax-from-digest
+    note: the morning digest says "Reply *tax* for the estimate"
+    tenant: digg-demo
+    text: "tax"
+    expect: {route: owner_admin, skill: commerce_admin}
   - id: what-to-charge
     tenant: digg-demo
     text: "What should I charge per m2 for tiling?"

@@ -125,10 +125,9 @@ class Settings(BaseSettings):
     # N web workers a sender can get up to N x this before being slowed. Deliberately not a DB
     # counter (that would add a write to every inbound message); tighten the number instead.
     wa_sender_rate_limit: int = 15
-    # SARS compulsory VAT registration: taxable supplies above this in any 12 months (cents).
-    # vula/commerce/cross_check.py warns an unregistered tenant approaching it. Kept as config
-    # because the threshold changes by budget — verify the current figure with SARS.
-    vat_registration_threshold_cents: int = 100_000_000
+    # SARS compulsory VAT registration threshold override (12-month taxable supplies, cents);
+    # 0 = the dated table in vula/commerce/tax.py (R2.3m from 1 Apr 2026, Budget 2026).
+    vat_registration_threshold_override_cents: int = 0
     vula_base_url: str = "https://app.vula.ai"
     # The dashboard's actual reachable URL — vula_base_url above is a stale placeholder (see
     # vula/api/links.py's own comment), not something to build a real customer-facing link on.
