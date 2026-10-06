@@ -3701,6 +3701,19 @@ async def admin_report_expenses(tenant_id: str, since: Optional[str] = None,
     return expenses.report(tenant_id, since=since, until=until, project=project)
 
 
+@router.get("/{tenant_id}/admin/reports/statements")
+async def admin_report_statements(tenant_id: str, since: Optional[str] = None,
+                                  until: Optional[str] = None, period: str = "this_month"):
+    """P&L, cash flow, VAT and balance sheet — all from the ledger (vula/commerce/reports.py)."""
+    import asyncio as _a
+    from vula.commerce import reports
+    s, u = reports.period_dates(period)
+    try:
+        return await _a.to_thread(reports.build_all, tenant_id, (since or s)[:10], (until or u)[:10])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Couldn't read the ledger: {exc}")
+
+
 @router.get("/{tenant_id}/admin/reports/trial-balance")
 async def admin_report_trial_balance(tenant_id: str, since: Optional[str] = None,
                                      until: Optional[str] = None):

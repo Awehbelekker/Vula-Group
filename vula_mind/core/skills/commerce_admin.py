@@ -262,6 +262,18 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "days": {"type": "integer", "description": "Look-back window, default 30."}}},
     }},
     {"type": "function", "function": {
+        "name": "financial_report",
+        "description": "The business's financial statements from its books — profit and loss, "
+                       "cash flow, VAT payable and balance sheet — as a WhatsApp summary plus a "
+                       "PDF link. Use for 'send me my P&L', 'how did we do last month', 'what VAT "
+                       "do I owe this tax year', 'balance sheet', 'financial statements'. The "
+                       "reply is sent exactly as returned.",
+        "parameters": {"type": "object", "properties": {
+            "period": {"type": "string", "enum": ["this_month", "last_month", "this_year",
+                                                   "tax_year", "last_tax_year", "last_12_months"]},
+            "since": {"type": "string", "description": "YYYY-MM-DD, only if the owner gave a date"},
+            "until": {"type": "string", "description": "YYYY-MM-DD, only if the owner gave a date"}}}}},
+    {"type": "function", "function": {
         "name": "cash_summary",
         "description": (
             "Money in vs money out, with a breakdown by supplier. Answers 'what's our money in "
@@ -1737,6 +1749,10 @@ class CommerceAdminSkill(BaseSkill):
                     need_info = need_info_message(result)
                     if need_info:
                         return need_info
+                    # A tool that built its own reply from DB figures (financial_report) is sent as-is —
+                    # the model never re-states the numbers.
+                    if isinstance(result, dict) and isinstance(result.get("reply_verbatim"), str):
+                        return result["reply_verbatim"]
                     direct = await _direct_supplier_answer(
                         question, name, args, result, tenant_id=ctx.get("tenant_id") or "",
                         history=history, phone=ctx.get("phone") or "")
@@ -1807,6 +1823,10 @@ class CommerceAdminSkill(BaseSkill):
                 need_info = need_info_message(result)
                 if need_info:
                     return need_info
+                # A tool that built its own reply from DB figures (financial_report) is sent as-is —
+                # the model never re-states the numbers.
+                if isinstance(result, dict) and isinstance(result.get("reply_verbatim"), str):
+                    return result["reply_verbatim"]
                 direct = await _direct_supplier_answer(
                     question, tc.function.name, args, result, tenant_id=ctx.get("tenant_id") or "",
                     history=history, phone=ctx.get("phone") or "")
@@ -1911,6 +1931,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
             if name == "payment_link":       return await self._payment_link(tid, args)
+            if name == "financial_report":   return await self._financial_report(tid, args)
             if name == "credit_note":        return await self._credit_note(tid, args)
             if name == "record_payment":     return await self._record_payment(tid, args)
             if name == "list_quotes":        return await self._list_quotes(tid, args.get("status"))
@@ -2580,6 +2601,24 @@ class CommerceAdminSkill(BaseSkill):
                 "invoice_number": after.get("invoice_number"), "invoice_status": after.get("status"),
                 "still_owed": self._rands(max(0, int(after.get("total_cents") or 0)
                                               - int(after.get("total_paid_cents") or 0)))}
+
+    async def _financial_report(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        import asyncio
+        from vula.commerce import reports
+        since, until = reports.period_dates(args.get("period") or "this_month")
+        since = (args.get("since") or since)[:10]
+        until = (args.get("until") or until)[:10]
+        try:
+            d = await asyncio.to_thread(reports.build_all, tid, since, until)
+        except Exception as exc:
+            logger.error("financial report failed for %s: %s", tid, exc)
+            return {"error": "I couldn't read the books just now — please try again shortly."}
+        from vula.api.tenants import display_name
+        link = await asyncio.to_thread(reports.pdf_link, tid, display_name(tid), d)
+        text = reports.summary_text(d)
+        text += f"\n\n📄 Full statements (PDF): {link}" if link else "\n\n(The PDF couldn't be made just now.)"
+        return {"reply_verbatim": text, "net_profit_cents": d["pnl"]["net_profit_cents"],
+                "balanced": d["balance"]["balanced"]}
 
     async def _find_invoice_by_number(self, tid: str, number: str) -> Optional[Dict[str, Any]]:
         """Shared lookup for record_payment/convert_quote_to_invoice/update_quote_status —
