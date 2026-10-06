@@ -3754,6 +3754,29 @@ _SUPPLIER_CHECK_FIELD = {
 # (supplier/tax_id/total_cents/vat_cents/line_items) and are therefore both arithmetic-
 # checkable (extraction_quality.scan_quality_ok) and eligible for commit_inbound_document().
 _FINANCIAL_DOC_CATEGORIES = {"Invoice", "Quote / Estimate", "Bill of Quantities (BOQ)"}
+# Categories whose line items should add up to the total (a BOQ is often summarised by section).
+_LINE_CHECKED_CATEGORIES = {"Invoice", "Quote / Estimate"}
+
+
+def _keep_complete_read(first: Optional[dict], later: Optional[dict], text: str) -> Optional[dict]:
+    """After escalating a read whose only fault was missing line items, keep the later read
+    only if it is the same document read better: same category, same total, fewer cents short.
+    A first total that is grounded in the text is never swapped for a different one — the
+    escalation was about the lines, not the total. Any other first read is left to the caller's
+    existing rule (the later read wins)."""
+    from vula.commerce.extraction_quality import (lines_short_cents, scan_quality_ok,
+                                                  ungrounded_figures)
+    if not first or later is first or first.get("category") not in _LINE_CHECKED_CATEGORIES:
+        return later
+    f1 = first.get("fields") or {}
+    if not (scan_quality_ok(f1) and not ungrounded_figures(f1, text) and lines_short_cents(f1)):
+        return later                                   # the first read was weak for another reason
+    f2 = (later or {}).get("fields") or {}
+    if ((later or {}).get("category") == first.get("category")
+            and f2.get("total_cents") == f1.get("total_cents")
+            and lines_short_cents(f2) < lines_short_cents(f1)):
+        return later
+    return first
 
 # commit_inbound_document()'s doc_type vocabulary ("invoice" | "quote" | "delivery_note" | ...)
 # doesn't match _analyze_document's category labels — map across explicitly. A BOQ is priced
@@ -3914,7 +3937,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
         import json as _json
         import litellm
         from core.llm_router import resolve_cheap_route, resolve_cloud_route
-        from vula.commerce.extraction_quality import scan_quality_ok, ungrounded_figures
+        from vula.commerce.extraction_quality import (lines_short_cents, scan_quality_ok,
+                                                      ungrounded_figures)
         litellm.drop_params = True
         model, api_key, api_base = await resolve_cheap_route()
 
@@ -4033,6 +4057,10 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                     return True
                 if ungrounded_figures(flds, text):
                     return True
+                # One missed line passes the 70–130% ratio above (6 Oct: two Gardens Handiman
+                # invoices R465 / R180 short) — a shortfall is a weak read too.
+                if cat in _LINE_CHECKED_CATEGORIES and lines_short_cents(flds):
+                    return True
             elif cat in ("Proof of Payment", "Settlement Statement") and ungrounded_figures(flds, text):
                 return True
             return False
@@ -4048,6 +4076,7 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
 
         # Escalate to the 70B on an empty/failed read, OR (financial categories only) on a
         # weak/arithmetically-inconsistent extraction — not just on the model's own say-so.
+        first_read = result
         if _needs_escalation(result):
             cloud = resolve_cloud_route()
             if cloud:
@@ -4092,6 +4121,8 @@ async def _analyze_document(tenant_id: str, filename: str, local_path,
                                 result = docling_result
                     except Exception as exc3:
                         logger.debug("Docling retry skipped for %s: %s", filename, exc3)
+
+                result = _keep_complete_read(first_read, result, text)
 
         # Even after escalation a money figure may still not be traceable to the text. Don't
         # drop the read — flag it, so filing routes it to owner review instead of booking it

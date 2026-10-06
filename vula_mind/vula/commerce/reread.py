@@ -40,9 +40,21 @@ def _missing(row: dict) -> list:
     return missing_details(row.get("category"), row.get("fields"))
 
 
+_LINE_CHECKED = ("Invoice", "Quote / Estimate")
+
+
+def _lines_short(row: dict) -> int:
+    """Cents an invoice/quote's extracted line items fall short of its total (0 = complete)."""
+    if row.get("category") not in _LINE_CHECKED:
+        return 0
+    from vula.commerce.extraction_quality import lines_short_cents
+    return lines_short_cents(row.get("fields") or {})
+
+
 def candidates(tenant_id: str, limit: int = 200, fresh_only: bool = False) -> List[dict]:
-    """Filed PDFs that are uncategorised or missing a required detail. fresh_only skips one
-    already re-read (fields._reread_at) — the daily automatic pass tries each document once."""
+    """Filed PDFs that are uncategorised, missing a required detail, or (invoices and quotes)
+    whose line items fall short of the total — a missed line (6 Oct, Gardens Handiman). fresh_only
+    skips one already re-read (fields._reread_at) — the daily automatic pass tries each once."""
     from vula.commerce.doc_quality import REQUIRED
     rows = (service._client().table("vula_filed_documents")
             .select("id,category,filename,file_url,fields,summary,doc_id,project,created_at")
@@ -50,7 +62,7 @@ def candidates(tenant_id: str, limit: int = 200, fresh_only: bool = False) -> Li
             .order("created_at", desc=True).limit(2000).execute().data or [])
     out = [r for r in rows
            if r.get("file_url") and (r.get("filename") or "").lower().endswith(".pdf")
-           and (r.get("category") == "Email attachment" or _missing(r))
+           and (r.get("category") == "Email attachment" or _missing(r) or _lines_short(r))
            and not (fresh_only and (r.get("fields") or {}).get("_reread_at"))]
     return out[:limit]
 
@@ -62,11 +74,27 @@ def _improves(row: dict, analysis: dict) -> bool:
         return False
     if row.get("category") == "Email attachment":
         return True
+    if _lines_only(row, analysis):
+        return True
     # Only if the re-read found something that was missing (and kept the document's kind).
     from vula.commerce.doc_quality import missing_details
     before = set(missing_details(row.get("category"), row.get("fields")))
     after = set(missing_details(row.get("category"), fields))
     return cat == row.get("category") and len(after) < len(before)
+
+
+def _lines_only(row: dict, analysis: dict) -> bool:
+    """A complete document whose line items were short, re-read as the same document (same
+    category and total) with fewer cents missing — only its line items are taken."""
+    if _missing(row) or not _lines_short(row) or analysis.get("category") != row.get("category"):
+        return False
+    from vula.commerce.extraction_quality import lines_short_cents
+    new, old = analysis.get("fields") or {}, row.get("fields") or {}
+    try:
+        same_total = int(new.get("total_cents")) == int(old.get("total_cents"))
+    except (TypeError, ValueError):
+        return False
+    return same_total and bool(new.get("line_items")) and lines_short_cents(new) < _lines_short(row)
 
 
 async def _download(url: str) -> bytes:
@@ -103,11 +131,21 @@ async def reread_missing(tenant_id: str, limit: int = 60, fresh_only: bool = Fal
                         log.debug("reread stock sheet check skipped: %s", exc)
             from datetime import datetime, timezone
             stamp = datetime.now(timezone.utc).isoformat()
-            if analysis and _improves(row, analysis):
+            if analysis and _lines_only(row, analysis):
+                # Only the missing lines were wrong: take the new line items, keep every other
+                # detail (supplier, date, total, VAT) exactly as first read and booked.
+                merged = {**(row.get("fields") or {}),
+                          "line_items": analysis["fields"]["line_items"], "_reread_at": stamp}
+                analysis = {**analysis, "category": row["category"],
+                            "summary": row.get("summary"), "fields": merged}
+            elif analysis and _improves(row, analysis):
                 # Keep what the first read found when the re-read has nothing for that key.
                 merged = {**(row.get("fields") or {}),
                           **{k: v for k, v in (analysis.get("fields") or {}).items() if v not in (None, "")},
                           "_reread_at": stamp}
+            else:
+                merged = None
+            if merged is not None:
                 (service._client().table("vula_filed_documents")
                  .update({"category": analysis["category"],
                           "summary": analysis.get("summary") or row.get("summary"),
