@@ -99,3 +99,43 @@ def scan_quality_ok(ex: Dict[str, Any]) -> bool:
         if ratio > 1.3 or ratio < 0.7:
             return False
     return True
+
+
+def _line_total_cents(it: Dict[str, Any]) -> int:
+    lt = it.get("total_cents")
+    if lt is None:
+        lt = (it.get("quantity") or 0) * (it.get("unit_price_cents") or 0)
+    try:
+        return abs(int(round(float(lt or 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def lines_short_cents(ex: Dict[str, Any], tolerance_cents: int = 100) -> int:
+    """How far the extracted line items fall SHORT of the stated total, in cents — 0 when they
+    account for it (within R1), also when the lines are priced excluding VAT (lines + VAT, or
+    lines × 1.15, make the total), and when there's no total or no lines to compare.
+
+    scan_quality_ok accepts lines anywhere within 70–130% of the total, so a single missed line
+    passes it: two Gardens Handiman invoices (6 Oct) were R465 and R180 short — 9% and 26% —
+    and were never escalated. Lines that come to MORE than the total are left to
+    scan_quality_ok's ratio check (discounts and rounding lines make that case noisier)."""
+    try:
+        total = abs(int(round(float((ex or {}).get("total_cents") or 0))))
+    except (TypeError, ValueError):
+        return 0
+    items = [it for it in ((ex or {}).get("line_items") or []) if isinstance(it, dict)]
+    if not total or not items:
+        return 0
+    lines = sum(_line_total_cents(it) for it in items)
+    if lines <= 0 or lines >= total - tolerance_cents:
+        return 0
+    try:
+        vat = abs(int(round(float(ex.get("vat_cents") or 0))))
+    except (TypeError, ValueError):
+        vat = 0
+    if vat and abs(lines + vat - total) <= tolerance_cents:
+        return 0
+    if abs(round(lines * 1.15) - total) <= tolerance_cents:
+        return 0
+    return total - lines
