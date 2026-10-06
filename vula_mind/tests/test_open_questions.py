@@ -41,6 +41,10 @@ class _Q:
         self.f.append(lambda r: (r.get(col) or "") >= val)
         return self
 
+    def in_(self, col, vals):
+        self.f.append(lambda r: r.get(col) in vals)
+        return self
+
     def order(self, col, desc=False):
         self.order_key = (col, desc)
         return self

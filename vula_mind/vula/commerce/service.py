@@ -2422,6 +2422,17 @@ def upsert_project_boq(tenant_id: str, project: str, total_cents: int,
         logger.debug("upsert_project_boq skipped (run migration 056/129?): %s", exc)
 
 
+def vat_inclusive(total_cents: int, vat_cents: int, excl: bool) -> Tuple[int, int]:
+    """(total incl VAT, VAT) in cents. A document that prices EXCLUDING VAT and shows no VAT
+    figure (STE Scaffolding's quotes, 2026-10-02: "R41,752.47 excluding VAT" was booked as the
+    full price with R0 VAT) gets 15% added here, in code — never by the model. Half cents are
+    dropped, as on STE's own invoice: R2,084.50 excl → R312.67 VAT (STE00866, R2,397.17)."""
+    if excl and total_cents > 0 and not vat_cents:
+        vat_cents = total_cents * 15 // 100
+        return total_cents + vat_cents, vat_cents
+    return total_cents, vat_cents
+
+
 async def commit_inbound_document(
     tenant_id: str, extracted: dict, *, auto_commit: bool = True, source: str = "scanner",
     filed_document_id: Optional[str] = None, project: Optional[str] = None,
@@ -2502,10 +2513,16 @@ async def commit_inbound_document(
             due_date = date.fromisoformat(extracted["due_date"])
         except ValueError:
             pass
-    if not due_date and payment_terms_days is not None:
+    if doc_type == "quote":
+        # A quote is a price, not a bill — nothing falls due until it's accepted and invoiced
+        # (2026-10-06: 85 DIGG supplier quotes, R12.8M, carried a 30-day "due date").
+        due_date = None
+    elif not due_date and payment_terms_days is not None:
         due_date = doc_date + timedelta(days=payment_terms_days)
     days_until_due = (due_date - today).days if due_date else None
     vat_cents = int(extracted.get("vat_cents") or 0)
+    total_cents, vat_cents = vat_inclusive(total_cents, vat_cents,
+                                           bool(extracted.get("amounts_exclude_vat")))
 
     preview = {
         "supplier": supplier_name,
@@ -2724,7 +2741,8 @@ async def commit_inbound_document(
         lines = [f"Document type: {doc_type}", f"Supplier: {supplier_name}", f"Date: {doc_date}"]
         if due_date:
             lines.append(f"Due date: {due_date} ({payment_terms_days} day terms)")
-        lines.append(f"Total: R{total_cents/100:.2f} (incl VAT R{vat_cents/100:.2f})")
+        lines.append(f"Total incl VAT: R{total_cents/100:.2f} (excl VAT R{(total_cents - vat_cents)/100:.2f}, "
+                     f"VAT R{vat_cents/100:.2f})")
         if extracted.get("line_items"):
             lines.append("Line items:")
             for item in extracted["line_items"][:20]:
@@ -2740,7 +2758,10 @@ async def commit_inbound_document(
     except Exception as kb_exc:
         logger.warning("KB ingest failed for scan commit %s: %s", record_id, kb_exc)
 
-    if due_date:
+    if doc_type == "quote":
+        msg = (f"✅ Quote captured — R{total_cents/100:,.2f} from {supplier_name or 'supplier'} "
+               f"(a price, not a bill — nothing is owed until it's accepted)")
+    elif due_date:
         if days_until_due < 0:
             msg = f"⚠️ OVERDUE by {abs(days_until_due)} days — R{total_cents/100:.0f} to {supplier_name or 'supplier'}"
         elif days_until_due == 0:
@@ -3710,6 +3731,40 @@ def _resolved_party_result(tenant_id: str, query: str, party: str, category: Opt
     return out
 
 
+_MONEY_RE = re.compile(
+    r"(?:\bR\s?(\d{1,3}(?:[ ,\u00a0]\d{3})+|\d+)(?:[.,](\d{2}))?\b)"       # R41 752,47 / R41752
+    r"|(?:\b(\d{1,3}(?:[ ,\u00a0]\d{3})+|\d+)[.,](\d{2})\b)",              # 41,752.47 / 41752.47
+    re.IGNORECASE)
+
+
+def money_in_query(query: str) -> Optional[int]:
+    """The money amount a question names, in integer cents ("the sale R41752.47", "R2 397,17",
+    "41,752.47"), or None. A bare number like "00084" is a document number, not an amount."""
+    m = _MONEY_RE.search(query or "")
+    if not m:
+        return None
+    whole = re.sub(r"[ ,\u00a0]", "", m.group(1) or m.group(3) or "")
+    cents = m.group(2) or m.group(4) or "00"
+    try:
+        value = int(whole) * 100 + int(cents)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _filed_rows_by_amount(tenant_id: str, cents: int, category: Optional[str]) -> List[dict]:
+    """Filed documents whose extracted total is exactly `cents` — or that amount with/without
+    15% VAT, since an owner quotes whichever figure they saw."""
+    targets = dict.fromkeys([cents, (cents * 100 + 57) // 115, (cents * 115 + 50) // 100])
+    clauses = [f"fields->>{k}.eq.{c}" for c in targets for k in ("total_cents", "amount_cents")]
+    q = (_client().table("vula_filed_documents")
+         .select("id,filename,category,summary,fields,status,created_at,customer_phone")
+         .eq("tenant_id", tenant_id).or_(",".join(clauses)).order("created_at", desc=True))
+    if category:
+        q = q.eq("category", category)
+    return q.limit(50).execute().data or []
+
+
 async def find_filed_document(tenant_id: str, query: str, category: Optional[str] = None,
                               limit: int = 5) -> Dict[str, Any]:
     """Search filed documents (invoices/quotes/proof-of-payment/BOQs/receipts) for `query`.
@@ -3757,6 +3812,23 @@ async def find_filed_document(tenant_id: str, query: str, category: Optional[str
     if not query:
         return {"error": "Give a few words about the document — supplier/customer name, "
                           "invoice number, amount, or what it was for."}
+    # An amount ("what's the sale R41752.47?") is matched exactly on the extracted totals —
+    # 2026-10-06: the text search looked for "41752.47" in filenames/summaries, where it's
+    # written "R41,752.47", and found nothing.
+    amount = money_in_query(query)
+    if amount:
+        try:
+            by_amount = _filed_rows_by_amount(tenant_id, amount, category)
+        except Exception as exc:
+            logger.debug("find_filed_document amount search skipped: %s", exc)
+            by_amount = []
+        if by_amount:
+            out = _filed_rows_result(by_amount)
+            out["matched_by"] = (f"amount R{amount / 100:,.2f} (exact, or the same amount with/"
+                                 "without 15% VAT) — say which document it is and what kind "
+                                 "(a quote is a price, not a bill or a sale)")
+            _log_find(tenant_id, category, "amount", len(by_amount))
+            return out
     safe_query = _pg_term(query)
     core = _core_search_term(query)
     terms = [t for t in dict.fromkeys([safe_query, _pg_term(core)]) if t]

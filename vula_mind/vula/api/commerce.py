@@ -6829,9 +6829,12 @@ async def admin_expenses_due(
         .order("due_date").execute()
 
     # Inbound invoices due
+    # Bills only: a supplier's quote is a price, not money owed (2026-10-06: 85 DIGG supplier
+    # quotes, R12.8M, all carried a due date and would have shown here as bills due).
     inv_due = db.table("commerce_invoices").select("*") \
         .eq("tenant_id", tenant_id) \
         .eq("direction", "inbound") \
+        .eq("doc_type", "invoice") \
         .in_("status", ["draft", "sent"]) \
         .lte("due_date", cutoff) \
         .not_.is_("due_date", "null") \

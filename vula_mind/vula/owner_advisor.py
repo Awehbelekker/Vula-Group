@@ -38,7 +38,7 @@ def overdue_invoices(tenant_id: str, today: date) -> Dict[str, Any]:
     try:
         rows = (_client().table("commerce_invoices")
                 .select("invoice_number,customer_name,total_cents,total_paid_cents,due_date,status")
-                .eq("tenant_id", tenant_id).eq("direction", "outbound")
+                .eq("tenant_id", tenant_id).eq("direction", "outbound").eq("doc_type", "invoice")
                 .in_("status", ["sent", "overdue", "partially_paid", "partial"])
                 .lt("due_date", today.isoformat()).limit(500).execute().data or [])
     except Exception as exc:
