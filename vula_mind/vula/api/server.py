@@ -1532,8 +1532,9 @@ async def lifespan(app: FastAPI):
         # loud line instead of a silent runtime exception in a request later.
         try:
             import asyncio as __a
-            from vula.startup_checks import check_schema
+            from vula.startup_checks import check_payment_setup, check_schema
             await __a.to_thread(check_schema)
+            await __a.to_thread(check_payment_setup)
         except Exception as exc:
             log.debug("schema check task failed: %s", exc)
 

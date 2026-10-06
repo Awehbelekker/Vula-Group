@@ -1605,7 +1605,9 @@ async def create_invoice(tenant_id: str, data: dict) -> dict:
     # Respect the tenant's VAT profile: non-registered → 0%; inclusive pricing → back out VAT.
     s = await get_invoice_settings(tenant_id) or {}
     vat_registered = s.get("vat_registered", True)
-    prices_include_vat = bool(s.get("prices_include_vat"))
+    # A per-document override: a payment link for "R1,200" means the customer pays R1,200.
+    prices_include_vat = bool(data["prices_include_vat"] if "prices_include_vat" in data
+                              else s.get("prices_include_vat"))
     vat_rate = float(data.get("vat_rate", 15.0)) if vat_registered else 0.0
     inv_disc_pct = float(data.get("discount_pct") or 0)
     subtotal, discount_cents, vat_cents, total, items = _compute_totals(

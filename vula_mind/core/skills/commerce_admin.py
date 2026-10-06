@@ -341,6 +341,21 @@ INVOICE_TOOLS = [
                                                         "confirm": {"type": "boolean"}},
                        "required": ["invoice_number"]}}},
     {"type": "function", "function": {
+        "name": "payment_link",
+        "description": "Send a customer a link to pay an amount — 'send Sam a payment link for "
+                       "R1,200', 'request R850 from Thabo for the deposit'. Creates the invoice "
+                       "for exactly that amount and WhatsApps the business's own pay page (card "
+                       "through the connected gateway, plus EFT details). Without confirm=true "
+                       "it returns a preview — only pass confirm=true after the owner has said to "
+                       "go ahead. For an EXISTING invoice use send_invoice instead.",
+        "parameters": {"type": "object", "properties": {
+            "customer_name": {"type": "string"},
+            "customer_phone": {"type": "string", "description": "Only if the owner gave it."},
+            "amount_rands": {"type": "number", "description": "The amount the customer pays."},
+            "description": {"type": "string", "description": "What it's for, e.g. 'Deposit'."},
+            "confirm": {"type": "boolean"}},
+            "required": ["customer_name", "amount_rands"]}}},
+    {"type": "function", "function": {
         "name": "record_payment",
         "description": "Record a payment received against an existing invoice, by its number "
                        "(e.g. OTH-INV-00001). Supports partial payments — status becomes "
@@ -1845,6 +1860,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "apply_voice_persona": return await self._apply_voice_persona(tid, args.get("persona_prompt", ""), bool(args.get("confirm")))
             if name == "create_invoice":     return await self._create_invoice(tid, args)
             if name == "send_invoice":       return await self._send_invoice(tid, args.get("invoice_number", ""), bool(args.get("confirm")))
+            if name == "payment_link":       return await self._payment_link(tid, args)
             if name == "record_payment":     return await self._record_payment(tid, args)
             if name == "list_quotes":        return await self._list_quotes(tid, args.get("status"))
             if name == "convert_quote_to_invoice": return await self._convert_quote_to_invoice(tid, args.get("quote_number", ""))
@@ -2319,6 +2335,82 @@ class CommerceAdminSkill(BaseSkill):
         from vula.api.commerce import admin_send_invoice_whatsapp
         await admin_send_invoice_whatsapp(tid, rows[0]["id"], {})
         return {"sent": True, "invoice_number": num}
+
+    async def _payment_link(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Invoice for exactly the amount asked + the tenant's pay page, sent on WhatsApp after
+        the owner confirms. Every figure in the result comes from the saved invoice."""
+        from vula.api.commerce import _aggregate_customers, _norm_phone
+        from vula.commerce import pay_page
+        from vula.commerce.order_workflow import get_order_settings
+        try:
+            cents = int(round(float(args.get("amount_rands")) * 100))
+        except (TypeError, ValueError):
+            cents = 0
+        if cents <= 0:
+            return {"status": "need_info", "message": "How much should the customer pay?"}
+        name = (args.get("customer_name") or "").strip()
+        what = (args.get("description") or "").strip() or "Payment"
+        phone = _norm_phone(args.get("customer_phone") or "")
+        if not phone:
+            matches = [c for c in (await _aggregate_customers(tid)).values()
+                       if name and name.lower() in (c.get("name") or "").lower() and c.get("phone")]
+            phones = {_norm_phone(c["phone"]): c for c in matches}
+            if len(phones) == 1:
+                phone, c = next(iter(phones.items()))
+                name = c.get("name") or name
+            elif len(phones) > 1:
+                return {"status": "need_info", "message": "Which one? " + "; ".join(
+                    f"{c.get('name')} ({p[-4:]})" for p, c in list(phones.items())[:5])}
+            else:
+                return {"status": "need_info",
+                        "message": f"What's {name or 'the customer'}'s WhatsApp number?"}
+        card = await pay_page.has_gateway(tid)
+        eft = (get_order_settings(tid) or {}).get("eft_details")
+        if not card and not eft:
+            logger.error("payment_link for %s: no gateway and no EFT details configured", tid)
+            return {"error": "No way to take payment is set up yet — connect a card gateway "
+                             "under Settings › Payments, or add your EFT banking details, then "
+                             "I can send payment links."}
+        if not args.get("confirm"):
+            return {"preview": True, "customer": name, "phone_ending": phone[-4:],
+                    "amount": self._rands(cents), "for": what,
+                    "pays_by": ("card or EFT" if card and eft else "card" if card else "EFT only"),
+                    "message": "Confirm to create the invoice and WhatsApp the payment link "
+                               "(call again with confirm=true)."}
+        inv = await service.create_invoice(tid, {
+            "doc_type": "invoice", "customer_name": name or "Customer", "customer_phone": phone,
+            "line_items": [{"description": what, "quantity": 1, "unit_price_cents": cents}],
+            "prices_include_vat": True, "status": "draft"})
+        if not inv.get("id"):
+            return {"error": "The invoice couldn't be created — nothing was sent."}
+        note = None
+        if card:
+            try:
+                await pay_page.gateway_link(tid, inv)
+            except Exception as exc:
+                note = f"Card payment isn't available on this link ({exc}); EFT details are shown."
+        url = pay_page.page_url(tid, inv["id"])
+        from vula.api.tenants import display_name
+        from vula.api.whatsapp import _send_reply
+        first = (name or "").split()[0] if name else ""
+        msg = (f"Hi {first}, here's your payment link from {display_name(tid)} — "
+               f"{what}, {self._rands(inv.get('total_cents'))} (invoice {inv.get('invoice_number')}):"
+               f"\n\n{url}").replace("Hi ,", "Hi,")
+        sent = await _send_reply(phone, msg, tid)
+        if sent is not False:
+            await service.update_invoice_status(tid, inv["id"], "sent")
+        saved = await service.get_invoice(tid, inv["id"]) or {}
+        out = {"invoice_number": saved.get("invoice_number"),
+               "amount": self._rands(saved.get("total_cents")),
+               "customer": name, "status": saved.get("status"), "link": url,
+               "sent": sent is not False}
+        if sent is False:
+            out["message"] = ("The invoice and link are ready, but WhatsApp wouldn't deliver it "
+                              "(the customer may not have messaged in the last 24 hours). "
+                              "Forward the link yourself.")
+        if note:
+            out["note"] = note
+        return out
 
     async def _find_invoice_by_number(self, tid: str, number: str) -> Optional[Dict[str, Any]]:
         """Shared lookup for record_payment/convert_quote_to_invoice/update_quote_status —

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from vula.api.master_auth import require_auth
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from vula.commerce import service
@@ -4830,40 +4830,50 @@ async def admin_create_credit_note(tenant_id: str, invoice_id: str, body: dict =
 
 @router.post("/{tenant_id}/admin/invoices/{invoice_id}/pay-link")
 async def admin_invoice_pay_link(tenant_id: str, invoice_id: str):
-    """Create a Yoco 'Pay now' checkout for an invoice; store + return the link."""
+    """Create a card-payment link for an invoice (the tenant's default gateway); store + return
+    it, plus the tenant's own pay page that carries it."""
     inv = await service.get_invoice(tenant_id, invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    from vula.commerce import pay_page
     if inv.get("status") == "paid":
-        return {"already_paid": True, "pay_url": inv.get("pay_url")}
-    from vula import payments
-    from vula.api import tenants as _tenants
-    store_url = _tenants.store_url(tenant_id) or "https://offthehook.co.za"
-    from config import settings as _cfg
-    api_base = _cfg.public_base_url.rstrip("/")
-    row = payments.default_provider_row(tenant_id)
-    provider = row["provider"] if row else "yoco"
-    notify_url = f"{api_base}/v1/payments/webhook/{tenant_id}/{provider}"
+        return {"already_paid": True, "pay_url": inv.get("pay_url"),
+                "page_url": pay_page.page_url(tenant_id, invoice_id)}
     try:
-        link = await payments.create_pay_link(
-            tenant_id, amount_cents=int(inv["total_cents"]), reference=invoice_id,
-            description=f"Invoice {inv.get('invoice_number') or ''}".strip(),
-            success_url=f"{store_url}/payment/success?invoice={invoice_id}",
-            cancel_url=f"{store_url}/payment/cancel?invoice={invoice_id}",
-            notify_url=notify_url,
-            customer={"email": inv.get("customer_email"), "phone": inv.get("customer_phone")})
-    except Exception as exc:
-        log.error("Pay-link create failed (%s): %s", provider, exc)
-        raise HTTPException(status_code=502, detail="Payment gateway error — check your gateway keys.")
-    if not link or not link.url:
-        raise HTTPException(status_code=503, detail="No payment gateway connected — connect one in Payments.")
+        url, provider = await pay_page.gateway_link(tenant_id, inv)
+    except pay_page.NoGateway as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=f"Payment gateway error — {exc}.")
+    return {"pay_url": url, "provider": provider, "amount_cents": pay_page.owed_cents(inv),
+            "page_url": pay_page.page_url(tenant_id, invoice_id)}
+
+
+@router.get("/{tenant_id}/pay/{invoice_id}", response_class=HTMLResponse)
+async def public_pay_page(tenant_id: str, invoice_id: str, result: str = ""):
+    """The tenant's branded "pay this invoice" page (public — the customer has no login; the
+    invoice id is an unguessable UUID). Amount and status come from the database; the card
+    button is the tenant's own gateway; the EFT block is the tenant's own banking details."""
+    from vula.commerce import pay_page
+    from vula.commerce.order_workflow import get_order_settings
     try:
-        service._client().table("commerce_invoices").update(
-            {"pay_url": link.url, "yoco_checkout_id": link.raw.get("id"), "updated_at": service._now()}
-        ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+        inv = await service.get_invoice(tenant_id, invoice_id)
     except Exception:
-        pass
-    return {"pay_url": link.url, "provider": link.provider, "amount_cents": int(inv["total_cents"])}
+        inv = None
+    if not inv or inv.get("doc_type") not in ("invoice", "proforma") \
+            or (inv.get("direction") or "outbound") != "outbound" or inv.get("status") == "cancelled":
+        return HTMLResponse("<h3>This payment link isn't valid any more.</h3>", status_code=404)
+    brand = await public_brand(tenant_id)
+    card_url = inv.get("pay_url")
+    if not card_url and inv.get("status") != "paid" and pay_page.owed_cents(inv) > 0:
+        try:
+            card_url, _ = await pay_page.gateway_link(tenant_id, inv)
+        except Exception as exc:            # no gateway → EFT only; already logged loudly
+            log.info("pay page for %s shows EFT only: %s", invoice_id, exc)
+            card_url = None
+    eft = (get_order_settings(tenant_id) or {}).get("eft_details")
+    return HTMLResponse(pay_page.render(brand, inv, eft, card_url,
+                                        result if result in ("success", "cancel") else ""))
 
 
 # ── Quote / proforma endpoints ────────────────────────────────────────────────

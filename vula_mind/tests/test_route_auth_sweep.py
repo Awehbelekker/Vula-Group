@@ -72,6 +72,7 @@ PUBLIC = {
     ("POST", "/v1/commerce/{tenant_id}/reviews"): "customer review — verified purchase in handler",
     ("GET", "/v1/commerce/{tenant_id}/orders/{order_id}"): "customer order tracking (unguessable id)",
     ("GET", "/v1/commerce/{tenant_id}/invoices/{invoice_id}/approve"): "client approval page (token)",
+    ("GET", "/v1/commerce/{tenant_id}/pay/{invoice_id}"): "customer's pay page (unguessable invoice id; amount + brand only)",
     ("POST", "/v1/commerce/{tenant_id}/invoices/{invoice_id}/approve"): "client approval (token)",
     ("GET", "/v1/tenants/registry"): "static module/business-type catalogue (login + onboarding)",
     ("GET", "/v1/tenants/{tenant_id}"): "public tenant profile — _public() strips private fields",

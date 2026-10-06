@@ -126,6 +126,12 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request) -> di
                 log.info("Invoice %s paid via %s", ref, provider)
             except Exception as exc:
                 log.warning("invoice mark-paid failed: %s", exc)
+                return {"received": True}
+            try:
+                from vula.commerce.pay_page import notify_paid
+                await notify_paid(tenant_id, ref, provider)
+            except Exception as exc:
+                log.warning("owner paid-notification failed for %s: %s", ref, exc)
             return {"received": True}
         # 2. Order? (order pay-links use reference = display_id) — mark paid + trigger fulfilment.
         try:

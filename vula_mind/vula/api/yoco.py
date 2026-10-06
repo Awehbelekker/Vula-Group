@@ -354,6 +354,12 @@ async def yoco_webhook(request: Request) -> dict:
             log.info("Invoice %s paid via Yoco", metadata.get("invoice_number", invoice_id))
         except Exception as exc:
             log.warning("invoice mark-paid failed: %s", exc)
+            return {"received": True}
+        try:
+            from vula.commerce.pay_page import notify_paid
+            await notify_paid(tenant_id, invoice_id, "yoco")
+        except Exception as exc:
+            log.warning("owner paid-notification failed for %s: %s", invoice_id, exc)
         return {"received": True}
 
     if not order_id:
