@@ -100,17 +100,21 @@ async def create_approval(
     if steps:
         sb.table("vula_approval_steps").insert(steps).execute()
 
-    # Notify each approver on WhatsApp, and record the question so their reply finds it.
+    # Notify each approver on WhatsApp, and record the question so their reply finds it. An
+    # approval someone else asked for waits behind a question the approver is still on
+    # (vula/open_questions.ask_or_queue); the requester's own approval goes straight out.
     from vula import open_questions
+    requester = _digits(requested_by or "")
     for s in steps:
-        sent = await _send_reply(
-            s["approver_phone"],
-            f"🔔 Approval needed: *{title}*\n\n"
-            f"Reply *APPROVE* to authorise, or *REJECT <reason>* to decline.",
-            tenant_id,
-        )
-        if sent is not False:
-            open_questions.ask(tenant_id, s["approver_phone"], "approval", appr["id"], title)
+        msg = (f"🔔 Approval needed: *{title}*\n\n"
+               f"Reply *APPROVE* to authorise, or *REJECT <reason>* to decline.")
+        if requester and s["approver_phone"].endswith(requester[-9:]):
+            sent = await _send_reply(s["approver_phone"], msg, tenant_id)
+            if sent is not False:
+                open_questions.ask(tenant_id, s["approver_phone"], "approval", appr["id"], title)
+        else:
+            await open_questions.ask_or_queue(tenant_id, s["approver_phone"], "approval",
+                                              appr["id"], title, msg)
     return appr
 
 

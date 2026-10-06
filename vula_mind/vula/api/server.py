@@ -696,6 +696,13 @@ async def _automations_loop() -> None:
                 log.info("Due-reminder nudge sent for %d reminder(s)", reminded)
         except Exception as exc:
             log.warning("Reminder nudge check error: %s", exc)
+        try:
+            from vula.open_questions import release_due
+            released = await release_due()
+            if released:
+                log.info("Sent %d queued question(s)", released)
+        except Exception as exc:
+            log.warning("Question queue sweep error: %s", exc)
         await _asyncio.sleep(300)
 
 

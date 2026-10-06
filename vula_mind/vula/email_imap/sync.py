@@ -876,7 +876,8 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
                 from vula.integrations.doc_filing import ask_project
                 from vula.integrations.notify import recipients_for
                 await ask_project(tenant_id, filed_row, recipients_for(tenant_id, "which_project"),
-                                  prefix=f"📎 A document came in by email from {em.get('from','')}.")
+                                  prefix=f"📎 A document came in by email from {em.get('from','')}.",
+                                  queue=True)
             except Exception as exc:
                 logger.debug("notify ask failed: %s", exc)
     except Exception as exc:

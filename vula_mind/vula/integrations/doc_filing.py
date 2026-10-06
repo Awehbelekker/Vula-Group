@@ -708,17 +708,29 @@ def mark_asked(tenant_id: str, doc: dict, phone: str) -> None:
         logger.debug("mark_asked skipped: %s", exc)
 
 
-async def ask_project(tenant_id: str, doc: dict, phones: list, prefix: str = "") -> int:
-    """Send project_question about `doc` to each phone and mark it asked. Returns sends made."""
+async def ask_project(tenant_id: str, doc: dict, phones: list, prefix: str = "",
+                      queue: bool = False) -> int:
+    """Send project_question about `doc` to each phone and mark it asked. Returns sends made.
+    `queue=True` for a question nobody prompted (an emailed document): it waits behind any
+    question the person is still on (vula/open_questions.ask_or_queue)."""
     from vula.api.whatsapp import _send_reply
     msg = (prefix + "\n\n" if prefix else "") + project_question(tenant_id, doc)
+    prompt = f"Which project: {doc.get('filename') or 'document'}"
     sent = 0
     from vula import open_questions
     for ph in phones:
-        if ph and await _send_reply(ph, msg, tenant_id=tenant_id):
+        if not ph:
+            continue
+        if queue:
+            outcome = await open_questions.ask_or_queue(tenant_id, ph, "doc_project", doc["id"],
+                                                        prompt, msg)
+            if outcome == "sent":
+                mark_asked(tenant_id, doc, ph)
+                sent += 1
+            continue
+        if await _send_reply(ph, msg, tenant_id=tenant_id):
             mark_asked(tenant_id, doc, ph)
-            open_questions.ask(tenant_id, ph, "doc_project", doc["id"],
-                               f"Which project: {doc.get('filename') or 'document'}")
+            open_questions.ask(tenant_id, ph, "doc_project", doc["id"], prompt)
             sent += 1
     return sent
 

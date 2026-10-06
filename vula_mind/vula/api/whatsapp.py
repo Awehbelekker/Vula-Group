@@ -2889,6 +2889,13 @@ async def _answer_open_question(tenant_id: str, phone: str, text: str) -> bool:
             if await _try_open_question(tenant_id, phone, text, q):
                 from vula import turns
                 turns.note("open_question", kind=q.get("kind"), ref=q.get("ref_id"))
+                # Answered — the next question that was waiting its turn goes out now (unless
+                # the answer itself led straight to a follow-up question).
+                try:
+                    if await oq.release_next(tenant_id, phone):
+                        turns.note("question_released")
+                except Exception as exc:
+                    logger.debug("queued question release failed: %s", exc)
                 return True
         except Exception as exc:
             logger.warning("open question %s (%s) answer failed: %s", q.get("id"), q.get("kind"), exc)
