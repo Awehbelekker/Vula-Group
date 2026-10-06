@@ -5856,7 +5856,9 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         sticky = _last_skill(tenant_id, phone)
         if sticky and looks_like_follow_up(question):
             from core.hrm.orchestrator import HRMOrchestrator
-            if HRMOrchestrator()._keyword_skill(question, tenant_id) in (None, sticky):
+            # A catch-all keyword ("before" → memory_recall) doesn't name a new job.
+            if HRMOrchestrator()._keyword_skill(question, tenant_id) in (
+                    None, sticky, "memory_recall", "reasoning", "financial_reasoning"):
                 try:
                     from core.skills.base import SkillInput
                     from core.skills.loader import get_skill
