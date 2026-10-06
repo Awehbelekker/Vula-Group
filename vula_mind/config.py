@@ -216,6 +216,22 @@ class Settings(BaseSettings):
     # Public base URL the OAuth redirect comes back to (defaults to Railway prod)
     public_base_url: str = "https://vula-group-production.up.railway.app"
 
+    # Tap-to-pay (KakEnBetaal) pilot: comma-separated tenant ids that have it switched on. Empty =
+    # off everywhere (no inbound message is inspected, no /t/ tag resolves). tap_hash_pepper keys
+    # the HMAC used to look customer numbers up without storing them; if blank it is derived from
+    # the Supabase service key (set it explicitly so rotating that key doesn't orphan the hashes).
+    tap_to_pay_tenants: str = ""
+    tap_hash_pepper: str = ""
+    # Approved WhatsApp template (utility) for unpaid-bill reminders sent more than ~23 h after the customer's
+    # last message, body params {{1}} merchant, {{2}} amount, {{3}} pay link. Empty = such reminders are skipped.
+    tap_reminder_template: str = ""
+    tap_reminder_final_template: str = ""   # optional: same params, worded as the LAST reminder
+    # Web Push for the coach app (VAPID). Generate a key pair once with `python scripts/gen_vapid.py`;
+    # the public key is what browsers get. Empty = no push (WhatsApp alerts still go out).
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = "mailto:support@vula.ai"
+
     # Tenant-scoped auth enforcement (2026-07-17): when true, /v1/commerce/{t}/admin/*,
     # /v1/team/{t}/* and /v1/users/{t}/* require a verified Supabase JWT belonging to that
     # tenant (or master). Shipped dark (false) so the dashboard's token-attach wrapper can be

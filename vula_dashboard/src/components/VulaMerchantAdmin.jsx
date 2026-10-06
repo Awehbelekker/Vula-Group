@@ -73,6 +73,7 @@ import VulaFlowBuilder from './VulaFlowBuilder'
 // Lazy-loaded: the Puck page builder is ~1 MB — keep it out of the main bundle until the Pages tab opens.
 const VulaPages = lazy(() => import('./VulaPages'))
 import VulaPayments from './VulaPayments'
+import VulaTapToPay from './VulaTapToPay'
 import { VULA_API } from '../lib/authFetch'
 
 
@@ -250,6 +251,7 @@ function MoneySection({ tenantId, products, subtabs, pendingSubtab, onConsumePen
       {active === 'bank' && <VulaBankRec tenantId={tenantId} />}
       {active === 'books' && <VulaAccounting tenantId={tenantId} />}
       {active === 'payments' && <VulaPayments tenantId={tenantId} />}
+      {active === 'taptopay' && <VulaTapToPay tenantId={tenantId} />}
       {active === 'budget' && <VulaBudget tenantId={tenantId} />}
       {active === 'scanner' && <VulaSmartScanner tenantId={tenantId} products={products} />}
       {active === 'finances' && <FinancesSubsection tenantId={tenantId} />}

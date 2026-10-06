@@ -286,3 +286,6 @@ button { transition: filter var(--t-fast) var(--ease), background var(--t-fast) 
   .vula-glass, .vula-glass.refract { -webkit-backdrop-filter: none; backdrop-filter: none; background: #fff; }
   .vula-glass.dark { background: #14503D; }
 }
+
+/* QR codes must stay black-on-white to scan, in light and dark mode */
+.qr-white{background:#fff}

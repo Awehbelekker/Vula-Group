@@ -89,6 +89,8 @@ from vula.api.documents import router as documents_router
 from vula.api.projects import router as projects_router
 from vula.api.team import router as team_router
 from vula.api.payments import router as payments_router
+from vula.tap.api import router as tap_router
+from vula.tap.appapi import router as tap_app_router
 from vula.api.tenants import router as tenants_router
 from vula.api.signup import router as signup_router
 from vula.api.users import router as users_router
@@ -730,6 +732,28 @@ async def _daily_commerce_jobs_loop() -> None:
         except Exception as exc:
             log.warning("Daily commerce jobs loop error: %s", exc)
         await _asyncio.sleep(86400)  # daily
+
+
+async def _tap_sweep_loop() -> None:
+    """Every minute: expire stale tap-to-pay sessions and send due unpaid-bill reminders
+    (vula/tap/service.py::sweep). Every step is a compare-and-set or a unique insert, so an
+    overlapping run on another worker cannot double-send. Only tenants with Tap to Pay switched on."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(75)
+    while True:
+        try:
+            from vula.api import tenants as _t
+            from vula.tap.api import _override_tenants, get_service
+            svc = get_service()
+            for tid in sorted(set(svc.repo.enabled_tenants()) | _override_tenants()):
+                if not _t.is_active(tid):
+                    continue
+                stats = await svc.sweep(tid)
+                if stats["reminders"] or stats["expired"]:
+                    log.info("tap sweep %s: %s", tid, stats)
+        except Exception as exc:
+            log.warning("tap sweep loop error: %s", exc)
+        await _asyncio.sleep(60)
 
 
 async def _programme_briefs_loop() -> None:
@@ -1468,6 +1492,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_tap_sweep_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
@@ -1647,6 +1672,7 @@ _TENANT_GUARD_RES = [
     # is the tenant the caller must belong to. Public customer paths are carved out below.
     re.compile(r"^/v1/payments/(?!webhook/)([^/]+)/"),
     re.compile(r"^/v1/bookings/([^/]+)(?:/|$)"),
+    re.compile(r"^/v1/tap/(?!pay/|done/|cancelled/|app/|receipt/)([^/]+)/"),   # tap-to-pay merchant bills
     re.compile(r"^/v1/subscriptions/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/recurring-bills/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/projects/([^/]+)(?:/|$)"),
@@ -1742,6 +1768,8 @@ async def _guard_check(method: str, path: str, auth_header: str, api_key: str = 
         break
     return None
 
+app.include_router(tap_app_router)  # coach PWA API — own device+PIN token auth (see vula/tap/appapi.py)
+app.include_router(tap_router)  # no prefix — public /t/{code} tap + /v1/tap/pay; merchant routes are tenant-guarded
 app.include_router(links_router)  # no prefix — public /l/{code} redirect for broadcast click tracking
 app.include_router(email_public_router)  # no prefix — public /email/unsubscribe for campaigns
 app.include_router(menu_page_router)  # no prefix — public /menu/{tenant_id} photo menu
