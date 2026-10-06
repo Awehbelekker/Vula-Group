@@ -70,3 +70,44 @@ async def test_a_pdf_request_sends_a_pdf_not_a_spreadsheet(monkeypatch):
     assert args[2].endswith(".pdf") and kwargs["content_type"] == "application/pdf"
     assert service.export_label(PDF_Q) == "a PDF"
     assert service.export_label("in excel please") == "an Excel file"
+
+
+def _history(n_inv=45, n_mat=30):
+    rows = [{"date": f"2026-09-{(i % 28) + 1:02d}", "ref": f"23-24{i:04d}", "total_cents": 10000 + i,
+             "vat_cents": 1304, "is_refund": False, "party": "GARDENS HANDIMAN CENTRE"} for i in range(n_inv)]
+    rows.append({"date": "2026-10-01", "ref": "21-367569", "total_cents": -165600, "vat_cents": -21600,
+                 "is_refund": True, "party": "GARDENS HANDIMAN CENTRE"})
+    mats = [{"description": f"ITEM {i}", "quantity": i + 1, "spend_cents": 5000 * (n_mat - i),
+             "spend": f"R{50 * (n_mat - i):,.2f}"} for i in range(n_mat)]
+    priced = sum(r["total_cents"] for r in rows)
+    matches = [{"filename": r["ref"], "filed_at": r["date"], "amount": r["total_cents"] / 100,
+                "is_refund": r["is_refund"], "party": r["party"]} for r in rows[:30]]
+    return {"status": "found", "total_amount_cents": priced, "total_amount": f"R{priced / 100:,.2f}",
+            "total_matches": len(rows), "matches_with_amount": len(rows), "matches": matches,
+            "resolved_supplier": "GARDENS HANDIMAN CENTRE", "_export_rows": rows,
+            "materials": mats[:12], "materials_distinct": n_mat, "_materials_all": mats}
+
+
+def test_a_full_breakdown_lists_every_invoice_and_material_with_a_written_summary():
+    res = _history()
+    text = service.format_supplier_history_reply(
+        res, question="Please give me a full break down of all jack hammer invoices", xlsx_sent=False)
+    assert text.count("\n• ") == 46 + 30                          # every invoice + every material
+    assert "…and" not in text and "more item" not in text
+    assert "*Summary*" in text and "Period: 2026-09-01 to 2026-10-01" in text
+    assert "45 invoices, 1 refund" in text and "Refunds: −R1,656.00" in text
+    total = sum(r["total_cents"] for r in res["_export_rows"])
+    assert f"Total R{total / 100:,.2f}" in text
+    assert "By month: 2026-09" in text
+
+
+def test_a_simple_question_keeps_the_short_answer():
+    text = service.format_supplier_history_reply(_history(), question="what did we spend at jack hammer")
+    assert "*Summary*" not in text and "…and 16 more" in text
+
+
+def test_the_full_text_goes_out_whole_in_several_messages():
+    text = service.format_supplier_history_reply(_history(120, 80), question="full breakdown")
+    parts = wa._split_for_whatsapp(text)
+    assert len(parts) > 1 and all(len(p) <= 3900 for p in parts)
+    assert "\n".join(parts).count("• ") == text.count("• ")
