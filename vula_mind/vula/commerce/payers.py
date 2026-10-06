@@ -82,24 +82,33 @@ def remember(tenant_id: str, payer: Optional[str], owner: str, account: Optional
         return False
 
 
-def pop_note(tenant_id: str, phone: str, fields: dict, business_label: str = "the business") -> str:
-    """One line for the POP reply: whose money it was, or one question to find out (recorded as
-    an open question so the reply is understood)."""
+def pop_question(tenant_id: str, fields: dict, business_label: str = "the business") -> tuple:
+    """(line, question) for a POP's payer: a statement when the payer is known, else a question
+    as (ref, prompt) for the caller to ask now or queue. ("", None) when the POP names no payer."""
     payer = (fields.get("payer") or "").strip("* ").strip()
     account = fields.get("payer_account")
     if not (payer or account):
-        return ""
+        return "", None
     found = classify(tenant_id, payer, account)
     if found and found["owner"] == "business":
-        return f"🏦 Paid from {business_label}'s account ({payer or 'account …' + (last4(account) or '')})."
+        return f"🏦 Paid from {business_label}'s account ({payer or 'account …' + (last4(account) or '')}).", None
     if found:
         who = found.get("person") or payer
-        return f"👛 Paid from {who}'s own money — it's owed back to them."
-    from vula import open_questions
+        return f"👛 Paid from {who}'s own money — it's owed back to them.", None
     ref = f"payer:{name_key(payer) or last4(account)}|{payer}|{last4(account) or ''}"
-    open_questions.ask(tenant_id, phone, "payer_account", ref, f"Whose account: {payer}")
     return (f"💳 Paid from *{payer or 'account …' + (last4(account) or '')}* — is that a "
-            f"*{business_label}* account or *your own* money? I'll remember it.")
+            f"*{business_label}* account or *your own* money? I'll remember it.",
+            (ref, f"Whose account: {payer}"))
+
+
+def pop_note(tenant_id: str, phone: str, fields: dict, business_label: str = "the business") -> str:
+    """One line for the POP reply: whose money it was, or one question to find out (recorded as
+    an open question so the reply is understood)."""
+    line, question = pop_question(tenant_id, fields, business_label)
+    if question:
+        from vula import open_questions
+        open_questions.ask(tenant_id, phone, "payer_account", question[0], question[1])
+    return line
 
 
 def answer(tenant_id: str, ref: str, text: str, business_label: str = "") -> Optional[str]:

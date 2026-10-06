@@ -31,7 +31,11 @@ COMPLEXITY_KEYWORDS = {
 # Keyword hits (and a miss, None) that a supplier spend/materials-history question may be
 # re-routed away from — see _route_with_reason.
 # standards_lookup: its "look up" keyword took "Please look up jack hammer invoice…" (2026-09-30 audit)
-_SUPPLIER_HISTORY_OVERRIDABLE = {None, "commerce_assistant", "finance_admin", "calculations", "standards_lookup"}
+# web_search / file_parse (6 Oct, DIGG): "current" sent "What is the current total invoices count at
+# jack hammer" to web search, and "pdf" sent "put all jack hammer invoices … in a sharable PDF" to
+# file_parse — a generic word beat a question about the business's own invoices.
+_SUPPLIER_HISTORY_OVERRIDABLE = {None, "commerce_assistant", "finance_admin", "calculations",
+                                 "standards_lookup", "web_search", "file_parse"}
 
 SKILL_KEYWORDS: dict[str, list[str]] = {
     # ClickUp first — explicit task-management phrasing only, so it never shadows

@@ -4074,7 +4074,13 @@ def _rands(v: Any) -> str:
         return str(v)
 
 
-_FILE_EXPORT_RE = re.compile(r"\b(excel|spreadsheet|xlsx?|csv)\b", re.IGNORECASE)
+_FILE_EXPORT_RE = re.compile(r"\b(excel|spreadsheet|xlsx?|csv|pdf|shar(?:e)?able)\b", re.IGNORECASE)
+# "put it in a sharable PDF" (DIGG, 6 Oct) — a PDF, not a spreadsheet.
+_PDF_EXPORT_RE = re.compile(r"\b(pdf|shar(?:e)?able)\b", re.IGNORECASE)
+
+
+def export_label(question: str) -> str:
+    return "a PDF" if _PDF_EXPORT_RE.search(question or "") else "an Excel file"
 
 
 async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
@@ -4088,6 +4094,21 @@ async def send_supplier_history_xlsx(tenant_id: str, phone: str, question: str,
     public URL needed."""
     if not phone or not _FILE_EXPORT_RE.search(question or ""):
         return False
+    if _PDF_EXPORT_RE.search(question or ""):
+        try:
+            from vula.api.tenants import display_name
+            from vula.api.whatsapp import _send_invoice_document
+            from vula.commerce.xlsx import render_supplier_history_pdf
+            pdf_bytes = render_supplier_history_pdf(result, supplier, display_name(tenant_id))
+            if not pdf_bytes:
+                return False
+            safe = re.sub(r"[^A-Za-z0-9]+", "_", _canonical_party(supplier) or supplier).strip("_") or "Supplier"
+            return await _send_invoice_document(phone, pdf_bytes,
+                                                f"{safe.title()}_invoices_{_today_iso()}.pdf",
+                                                "", tenant_id, content_type="application/pdf")
+        except Exception as exc:
+            logger.warning("supplier-history PDF send failed for %s: %s", tenant_id, exc)
+            return False
     try:
         from vula.commerce.xlsx import render_supplier_history_xlsx
         xlsx_bytes = render_supplier_history_xlsx(result, supplier, accent=await _brand_accent(tenant_id))
@@ -4207,6 +4228,68 @@ async def answer_all_invoices(tenant_id: str, question: str, phone: str = "") ->
     return "\n".join(lines)
 
 
+# "full break down", "all invoices", "a summary", "in a PDF/Excel" → every invoice and every
+# material in the text, with a written summary — not the first 30 / top 12 (DIGG, 6 Oct: "not
+# generating a full break down … nor a full written summary"). Long replies are split into
+# several WhatsApp messages by the send path, never cut off.
+_FULL_BREAKDOWN_RE = re.compile(
+    r"\b(full|all|every|whole|complete|break\s*[.\-]?\s*down|summary|summari[sz]e|list|pdf|excel|"
+    r"spreadsheet|xlsx?|csv|shar(?:e)?able)\b", re.IGNORECASE)
+
+
+def materials_of(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return result.get("materials") or []
+
+
+def _full_breakdown_lines(rows: List[Dict[str, Any]], materials: List[Dict[str, Any]]) -> List[str]:
+    """The written summary plus every invoice and every material, from the export rows (integer
+    cents, refunds already negative). Every figure is summed here."""
+    def r(c):
+        return f"{'−' if c < 0 else ''}R{abs(c) / 100:,.2f}"
+    rows = sorted(rows, key=lambda x: (x.get("date") or "", str(x.get("ref") or "")), reverse=True)
+    priced = [x for x in rows if x.get("total_cents") is not None]
+    total = sum(x["total_cents"] for x in priced)
+    refunds = [x for x in priced if x.get("is_refund")]
+    with_vat = [x for x in priced if x.get("vat_cents") is not None]
+    dates = sorted(x["date"] for x in rows if x.get("date"))
+    months: Dict[str, List[int]] = {}
+    for x in priced:
+        if x.get("date"):
+            m = months.setdefault(x["date"][:7], [0, 0])
+            m[0] += x["total_cents"]
+            m[1] += 1
+    out = ["", "*Summary*"]
+    if dates:
+        out.append(f"Period: {dates[0]} to {dates[-1]}")
+    out.append(f"Documents: {len(rows)} ({len(priced) - len(refunds)} invoice"
+               f"{'s' if len(priced) - len(refunds) != 1 else ''}, {len(refunds)} refund"
+               f"{'s' if len(refunds) != 1 else ''}"
+               + (f", {len(rows) - len(priced)} with no amount" if len(rows) > len(priced) else "") + ")")
+    if refunds:
+        out.append(f"Refunds: {r(sum(x['total_cents'] for x in refunds))}")
+    if with_vat and len(with_vat) == len(priced):
+        vat = sum(x["vat_cents"] for x in with_vat)
+        out.append(f"Excl VAT {r(total - vat)} · VAT {r(vat)} · Total {r(total)}")
+    else:
+        out.append(f"Total: {r(total)}")
+    if len(months) > 1:
+        out.append("By month: " + " · ".join(f"{k} {r(v[0])} ({v[1]})" for k, v in sorted(months.items())))
+    out += ["", f"*Every invoice* ({len(rows)}, newest first)"]
+    for x in rows:
+        amt = r(x["total_cents"]) if x.get("total_cents") is not None else "no amount"
+        out.append(f"• {x.get('date') or '—'} — {x.get('ref') or 'document'} — {amt}"
+                   + (" (refund)" if x.get("is_refund") else ""))
+    if materials:
+        out += ["", f"*Every material* ({len(materials)}, biggest spend first)"]
+        for it in materials:
+            spend = it.get("spend_cents")
+            q = it.get("quantity")
+            qty = f" × {q:g}" if isinstance(q, (int, float)) else ""
+            out.append(f"• {it.get('description')}{qty} — {r(spend) if spend is not None else it.get('spend') or ''}"
+                       + (" — ⚠️ quantity to check" if it.get("unit_price_varies") else ""))
+    return out
+
+
 def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
                                   question: str = "", xlsx_sent: bool = False) -> Optional[str]:
     """A complete WhatsApp answer for a supplier spend/materials question, built only from a
@@ -4244,12 +4327,13 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
                  f"{', '.join(_rands(r.get('amount')) for r in refunds)})")
     lines = [head + "."]
     if _FILE_EXPORT_RE.search(question or ""):
+        kind = export_label(question)
         if xlsx_sent:
-            lines.append("📎 Sent the full breakdown as an Excel file too — check your WhatsApp "
+            lines.append(f"📎 Sent the full breakdown as {kind} too — check your WhatsApp "
                           "attachments.")
         else:
-            lines.append("📎 Couldn't send an Excel file this time — here's the full breakdown "
-                          "as text below; copy it into a spreadsheet if you need one.")
+            lines.append(f"📎 Couldn't send {kind} this time — here's the full breakdown "
+                          "as text below.")
     if result.get("match_type") == "resolved_via_knowledge_base" and query:
         lines.append(f"I took \"{query}\" to mean {supplier} — tell me if that's wrong, or save "
                      f"it with \"{query} is an alias for {supplier}\".")
@@ -4257,6 +4341,9 @@ def format_supplier_history_reply(result: Dict[str, Any], query: str = "",
     if missing > 0:
         lines.append(f"⚠️ {missing} document{'s have' if missing != 1 else ' has'} no amount on "
                      f"file and {'are' if missing != 1 else 'is'} not in that total.")
+    rows = result.get("_export_rows")
+    if rows and _FULL_BREAKDOWN_RE.search(question or ""):
+        return "\n".join(lines + _full_breakdown_lines(rows, result.get("_materials_all") or materials_of(result)))
     lines.append("")
     lines.append("*Invoices*")
     for m in matches:
