@@ -80,6 +80,15 @@ cases:
     tenant: digg-demo
     text: "Are we making our 10% on HPC?"
     expect: {route: owner_admin, skill: commerce_admin}
+  - id: hpc-project-profit-6oct
+    note: went to finance_admin and was answered "The net profit for the HPC project is R0." (6 Oct)
+    tenant: digg-demo
+    text: "Can you tell me HPC project profit"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: profit-for-project
+    tenant: digg-demo
+    text: "What's the profit for Porterfield?"
+    expect: {route: owner_admin, skill: commerce_admin}
   - id: what-to-charge
     tenant: digg-demo
     text: "What should I charge per m2 for tiling?"
