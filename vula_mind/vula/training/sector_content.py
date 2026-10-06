@@ -203,7 +203,10 @@ Work to a written contract (JBCC, GCC or a clear written agreement). Get every V
 scope in writing — signed by the client or their agent — before doing the extra work, with the
 price or the basis for pricing it; unapproved extras are the most common reason contractors don't
 get paid. Retention (commonly 5–10% of each payment) is held until practical completion and
-released per the contract, often half at practical and half at final completion.
+released per the contract, often half at practical and half at final completion. Track retention
+held on every certificate — it's money owed to you, and it's easy to forget to claim it. If you
+became VAT registered after the work was certified, ask your accountant whether the retention
+release carries VAT before you invoice it.
 """),
         TrainingDocument(
             filename="resilient_flooring_basics.md",
