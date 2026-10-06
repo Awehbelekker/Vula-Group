@@ -117,8 +117,11 @@ class Yoco(_Provider):
 class PayFast(_Provider):
     name = "payfast"
 
-    def _sig(self, data: dict, passphrase: str) -> str:
-        parts = [f"{k}={quote_plus(str(v).strip())}" for k, v in data.items() if v not in (None, "")]
+    def _sig(self, data: dict, passphrase: str, keep_blank: bool = False) -> str:
+        # Checkout links omit empty fields; PayFast signs an ITN over EVERY posted field in the order
+        # received, blanks included (name_last=, custom_str1=, ...), so ITN verification keeps_blank.
+        parts = [f"{k}={quote_plus(str(v).strip())}" for k, v in data.items()
+                 if v is not None and (keep_blank or v != "")]
         s = "&".join(parts)
         if passphrase:
             s += f"&passphrase={quote_plus(passphrase.strip())}"
@@ -144,9 +147,11 @@ class PayFast(_Provider):
         # Signature check (order as received, excluding 'signature'). Mandatory: an ITN with no
         # signature used to be accepted as-is, so anyone could POST payment_status=COMPLETE.
         check = {k: v for k, v in d.items() if k != "signature"}
-        expect = self._sig(check, creds.get("passphrase", ""))
         sig = str(d.get("signature") or "")
-        if not sig or not hmac.compare_digest(sig, expect):
+        passphrase = creds.get("passphrase", "")
+        ok = bool(sig) and any(
+            hmac.compare_digest(sig, self._sig(check, passphrase, keep_blank=kb)) for kb in (True, False))
+        if not ok:
             logger.warning("PayFast ITN rejected: %s", "signature mismatch" if sig else "no signature")
             return None
         paid = (d.get("payment_status") == "COMPLETE")

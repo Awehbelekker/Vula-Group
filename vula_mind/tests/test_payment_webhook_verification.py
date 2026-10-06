@@ -43,6 +43,48 @@ async def test_payfast_rejects_tampered_amount():
     assert await pf.verify_webhook({"passphrase": "pp"}, {}, b"", form) is None
 
 
+def _payfast_documented_signature(fields: dict, passphrase: str) -> str:
+    """PayFast's published ITN method, written independently of PayFast._sig: every field in the
+    order received (blank ones included), urlencoded, then &passphrase=..., md5."""
+    from urllib.parse import quote_plus
+    s = "&".join(f"{k}={quote_plus(str(v).strip())}" for k, v in fields.items())
+    if passphrase:
+        s += "&passphrase=" + quote_plus(passphrase.strip())
+    return hashlib.md5(s.encode()).hexdigest()
+
+
+def _real_itn():
+    # shape of a live PayFast notification: many blank fields, in PayFast's order
+    return {"m_payment_id": "kb-3fab290c-ca9f-47ba-aff2-c8e4cf47e323", "pf_payment_id": "2654432",
+            "payment_status": "COMPLETE", "item_name": "Test payment", "item_description": "",
+            "amount_gross": "6.00", "amount_fee": "-2.76", "amount_net": "3.24",
+            "custom_str1": "", "custom_str2": "", "custom_str3": "", "custom_str4": "", "custom_str5": "",
+            "custom_int1": "", "custom_int2": "", "custom_int3": "", "custom_int4": "", "custom_int5": "",
+            "name_first": "", "name_last": "", "email_address": "", "merchant_id": "22177662"}
+
+
+@pytest.mark.asyncio
+async def test_payfast_accepts_real_itn_with_blank_fields():
+    pf = payments.PayFast()
+    form = _real_itn()
+    form["signature"] = _payfast_documented_signature(form, "Aweh Be Lekker 247")
+    res = await pf.verify_webhook({"passphrase": "Aweh Be Lekker 247"}, {}, b"", dict(form))
+    assert res and res["paid"] is True and res["amount_cents"] == 600
+    assert res["reference"].startswith("kb-")
+
+
+@pytest.mark.asyncio
+async def test_payfast_real_itn_rejects_tampering_and_wrong_passphrase():
+    pf = payments.PayFast()
+    form = _real_itn()
+    form["signature"] = _payfast_documented_signature(form, "pp")
+    assert await pf.verify_webhook({"passphrase": "other"}, {}, b"", dict(form)) is None
+    bad = dict(form, amount_gross="600.00")
+    assert await pf.verify_webhook({"passphrase": "pp"}, {}, b"", bad) is None
+    reordered = dict(reversed(list(form.items())))
+    assert await pf.verify_webhook({"passphrase": "pp"}, {}, b"", reordered) is None   # order matters
+
+
 def _ozow_notice(key, **over):
     d = {"SiteCode": "SITE1", "TransactionId": "t1", "TransactionReference": "OTH-1001",
          "Amount": "250.00", "Status": "Complete", "CurrencyCode": "ZAR", "IsTest": "false",
