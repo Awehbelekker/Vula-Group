@@ -101,6 +101,9 @@ def _inv(id_, days_over, status="sent", reminder_stage=None, doc_type="invoice",
 @pytest.fixture(autouse=True)
 def _patch_client(monkeypatch):
     monkeypatch.setattr(service, "_now", lambda: "2026-08-15T00:00:00Z")
+    # These cases cover the cadence itself, in 'auto' mode (sent without asking). The default,
+    # 'propose', is covered in tests/test_debtors_and_reminders.py.
+    monkeypatch.setattr(commerce, "_reminder_settings", lambda t: ("auto", "friendly"))
 
 
 @pytest.fixture

@@ -5934,48 +5934,108 @@ def _reminder_stage_for(days_over: int) -> Optional[str]:
     return "escalated"
 
 
-def _reminder_message(stage: str, iv: dict, days_over: int) -> str:
+def _owed_cents(iv: dict) -> int:
+    return max(0, int(iv.get("total_cents") or 0) - int(iv.get("total_paid_cents") or 0))
+
+
+def _reminder_message(stage: str, iv: dict, days_over: int, tone: str = "friendly",
+                      link: Optional[str] = None) -> str:
+    """The customer's reminder. The amount is what is still owed (after part-payments), read
+    from the invoice row; the link is the business's own pay page."""
     name = iv.get("customer_name") or "there"
     num = iv.get("invoice_number")
-    amount = (iv.get("total_cents") or 0) / 100
+    amount = f"R{_owed_cents(iv) / 100:,.2f}"
+    pay = f"\n\nPay here: {link}" if link else ""
+    firm = tone == "firm"
     if stage == "pre_due":
         days_left = abs(days_over)
-        return (f"Hi {name}, just a heads-up — invoice *{num}* for R{amount:.2f} is due in "
-                f"{days_left} day{'s' if days_left != 1 else ''}. Let us know if you have any "
-                f"questions. Thank you! 🙏")
+        return (f"Hi {name}, {'' if firm else 'just a heads-up — '}invoice *{num}* for {amount} "
+                f"is due in {days_left} day{'s' if days_left != 1 else ''}."
+                + ("" if firm else " Let us know if you have any questions. Thank you! 🙏") + pay)
     if stage == "due":
-        return (f"Hi {name}, a friendly reminder that invoice *{num}* for R{amount:.2f} is now "
-                f"past its due date. Please arrange payment when you can — reply here with any "
-                f"questions. Thank you! 🙏")
+        return ((f"Hi {name}, invoice *{num}* for {amount} is now due. Please make payment "
+                 f"today." if firm else
+                 f"Hi {name}, a friendly reminder that invoice *{num}* for {amount} is now past "
+                 f"its due date. Please arrange payment when you can — reply here with any "
+                 f"questions. Thank you! 🙏") + pay)
     if stage == "firm":
-        return (f"Hi {name}, invoice *{num}* for R{amount:.2f} is now {days_over} days overdue. "
-                f"Please arrange payment as soon as possible, or reply here if there's an issue "
-                f"we should know about.")
-    return (f"Hi {name}, invoice *{num}* for R{amount:.2f} is now {days_over} days overdue. "
-            f"Please arrange payment urgently, or reply here so we can sort this out together.")
+        return (f"Hi {name}, invoice *{num}* for {amount} is now {days_over} days overdue. "
+                + ("Please pay immediately." if firm else
+                   "Please arrange payment as soon as possible, or reply here if there's an "
+                   "issue we should know about.") + pay)
+    return (f"Hi {name}, invoice *{num}* for {amount} is now {days_over} days overdue. "
+            f"Please arrange payment urgently, or reply here so we can sort this out together." + pay)
 
 
-async def _process_overdue_invoices(tenant_id: str) -> int:
+def _reminder_settings(tenant_id: str) -> tuple:
+    """(mode, tone) — migration 198. Unreadable settings mean 'propose': when in doubt, no
+    customer is messaged without the owner's say-so."""
+    try:
+        row = (service._client().table("commerce_invoice_settings")
+               .select("reminder_mode,reminder_tone").eq("tenant_id", tenant_id).limit(1)
+               .execute().data or [])
+        r = row[0] if row else {}
+    except Exception:
+        r = {}
+    mode = r.get("reminder_mode") if r.get("reminder_mode") in service.REMINDER_MODES else "propose"
+    tone = r.get("reminder_tone") if r.get("reminder_tone") in service.REMINDER_TONES else "friendly"
+    return mode, tone
+
+
+async def _send_reminder(tenant_id: str, phone: str, iv: dict, stage: str, days_over: int,
+                         tone: str) -> bool:
+    """Free text inside the 24-hour window; outside it, the approved reminder template when one
+    is configured (WHATSAPP_REMINDER_TEMPLATE) — otherwise it is logged as an error, never
+    silently dropped."""
+    from vula.api.whatsapp import _send_reply
+    from vula.commerce.pay_page import page_url
+    link = page_url(tenant_id, iv["id"]) if iv.get("id") else None
+    if await _send_reply(phone, _reminder_message(stage, iv, days_over, tone, link), tenant_id) is not False:
+        return True
+    from config import settings
+    from vula.api.whatsapp import send_template
+    name = (settings.whatsapp_reminder_template or "").strip()
+    if not name:
+        log.error("Overdue reminder for %s (%s) not delivered — outside the 24-hour window and "
+                  "WHATSAPP_REMINDER_TEMPLATE isn't set", iv.get("invoice_number"), tenant_id)
+        return False
+    return await send_template(tenant_id, phone, name, [
+        iv.get("customer_name") or "there", str(iv.get("invoice_number") or ""),
+        f"R{_owed_cents(iv) / 100:,.2f}", link or ""])
+
+
+async def _process_overdue_invoices(tenant_id: str, only_ids: Optional[list] = None,
+                                    force_send: bool = False) -> int:
     """Staged overdue-invoice reminder cadence: pre_due (-3d) / due (0d) / firm (+7d) /
     escalated (+14d, also alerts the internal team). Each stage fires exactly once per invoice,
-    claimed via a conditional update matching the invoice's previous reminder_stage — the same
-    idempotency shape commerce_orders.followup_sent_at uses, generalized from a boolean to an
-    ordered stage so a daily job re-run (or two overlapping runs) can never double-send.
-    Requires migration 131 (reminder_stage/last_reminded_at columns)."""
+    claimed via a conditional update matching the invoice's previous reminder_stage, so a daily
+    re-run (or two overlapping runs) can never double-send. Requires migration 131.
+
+    What happens to the customer message depends on the tenant's reminder_mode (migration 198):
+    'propose' puts the due reminders to the owner as one Confirm/Cancel list and sends nothing
+    until they confirm (the confirm re-runs this with only_ids + force_send); 'auto' sends;
+    'off' sends nothing. A customer who replied STOP is never chased. Returns reminders sent."""
     from datetime import date as _date
     db = service._client()
     today = _date.today()
     try:
-        rows = (db.table("commerce_invoices")
-                .select("id,invoice_number,customer_name,customer_phone,total_cents,due_date,"
-                        "doc_type,status,reminder_stage")
-                .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue"]).execute().data or [])
+        q = (db.table("commerce_invoices")
+             .select("id,invoice_number,customer_name,customer_phone,total_cents,total_paid_cents,"
+                     "due_date,doc_type,status,reminder_stage,reminder_proposed_stage")
+             .eq("tenant_id", tenant_id).in_("status", ["sent", "overdue", "part_paid"]))
+        if only_ids:
+            q = q.in_("id", list(only_ids))
+        rows = q.execute().data or []
     except Exception as exc:
         log.debug("overdue scan skipped: %s", exc)
         return 0
 
+    mode, tone = _reminder_settings(tenant_id)
+    if force_send:
+        mode = "auto"
     reminded = 0
     suppressed = None          # loaded once, on the first reminder that would go out
+    to_propose = []
     for iv in rows:
         if (iv.get("doc_type") or "invoice") != "invoice":
             continue   # only invoices go overdue — not quotes/proformas
@@ -5989,51 +6049,91 @@ async def _process_overdue_invoices(tenant_id: str) -> int:
         days_over = (today - due_date).days
         target = _reminder_stage_for(days_over)
         current = iv.get("reminder_stage")
-        if target is None or _REMINDER_STAGE_ORDER[target] <= _REMINDER_STAGE_ORDER.get(current, 0):
+        if target is None or target == current or _STAGE_ORDER.index(target) <= _STAGE_ORDER.index(current or "none"):
+            continue
+        phone = (iv.get("customer_phone") or "").strip()
+        if phone and suppressed is None:
+            suppressed = _suppressed_phones(tenant_id)
+        if phone and _norm_phone(phone) in suppressed:
+            log.info("Overdue reminder for %s skipped — customer opted out", iv.get("invoice_number"))
+            phone = ""
+
+        if mode == "propose" and phone:
+            if iv.get("reminder_proposed_stage") != target:
+                to_propose.append((iv, target, days_over))
             continue
 
+        # Claim the stage (also: auto mode, off mode, opted-out or phoneless customers — the
+        # stage still advances so the team's escalation alert fires once).
         patch = {"reminder_stage": target, "last_reminded_at": service._now(), "updated_at": service._now()}
-        if days_over >= 0 and iv.get("status") == "sent":
+        if target != "pre_due" and iv.get("status") == "sent":
             patch["status"] = "overdue"
-        q = db.table("commerce_invoices").update(patch).eq("id", iv["id"]).eq("tenant_id", tenant_id)
-        q = q.is_("reminder_stage", "null") if current is None else q.eq("reminder_stage", current)
         try:
-            claimed = q.execute().data
+            cq = (db.table("commerce_invoices").update(patch)
+                  .eq("id", iv["id"]).eq("tenant_id", tenant_id))
+            cq = cq.is_("reminder_stage", "null") if current is None else cq.eq("reminder_stage", current)
+            claimed = (cq.execute().data or [])
         except Exception as exc:
             log.debug("overdue stage claim failed for %s: %s", iv.get("id"), exc)
             continue
         if not claimed:
             continue   # another run already claimed this stage — race-safe skip
 
-        phone = (iv.get("customer_phone") or "").strip()
-        # A customer who replied STOP is never chased on WhatsApp (POPIA); the stage is still
-        # recorded so the team's escalation alert below fires as usual.
-        if phone and suppressed is None:
-            suppressed = _suppressed_phones(tenant_id)
-        if phone and _norm_phone(phone) in suppressed:
-            log.info("Overdue reminder for %s skipped — customer opted out", iv.get("invoice_number"))
-            phone = ""
-        if phone:
+        if phone and mode == "auto":
             try:
-                from vula.api.whatsapp import _send_reply
-                await _send_reply(phone, _reminder_message(target, iv, days_over), tenant_id)
-                reminded += 1
+                if await _send_reminder(tenant_id, phone, iv, target, days_over, tone):
+                    reminded += 1
             except Exception as exc:
                 log.debug("overdue reminder send failed: %s", exc)
 
         if target == "escalated":
-            try:
-                from vula.integrations.notify import notify_team
-                await notify_team(tenant_id, "invoice_overdue_escalated", (
-                    f"🔴 Invoice {iv.get('invoice_number')} for {iv.get('customer_name') or 'a customer'} "
-                    f"(R{(iv.get('total_cents') or 0) / 100:.2f}) is now {days_over} days overdue with no "
-                    f"response to reminders. May need a personal follow-up call."))
-            except Exception as exc:
-                log.debug("overdue escalation alert failed: %s", exc)
+            await _escalation_alert(tenant_id, iv, days_over)
 
+    if to_propose:
+        await _propose_reminders(tenant_id, to_propose)
     if reminded:
         log.info("Overdue invoices: reminded %d customer(s) for %s", reminded, tenant_id)
     return reminded
+
+
+_STAGE_ORDER = ["none", "pre_due", "due", "firm", "escalated"]
+
+
+async def _escalation_alert(tenant_id: str, iv: dict, days_over: int) -> None:
+    try:
+        from vula.integrations.notify import notify_team
+        await notify_team(tenant_id, "invoice_overdue_escalated", (
+            f"🔴 Invoice {iv.get('invoice_number')} for {iv.get('customer_name') or 'a customer'} "
+            f"(R{_owed_cents(iv) / 100:,.2f}) is now {days_over} days overdue with no "
+            f"response to reminders. May need a personal follow-up call."))
+    except Exception as exc:
+        log.debug("overdue escalation alert failed: %s", exc)
+
+
+async def _propose_reminders(tenant_id: str, items: list) -> None:
+    """One Confirm/Cancel list per owner/admin; nothing reaches a customer until a tap. Each
+    invoice is proposed once per stage (reminder_proposed_stage)."""
+    from vula.api.whatsapp import _ask_admin_confirm
+    from vula.commerce.approvals import tenant_admin_approvers
+    lines = [f"• {iv.get('customer_name') or '?'} — {iv.get('invoice_number')}, "
+             f"R{_owed_cents(iv) / 100:,.2f} ({'due in ' + str(-d) + ' days' if d < 0 else str(d) + ' days overdue' if d else 'due today'})"
+             for iv, _t, d in items]
+    preview = {"preview": True, "reminders": len(items), "customers": lines,
+               "message": "Send these payment reminders on WhatsApp?"}
+    ids = [iv["id"] for iv, _t, _d in items]
+    for a in await tenant_admin_approvers(tenant_id):
+        try:
+            await _ask_admin_confirm(a["phone"], tenant_id, "send_payment_reminders",
+                                     {"invoice_ids": ids}, preview, caller_role="admin")
+        except Exception as exc:
+            log.warning("reminder proposal to %s failed: %s", a.get("phone"), exc)
+    for iv, target, _d in items:
+        try:
+            (service._client().table("commerce_invoices")
+             .update({"reminder_proposed_stage": target})
+             .eq("id", iv["id"]).eq("tenant_id", tenant_id).execute())
+        except Exception as exc:
+            log.debug("reminder_proposed_stage not saved (run migration 198?): %s", exc)
 
 
 @router.post("/{tenant_id}/jobs/stock-alerts", dependencies=[Depends(require_auth)])

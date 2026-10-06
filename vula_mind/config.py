@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     # recorded, nothing is silently substituted.
     whatsapp_notify_template: str = ""
     whatsapp_notify_template_lang: str = "en"
+    # Approved Meta template for payment reminders outside the 24-hour window. Body parameters,
+    # in order: customer name, invoice number, amount owed, pay-page link. Unset → a reminder
+    # that can't go as free text is logged as an error (vula/api/commerce._send_reminder).
+    whatsapp_reminder_template: str = ""
+    whatsapp_reminder_template_lang: str = "en"
     # Inbound messages one customer number may send one tenant per minute before Vula stops
     # running the assistant on them (one "please wait" reply per minute instead). Every Meta
     # webhook comes from Meta's IPs, so the per-IP slowapi limit can't tell senders apart.
@@ -284,6 +289,9 @@ class Settings(BaseSettings):
     # Monday-morning advisor WhatsApp to each owner (vula/owner_advisor.py). Off until the team
     # has previewed it per tenant in Master › Conversations.
     owner_advisor_enabled: bool = False
+    # Weekday-morning money digest to owners (vula/owner_digest.py). Off until previewed with
+    # the owner, like the weekly advisor.
+    owner_digest_enabled: bool = False
     # Daily automatic re-read of documents missing a required detail (vula/commerce/doc_quality.py),
     # each tried once; at most this many per tenant per day. 0 turns it off.
     document_auto_reread_per_day: int = 25

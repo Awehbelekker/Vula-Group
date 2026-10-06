@@ -6290,6 +6290,37 @@ async def _alert_off_whatsapp(tenant_id: str, subject: str, body: str) -> bool:
         return False
 
 
+async def send_template(tenant_id: str, to: str, name: str, params: list,
+                        lang: Optional[str] = None) -> bool:
+    """Send an approved Meta template with body parameters (works outside the 24-hour window).
+    False when it couldn't be sent — logged as an error, never silently."""
+    creds = await _get_tenant_wa_creds(tenant_id) if tenant_id else None
+    if not creds:
+        creds = ({"token": settings.whatsapp_token, "phone_id": settings.whatsapp_phone_id}
+                 if settings.whatsapp_token and settings.whatsapp_phone_id else None)
+    if not creds:
+        logger.error("template %s not sent to %s — no WhatsApp credentials for %s", name, to, tenant_id)
+        return False
+    number = _wa_number(to)
+    payload = {"name": name, "language": {"code": lang or settings.whatsapp_reminder_template_lang or "en"},
+               "components": [{"type": "body", "parameters": [
+                   {"type": "text", "text": str(p)[:200]} for p in params]}]}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json={"messaging_product": "whatsapp", "to": number, "type": "template",
+                      "template": payload})
+            resp.raise_for_status()
+        _record_outbound(resp, tenant_id, number, f"[template {name}]", kind="template")
+        return True
+    except Exception as exc:
+        body = getattr(getattr(exc, "response", None), "text", "")[:400]
+        logger.error("template %s to %s failed: %s %s", name, to, exc, body)
+        return False
+
+
 async def _send_notify_template(creds: dict, number: str, tenant_id: str) -> bool:
     """Last resort when a proactive free-form message is refused for being outside Meta's
     24-hour window: send an approved TEMPLATE instead, which has no such restriction.
@@ -7746,12 +7777,71 @@ async def _handle_native_order(phone: str, order: dict, tenant_id: str) -> None:
     await _send_reply(phone, "\n".join(lines), tenant_id)
 
 
+_SAYS_PAID_RE = re.compile(
+    r"\b(?:i|we)(?:'ve|\s+have|\s+just|\s+already)*\s+(?:just\s+|already\s+)?"
+    r"(?:paid|made\s+(?:the\s+)?payment|sent\s+(?:the\s+|you\s+the\s+)?(?:money|payment|eft))\b"
+    r"|\b(?:payment|eft|money)\s+(?:has\s+been\s+|was\s+)?(?:made|sent|done)\b"
+    r"|\balready\s+paid\b",
+    re.IGNORECASE)
+
+
+async def _maybe_customer_says_paid(phone: str, text: str, tenant_id: str) -> bool:
+    """A customer types "I've paid" about an invoice. The owner/admins are told which open
+    invoice(s) it could be — amounts from the DB — and asked to check the bank and record it;
+    nothing is marked paid here (a customer's word is not a payment). The customer is thanked and
+    invited to send the proof of payment. False when it isn't that, or they have no open invoice."""
+    t = (text or "").strip()
+    if not t or len(t) > 160 or not _SAYS_PAID_RE.search(t):
+        return False
+    if "?" in t or re.search(r"\b(where|when|track|deliver|arrive|refund)\w*", t, re.I):
+        return False            # a question about an order, not a payment report
+    from vula.api.commerce import _norm_phone
+    from vula.commerce import service as cs
+    p = _norm_phone(phone)
+    variants = list({p, "0" + p[2:] if p.startswith("27") else p, "+" + p})
+    rows = (cs._client().table("commerce_invoices")
+            .select("id,invoice_number,customer_name,total_cents,total_paid_cents,due_date")
+            .eq("tenant_id", tenant_id).eq("direction", "outbound").eq("doc_type", "invoice")
+            .in_("status", ["sent", "overdue", "part_paid"]).in_("customer_phone", variants)
+            .limit(10).execute().data or [])
+    open_inv = [r for r in rows if int(r.get("total_cents") or 0) > int(r.get("total_paid_cents") or 0)]
+    if not open_inv:
+        return False
+    name = open_inv[0].get("customer_name") or "A customer"
+    lst = "\n".join(
+        f"• {r.get('invoice_number')} — R{(int(r['total_cents']) - int(r.get('total_paid_cents') or 0)) / 100:,.2f}"
+        for r in open_inv[:5])
+    from vula.commerce.approvals import tenant_admin_approvers
+    from datetime import date as _d
+    for a in await tenant_admin_approvers(tenant_id):
+        await _send_reply(a["phone"], (
+            f"💬 *{name}* says they've paid:\n_{t[:120]}_\n\nTheir open invoice"
+            f"{'s' if len(open_inv) != 1 else ''}:\n{lst}\n\nCheck the bank — once it's in, "
+            f"reply *record payment {open_inv[0].get('invoice_number')}* (nothing is marked paid "
+            f"until you do)."), tenant_id, idem_key=f"says-paid:{p}:{_d.today().isoformat()}")
+    first = (open_inv[0].get("customer_name") or "").split()[0] if open_inv[0].get("customer_name") else ""
+    await _send_reply(phone, (f"Thanks{(' ' + first) if first else ''} — I've let the team know. "
+                              "They'll confirm once the payment reflects. If you have a proof of "
+                              "payment, please send it here."), tenant_id)
+    try:
+        from vula import turns
+        turns.note("handler", name="customer_says_paid", invoices=len(open_inv))
+    except Exception:
+        pass
+    return True
+
+
 async def _run_commerce_assistant(phone: str, text: str, tenant_id: str,
                                   detected_lang: Optional[str] = None) -> bool:
     """Drive the commerce_assistant skill with persisted conversation memory.
 
     Returns True if a reply was sent, False if the skill could not produce one.
     """
+    try:
+        if await _maybe_customer_says_paid(phone, text, tenant_id):
+            return True
+    except Exception as exc:
+        logger.warning("'I paid' check failed: %s", exc)
     try:
         from core.skills.base import SkillInput
         from core.skills.loader import get_skill

@@ -143,9 +143,31 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "outstanding_invoices",
-        "description": "List unpaid/overdue invoices and the total amount owed.",
+        "description": "Who owes the business money — 'who owes me what?', 'unpaid invoices', "
+                       "'debtors'. Returns what each customer still owes (after part-payments), "
+                       "how many days the oldest is overdue, and the total — all computed "
+                       "server-side; quote the figures as given.",
         "parameters": {"type": "object", "properties": {}},
     }},
+    {"type": "function", "function": {
+        "name": "send_payment_reminders",
+        "description": "Send WhatsApp payment reminders for overdue invoices now — 'remind "
+                       "everyone who owes me', 'chase Sam's invoice'. Pass invoice_numbers to "
+                       "limit it; leave empty for every invoice that is due a reminder. Without "
+                       "confirm=true returns a preview of who would be messaged.",
+        "parameters": {"type": "object", "properties": {
+            "invoice_numbers": {"type": "array", "items": {"type": "string"}},
+            "invoice_ids": {"type": "array", "items": {"type": "string"}},
+            "confirm": {"type": "boolean"}}}}},
+    {"type": "function", "function": {
+        "name": "reminder_settings",
+        "description": "Change how overdue reminders work: mode 'propose' (Vula asks you first "
+                       "each morning), 'auto' (sent automatically) or 'off'; tone 'friendly' or "
+                       "'firm'. Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "mode": {"type": "string", "enum": ["propose", "auto", "off"]},
+            "tone": {"type": "string", "enum": ["friendly", "firm"]},
+            "confirm": {"type": "boolean"}}}}},
     {"type": "function", "function": {
         "name": "find_document",
         "description": "Search filed documents (invoices, quotes, proof-of-payment, BOQs, "
@@ -1849,6 +1871,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_stock":       return await self._update_stock(tid, args.get("product", ""), args.get("quantity"), bool(args.get("confirm")), actor=ctx.get("phone"), add=args.get("add"), product_id=args.get("product_id"), variant_id=args.get("variant_id"))
             if name == "receive_stock":      return await self._receive_stock(tid, args.get("lines") or [], args.get("reference"), bool(args.get("confirm")), actor=ctx.get("phone"))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
+            if name == "send_payment_reminders": return await self._send_payment_reminders(tid, args)
+            if name == "reminder_settings":  return await self._reminder_settings(tid, args)
             if name == "find_document":      return await self._find_document(tid, args)
             if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
@@ -2146,23 +2170,78 @@ class CommerceAdminSkill(BaseSkill):
         return result
 
     async def _outstanding_invoices(self, tid: str) -> Dict[str, Any]:
-        # 2026-08-22: was summing ALL directions — a real transcript (off-the-hook) showed this
-        # silently mixing inbound supplier bills (direction="inbound", money the tenant OWES,
-        # see commerce/service.py's commit_inbound_document) into what an owner reads as "money
-        # owed to me," inflating a real R37,938.69/25-invoice figure into a nonsense
-        # R109,743.11/79-invoice one as supplier bills kept arriving by email. direction="outbound"
-        # restricts this to the tenant's own issued invoices/quotes, matching what "outstanding
-        # invoices" actually means to a business owner. "draft" dropped too — an invoice that was
-        # never sent isn't outstanding to anyone yet.
+        # 2026-08-22: outbound only — inbound supplier bills are money the tenant OWES, and a
+        # real off-the-hook transcript showed them inflating "owed to me" from R37,938.69 to
+        # R109,743.11. Drafts are excluded (never sent = not owed by anyone yet); quotes too.
+        # 2026-10-06 (finance brief): grouped by customer, owed = total − part-payments, aged by
+        # due date — every figure computed here, never by the model.
+        from datetime import date as _date
+        today = _date.today()
         owed = 0
         invoices = []
-        for st in ("sent", "overdue"):
+        per: Dict[str, Dict[str, Any]] = {}
+        for st in ("sent", "overdue", "part_paid"):
             for inv in await service.list_invoices(tid, doc_type="invoice", status=st,
                                                    direction="outbound", limit=100):
-                owed += int(inv.get("total_cents") or 0)
+                left = max(0, int(inv.get("total_cents") or 0) - int(inv.get("total_paid_cents") or 0))
+                if not left:
+                    continue
+                owed += left
+                try:
+                    days = (today - _date.fromisoformat(str(inv.get("due_date"))[:10])).days
+                except (TypeError, ValueError):
+                    days = None
                 invoices.append({"invoice": inv.get("invoice_number"), "status": inv.get("status"),
-                                 "total": self._rands(inv.get("total_cents")), "customer": inv.get("customer_name")})
-        return {"outstanding_total": self._rands(owed), "count": len(invoices), "invoices": invoices[:15]}
+                                 "total": self._rands(left), "customer": inv.get("customer_name"),
+                                 "days_overdue": days if days and days > 0 else 0})
+                key = (inv.get("customer_name") or "Unknown customer").strip()
+                c = per.setdefault(key, {"customer": key, "owed_cents": 0, "invoices": 0,
+                                         "oldest_days_overdue": 0})
+                c["owed_cents"] += left
+                c["invoices"] += 1
+                if days and days > c["oldest_days_overdue"]:
+                    c["oldest_days_overdue"] = days
+        by_customer = sorted(per.values(), key=lambda c: -c["owed_cents"])
+        return {"outstanding_total": self._rands(owed), "count": len(invoices),
+                "by_customer": [{"customer": c["customer"], "owes": self._rands(c["owed_cents"]),
+                                 "invoices": c["invoices"],
+                                 "oldest_days_overdue": c["oldest_days_overdue"]}
+                                for c in by_customer[:20]],
+                "invoices": invoices[:15]}
+
+    async def _send_payment_reminders(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        from vula.api.commerce import _process_overdue_invoices
+        ids = list(args.get("invoice_ids") or [])
+        nums = [n.strip() for n in (args.get("invoice_numbers") or []) if n and n.strip()]
+        if nums:
+            rows = (service._client().table("commerce_invoices").select("id,invoice_number")
+                    .eq("tenant_id", tid).in_("invoice_number", nums).execute().data or [])
+            ids += [r["id"] for r in rows]
+            if not rows:
+                return {"error": f"No invoice {', '.join(nums)} found."}
+        if not args.get("confirm"):
+            return {"preview": True, "invoices": nums or ("the listed invoices" if ids else
+                                                          "every invoice due a reminder"),
+                    "message": "Confirm to send the payment reminders on WhatsApp "
+                               "(call again with confirm=true)."}
+        sent = await _process_overdue_invoices(tid, only_ids=ids or None, force_send=True)
+        return {"reminders_sent": sent,
+                "note": None if sent else "Nothing was due a reminder (or the customers opted out "
+                                          "/ have no WhatsApp number)."}
+
+    async def _reminder_settings(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        patch = {k: args[k] for k in ("mode", "tone") if args.get(k)}
+        if not patch:
+            from vula.api.commerce import _reminder_settings
+            mode, tone = _reminder_settings(tid)
+            return {"mode": mode, "tone": tone}
+        if not args.get("confirm"):
+            return {"preview": True, **patch,
+                    "message": "Confirm to change the reminder settings (call again with confirm=true)."}
+        saved = await service.upsert_invoice_settings(
+            tid, {("reminder_" + k): v for k, v in patch.items()})
+        return {"mode": saved.get("reminder_mode"), "tone": saved.get("reminder_tone"),
+                "verified": all(saved.get("reminder_" + k) == v for k, v in patch.items())}
 
     async def _add_expense(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         cents = int(round(float(args.get("amount_rands", 0)) * 100))

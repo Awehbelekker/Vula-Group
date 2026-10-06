@@ -2797,7 +2797,10 @@ _INVOICE_SETTINGS_FIELDS = (
     "header_sticky", "header_nav_position", "header_cta_text", "header_cta_link",
     "signature_url", "signature_name",
     "secondary_color", "corner_style", "density", "tagline", "icon_url",
+    "reminder_mode", "reminder_tone",
 )
+REMINDER_MODES = ("propose", "auto", "off")
+REMINDER_TONES = ("friendly", "firm")
 _CORNER_STYLES = ("rounded", "soft", "sharp")
 _DENSITIES = ("comfortable", "compact")
 _TEMPLATE_CHOICES = ("classic", "minimal", "modern", "branded", "digg")
@@ -2835,9 +2838,10 @@ _INVOICE_SETTINGS_128_FIELDS = (  # only exist once migration 128 runs
 _INVOICE_SETTINGS_165_FIELDS = ("signature_url", "signature_name")  # only exist once migration 165 runs
 # the dashboard theme's brand fields (2026-09-29) — only exist once migration 187 runs
 _INVOICE_SETTINGS_187_FIELDS = ("secondary_color", "corner_style", "density", "tagline", "icon_url")
+_INVOICE_SETTINGS_198_FIELDS = ("reminder_mode", "reminder_tone")
 _INVOICE_SETTINGS_OPTIONAL_FIELDS = (
     _INVOICE_SETTINGS_078_FIELDS + _INVOICE_SETTINGS_103_FIELDS + _INVOICE_SETTINGS_128_FIELDS
-    + _INVOICE_SETTINGS_165_FIELDS + _INVOICE_SETTINGS_187_FIELDS
+    + _INVOICE_SETTINGS_165_FIELDS + _INVOICE_SETTINGS_187_FIELDS + _INVOICE_SETTINGS_198_FIELDS
 )
 
 
@@ -2865,6 +2869,10 @@ async def upsert_invoice_settings(tenant_id: str, data: dict) -> dict:
         raise ValueError(f"corner_style must be one of {_CORNER_STYLES}")
     if patch.get("density") not in (None, "") and patch["density"] not in _DENSITIES:
         raise ValueError(f"density must be one of {_DENSITIES}")
+    if patch.get("reminder_mode") not in (None, "") and patch["reminder_mode"] not in REMINDER_MODES:
+        raise ValueError(f"reminder_mode must be one of {REMINDER_MODES}")
+    if patch.get("reminder_tone") not in (None, "") and patch["reminder_tone"] not in REMINDER_TONES:
+        raise ValueError(f"reminder_tone must be one of {REMINDER_TONES}")
     for key in ("accent_color", "ink_color", "secondary_color"):
         v = patch.get(key)
         if v and not re.fullmatch(r"#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?", str(v).strip()):
