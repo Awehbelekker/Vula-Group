@@ -125,6 +125,40 @@ class SupabaseRepo:
         return self._one(self.db.table("kb_split_rules").select("*")
                          .eq("tenant_id", tenant_id).eq("scope", "default"))
 
+    # setup / admin
+    def get_settings(self, tenant_id: str) -> Optional[dict]:
+        return self._one(self.db.table("kb_settings").select("*").eq("tenant_id", tenant_id))
+
+    def upsert_settings(self, tenant_id: str, fields: dict) -> None:
+        self.db.table("kb_settings").upsert(
+            {"tenant_id": tenant_id, **fields, "updated_at": "now()"}, on_conflict="tenant_id").execute()
+
+    def list_tags(self, tenant_id: str) -> list[dict]:
+        return (self.db.table("kb_tags").select("*").eq("tenant_id", tenant_id)
+                .order("created_at").execute().data or [])
+
+    def create_tag(self, row: dict) -> dict:
+        return self.db.table("kb_tags").insert(row).execute().data[0]
+
+    def update_tag(self, tenant_id: str, tag_id: str, fields: dict) -> None:
+        self.db.table("kb_tags").update(fields).eq("tenant_id", tenant_id).eq("id", tag_id).execute()
+
+    def recent_bills(self, tenant_id: str, limit: int = 20) -> list[dict]:
+        return (self.db.table("kb_bills")
+                .select("id,tag_id,status,description,subtotal_cents,staff_id,is_test,created_at")
+                .eq("tenant_id", tenant_id).order("created_at", desc=True).limit(limit).execute().data or [])
+
+    def list_split_rules(self, tenant_id: str) -> list[dict]:
+        return self.db.table("kb_split_rules").select("*").eq("tenant_id", tenant_id).execute().data or []
+
+    def upsert_split_rule(self, tenant_id: str, scope: str, fields: dict) -> None:
+        self.db.table("kb_split_rules").upsert(
+            {"tenant_id": tenant_id, "scope": scope, **fields}, on_conflict="tenant_id,scope").execute()
+
+    def team_members(self, tenant_id: str) -> list[dict]:
+        return (self.db.table("vula_team_members").select("id,name,whatsapp,role,active")
+                .eq("tenant_id", tenant_id).eq("active", True).order("created_at").execute().data or [])
+
     # display
     def merchant_name(self, tenant_id: str) -> str:
         try:

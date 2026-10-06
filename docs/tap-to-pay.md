@@ -41,7 +41,18 @@ abandoned bills, GL journal posting for tap payments (per-party lines live in `k
 merchant audit rows for bill actions, per-tag rate limiting beyond the global IP limit, NTAG424 SDM
 verification (static tags only), group bills, shifts/pools, payouts, nightly reconciliation.
 
-## Switching it on (staging first — docs/staging.md)
-Apply migrations 199 and 200 in the Supabase SQL editor; connect PayFast for the tenant in the
-dashboard (sandbox mode); create a tag row (`kb_tags`) and a default `kb_split_rules` row; set
-`TAP_TO_PAY_TENANTS=<tenant>` and `TAP_HASH_PEPPER=<random>` on Railway and `railway up`.
+## Switching it on (self-serve)
+Apply migrations 199, 200 and 201 in the Supabase SQL editor (staging first — docs/staging.md), then the
+owner does everything in the dashboard: **Money -> Tap to Pay**.
+
+1. Connect PayFast (merchant ID, key, passphrase; start with sandbox keys).
+2. Set each person's share of the bill (tips always go 100% to the person who served) and create their tag
+   (link + printable QR; write the link to an NFC tag).
+3. Run the R5 test payment (scan the QR, pay). The screen ticks by itself when PayFast's notification is
+   confirmed; a test books nothing to anyone's earnings.
+4. Go live. "Go live" stays locked until a test payment has been confirmed. "Pause" switches it off.
+
+State lives in `kb_settings.mode` (off / testing / live), cached 30 s per worker. Any DB error reads as
+off. `TAP_TO_PAY_TENANTS` is still honoured as an operator override (treated as live) and
+`TAP_HASH_PEPPER` should be set once on Railway so customer-number hashes survive a service-key rotation.
+Tags can be replaced from the screen; the old tag and QR stop working immediately.

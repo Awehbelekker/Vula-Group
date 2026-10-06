@@ -51,6 +51,7 @@ class TapConfig:
     session_ttl: timedelta = timedelta(minutes=10)
     quick_tip_presets_cents: tuple = (500, 1000, 2000)
     clock: Callable[[], datetime] = _utcnow
+    enabled: Callable[[str], bool] = lambda tenant_id: True   # per-tenant switch (api.tenant_enabled)
 
 
 # ── customer copy (rands, 2 decimals, merchant named, < 3 lines) ─────────────────────────────
@@ -117,7 +118,7 @@ class TapService:
         """Verify the tag and mint a one-time claim token. Returns the wa.me URL, or None when the
         tag is unknown/disabled/unbound (caller shows MSG_NOT_VERIFIED)."""
         tag = self.repo.get_tag_by_code(code)
-        if not tag or tag.get("status") != "active":
+        if not tag or tag.get("status") != "active" or not self.cfg.enabled(tag["tenant_id"]):
             return None
         number = re.sub(r"\D", "", self.repo.tenant_wa_number(tag["tenant_id"]) or "")
         if not number:
@@ -426,7 +427,8 @@ class TapService:
     async def open_pay_link(self, session_id: str, nonce: str) -> Optional[str]:
         """Resolve the short one-time link to the hosted-checkout URL, or None."""
         s = self._live(self.repo.get_session_any_tenant(session_id))
-        if (not s or s["state"] != "awaiting_payment" or not s.get("pay_nonce_hash")
+        if (not s or not self.cfg.enabled(s["tenant_id"]) or s["state"] != "awaiting_payment"
+                or not s.get("pay_nonce_hash")
                 or not hmac.compare_digest(s["pay_nonce_hash"], self._token_hash(nonce))):
             return None
         bill = self.repo.get_bill(s["tenant_id"], s["bill_id"]) if s.get("bill_id") else None
@@ -477,9 +479,18 @@ class TapService:
             "fee_cents": int(ev.get("fee_cents") or 0)})
         if pay is None:
             return "duplicate"
-        await self._post_ledger(tenant_id, s, pay)
+        bill = self.repo.get_bill(tenant_id, s["bill_id"]) if s.get("bill_id") else None
+        is_test = bool((bill or {}).get("is_test"))
+        if not is_test:
+            await self._post_ledger(tenant_id, s, pay)
         if s.get("bill_id"):
             self.repo.cas_bill(tenant_id, s["bill_id"], expected="claimed", new="paid")
+        if is_test:                                  # setup test: unlocks "Go live", books nothing
+            self.repo.upsert_settings(tenant_id, {"tested_at": self.now().isoformat()})
+            for p in self.repo.team_phones(tenant_id, None):
+                await self._say(tenant_id, p, "Tap to Pay test payment received. PayFast is set up "
+                                              "correctly - you can go live in the dashboard.")
+            return "test_paid"
         if phone:
             await self._say(tenant_id, phone,
                             f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
@@ -521,12 +532,13 @@ class TapService:
 
     # ── 5. merchant actions ──────────────────────────────────────────────────────────────────
     def create_bill(self, *, tenant_id: str, tag_id: str, amount_cents: int, description: str,
-                    staff_id: Optional[str], created_by: str, customer_phone: Optional[str] = None) -> dict:
+                    staff_id: Optional[str], created_by: str, customer_phone: Optional[str] = None,
+                    is_test: bool = False) -> dict:
         if amount_cents <= 0:
             raise mo.MoneyError("amount must be positive")
         row = {"tenant_id": tenant_id, "tag_id": tag_id, "bill_type": "fixed", "status": "open",
                "description": description[:120], "subtotal_cents": amount_cents,
-               "staff_id": staff_id, "created_by": created_by,
+               "staff_id": staff_id, "created_by": created_by, "is_test": is_test,
                "expires_at": (self.now() + timedelta(hours=24)).isoformat()}
         if customer_phone:
             row.update(customer_hash=self.phone_hash(customer_phone),

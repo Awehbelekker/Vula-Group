@@ -28,6 +28,8 @@ class MemoryRepo:
         self.rules, self.wa = {}, {}
         self.names = {}
         self.team = {}
+        self.settings = {}
+        self.members = {}
 
     def _id(self):
         return f"id{next(self.n):04d}" + "x" * 4
@@ -132,6 +134,38 @@ class MemoryRepo:
 
     def get_split_rule(self, tenant_id, staff_id):
         return self.rules.get((tenant_id, staff_id)) or self.rules.get((tenant_id, None))
+
+    # setup / admin
+    def get_settings(self, tenant_id):
+        return self.settings.get(tenant_id)
+
+    def upsert_settings(self, tenant_id, fields):
+        self.settings.setdefault(tenant_id, {"tenant_id": tenant_id, "mode": "off", "tested_at": None}).update(fields)
+
+    def list_tags(self, tenant_id):
+        return [dict(t) for t in self.tags.values() if t["tenant_id"] == tenant_id]
+
+    def create_tag(self, row):
+        t = {"id": self._id(), "status": "active", "mode": "appointment", "allow_open_amount": False, **row}
+        self.tags[t["id"]] = t
+        return dict(t)
+
+    def update_tag(self, tenant_id, tag_id, fields):
+        self.tags[tag_id].update(fields)
+
+    def recent_bills(self, tenant_id, limit=20):
+        return [dict(b) for b in list(self.bills.values())[::-1] if b["tenant_id"] == tenant_id][:limit]
+
+    def list_split_rules(self, tenant_id):
+        return [dict(v, scope="default" if k[1] is None else f"staff:{k[1]}")
+                for k, v in self.rules.items() if k[0] == tenant_id]
+
+    def upsert_split_rule(self, tenant_id, scope, fields):
+        staff = None if scope == "default" else scope.split(":", 1)[1]
+        self.rules.setdefault((tenant_id, staff), {}).update(fields)
+
+    def team_members(self, tenant_id):
+        return self.members.get(tenant_id, [])
 
     # display
     def merchant_name(self, tenant_id):

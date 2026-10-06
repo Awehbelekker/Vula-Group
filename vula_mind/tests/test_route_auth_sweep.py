@@ -31,6 +31,7 @@ PUBLIC = {
     ("POST", "/email/unsubscribe"): "signed unsubscribe link in campaign emails",
     ("GET", "/l/{code}"): "broadcast click-tracking redirect",
     ("GET", "/t/{code}"): "tap-to-pay NFC/QR tag landing — mints a 2-minute single-use claim token, off unless tenant enabled",
+    ("GET", "/t/{code}/qr.svg"): "tap-to-pay printable QR of the public tap link — carries no secret",
     ("GET", "/v1/tap/pay/{session_id}/{nonce}"): "tap-to-pay one-time pay link — nonce hash-checked against the session",
     ("GET", "/v1/tap/done/{session_id}"): "tap-to-pay gateway return page — informational only, never marks paid",
     ("GET", "/v1/tap/cancelled/{session_id}"): "tap-to-pay gateway return page — informational only",

@@ -51,6 +51,7 @@ export const MERCHANT_GROUPS = [
       { id: "bank", icon: "🏦", label: "Bank & matching" },
       { id: "books", icon: "📒", label: "Accounts" },
       { id: "payments", icon: "💳", label: "Payments" },
+      { id: "taptopay", icon: "📲", label: "Tap to Pay" },
       { id: "budget", icon: "🎯", label: "Budget" },
       { id: "scanner", icon: "📷", label: "Scanner" },
       { id: "finances", icon: "💵", label: "Finances" },

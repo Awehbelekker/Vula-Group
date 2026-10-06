@@ -21,7 +21,9 @@ def svc(monkeypatch):
     repo = MemoryRepo(clock)
     s = TapService(repo, FakeMessenger(), FakeGateway(),
                    TapConfig(pepper="p", public_base_url="https://api.test",
-                             encrypt=lambda x: "enc:" + x, decrypt=lambda x: x[4:], clock=clock))
+                             encrypt=lambda x: "enc:" + x, decrypt=lambda x: x[4:], clock=clock,
+                             enabled=tap_api.tenant_enabled))
+    tap_api._mode_cache.clear()
     repo.add_tag(T, "coach-sipho", bound_id="coach")
     monkeypatch.setattr(tap_api.settings, "tap_to_pay_tenants", T)
     monkeypatch.setattr(tap_api, "get_service", lambda: s)
@@ -37,6 +39,7 @@ def test_tap_redirects_to_whatsapp(svc):
 def test_unknown_tag_and_feature_off_show_not_verified(svc, monkeypatch):
     assert client.get("/t/nope").status_code == 404
     monkeypatch.setattr(tap_api.settings, "tap_to_pay_tenants", "")
+    tap_api._mode_cache.clear()
     r = client.get("/t/coach-sipho")
     assert r.status_code == 404 and "couldn't verify" in r.text
 
@@ -56,6 +59,7 @@ def test_return_pages_are_informational_only(svc):
 async def test_text_and_interactive_hooks_are_off_unless_enabled(svc, monkeypatch):
     assert await tap_api.try_handle_text(T, "27821114482", "what time do you open?") is False
     monkeypatch.setattr(tap_api.settings, "tap_to_pay_tenants", "someone-else")
+    tap_api._mode_cache.clear()
     assert await tap_api.try_handle_text(T, "27821114482", "PAY aaaaaaaaaaaaaaaa") is False
     assert await tap_api.try_handle_interactive(T, "27821114482", "kb:pay:x") is False
 
@@ -63,8 +67,10 @@ async def test_text_and_interactive_hooks_are_off_unless_enabled(svc, monkeypatc
 async def test_itn_hook_only_takes_tap_references(svc, monkeypatch):
     assert await tap_api.try_handle_itn(T, {}, b"", {"m_payment_id": "invoice-uuid"}) is None
     monkeypatch.setattr(tap_api.settings, "tap_to_pay_tenants", "")
+    tap_api._mode_cache.clear()
     assert await tap_api.try_handle_itn(T, {}, b"", {"m_payment_id": REF_PREFIX + "x"}) is None
     monkeypatch.setattr(tap_api.settings, "tap_to_pay_tenants", T)
+    tap_api._mode_cache.clear()
     svc.gateway.itn = None            # bad signature
     assert await tap_api.try_handle_itn(T, {}, b"", {"m_payment_id": REF_PREFIX + "x"}) == "rejected"
 

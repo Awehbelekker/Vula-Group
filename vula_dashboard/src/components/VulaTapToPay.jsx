@@ -1,0 +1,281 @@
+/**
+ * VulaTapToPay.jsx — one-screen setup for Tap to Pay (NFC tag / QR → WhatsApp → PayFast → slip).
+ * Four steps, top to bottom: connect PayFast → pick who gets paid + their share and get their tag →
+ * run a R5 test payment → go live. Nothing here needs a developer: the server keeps the on/off
+ * switch, and "Go live" stays locked until a real test payment has been confirmed.
+ */
+import { useState, useEffect, useCallback, useRef } from "react";
+import { T } from "../theme/tokens";
+import { Card, Button, Badge, SectionTitle, inputStyle } from "./ui";
+import { VULA_API } from "../lib/authFetch";
+
+const MODE_BADGE = { off: ["muted", "Off"], testing: ["warn", "Testing"], live: ["ok", "Live"] };
+const STATUS_TONE = { open: "muted", claimed: "warn", paid: "ok", cancelled: "muted", expired: "muted" };
+const RAND = /^\d{1,7}(\.\d{1,2})?$/;
+
+async function api(path, opts = {}) {
+  const r = await fetch(`${VULA_API}${path}`, {
+    ...opts,
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  let data = {};
+  try { data = await r.json(); } catch { /* empty body */ }
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Something went wrong — please try again.");
+  return data;
+}
+
+function Step({ n, title, done, children }) {
+  return (
+    <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ width: 24, height: 24, borderRadius: 12, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: done ? T.ok || "#16a34a" : T.surfaceAlt, color: done ? "#fff" : T.muted, fontSize: 13, fontWeight: 700 }}>{done ? "✓" : n}</span>
+        <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>{title}</span>
+      </div>
+      {children}
+    </Card>
+  );
+}
+
+const hint = { fontSize: 12.5, color: T.muted };
+
+export default function VulaTapToPay({ tenantId }) {
+  const [st, setSt] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [shares, setShares] = useState({});        // member id -> percent string
+  const [pf, setPf] = useState({ merchant_id: "", merchant_key: "", passphrase: "", mode: "test" });
+  const [editPf, setEditPf] = useState(false);
+  const [test, setTest] = useState(null);          // {url, qr, code}
+  const [testMember, setTestMember] = useState("");
+  const [bills, setBills] = useState([]);
+  const [nb, setNb] = useState({ member: "", desc: "", amount: "", phone: "" });
+  const [newCode, setNewCode] = useState("");
+  const poll = useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const s = await api(`/v1/tap/${tenantId}/setup`);
+      setSt(s);
+      setShares((cur) => {
+        const next = { ...cur };
+        s.staff.forEach((m) => { if (next[m.id] === undefined) next[m.id] = String(m.share_bp / 100); });
+        return next;
+      });
+      setTestMember((m) => m || s.staff.find((x) => x.tag)?.id || s.staff[0]?.id || "");
+      setNb((b) => ({ ...b, member: b.member || s.staff.find((x) => x.tag)?.id || "" }));
+      if (s.mode !== "off") {
+        const b = await api(`/v1/tap/${tenantId}/bills`).catch(() => ({ bills: [] }));
+        setBills(b.bills || []);
+      }
+    } catch (e) { setErr(e.message); }
+  }, [tenantId]);
+  useEffect(() => { load(); }, [load]);
+
+  // while a test payment is pending, check every 4 s so the tick appears by itself
+  useEffect(() => {
+    clearInterval(poll.current);
+    if (test && st && !st.tested) poll.current = setInterval(load, 4000);
+    return () => clearInterval(poll.current);
+  }, [test, st, load]);
+
+  const run = async (key, fn) => {
+    setBusy(key); setErr("");
+    try { await fn(); } catch (e) { setErr(e.message); } finally { setBusy(""); }
+  };
+
+  const connectPayfast = () => run("pf", async () => {
+    if (!pf.merchant_id.trim() || !pf.merchant_key.trim()) throw new Error("Enter your PayFast merchant ID and merchant key.");
+    const r = await api(`/v1/payments/${tenantId}/providers`, { method: "POST", body: {
+      provider: "payfast", mode: pf.mode, is_default: false,
+      credentials: { merchant_id: pf.merchant_id.trim(), merchant_key: pf.merchant_key.trim(), passphrase: pf.passphrase } } });
+    if (r.error) throw new Error(r.error);
+    setPf({ merchant_id: "", merchant_key: "", passphrase: "", mode: pf.mode });
+    setEditPf(false); await load();
+  });
+
+  const saveShares = () => run("shares", async () => {
+    const staff_shares = {};
+    for (const m of st.staff) {
+      const v = Number(shares[m.id] ?? 0);
+      if (!Number.isFinite(v) || v < 0 || v > 100) throw new Error(`${m.name}: enter a share between 0 and 100.`);
+      staff_shares[m.id] = Math.round(v * 100);
+    }
+    setSt(await api(`/v1/tap/${tenantId}/setup/shares`, { method: "PUT", body: { default_share_bp: 0, staff_shares } }));
+  });
+
+  const getTag = (id, rotate = false) => run(`tag-${id}`, async () => {
+    if (rotate && !window.confirm("Make a new tag? The old tag and QR code stop working straight away.")) return;
+    await api(`/v1/tap/${tenantId}/staff/${id}/tag${rotate ? "?rotate=true" : ""}`, { method: "POST" });
+    await load();
+  });
+
+  const startTest = () => run("test", async () => setTest(await api(`/v1/tap/${tenantId}/test/${testMember}`, { method: "POST" })));
+  const goLive = () => run("live", async () => setSt(await api(`/v1/tap/${tenantId}/go-live`, { method: "POST" })));
+  const pause = () => run("pause", async () => { setSt(await api(`/v1/tap/${tenantId}/pause`, { method: "POST" })); setBills([]); });
+
+  const createBill = () => run("bill", async () => {
+    if (!nb.desc.trim()) throw new Error("Say what the bill is for, for example “Beginner lesson”.");
+    if (!RAND.test(nb.amount)) throw new Error("Enter the amount in rands, for example 500 or 500.00.");
+    const tag = st.staff.find((m) => m.id === nb.member)?.tag;
+    if (!tag) throw new Error("Pick a team member who has a tag.");
+    const r = await api(`/v1/tap/${tenantId}/bills`, { method: "POST", body: {
+      amount_cents: Math.round(Number(nb.amount) * 100),
+      description: nb.desc.trim(), staff_id: nb.member, customer_phone: nb.phone.trim() || null } });
+    setNewCode(r.bill_code ? `Bill created. If the customer pays from a different phone, give them code ${r.bill_code}.` : "Bill created — the customer can tap now.");
+    setNb({ ...nb, desc: "", amount: "", phone: "" });
+    await load();
+  });
+  const billAction = (id, action) => run(`b-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/${action}`, { method: "POST" }); await load(); });
+
+  if (!st) return <div style={{ padding: 24, color: T.muted }}>{err || "Loading…"}</div>;
+  const [tone, label] = MODE_BADGE[st.mode] || MODE_BADGE.off;
+  const pfOk = st.payfast.connected;
+  const staffWithTag = st.staff.filter((m) => m.tag);
+
+  return (
+    <div style={{ maxWidth: 820, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
+      <SectionTitle sub="Customers tap a tag or scan a QR code, choose a tip, pay with PayFast and get their slip on WhatsApp. No card machine.">
+        Tap to Pay <Badge tone={tone} style={{ marginLeft: 8 }}>{label}</Badge>
+      </SectionTitle>
+      {err && <div role="alert" style={{ background: "rgba(239,68,68,0.1)", color: "var(--danger)", borderRadius: 8, padding: "8px 12px", fontSize: 13 }}>{err}</div>}
+
+      <Step n={1} title="Connect PayFast" done={pfOk}>
+        {pfOk && !editPf ? (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={hint}>Connected · {st.payfast.mode === "test" ? "Test / sandbox keys" : "Live keys"}</span>
+            <Button size="sm" variant="soft" onClick={() => setEditPf(true)}>Change keys</Button>
+          </div>
+        ) : (
+          <>
+            <div style={{ ...hint, background: T.surfaceAlt, borderRadius: 8, padding: "8px 10px" }}>
+              Where to find these: PayFast dashboard → Settings → Integration (merchant ID, merchant key, passphrase).
+              Start with your <b>sandbox</b> keys — the test in step 3 will tell you if they work.
+            </div>
+            <input style={inputStyle} placeholder="Merchant ID" value={pf.merchant_id} onChange={(e) => setPf({ ...pf, merchant_id: e.target.value })} />
+            <input style={inputStyle} type="password" placeholder="Merchant key" value={pf.merchant_key} onChange={(e) => setPf({ ...pf, merchant_key: e.target.value })} />
+            <input style={inputStyle} type="password" placeholder="Passphrase (the one set in PayFast)" value={pf.passphrase} onChange={(e) => setPf({ ...pf, passphrase: e.target.value })} />
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select value={pf.mode} onChange={(e) => setPf({ ...pf, mode: e.target.value })} style={{ ...inputStyle, width: "auto" }}>
+                <option value="test">Test / sandbox</option><option value="live">Live</option>
+              </select>
+              <Button size="sm" onClick={connectPayfast} disabled={busy === "pf"}>{busy === "pf" ? "Connecting…" : "Connect PayFast"}</Button>
+              {editPf && <Button size="sm" variant="ghost" onClick={() => setEditPf(false)}>Cancel</Button>}
+            </div>
+            <span style={hint}>Keys are stored encrypted and never shown again.</span>
+          </>
+        )}
+        {!st.whatsapp.connected && <span style={{ ...hint, color: "var(--warn)" }}>WhatsApp isn’t connected yet — connect your number in Settings first.</span>}
+      </Step>
+
+      <Step n={2} title="Who gets paid, and their tag" done={staffWithTag.length > 0}>
+        {st.staff.length === 0 ? (
+          <span style={hint}>Add your coaches or staff under Team (with their WhatsApp number), then come back.</span>
+        ) : (
+          <>
+            <span style={hint}>
+              Each person’s share is the % of the <b>bill</b> they keep (the shop keeps the rest). Tips always go 100% to the person who served.
+            </span>
+            {st.staff.map((m) => (
+              <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", borderTop: `1px solid ${T.border || "rgba(0,0,0,.08)"}`, paddingTop: 10 }}>
+                <span style={{ minWidth: 140, fontWeight: 600, color: T.ink }}>{m.name}</span>
+                <label style={{ ...hint, display: "flex", alignItems: "center", gap: 6 }}>
+                  Share
+                  <input style={{ ...inputStyle, width: 70 }} inputMode="decimal" value={shares[m.id] ?? ""} onChange={(e) => setShares({ ...shares, [m.id]: e.target.value })} />%
+                </label>
+                {m.tag ? (
+                  <>
+                    <img src={m.tag.qr} alt={`QR code for ${m.name}`} width={72} height={72} style={{ background: "#fff", borderRadius: 6 }} />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <a href={m.tag.qr} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>Open / print QR</a>
+                      <button type="button" style={{ ...hint, background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", textDecoration: "underline" }}
+                        onClick={() => navigator.clipboard?.writeText(m.tag.url)}>Copy link (write this to an NFC tag)</button>
+                      <button type="button" style={{ ...hint, background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer" }}
+                        onClick={() => getTag(m.id, true)}>Replace tag…</button>
+                    </div>
+                  </>
+                ) : (
+                  <Button size="sm" variant="soft" onClick={() => getTag(m.id)} disabled={busy === `tag-${m.id}`}>Create tag</Button>
+                )}
+              </div>
+            ))}
+            <div><Button size="sm" onClick={saveShares} disabled={busy === "shares"}>{busy === "shares" ? "Saving…" : "Save shares"}</Button></div>
+          </>
+        )}
+      </Step>
+
+      <Step n={3} title="Test with a R5 payment" done={st.tested}>
+        {st.tested ? (
+          <span style={hint}>Test payment received — PayFast is set up correctly.</span>
+        ) : (
+          <>
+            <span style={hint}>Opens the real flow on your phone, end to end. Use your sandbox keys; with live keys it is a genuine R5 you can refund in PayFast. Nothing is booked to anyone’s earnings.</span>
+            {st.blockers.filter((b) => !b.includes("tag")).map((b) => <span key={b} style={{ ...hint, color: "var(--warn)" }}>{b}</span>)}
+            {st.staff.length > 0 && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <select value={testMember} onChange={(e) => setTestMember(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+                  {st.staff.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                <Button size="sm" style={{ opacity: pfOk && st.whatsapp.connected ? 1 : 0.5 }} onClick={startTest} disabled={busy === "test" || !pfOk || !st.whatsapp.connected}>{busy === "test" ? "Starting…" : "Start test"}</Button>
+              </div>
+            )}
+            {test && (
+              <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                <img src={test.qr} alt="Scan with your phone" width={110} height={110} style={{ background: "#fff", borderRadius: 6 }} />
+                <span style={hint}>Scan this with your phone camera (or tap an NFC tag with this link). WhatsApp opens — press Send, choose a tip, pay. This page ticks by itself when the payment is confirmed.</span>
+              </div>
+            )}
+          </>
+        )}
+      </Step>
+
+      <Step n={4} title="Go live" done={st.mode === "live"}>
+        {st.mode === "live" ? (
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <span style={hint}>Customers can tap and pay now.</span>
+            <Button size="sm" variant="ghost" onClick={pause} disabled={busy === "pause"}>Pause Tap to Pay</Button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Button size="sm" style={{ opacity: st.can_go_live ? 1 : 0.5 }} onClick={goLive} disabled={!st.can_go_live || busy === "live"}>{busy === "live" ? "Going live…" : "Go live"}</Button>
+            {!st.can_go_live && <span style={hint}>{st.tested ? st.blockers[0] : "Finish the test payment first."}</span>}
+            {st.mode === "testing" && <Button size="sm" variant="ghost" onClick={pause}>Switch off</Button>}
+          </div>
+        )}
+        {st.mode === "live" && st.payfast.mode === "test" && <span style={{ ...hint, color: "var(--warn)" }}>You’re live on <b>sandbox</b> keys — no real money moves. Switch to your live PayFast keys (step 1) when you’re ready.</span>}
+      </Step>
+
+      {st.mode !== "off" && (
+        <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>Create a bill</span>
+          <span style={hint}>The customer taps the tag (or scans the QR), and the first phone to tap gets this bill.</span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select value={nb.member} onChange={(e) => setNb({ ...nb, member: e.target.value })} style={{ ...inputStyle, width: "auto" }}>
+              <option value="">Who served?</option>
+              {staffWithTag.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+            <input style={{ ...inputStyle, flex: "1 1 180px" }} placeholder="What for? e.g. Beginner lesson" value={nb.desc} onChange={(e) => setNb({ ...nb, desc: e.target.value })} />
+            <input style={{ ...inputStyle, width: 110 }} inputMode="decimal" placeholder="Rands" value={nb.amount} onChange={(e) => setNb({ ...nb, amount: e.target.value })} />
+            <input style={{ ...inputStyle, flex: "1 1 160px" }} inputMode="tel" placeholder="Customer WhatsApp (optional)" value={nb.phone} onChange={(e) => setNb({ ...nb, phone: e.target.value })} />
+            <Button size="sm" onClick={createBill} disabled={busy === "bill"}>{busy === "bill" ? "Creating…" : "Create bill"}</Button>
+          </div>
+          {newCode && <span style={{ ...hint, color: "var(--ok)" }}>{newCode}</span>}
+          {bills.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+              {bills.map((b) => (
+                <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13, color: T.ink }}>
+                  <span style={{ flex: 1 }}>{b.description}{b.is_test && !/test/i.test(b.description) ? " (test)" : ""}</span>
+                  <span>R {(b.subtotal_cents / 100).toFixed(2)}</span>
+                  <Badge tone={STATUS_TONE[b.status] || "muted"}>{b.status}</Badge>
+                  {b.status === "claimed" && <Button size="sm" variant="ghost" onClick={() => billAction(b.id, "release")}>Release</Button>}
+                  {(b.status === "open" || b.status === "claimed") && <Button size="sm" variant="ghost" onClick={() => billAction(b.id, "cancel")}>Cancel</Button>}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
