@@ -159,6 +159,7 @@ def _match_account(answer: str, accounts: List[dict], direction: str) -> Optiona
         "stock": "cost_of_sales", "supplies": "cost_of_sales", "supplier": "cost_of_sales",
         "ingredients": "cost_of_sales", "fish": "cost_of_sales",
         "labour": "casual_labour", "labor": "casual_labour", "worker": "casual_labour",
+        "subcontractor": "subcontractors", "subbie": "subcontractors",
         "wages": "wages", "salary": "wages", "staff": "wages",
         "petrol": "fuel", "diesel": "fuel", "transport": "delivery",
         "income": "other_income", "sale": "sales", "customer": "sales",

@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-_PROJECT_COST = {"cost_of_sales", "casual_labour"}
+_PROJECT_COST = {"cost_of_sales", "casual_labour", "subcontractors"}
 _NOT_SPEND = {"bank_cash", "accounts_payable", "vat_output", "vat_input"}
 _UNSPECIFIED = ("unspecified", "unallocated", "general", "")
 DEFAULT_FEE_PCT = 10.0
@@ -179,9 +179,10 @@ def _is_overhead(t: Dict[str, Any]) -> bool:
 
 def _trade(t: Dict[str, Any]) -> str:
     tr = (t.get("trade") or "").strip()
-    if tr.lower().split(" - ")[-1].strip() in _UNSPECIFIED or "unspecified" in tr.lower():
+    if tr and (tr.lower().split(" - ")[-1].strip() in _UNSPECIFIED or "unspecified" in tr.lower()):
         return "Not yet allocated to a trade"
-    return tr or ("Labour" if t.get("account_code") == "casual_labour" else "Not yet allocated to a trade")
+    return tr or ("Labour" if t.get("account_code") in ("casual_labour", "subcontractors")
+                  else "Not yet allocated to a trade")
 
 
 def costing(tenant_id: str, since: Optional[str] = None, txns: Optional[List[Dict[str, Any]]] = None

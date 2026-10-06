@@ -2919,7 +2919,7 @@ async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, 
         elif status == "no_project":
             # Materials/labour paid but not on a project — filtered here, not in the browser,
             # so a line older than the latest page still shows (2 Oct: 72 DIGG lines back to June).
-            q = (q.eq("direction", "out").in_("account_code", ["cost_of_sales", "casual_labour"])
+            q = (q.eq("direction", "out").in_("account_code", ["cost_of_sales", "casual_labour", "subcontractors"])
                  .is_("project", "null").neq("match_status", "ignored"))
         elif status:
             q = q.eq("match_status", status)

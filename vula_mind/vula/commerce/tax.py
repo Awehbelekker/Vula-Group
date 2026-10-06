@@ -452,9 +452,23 @@ def vat_position(tenant_id: str, today: Optional[date] = None) -> Dict[str, Any]
 # ── the calendar ──────────────────────────────────────────────────────────────
 
 def _pays_workers(tenant_id: str) -> bool:
+    """Employees on payroll (so EMP201 applies): the owner's answer if given, else active
+    workers or wages paid in the last 90 days. Casual-labour and subcontractor payments never
+    count — DIGG (6 Oct) paid its subcontractors for their own workers, and had only an inactive
+    test worker on file."""
+    said = (_answers(tenant_id).get("payroll") or "").lower()
+    if said:
+        return bool(re.search(r"\b(?:yes|payroll|paye|employ|staff)\b", said)) and not re.search(
+            r"\b(?:no|not|subcontract\w*|none)\b", said)
     try:
         from vula.commerce.job_costing import _client
-        return bool(_client().table("commerce_workers").select("id").eq("tenant_id", tenant_id)
+        db = _client()
+        if (db.table("commerce_workers").select("id").eq("tenant_id", tenant_id)
+                .eq("active", True).limit(1).execute().data):
+            return True
+        since = (date.today() - timedelta(days=90)).isoformat()
+        return bool(db.table("commerce_bank_transactions").select("id").eq("tenant_id", tenant_id)
+                    .eq("account_code", "wages").eq("direction", "out").gte("txn_date", since)
                     .limit(1).execute().data)
     except Exception:
         return False

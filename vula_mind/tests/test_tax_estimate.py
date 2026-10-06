@@ -334,3 +334,79 @@ async def test_a_wrong_vat_number_is_queried_not_saved():
     ("Is the price including VAT?", False)])
 def test_owner_tax_questions_go_to_the_admin_agent(text, yes):
     assert looks_like_owner_admin_question(text) is yes
+
+
+# ── payroll: subcontractors aren't employees (DIGG, 6 Oct) ───────────────────
+
+class _Rows:
+    """A stand-in client: workers and bank lines, filtered by eq/gte like supabase."""
+
+    def __init__(self, tables):
+        self.tables, self._t, self._f = tables, None, []
+
+    def table(self, name):
+        self._t, self._f = name, []
+        return self
+
+    def select(self, *_a):
+        return self
+
+    def eq(self, k, v):
+        self._f.append(lambda r: r.get(k) == v)
+        return self
+
+    def gte(self, k, v):
+        self._f.append(lambda r: str(r.get(k)) >= v)
+        return self
+
+    def limit(self, *_a):
+        return self
+
+    def execute(self):
+        from types import SimpleNamespace
+        rows = [r for r in self.tables.get(self._t, []) if all(f(r) for f in self._f)]
+        return SimpleNamespace(data=rows)
+
+
+def _payroll(tables, answers=None):
+    with patch("vula.commerce.job_costing._client", return_value=_Rows(tables)), \
+            patch("vula.commerce.business_profile.get_answers", return_value=answers or {}):
+        return tax._pays_workers(TID)
+
+
+def test_subcontractor_labour_and_an_inactive_test_worker_are_not_payroll():
+    recent = (date.today().replace(day=1)).isoformat()
+    tables = {"commerce_workers": [{"tenant_id": TID, "id": "w", "active": False}],
+              "commerce_bank_transactions": [
+                  {"tenant_id": TID, "id": "b1", "account_code": "casual_labour", "direction": "out",
+                   "txn_date": recent},
+                  {"tenant_id": TID, "id": "b2", "account_code": "subcontractors", "direction": "out",
+                   "txn_date": recent}]}
+    assert _payroll(tables) is False
+
+
+def test_active_workers_or_wages_mean_payroll():
+    recent = date.today().isoformat()
+    assert _payroll({"commerce_workers": [{"tenant_id": TID, "id": "w", "active": True}]})
+    assert _payroll({"commerce_bank_transactions": [
+        {"tenant_id": TID, "id": "b", "account_code": "wages", "direction": "out", "txn_date": recent}]})
+
+
+@pytest.mark.parametrize("answer,expected", [
+    ("Workers are paid through subcontractors", False), ("No", False),
+    ("Yes, 3 staff on PAYE", True)])
+def test_the_owners_payroll_answer_wins(answer, expected):
+    assert _payroll({"commerce_workers": [{"tenant_id": TID, "id": "w", "active": True}]},
+                    {"payroll": answer}) is expected
+
+
+def test_subcontractor_lines_are_project_labour_in_job_costing():
+    from vula.commerce import job_costing
+    assert job_costing._trade({"account_code": "subcontractors"}) == "Labour"
+    assert "subcontractors" in job_costing._PROJECT_COST
+
+
+def test_subcontractors_account_is_in_the_default_chart():
+    from vula.commerce.accounting import DEFAULT_CHART
+    row = next(r for r in DEFAULT_CHART if r[0] == "subcontractors")
+    assert row[2] == "expense" and row[4] is True
