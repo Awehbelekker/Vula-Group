@@ -2910,10 +2910,13 @@ async def admin_bank_review_start(tenant_id: str):
 
 
 @router.get("/{tenant_id}/admin/bank/transactions")
-async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, limit: int = 200):
+async def admin_bank_transactions(tenant_id: str, status: Optional[str] = None, limit: int = 200,
+                                  account_code: Optional[str] = None):
     db = service._client()
     try:
         q = db.table("commerce_bank_transactions").select("*").eq("tenant_id", tenant_id)
+        if account_code:            # "show me all Casual labour" (DIGG re-booking, 6 Oct)
+            q = q.eq("account_code", account_code)
         if status == "needs_input":
             q = q.in_("categorized_by", ["default", "asked"])   # Vula unsure — owner to allocate
         elif status == "no_project":
@@ -3090,6 +3093,9 @@ async def admin_categorize_txn(tenant_id: str, txn_id: str, body: CategorizeIn):
 class BulkCategorizeIn(BaseModel):
     txn_ids: List[str]
     account_code: str
+    # Optional: put the whole group on a project / trade too (and learn it once).
+    project: Optional[str] = None
+    trade: Optional[str] = None
 
 
 class BulkDismissIn(BaseModel):
@@ -3112,7 +3118,8 @@ _BULK_LIMIT = 500
 
 @router.get("/{tenant_id}/admin/bank/transactions/groups")
 async def admin_bank_transaction_groups(tenant_id: str, direction: Optional[str] = None,
-                                        group_by: str = "merchant", limit: int = 2000):
+                                        group_by: str = "merchant", limit: int = 2000,
+                                        account_code: Optional[str] = None):
     """Unreviewed transactions collapsed into merchant-shaped GROUPS.
 
     2026-09-06: off-the-hook had 738 unmatched rows and digg-demo 54, spanning 2026-05-11 to
@@ -3128,8 +3135,12 @@ async def admin_bank_transaction_groups(tenant_id: str, direction: Optional[str]
     from vula.commerce.merchants import merchant_key
     db = service._client()
     try:
-        q = (db.table("commerce_bank_transactions").select("*")
-             .eq("tenant_id", tenant_id).in_("match_status", ["unmatched", "asked"]))
+        q = db.table("commerce_bank_transactions").select("*").eq("tenant_id", tenant_id)
+        # With a category: every line in it (re-filing lines already booked, e.g. DIGG's
+        # "casual labour" that was really materials and subcontractors). Without: the
+        # unreviewed queue, as before.
+        q = (q.eq("account_code", account_code).neq("match_status", "ignored") if account_code
+             else q.in_("match_status", ["unmatched", "asked"]))
         if direction in ("in", "out"):
             q = q.eq("direction", direction)
         rows = q.order("txn_date", desc=True).limit(min(limit, 5000)).execute().data or []
@@ -3198,14 +3209,20 @@ async def admin_bulk_categorize(tenant_id: str, body: BulkCategorizeIn):
         raise HTTPException(status_code=404, detail="no matching transactions")
 
     vat_reg = accounting.is_vat_registered(tenant_id)
+    project = service.canonical_project(tenant_id, body.project) if body.project else None
+    trade = (body.trade or "").strip() or None
     updated = 0
     for txn in rows:
         vat = accounting.vat_for(acc, int(txn.get("amount_cents") or 0), vat_reg)
+        change = {"account_code": body.account_code, "vat_cents": vat,
+                  "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
+        if project:
+            change["project"] = project
+        if trade:
+            change["trade"] = trade
         try:
-            db.table("commerce_bank_transactions").update(
-                {"account_code": body.account_code, "vat_cents": vat,
-                 "vat_treatment": acc.get("vat_treatment"), "categorized_by": "owner"}
-            ).eq("id", txn["id"]).execute()
+            db.table("commerce_bank_transactions").update(change).eq(
+                "tenant_id", tenant_id).eq("id", txn["id"]).execute()
             updated += 1
         except Exception as exc:
             log.warning("bulk categorize skipped %s: %s", txn.get("id"), exc)
@@ -3215,8 +3232,15 @@ async def admin_bulk_categorize(tenant_id: str, body: BulkCategorizeIn):
         accounting.learn_category_rule(tenant_id, rows[0], body.account_code)
     except Exception as exc:
         log.debug("bulk rule learning skipped: %s", exc)
+    if project:
+        try:
+            from vula.commerce import allocation
+            allocation.learn(tenant_id, rows[0].get("description"), project, trade,
+                             payee=rows[0].get("payee"))
+        except Exception as exc:
+            log.debug("bulk allocation learning skipped: %s", exc)
     return {"ok": True, "updated": updated, "requested": len(body.txn_ids),
-            "account_code": body.account_code}
+            "account_code": body.account_code, "project": project, "trade": trade}
 
 
 @router.post("/{tenant_id}/admin/bank/transactions/bulk-dismiss")
