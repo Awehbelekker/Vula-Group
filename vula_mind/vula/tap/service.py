@@ -52,6 +52,8 @@ class TapConfig:
     quick_tip_presets_cents: tuple = (500, 1000, 2000)
     clock: Callable[[], datetime] = _utcnow
     enabled: Callable[[str], bool] = lambda tenant_id: True   # per-tenant switch (api.tenant_enabled)
+    receipt_secret: str = ""       # with receipt_base_url: puts a receipt link in the customer's slip
+    receipt_base_url: str = ""     # e.g. https://dashboard.example (page lives at /r/<token>)
 
 
 # ── customer copy (rands, 2 decimals, merchant named, < 3 lines) ─────────────────────────────
@@ -493,9 +495,13 @@ class TapService:
                                               "correctly - you can go live in the dashboard.")
             return "test_paid"
         if phone:
+            link = ""
+            if self.cfg.receipt_secret and self.cfg.receipt_base_url:
+                from vula.tap.receipt import make_token
+                link = f"\nYour receipt: {self.cfg.receipt_base_url.rstrip('/')}/r/{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}"
             await self._say(tenant_id, phone,
                             f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
-                            f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.")
+                            f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{link}")
         await self._notify_staff(tenant_id, s, phone)
         return "paid"
 

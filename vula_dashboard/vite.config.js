@@ -4,8 +4,8 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   build: {
-    // two pages: the dashboard (/) and the coach app (/pay/, its own manifest + service worker)
-    rollupOptions: { input: { main: "index.html", pay: "pay/index.html" } },
+    // three pages: the dashboard (/), the coach app (/pay/, own manifest + service worker) and the customer receipt (/r/<token>)
+    rollupOptions: { input: { main: "index.html", pay: "pay/index.html", receipt: "r/index.html" } },
   },
   server: {
     port: 3000,

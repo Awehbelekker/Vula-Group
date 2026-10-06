@@ -221,12 +221,42 @@ class SupabaseRepo:
         if not s:
             return {}
         out = {"tip_cents": int(s["tip_cents"]), "total_cents": int(s["tip_cents"]) + int(s["bill_cents"])}
-        pay = self._one(self.db.table("kb_payments").select("id").eq("tenant_id", tenant_id).eq("session_id", s["id"]))
+        pay = self._one(self.db.table("kb_payments").select("id,created_at").eq("tenant_id", tenant_id).eq("session_id", s["id"]))
+        if pay:
+            out["paid_at"], out["ref"] = pay["created_at"], str(pay["id"])[:8].upper()
         if pay and party_id:
             lines = (self.db.table("kb_ledger_lines").select("cents").eq("tenant_id", tenant_id)
                      .eq("payment_id", pay["id"]).eq("party_id", party_id).execute().data or [])
             out["share_cents"] = sum(int(l["cents"]) for l in lines)
         return out
+
+    # receipts
+    def receipt_source(self, payment_id: str) -> Optional[dict]:
+        pay = self._one(self.db.table("kb_payments")
+                        .select("id,tenant_id,session_id,created_at,receipt_nonce,receipt_revoked_at").eq("id", payment_id))
+        if not pay:
+            return None
+        s = self._one(self.db.table("kb_sessions").select("bill_id,bill_cents,tip_cents")
+                      .eq("tenant_id", pay["tenant_id"]).eq("id", pay["session_id"])) or {}
+        b = (self._one(self.db.table("kb_bills").select("description,staff_id,is_test")
+                       .eq("tenant_id", pay["tenant_id"]).eq("id", s["bill_id"])) if s.get("bill_id") else None) or {}
+        return {"payment_id": pay["id"], "tenant_id": pay["tenant_id"], "paid_at": pay["created_at"],
+                "nonce": int(pay.get("receipt_nonce") or 0), "revoked_at": pay.get("receipt_revoked_at"),
+                "bill_cents": int(s.get("bill_cents") or 0), "tip_cents": int(s.get("tip_cents") or 0),
+                "description": b.get("description"), "staff_id": b.get("staff_id"), "is_test": bool(b.get("is_test"))}
+
+    def revoke_receipt(self, tenant_id: str, payment_id: str) -> None:
+        self.db.table("kb_payments").update({"receipt_revoked_at": "now()"}) \
+            .eq("tenant_id", tenant_id).eq("id", payment_id).execute()
+
+    def merchant_vat(self, tenant_id: str) -> dict:
+        try:
+            r = self._one(self.db.table("commerce_invoice_settings").select("vat_number,vat_registered")
+                          .eq("tenant_id", tenant_id)) or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("merchant_vat lookup failed: %s", exc)
+            r = {}
+        return {"vat_number": r.get("vat_number") or None, "vat_registered": bool(r.get("vat_registered", False))}
 
     # display
     def merchant_name(self, tenant_id: str) -> str:

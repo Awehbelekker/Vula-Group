@@ -8,11 +8,28 @@
       "destination": "https://vula-group-production.up.railway.app/$1"
     },
     {
+      "source": "/r/(.*)",
+      "destination": "/r/index.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
   ],
   "headers": [
+    {
+      "source": "/r/(.*)",
+      "headers": [
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    },
     {
       "source": "/pay/sw.js",
       "headers": [

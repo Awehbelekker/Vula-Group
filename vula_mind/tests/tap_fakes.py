@@ -29,6 +29,7 @@ class MemoryRepo:
         self.names = {}
         self.team = {}
         self.settings = {}
+        self.vat = {}
         self.codes, self.devices, self.subs = [], {}, {}
         self.members = {}
 
@@ -128,7 +129,7 @@ class MemoryRepo:
         k = (row["provider"], row["provider_ref"])
         if k in self.payments:
             return None
-        p = {"id": self._id(), **row}
+        p = {"id": self._id(), "receipt_nonce": 0, "receipt_revoked_at": None, **row}
         self.payments[k] = p
         return dict(p)
 
@@ -232,15 +233,38 @@ class MemoryRepo:
             return {}
         out = {"tip_cents": s["tip_cents"], "total_cents": s["bill_cents"] + s["tip_cents"]}
         pay = self.payments.get(("payfast", "kb-" + s["id"]))
+        if pay:
+            out["paid_at"], out["ref"] = "2026-10-06T10:05:00+00:00", pay["id"][:8].upper()
         if pay and party_id:
             out["share_cents"] = sum(l["cents"] for l in self.ledger if l["payment_id"] == pay["id"] and l["party_id"] == party_id)
         return out
+
+    # receipts
+    def receipt_source(self, payment_id):
+        pay = next((p for p in self.payments.values() if p["id"] == payment_id), None)
+        if not pay:
+            return None
+        sess = self.sessions[pay["session_id"]]
+        bill = self.bills.get(sess.get("bill_id"), {})
+        return {"payment_id": pay["id"], "tenant_id": pay["tenant_id"], "paid_at": "2026-10-06T10:05:00+00:00",
+                "nonce": pay.get("receipt_nonce", 0), "revoked_at": pay.get("receipt_revoked_at"),
+                "bill_cents": sess["bill_cents"], "tip_cents": sess["tip_cents"], "description": bill.get("description"),
+                "staff_id": bill.get("staff_id"), "is_test": bool(bill.get("is_test"))}
+
+    def revoke_receipt(self, tenant_id, payment_id):
+        next(p for p in self.payments.values() if p["id"] == payment_id)["receipt_revoked_at"] = "now"
+
+    def merchant_vat(self, tenant_id):
+        return self.vat.get(tenant_id, {"vat_number": None, "vat_registered": False})
 
     # display
     def merchant_name(self, tenant_id):
         return self.names.get(tenant_id, "Bean and Brew Coffee")
 
     def staff_name(self, tenant_id, staff_id):
+        m = next((m for m in self.members.get(tenant_id, []) if m["id"] == staff_id), None)
+        if m:
+            return (m.get("name") or "").split(" ")[0] or None
         return {"coach": "Sipho"}.get(staff_id)
 
     def tenant_wa_number(self, tenant_id):

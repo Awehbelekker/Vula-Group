@@ -57,8 +57,23 @@ installed home-screen app. The WhatsApp alert still goes out regardless. Apply m
 Not yet: WhatsApp-OTP sign-in (needs a Meta-approved authentication template), tip-pool/manager summaries, PNG icons
 (the app reuses the dashboard's SVG icon; fine for Chrome/Android installs, add 192/512 PNGs for older/iOS icons).
 
+## Receipts (animated slip, both sides)
+`vula_dashboard/src/receipt/PrintedSlip.jsx` is one shared component: the slip rises out of a printer slot
+header-first with a torn top edge, printer ticks and a soft ding (sound toggle, remembered), VAT line for
+VAT-registered merchants, a PAID stamp and barcode. It respects `prefers-reduced-motion` (appears instantly,
+silent) and stays silent when the browser blocks autoplay (the Replay button, being a tap, can play sound).
+- **Customer:** the WhatsApp slip now ends with `Your receipt: <dashboard>/r/<token>`. `/r/` is its own Vite page
+  (noindex, no-referrer). The token is an HMAC of (payment id, nonce) — unguessable, nothing stored, revoked by
+  `POST /v1/tap/{tenant}/payments/{id}/receipt/revoke`. The public JSON carries only merchant, service, first name
+  of who served, amounts, VAT, date, ref — never numbers or the coach's share. All failures look identical (404).
+  "Save / print" uses the browser's print-to-PDF with print CSS (no animation).
+- **Coach:** when a payment lands in Vula Pay the slip prints in an overlay with "Your share"; any paid bill has
+  "View slip". Sound can be switched off under "This phone".
+Apply migration 203. VAT shown on a receipt is 15% of the VAT-inclusive BILL only; tips are excluded until the
+accountant confirms their treatment. "Get tax invoice" is not built yet.
+
 ## Switching it on (self-serve)
-Apply migrations 199, 200, 201 and 202 in the Supabase SQL editor (staging first — docs/staging.md), then the
+Apply migrations 199, 200, 201, 202 and 203 in the Supabase SQL editor (staging first — docs/staging.md), then the
 owner does everything in the dashboard: **Money -> Tap to Pay**.
 
 1. Connect PayFast (merchant ID, key, passphrase; start with sandbox keys).

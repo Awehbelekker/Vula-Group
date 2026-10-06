@@ -1649,7 +1649,7 @@ _TENANT_GUARD_RES = [
     # is the tenant the caller must belong to. Public customer paths are carved out below.
     re.compile(r"^/v1/payments/(?!webhook/)([^/]+)/"),
     re.compile(r"^/v1/bookings/([^/]+)(?:/|$)"),
-    re.compile(r"^/v1/tap/(?!pay/|done/|cancelled/|app/)([^/]+)/"),   # tap-to-pay merchant bills
+    re.compile(r"^/v1/tap/(?!pay/|done/|cancelled/|app/|receipt/)([^/]+)/"),   # tap-to-pay merchant bills
     re.compile(r"^/v1/subscriptions/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/recurring-bills/([^/]+)(?:/|$)"),
     re.compile(r"^/v1/projects/([^/]+)(?:/|$)"),

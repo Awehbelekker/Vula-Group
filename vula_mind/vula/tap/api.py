@@ -85,7 +85,8 @@ def get_service() -> TapService:
         ("tap:" + (settings.supabase_service_role_key or settings.supabase_service_key or "")).encode()
     ).hexdigest()
     cfg = TapConfig(pepper=pepper, public_base_url=settings.public_base_url,
-                    encrypt=encrypt_secret, decrypt=decrypt_secret, enabled=tenant_enabled)
+                    encrypt=encrypt_secret, decrypt=decrypt_secret, enabled=tenant_enabled,
+                    receipt_secret="receipt:" + pepper, receipt_base_url=settings.dashboard_url)
     from vula.tap.push import build_pusher
     return TapService(SupabaseRepo(), WhatsAppMessenger(), PayFastGateway(settings.public_base_url), cfg,
                       pusher=build_pusher(settings))
@@ -319,4 +320,41 @@ async def list_devices(tenant: str, identity: dict = Depends(require_tenant_acto
 @router.post("/v1/tap/{tenant}/devices/{device_id}/revoke")
 async def revoke_device(tenant: str, device_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
     _auth().revoke_device(tenant, device_id)
+    return {"revoked": True}
+
+
+# ── receipts ─────────────────────────────────────────────────────────────────────────────────
+def build_receipt(svc: TapService, src: dict) -> dict:
+    """The public, customer-safe receipt: no phone numbers, no staff share, no other payments."""
+    from vula.tap.receipt import vat_included
+    tenant = src["tenant_id"]
+    vat = svc.repo.merchant_vat(tenant)
+    first = (svc.repo.staff_name(tenant, src.get("staff_id")) or None)
+    return {"merchant": svc.repo.merchant_name(tenant), "description": src.get("description") or "Payment",
+            "served_by": first, "bill_cents": src["bill_cents"], "tip_cents": src["tip_cents"],
+            "total_cents": src["bill_cents"] + src["tip_cents"], "currency": "ZAR",
+            "vat_number": vat["vat_number"] if vat["vat_registered"] else None,
+            "vat_cents": vat_included(src["bill_cents"]) if vat["vat_registered"] and vat["vat_number"] else None,
+            "paid_at": src["paid_at"], "ref": str(src["payment_id"])[:8].upper(), "is_test": src["is_test"]}
+
+
+@router.get("/v1/tap/receipt/{token}")
+async def get_receipt(token: str) -> Response:
+    from vula.tap.receipt import read_token
+    svc = get_service()
+    parsed = read_token(svc.cfg.receipt_secret, token[:300])
+    src = svc.repo.receipt_source(parsed[0]) if parsed else None
+    if not src or src["nonce"] != parsed[1] or src.get("revoked_at"):
+        raise HTTPException(status_code=404, detail="This receipt link is no longer available.")
+    import json
+    return Response(json.dumps(build_receipt(svc, src)), media_type="application/json",
+                    headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+@router.post("/v1/tap/{tenant}/payments/{payment_id}/receipt/revoke")
+async def revoke_receipt(tenant: str, payment_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    src = get_service().repo.receipt_source(payment_id)
+    if not src or src["tenant_id"] != tenant:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+    get_service().repo.revoke_receipt(tenant, payment_id)
     return {"revoked": True}

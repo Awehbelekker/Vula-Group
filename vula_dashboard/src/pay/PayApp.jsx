@@ -7,6 +7,7 @@
  * offline. Everything money-related comes from the server — nothing is computed here.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
+import PrintedSlip from "../receipt/PrintedSlip";
 
 const API = import.meta.env.VITE_API_URL || "https://vula-group-production.up.railway.app";
 const LS = {
@@ -37,18 +38,7 @@ async function call(path, { token, method = "GET", body } = {}) {
   return data;
 }
 
-function beep() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    [880, 1320].forEach((f, i) => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
-      g.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.14); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.14 + 0.2);
-      o.start(ctx.currentTime + i * 0.14); o.stop(ctx.currentTime + i * 0.14 + 0.22);
-    });
-  } catch { /* audio blocked */ }
-}
-const celebrate = () => { try { navigator.vibrate?.([120, 60, 120]); } catch { /* unsupported */ } beep(); };
+const buzz = () => { try { navigator.vibrate?.([120, 60, 120]); } catch { /* unsupported */ } };
 
 function urlB64ToUint8(s) {
   const pad = "=".repeat((4 - (s.length % 4)) % 4);
@@ -77,6 +67,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .paid-card{border-color:${C.ok};background:#f0fdf4;animation:pop .5s ease-out} @keyframes pop{0%{transform:scale(.97)}60%{transform:scale(1.02)}100%{transform:scale(1)}}
 .big{font-size:28px;font-weight:800}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
 .pin{letter-spacing:.5em;text-align:center;font-size:28px}
+.ov{position:fixed;inset:0;background:rgba(18,26,22,.94);backdrop-filter:blur(4px);z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:22px 12px calc(20px + env(safe-area-inset-bottom));overflow:auto}
+.ov .bar{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:center}.ov .bar button{width:auto;margin:0;font-size:15px;padding:10px 18px}
+.ov .bar button.ghost{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.3)}
 `;
 
 export default function PayApp() {
@@ -161,6 +154,9 @@ function Home({ token, onLock, onExpired }) {
   const [note, setNote] = useState("");
   const [installEvt, setInstallEvt] = useState(null);
   const [alerts, setAlerts] = useState("unknown");
+  const [slip, setSlip] = useState(null);           // paid bill whose slip is printing on screen
+  const [slipRun, setSlipRun] = useState(0);
+  const [sound, setSound] = useState(() => LS.get("vp.sound") !== "off");
   const seenPaid = useRef(new Set());   // bills already celebrated (seeded by the FIRST load only)
   const seeded = useRef(false);
   const cursor = useRef("");
@@ -189,6 +185,13 @@ function Home({ token, onLock, onExpired }) {
     (async () => { try { setMe(await call("/v1/tap/app/me", { token })); } catch (x) { guard(x); } })();
     loadBills();
   }, [token, loadBills, guard]);
+
+  useEffect(() => {
+    if (!slip) return undefined;
+    const k = (e) => { if (e.key === "Escape") setSlip(null); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [slip]);
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false);
@@ -223,7 +226,7 @@ function Home({ token, onLock, onExpired }) {
               const d = JSON.parse(data);
               if (d.cursor) cursor.current = d.cursor;
               if (ev === "bill") {
-                if (d.status === "paid" && !d.is_test && !seenPaid.current.has(d.id)) { seenPaid.current.add(d.id); celebrate(); }
+                if (d.status === "paid" && !d.is_test && !seenPaid.current.has(d.id)) { seenPaid.current.add(d.id); buzz(); setSlip(d); setSlipRun((n) => n + 1); }
                 upsert(d);
               }
             }
@@ -315,6 +318,7 @@ function Home({ token, onLock, onExpired }) {
             <div className="row"><span className="pill paid">Paid</span><span className="muted">{b.description}</span></div>
             <div className="big">{rands(b.total_cents ?? b.subtotal_cents)}</div>
             <div className="muted">Bill {rands(b.subtotal_cents)}{b.tip_cents ? ` + ${rands(b.tip_cents)} tip` : ""}{b.share_cents != null ? ` · your share ${rands(b.share_cents)}` : ""}</div>
+            <button className="ghost small" style={{ marginTop: 8 }} onClick={() => { setSlip(b); setSlipRun((n) => n + 1); }}>View slip</button>
           </div>
         : <div key={b.id} className="card">
             <div className="row"><span style={{ fontWeight: 600 }}>{b.description}{b.is_test ? " (test)" : ""}</span><span className={`pill ${b.status}`}>{b.status}</span></div>
@@ -332,8 +336,22 @@ function Home({ token, onLock, onExpired }) {
         {alerts === "on" && <div className="muted">Payment alerts are on.</div>}
         {alerts === "blocked" && <div className="muted">Alerts are blocked in your phone's settings for this app.</div>}
         {alerts === "unsupported" && <div className="muted">{isIos ? "On iPhone: tap Share → Add to Home Screen, then open Vula Pay from your home screen to get alerts." : "This browser can't show payment alerts. You'll still get a WhatsApp message."}</div>}
+        <button className="ghost" aria-pressed={sound} onClick={() => { const n = !sound; setSound(n); LS.set("vp.sound", n ? "on" : "off"); }}>{sound ? "Slip sound: on" : "Slip sound: off"}</button>
         {installEvt && <button className="ghost" onClick={async () => { installEvt.prompt(); await installEvt.userChoice; setInstallEvt(null); }}>Install the app</button>}
       </div>
+      {slip && (
+        <div className="ov" role="dialog" aria-modal="true" aria-label="Payment slip">
+          <PrintedSlip key={slipRun} sound={sound} data={{
+            merchant: me?.merchant, description: slip.description, served_by: me && !me.sees_all ? me.name : null,
+            bill_cents: slip.subtotal_cents, tip_cents: slip.tip_cents || 0, total_cents: slip.total_cents ?? slip.subtotal_cents,
+            paid_at: slip.paid_at, ref: slip.ref }}
+            extra={slip.share_cents != null ? [{ label: "Your share", value: rands(slip.share_cents), strong: true }] : []} />
+          <div className="bar">
+            <button onClick={() => setSlipRun((n) => n + 1)} className="ghost">Replay</button>
+            <button onClick={() => setSlip(null)}>Done</button>
+          </div>
+        </div>
+      )}
     </>
   );
 }
