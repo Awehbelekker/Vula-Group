@@ -52,6 +52,8 @@ export default function VulaTapToPay({ tenantId }) {
   const [bills, setBills] = useState([]);
   const [nb, setNb] = useState({ member: "", desc: "", amount: "", phone: "" });
   const [newCode, setNewCode] = useState("");
+  const [enrol, setEnrol] = useState(null);        // {id, name, code, expires_in_minutes, app_url}
+  const [devices, setDevices] = useState([]);
   const poll = useRef(null);
 
   const load = useCallback(async () => {
@@ -65,6 +67,7 @@ export default function VulaTapToPay({ tenantId }) {
       });
       setTestMember((m) => m || s.staff.find((x) => x.tag)?.id || s.staff[0]?.id || "");
       setNb((b) => ({ ...b, member: b.member || s.staff.find((x) => x.tag)?.id || "" }));
+      api(`/v1/tap/${tenantId}/devices`).then((d) => setDevices(d.devices || [])).catch(() => {});
       if (s.mode !== "off") {
         const b = await api(`/v1/tap/${tenantId}/bills`).catch(() => ({ bills: [] }));
         setBills(b.bills || []);
@@ -127,6 +130,12 @@ export default function VulaTapToPay({ tenantId }) {
     setNb({ ...nb, desc: "", amount: "", phone: "" });
     await load();
   });
+  const getEnrolCode = (m) => run(`enrol-${m.id}`, async () => setEnrol({ id: m.id, ...(await api(`/v1/tap/${tenantId}/members/${m.id}/enrol-code`, { method: "POST" })) }));
+  const revokeDevice = (id) => run(`dev-${id}`, async () => {
+    if (!window.confirm("Sign this phone out? They'll need a new code to use the app again.")) return;
+    await api(`/v1/tap/${tenantId}/devices/${id}/revoke`, { method: "POST" }); await load();
+  });
+
   const billAction = (id, action) => run(`b-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/${action}`, { method: "POST" }); await load(); });
 
   if (!st) return <div style={{ padding: 24, color: T.muted }}>{err || "Loading…"}</div>;
@@ -204,6 +213,45 @@ export default function VulaTapToPay({ tenantId }) {
           </>
         )}
       </Step>
+
+      {st.staff.length > 0 && (
+        <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>Coach app (optional)</span>
+          <span style={hint}>
+            Your team can create bills and see payments land live on their own phone with <b>Vula Pay</b>. Give each person a one-time code, then
+            send them the app link — they enter their WhatsApp number, the code and choose a PIN. No email or password.
+          </span>
+          {st.staff.map((m) => (
+            <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ minWidth: 140, fontWeight: 600, color: T.ink }}>{m.name}</span>
+              <Button size="sm" variant="soft" style={{ opacity: m.whatsapp ? 1 : 0.5 }} onClick={() => getEnrolCode(m)} disabled={busy === `enrol-${m.id}` || !m.whatsapp}>Get sign-in code</Button>
+              {!m.whatsapp && <span style={hint}>Add their WhatsApp number under Team first.</span>}
+            </div>
+          ))}
+          {enrol && (
+            <div style={{ background: T.surfaceAlt, borderRadius: 10, padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={hint}>Code for <b>{enrol.name}</b> (valid {enrol.expires_in_minutes} minutes, works once):</span>
+              <span style={{ fontSize: 30, fontWeight: 800, letterSpacing: "0.2em", color: T.ink }}>{enrol.code}</span>
+              <span style={hint}>App link to send them:</span>
+              <a href={enrol.app_url} target="_blank" rel="noreferrer" style={{ fontSize: 13, wordBreak: "break-all" }}>{enrol.app_url}</a>
+              <div><Button size="sm" variant="ghost" onClick={() => navigator.clipboard?.writeText(`Vula Pay: ${enrol.app_url}\nYour code: ${enrol.code} (valid ${enrol.expires_in_minutes} min)`)}>Copy message</Button></div>
+            </div>
+          )}
+          {devices.filter((d) => !d.revoked_at).length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+              <span style={hint}>Phones signed in</span>
+              {devices.filter((d) => !d.revoked_at).map((d) => {
+                const who = st.staff.find((m) => m.id === d.member_id)?.name || "Team member";
+                return (
+                  <div key={d.id} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13, color: T.ink }}>
+                    <span style={{ flex: 1 }}>{who} · {d.last_seen_at ? `last used ${new Date(d.last_seen_at).toLocaleDateString()}` : "not used yet"}</span>
+                    <Button size="sm" variant="ghost" onClick={() => revokeDevice(d.id)}>Sign out</Button>
+                  </div>);
+              })}
+            </div>
+          )}
+        </Card>
+      )}
 
       <Step n={3} title="Test with a R5 payment" done={st.tested}>
         {st.tested ? (

@@ -223,8 +223,8 @@ class Settings(BaseSettings):
     # the Supabase service key (set it explicitly so rotating that key doesn't orphan the hashes).
     tap_to_pay_tenants: str = ""
     tap_hash_pepper: str = ""
-    # Web Push for the coach app (VAPID). Generate once:  python -c "from py_vapid import Vapid; v=Vapid(); v.generate_keys(); \
-    # print(v.private_pem().decode()); print(v.public_key)"  — or use scripts/gen_vapid.py. Public key is shared with browsers.
+    # Web Push for the coach app (VAPID). Generate a key pair once with `python scripts/gen_vapid.py`;
+    # the public key is what browsers get. Empty = no push (WhatsApp alerts still go out).
     vapid_public_key: str = ""
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:support@vula.ai"

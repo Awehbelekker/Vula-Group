@@ -36,13 +36,29 @@ Hooks into existing code (all additive): `whatsapp.py` (text + `kb:` interactive
 7. **Split payments**: native PayFast split deliberately not used. Needs written confirmation first.
 
 ## Not built yet
-Slip as PNG/PDF (text slip only), merchant PWA screens + SSE + push, PIN/OTP sign-in, reminders for
+Slip as PNG/PDF (text slip only), reminders for
 abandoned bills, GL journal posting for tap payments (per-party lines live in `kb_ledger_lines`),
 merchant audit rows for bill actions, per-tag rate limiting beyond the global IP limit, NTAG424 SDM
 verification (static tags only), group bills, shifts/pools, payouts, nightly reconciliation.
 
+## Coach app (Vula Pay, `/pay/`)
+Installable PWA for coaches/cashiers (own manifest + service worker, scope `/pay/`; source `vula_dashboard/src/pay/`,
+`pay/index.html`, `public/pay/`). Sign-in is a one-time 6-digit code issued by the owner (dashboard -> Tap to Pay ->
+Coach app) + the person's WhatsApp number + a PIN they choose; no email/password. 5 wrong codes burn the code, 5 wrong
+PINs lock the phone for 15 minutes, "Sign out" in the dashboard revokes a phone on its next request. Staff see only their
+own bills; owners/managers see all. Live "Paid" status is streamed from `/v1/tap/app/events` (polls the DB every 2 s, so it
+works across workers); a payment vibrates + beeps and shows tip and the person's share. Shell and recent bills open
+offline; creating a bill needs a connection.
+
+Web Push (optional, needs keys): set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` on Railway (generate once
+with `python vula_mind/scripts/gen_vapid.py`; keep the private key secret and never regenerate it, or every existing subscription dies) and `railway up`. iPhone only delivers push to the
+installed home-screen app. The WhatsApp alert still goes out regardless. Apply migration 202.
+
+Not yet: WhatsApp-OTP sign-in (needs a Meta-approved authentication template), tip-pool/manager summaries, PNG icons
+(the app reuses the dashboard's SVG icon; fine for Chrome/Android installs, add 192/512 PNGs for older/iOS icons).
+
 ## Switching it on (self-serve)
-Apply migrations 199, 200 and 201 in the Supabase SQL editor (staging first — docs/staging.md), then the
+Apply migrations 199, 200, 201 and 202 in the Supabase SQL editor (staging first — docs/staging.md), then the
 owner does everything in the dashboard: **Money -> Tap to Pay**.
 
 1. Connect PayFast (merchant ID, key, passphrase; start with sandbox keys).
