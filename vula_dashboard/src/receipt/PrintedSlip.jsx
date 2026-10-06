@@ -9,6 +9,7 @@
  * Respects prefers-reduced-motion: the slip simply appears, silently.
  */
 import { useEffect, useRef } from "react";
+import { schedulePrintSound } from "./printSound";
 
 export const rands = (c) =>
   `R ${(Number(c || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.replace(/ /g, " ");
@@ -28,31 +29,18 @@ const audioCtx = () => {
   try { ctxSingleton = ctxSingleton || new (window.AudioContext || window.webkitAudioContext)(); return ctxSingleton; } catch { return null; }
 };
 
-/** Printer chatter: short filtered-noise ticks while the paper feeds, then a soft two-note ding. */
-export function playPrintSound(duration = 2.8) {
+/** Plays the slip sound (style "modern" by default; "classic" = the older dot-matrix chatter).
+ *  Returns false, silently, when the browser hasn't allowed audio yet (no tap so far). */
+export function playPrintSound(duration = 2.8, style = (() => { try { return localStorage.getItem("vp.soundstyle") || "modern"; } catch { return "modern"; } })()) {
   const ctx = audioCtx();
   if (!ctx) return false;
   try {
     if (ctx.state === "suspended") Promise.resolve(ctx.resume()).catch(() => {});
     if (ctx.state !== "running") return false;            // autoplay blocked (no tap yet): stay silent
-    const t0 = ctx.currentTime + 0.05;
-    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.03), ctx.sampleRate);
-    const ch = buf.getChannelData(0);
-    for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / ch.length);
-    const ticks = Math.floor(duration / 0.07);
-    for (let i = 0; i < ticks; i++) {
-      const src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
-      src.buffer = buf; f.type = "bandpass"; f.frequency.value = 1800 + (i % 3) * 400; f.Q.value = 0.9;
-      g.gain.value = 0.22 + (i % 2) * 0.06;
-      src.connect(f); f.connect(g); g.connect(ctx.destination);
-      src.start(t0 + i * 0.07);
-    }
-    [988, 1319].forEach((hz, i) => {
-      const o = ctx.createOscillator(), g = ctx.createGain(), at = t0 + duration + i * 0.12;
-      o.type = "sine"; o.frequency.value = hz; o.connect(g); g.connect(ctx.destination);
-      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.16, at + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.45);
-      o.start(at); o.stop(at + 0.5);
-    });
+    const comp = ctx.createDynamicsCompressor();          // a safety net so nothing can clip on a phone speaker
+    comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.2;
+    comp.connect(ctx.destination);
+    schedulePrintSound(ctx, comp, ctx.currentTime + 0.15, duration, style);   // 0.15 = the CSS feed delay
     return true;
   } catch { return false; }
 }
