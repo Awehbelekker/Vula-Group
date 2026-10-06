@@ -16,7 +16,7 @@ class IllegalTransition(ValueError):
 
 BILL_STATES = ("open", "claimed", "paid", "cancelled", "expired", "abandoned",
                "needs_follow_up", "written_off", "paid_other")
-BILL_EVENTS = ("claim", "release", "claim_idle", "pay", "cancel", "expire", "abandon",
+BILL_EVENTS = ("claim", "release", "claim_idle", "reclaim", "pay", "cancel", "expire", "abandon",
                "reminders_exhausted", "mark_paid_other", "write_off")
 
 _BILL: dict[tuple[str, str], str] = {
@@ -32,6 +32,8 @@ _BILL: dict[tuple[str, str], str] = {
     ("abandoned", "reminders_exhausted"): "needs_follow_up",
 }
 for _s in ("abandoned", "needs_follow_up"):
+    _BILL[(_s, "reclaim")] = "claimed"     # the customer who left taps the tag again
+    _BILL[(_s, "release")] = "open"        # the owner frees the bill for anyone to pay
     _BILL[(_s, "pay")] = "paid"
     _BILL[(_s, "mark_paid_other")] = "paid_other"
     _BILL[(_s, "write_off")] = "written_off"

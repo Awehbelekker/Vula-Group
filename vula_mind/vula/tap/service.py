@@ -26,6 +26,7 @@ from urllib.parse import quote
 
 from vula.tap.core import matching as mt
 from vula.tap.core import money as mo
+from vula.tap.core import reminders as rem
 from vula.tap.core import states as st
 from vula.tap.ports import Gateway, Messenger, Pusher, Repo
 
@@ -54,6 +55,10 @@ class TapConfig:
     enabled: Callable[[str], bool] = lambda tenant_id: True   # per-tenant switch (api.tenant_enabled)
     receipt_secret: str = ""       # with receipt_base_url: puts a receipt link in the customer's slip
     receipt_base_url: str = ""     # e.g. https://dashboard.example (page lives at /r/<token>)
+    reminder_link_ttl: timedelta = timedelta(hours=24)   # a reminder's pay link stays valid this long
+    reminder_template: str = ""    # approved WhatsApp template for reminders sent outside the 24 h window
+    reminder_final_template: str = ""   # same, worded as "last reminder" (falls back to reminder_template)
+    window_hours: float = 23.0     # free-text reminders only while the customer's last message is this recent
 
 
 # ── customer copy (rands, 2 decimals, merchant named, < 3 lines) ─────────────────────────────
@@ -70,6 +75,10 @@ MSG_CODE_BAD = "That code isn't right. Try again."
 MSG_EXPIRED = "This payment link has expired. Tap the tag again to restart."
 MSG_FAILED = "That payment didn't go through. You haven't been charged. Tap the tag to try again."
 MSG_BAD_AMOUNT = "That amount doesn't look right. Type it in rands, for example 15."
+
+
+class ReminderError(Exception):
+    """A manual reminder that can't go out; the message is shown to the owner as is."""
 
 
 @dataclass
@@ -104,14 +113,31 @@ class TapService:
         if session["state"] in st.SESSION_PRE_PAYMENT and _ts(session["expires_at"]) <= self.now():
             if self.repo.cas_session(session["tenant_id"], session["id"],
                                      expected=session["state"], new="expired"):
-                self._release_bill_for(session)
+                self._ended(session, session["state"])
             return None
         return session
 
-    def _release_bill_for(self, session: dict) -> None:
-        if session.get("bill_id"):
-            self.repo.cas_bill(session["tenant_id"], session["bill_id"], expected="claimed", new="open",
-                               fields={"claimed_by_hash": None})
+    def _reminders_max(self, tenant_id: str) -> int:
+        v = (self.repo.get_settings(tenant_id) or {}).get("reminders_max")
+        return 3 if v is None else max(0, min(int(v), rem.MAX_REMINDERS))
+
+    def _ended(self, session: dict, state_at_end: str) -> None:
+        """A session ended without payment. If the customer had seen their total (or their payment
+        failed) the bill is ABANDONED and the reminder sequence takes over; otherwise (they only
+        tapped) it is simply released for anyone to claim."""
+        if not session.get("bill_id"):
+            return
+        tenant, bill_id = session["tenant_id"], session["bill_id"]
+        bill = self.repo.get_bill(tenant, bill_id) or {}
+        if (bill.get("status") == "claimed" and not bill.get("is_test")
+                and state_at_end in ("awaiting_confirm", "awaiting_payment", "failed")):
+            if self.repo.cas_bill(tenant, bill_id, expected="claimed", new=st.bill_next("claimed", "abandon"),
+                                  fields={"abandoned_at": self.now().isoformat(), "last_session_id": session["id"]}):
+                if self._reminders_max(tenant) == 0:           # reminders switched off: straight to the owner
+                    self.repo.cas_bill(tenant, bill_id, expected="abandoned",
+                                       new=st.bill_next("abandoned", "reminders_exhausted"))
+                return
+        self.repo.cas_bill(tenant, bill_id, expected="claimed", new="open", fields={"claimed_by_hash": None})
 
     async def _say(self, tenant_id: str, phone: str, body: str) -> None:
         await self.messenger.text(tenant_id, phone, body)
@@ -200,6 +226,13 @@ class TapService:
             if existing and existing.get("bill_id") == bill_id:
                 await self._resume(existing, phone)          # double tap: reuse the open session
                 return
+        elif bill["status"] in ("abandoned", "needs_follow_up") and bill.get("claimed_by_hash") == payer:
+            # the customer who left comes back: reminder links die, they choose their tip again
+            if not self.repo.cas_bill(tenant_id, bill_id, expected=bill["status"], new=st.bill_next(bill["status"], "reclaim")):
+                await self._say(tenant_id, phone, MSG_LOCKED)
+                return
+            self.repo.cas_bill(tenant_id, bill_id, expected="claimed", new="claimed", fields={"abandoned_at": None})
+            self.repo.cancel_other_sessions(tenant_id, bill_id, None)
         elif not self.repo.cas_bill(tenant_id, bill_id, expected="open", new="claimed",
                                     fields={"claimed_by_hash": payer}):
             await self._say(tenant_id, phone, MSG_LOCKED)    # lost the atomic claim
@@ -459,7 +492,7 @@ class TapService:
         if not ev.get("paid"):
             if self.repo.cas_session(tenant_id, s["id"], expected="awaiting_payment",
                                      new=st.session_next("awaiting_payment", "payment_failed")):
-                self._release_bill_for(s)
+                self._ended(s, "failed")
                 if phone:
                     await self._say(tenant_id, phone, MSG_FAILED)
             return "failed"
@@ -487,7 +520,10 @@ class TapService:
         if not is_test:
             await self._post_ledger(tenant_id, s, pay)
         if s.get("bill_id"):
-            self.repo.cas_bill(tenant_id, s["bill_id"], expected="claimed", new="paid")
+            for held in ("claimed", "abandoned", "needs_follow_up", "open"):     # paid via the tap or a reminder link
+                if self.repo.cas_bill(tenant_id, s["bill_id"], expected=held, new=st.bill_next(held, "pay")):
+                    break
+            self.repo.cancel_other_sessions(tenant_id, s["bill_id"], s["id"])
         if is_test:                                  # setup test: unlocks "Go live", books nothing
             self.repo.upsert_settings(tenant_id, {"tested_at": self.now().isoformat()})
             for p in self.repo.team_phones(tenant_id, None):
@@ -571,10 +607,13 @@ class TapService:
 
     def cancel_bill(self, tenant_id: str, bill_id: str) -> bool:
         bill = self.repo.get_bill(tenant_id, bill_id)
-        if not bill or bill["status"] not in ("open", "claimed"):
+        if not bill or bill["status"] not in ("open", "claimed", "abandoned", "needs_follow_up"):
             return False
-        return self.repo.cas_bill(tenant_id, bill_id, expected=bill["status"],
-                                  new=st.bill_next(bill["status"], "cancel"))
+        ok = self.repo.cas_bill(tenant_id, bill_id, expected=bill["status"],
+                                new=st.bill_next(bill["status"], "cancel"))
+        if ok:
+            self.repo.cancel_other_sessions(tenant_id, bill_id, None)
+        return ok
 
     def release_bill(self, tenant_id: str, bill_id: str) -> bool:
         """Free a wrongly claimed bill (cancels any unpaid session first so nobody pays a stale one)."""
@@ -587,6 +626,171 @@ class TapService:
                                   new=st.session_next(s["state"], "cancel"))
         return self.repo.cas_bill(tenant_id, bill_id, expected="claimed", new="open",
                                   fields={"claimed_by_hash": None})
+
+
+    # ── unpaid bills: reminders, sweeper, owner actions ──────────────────────────────────────
+    async def sweep(self, tenant_id: Optional[str] = None) -> dict:
+        """One pass of the background job (safe to run on several workers at once: every step is a
+        compare-and-set or a unique insert). Expires stale sessions, then sends due reminders."""
+        stats = {"expired": 0, "reminders": 0, "followups": 0}
+        for s in self.repo.stale_sessions(self.now().isoformat(), 200):
+            if tenant_id and s["tenant_id"] != tenant_id:
+                continue
+            if self.repo.cas_session(s["tenant_id"], s["id"], expected=s["state"], new=st.session_next(s["state"], "expire")):
+                self._ended(s, s["state"])
+                stats["expired"] += 1
+        for t in ([tenant_id] if tenant_id else self.repo.enabled_tenants()):
+            for b in self.repo.bills_with_status(t, "abandoned", 200):
+                try:
+                    outcome = await self._remind(b)
+                except Exception:  # noqa: BLE001 — one bad bill must not stop the pass
+                    logger.exception("reminder failed (tenant=%s bill=%s)", t, b.get("id"))
+                    continue
+                stats["reminders"] += outcome == "sent"
+                stats["followups"] += outcome in ("followup", "opted_out")
+        return stats
+
+    def _to_follow_up(self, bill: dict) -> None:
+        self.repo.cas_bill(bill["tenant_id"], bill["id"], expected="abandoned",
+                           new=st.bill_next("abandoned", "reminders_exhausted"))
+
+    def _reminder_text(self, merchant: str, total: int, url: str, seq: int, last: bool, max_n: int, manual: bool) -> str:
+        amt = _m(total)
+        if manual:
+            return f"{merchant} is still waiting for {amt}. Pay now: {url}\nReply STOP to stop reminders."
+        if seq == 1:
+            more = (f"We'll send up to {max_n - 1} more." if max_n > 1 else "This is the only reminder.")
+            return f"You haven't finished paying {merchant} {amt}. Pay now: {url}\n{more} Reply STOP to stop."
+        if last:
+            return f"Last reminder: {amt} to {merchant} is still unpaid. Pay now: {url}\nReply STOP to stop."
+        return f"Reminder: {amt} to {merchant} is still unpaid. Pay now: {url}\nReply STOP to stop reminders."
+
+    async def _remind(self, bill: dict, *, manual: bool = False) -> str:
+        """Send the next reminder for an abandoned bill if one is due. Returns an outcome label."""
+        tenant, now = bill["tenant_id"], self.now()
+        ls = self.repo.get_session(tenant, bill["last_session_id"]) if bill.get("last_session_id") else None
+        if not ls or not ls.get("payer_enc"):
+            if not manual:
+                self._to_follow_up(bill)
+            return "followup"
+        phone = self.cfg.decrypt(ls["payer_enc"])
+        if self.repo.is_opted_out(tenant, phone):                           # STOP is honoured immediately
+            if not manual:
+                self._to_follow_up(bill)
+                return "opted_out"
+            raise ReminderError("This customer asked not to receive reminders.")
+        rows = self.repo.reminders_for_bill(tenant, bill["id"])
+        autos = [r for r in rows if r.get("kind", "auto") == "auto"]
+        max_n = self._reminders_max(tenant)
+        if manual:
+            if not rem.in_window(now):
+                raise ReminderError("Reminders can only be sent between 08:00 and 20:00.")
+            if rem.sent_today([_ts(r["sent_at"]) for r in rows], now):
+                raise ReminderError("A reminder already went out to this customer today.")
+            seq, kind = 0, "manual"
+        else:
+            due = rem.next_due(_ts(bill.get("abandoned_at") or now), [_ts(r["sent_at"]) for r in autos], max_n)
+            if due is None:
+                self._to_follow_up(bill)
+                return "followup"
+            if now < due or not rem.in_window(now):
+                return "not_due"
+            seq, kind = len(autos) + 1, "auto"
+        row = self.repo.insert_reminder({"tenant_id": tenant, "bill_id": bill["id"], "session_id": ls["id"], "seq": seq,
+                                         "kind": kind, "status": "sending", "sent_at": now.isoformat()})
+        if row is None:
+            return "busy"                                                   # another worker has this one
+        # a fresh one-time pay link; older reminder links stop working ("one bill, one link")
+        self.repo.cancel_other_sessions(tenant, bill["id"], None)
+        nonce = secrets.token_urlsafe(16)
+        sess = self.repo.create_session({
+            "tenant_id": tenant, "bill_id": bill["id"], "payer_hash": ls["payer_hash"], "payer_enc": ls["payer_enc"],
+            "state": "awaiting_payment", "bill_cents": ls["bill_cents"], "tip_cents": ls["tip_cents"],
+            "idempotency_key": f"rem:{bill['id']}:{seq}:{secrets.token_hex(6)}",
+            "expires_at": (now + self.cfg.reminder_link_ttl).isoformat(), "pay_nonce_hash": self._token_hash(nonce)})
+        self.repo.cas_session(tenant, sess["id"], expected="awaiting_payment", new="awaiting_payment",
+                              fields={"checkout_ref": REF_PREFIX + sess["id"]})
+        url = f"{self.cfg.public_base_url.rstrip('/')}/v1/tap/pay/{sess['id']}/{nonce}"
+        total = int(ls["bill_cents"]) + int(ls["tip_cents"])
+        merchant = self.repo.merchant_name(tenant)
+        last = kind == "auto" and rem.is_last(seq, max_n)
+        text = self._reminder_text(merchant, total, url, seq, last, max_n, manual)
+        in_window = (now - _ts(ls.get("updated_at") or ls["created_at"])) < timedelta(hours=self.cfg.window_hours)
+        tname = self.cfg.reminder_template
+        try:
+            if in_window:
+                ok, channel = await self.messenger.text(tenant, phone, text), "text"
+            elif self.cfg.reminder_template:
+                tname = (self.cfg.reminder_final_template or self.cfg.reminder_template) if last else self.cfg.reminder_template
+                ok, channel = await self.messenger.template(tenant, phone, tname, [merchant, _m(total), url]), "template"
+            else:
+                ok, channel = None, "none"          # outside the 24 h window and no approved template: can't send
+        except Exception:  # noqa: BLE001
+            logger.exception("reminder send crashed (tenant=%s bill=%s)", tenant, bill["id"])
+            ok, channel = False, "text"
+        if ok is False:                                                     # let a later pass retry this one
+            self.repo.delete_reminder(row["id"])
+            self.repo.cas_session(tenant, sess["id"], expected="awaiting_payment", new="cancelled")
+            return "failed"
+        if channel == "none":
+            self.repo.update_reminder(row["id"], {"status": "skipped_no_template", "channel": "none"})
+            self.repo.cas_session(tenant, sess["id"], expected="awaiting_payment", new="cancelled")
+            outcome = "skipped"
+        else:
+            self.repo.update_reminder(row["id"], {"status": "sent", "channel": channel,
+                                                  "template": tname if channel == "template" else None})
+            outcome = "sent"
+        if last:
+            self._to_follow_up(bill)
+        return outcome
+
+    async def send_reminder_now(self, tenant_id: str, bill_id: str) -> str:
+        """Owner/coach presses "Resend link". Same fair-use rules: window, one a day, STOP honoured."""
+        bill = self.repo.get_bill(tenant_id, bill_id)
+        if not bill or bill["status"] not in ("abandoned", "needs_follow_up"):
+            raise ReminderError("Only unpaid bills can be reminded.")
+        outcome = await self._remind(bill, manual=True)
+        if outcome == "failed":
+            raise ReminderError("The message couldn't be sent. Try again in a moment.")
+        if outcome == "skipped":
+            raise ReminderError("This customer last messaged more than a day ago and no approved reminder template is set up yet.")
+        return outcome
+
+    def close_unpaid(self, tenant_id: str, bill_id: str, action: str, reason: Optional[str] = None) -> bool:
+        """Owner closes an unpaid bill: paid_other (cash/eft/other), write_off, or release (back to open)."""
+        events = {"paid_other": "mark_paid_other", "write_off": "write_off", "release": "release"}
+        bill = self.repo.get_bill(tenant_id, bill_id)
+        if action not in events or not bill or bill["status"] not in ("abandoned", "needs_follow_up"):
+            return False
+        if action == "paid_other" and reason not in ("cash", "eft", "other"):
+            raise ReminderError("Say how it was paid: cash, EFT or other.")
+        fields = {"closed_reason": reason if action == "paid_other" else action}
+        if action == "release":
+            fields = {"claimed_by_hash": None, "abandoned_at": None}
+        ok = self.repo.cas_bill(tenant_id, bill_id, expected=bill["status"], new=st.bill_next(bill["status"], events[action]), fields=fields)
+        if ok:
+            self.repo.cancel_other_sessions(tenant_id, bill_id, None)       # no stale link can still be paid
+        return ok
+
+    def unpaid(self, tenant_id: str) -> list[dict]:
+        """The owner's Unpaid list: who left, how much, how many reminders, what's next."""
+        out, max_n, now = [], self._reminders_max(tenant_id), self.now()
+        for b in self.repo.unpaid_bills(tenant_id):
+            rows = self.repo.reminders_for_bill(tenant_id, b["id"])
+            autos = [r for r in rows if r.get("kind", "auto") == "auto" and r.get("status") != "skipped_no_template"]
+            ls = self.repo.get_session(tenant_id, b["last_session_id"]) if b.get("last_session_id") else None
+            phone = self.cfg.decrypt(ls["payer_enc"]) if ls and ls.get("payer_enc") else ""
+            nxt = None
+            if b["status"] == "abandoned" and b.get("abandoned_at"):
+                d = rem.next_due(_ts(b["abandoned_at"]), [_ts(r["sent_at"]) for r in rows if r.get("kind", "auto") == "auto"], max_n, now=now)
+                nxt = d.isoformat() if d else None
+            out.append({"id": b["id"], "status": b["status"], "description": b.get("description"),
+                        "total_cents": int(ls["bill_cents"]) + int(ls["tip_cents"]) if ls else int(b["subtotal_cents"]),
+                        "staff_id": b.get("staff_id"), "customer": self.mask(phone) if phone else None,
+                        "abandoned_at": b.get("abandoned_at"), "reminders_sent": len(autos), "reminders_max": max_n,
+                        "skipped": sum(1 for r in rows if r.get("status") == "skipped_no_template"),
+                        "next_reminder_at": nxt, "opted_out": bool(phone and self.repo.is_opted_out(tenant_id, phone))})
+        return out
 
 
 def _ts(v) -> datetime:

@@ -56,7 +56,7 @@ class SupabaseRepo:
     # bills
     def live_bills_for_tag(self, tenant_id: str, tag_id: str) -> list[dict]:
         return (self.db.table("kb_bills").select("*").eq("tenant_id", tenant_id).eq("tag_id", tag_id)
-                .in_("status", ["open", "claimed"]).execute().data or [])
+                .in_("status", ["open", "claimed", "abandoned", "needs_follow_up"]).execute().data or [])
 
     def get_bill(self, tenant_id: str, bill_id: str) -> Optional[dict]:
         return self._one(self.db.table("kb_bills").select("*").eq("tenant_id", tenant_id).eq("id", bill_id))
@@ -257,6 +257,59 @@ class SupabaseRepo:
             logger.debug("merchant_vat lookup failed: %s", exc)
             r = {}
         return {"vat_number": r.get("vat_number") or None, "vat_registered": bool(r.get("vat_registered", False))}
+
+    # unpaid-bill reminders
+    def stale_sessions(self, now_iso: str, limit: int = 100) -> list[dict]:
+        return (self.db.table("kb_sessions").select("*").in_("state", _LIVE_SESSION)
+                .lt("expires_at", now_iso).limit(limit).execute().data or [])
+
+    def enabled_tenants(self) -> list[str]:
+        rows = self.db.table("kb_settings").select("tenant_id").in_("mode", ["testing", "live"]).execute().data or []
+        return [r["tenant_id"] for r in rows]
+
+    def bills_with_status(self, tenant_id: str, status: str, limit: int = 100) -> list[dict]:
+        return (self.db.table("kb_bills").select("*").eq("tenant_id", tenant_id).eq("status", status)
+                .order("abandoned_at").limit(limit).execute().data or [])
+
+    def unpaid_bills(self, tenant_id: str) -> list[dict]:
+        return (self.db.table("kb_bills").select("*").eq("tenant_id", tenant_id)
+                .in_("status", ["abandoned", "needs_follow_up"]).order("abandoned_at", desc=True)
+                .limit(50).execute().data or [])
+
+    def reminders_for_bill(self, tenant_id: str, bill_id: str) -> list[dict]:
+        return (self.db.table("kb_reminders").select("*").eq("tenant_id", tenant_id).eq("bill_id", bill_id)
+                .order("sent_at").execute().data or [])
+
+    def insert_reminder(self, row: dict) -> Optional[dict]:
+        try:
+            return self.db.table("kb_reminders").insert(row).execute().data[0]
+        except Exception as exc:  # noqa: BLE001
+            if _is_dup(exc):                       # another worker already claimed this reminder number
+                return None
+            raise
+
+    def update_reminder(self, reminder_id: str, fields: dict) -> None:
+        self.db.table("kb_reminders").update(fields).eq("id", reminder_id).execute()
+
+    def delete_reminder(self, reminder_id: str) -> None:
+        self.db.table("kb_reminders").delete().eq("id", reminder_id).execute()
+
+    def cancel_other_sessions(self, tenant_id: str, bill_id: str, keep: Optional[str]) -> None:
+        q = (self.db.table("kb_sessions").update({"state": "cancelled", "updated_at": "now()"})
+             .eq("tenant_id", tenant_id).eq("bill_id", bill_id).in_("state", _LIVE_SESSION))
+        if keep:
+            q = q.neq("id", keep)
+        q.execute()
+
+    def is_opted_out(self, tenant_id: str, phone: str) -> bool:
+        try:
+            from vula.api.commerce import _norm_phone
+            r = self._one(self.db.table("commerce_consent").select("status")
+                          .eq("tenant_id", tenant_id).eq("phone", _norm_phone(phone)))
+            return bool(r and r.get("status") == "opted_out")
+        except Exception as exc:  # noqa: BLE001 — if we can't tell, don't message
+            logger.warning("opt-out lookup failed, treating as opted out: %s", exc)
+            return True
 
     # display
     def merchant_name(self, tenant_id: str) -> str:

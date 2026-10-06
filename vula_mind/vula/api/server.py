@@ -734,6 +734,28 @@ async def _daily_commerce_jobs_loop() -> None:
         await _asyncio.sleep(86400)  # daily
 
 
+async def _tap_sweep_loop() -> None:
+    """Every minute: expire stale tap-to-pay sessions and send due unpaid-bill reminders
+    (vula/tap/service.py::sweep). Every step is a compare-and-set or a unique insert, so an
+    overlapping run on another worker cannot double-send. Only tenants with Tap to Pay switched on."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(75)
+    while True:
+        try:
+            from vula.api import tenants as _t
+            from vula.tap.api import _override_tenants, get_service
+            svc = get_service()
+            for tid in sorted(set(svc.repo.enabled_tenants()) | _override_tenants()):
+                if not _t.is_active(tid):
+                    continue
+                stats = await svc.sweep(tid)
+                if stats["reminders"] or stats["expired"]:
+                    log.info("tap sweep %s: %s", tid, stats)
+        except Exception as exc:
+            log.warning("tap sweep loop error: %s", exc)
+        await _asyncio.sleep(60)
+
+
 async def _programme_briefs_loop() -> None:
     """06:00 SAST every day: each site person gets today's programme tasks per room, and the
     owner the day's work, overdue items, cost against the signed baseline and variations needing
@@ -1470,6 +1492,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_daily_commerce_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_tap_sweep_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))

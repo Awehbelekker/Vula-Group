@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from config import settings
 from vula.api.tenant_auth import require_tenant_actor
 from vula.tap.core.money import MoneyError
-from vula.tap.service import TapConfig, TapService
+from vula.tap.service import ReminderError, TapConfig, TapService
 from vula.tap.setup import Setup, SetupError
 
 log = logging.getLogger(__name__)
@@ -86,7 +86,9 @@ def get_service() -> TapService:
     ).hexdigest()
     cfg = TapConfig(pepper=pepper, public_base_url=settings.public_base_url,
                     encrypt=encrypt_secret, decrypt=decrypt_secret, enabled=tenant_enabled,
-                    receipt_secret="receipt:" + pepper, receipt_base_url=settings.dashboard_url)
+                    receipt_secret="receipt:" + pepper, receipt_base_url=settings.dashboard_url,
+                    reminder_template=settings.tap_reminder_template,
+                    reminder_final_template=settings.tap_reminder_final_template)
     from vula.tap.push import build_pusher
     return TapService(SupabaseRepo(), WhatsAppMessenger(), PayFastGateway(settings.public_base_url), cfg,
                       pusher=build_pusher(settings))
@@ -358,3 +360,45 @@ async def revoke_receipt(tenant: str, payment_id: str, identity: dict = Depends(
         raise HTTPException(status_code=404, detail="Payment not found.")
     get_service().repo.revoke_receipt(tenant, payment_id)
     return {"revoked": True}
+
+
+# ── unpaid bills & reminders (owner) ─────────────────────────────────────────────────────────
+@router.get("/v1/tap/{tenant}/unpaid")
+async def unpaid(tenant: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    svc = get_service()
+    return {"unpaid": svc.unpaid(tenant), "reminders_max": svc._reminders_max(tenant)}
+
+
+class RemindersIn(BaseModel):
+    max: int = Field(ge=0, le=3)
+
+
+@router.put("/v1/tap/{tenant}/setup/reminders")
+async def set_reminders(tenant: str, body: RemindersIn, identity: dict = Depends(require_tenant_actor)) -> dict:
+    get_service().repo.upsert_settings(tenant, {"reminders_max": body.max})
+    return {"reminders_max": body.max}
+
+
+@router.post("/v1/tap/{tenant}/bills/{bill_id}/remind")
+async def remind_now(tenant: str, bill_id: str, identity: dict = Depends(require_tenant_actor)) -> dict:
+    try:
+        await _guard(tenant).send_reminder_now(tenant, bill_id)
+    except ReminderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"sent": True}
+
+
+class CloseIn(BaseModel):
+    action: str = Field(pattern="^(paid_other|write_off|release)$")
+    reason: Optional[str] = Field(default=None, max_length=20)
+
+
+@router.post("/v1/tap/{tenant}/bills/{bill_id}/close")
+async def close_unpaid(tenant: str, bill_id: str, body: CloseIn, identity: dict = Depends(require_tenant_actor)) -> dict:
+    try:
+        ok = get_service().close_unpaid(tenant, bill_id, body.action, body.reason)
+    except ReminderError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=409, detail="This bill isn't waiting on a payment any more.")
+    return {"closed": body.action}

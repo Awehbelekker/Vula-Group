@@ -118,15 +118,20 @@ async def test_bad_signature_and_amount_mismatch_never_mark_paid(env):
     assert any("NOT marked paid" in m[3] for m in msg.to("27800000001", "text"))
 
 
-async def test_failed_payment_releases_the_bill(env):
+async def test_failed_payment_leaves_the_bill_abandoned_for_the_reminders(env):
     svc, repo, msg, gw, tag, _ = env
     mk_bill(svc, repo, tag)
     await tap_and_pay_msg(svc, tag, CUST)
     sid, _ = await run_to_checkout(svc, msg, repo, CUST, "0")
     gw.itn = itn(sid, 50000, paid=False)
     assert await svc.confirm_payment(T, {}, b"", {}) == "failed"
-    assert next(iter(repo.bills.values()))["status"] == "open"
+    bill = next(iter(repo.bills.values()))
+    assert bill["status"] == "abandoned" and bill["claimed_by_hash"] and bill["last_session_id"] == sid
     assert "didn't go through" in msg.to(CUST, "text")[-1][3]
+    # the same customer can come back and try again straight away
+    await tap_and_pay_msg(svc, tag, CUST)
+    assert next(iter(repo.bills.values()))["status"] == "claimed"
+    assert msg.to(CUST, "list")[-1]
 
 
 async def test_second_customer_is_locked_out(env):

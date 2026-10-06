@@ -90,6 +90,10 @@ MERCHANT = [
     ("POST", "/v1/tap/off-the-hook/bills"),
     ("POST", "/v1/tap/off-the-hook/bills/b1/cancel"),
     ("POST", "/v1/tap/off-the-hook/bills/b1/release"),
+    ("GET", "/v1/tap/off-the-hook/unpaid"),
+    ("PUT", "/v1/tap/off-the-hook/setup/reminders"),
+    ("POST", "/v1/tap/off-the-hook/bills/b1/remind"),
+    ("POST", "/v1/tap/off-the-hook/bills/b1/close"),
 ]
 PUBLIC = [
     ("GET", "/v1/tap/pay/s1/nonce"),

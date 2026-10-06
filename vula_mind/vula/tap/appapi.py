@@ -4,7 +4,7 @@ demands a valid app token. Staff see only their own bills; owners/managers see a
 
     POST /v1/tap/app/enrol | /login
     GET  /v1/tap/app/me | /bills | /events (SSE) | /push-key
-    POST /v1/tap/app/bills | /bills/{id}/cancel | /bills/{id}/release | /push ;  DELETE /push
+    POST /v1/tap/app/bills | /bills/{id}/cancel | /bills/{id}/release | /bills/{id}/remind | /push ;  DELETE /push
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from config import settings
 from vula.tap import api as tap_api
 from vula.tap.appauth import Actor, AppAuth, AuthError
 from vula.tap.core.money import MoneyError
+from vula.tap.service import ReminderError
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["tap-app"])
@@ -158,6 +159,16 @@ async def release(bill_id: str, a: Actor = Depends(app_actor)) -> dict:
     if not tap_api.get_service().release_bill(a.tenant_id, bill_id):
         raise HTTPException(status_code=409, detail="This bill isn't claimed.")
     return {"status": "open"}
+
+
+@router.post("/v1/tap/app/bills/{bill_id}/remind")
+async def remind(bill_id: str, a: Actor = Depends(app_actor)) -> dict:
+    _own_bill(a, bill_id)
+    try:
+        await tap_api.get_service().send_reminder_now(a.tenant_id, bill_id)
+    except ReminderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"sent": True}
 
 
 # ── live status (server-sent events, polled from the DB so it works across workers) ──────────

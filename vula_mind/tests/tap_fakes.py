@@ -31,6 +31,7 @@ class MemoryRepo:
         self.settings = {}
         self.vat = {}
         self.codes, self.devices, self.subs = [], {}, {}
+        self.reminders, self.opted_out = [], set()
         self.members = {}
 
     def _id(self):
@@ -63,7 +64,7 @@ class MemoryRepo:
     # bills
     def live_bills_for_tag(self, tenant_id, tag_id):
         return [dict(b) for b in self.bills.values() if b["tenant_id"] == tenant_id
-                and b["tag_id"] == tag_id and b["status"] in ("open", "claimed")]
+                and b["tag_id"] == tag_id and b["status"] in ("open", "claimed", "abandoned", "needs_follow_up")]
 
     def get_bill(self, tenant_id, bill_id):
         b = self.bills.get(bill_id)
@@ -91,7 +92,7 @@ class MemoryRepo:
     # sessions
     def create_session(self, row):
         s = {"id": self._id(), "pay_nonce_hash": None, "expecting": None, "staff_ref": None,
-             "checkout_ref": None, **row}
+             "checkout_ref": None, "created_at": self.clock().isoformat(), "updated_at": self.clock().isoformat(), **row}
         self.sessions[s["id"]] = s
         return dict(s)
 
@@ -115,6 +116,7 @@ class MemoryRepo:
             return False
         s.update(fields or {})
         s["state"] = new
+        s["updated_at"] = self.clock().isoformat()
         return True
 
     # money
@@ -257,6 +259,46 @@ class MemoryRepo:
     def merchant_vat(self, tenant_id):
         return self.vat.get(tenant_id, {"vat_number": None, "vat_registered": False})
 
+    # unpaid-bill reminders
+    PRE = ("claimed", "awaiting_amount", "awaiting_tip", "awaiting_confirm", "awaiting_payment")
+
+    def stale_sessions(self, now_iso, limit=100):
+        now = _ts(now_iso)
+        return [dict(x) for x in self.sessions.values() if x["state"] in self.PRE and _ts(x["expires_at"]) < now][:limit]
+
+    def enabled_tenants(self):
+        return [t for t, v in self.settings.items() if v.get("mode") in ("testing", "live")]
+
+    def bills_with_status(self, tenant_id, status, limit=100):
+        return [dict(b) for b in self.bills.values() if b["tenant_id"] == tenant_id and b["status"] == status][:limit]
+
+    def unpaid_bills(self, tenant_id):
+        return [dict(b) for b in self.bills.values() if b["tenant_id"] == tenant_id and b["status"] in ("abandoned", "needs_follow_up")]
+
+    def reminders_for_bill(self, tenant_id, bill_id):
+        return sorted((dict(r) for r in self.reminders if r["bill_id"] == bill_id), key=lambda r: r["sent_at"])
+
+    def insert_reminder(self, row):
+        if row.get("kind") == "auto" and any(r["bill_id"] == row["bill_id"] and r["seq"] == row["seq"] and r["kind"] == "auto" for r in self.reminders):
+            return None
+        r = {"id": self._id(), **row}
+        self.reminders.append(r)
+        return dict(r)
+
+    def update_reminder(self, reminder_id, fields):
+        next(r for r in self.reminders if r["id"] == reminder_id).update(fields)
+
+    def delete_reminder(self, reminder_id):
+        self.reminders = [r for r in self.reminders if r["id"] != reminder_id]
+
+    def cancel_other_sessions(self, tenant_id, bill_id, keep):
+        for x in self.sessions.values():
+            if x["tenant_id"] == tenant_id and x.get("bill_id") == bill_id and x["state"] in self.PRE and x["id"] != keep:
+                x["state"] = "cancelled"
+
+    def is_opted_out(self, tenant_id, phone):
+        return "".join(c for c in phone if c.isdigit()) in self.opted_out
+
     # display
     def merchant_name(self, tenant_id):
         return self.names.get(tenant_id, "Bean and Brew Coffee")
@@ -289,6 +331,10 @@ class FakeMessenger:
     async def list(self, tenant_id, phone, header, body, button, rows):
         self.sent.append(("list", tenant_id, phone, (body, rows)))
         return True
+
+    async def template(self, tenant_id, phone, name, params):
+        self.sent.append(("template", tenant_id, phone, (name, params)))
+        return not getattr(self, "fail_next", False)
 
     def to(self, phone, kind=None):
         d = "".join(c for c in phone if c.isdigit())

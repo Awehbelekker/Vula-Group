@@ -37,6 +37,7 @@ PUBLIC = {
     ("POST", "/v1/tap/app/bills"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("POST", "/v1/tap/app/bills/{bill_id}/cancel"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("POST", "/v1/tap/app/bills/{bill_id}/release"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
+    ("POST", "/v1/tap/app/bills/{bill_id}/remind"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor))",
     ("GET", "/v1/tap/app/events"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("GET", "/v1/tap/app/push-key"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("POST", "/v1/tap/app/push"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",

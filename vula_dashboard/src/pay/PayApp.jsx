@@ -64,7 +64,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 6px} .chip{background:${C.soft};color:${C.green};border-radius:999px;padding:7px 12px;font-size:14px;border:0;width:auto;font-weight:500;margin:0}
 .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
 .pill{border-radius:999px;padding:3px 10px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
-.pill.open{background:#e5e7eb;color:#374151}.pill.claimed{background:#fef3c7;color:${C.warn}}.pill.paid{background:#dcfce7;color:${C.ok}}.pill.cancelled,.pill.expired{background:#f3f4f6;color:#9ca3af}
+.pill.open{background:#e5e7eb;color:#374151}.pill.claimed{background:#fef3c7;color:${C.warn}}.pill.paid{background:#dcfce7;color:${C.ok}}.pill.cancelled,.pill.expired{background:#f3f4f6;color:#9ca3af}.pill.abandoned{background:#ffedd5;color:#c2410c}.pill.needs_follow_up{background:#fee2e2;color:#b91c1c}
 .paid-card{border-color:${C.ok};background:#f0fdf4;animation:pop .5s ease-out} @keyframes pop{0%{transform:scale(.97)}60%{transform:scale(1.02)}100%{transform:scale(1)}}
 .big{font-size:28px;font-weight:800}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
 .pin{letter-spacing:.5em;text-align:center;font-size:28px}
@@ -325,8 +325,13 @@ function Home({ token, onLock, onExpired }) {
             <button className="ghost small" style={{ marginTop: 8 }} onClick={() => { setSlip(b); setSlipRun((n) => n + 1); }}>View slip</button>
           </div>
         : <div key={b.id} className="card">
-            <div className="row"><span style={{ fontWeight: 600 }}>{b.description}{b.is_test ? " (test)" : ""}</span><span className={`pill ${b.status}`}>{b.status}</span></div>
+            <div className="row"><span style={{ fontWeight: 600 }}>{b.description}{b.is_test ? " (test)" : ""}</span><span className={`pill ${b.status}`}>{b.status === "abandoned" ? "unpaid" : b.status === "needs_follow_up" ? "follow up" : b.status}</span></div>
             <div className="big" style={{ fontSize: 22 }}>{rands(b.subtotal_cents)}</div>
+            {(b.status === "abandoned" || b.status === "needs_follow_up") && (
+              <div className="row" style={{ marginTop: 6 }}>
+                <span className="muted" style={{ fontSize: 12 }}>{b.status === "abandoned" ? "Customer left without paying" : "Reminders finished — follow up yourself"}</span>
+                <button className="ghost small" onClick={() => act(b.id, "remind")}>Resend link</button>
+              </div>)}
             {(b.status === "open" || b.status === "claimed") && (
               <div className="row" style={{ marginTop: 6 }}>
                 {b.status === "claimed" && <button className="ghost small" onClick={() => act(b.id, "release")}>Release</button>}

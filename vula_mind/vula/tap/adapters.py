@@ -43,6 +43,11 @@ class WhatsAppMessenger:
         return await wa._send_reply(phone, body + "\n" + "\n".join(r["title"] for r in trimmed), tenant_id)
 
 
+    async def template(self, tenant_id: str, phone: str, name: str, params: list[str]) -> bool:
+        from vula.api.whatsapp import _send_wa_template
+        return await _send_wa_template(tenant_id, phone, name, *params)
+
+
 def _payfast_row(tenant_id: str) -> Optional[dict]:
     rows = (payments._client().table("vula_payment_providers").select("credentials,mode,active")
             .eq("tenant_id", tenant_id).eq("provider", "payfast").limit(1).execute().data or [])

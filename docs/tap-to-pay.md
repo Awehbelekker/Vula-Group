@@ -36,8 +36,7 @@ Hooks into existing code (all additive): `whatsapp.py` (text + `kb:` interactive
 7. **Split payments**: native PayFast split deliberately not used. Needs written confirmation first.
 
 ## Not built yet
-Slip as PNG/PDF (text slip only), reminders for
-abandoned bills, GL journal posting for tap payments (per-party lines live in `kb_ledger_lines`),
+Slip as PNG/PDF (text slip only), GL journal posting for tap payments (per-party lines live in `kb_ledger_lines`),
 merchant audit rows for bill actions, per-tag rate limiting beyond the global IP limit, NTAG424 SDM
 verification (static tags only), group bills, shifts/pools, payouts, nightly reconciliation.
 
@@ -75,8 +74,34 @@ silent) and stays silent when the browser blocks autoplay (the Replay button, be
 Apply migration 203. VAT shown on a receipt is 15% of the VAT-inclusive BILL only; tips are excluded until the
 accountant confirms their treatment. "Get tax invoice" is not built yet.
 
+## Unpaid-bill reminders
+When a customer has seen their total and then leaves (the 10-minute session lapses) or their payment fails, the bill
+becomes **abandoned** (still reserved for that customer; they can tap the tag again and carry on). A background sweeper
+(`_tap_sweep_loop` in `server.py`, every minute, safe on several workers) then sends up to **3** reminders, each with a
+fresh one-time pay link for the same total (an older link stops working): **#1 about 10 minutes** after they left,
+**#2 the next morning (08:00 SAST)**, **#3 on day 3** which says it is the last. Rules, enforced in
+`vula/tap/core/reminders.py` and property-tested: never more than 3, never more than one per SAST calendar day, only
+between 08:00 and 20:00 SAST (anything due outside waits for 08:00). The first reminder tells the customer how many to
+expect; every reminder names the merchant and the amount and says "Reply STOP". STOP (the platform's existing opt-out)
+ends the sequence at once and hands the bill to the owner, as does paying, cancelling, writing off or "paid another
+way". After the last reminder, or when reminders are off, the bill becomes **needs follow-up**.
+Owner (dashboard -> Tap to Pay -> Unpaid bills): reminders per bill (Off / 1 / 2 / 3), the list with reminders sent and the
+next one due, **Resend link** (same window, one-a-day and STOP rules; logged as a manual reminder that does not use up
+the three), **Paid another way** (cash / EFT / other), **Release** (frees the bill for anyone) and **Write off**. The coach
+sees their own unpaid bills with the same Resend link. Customers are shown as "ending 482" only.
+WhatsApp only allows free text within 24 hours of the customer's last message, so reminder #1 normally goes as text and
+later ones (day 3, sometimes #2) must be **approved templates**. Create two utility templates in Meta and set
+`TAP_REMINDER_TEMPLATE` and (optional) `TAP_REMINDER_FINAL_TEMPLATE`; each takes three body variables
+{{1}} merchant, {{2}} amount, {{3}} pay link, e.g. `You haven't finished paying {{1}} {{2}}. Pay now: {{3}} Reply STOP to
+stop reminders.` and `Last reminder: {{2}} to {{1}} is still unpaid. Pay now: {{3}} Reply STOP to stop.` Meta may not
+accept a link variable in the body (it often wants a URL button); if so, adapt the template and `_send_wa_template`
+accordingly. Without a template, an out-of-window reminder is **skipped and logged** (`skipped_no_template`, shown to the
+owner), never sent as free text. Apply migration 204.
+Trade-off to know: an abandoned bill stays reserved to the customer who left, so another customer tapping that tag sees
+"being paid from another phone" until the owner uses Release (or the sequence ends and they close it).
+
 ## Switching it on (self-serve)
-Apply migrations 199, 200, 201, 202 and 203 in the Supabase SQL editor (staging first — docs/staging.md), then the
+Apply migrations 199, 200, 201, 202, 203 and 204 in the Supabase SQL editor (staging first — docs/staging.md), then the
 owner does everything in the dashboard: **Money -> Tap to Pay**.
 
 1. Connect PayFast (merchant ID, key, passphrase; start with sandbox keys).

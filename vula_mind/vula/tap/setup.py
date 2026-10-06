@@ -59,7 +59,7 @@ class Setup:
         if not has_tag:
             blockers.append("Create a tag for at least one team member.")
         return {
-            "mode": cfg.get("mode", "off"), "tested": tested, "payfast": pf,
+            "mode": cfg.get("mode", "off"), "tested": tested, "reminders_max": int(cfg.get("reminders_max", 3)), "payfast": pf,
             "whatsapp": {"connected": bool(wa), "number": wa},
             "default_share_bp": int((rules.get("default") or {}).get("staff_share_bp", 0)),
             "staff": staff, "blockers": blockers,

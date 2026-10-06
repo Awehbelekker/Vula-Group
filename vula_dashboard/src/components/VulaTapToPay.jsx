@@ -54,6 +54,8 @@ export default function VulaTapToPay({ tenantId }) {
   const [newCode, setNewCode] = useState("");
   const [enrol, setEnrol] = useState(null);        // {id, name, code, expires_in_minutes, app_url}
   const [devices, setDevices] = useState([]);
+  const [unpaid, setUnpaid] = useState([]);
+  const [closing, setClosing] = useState(null);     // bill id whose "paid another way" picker is open
   const poll = useRef(null);
 
   const load = useCallback(async () => {
@@ -67,6 +69,7 @@ export default function VulaTapToPay({ tenantId }) {
       });
       setTestMember((m) => m || s.staff.find((x) => x.tag)?.id || s.staff[0]?.id || "");
       setNb((b) => ({ ...b, member: b.member || s.staff.find((x) => x.tag)?.id || "" }));
+      api(`/v1/tap/${tenantId}/unpaid`).then((d) => setUnpaid(d.unpaid || [])).catch(() => {});
       api(`/v1/tap/${tenantId}/devices`).then((d) => setDevices(d.devices || [])).catch(() => {});
       if (s.mode !== "off") {
         const b = await api(`/v1/tap/${tenantId}/bills`).catch(() => ({ bills: [] }));
@@ -135,6 +138,14 @@ export default function VulaTapToPay({ tenantId }) {
     if (!window.confirm("Sign this phone out? They'll need a new code to use the app again.")) return;
     await api(`/v1/tap/${tenantId}/devices/${id}/revoke`, { method: "POST" }); await load();
   });
+
+  const setReminders = (n) => run("rem", async () => { await api(`/v1/tap/${tenantId}/setup/reminders`, { method: "PUT", body: { max: n } }); await load(); });
+  const remind = (id) => run(`r-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/remind`, { method: "POST" }); await load(); setNewCode("Reminder sent."); });
+  const closeBill = (id, action, reason) => run(`c-${id}`, async () => {
+    if (action === "write_off" && !window.confirm("Write this bill off? Reminders stop and it leaves your unpaid list.")) return;
+    await api(`/v1/tap/${tenantId}/bills/${id}/close`, { method: "POST", body: { action, reason } }); setClosing(null); await load();
+  });
+  const when = (iso) => { try { return new Date(iso).toLocaleString("en-ZA", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg" }); } catch { return ""; } };
 
   const billAction = (id, action) => run(`b-${id}`, async () => { await api(`/v1/tap/${tenantId}/bills/${id}/${action}`, { method: "POST" }); await load(); });
 
@@ -293,6 +304,57 @@ export default function VulaTapToPay({ tenantId }) {
         )}
         {st.mode === "live" && st.payfast.mode === "test" && <span style={{ ...hint, color: "var(--warn)" }}>You’re live on <b>sandbox</b> keys — no real money moves. Switch to your live PayFast keys (step 1) when you’re ready.</span>}
       </Step>
+
+      {st.mode !== "off" && (
+        <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>Unpaid bills</span>
+            <label style={{ ...hint, display: "flex", gap: 6, alignItems: "center", marginLeft: "auto" }}>
+              Reminders per bill
+              <select value={st.reminders_max ?? 3} disabled={busy === "rem"} onChange={(e) => setReminders(Number(e.target.value))} style={{ ...inputStyle, width: "auto", padding: "5px 8px" }}>
+                <option value={0}>Off</option><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option>
+              </select>
+            </label>
+          </div>
+          <span style={hint}>
+            If a customer sees their total and leaves, or their payment fails, we send up to {st.reminders_max ?? 3} polite WhatsApp
+            reminder{(st.reminders_max ?? 3) === 1 ? "" : "s"} (about 10 minutes later, the next morning, then day 3), only between 08:00 and 20:00, at most one a day.
+            They can reply STOP at any time. After the last one the bill waits here for you.
+          </span>
+          {unpaid.length === 0 && <span style={hint}>Nothing unpaid. Bills a customer walked away from will show up here.</span>}
+          {unpaid.map((u) => (
+            <div key={u.id} style={{ borderTop: `1px solid ${T.border || "rgba(0,0,0,.08)"}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 600, color: T.ink }}>{u.description || "Bill"}</span>
+                <span style={{ color: T.ink }}>R {(u.total_cents / 100).toFixed(2)}</span>
+                {u.customer && <span style={hint}>customer {u.customer}</span>}
+                <Badge tone={u.status === "abandoned" ? "warn" : "danger"} style={{ marginLeft: "auto" }}>{u.status === "abandoned" ? "Reminding" : "Needs follow-up"}</Badge>
+              </div>
+              <span style={hint}>
+                {u.opted_out ? "Customer replied STOP — no more reminders." :
+                  u.status === "abandoned" ? `Reminder ${u.reminders_sent} of ${u.reminders_max} sent${u.next_reminder_at ? ` · next ${when(u.next_reminder_at)}` : ""}` :
+                  `${u.reminders_sent} reminder${u.reminders_sent === 1 ? "" : "s"} sent · no more automatic ones`}
+                {u.skipped > 0 && ` · ${u.skipped} couldn't be sent (no approved WhatsApp reminder template yet)`}
+              </span>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Button size="sm" variant="soft" style={{ opacity: u.opted_out ? 0.5 : 1 }} disabled={busy === `r-${u.id}` || u.opted_out} onClick={() => remind(u.id)}>Resend link</Button>
+                {closing === u.id ? (
+                  <>
+                    {[["cash", "Cash"], ["eft", "EFT"], ["other", "Other"]].map(([v, l]) => <Button key={v} size="sm" onClick={() => closeBill(u.id, "paid_other", v)}>{l}</Button>)}
+                    <Button size="sm" variant="ghost" onClick={() => setClosing(null)}>Cancel</Button>
+                  </>
+                ) : (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={() => setClosing(u.id)}>Paid another way</Button>
+                    <Button size="sm" variant="ghost" onClick={() => closeBill(u.id, "release")}>Release</Button>
+                    <Button size="sm" variant="ghost" onClick={() => closeBill(u.id, "write_off")}>Write off</Button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
 
       {st.mode !== "off" && (
         <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>

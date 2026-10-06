@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Sequence
 
+HELD_STATUSES = ("claimed", "abandoned", "needs_follow_up")   # someone has this bill
+LIVE_STATUSES = ("open",) + HELD_STATUSES
 MAX_CODE_ATTEMPTS = 3
 CODE_LOCK = timedelta(minutes=15)
 
@@ -46,10 +48,11 @@ def resolve_tap(*, tag_mode: str, payer_hash: str, bills: Sequence[BillView],
     if tag_mode == "quick_tip":
         return Decision(QUICK_TIP)
 
-    live = [b for b in bills if b.status in ("open", "claimed")]
+    live = [b for b in bills if b.status in LIVE_STATUSES]
 
-    # a tap from the number that already holds a claim re-uses that claim (double tap)
-    mine_claimed = [b for b in live if b.status == "claimed" and b.claimed_by_hash == payer_hash]
+    # a tap from the number that already holds a claim re-uses that claim (double tap), and a customer
+    # who left an unpaid bill (abandoned / needs follow-up) picks it up again
+    mine_claimed = [b for b in live if b.status in HELD_STATUSES and b.claimed_by_hash == payer_hash]
     if mine_claimed:
         return Decision(CLAIM, mine_claimed[0].id)
 
@@ -64,7 +67,7 @@ def resolve_tap(*, tag_mode: str, payer_hash: str, bills: Sequence[BillView],
         # at most one per tag (partial unique index); oldest-id first if data is ever dirty
         return Decision(CLAIM, sorted(claimable, key=lambda b: b.id)[0].id)
 
-    if any(b.status == "claimed" for b in live):
+    if any(b.status in HELD_STATUSES for b in live):
         return Decision(LOCKED)
 
     if any(b.status == "open" and b.customer_hash for b in live):
