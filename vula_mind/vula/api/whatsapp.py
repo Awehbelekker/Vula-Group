@@ -1539,6 +1539,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
             if pending.get("clickup"):
                 note += " Added to ClickUp."
             await _send_reply(phone, note, tenant_id=tenant_id)
+        elif pending.get("duplicate_dropped"):
+            await _send_reply(phone, f"👍 Dropped '{pending['filename']}' as a duplicate — its bill "
+                              f"won't count twice.", tenant_id=tenant_id)
         elif pending.get("skipped"):
             await _send_reply(
                 phone, f"👍 Left '{pending['filename']}' unfiled — you can file it "

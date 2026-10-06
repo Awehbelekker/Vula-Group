@@ -767,7 +767,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         logger.debug("attachment analysis skipped: %s", exc)
 
     try:
-        from vula.integrations.doc_filing import (file_document, match_project, project_examples,
+        from vula.integrations.doc_filing import (file_document, match_project,
                                                   lookup_learned_project)
         field_text = " ".join(str(v) for v in fields.values() if isinstance(v, (str, int, float)))
         # The attachment's own evidence only: its name, what's in it, and the email subject. Not
@@ -845,6 +845,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
         # A real B2B bill/quote (not already handled as a bank statement/POP above) gets
         # committed into the books via the same shared path the Smart Scanner uses —
         # supplier match/auto-create, due-date calc, commerce_invoices/expenses row.
+        committed = None
         try:
             from vula.api.whatsapp import _FINANCIAL_DOC_CATEGORIES, _CATEGORY_TO_DOC_TYPE
             if category in _FINANCIAL_DOC_CATEGORIES and not payment_matched:
@@ -855,7 +856,7 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
                 # invoice/quote as an expense. Map the deep-analysis category across.
                 commit_fields = dict(fields or {})
                 commit_fields.setdefault("doc_type", _CATEGORY_TO_DOC_TYPE.get(category, "invoice"))
-                await commerce_service.commit_inbound_document(
+                committed = await commerce_service.commit_inbound_document(
                     tenant_id, commit_fields, auto_commit=True, source="email",
                     filed_document_id=filed_row.get("id") if filed_row else None,
                     project=match["project"] if match else None,
@@ -864,15 +865,18 @@ async def _file_attachment(tenant_id: str, em: dict, att: dict, notify_phone: st
             logger.warning("commit_inbound_document failed for email attachment %s: %s",
                            att.get("name"), exc)
 
-        if ask:
+        # When the bill also needs "is this supplier X?" (commit_inbound_document's approval),
+        # the project question follows that answer (approvals._ask_project_next) — two
+        # questions at once got one answer and the other was never asked (2026-10-05).
+        supplier_question = bool(committed and committed.get("needs_review")
+                                 and committed.get("supplier_match")
+                                 and committed.get("record_type") == "invoice")
+        if ask and filed_row and filed_row.get("id") and not supplier_question:
             try:
-                from vula.integrations.notify import notify_team
-                ex = project_examples(tenant_id)
-                hint_txt = f" (e.g. {', '.join(ex)})" if ex else ""
-                await notify_team(tenant_id, "which_project", (
-                    f"📎 A document came in by email — *{att['name']}* "
-                    f"from {em.get('from','')}. Which project should I file it under?{hint_txt} "
-                    f"Reply with the project name, or 'skip'."))
+                from vula.integrations.doc_filing import ask_project
+                from vula.integrations.notify import recipients_for
+                await ask_project(tenant_id, filed_row, recipients_for(tenant_id, "which_project"),
+                                  prefix=f"📎 A document came in by email from {em.get('from','')}.")
             except Exception as exc:
                 logger.debug("notify ask failed: %s", exc)
     except Exception as exc:

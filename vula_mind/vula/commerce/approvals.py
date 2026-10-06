@@ -151,6 +151,11 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
         sb.table("vula_approvals").update(
             {"status": "rejected", "completed_at": _now()}
         ).eq("id", approval["id"]).execute()
+        if approval["entity_type"] == "inbound_invoice":
+            await _send_reply(phone, "👍 Noted — I'll keep it under the supplier name on the invoice.",
+                              tenant_id)
+            await _ask_project_next(approval, phone)
+            return approval
         await _send_reply(phone, f"❌ You rejected *{title}*. The requester has been notified.", tenant_id)
         if approval.get("requested_by"):
             await _send_reply(
@@ -187,10 +192,32 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
             f"✅ *{title}* is approved and has been sent to the client." if sent else
             f"✅ *{title}* is approved, but I couldn't send it to the client. Open it under "
             f"Invoices in the dashboard and press Send."), tenant_id)
+    elif approval["entity_type"] == "inbound_invoice":
+        await _on_approved(approval)
+        name = (approval.get("meta") or {}).get("candidate_supplier_name") or "that supplier"
+        await _send_reply(phone, f"✅ Linked to *{name}*.", tenant_id)
+        await _ask_project_next(approval, phone)
     else:
         await _send_reply(phone, f"✅ Approved: *{title}*", tenant_id)
         await _on_approved(approval)
     return approval
+
+
+async def _ask_project_next(approval: dict, phone: str) -> None:
+    """After "is this supplier X?" comes "which project?" — the email path holds that question
+    back while the supplier one is open, so one answer never leaves the other unasked
+    (2026-10-05, STE Scaffolding)."""
+    fid = (approval.get("meta") or {}).get("filed_document_id")
+    if not fid:
+        return
+    try:
+        rows = (_client().table("vula_filed_documents").select("*")
+                .eq("tenant_id", approval["tenant_id"]).eq("id", fid).limit(1).execute().data or [])
+        if rows and rows[0].get("status") == "pending_project":
+            from vula.integrations.doc_filing import ask_project
+            await ask_project(approval["tenant_id"], rows[0], [phone])
+    except Exception as exc:
+        logger.warning("project follow-up after supplier answer failed: %s", exc)
 
 
 async def _on_approved(approval: dict) -> None:
