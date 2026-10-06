@@ -90,6 +90,11 @@ class TapService:
     pusher: Optional[Pusher] = None
 
     # ── helpers ──────────────────────────────────────────────────────────────────────────────
+    @property
+    def tax(self):
+        from vula.tap.tax import TaxDesk
+        return TaxDesk(self)
+
     def now(self) -> datetime:
         return self.cfg.clock()
 
@@ -164,6 +169,8 @@ class TapService:
         m = _PAY_RE.match(text or "")
         if m:
             await self._start(tenant_id, phone, m.group(1))
+            return True
+        if await self.tax.handle_text(tenant_id, phone, text):
             return True
         session = self._live(self.repo.active_session_for_payer(
             tenant_id, self.phone_hash(phone), self.now()))
@@ -531,13 +538,15 @@ class TapService:
                                               "correctly - you can go live in the dashboard.")
             return "test_paid"
         if phone:
+            tax_hint = "\nNeed a VAT tax invoice? Reply TAX." if s["bill_cents"] and self.tax.can_issue(tenant_id) else ""
             link = ""
             if self.cfg.receipt_secret and self.cfg.receipt_base_url:
                 from vula.tap.receipt import make_token
                 link = f"\nYour receipt: {self.cfg.receipt_base_url.rstrip('/')}/r/{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}"
             await self._say(tenant_id, phone,
                             f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
-                            f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{link}")
+                            f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{link}"
+                            f"{tax_hint}")
         await self._notify_staff(tenant_id, s, phone)
         return "paid"
 

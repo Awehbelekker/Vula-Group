@@ -33,6 +33,7 @@ class MemoryRepo:
         self.codes, self.devices, self.subs = [], {}, {}
         self.reminders, self.opted_out = [], set()
         self.members = {}
+        self.invoice_cfg, self.tax_invoices, self.tax_requests = {}, [], []
 
     def _id(self):
         return f"id{next(self.n):04d}" + "x" * 4
@@ -259,6 +260,48 @@ class MemoryRepo:
     def merchant_vat(self, tenant_id):
         return self.vat.get(tenant_id, {"vat_number": None, "vat_registered": False})
 
+    # tax invoices
+    def invoice_settings(self, tenant_id):
+        return self.invoice_cfg.get(tenant_id)
+
+    def get_tax_invoice(self, tenant_id, payment_id):
+        return next((dict(i) for i in self.tax_invoices
+                     if i["tenant_id"] == tenant_id and i["payment_id"] == payment_id), None)
+
+    def insert_tax_invoice(self, row):
+        if any(i["payment_id"] == row["payment_id"] or (i["tenant_id"], i["number"]) == (row["tenant_id"], row["number"])
+               for i in self.tax_invoices):
+            return None
+        r = {"id": self._id(), "issued_at": "2026-10-06T10:06:00+00:00", **row}
+        self.tax_invoices.append(r)
+        return dict(r)
+
+    def max_tax_number(self, tenant_id):
+        return max([i["number"] for i in self.tax_invoices if i["tenant_id"] == tenant_id] or [0])
+
+    def latest_paid_payment(self, tenant_id, payer_hash):
+        for pay in reversed(list(self.payments.values())):
+            s = self.sessions.get(pay["session_id"], {})
+            if s.get("payer_hash") == payer_hash and pay["tenant_id"] == tenant_id \
+                    and not self.bills.get(s.get("bill_id"), {}).get("is_test"):
+                return pay["id"]
+        return None
+
+    def put_tax_request(self, row):
+        for r in self.tax_requests:
+            if r["payer_hash"] == row["payer_hash"] and r["status"] == "awaiting":
+                r["status"] = "cancelled"
+        self.tax_requests.append({"id": self._id(), "status": "awaiting", **row})
+
+    def open_tax_request(self, tenant_id, payer_hash, now_iso):
+        now = _ts(now_iso)
+        return next((dict(r) for r in reversed(self.tax_requests)
+                     if r["tenant_id"] == tenant_id and r["payer_hash"] == payer_hash
+                     and r["status"] == "awaiting" and _ts(r["expires_at"]) > now), None)
+
+    def close_tax_request(self, request_id, status):
+        next(r for r in self.tax_requests if r["id"] == request_id)["status"] = status
+
     # unpaid-bill reminders
     PRE = ("claimed", "awaiting_amount", "awaiting_tip", "awaiting_confirm", "awaiting_payment")
 
@@ -326,6 +369,10 @@ class FakeMessenger:
 
     async def buttons(self, tenant_id, phone, body, buttons):
         self.sent.append(("buttons", tenant_id, phone, (body, buttons)))
+        return True
+
+    async def document(self, tenant_id, phone, data, filename, caption):
+        self.sent.append(("document", tenant_id, phone, (filename, caption, data)))
         return True
 
     async def list(self, tenant_id, phone, header, body, button, rows):

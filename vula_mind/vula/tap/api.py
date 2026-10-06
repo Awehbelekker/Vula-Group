@@ -337,7 +337,16 @@ def build_receipt(svc: TapService, src: dict) -> dict:
             "total_cents": src["bill_cents"] + src["tip_cents"], "currency": "ZAR",
             "vat_number": vat["vat_number"] if vat["vat_registered"] else None,
             "vat_cents": vat_included(src["bill_cents"]) if vat["vat_registered"] and vat["vat_number"] else None,
-            "paid_at": src["paid_at"], "ref": str(src["payment_id"])[:8].upper(), "is_test": src["is_test"]}
+            "paid_at": src["paid_at"], "ref": str(src["payment_id"])[:8].upper(), "is_test": src["is_test"],
+            **_tax_fields(svc, src)}
+
+
+def _tax_fields(svc: TapService, src: dict) -> dict:
+    from vula.tap.core.taxinvoice import format_number
+    tenant, desk = src["tenant_id"], svc.tax
+    inv = svc.repo.get_tax_invoice(tenant, src["payment_id"])
+    return {"tax_invoice_number": format_number(inv["number"]) if inv else None,
+            "can_tax_invoice": bool(inv) or (desk.can_issue(tenant) and src["bill_cents"] > 0 and not src["is_test"])}
 
 
 @router.get("/v1/tap/receipt/{token}")
@@ -351,6 +360,50 @@ async def get_receipt(token: str) -> Response:
     import json
     return Response(json.dumps(build_receipt(svc, src)), media_type="application/json",
                     headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+def _valid_receipt(svc: TapService, token: str) -> dict:
+    from vula.tap.receipt import read_token
+    parsed = read_token(svc.cfg.receipt_secret, token[:300])
+    src = svc.repo.receipt_source(parsed[0]) if parsed else None
+    if not src or src["nonce"] != parsed[1] or src.get("revoked_at"):
+        raise HTTPException(status_code=404, detail="This receipt link is no longer available.")
+    return src
+
+
+class TaxIn(BaseModel):
+    company: str = Field(min_length=2, max_length=120)
+    vat: str = Field(min_length=9, max_length=14)
+    address: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/v1/tap/receipt/{token}/tax-invoice")
+async def issue_tax_invoice(token: str, body: TaxIn) -> dict:
+    from vula.tap.core.taxinvoice import format_number
+    from vula.tap.tax import TaxError
+    svc = get_service()
+    src = _valid_receipt(svc, token)
+    try:
+        inv, created = svc.tax.issue(src["payment_id"], body.company, body.vat, body.address or "")
+    except TaxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"number": format_number(inv["number"]), "created": created,
+            "pdf_url": f"/v1/tap/receipt/{token}/tax-invoice.pdf"}
+
+
+@router.get("/v1/tap/receipt/{token}/tax-invoice.pdf")
+async def tax_invoice_pdf(token: str) -> Response:
+    import asyncio
+    from vula.tap.core.taxinvoice import format_number
+    svc = get_service()
+    src = _valid_receipt(svc, token)
+    inv = svc.repo.get_tax_invoice(src["tenant_id"], src["payment_id"])
+    if not inv:
+        raise HTTPException(status_code=404, detail="No tax invoice has been requested for this payment.")
+    pdf = await asyncio.to_thread(svc.tax.render_pdf, inv)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex",
+                             "Content-Disposition": f'inline; filename="Tax-Invoice-{format_number(inv["number"])}.pdf"'})
 
 
 @router.post("/v1/tap/{tenant}/payments/{payment_id}/receipt/revoke")

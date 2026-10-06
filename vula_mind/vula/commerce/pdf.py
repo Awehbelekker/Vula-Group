@@ -283,6 +283,7 @@ _DOC_HTML = """<!DOCTYPE html>
     {% if customer_address %}{{ customer_address | replace("\\n", "<br>") | safe }}<br>{% endif %}
     {% if customer_email %}{{ customer_email }}<br>{% endif %}
     {% if customer_phone %}{{ customer_phone }}{% endif %}
+    {% if customer_vat %}<br>VAT No: {{ customer_vat }}{% endif %}
     </p>
   </div>
 </div>
@@ -601,6 +602,7 @@ def render_invoice_pdf(invoice: dict, tenant_profile: Optional[dict] = None) -> 
         "customer_email": bill_email,
         "customer_phone": bill_phone,
         "customer_address": bill_address,
+        "customer_vat": "" if inbound else (invoice.get("customer_vat") or ""),
         # Financials — always integer cents, never floats in storage
         "line_items": line_items,
         "sections": _group_sections(line_items),

@@ -258,6 +258,56 @@ class SupabaseRepo:
             r = {}
         return {"vat_number": r.get("vat_number") or None, "vat_registered": bool(r.get("vat_registered", False))}
 
+    # tax invoices
+    def invoice_settings(self, tenant_id: str) -> Optional[dict]:
+        return self._one(self.db.table("commerce_invoice_settings").select("*").eq("tenant_id", tenant_id))
+
+    def get_tax_invoice(self, tenant_id: str, payment_id: str) -> Optional[dict]:
+        return self._one(self.db.table("kb_tax_invoices").select("*")
+                         .eq("tenant_id", tenant_id).eq("payment_id", payment_id))
+
+    def insert_tax_invoice(self, row: dict) -> Optional[dict]:
+        """None when another request won the race (same payment or same number)."""
+        try:
+            return self.db.table("kb_tax_invoices").insert(row).execute().data[0]
+        except Exception as exc:  # noqa: BLE001
+            if _is_dup(exc):
+                return None
+            raise
+
+    def max_tax_number(self, tenant_id: str) -> int:
+        r = self._one(self.db.table("kb_tax_invoices").select("number").eq("tenant_id", tenant_id)
+                      .order("number", desc=True))
+        return int((r or {}).get("number") or 0)
+
+    def latest_paid_payment(self, tenant_id: str, payer_hash: str) -> Optional[str]:
+        """The customer's most recent real (non-test) payment, as a payment id."""
+        for s in (self.db.table("kb_sessions").select("id,bill_id").eq("tenant_id", tenant_id)
+                  .eq("payer_hash", payer_hash).eq("state", "paid")
+                  .order("created_at", desc=True).limit(5).execute().data or []):
+            b = (self._one(self.db.table("kb_bills").select("is_test").eq("tenant_id", tenant_id)
+                           .eq("id", s["bill_id"])) if s.get("bill_id") else None) or {}
+            if b.get("is_test"):
+                continue
+            pay = self._one(self.db.table("kb_payments").select("id").eq("tenant_id", tenant_id)
+                            .eq("session_id", s["id"]))
+            if pay:
+                return pay["id"]
+        return None
+
+    def put_tax_request(self, row: dict) -> None:
+        self.db.table("kb_tax_requests").update({"status": "cancelled"}).eq("tenant_id", row["tenant_id"]) \
+            .eq("payer_hash", row["payer_hash"]).eq("status", "awaiting").execute()
+        self.db.table("kb_tax_requests").insert(row).execute()
+
+    def open_tax_request(self, tenant_id: str, payer_hash: str, now_iso: str) -> Optional[dict]:
+        return self._one(self.db.table("kb_tax_requests").select("*").eq("tenant_id", tenant_id)
+                         .eq("payer_hash", payer_hash).eq("status", "awaiting").gt("expires_at", now_iso)
+                         .order("created_at", desc=True))
+
+    def close_tax_request(self, request_id: str, status: str) -> None:
+        self.db.table("kb_tax_requests").update({"status": status}).eq("id", request_id).execute()
+
     # unpaid-bill reminders
     def stale_sessions(self, now_iso: str, limit: int = 100) -> list[dict]:
         return (self.db.table("kb_sessions").select("*").in_("state", _LIVE_SESSION)

@@ -47,6 +47,10 @@ class WhatsAppMessenger:
         from vula.api.whatsapp import _send_wa_template
         return await _send_wa_template(tenant_id, phone, name, *params)
 
+    async def document(self, tenant_id: str, phone: str, data: bytes, filename: str, caption: str) -> bool:
+        from vula.api.whatsapp import _send_invoice_document
+        return await _send_invoice_document(phone, data, filename, caption, tenant_id)
+
 
 def _payfast_row(tenant_id: str) -> Optional[dict]:
     rows = (payments._client().table("vula_payment_providers").select("credentials,mode,active")

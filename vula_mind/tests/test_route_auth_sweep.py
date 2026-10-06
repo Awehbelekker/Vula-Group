@@ -43,6 +43,8 @@ PUBLIC = {
     ("POST", "/v1/tap/app/push"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("DELETE", "/v1/tap/app/push"): "tap-to-pay coach app — device token + PIN auth enforced in the handler (Depends(app_actor)); enrol/login are the sign-in itself",
     ("GET", "/v1/tap/receipt/{token}"): "tap-to-pay public receipt — 128-bit HMAC token, revocable, customer-safe fields only",
+    ("POST", "/v1/tap/receipt/{token}/tax-invoice"): "tap-to-pay tax invoice request — same receipt token; one immutable invoice per payment",
+    ("GET", "/v1/tap/receipt/{token}/tax-invoice.pdf"): "tap-to-pay tax invoice PDF — same receipt token; 404 until requested",
     ("GET", "/t/{code}"): "tap-to-pay NFC/QR tag landing — mints a 2-minute single-use claim token, off unless tenant enabled",
     ("GET", "/t/{code}/qr.svg"): "tap-to-pay printable QR of the public tap link — carries no secret",
     ("GET", "/v1/tap/pay/{session_id}/{nonce}"): "tap-to-pay one-time pay link — nonce hash-checked against the session",

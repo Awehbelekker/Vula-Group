@@ -36,7 +36,7 @@ Hooks into existing code (all additive): `whatsapp.py` (text + `kb:` interactive
 7. **Split payments**: native PayFast split deliberately not used. Needs written confirmation first.
 
 ## Not built yet
-Slip as PNG/PDF (text slip only), GL journal posting for tap payments (per-party lines live in `kb_ledger_lines`),
+Slip as PNG/PDF (text slip only; tax invoices are PDF), credit notes for tax invoices, GL journal posting for tap payments (per-party lines live in `kb_ledger_lines`),
 merchant audit rows for bill actions, per-tag rate limiting beyond the global IP limit, NTAG424 SDM
 verification (static tags only), group bills, shifts/pools, payouts, nightly reconciliation.
 
@@ -72,7 +72,30 @@ silent) and stays silent when the browser blocks autoplay (the Replay button, be
 - **Coach:** when a payment lands in Vula Pay the slip prints in an overlay with "Your share"; any paid bill has
   "View slip". Sound can be switched off under "This phone".
 Apply migration 203. VAT shown on a receipt is 15% of the VAT-inclusive BILL only; tips are excluded until the
-accountant confirms their treatment. "Get tax invoice" is not built yet.
+accountant confirms their treatment.
+
+## Tax invoice on request
+A customer who has paid can ask for a VAT **tax invoice** two ways: reply `TAX` on WhatsApp (the slip says "Need a VAT tax
+invoice? Reply TAX." when the merchant can issue one; the bot asks "Send your company name and VAT number for a tax invoice.",
+or accept it all in one message: `TAX Acme Trading (Pty) Ltd 4123456789`), or tap **Get tax invoice** on the receipt page. The PDF
+comes from the existing invoice renderer (`vula/commerce/pdf.py`, new "VAT No" line under Bill To) and is sent as a WhatsApp
+document / opened from the receipt page. Code: `vula/tap/tax.py`, pure rules in `vula/tap/core/taxinvoice.py`.
+- **Who can issue:** only a merchant with *VAT registered* ticked, a VAT number **and a registered address** in Invoice
+  settings. Otherwise the option isn't offered, and a customer who asks anyway is told to ask the merchant. The supplier name
+  comes from the same settings (company name, else the tenant name).
+- **Buyer details:** company name + SARS VAT number (10 digits starting with 4; spaces tolerated). Address is optional (the page has a
+  field). Wrong number -> the bot explains and keeps the request open for 30 minutes; "cancel"/"no thanks" closes it. Anything that
+  isn't an answer (a question, a long message) is passed to normal routing untouched.
+- **One immutable invoice per payment.** Asking again returns the same PDF; the details cannot be changed once issued (a DB trigger
+  forbids update/delete; a correction needs a credit note, not built). Supplier and buyer details are snapshotted, so later
+  settings changes never alter an issued invoice. Numbers are `TI-000001`... sequential per tenant, never reused (unique + retry).
+- **Amounts:** the invoice is for the **bill** only: excl-VAT, VAT (15%, half-up) and total = what was charged for the service. A tip is
+  not on it; if there was one, a note says it was paid separately. Setup test payments can't be invoiced.
+- **Who can ask:** by WhatsApp, the number that paid, within 30 days (a message from anyone else, or from someone who never paid, is
+  not intercepted). On the page, anyone with the unguessable receipt link (same token; revoking the receipt revokes this too).
+- Open question for the accountant: VAT treatment of tips, and whether an abridged invoice is wanted for bills under R5 000 (we
+  always print the buyer's details, which is also valid).
+Apply migration 205 (`kb_tax_invoices`, `kb_tax_requests`).
 
 ## Unpaid-bill reminders
 When a customer has seen their total and then leaves (the 10-minute session lapses) or their payment fails, the bill
@@ -101,7 +124,7 @@ Trade-off to know: an abandoned bill stays reserved to the customer who left, so
 "being paid from another phone" until the owner uses Release (or the sequence ends and they close it).
 
 ## Switching it on (self-serve)
-Apply migrations 199, 200, 201, 202, 203 and 204 in the Supabase SQL editor (staging first — docs/staging.md), then the
+Apply migrations 199, 200, 201, 202, 203, 204 and 205 (or the combined `migrations/_APPLY_2026-10-06_tap_to_pay_199-205.sql`) in the Supabase SQL editor (staging first — docs/staging.md), then the
 owner does everything in the dashboard: **Money -> Tap to Pay**.
 
 1. Connect PayFast (merchant ID, key, passphrase; start with sandbox keys).
