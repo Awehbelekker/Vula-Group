@@ -112,6 +112,15 @@ cases:
     last_skill: commerce_admin
     text: "Check my email"
     expect: {skill: email_admin}
+  - id: profit-after-tax-6oct
+    note: was answered "I do not have the tools to calculate the profit after tax" (6 Oct)
+    tenant: digg-demo
+    text: "HPC project profit and also after tax"
+    expect: {route: owner_admin, skill: commerce_admin}
+  - id: tax-regime-answer
+    tenant: digg-demo
+    text: "Turnover tax"
+    expect: {route: owner_admin, skill: commerce_admin}
   - id: what-to-charge
     tenant: digg-demo
     text: "What should I charge per m2 for tiling?"

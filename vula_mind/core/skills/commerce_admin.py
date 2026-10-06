@@ -912,6 +912,25 @@ PROJECT_TOOLS = [
             "unit": {"type": "string", "description": "m2, m, each, day… if the user said one."},
             "project": {"type": "string"}},
             "required": ["item"]}}},
+    # 6 Oct (DIGG): "HPC project profit and also after tax" — tax worked out in code from the
+    # business's own bank lines and the SARS tables (vula/commerce/tax.py), never by the model.
+    {"type": "function", "function": {
+        "name": "tax_estimate",
+        "description": "Income tax for this tax year from the business's own figures, under how it "
+                       "is taxed (Turnover Tax, company or sole proprietor): the tax so far with "
+                       "the working, whether it is still under the Turnover Tax limit, and — "
+                       "when a project is named — that project's profit after tax. Use for any "
+                       "'after tax', 'how much tax', 'turnover tax', 'provisional tax' question. "
+                       "Quote the returned text; never compute tax yourself.",
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string", "description": "Project name if the user named one."}}}}},
+    {"type": "function", "function": {
+        "name": "set_tax_regime",
+        "description": "Record how the business is taxed when the owner says so (e.g. 'turnover "
+                       "tax', '(Pty) Ltd', 'sole proprietor'). Only after the owner said it.",
+        "parameters": {"type": "object", "properties": {
+            "regime": {"type": "string", "description": "The owner's words."}},
+            "required": ["regime"]}}},
 ]
 SUBSCRIPTION_TOOLS = [
     {"type": "function", "function": {
@@ -1286,7 +1305,8 @@ _TOOL_SCOPE: Dict[str, str] = {
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
-    "project_profit": "finances", "price_advice": "finances",
+    "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
+    "set_tax_regime": "finances",
 }
 for _scope, _group in (("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS),
                        ("products", DISCOUNT_TOOLS), ("products", PURCHASE_ORDER_TOOLS),
@@ -1942,6 +1962,24 @@ class CommerceAdminSkill(BaseSkill):
         return None
 
     # ── Tool dispatch ─────────────────────────────────────────────────────────
+    async def _set_tax_regime(self, tid: str, regime: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """Store how the business is taxed in its profile, read it back, then answer the tax
+        question with it."""
+        from vula.commerce import business_profile, tax
+        if not regime.strip():
+            return {"status": "need_info", "message": tax.estimate(tid).get("message") or ""}
+        await business_profile.save_answers(tid, {"tax_regime": regime},
+                                            by=str(ctx.get("phone") or ""))
+        kind = tax.regime(tid)
+        if kind is None:
+            return _not_confirmed(f"I couldn't save how the business is taxed ('{regime}'). "
+                                  "Not confirmed.")
+        names = {"turnover": "Turnover Tax", "company": "a (Pty) Ltd company",
+                 "sole_prop": "a sole proprietor"}
+        res = tax.project_tax(tid, None)
+        return _checked({"saved": True, "regime": kind},
+                        f"✅ Noted: the business is taxed as {names[kind]}.\n\n{res.get('text', '')}")
+
     @_dry_run.guard_dispatch
     async def _dispatch_tool(self, name: str, args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
         tid = ctx["tenant_id"]
@@ -2034,6 +2072,12 @@ class CommerceAdminSkill(BaseSkill):
                 res = project_profit(tid, args.get("project") or None)
                 text = res.get("text") or res.get("message")
                 return {**res, "reply_verbatim": text} if text else res
+            if name == "tax_estimate":
+                from vula.commerce.tax import project_tax
+                res = project_tax(tid, args.get("project") or None)
+                return {**res, "reply_verbatim": res["text"]} if res.get("text") else res
+            if name == "set_tax_regime":
+                return await self._set_tax_regime(tid, str(args.get("regime") or ""), ctx)
             if name == "price_advice":
                 from vula.commerce.job_costing import price_advice
                 return price_advice(tid, str(args.get("item") or ""), args.get("quantity"),

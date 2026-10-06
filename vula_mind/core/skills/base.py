@@ -676,6 +676,10 @@ _OWNER_ADMIN_RE = re.compile(
     # for DIGG, and answered "R0" (6 Oct) — profit/margin on a project is job costing.
     r"\b(?:project|job)\s+(?:profit|margin|loss)\b|\b(?:profit|margin|loss)\s+(?:for|of)\s+(?:the\s+)?\w+|"
     r"\bprofit(?:able)?\b.{0,30}\bproject\b|\bproject\b.{0,30}\bprofit(?:able)?\b|"
+    # Tax on the business's own figures — the tax_estimate tool (6 Oct). Not "tax invoice".
+    r"\b(?:after|before|income|turnover|company|provisional)[\s-]+tax\b|\bhow much tax\b|"
+    r"\btax (?:do|must|should|will) (?:i|we)\b|\b(?:pay|owe) (?:sars|tax)\b|"
+    r"^\s*(?:(?:on |it'?s |we'?re (?:on )?)?turnover tax|sole prop\w*|\(?pty\)? ?ltd)\s*[.!]?\s*$|"
     # "Who owes me money?" went to the general reasoning skill, which can't see invoices (replay
     # corpus, 6 Oct) — debtors and bills are the admin agent's outstanding_invoices.
     r"\bwho owes\b|\bwho (?:do|must|should) (?:i|we) (?:still )?pay\b|\b(?:do|must) (?:i|we) owe\b|"
