@@ -24,7 +24,7 @@ from core.llm_router import is_local_model, resolve_generation_route, substitute
 from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, substitute_if_leaked, tool_source,
-    unverified_prices, wrong_arithmetic, drop_unverified_price_sentences,
+    unverified_prices, wrong_arithmetic, drop_unverified_price_sentences, contentless,
 )
 from vula.commerce import service
 
@@ -290,6 +290,10 @@ HOW_TO_ORDER_REPLY = (
 # the same thing again never helps; offer the team instead.
 REPEAT_REPLY = ("I think I've covered that one — is there anything else I can help with? "
                 "If you'd like, I can pass your question on to the team.")
+# A customer closing the chat ("thanks", "dankie", "bye") can fairly get just a 👍 back; anything
+# else that gets a reply with no words gets the cart and the next step instead.
+_THANKS_RE = re.compile(r"\b(thanks?|thank\s+you|thx|ta|dankie|baie\s+dankie|cheers|bye|goodbye|"
+                        r"totsiens|ngiyabonga|enkosi)\b", re.IGNORECASE)
 _ASSISTANT_LINE_RE = re.compile(r"^Assistant[^:\n]*:\s?", re.MULTILINE)
 _CUSTOMER_LINE_RE = re.compile(r"^Customer[^:\n]*:", re.MULTILINE)
 
@@ -450,7 +454,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "product": {"type": "string", "description": "Product name or slug."},
-                    "quantity": {"type": "number", "description": "Amount to add. For products priced per kg, this is the number of kilograms (decimals allowed, e.g. 1.5). For packs, the number of packs. Default 1."},
+                    "quantity": {"type": "number", "description": "Amount to add. For products priced per kg, this is the number of kilograms (decimals allowed, e.g. 1.5). For packs, the number of packs. Only pass the amount the customer actually said — omit it if they didn't say one, and you'll be told to ask."},
                     "variant": {"type": "string", "description": "The customer's chosen option(s) for a product that has variants, in their own words (e.g. 'large', 'red', 'size L red'). Omit for products with no options."},
                 },
                 "required": ["product"],
@@ -959,6 +963,8 @@ class CommerceAssistantSkill(BaseSkill):
                                           tool_names=[t["function"]["name"] for t in TOOL_SPECS])
             if _repeats_last_reply(answer, inp.conversation_history or ""):
                 answer = REPEAT_REPLY
+            if contentless(answer) and not _THANKS_RE.search(inp.question or ""):
+                answer = await self._cart_status_reply(ctx)
             confidence = 0.8 if kb_context else 0.7
             # 2026-09-26: this skill quotes prices straight to paying customers from KB context
             # (the storefront price list) but, unlike commerce_admin.py, never checked a stated
@@ -1474,7 +1480,7 @@ class CommerceAssistantSkill(BaseSkill):
         if name == "check_business_hours":
             return self._exec_check_business_hours(tid)
         if name == "suggest_recipe":
-            return await self._exec_suggest_recipe(tid, args)
+            return await self._exec_suggest_recipe(tid, args, cart_names=await self._cart_names(tid, sid, phone))
         if name == "research_product":
             return await self._exec_research_product(tid, args)
         if name == "create_quote":
@@ -1784,6 +1790,16 @@ class CommerceAssistantSkill(BaseSkill):
             if not variant.get("in_stock", True):
                 return {"error": f"That option of '{product['name']}' is currently out of stock."}
 
+        # 2026-10-05 (off-the-hook): "I'd like to order Hake Centre Cuts" — no amount — was added
+        # as 1kg anyway, then "did you want 1kg, or a different amount?" got "Yes" and a bare 👍.
+        # The prompt's CART DISCIPLINE rule (add only with a quantity) didn't hold, so it's code:
+        # no quantity, nothing added — ask first.
+        if args.get("quantity") in (None, ""):
+            ask = ("how many kg (e.g. 0.5, 1, 1.5, 2)" if _is_kg(product)
+                   else "how many")
+            return {"needs_quantity": True, "product": product["name"],
+                    "instruction": f"Nothing was added. Ask the customer {ask} of {product['name']} "
+                                   "they'd like, then call add_to_cart with that quantity."}
         unit_price_cents = variant.get("price_cents") if variant and variant.get("price_cents") is not None else product["price_cents"]
         # Decimal amount for kg products (e.g. 1.5 kg), whole packs otherwise.
         qty = _norm_qty(product, args.get("quantity", 1))
@@ -1814,12 +1830,24 @@ class CommerceAssistantSkill(BaseSkill):
             notes.append(f"The customer asked for '{name}'; you added {product['name']}, the closest "
                          "product in stock. Say so plainly and offer to remove it if it isn't what "
                          "they wanted.")
-        if args.get("quantity") in (None, ""):
-            notes.append(f"No quantity was given, so {_fmt_qty(product, qty)} was added — confirm "
-                         "the amount with the customer.")
         if notes:
             out["note"] = " ".join(notes)
         return out
+
+    async def _cart_status_reply(self, ctx: Dict[str, Any]) -> str:
+        """Where the order stands and what to do next, from the live cart — used when the model
+        replies with nothing but an emoji (see base.contentless)."""
+        try:
+            cart = await self._exec_view_cart(ctx["tenant_id"], ctx["session_id"], ctx["customer_phone"])
+        except Exception as exc:
+            logger.debug("cart status lookup failed: %s", exc)
+            cart = {}
+        items = cart.get("items") or []
+        if not items:
+            return "What would you like to order? Tell me the product and how much, e.g. \"1kg hake\"."
+        lines = "\n".join(f"• {i['quantity']} {i['name']} — {i['line_total']}" for i in items)
+        return (f"🛒 Your cart:\n{lines}\nTotal {cart.get('total')} (incl. delivery {cart.get('delivery')}).\n\n"
+                "Reply *place order* when you're ready, or tell me what else you'd like.")
 
     async def _exec_view_cart(
         self, tenant_id: str, session_id: str, phone: Optional[str]
@@ -2025,8 +2053,25 @@ class CommerceAssistantSkill(BaseSkill):
                                 f"{when}. Do NOT call ask_team, this is a real answer."
                                 + (f" Mention: {note}." if note else ""))}
 
-    async def _exec_suggest_recipe(self, tenant_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate a South African recipe and match ingredients to in-stock products."""
+    async def _cart_names(self, tenant_id: str, session_id: str, phone: Optional[str]) -> List[str]:
+        """Product names already in the customer's cart; [] when there's no cart or on error."""
+        try:
+            cart = await service.get_or_create_cart(tenant_id, session_id, phone)
+        except Exception as exc:
+            logger.debug("cart lookup for recipe skipped: %s", exc)
+            return []
+        return [n for n in ((it.get("commerce_products") or {}).get("name")
+                            for it in (cart.get("commerce_cart_items") or [])) if n]
+
+    async def _exec_suggest_recipe(self, tenant_id: str, args: Dict[str, Any],
+                                   cart_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Generate a South African recipe and match ingredients to in-stock products.
+
+        2026-10-05 (off-the-hook): with Hake Centre Cuts in the cart, "give me a recipe on hakes"
+        got three recipes all built on Hake Fillets, each ending "Available to order: Hake
+        Fillets". What's in the cart is what they're cooking — use it, and list what's
+        orderable once, at the end."""
+        cart_names = cart_names or []
         import litellm
 
         dish = (args.get("dish") or "fish").strip()
@@ -2101,18 +2146,23 @@ class CommerceAssistantSkill(BaseSkill):
             if count > 1 else
             "Write a SHORT, practical South African recipe (max 180 words):\n"
         )
+        in_cart = (f"The customer already has in their cart: {', '.join(cart_names)}. Build the "
+                   f"recipes around THAT product (use its exact name) wherever it fits the dish.\n"
+                   if cart_names else "")
         prompt = (
             f"You are a South African recipe assistant for a food business.\n"
             f"A customer wants to cook: {dish} (serves {serves}).\n"
             f"{grounding}{inspiration}\n"
-            f"These ingredients are currently in stock and available to order:\n{catalog_str}\n\n"
+            f"These ingredients are currently in stock and available to order:\n{catalog_str}\n"
+            f"{in_cart}\n"
             f"{count_instruction}"
             f"- Recipe name\n"
-            f"- Ingredients list (highlight which ones are available to order)\n"
+            f"- Ingredients list, using the exact catalog name for anything we sell\n"
             f"- Quick method (4–6 steps)\n"
-            f"- An 'Available to order' section listing ONLY the in-stock items needed, "
-            f"with their exact names from the catalog so they can be added to the cart.\n\n"
-            f"Keep it warm, South African, and appetising. "
+            f"Do NOT add an 'Available to order' line to each recipe — what can be ordered is "
+            f"listed once after the recipes.\n\n"
+            f"Keep it warm, South African, and appetising. WhatsApp formatting: *bold* with "
+            f"single asterisks, no markdown headings. "
             f"If the dish doesn't need any fish/chicken, suggest a protein that works well."
         )
 
@@ -2143,8 +2193,11 @@ class CommerceAssistantSkill(BaseSkill):
             if len(first_word) > 3 and first_word in recipe_lower and p not in matched:
                 matched.append(p)
 
+        cart_lower = {n.lower() for n in cart_names}
+        matched.sort(key=lambda p: p["name"].lower() not in cart_lower)  # what's in the cart first
         available = [
-            {"name": p["name"], "slug": p["slug"], "price": f"R{p['price_cents'] / 100:.2f}"}
+            {"name": p["name"], "slug": p["slug"], "price": f"R{p['price_cents'] / 100:.2f}",
+             **({"in_cart": True} if p["name"].lower() in cart_lower else {})}
             for p in matched[:6]
         ]
 
@@ -2152,7 +2205,8 @@ class CommerceAssistantSkill(BaseSkill):
             "recipe": recipe_text,
             "available_to_order": available,
             "tip": (
-                "I can add any of these to your cart — just say which ones you want!"
+                "List the orderable items ONCE after the recipes (never after each one), noting "
+                "which are already in their cart, and offer to add the rest."
                 if available else
                 "Let me know what else I can help you with."
             ),

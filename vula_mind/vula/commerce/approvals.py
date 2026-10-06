@@ -14,7 +14,8 @@ Flow:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from config import settings
@@ -32,6 +33,20 @@ def _client():
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# An APPROVE/REJECT reply only answers a recent question. 2026-10-05 (digg-demo): the owner's
+# "Approve" to that afternoon's STE Scaffolding supplier question approved a June test invoice
+# instead (and tried to send it to the client) — steps were picked by `order("id")`, a random
+# UUID, so the "latest" step was arbitrary, and nothing ever aged out.
+APPROVAL_REPLY_WINDOW = timedelta(days=14)
+
+
+def _created(row: dict) -> datetime:
+    try:
+        return datetime.fromisoformat(str(row.get("created_at")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _digits(phone: str) -> str:
@@ -107,19 +122,22 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
     sb = _client()
     phone = _digits(approver_phone)
 
-    step_res = (sb.table("vula_approval_steps")
-                .select("*").eq("approver_phone", phone).eq("status", "pending")
-                .order("id", desc=True).limit(1).execute())
-    steps = step_res.data or []
+    steps = (sb.table("vula_approval_steps")
+             .select("*").eq("approver_phone", phone).eq("status", "pending")
+             .execute()).data or []
     if not steps:
         return None  # nothing pending for this approver → not an approval reply
-    step = steps[0]
-
-    appr = (sb.table("vula_approvals").select("*").eq("id", step["approval_id"])
-            .limit(1).execute()).data
-    if not appr or appr[0]["status"] != "pending":
+    # The approver is answering the most recent question they were asked — newest approval by
+    # created_at, and only within the reply window.
+    cutoff = datetime.now(timezone.utc) - APPROVAL_REPLY_WINDOW
+    approvals = (sb.table("vula_approvals").select("*")
+                 .in_("id", list({st["approval_id"] for st in steps})).eq("status", "pending")
+                 .execute()).data or []
+    approvals = sorted((a for a in approvals if _created(a) >= cutoff), key=_created, reverse=True)
+    if not approvals:
         return None
-    approval = appr[0]
+    approval = approvals[0]
+    step = next(st for st in steps if st["approval_id"] == approval["id"])
 
     # Record this approver's decision
     sb.table("vula_approval_steps").update({
@@ -133,6 +151,11 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
         sb.table("vula_approvals").update(
             {"status": "rejected", "completed_at": _now()}
         ).eq("id", approval["id"]).execute()
+        if approval["entity_type"] == "inbound_invoice":
+            await _send_reply(phone, "👍 Noted — I'll keep it under the supplier name on the invoice.",
+                              tenant_id)
+            await _ask_project_next(approval, phone)
+            return approval
         await _send_reply(phone, f"❌ You rejected *{title}*. The requester has been notified.", tenant_id)
         if approval.get("requested_by"):
             await _send_reply(
@@ -162,9 +185,39 @@ async def record_decision(approver_phone: str, decision: str, notes: str = "") -
     sb.table("vula_approvals").update(
         {"status": "approved", "completed_at": _now()}
     ).eq("id", approval["id"]).execute()
-    await _send_reply(phone, f"✅ *{title}* is fully approved. Delivering now.", tenant_id)
-    await _on_approved(approval)
+    if approval["entity_type"] == "invoice":
+        # Say what actually happened, not "Delivering now" before trying.
+        sent = await _deliver_invoice(approval)
+        await _send_reply(phone, (
+            f"✅ *{title}* is approved and has been sent to the client." if sent else
+            f"✅ *{title}* is approved, but I couldn't send it to the client. Open it under "
+            f"Invoices in the dashboard and press Send."), tenant_id)
+    elif approval["entity_type"] == "inbound_invoice":
+        await _on_approved(approval)
+        name = (approval.get("meta") or {}).get("candidate_supplier_name") or "that supplier"
+        await _send_reply(phone, f"✅ Linked to *{name}*.", tenant_id)
+        await _ask_project_next(approval, phone)
+    else:
+        await _send_reply(phone, f"✅ Approved: *{title}*", tenant_id)
+        await _on_approved(approval)
     return approval
+
+
+async def _ask_project_next(approval: dict, phone: str) -> None:
+    """After "is this supplier X?" comes "which project?" — the email path holds that question
+    back while the supplier one is open, so one answer never leaves the other unasked
+    (2026-10-05, STE Scaffolding)."""
+    fid = (approval.get("meta") or {}).get("filed_document_id")
+    if not fid:
+        return
+    try:
+        rows = (_client().table("vula_filed_documents").select("*")
+                .eq("tenant_id", approval["tenant_id"]).eq("id", fid).limit(1).execute().data or [])
+        if rows and rows[0].get("status") == "pending_project":
+            from vula.integrations.doc_filing import ask_project
+            await ask_project(approval["tenant_id"], rows[0], [phone])
+    except Exception as exc:
+        logger.warning("project follow-up after supplier answer failed: %s", exc)
 
 
 async def _on_approved(approval: dict) -> None:
@@ -211,13 +264,18 @@ async def _apply_supplier_match(approval: dict) -> None:
             logger.warning("Failed to clear needs_review on filed_document %s: %s", filed_document_id, exc)
 
 
-async def _deliver_invoice(approval: dict) -> None:
-    """Send an approved invoice to the client via WhatsApp / email / both."""
+async def _deliver_invoice(approval: dict) -> bool:
+    """Send an approved invoice to the client via WhatsApp / email / both. True only when
+    every send returned success."""
     import httpx
     tenant_id = approval["tenant_id"]
     invoice_id = approval["entity_id"]
     via = (approval.get("deliver_via") or "whatsapp").lower()
-    base = f"http://localhost:{settings.api_port}/v1/commerce/{tenant_id}/admin/invoices/{invoice_id}"
+    # The server listens on $PORT (start.py); api_port is only the local-dev default. Using
+    # api_port alone failed every approved-invoice send in production ("All connection attempts
+    # failed", 2026-10-05).
+    port = os.environ.get("PORT") or settings.api_port
+    base = f"http://localhost:{port}/v1/commerce/{tenant_id}/admin/invoices/{invoice_id}"
     headers = {"X-API-Key": settings.api_key, "Content-Type": "application/json"}
 
     targets = []
@@ -228,10 +286,14 @@ async def _deliver_invoice(approval: dict) -> None:
     if not targets:
         targets = ["send-whatsapp"]
 
+    ok = True
     async with httpx.AsyncClient(timeout=30.0) as client:
         for ep in targets:
             try:
                 r = await client.post(f"{base}/{ep}", headers=headers, json={})
                 logger.info("Invoice %s %s → %s", invoice_id, ep, r.status_code)
+                ok = ok and r.is_success
             except Exception as exc:
                 logger.warning("Invoice %s %s failed: %s", invoice_id, ep, exc)
+                ok = False
+    return ok

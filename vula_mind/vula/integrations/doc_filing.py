@@ -634,12 +634,98 @@ _REQUEST_START = re.compile(
     re.IGNORECASE)
 
 
+def _money(cents) -> str:
+    try:
+        return f"R{int(cents) / 100:,.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def probable_duplicate(tenant_id: str, doc: dict) -> Optional[dict]:
+    """An earlier filed document that looks like the same bill: same total, same date, and the
+    supplier names share their first word. 2026-10-05 (digg-demo): STE Scaffolding invoice
+    STE00866 arrived twice by email (a scan, then the PDF) and was booked and asked about twice."""
+    f = doc.get("fields") or {}
+    total, date, sup = f.get("total_cents"), f.get("date"), (f.get("supplier") or "").strip()
+    if not (total and date and sup):
+        return None
+    first = re.sub(r"[^a-z0-9]", "", sup.lower().split()[0])
+    try:
+        rows = (_client().table("vula_filed_documents").select("id,filename,fields,status")
+                .eq("tenant_id", tenant_id).eq("fields->>total_cents", str(total))
+                .eq("fields->>date", str(date)).limit(10).execute().data or [])
+    except Exception as exc:
+        logger.debug("duplicate check skipped: %s", exc)
+        return None
+    for r in rows if isinstance(rows, list) else []:
+        other = ((r.get("fields") or {}).get("supplier") or "").strip().lower()
+        if (r.get("id") != doc.get("id") and r.get("status") not in ("duplicate", "ignored")
+                and other and re.sub(r"[^a-z0-9]", "", other.split()[0]) == first):
+            return r
+    return None
+
+
+def project_question(tenant_id: str, doc: dict) -> str:
+    """"Which project?" for a waiting document: what it is, Vula's best guess when it has one
+    (project named in it, the bank payment that settled it, the supplier's usual project), and
+    a way to drop a second copy. Replies are read by resolve_pending_document."""
+    f = doc.get("fields") or {}
+    what = " — ".join(x for x in ((f.get("supplier") or "").strip(), _money(f.get("total_cents"))) if x)
+    head = f"📂 *{doc.get('filename') or 'Document'}*" + (f" ({what})" if what else "") + "\n"
+    try:
+        from vula.integrations.project_resolver import resolve
+        r = resolve(tenant_id, f, f"{doc.get('filename') or ''} {doc.get('summary') or ''}") or {}
+    except Exception as exc:
+        logger.debug("project suggestion skipped: %s", exc)
+        r = {}
+    if r.get("project"):
+        why = f" — {r['reason']}" if r.get("reason") else ""
+        q = f"Is this for *{r['project']}*{why}? Reply *yes*, another project name, or *skip*."
+    elif r.get("candidates"):
+        q = ("Which project — " + " / ".join(f"*{c}*" for c in r["candidates"])
+             + "? Reply with the project name, or *skip*.")
+    else:
+        ex = project_examples(tenant_id)
+        q = ("Which project is this for?" + (f" (e.g. {', '.join(ex)})" if ex else "")
+             + " Reply with the project name, or *skip*.")
+    dup = probable_duplicate(tenant_id, doc)
+    if dup:
+        q += (f"\n\nIt looks like a second copy of *{dup.get('filename')}* (same supplier, amount "
+              f"and date) — reply *duplicate* to drop this one.")
+    return head + q
+
+
+def mark_asked(tenant_id: str, doc: dict, phone: str) -> None:
+    """Remember who was asked about `doc` and when, so their reply files THIS document — not
+    whichever pending one happens to be newest."""
+    from datetime import datetime, timezone
+    fields = dict(doc.get("fields") or {})
+    fields.update({"_asked_phone": phone, "_asked_at": datetime.now(timezone.utc).isoformat()})
+    try:
+        (_client().table("vula_filed_documents").update({"fields": fields})
+         .eq("tenant_id", tenant_id).eq("id", doc["id"]).execute())
+    except Exception as exc:
+        logger.debug("mark_asked skipped: %s", exc)
+
+
+async def ask_project(tenant_id: str, doc: dict, phones: list, prefix: str = "") -> int:
+    """Send project_question about `doc` to each phone and mark it asked. Returns sends made."""
+    from vula.api.whatsapp import _send_reply
+    msg = (prefix + "\n\n" if prefix else "") + project_question(tenant_id, doc)
+    sent = 0
+    for ph in phones:
+        if ph and await _send_reply(ph, msg, tenant_id=tenant_id):
+            mark_asked(tenant_id, doc, ph)
+            sent += 1
+    return sent
+
+
 def looks_like_project_answer(text: str) -> bool:
     t = (text or "").strip()
     if not t or len(t) > 60 or t.endswith("?") or len(t.split()) > 8:
         return False
     if t.lower().rstrip(".!") in ("yes", "y", "yep", "ja", "yes please", "correct", "that's right",
-                                  "skip", "none", "no project", "unfiled", "leave it"):
+                                  "skip", "none", "no project", "unfiled", "leave it", "duplicate"):
         return True
     return not _REQUEST_START.match(t)
 
@@ -674,12 +760,20 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
         # unanswered in time and the doc was permanently orphaned even when someone
         # replied hours later. 24h gives a realistic same-day/next-morning window.
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        # The document this phone was last ASKED about wins (2026-10-05: with several pending,
+        # a reply went to whichever was newest, not the one in the question).
+        asked = (_client().table("vula_filed_documents").select("*")
+                 .eq("tenant_id", tenant_id).eq("status", "pending_project")
+                 .eq("fields->>_asked_phone", phone).gte("fields->>_asked_at", cutoff)
+                 .order("fields->>_asked_at", desc=True).limit(1).execute().data)
         base = (_client().table("vula_filed_documents").select("*")
                 .eq("tenant_id", tenant_id).eq("status", "pending_project")
                 .gte("created_at", cutoff).order("created_at", desc=True))
         # Match the doc filed for this exact phone first; otherwise, if the replier is a
         # known team member, let them answer the tenant's most-recent pending doc.
-        rows = base.eq("filed_by", phone).limit(1).execute().data or []
+        rows = asked if isinstance(asked, list) and asked else []
+        if not rows:
+            rows = base.eq("filed_by", phone).limit(1).execute().data or []
         if not rows:
             try:
                 from vula.integrations.notify import team_member_for_phone
@@ -694,6 +788,23 @@ async def resolve_pending_document(tenant_id: str, phone: str, text: str) -> Opt
     doc = rows[0]
     if not looks_like_project_answer(text):
         return None        # a real message — let it reach the assistant; the doc keeps waiting
+
+    # "duplicate" → a second copy of a bill already in: mark it, and cancel its booked bill so
+    # it isn't owed twice (never deleted).
+    if text.strip().lower().rstrip(".!") == "duplicate":
+        try:
+            _client().table("vula_filed_documents").update({"status": "duplicate"}) \
+                .eq("id", doc["id"]).execute()
+            if doc.get("commerce_invoice_id"):
+                from datetime import datetime, timezone
+                _client().table("commerce_invoices").update({
+                    "status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                    "cancel_reason": "Duplicate copy of a bill already received (owner, WhatsApp)",
+                }).eq("tenant_id", tenant_id).eq("id", doc["commerce_invoice_id"]).execute()
+        except Exception as exc:
+            logger.warning("mark duplicate failed for %s: %s", doc.get("id"), exc)
+            return {"unmatched": True, "filename": doc.get("filename")}
+        return {"duplicate_dropped": True, "filename": doc.get("filename")}
 
     # "skip" → leave it unfiled (still stored + in KB).
     if text.strip().lower() in ("skip", "none", "no project", "unfiled", "leave it"):

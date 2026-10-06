@@ -83,10 +83,10 @@ async def _add(args):
 
 
 @pytest.mark.asyncio
-async def test_closest_match_and_default_quantity_are_flagged():
-    out = await _add({"product": "Atlantic Mackerel"})
+async def test_closest_match_is_flagged():
+    out = await _add({"product": "Atlantic Mackerel", "quantity": 1})
     assert out["added"] == "Atlantic Mackerel Fillets"
-    assert "asked for 'Atlantic Mackerel'" in out["note"] and "confirm the amount" in out["note"]
+    assert "asked for 'Atlantic Mackerel'" in out["note"]
 
 
 @pytest.mark.asyncio

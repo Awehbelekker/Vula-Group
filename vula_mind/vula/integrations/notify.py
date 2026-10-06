@@ -57,6 +57,19 @@ def _fallback_phone(tenant_id: str) -> Optional[str]:
         return None
 
 
+def recipients_for(tenant_id: str, event_type: str) -> list:
+    """The WhatsApp numbers notify_team would send `event_type` to (same opt-in + fallback)."""
+    members = _members(tenant_id)
+    recipients = [_digits(m["whatsapp"]) for m in members
+                  if event_type in (m.get("notify") or []) and m.get("whatsapp")]
+    recipients = list(dict.fromkeys(r for r in recipients if r))
+    if not recipients and not members:
+        fb = _fallback_phone(tenant_id)
+        if fb:
+            recipients = [_digits(fb)]
+    return recipients
+
+
 async def notify_team(tenant_id: str, event_type: str, message: str,
                       idem_key: Optional[str] = None) -> int:
     """Send `message` to every active member subscribed to `event_type`. Returns count sent.
@@ -69,18 +82,7 @@ async def notify_team(tenant_id: str, event_type: str, message: str,
     idem_key: for scheduled alerts — each recipient gets it once per key, even across restarts
     (the key is stored in the DB by _send_reply)."""
     from vula.api.whatsapp import _send_reply
-    members = _members(tenant_id)
-    recipients = []
-    for m in members:
-        notify = m.get("notify") or []
-        if event_type in notify and m.get("whatsapp"):
-            recipients.append(_digits(m["whatsapp"]))
-    recipients = list(dict.fromkeys(r for r in recipients if r))   # dedupe, drop blanks
-
-    if not recipients and not members:
-        fb = _fallback_phone(tenant_id)
-        if fb:
-            recipients = [_digits(fb)]
+    recipients = recipients_for(tenant_id, event_type)
 
     sent = 0
     for to in recipients:

@@ -330,3 +330,26 @@ async def test_skip_leaves_the_bill_alone():
     mark.assert_not_awaited()
     assert {"match_status": "ignored"} in updated
     assert "Skipped" in reply
+
+
+# ── 2026-10-06 (digg-demo): an FNB POP names the beneficiary "Ste", not STE Scaffolding ──
+STE_BILL = {"id": "bill-ste", "invoice_number": "DIG-BILL-00092",
+            "supplier": "STE Scaffolding S A (Pty) Ltd (Cape)", "total_cents": 239717,
+            "status": "draft", "doc_type": "invoice", "direction": "inbound"}
+
+
+def test_a_short_beneficiary_name_with_the_bills_exact_amount_is_money_out():
+    with patch.object(bank_rec, "_client", lambda: _db(bills=[STE_BILL])), _tenant_named("DIGG Architecture"):
+        assert bank_rec.classify_pop_direction("digg-demo", "Ste")[1] is False    # name alone: unsure
+        direction, confident, _ = bank_rec.classify_pop_direction("digg-demo", "Ste", 239717)
+    assert (direction, confident) == ("out", True)
+
+
+def test_the_ste_pop_proposes_the_ste_bill():
+    rows = []
+    with patch.object(bank_rec, "_client", lambda: _db(bills=[STE_BILL], inserted=rows)), \
+         _tenant_named("DIGG Architecture"):
+        reply = bank_rec.stage_pop_for_review("digg-demo", 239717, "2026-10-05", "Digg", "Ste",
+                                              sender_phone="27645755210")
+    assert "DIG-BILL-00092" in reply and "Reply *yes* to mark it paid" in reply
+    assert rows[0]["direction"] == "out" and rows[0]["proposed_match_id"] == "bill-ste"

@@ -250,6 +250,13 @@ LEAKED_CUSTOMER_FALLBACK = ("Sorry, I couldn't complete that just now. Tell me t
                             "reply \"speak to someone\" and the team will help.")
 
 
+def contentless(text: str) -> bool:
+    """True when a reply carries no words or numbers at all — only emoji, punctuation or
+    whitespace. 2026-10-05 (off-the-hook): a customer's "Yes" to "did you want 1kg?" got back a
+    bare "👍" — no cart, no total, no next step."""
+    return not re.search(r"[^\W_]", text or "")
+
+
 def leaked_tool_output(text: str, tool_names: Iterable[str] = ()) -> bool:
     """True when `text` is tool plumbing (a fenced tool result, a description of JSON, or a
     tool call written out as text) rather than an answer for a person."""

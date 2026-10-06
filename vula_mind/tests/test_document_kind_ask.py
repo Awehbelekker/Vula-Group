@@ -100,7 +100,8 @@ async def test_the_answer_files_it_on_the_right_side(kind, expected_direction):
          patch.object(wa, "_send_reply", AsyncMock()) as reply:
         await wa._handle_document_kind_reply("27737815979", f"docdir:{kind}:{INV}", TENANT)
     assert updates[0]["direction"] == expected_direction
-    assert updates[0]["needs_review"] is False
+    assert "needs_review" not in updates[0]                     # not a column on commerce_invoices
+    assert updates[1] == {"needs_review": False}                # cleared on the filed document
     assert "R4,520.00" in reply.await_args[0][1]
 
 
@@ -177,7 +178,8 @@ async def test_expense_is_flagged_not_silently_moved():
     with patch.object(cs, "_client", lambda: db), \
          patch.object(wa, "_send_reply", AsyncMock()) as reply:
         await wa._handle_document_kind_reply("27737815979", f"docdir:expense:{INV}", TENANT)
-    assert updates[0]["needs_review"] is True
+    assert updates[0] == {"notes": "Owner says: expense, not an invoice"}
+    assert updates[1] == {"needs_review": True}                 # flagged on the filed document
     assert "direction" not in updates[0], "must not re-file it as either side"
     assert "rather than moving it myself" in reply.await_args[0][1]
 
@@ -204,3 +206,19 @@ def test_the_button_ids_are_routed_in_the_webhook():
     src = inspect.getsource(wa)
     assert 'reply_id.startswith("docdir:")' in src
     assert "_handle_document_kind_reply(phone, reply_id, route_tenant)" in src
+
+
+@pytest.mark.asyncio
+async def test_supplier_tap_goes_on_to_which_project():
+    """2026-10-05 (STE Scaffolding): the tap crashed, and even working it ended there — the
+    project was never asked."""
+    from vula.commerce import service as cs
+    pending = dict(ROW, status="pending_project", filename="Tax Invoice STE00866.PDF")
+    db, _updates = _db_with(pending)
+    ask = AsyncMock(return_value=1)
+    with patch.object(cs, "_client", lambda: db), \
+         patch.object(wa, "_send_reply", AsyncMock()), \
+         patch("vula.integrations.doc_filing.ask_project", ask):
+        await wa._handle_document_kind_reply("27645755210", f"docdir:supplier:{INV}", TENANT)
+    ask.assert_awaited_once()
+    assert ask.await_args.args[2] == ["27645755210"]

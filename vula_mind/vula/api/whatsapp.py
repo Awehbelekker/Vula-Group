@@ -1136,8 +1136,10 @@ async def _handle_document_kind_reply(phone: str, reply_id: str, tenant_id: str)
         # invisible write this whole pass has been correcting. Flag it and say so plainly.
         try:
             cs._client().table("commerce_invoices").update(
-                {"needs_review": True, "notes": "Owner says: expense, not an invoice"}
+                {"notes": "Owner says: expense, not an invoice"}
             ).eq("id", invoice_id).eq("tenant_id", tenant_id).execute()
+            cs._client().table("vula_filed_documents").update({"needs_review": True}) \
+                .eq("tenant_id", tenant_id).eq("commerce_invoice_id", invoice_id).execute()
         except Exception as exc:
             logger.warning("expense reclassify flag failed for %s: %s", invoice_id, exc)
         await _send_reply(phone, (
@@ -1147,7 +1149,9 @@ async def _handle_document_kind_reply(phone: str, reply_id: str, tenant_id: str)
         return
 
     direction = "inbound" if kind == "supplier" else "outbound"
-    update: Dict[str, Any] = {"direction": direction, "needs_review": False}
+    # needs_review lives on vula_filed_documents, not commerce_invoices — writing it here failed
+    # every tap with PGRST204 and the owner got "Couldn't file that just now" (2026-10-05, STE).
+    update: Dict[str, Any] = {"direction": direction}
     # 2026-09-08: a genuine flip (not just re-confirming the direction it was already filed
     # under) means the existing invoice_number was minted under the WRONG counter/code — e.g.
     # a BILL-prefixed supplier-bill reference on what's actually the tenant's own sales invoice,
@@ -1166,6 +1170,17 @@ async def _handle_document_kind_reply(phone: str, reply_id: str, tenant_id: str)
         logger.warning("document direction update failed for %s: %s", invoice_id, exc)
         await _send_reply(phone, "Couldn't file that just now, sorry.", tenant_id)
         return
+    doc = None
+    try:
+        docs = (cs._client().table("vula_filed_documents").select("*")
+                .eq("tenant_id", tenant_id).eq("commerce_invoice_id", invoice_id).limit(1)
+                .execute().data or [])
+        doc = docs[0] if docs else None
+        if doc:
+            cs._client().table("vula_filed_documents").update({"needs_review": False}) \
+                .eq("tenant_id", tenant_id).eq("id", doc["id"]).execute()
+    except Exception as exc:
+        logger.debug("filed-document review flag skipped for %s: %s", invoice_id, exc)
     if direction == "inbound":
         await _send_reply(phone, (
             f"👍 Filed as a *supplier bill* — {amount} owed to {who}. It'll show in what's due "
@@ -1174,6 +1189,13 @@ async def _handle_document_kind_reply(phone: str, reply_id: str, tenant_id: str)
         await _send_reply(phone, (
             f"👍 Filed as *your invoice* — {amount} owed to you. It'll count as money in."),
             tenant_id)
+    # Next question, not silence: which project is it for?
+    if doc and doc.get("status") == "pending_project":
+        try:
+            from vula.integrations.doc_filing import ask_project
+            await ask_project(tenant_id, doc, [phone])
+        except Exception as exc:
+            logger.debug("project follow-up after kind tap skipped: %s", exc)
 
 
 async def _handle_learn_review_reply(phone: str, reply_id: str, tenant_id: str) -> None:
@@ -1539,6 +1561,9 @@ async def _handle_message(phone: str, text: str, msg_id: str, route_tenant_id: O
             if pending.get("clickup"):
                 note += " Added to ClickUp."
             await _send_reply(phone, note, tenant_id=tenant_id)
+        elif pending.get("duplicate_dropped"):
+            await _send_reply(phone, f"👍 Dropped '{pending['filename']}' as a duplicate — its bill "
+                              f"won't count twice.", tenant_id=tenant_id)
         elif pending.get("skipped"):
             await _send_reply(
                 phone, f"👍 Left '{pending['filename']}' unfiled — you can file it "
@@ -2516,6 +2541,20 @@ async def _handle_document_ingest(
             doc_category = _classify_document(result.filename, local_path)
             summary, fields, breakdown = "", {}, ""
 
+        # A PDF proof of payment (FNB/bank payment notifications) never reached the POP matcher —
+        # only photographed ones did — so paying a supplier left its bill "owed" (2026-10-06: the
+        # R2,397.17 FNB POP to "Ste" against STE Scaffolding's bill STE00866). Same proposal as
+        # the photo path: match the open bill, ask, mark paid only on "yes".
+        pop_cents = (fields or {}).get("amount_cents") or (fields or {}).get("total_cents")
+        if not scan_msg and doc_category == "Proof of Payment" and pop_cents:
+            try:
+                from vula.commerce import bank_rec
+                scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
+                    tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
+                    fields.get("payee_name") or fields.get("payee"), sender_phone=phone)
+            except Exception as exc:
+                logger.warning("POP match skipped for %s: %s", result.filename, exc)
+
         # File the document: durable copy + project link + ClickUp attachment. Also books it
         # via the shared commit path (same as email/Smart Scanner) unless the vision-scan
         # shortcut above already committed it.
@@ -2738,6 +2777,20 @@ async def _maybe_bank_review_answer(tenant_id: str, phone: str, text: str) -> Op
         return None
 
 
+def _doc_asked_since(tenant_id: str, phone: str, since: Optional[str]) -> bool:
+    """True when this phone was asked "which project?" about a document after `since` — that
+    question is the one being answered (see doc_filing.mark_asked)."""
+    try:
+        from vula.commerce import service
+        rows = (service._client().table("vula_filed_documents").select("id")
+                .eq("tenant_id", tenant_id).eq("status", "pending_project")
+                .eq("fields->>_asked_phone", phone).gte("fields->>_asked_at", since or "")
+                .limit(1).execute().data or [])
+        return bool(rows)
+    except Exception:
+        return False
+
+
 async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str) -> Optional[str]:
     """If this text is answering 'which project is that receipt for?', allocate the most recent
     unallocated WhatsApp expense claim from this sender. Returns a reply if handled, else None."""
@@ -2776,10 +2829,18 @@ async def _maybe_allocate_pending_expense(tenant_id: str, phone: str, text: str)
                 return (f"👍 Noted — *R{amt:,.2f}* was your own money, so it's marked "
                         "to be paid back to you. 👛")
 
+        # 2026-10-06 (digg-demo): the owner answered "Atlantis Paarden Eiland" to the project
+        # question about a proof of payment just sent, and it was applied to a Bauxite expense
+        # claim from 28 Aug that had never been allocated. Only a claim from the last 2 days
+        # counts, and a document asked about more recently than the claim takes the answer.
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
         rows = (service._client().table("commerce_expenses").select("*")
                 .eq("tenant_id", tenant_id).eq("paid_by", phone).eq("channel", "whatsapp")
-                .eq("status", "submitted").is_("project", "null")
+                .eq("status", "submitted").is_("project", "null").gte("created_at", since)
                 .order("updated_at", desc=True).limit(1).execute().data or [])
+        if rows and _doc_asked_since(tenant_id, phone, rows[0].get("created_at")):
+            rows = []
         if rows:
             claim = rows[0]
             if low in ("none", "no", "no project", "personal", "office", "n/a", "na", "skip"):
