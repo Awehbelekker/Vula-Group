@@ -205,6 +205,32 @@ def post_supplier_invoice_paid(tenant_id: str, invoice: Dict[str, Any]) -> None:
           source_type="supplier_invoice_paid", source_id=invoice.get("id"), lines=lines)
 
 
+def post_supplier_payment(tenant_id: str, invoice: Dict[str, Any], payment: Dict[str, Any]) -> None:
+    """One instalment paid against a SUPPLIER bill (a bank payment matched to part of it) — the
+    money-out mirror of post_invoice_payment: credit bank_cash for this payment only, debit the
+    bill's expense account, VAT to input in the bill's own VAT/total ratio. Keyed by the
+    payment's id so several instalments on one bill each post."""
+    amount = int(payment.get("amount_cents") or 0)
+    if amount <= 0:
+        return
+    inv_total = int(invoice.get("total_cents") or 0)
+    inv_vat = int(invoice.get("vat_cents") or 0)
+    vat = max(0, min((amount * inv_vat // inv_total) if inv_total > 0 else 0, amount))
+    account_code = invoice.get("account_code") or _supplier_account_code(
+        invoice.get("tenant_id"), invoice.get("supplier_id"), invoice.get("supplier"))
+    lines = [{"account_code": "bank_cash", "debit_cents": 0, "credit_cents": amount}]
+    if vat > 0:
+        lines.append({"account_code": account_code, "debit_cents": amount - vat, "credit_cents": 0})
+        lines.append({"account_code": "vat_input", "debit_cents": vat, "credit_cents": 0})
+    else:
+        lines.append({"account_code": account_code, "debit_cents": amount, "credit_cents": 0})
+    _post(tenant_id, entry_date=(payment.get("paid_at") or _today()),
+          description=f"Part payment of supplier invoice "
+                      f"{invoice.get('invoice_number') or invoice.get('id')}"
+                      f" ({invoice.get('supplier') or 'supplier'})",
+          source_type="supplier_payment", source_id=payment.get("id"), lines=lines)
+
+
 def post_expense(tenant_id: str, expense: Dict[str, Any]) -> None:
     amount = int(expense.get("amount_cents") or 0)
     if amount <= 0:
