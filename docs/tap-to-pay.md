@@ -58,8 +58,11 @@ Not yet: WhatsApp-OTP sign-in (needs a Meta-approved authentication template), t
 (the app reuses the dashboard's SVG icon; fine for Chrome/Android installs, add 192/512 PNGs for older/iOS icons).
 
 ## Receipts (animated slip, both sides)
-`vula_dashboard/src/receipt/PrintedSlip.jsx` is one shared component: the slip rises out of a printer slot
-header-first with a torn top edge, printer ticks and a soft ding (sound toggle, remembered), VAT line for
+`vula_dashboard/src/receipt/PrintedSlip.jsx` is one shared component, shown FULL SCREEN on both sides: a full-width
+printer bar sits flush with the top edge of the screen (under the status bar) and the slip feeds down out of its slot
+line by line; the ink is faint at the slot and develops as the paper leaves it, a print-head glow sweeps the slot, and
+the slip gives a small tear-off settle at the end (the barcode end emerges first, as on a printer that prints in
+reverse). It also has printer ticks and a soft ding (sound toggle, remembered), VAT line for
 VAT-registered merchants, a PAID stamp and barcode. It respects `prefers-reduced-motion` (appears instantly,
 silent) and stays silent when the browser blocks autoplay (the Replay button, being a tap, can play sound).
 - **Customer:** the WhatsApp slip now ends with `Your receipt: <dashboard>/r/<token>`. `/r/` is its own Vite page

@@ -14,13 +14,17 @@ const token = () => {
 };
 
 const css = `
-*{box-sizing:border-box}body{margin:0;background:#F7F4EE;color:#1d2b25;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-.rp{max-width:420px;margin:0 auto;padding:22px 16px calc(28px + env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:14px;min-height:100vh}
-.rp h1{font-size:18px;margin:6px 0 0;text-align:center}.rp .m{color:#6b756f;font-size:13px;text-align:center}
-.rp .btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:6px}
-.rp button{font:inherit;font-size:15px;font-weight:600;border:1px solid rgba(0,0,0,.12);background:#fff;color:#2C5545;border-radius:999px;padding:10px 16px;cursor:pointer}
-.rp button.p{background:#2C5545;color:#fff;border-color:#2C5545}
-.rp .e{background:#fff;border-radius:14px;padding:22px;text-align:center;margin-top:60px;border:1px solid rgba(0,0,0,.08)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#12171a}
+body{color:#e8eee9;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.rp{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%)}
+.rp .dock{position:sticky;bottom:0;margin-top:auto;width:100%;padding:16px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:10px;background:linear-gradient(rgba(18,23,26,0),#12171a 38%)}
+.rp .m{color:#9fb0a8;font-size:13px;text-align:center}.rp .m b{color:#e8eee9}
+.rp .btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.rp button{font:inherit;font-size:15px;font-weight:600;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#e8eee9;border-radius:999px;padding:10px 18px;cursor:pointer}
+.rp button.p{background:#3f8f73;border-color:#3f8f73;color:#fff}
+.rp .e{background:#1c2428;border-radius:14px;padding:24px;text-align:center;margin:90px 16px 0;border:1px solid rgba(255,255,255,.12);max-width:360px}
+.rp .e h1{font-size:18px;margin:0 0 6px}
+@media print{html,body,.rp{background:#fff!important;color:#000!important}.rp .dock{display:none}}
 `;
 
 export default function ReceiptPage() {
@@ -44,21 +48,22 @@ export default function ReceiptPage() {
   return (
     <div className="rp">
       <style>{css}</style>
-      {state.s === "loading" && <div className="m" style={{ marginTop: 80 }}>Fetching your receipt…</div>}
+      {state.s === "loading" && <div className="m" style={{ marginTop: 120 }}>Fetching your receipt…</div>}
       {state.s === "error" && (
         <div className="e"><h1>Receipt not available</h1><p className="m">This receipt link is no longer available. If you need a copy, ask the business that served you.</p></div>
       )}
       {state.s === "ok" && (
         <>
-          <h1 className="noprint">Payment received</h1>
-          <div className="m noprint">Your receipt from {state.data.merchant}</div>
           <PrintedSlip key={run} data={state.data} sound={sound && !still} />
-          <div className="btns noprint">
-            <button className="p" onClick={replay}>Replay</button>
-            <button onClick={toggle} aria-pressed={sound}>{sound ? "Sound on" : "Sound off"}</button>
-            <button onClick={() => window.print()}>Save / print</button>
+          <div className="dock noprint">
+            <div className="m"><b>Payment received</b> · your receipt from {state.data.merchant}</div>
+            <div className="btns">
+              <button className="p" onClick={replay}>Replay</button>
+              <button onClick={toggle} aria-pressed={sound}>{sound ? "Sound on" : "Sound off"}</button>
+              <button onClick={() => window.print()}>Save / print</button>
+            </div>
+            <div className="m" style={{ fontSize: 11 }}>Powered by Vula</div>
           </div>
-          <div className="m noprint" style={{ marginTop: 10 }}>Powered by Vula</div>
         </>
       )}
     </div>

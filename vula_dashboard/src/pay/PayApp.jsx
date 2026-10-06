@@ -67,9 +67,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .paid-card{border-color:${C.ok};background:#f0fdf4;animation:pop .5s ease-out} @keyframes pop{0%{transform:scale(.97)}60%{transform:scale(1.02)}100%{transform:scale(1)}}
 .big{font-size:28px;font-weight:800}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
 .pin{letter-spacing:.5em;text-align:center;font-size:28px}
-.ov{position:fixed;inset:0;background:rgba(18,26,22,.94);backdrop-filter:blur(4px);z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:22px 12px calc(20px + env(safe-area-inset-bottom));overflow:auto}
-.ov .bar{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:center}.ov .bar button{width:auto;margin:0;font-size:15px;padding:10px 18px}
-.ov .bar button.ghost{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.3)}
+.ov{position:fixed;inset:0;background:radial-gradient(120% 60% at 50% 0%,#26323a 0%,#12171a 62%);z-index:50;display:flex;flex-direction:column;align-items:center;overflow:auto}
+.ov .bar{position:sticky;bottom:0;margin-top:auto;width:100%;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:16px 12px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(rgba(18,23,26,0),#12171a 40%)}
+.ov .bar button{width:auto;margin:0;font-size:15px;padding:10px 20px}
+.ov .bar button.ghost{background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.28)}
 `;
 
 export default function PayApp() {
