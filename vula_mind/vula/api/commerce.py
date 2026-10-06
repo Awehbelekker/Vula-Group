@@ -5965,6 +5965,7 @@ async def _process_overdue_invoices(tenant_id: str) -> int:
         return 0
 
     reminded = 0
+    suppressed = None          # loaded once, on the first reminder that would go out
     for iv in rows:
         if (iv.get("doc_type") or "invoice") != "invoice":
             continue   # only invoices go overdue — not quotes/proformas
@@ -5995,6 +5996,13 @@ async def _process_overdue_invoices(tenant_id: str) -> int:
             continue   # another run already claimed this stage — race-safe skip
 
         phone = (iv.get("customer_phone") or "").strip()
+        # A customer who replied STOP is never chased on WhatsApp (POPIA); the stage is still
+        # recorded so the team's escalation alert below fires as usual.
+        if phone and suppressed is None:
+            suppressed = _suppressed_phones(tenant_id)
+        if phone and _norm_phone(phone) in suppressed:
+            log.info("Overdue reminder for %s skipped — customer opted out", iv.get("invoice_number"))
+            phone = ""
         if phone:
             try:
                 from vula.api.whatsapp import _send_reply
