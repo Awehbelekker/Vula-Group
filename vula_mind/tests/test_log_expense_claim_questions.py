@@ -45,12 +45,14 @@ def _patches(*, needs_project: bool, has_project: bool, paid_with, cards_registe
 
 
 @pytest.mark.asyncio
-async def test_asks_both_questions_when_both_are_needed():
+async def test_when_both_are_needed_the_project_comes_first_and_alone():
+    """2026-10-06 (step 2b, vula/doc_steps.py): both still get asked — one at a time, project
+    first; answering it asks the card question (tests/test_doc_steps.py)."""
     patches = _patches(needs_project=True, has_project=False, paid_with=None, cards_registered=True)
     with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
         msg = await _log_expense_claim(TID, PHONE, SCAN_DATA)
     assert "Which project/site is this for?" in msg
-    assert "company card" in msg and "own money" in msg
+    assert "Reply 'company' or 'own'" not in msg
 
 
 @pytest.mark.asyncio

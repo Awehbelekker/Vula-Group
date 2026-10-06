@@ -2314,9 +2314,17 @@ class CommerceAdminSkill(BaseSkill):
         row = expenses.confirm_claim(tid, eid)
         if not row:
             return {"error": "It couldn't be booked — it may already have been handled."}
+        # Booked → the receipt's next step (vula/doc_steps.py), asked of whoever sent it.
+        from vula import doc_steps
+        text = (f"✅ Booked *{self._rands(row.get('amount_cents'))}*"
+                f"{(' from ' + row['supplier']) if row.get('supplier') else ''}.")
+        nxt = doc_steps.next_question(tid, row.get("paid_by") or "", eid, claim=row)
+        if nxt:
+            text += "\n" + nxt
         return {"booked": self._rands(row.get("amount_cents")), "supplier": row.get("supplier"),
                 "project": row.get("project"), "status": row.get("status"),
-                "verified": row.get("status") == "submitted"}
+                "verified": row.get("status") == "submitted", "reply": text,
+                "reply_verbatim": text}
 
     async def _add_expense(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         cents = int(round(float(args.get("amount_rands", 0)) * 100))

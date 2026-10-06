@@ -2535,7 +2535,7 @@ async def _handle_document_ingest(
                     reply = bank_rec.stage_pop_for_review(
                         tenant_id, round(total_r * 100), fin.get("date"),
                         fin.get("reference"), fin.get("payee"), sender_phone=phone)
-                    scan_msg = "\n\n" + reply + _payer_line(tenant_id, phone, {
+                    scan_msg = "\n\n" + reply + await _payer_line(tenant_id, phone, {
                         "payer": fin.get("payer"), "payer_account": fin.get("payer_account")})
                 elif fin and dtp == "delivery_note":
                     scan_msg = ("\n\n📦 That's a *delivery note* — filed with your documents "
@@ -2561,7 +2561,7 @@ async def _handle_document_ingest(
                 scan_msg = "\n\n" + bank_rec.stage_pop_for_review(
                     tenant_id, int(pop_cents), fields.get("date"), fields.get("reference"),
                     fields.get("payee_name") or fields.get("payee"), sender_phone=phone)
-                scan_msg += _payer_line(tenant_id, phone, fields)
+                scan_msg += await _payer_line(tenant_id, phone, fields)
             except Exception as exc:
                 logger.warning("POP match skipped for %s: %s", result.filename, exc)
 
@@ -2741,36 +2741,15 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
             msg += f" — marked to reimburse {name or 'you'}. 👛"
         else:
             msg += "."
-        # 2026-08-12 fix: these used to be if/elif — mutually exclusive, so whenever a project
-        # allocation was also needed (the common case for a project-running tenant), the
-        # payment-method question got silently dropped entirely, even with paid_with genuinely
-        # unknown and registered company cards on file. The reply handler
-        # (_maybe_allocate_pending_expense) already independently processes both answer types
-        # in one incoming message, so asking both here is safe — a reply with just one piece of
-        # info (e.g. "HPC") still resolves correctly, leaving the other question open.
-        asks = []
-        from vula import open_questions
-        if not claim.get("project") and claim.get("needs_project"):
-            asks.append("📍 Which project/site is this for? Reply with the site name, or 'none'.")
-            open_questions.ask(tenant_id, phone, "expense_project", claim.get("id") or "",
-                               f"Which project: R{total/100:,.2f} receipt")
-        if paid_with is None and expenses.list_cards(tenant_id):
-            asks.append("💳 Was this the *company card* or *your own money*? Reply 'company' or 'own'.")
-            open_questions.ask(tenant_id, phone, "expense_paid_with", claim.get("id") or "",
-                               f"Company card or own money: R{total/100:,.2f} receipt")
-        if not claim.get("purpose_category"):
-            asks.append("🗂️ What was this for — fuel, a client visit/meal, or accommodation? "
-                        "Reply with the category.")
-            # This is where the purpose question is FIRST asked; the re-prompt in
-            # _maybe_allocate_pending_purpose is only ever a follow-up. Both have to record it,
-            # or a genuine first answer would arrive with no record of the question and be
-            # treated as a new topic.
-            _note_purpose_prompt(phone)
-        elif claim.get("purpose_category") == "petrol":
-            # Only ever asked for petrol — a real KM logbook column, not a general expense field.
-            asks.append("🚗 What's the odometer reading at this fill-up? Reply with the number.")
-        if asks:
-            msg += "\n" + "\n".join(asks)
+        # One question at a time, in the receipt's fixed order (vula/doc_steps.py): project →
+        # company card or own money → purpose → odometer. Each answer asks the next. Until
+        # 6 Oct all of them went out in one message and a single reply had to untangle them.
+        if not confirm_first:
+            from vula import doc_steps
+            nxt = doc_steps.next_question(tenant_id, phone, claim.get("id") or "",
+                                          claim={**claim, "paid_with": claim.get("paid_with", paid_with)})
+            if nxt:
+                msg += "\n" + nxt
         msg += purpose_note
         try:
             warn_line = expenses.budget_warning_line(tenant_id, phone)
@@ -2817,12 +2796,26 @@ def _business_label(tenant_id: str) -> str:
     return (name.split()[0] if name else "") or "the business"
 
 
-def _payer_line(tenant_id: str, phone: str, fields: dict) -> str:
-    """Whose money a proof of payment came from — see vula/commerce/payers.py."""
+async def _payer_line(tenant_id: str, phone: str, fields: dict) -> str:
+    """Whose money a proof of payment came from — see vula/commerce/payers.py.
+
+    The POP's steps are fixed (vula/doc_steps.py): "which bill does this pay?" first, then
+    "whose account?". When the bill question was just asked, the payer question waits its turn
+    on the open-questions queue and goes out once that answer is in."""
     try:
+        from vula import open_questions as oq
         from vula.commerce import payers
-        line = payers.pop_note(tenant_id, phone, fields or {}, _business_label(tenant_id))
-        return ("\n" + line) if line else ""
+        line, question = payers.pop_question(tenant_id, fields or {}, _business_label(tenant_id))
+        if not question:
+            return ("\n" + line) if line else ""
+        from datetime import datetime, timedelta, timezone
+        just = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        if any(q.get("kind") == "pop_match" and (q.get("asked_at") or "") >= just
+               for q in oq.open_for(tenant_id, phone)):
+            await oq.ask_or_queue(tenant_id, phone, "payer_account", question[0], question[1], line)
+            return ""
+        oq.ask(tenant_id, phone, "payer_account", question[0], question[1])
+        return "\n" + line
     except Exception as exc:
         logger.debug("payer note skipped: %s", exc)
         return ""
@@ -2871,6 +2864,19 @@ def _answer_expense_question(tenant_id: str, kind: str, claim_id: str, text: str
         return None
     claim = rows[0]
     amt = int(claim.get("amount_cents") or 0) / 100
+    if kind == "expense_odometer":
+        km = expenses.parse_odometer_reading(t)
+        if km is None:
+            return None
+        expenses.set_odometer(tenant_id, claim_id, km)
+        return f"👍 Noted — {km:,} km at that *R{amt:,.2f}* fill-up."
+    if kind == "expense_purpose":
+        if re.fullmatch(r"[\d,\s]+(?:kms?\.?)?", t, flags=re.IGNORECASE):
+            return None                      # a bare number is never a purpose
+        cat = expenses.match_purpose_category(t)
+        expenses.set_purpose_category(tenant_id, claim_id, cat or "other",
+                                      detail=None if cat else t)
+        return f"👍 Logged that *R{amt:,.2f}* as *{(cat or 'other').title()}*."
     if kind == "expense_paid_with":
         if not re.search(r"\b(company|own|personal|my card|my money|cash)\b", low):
             return None
@@ -2945,12 +2951,15 @@ async def _try_open_question(tenant_id: str, phone: str, text: str, q: dict) -> 
             return False
         await _send_reply(phone, _pending_doc_reply(res), tenant_id=tenant_id)
         return True
-    if kind in ("expense_project", "expense_paid_with"):
+    if kind in ("expense_project", "expense_paid_with", "expense_purpose", "expense_odometer"):
         reply = _answer_expense_question(tenant_id, kind, ref, text)
         if reply is None:
             return False
         oq.close(q["id"], text)
-        await _send_reply(phone, reply, tenant_id=tenant_id)
+        # the receipt's next step, one question at a time (vula/doc_steps.py)
+        from vula import doc_steps
+        nxt = doc_steps.next_question(tenant_id, phone, ref)
+        await _send_reply(phone, reply + (f"\n{nxt}" if nxt else ""), tenant_id=tenant_id)
         return True
     if kind == "payer_account":
         from vula.commerce import payers
