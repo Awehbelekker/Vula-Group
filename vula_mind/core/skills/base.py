@@ -408,7 +408,13 @@ def tool_source(name: str, result: Any) -> Dict[str, Any]:
     text = json.dumps(result, default=str)
     # 900 chars cut the prices off a six-item catch list, so the price backstop dropped every one
     # of them (benchmark, 1 Oct). Long enough for a real list; the verifier prompt stays small.
-    return {"type": "tool", "name": name, "text": text[:_TOOL_SOURCE_CHARS]}
+    source = {"type": "tool", "name": name, "text": text[:_TOOL_SOURCE_CHARS]}
+    try:   # the full result is evidence for the supervisor's figure check (core/supervisor.py)
+        from core import supervisor
+        supervisor.add_source(source, full_result=text)
+    except Exception:
+        pass
+    return source
 
 
 # 2026-08-31: real incident, gerflor — a rep asked about vinyl roll pricing, the model called a
@@ -921,6 +927,10 @@ def _turn_note_skill(name: str, **detail) -> None:
     except Exception:
         pass
 
+# Skills whose figures are computed and self-checked in code, not stated by a model.
+_FIGURE_CHECK_EXEMPT = {"calculations"}
+
+
 class BaseSkill(ABC):
     name: str = "base"
     description: str = ""
@@ -933,6 +943,17 @@ class BaseSkill(ABC):
         """Execute the skill and return a SkillOutput."""
 
     async def __call__(self, inp: SkillInput) -> SkillOutput:
+        from core import supervisor
+        token = supervisor.start()
+        try:
+            return await self._supervised_call(inp)
+        finally:
+            supervisor.stop(token)
+
+    async def _supervised_call(self, inp: SkillInput) -> SkillOutput:
+        from core import supervisor
+        for text in (inp.question, inp.context, inp.conversation_history):
+            supervisor.add(text)
         started = time.monotonic()
         try:
             result = await self.run(inp)
@@ -958,9 +979,16 @@ class BaseSkill(ABC):
                 answer = strip_narration(result.answer)
                 answer = substitute_if_leaked(answer, skill=self.name, customer=customer,
                                               tenant_id=inp.tenant_id)
-                if not customer:
-                    answer = substitute_if_unbacked_claim(answer, result.sources or [],
-                                                          skill=self.name, tenant_id=inp.tenant_id)
+                # The supervisor (step 3, 6 Oct): unbacked action claims, wrong arithmetic and —
+                # for owner replies the model wrote — rand figures that appear nowhere in what
+                # the model was given. A reply built by code from the records is left alone.
+                code_built = any(isinstance(s_, dict) and s_.get("type") == "database"
+                                 for s_ in (result.sources or []))
+                if not code_built:
+                    answer, _ = supervisor.check(
+                        answer, skill=self.name, tenant_id=inp.tenant_id, customer=customer,
+                        extra_sources=result.sources or [],
+                        check_figures=self.name not in _FIGURE_CHECK_EXEMPT)
                 result.answer = answer
             except Exception:
                 pass
@@ -1015,3 +1043,10 @@ class turn_local:
             state = {}
             _TURN_STATE.set(state)
         state[(id(obj), self.key)] = value
+
+
+try:   # every model call's messages become the supervisor's evidence (core/supervisor.py)
+    from core import supervisor as _supervisor
+    _supervisor.install()
+except Exception:   # pragma: no cover
+    pass

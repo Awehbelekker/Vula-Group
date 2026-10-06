@@ -57,13 +57,18 @@ async def test_cancel_order_needs_confirm_but_dispatch_does_not(skill, monkeypat
 @pytest.mark.asyncio
 async def test_add_expense_previews_then_books_through_create_claim(skill):
     claim = AsyncMock(return_value={"id": "e1", "category": "fuel"})
-    with patch("vula.commerce.expenses.create_claim", claim):
+    db = MagicMock()   # the read-back of the booked expense (step 3)
+    db.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value \
+        .execute.return_value.data = [{"id": "e1", "amount_cents": 25000, "category": "fuel",
+                                       "supplier": None, "project": None, "status": "submitted"}]
+    with patch("vula.commerce.expenses.create_claim", claim), patch.object(ca.service, "_client", return_value=db):
         p = await skill._add_expense(TID, {"amount_rands": 250, "description": "Diesel"})
         assert p["preview"] is True and p["amount"]
         claim.assert_not_awaited()
         r = await skill._add_expense(TID, {"amount_rands": 250, "description": "Diesel", "confirm": True})
     assert claim.await_args.kwargs["amount_cents"] == 25000
     assert r["logged"] and r["description"] == "Diesel"
+    assert r["reply_verbatim"] == "✅ Expense of *R250.00* recorded (fuel)."
 
 
 @pytest.mark.asyncio

@@ -7747,9 +7747,12 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         await _send_reply(phone, "Something went wrong applying that — please try again.", tenant_id)
         return
 
-    # A tool that already wrote its own verified reply (setup_project) is sent as-is.
-    if isinstance(result, dict) and isinstance(result.get("reply"), str) and result["reply"].strip():
-        await _send_reply(phone, result["reply"], tenant_id)
+    # A tool that built its own reply from the records it read back is sent as-is — the model
+    # never re-words a confirmed change (chat rework step 3, 6 Oct).
+    from core.skills.commerce_admin import checked_reply
+    checked = checked_reply(result)
+    if checked:
+        await _send_reply(phone, checked, tenant_id)
         return
 
     # Summarise the raw tool result into plain WhatsApp language — same established pattern as
@@ -7773,6 +7776,15 @@ async def _handle_admin_confirm_reply(phone: str, reply_id: str, tenant_id: str)
         reply_text = (resp.choices[0].message.content or "").strip()
         if reply_text and looks_degenerate(reply_text):
             reply_text = None
+        if reply_text:
+            # The summary is model-written: its figures and claims are checked against the
+            # tool result it was given (core/supervisor.py).
+            from core import supervisor
+            from core.skills.base import tool_source
+            reply_text, _ = supervisor.check(
+                reply_text, skill="commerce_admin.confirm", tenant_id=tenant_id,
+                extra_sources=[tool_source(row["tool_name"], result)],
+                evidence=[json.dumps(result, default=str)])
     except Exception as exc:
         logger.debug("admin confirm result summarise skipped: %s", exc)
     if not reply_text:
