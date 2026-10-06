@@ -672,6 +672,10 @@ _OWNER_ADMIN_RE = re.compile(
     r"\bhow(?:'s| is)\s+[\w\s]{2,25}?\s+doing\b|\bon (?:track|budget) for (?:our|the|my) fee\b|"
     r"\bwhat should (?:i|we) (?:charge|quote|price)\b|\bhow much should (?:i|we) (?:charge|quote)\b|"
     r"\b(?:job|project) cost(?:ing)?\b|\bfee target\b|"
+    # "Can you tell me HPC project profit" went to finance_admin, whose project ledger is empty
+    # for DIGG, and answered "R0" (6 Oct) — profit/margin on a project is job costing.
+    r"\b(?:project|job)\s+(?:profit|margin|loss)\b|\b(?:profit|margin|loss)\s+(?:for|of)\s+(?:the\s+)?\w+|"
+    r"\bprofit(?:able)?\b.{0,30}\bproject\b|\bproject\b.{0,30}\bprofit(?:able)?\b|"
     # "Who owes me money?" went to the general reasoning skill, which can't see invoices (replay
     # corpus, 6 Oct) — debtors and bills are the admin agent's outstanding_invoices.
     r"\bwho owes\b|\bwho (?:do|must|should) (?:i|we) (?:still )?pay\b|\b(?:do|must) (?:i|we) owe\b|"
