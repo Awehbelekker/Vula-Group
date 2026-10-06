@@ -311,6 +311,12 @@ class HRMOrchestrator:
             from core.skills.base import looks_like_document_lookup
             if looks_like_document_lookup(prompt):
                 return "email_admin", "document_lookup"
+            # "Send me the updated jack hammer pdf" (6 Oct) named a supplier by alias and asked for
+            # an export; "pdf" sent it to the file reader. A known supplier + export → its history.
+            from core.skills.base import asks_for_named_supplier_summary
+            from vula.commerce.service import known_supplier_names
+            if asks_for_named_supplier_summary(prompt, known_supplier_names(tenant_id)):
+                return "email_admin", "named_supplier"
         if kw:
             return kw, "keyword"
         # A product-spec question ("Whats the slip rating of mipolam affinity") names no keyword;

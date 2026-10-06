@@ -2827,6 +2827,16 @@ def _note_handler(name: str) -> None:
     turns.note("handler", name=name)
 
 
+def _note_route(name: str, **detail) -> None:
+    """Which branch of the question path (_rag_reply) answered — onto the turn record, and what
+    the replay corpus (evals/replay.py, chat rework step 4) checks a message against."""
+    try:
+        from vula import turns
+        turns.note("route", name=name, **detail)
+    except Exception:
+        pass
+
+
 def _pending_doc_reply(pending: dict) -> str:
     """The reply to an answer about a document waiting on "which project?"."""
     if pending.get("filed"):
@@ -5813,10 +5823,12 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 profile_reply = None
             if profile_reply:
                 _LAST_CONF.set(1.0)
+                _note_route("profile_interview")
                 return profile_reply
         alias_reply = await _maybe_learn_supplier_alias(tenant_id, question)
         if alias_reply:
             _LAST_CONF.set(1.0)
+            _note_route("supplier_alias")
             return alias_reply
         # The project register: "add phase 2 to Sporty TV", "X is also called Y" (owner/manager).
         if (caller_role or "").lower() in ("owner", "manager", "admin"):
@@ -5828,11 +5840,13 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 project_reply = None
             if project_reply:
                 _LAST_CONF.set(1.0)
+                _note_route("project_register")
                 return project_reply
         from core.skills.base import delete_request_reply
         refuse = delete_request_reply(question)
         if refuse:
             _LAST_CONF.set(1.0)
+            _note_route("delete_refused")
             return refuse
         question = _resolve_go_ahead(tenant_id, phone, question)
         # 0a. A follow-up ("send the full list", "yes please", "in excel") goes back to the skill
@@ -5853,6 +5867,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                     if out.success and out.answer:
                         _remember_skill(tenant_id, phone, sticky)
                         _LAST_CONF.set(float(out.confidence or 0.0))
+                        _note_route("follow_up", skill=sticky)
                         return out.answer
                 except Exception as exc:
                     logger.warning("follow-up to %s fell through: %s", sticky, exc)
@@ -5861,6 +5876,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
         stock = _stock_sheet_answer(tenant_id, question)
         if stock:
             _LAST_CONF.set(0.95)
+            _note_route("stock_sheet")
             return stock
         # 0d. "What's on the programme today/tomorrow?" — the morning brief, on demand, from rows.
         try:
@@ -5871,6 +5887,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
             plan_reply = None
         if plan_reply:
             _LAST_CONF.set(0.95)
+            _note_route("programme")
             return plan_reply
         # "Which projects are we running?" — from the project register (benchmark, 30 Sep).
         try:
@@ -5881,6 +5898,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
             projects_reply = None
         if projects_reply:
             _LAST_CONF.set(0.95)
+            _note_route("projects")
             return projects_reply
         # 0b. Job costing and pricing ("are we making our 10%?", "what should I charge per m²?")
         # — those tools live in commerce_admin, which the skill picker never offers on a
@@ -5897,6 +5915,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 if out.success and out.answer:
                     _remember_skill(tenant_id, phone, "commerce_admin")
                     _LAST_CONF.set(float(out.confidence or 0.0))
+                    _note_route("owner_admin", skill="commerce_admin")
                     return out.answer
             except Exception as exc:
                 logger.warning("owner admin question fell through to the knowledge path: %s", exc)
@@ -5906,6 +5925,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
     hello = check_in_reply(question)
     if hello:
         _LAST_CONF.set(1.0)
+        _note_route("check_in")
         return hello
 
     # 1. Try the full multi-agent runner (research + memory + all skills)
@@ -5961,6 +5981,7 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 "Agent answered tenant=%s skill=%s confidence=%.2f",
                 tenant_id, result.skill_used, result.confidence,
             )
+            _note_route("agent", skill=result.skill_used)
             if _is_insider(caller_role):
                 _remember_skill(tenant_id, phone, result.skill_used)
             try:

@@ -671,7 +671,12 @@ _OWNER_ADMIN_RE = re.compile(
     r"\b(?:profit|margin|loss)\s+on\s+(?:the\s+)?\w+|\blos(?:e|ing) money\b|"
     r"\bhow(?:'s| is)\s+[\w\s]{2,25}?\s+doing\b|\bon (?:track|budget) for (?:our|the|my) fee\b|"
     r"\bwhat should (?:i|we) (?:charge|quote|price)\b|\bhow much should (?:i|we) (?:charge|quote)\b|"
-    r"\b(?:job|project) cost(?:ing)?\b|\bfee target\b",
+    r"\b(?:job|project) cost(?:ing)?\b|\bfee target\b|"
+    # "Who owes me money?" went to the general reasoning skill, which can't see invoices (replay
+    # corpus, 6 Oct) — debtors and bills are the admin agent's outstanding_invoices.
+    r"\bwho owes\b|\bwho (?:do|must|should) (?:i|we) (?:still )?pay\b|\b(?:do|must) (?:i|we) owe\b|"
+    r"\bowes? (?:me|us)\b|\bwhat(?:'s| is) (?:still )?(?:owed|outstanding)\b|\bdebtors?\b|"
+    r"\b(?:outstanding|unpaid|overdue) (?:invoices|bills|accounts)\b",
     re.IGNORECASE)
 
 
@@ -765,9 +770,29 @@ SPEC_ANSWER_RULE = (
 
 def looks_like_document_lookup(text: str) -> bool:
     """One specific filed document — an amount, an invoice number, or "find the <named> invoice" —
-    asked about AS a document (an amount alone, as in "15% VAT on R48,300.00", is arithmetic)."""
+    asked about AS a document (an amount alone, as in "15% VAT on R48,300.00", is arithmetic).
+    "The sale R41752.47 what's this" (Ian, 6 Oct) asks about a document by its amount without
+    naming the document type; "what's this/that" next to an exact amount does the same job."""
     t = text or ""
-    return bool(_SPECIFIC_DOCUMENT_RE.search(t) and _DOCUMENT_WORD_RE.search(t))
+    return bool(_SPECIFIC_DOCUMENT_RE.search(t)
+                and (_DOCUMENT_WORD_RE.search(t) or _WHATS_THIS_RE.search(t)))
+
+
+_WHATS_THIS_RE = re.compile(r"\bwhat(?:'s|s| is| was)\s+(?:this|that|it)\b|\bwhat (?:is|was) the\b",
+                            re.IGNORECASE)
+# An export or account summary — with a known supplier named, it's that supplier's history.
+_EXPORT_OR_SUMMARY_RE = re.compile(
+    r"\b(?:pdf|excel|spreadsheet|xlsx|summary|summari[sz]e|break\s*[.\-]?\s*down|statement|"
+    r"account|full list|everything)\b", re.IGNORECASE)
+
+
+def asks_for_named_supplier_summary(text: str, supplier_names: List[str]) -> bool:
+    """"Send me the updated jack hammer pdf" (Ian, 6 Oct) names a supplier by its alias and asks
+    for an export — the supplier history, not the file reader it went to."""
+    if not _EXPORT_OR_SUMMARY_RE.search(text or "") or not supplier_names:
+        return False
+    from vula.commerce.service import mentions_supplier_name
+    return mentions_supplier_name(text, supplier_names)
 
 
 _DOCUMENT_WORD_RE = re.compile(r"\b(?:invoice|inv|quote|quotation|receipt|statement|slip|"
