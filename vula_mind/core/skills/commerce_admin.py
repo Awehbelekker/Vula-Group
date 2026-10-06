@@ -160,14 +160,24 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "invoice_ids": {"type": "array", "items": {"type": "string"}},
             "confirm": {"type": "boolean"}}}}},
     {"type": "function", "function": {
-        "name": "reminder_settings",
-        "description": "Change how overdue reminders work: mode 'propose' (Vula asks you first "
-                       "each morning), 'auto' (sent automatically) or 'off'; tone 'friendly' or "
-                       "'firm'. Without confirm=true returns a preview.",
+        "name": "finance_settings",
+        "description": "Change how money automation works: reminder_mode 'propose' (Vula asks "
+                       "you first each morning), 'auto' (sent automatically) or 'off'; "
+                       "reminder_tone 'friendly' or 'firm'; expense_mode 'book' (a receipt is "
+                       "booked at once) or 'confirm' (you tap Confirm first). No fields = show "
+                       "the current settings. Without confirm=true returns a preview.",
         "parameters": {"type": "object", "properties": {
-            "mode": {"type": "string", "enum": ["propose", "auto", "off"]},
-            "tone": {"type": "string", "enum": ["friendly", "firm"]},
+            "reminder_mode": {"type": "string", "enum": ["propose", "auto", "off"]},
+            "reminder_tone": {"type": "string", "enum": ["friendly", "firm"]},
+            "expense_mode": {"type": "string", "enum": ["book", "confirm"]},
             "confirm": {"type": "boolean"}}}}},
+    {"type": "function", "function": {
+        "name": "confirm_expense",
+        "description": "Book a receipt that is waiting for confirmation (expense_mode 'confirm'). "
+                       "Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "expense_id": {"type": "string"}, "confirm": {"type": "boolean"}},
+            "required": ["expense_id"]}}},
     {"type": "function", "function": {
         "name": "find_document",
         "description": "Search filed documents (invoices, quotes, proof-of-payment, BOQs, "
@@ -1887,7 +1897,8 @@ class CommerceAdminSkill(BaseSkill):
             if name == "receive_stock":      return await self._receive_stock(tid, args.get("lines") or [], args.get("reference"), bool(args.get("confirm")), actor=ctx.get("phone"))
             if name == "outstanding_invoices": return await self._outstanding_invoices(tid)
             if name == "send_payment_reminders": return await self._send_payment_reminders(tid, args)
-            if name == "reminder_settings":  return await self._reminder_settings(tid, args)
+            if name == "finance_settings":   return await self._finance_settings(tid, args)
+            if name == "confirm_expense":    return await self._confirm_expense(tid, args)
             if name == "find_document":      return await self._find_document(tid, args)
             if name == "email_thread_summary": return await self._email_thread_summary(tid, args)
             if name == "add_expense":        return await self._add_expense(tid, args)
@@ -2245,19 +2256,46 @@ class CommerceAdminSkill(BaseSkill):
                 "note": None if sent else "Nothing was due a reminder (or the customers opted out "
                                           "/ have no WhatsApp number)."}
 
-    async def _reminder_settings(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        patch = {k: args[k] for k in ("mode", "tone") if args.get(k)}
+    async def _finance_settings(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        keys = ("reminder_mode", "reminder_tone", "expense_mode")
+        patch = {k: args[k] for k in keys if args.get(k)}
         if not patch:
             from vula.api.commerce import _reminder_settings
+            from vula.commerce import expenses
             mode, tone = _reminder_settings(tid)
-            return {"mode": mode, "tone": tone}
+            return {"reminder_mode": mode, "reminder_tone": tone,
+                    "expense_mode": expenses.expense_mode(tid)}
         if not args.get("confirm"):
             return {"preview": True, **patch,
-                    "message": "Confirm to change the reminder settings (call again with confirm=true)."}
-        saved = await service.upsert_invoice_settings(
-            tid, {("reminder_" + k): v for k, v in patch.items()})
-        return {"mode": saved.get("reminder_mode"), "tone": saved.get("reminder_tone"),
-                "verified": all(saved.get("reminder_" + k) == v for k, v in patch.items())}
+                    "message": "Confirm to change these settings (call again with confirm=true)."}
+        try:
+            saved = await service.upsert_invoice_settings(tid, patch)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {**{k: saved.get(k) for k in patch},
+                "verified": all(saved.get(k) == v for k, v in patch.items())}
+
+    async def _confirm_expense(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        from vula.commerce import expenses
+        eid = (args.get("expense_id") or "").strip()
+        rows = (service._client().table("commerce_expenses")
+                .select("id,amount_cents,supplier,status,project")
+                .eq("tenant_id", tid).eq("id", eid).limit(1).execute().data or []) if eid else []
+        if not rows:
+            return {"error": "That receipt wasn't found."}
+        r = rows[0]
+        if r.get("status") != "unconfirmed":
+            return {"message": "That receipt is already booked."}
+        if not args.get("confirm"):
+            return {"preview": True, "expense": self._rands(r.get("amount_cents")),
+                    "supplier": r.get("supplier"), "project": r.get("project"),
+                    "message": "Confirm to book this receipt (call again with confirm=true)."}
+        row = expenses.confirm_claim(tid, eid)
+        if not row:
+            return {"error": "It couldn't be booked — it may already have been handled."}
+        return {"booked": self._rands(row.get("amount_cents")), "supplier": row.get("supplier"),
+                "project": row.get("project"), "status": row.get("status"),
+                "verified": row.get("status") == "submitted"}
 
     async def _add_expense(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         cents = int(round(float(args.get("amount_rands", 0)) * 100))

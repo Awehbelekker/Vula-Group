@@ -2684,13 +2684,16 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
                     supplier_id = (sm.get("supplier") or {}).get("id")
             except Exception:
                 pass
+        # expense_mode 'confirm' (migration 198): the slip is read and staged, but it reaches the
+        # ledger only when the sender taps ✅ Confirm (commerce_admin confirm_expense).
+        confirm_first = expenses.expense_mode(tenant_id) == "confirm"
         claim = await expenses.create_claim(
             tenant_id, amount_cents=total,
             description=(scan_data.get("notes") or supplier or "Receipt"),
             supplier=supplier, supplier_id=supplier_id, date=scan_data.get("date"), vat_cents=vat,
             project=project, paid_by=phone, paid_by_name=name, reimbursable=reimbursable,
             paid_with=paid_with, card_last4=scan_data.get("card_last4"),
-            channel="whatsapp", receipt_doc_id=doc_id)
+            channel="whatsapp", receipt_doc_id=doc_id, confirmed=not confirm_first)
         if claim.get("duplicate"):
             where = f" (on {claim['project']})" if claim.get("project") else ""
             return (f"\n\n♻️ I've already logged this one — *R{total/100:,.2f}*"
@@ -2714,6 +2717,18 @@ async def _log_expense_claim(tenant_id: str, phone: str, scan_data: dict,
 
         cat = claim.get("category") or "expense"
         msg = f"\n\n💳 Logged as an expense: *R{total/100:,.2f}* → {cat}"
+        if confirm_first and claim.get("id"):
+            msg = (f"\n\n🧾 Read this receipt: *R{total/100:,.2f}*"
+                   f"{(' from ' + supplier) if supplier else ''} → {cat}. Not booked yet — tap "
+                   f"*Confirm* to book it")
+            try:
+                await _ask_admin_confirm(phone, tenant_id, "confirm_expense",
+                                         {"expense_id": claim["id"]},
+                                         {"preview": True, "expense": f"R{total/100:,.2f}",
+                                          "supplier": supplier, "category": cat,
+                                          "message": "Book this receipt?"})
+            except Exception as exc:
+                logger.warning("expense confirm buttons failed: %s", exc)
         if claim.get("vat_cents"):
             msg += f" (incl. VAT R{claim['vat_cents']/100:,.2f})"
         if claim.get("project"):
