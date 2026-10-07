@@ -462,9 +462,10 @@ class TapService:
                                   new="awaiting_payment", fields={"pay_nonce_hash": self._token_hash(nonce)})
         url = f"{self.cfg.public_base_url.rstrip('/')}/v1/tap/pay/{s['id']}/{nonce}"
         total = s["bill_cents"] + s["tip_cents"]
-        await self._say(s["tenant_id"], phone,
-                        f"Pay {_m(total)} to {self.repo.merchant_name(s['tenant_id'])}:\n{url}\n"
-                        f"Link works for 10 minutes.")
+        await self.messenger.link_button(
+            s["tenant_id"], phone,
+            f"Pay {_m(total)} to {self.repo.merchant_name(s['tenant_id'])}. The button works for 10 minutes.",
+            f"Pay {_m(total)}"[:20], url)
 
     # ── 3. pay redirect (HTTP) ───────────────────────────────────────────────────────────────
     async def open_pay_link(self, session_id: str, nonce: str) -> Optional[str]:
@@ -536,17 +537,24 @@ class TapService:
             for p in self.repo.team_phones(tenant_id, None):
                 await self._say(tenant_id, p, "Tap to Pay test payment received. PayFast is set up "
                                               "correctly - you can go live in the dashboard.")
-            return "test_paid"
         if phone:
-            tax_hint = "\nNeed a VAT tax invoice? Reply TAX." if s["bill_cents"] and self.tax.can_issue(tenant_id) else ""
-            link = ""
+            # A test payment sends the payer the same slip (marked TEST) so the owner sees what customers get.
+            tax_hint = ("\nNeed a VAT tax invoice? Reply TAX."
+                        if s["bill_cents"] and not is_test and self.tax.can_issue(tenant_id) else "")
+            receipt_url = ""
             if self.cfg.receipt_secret and self.cfg.receipt_base_url:
                 from vula.tap.receipt import make_token
-                link = f"\nYour receipt: {self.cfg.receipt_base_url.rstrip('/')}/r/{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}"
-            await self._say(tenant_id, phone,
-                            f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
-                            f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{link}"
-                            f"{tax_hint}")
+                receipt_url = (f"{self.cfg.receipt_base_url.rstrip('/')}/r/"
+                               f"{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}")
+            slip = (f"{'TEST PAYMENT - nothing is booked to anyone. ' if is_test else ''}"
+                    f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
+                    f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{tax_hint}")
+            if receipt_url:
+                await self.messenger.link_button(tenant_id, phone, slip, "View receipt", receipt_url)
+            else:
+                await self._say(tenant_id, phone, slip)
+        if is_test:
+            return "test_paid"
         await self._notify_staff(tenant_id, s, phone)
         return "paid"
 

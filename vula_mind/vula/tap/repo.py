@@ -363,6 +363,13 @@ class SupabaseRepo:
 
     # display
     def merchant_name(self, tenant_id: str) -> str:
+        try:                                    # the business name customers already see (tenant config)
+            from vula.api import tenants
+            name = ((tenants.get_config(tenant_id) or {}).get("display_name") or "").strip()
+            if name:
+                return name
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("merchant_name config lookup failed: %s", exc)
         try:
             r = self._one(self.db.table("vula_tenants").select("company_name").eq("tenant_id", tenant_id))
             if r and r.get("company_name"):

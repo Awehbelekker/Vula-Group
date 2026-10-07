@@ -68,13 +68,21 @@ async def pay(svc, repo, msg, gw, tag, tip="10"):
     return list(repo.payments.values())[0]
 
 
-async def test_slip_message_carries_a_working_receipt_link(env):
+async def test_slip_carries_a_view_receipt_button_with_a_working_link(env):
     svc, repo, msg, gw, tag = env
     p = await pay(svc, repo, msg, gw, tag)
-    slip = next(m[3] for m in msg.to(CUST, "text") if "Paid R 550.00" in m[3])
-    url = re.search(r"Your receipt: (https://dash\.test/r/\S+)", slip).group(1)
-    assert url.startswith("https://dash.test/r/") and " " not in url and "[" not in url      # raw URL for WhatsApp
+    (tenant, phone, body, label, url), = [l for l in msg.links if l[3] == "View receipt"]
+    assert "Paid R 550.00" in body and "http" not in body              # the address is not shown in the message
+    assert label == "View receipt" and url.startswith("https://dash.test/r/") and " " not in url
     assert rc.read_token("rs", url.rsplit("/", 1)[1]) == (p["id"], 0)
+
+
+async def test_pay_link_is_sent_as_a_button(env):
+    svc, repo, msg, gw, tag = env
+    await pay(svc, repo, msg, gw, tag)
+    pay_btn = [l for l in msg.links if l[3].startswith("Pay R")]
+    assert pay_btn and "http" not in pay_btn[0][2] and "/v1/tap/pay/" in pay_btn[0][4]
+    assert pay_btn[0][3] == "Pay R 550.00"[:20] or len(pay_btn[0][3]) <= 20
 
 
 async def test_no_link_when_receipts_not_configured(env):

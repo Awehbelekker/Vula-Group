@@ -108,6 +108,10 @@ def test_full_setup_to_live(env):
     assert repo.ledger == []                              # a test books nothing
     assert repo.get_settings(T)["tested_at"]
     assert any("test payment received" in m[3] for m in msg.to("27800000009", "text"))
+    # the payer gets the same slip, clearly marked TEST, and no tax-invoice offer
+    slip = [m for m in msg.to(CUST, "text") if "TEST PAYMENT" in m[3]]
+    assert slip and "Paid R 5.00" in slip[-1][3] and "Reply TAX" not in slip[-1][3]
+    assert not any("you earned" in m[3].lower() or "Payment from" in m[3] for m in msg.to("27800000001", "text"))   # coach is not alerted for a test
 
     assert setup.status(T)["can_go_live"] is True
     setup.go_live(T)
