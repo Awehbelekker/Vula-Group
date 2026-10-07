@@ -8173,6 +8173,31 @@ async def _send_wa_buttons(creds: dict, number: str, body: str, buttons: list) -
         return False
 
 
+async def _send_wa_cta_url(creds: dict, number: str, body: str, label: str, url: str) -> bool:
+    """Send an interactive WhatsApp "call to action" URL button: the message shows `label` as a
+    button and never displays the address. Only valid inside the 24 h customer-service window.
+    False on any failure so the caller can fall back to a plain-text link."""
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", number, f"{body} [{label}]"):   # capability benchmark
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
+                      "interactive": {"type": "cta_url",
+                                      "body": {"text": body[:1024]},
+                                      "action": {"name": "cta_url",
+                                                 "parameters": {"display_text": label[:20], "url": url}}}},
+            )
+            resp.raise_for_status()
+            return True
+    except Exception as exc:
+        logger.error("WA cta_url send failed to %s: %s", number, exc)
+        return False
+
+
 async def _send_wa_list(creds: dict, number: str, header: str, body: str,
                         footer: str, button: str, sections: list) -> bool:
     """Send an interactive WhatsApp list (≤10 rows total across sections)."""

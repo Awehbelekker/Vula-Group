@@ -362,6 +362,7 @@ class MemoryRepo:
 class FakeMessenger:
     def __init__(self):
         self.sent = []          # (kind, tenant, phone, payload)
+        self.links = []         # (tenant, phone, body, label, url) for every URL-button message
 
     async def text(self, tenant_id, phone, body):
         self.sent.append(("text", tenant_id, phone, body))
@@ -369,6 +370,11 @@ class FakeMessenger:
 
     async def buttons(self, tenant_id, phone, body, buttons):
         self.sent.append(("buttons", tenant_id, phone, (body, buttons)))
+        return True
+
+    async def link_button(self, tenant_id, phone, body, label, url):
+        self.links.append((tenant_id, phone, body, label, url))
+        self.sent.append(("text", tenant_id, phone, f"{body}\n{url}"))     # what the plain-text fallback sends
         return True
 
     async def document(self, tenant_id, phone, data, filename, caption):

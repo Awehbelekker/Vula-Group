@@ -123,6 +123,14 @@ owner), never sent as free text. Apply migration 204.
 Trade-off to know: an abandoned bill stays reserved to the customer who left, so another customer tapping that tag sees
 "being paid from another phone" until the owner uses Release (or the sequence ends and they close it).
 
+## Link buttons
+The pay link and the receipt link are sent as WhatsApp **URL buttons** ("Pay R 550.00", "View receipt"), so the long server address is
+never shown in the chat (`Messenger.link_button` -> `whatsapp._send_wa_cta_url`, interactive type `cta_url`). Buttons only work inside
+the 24-hour customer window, which is always true for these two messages. If WhatsApp refuses the button for any reason, the same
+message is sent as plain text with the link, so nothing breaks. Reminders sent later still use text or approved templates (a template
+can carry a URL button; see the reminder notes). The address shown when the page opens in the browser is the server's own domain; a
+custom domain (for example `pay.<yourdomain>`) is set in Railway -> Networking, then `PUBLIC_BASE_URL`.
+
 ## Switching it on (self-serve)
 Apply migrations 199, 200, 201, 202, 203, 204 and 205 (or the combined `migrations/_APPLY_2026-10-06_tap_to_pay_199-205.sql`) in the Supabase SQL editor (staging first — docs/staging.md), then the
 owner does everything in the dashboard: **Money -> Tap to Pay**.

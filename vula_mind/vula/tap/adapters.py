@@ -47,6 +47,13 @@ class WhatsAppMessenger:
         from vula.api.whatsapp import _send_wa_template
         return await _send_wa_template(tenant_id, phone, name, *params)
 
+    async def link_button(self, tenant_id: str, phone: str, body: str, label: str, url: str) -> bool:
+        from vula.api import whatsapp as wa
+        creds = await wa._get_tenant_wa_creds(tenant_id)
+        if creds and await wa._send_wa_cta_url(creds, wa._wa_number(phone), body, label, url):
+            return True
+        return await wa._send_reply(phone, f"{body}\n{url}", tenant_id)          # plain-text fallback
+
     async def document(self, tenant_id: str, phone: str, data: bytes, filename: str, caption: str) -> bool:
         from vula.api.whatsapp import _send_invoice_document
         return await _send_invoice_document(phone, data, filename, caption, tenant_id)
