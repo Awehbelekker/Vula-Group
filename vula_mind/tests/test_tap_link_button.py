@@ -71,3 +71,30 @@ async def test_adapter_uses_button_when_it_works(monkeypatch):
     monkeypatch.setattr(wa, "_send_reply", reply)
     assert await WhatsAppMessenger().link_button("t1", "+27 64 575 5210", "Pay R5.", "Pay", "https://x.test/p/1")
     assert seen == [("27645755210", "Pay", "https://x.test/p/1")]
+
+
+def test_merchant_name_prefers_the_tenant_display_name(monkeypatch):
+    from vula.api import tenants
+    from vula.tap.repo import SupabaseRepo
+    monkeypatch.setattr(tenants, "get_config", lambda t: {"display_name": "Gerflor Cape Town"})
+    assert SupabaseRepo.__new__(SupabaseRepo).merchant_name("gerflor") == "Gerflor Cape Town"
+
+
+def test_merchant_name_falls_back_when_config_is_missing(monkeypatch):
+    from vula.api import tenants
+    from vula.tap.repo import SupabaseRepo
+
+    class _Q:
+        def select(self, *a): return self
+        def eq(self, *a): return self
+        def limit(self, *a): return self
+        def execute(self):
+            class R: data = [{"company_name": "Gerflor — Western Cape Sales"}]
+            return R()
+
+    class _DB:
+        def table(self, *_): return _Q()
+
+    monkeypatch.setattr(tenants, "get_config", lambda t: {})
+    repo = SupabaseRepo(client=_DB())
+    assert repo.merchant_name("gerflor") == "Gerflor — Western Cape Sales"

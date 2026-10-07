@@ -537,20 +537,24 @@ class TapService:
             for p in self.repo.team_phones(tenant_id, None):
                 await self._say(tenant_id, p, "Tap to Pay test payment received. PayFast is set up "
                                               "correctly - you can go live in the dashboard.")
-            return "test_paid"
         if phone:
-            tax_hint = "\nNeed a VAT tax invoice? Reply TAX." if s["bill_cents"] and self.tax.can_issue(tenant_id) else ""
+            # A test payment sends the payer the same slip (marked TEST) so the owner sees what customers get.
+            tax_hint = ("\nNeed a VAT tax invoice? Reply TAX."
+                        if s["bill_cents"] and not is_test and self.tax.can_issue(tenant_id) else "")
             receipt_url = ""
             if self.cfg.receipt_secret and self.cfg.receipt_base_url:
                 from vula.tap.receipt import make_token
                 receipt_url = (f"{self.cfg.receipt_base_url.rstrip('/')}/r/"
                                f"{make_token(self.cfg.receipt_secret, pay['id'], pay.get('receipt_nonce', 0))}")
-            slip = (f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
+            slip = (f"{'TEST PAYMENT - nothing is booked to anyone. ' if is_test else ''}"
+                    f"Paid {_m(total)} to {self.repo.merchant_name(tenant_id)}. Thank you.\n"
                     f"Bill {_m(s['bill_cents'])}, tip {_m(s['tip_cents'])}. Ref {s['id'][:8]}.{tax_hint}")
             if receipt_url:
                 await self.messenger.link_button(tenant_id, phone, slip, "View receipt", receipt_url)
             else:
                 await self._say(tenant_id, phone, slip)
+        if is_test:
+            return "test_paid"
         await self._notify_staff(tenant_id, s, phone)
         return "paid"
 
