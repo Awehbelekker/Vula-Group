@@ -77,6 +77,31 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
 
 SAST = timezone(timedelta(hours=2))
 
+# Meta template names are WABA-wide, so each tenant's scheduled-job templates carry its own
+# prefix: off-the-hook predates the convention ("oth"); everyone else uses the tenant id.
+TEMPLATE_PREFIX: Dict[str, str] = {"off-the-hook": "oth"}
+
+# Jobs that only make sense for one kind of business (2026-10-12, onboarding SeedleMe — a maker
+# of concrete basins would otherwise get Off the Hook's "set this week's catch" reminder every
+# Friday). A tenant can still switch one on in the Scheduling tab.
+_ONLY_FOR_TYPES: Dict[str, set] = {"friday_catch_reminder": {"food"}}
+
+
+def template_name(tenant_id: str, suffix: str) -> str:
+    prefix = TEMPLATE_PREFIX.get(tenant_id) or tenant_id.replace("-", "_")
+    return f"{prefix}_{suffix}"
+
+
+def _default_enabled(tenant_id: str, job_type: str) -> bool:
+    types = _ONLY_FOR_TYPES.get(job_type)
+    if not types:
+        return True
+    try:
+        from vula.api.tenants import get_config
+        return (get_config(tenant_id) or {}).get("business_type") in types
+    except Exception:
+        return True
+
 
 def _client():
     from vula.commerce import service as cs
@@ -90,7 +115,8 @@ def effective_config(tenant_id: str, job_type: str, row: Optional[dict]) -> Dict
     cfg = {
         "job_type": job_type, "label": d["label"], "kind": d["kind"],
         "description": d["description"],
-        "enabled": row.get("enabled", True),
+        "enabled": (row["enabled"] if row.get("enabled") is not None
+                    else _default_enabled(tenant_id, job_type)),
         "template_name": row.get("template_name"),  # None = default prefixed name
         "default_template_suffix": d["template_suffix"],
         "last_fired_at": row.get("last_fired_at"),

@@ -33,6 +33,20 @@ export default function VulaWATemplates({ tenantId }) {
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [tenantId]);
 
+  // 2026-10-12: the templates Vula's own scheduled messages need (unpaid-order reminder, sales
+  // summary…), named the way the jobs look them up — one tap for a new business.
+  const submitStandard = async () => {
+    setBusy(true);
+    const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/wa-templates/standard`, { method: "POST" })
+      .then(async (x) => ({ ok: x.ok, d: await x.json().catch(() => ({})) })).catch(() => ({ ok: false, d: {} }));
+    setBusy(false);
+    if (!r.ok) { flash(r.d.detail || "Couldn't submit the standard templates."); return; }
+    const { submitted = [], already_there = [], failed = [] } = r.d;
+    flash(`${submitted.length} submitted for review, ${already_there.length} already on the account`
+      + (failed.length ? `, ${failed.length} refused: ${failed.map(f => `${f.name} (${f.error})`).join("; ")}` : "") + ".");
+    load();
+  };
+
   const remove = async (name) => {
     if (!(await confirmDialog(`Delete template "${name}"? This can't be undone.`, { danger: true, confirmLabel: 'Yes' }))) return;
     const r = await api(tenantId, `/wa-templates/${name}`, { method: "DELETE" }).catch(() => ({ error: "network" }));
@@ -47,7 +61,9 @@ export default function VulaWATemplates({ tenantId }) {
         <span style={{ fontSize: 12.5, color: C.muted }}>
           Needed to message someone who hasn't texted you recently — Meta reviews each one (usually minutes–24h).
         </span>
-        <button style={{ ...btn, ...btnOn, marginLeft: "auto" }} onClick={() => setAdding(a => !a)}>{adding ? "Close" : "+ New template"}</button>
+        <button style={{ ...btn, marginLeft: "auto" }} disabled={busy} onClick={submitStandard}
+          title="Submit the templates Vula's own reminders and summaries need, named for this business">Submit standard templates</button>
+        <button style={{ ...btn, ...btnOn }} onClick={() => setAdding(a => !a)}>{adding ? "Close" : "+ New template"}</button>
       </div>
 
       {adding && <AddForm tenantId={tenantId} onDone={() => { setAdding(false); load(); flash("Submitted — Meta is reviewing it."); }} flash={flash} />}

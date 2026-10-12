@@ -714,6 +714,58 @@ function LearnFromHistory({ tenantId }) {
   );
 }
 
+// "Import from your website" (2026-10-12, onboarding SeedleMe): the shop's products (with their
+// options) and the pages customers ask about — About, FAQ, delivery, returns, care, blog — read
+// from the business's own site into Products and the knowledge base. Re-running updates.
+function WebsiteImport({ tenantId }) {
+  const [url, setUrl] = useState("");
+  const [st, setSt] = useState(null);
+  const [msg, setMsg] = useState("");
+  const base = `${VULA_API}/v1/commerce/${tenantId.trim()}/admin/site-import`;
+  const load = useCallback(() => {
+    if (!tenantId.trim()) return;
+    fetch(base).then((r) => r.json()).then((d) => setSt(d.status || null)).catch(() => setSt(null));
+  }, [base, tenantId]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!st?.running) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [st?.running, load]);
+  useEffect(() => { if (st?.url && !url) setUrl(st.url); }, [st?.url]); // eslint-disable-line react-hooks/exhaustive-deps
+  const start = async () => {
+    setMsg("");
+    const r = await fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsg(d.detail || "Could not start."); return; }
+    setMsg(d.started ? `Reading ${d.url} in the background — products first, then the pages…` : "Already running.");
+    load();
+  };
+  const n = (v) => Number(v || 0).toLocaleString("en-ZA");
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 700, color: C.text }}>🌐 Import from your website</h3>
+      <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 10px" }}>
+        Your products (prices, options, photos) go into Products, and the pages customers ask about — about, FAQ, delivery, returns, care, blog — into what Vula knows. Running it again updates them. Nothing is sent to anyone.
+      </p>
+      {st?.running
+        ? <div style={{ fontSize: 13, color: C.text }}>Working… {st.step}</div>
+        : <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://yourshop.co.za"
+              style={{ flex: "1 1 220px", padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 16 }} />
+            <button onClick={start} disabled={!url.trim()} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 13 }}>Import</button>
+          </div>}
+      {st && !st.running && st.step === "done" && (
+        <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
+          Last import from {st.url}: {st.products_found ? `${n(st.products_found)} products (${n(st.products_created)} new, ${n(st.products_updated)} updated${st.variants ? `, ${n(st.variants)} options` : ""}${st.products_on_request ? `, ${n(st.products_on_request)} priced on request — in the catalogue, not for sale online` : ""}), ` : "no product catalogue found, "}{n(st.kb_documents)} pages added to what Vula knows{st.skipped_pages ? ` (${n(st.skipped_pages)} too short to use)` : ""}.
+          {st.errors?.length ? ` ${st.errors.length} couldn't be read.` : ""}
+        </div>)}
+      {st?.error && <div style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 8 }}>Stopped: {st.error}</div>}
+      {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
 export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }) {
   const [tenantId, setTenantId] = useState(propTenantId || "default");
   useEffect(() => { if (propTenantId) setTenantId(propTenantId); }, [propTenantId]);
@@ -847,6 +899,7 @@ export default function VulaDocuments({ tenantId: propTenantId, defaultFiledBy }
       <DriveImport tenantId={tenantId} onImported={() => setLibraryKey((k) => k + 1)} />
 
       <SortIntoProjects tenantId={tenantId} />
+      <WebsiteImport tenantId={tenantId} />
       <LearnFromHistory tenantId={tenantId} />
       <DocumentsHealth tenantId={tenantId} />
       <RereadMissing tenantId={tenantId} />
