@@ -1631,6 +1631,36 @@ async def admin_learn_from_history(tenant_id: str, request: Request):
     return {"started": True}
 
 
+@router.get("/{tenant_id}/admin/site-import")
+async def admin_site_import_status(tenant_id: str):
+    """The last "Import from your website" run's progress (site_import.py)."""
+    from vula.commerce import site_import
+    return {"status": site_import.status(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/site-import")
+async def admin_site_import(tenant_id: str, body: dict, request: Request):
+    """Import the business's products and site pages from its own website: {url}. Owner/manager.
+    Runs in the background; products are upserted by slug, pages go to the knowledge base."""
+    from vula.commerce import site_import
+    from vula.commerce.background_tasks import run_background
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can start this.")
+    try:
+        root = site_import.normalise_root((body or {}).get("url") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if site_import.status(tenant_id).get("running"):
+        return {"started": False, "status": site_import.status(tenant_id)}
+    try:
+        from vula.api.tenants import get_config
+        business = (get_config(tenant_id) or {}).get("display_name") or ""
+    except Exception:
+        business = ""
+    run_background(tenant_id, "site_import", site_import.import_site(tenant_id, root, business))
+    return {"started": True, "url": root}
+
+
 @router.post("/{tenant_id}/admin/stock/adjust")
 async def admin_adjust_stock(tenant_id: str, body: dict, request: Request):
     """Quick adjust from a scan: {product_id, variant_id?, set? | add?, note?}."""
