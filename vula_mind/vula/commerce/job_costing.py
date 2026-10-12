@@ -467,6 +467,124 @@ def overhead_rate(tenant_id: str, days: int = 90) -> Optional[float]:
     return res["overhead_rate_pct"]
 
 
+# ── Installed rates per trade, from finished work ────────────────────────────
+# 12 Oct (Ian: "what each phase of the project cost, so we can cost a new project"): the price
+# book knows what a board or a tin costs, never what a m² of ceiling cost to put up. A trade's
+# installed rate is what the job actually spent on it (bank lines on the project — labour and
+# materials) over the quantity its BOQ measured. HPC: ceilings & drywall 1,657 m², painting
+# 2,204.5 m² of walls and ceilings (HPC_CapeTown_Interior_BOQ_1.xlsx).
+# (trade, what the trade/description of a bank line says, what a BOQ m² line measures)
+_TRADE_GROUPS = [
+    ("Ceilings & drywall", re.compile(r"ceil|ciel|dry ?wall|d/wall|partition|plaster ?board|bulkhead", re.I),
+     re.compile(r"ceil|dry ?wall|d/wall|partition|plaster ?board|bulkhead", re.I)),
+    ("Painting", re.compile(r"paint", re.I), re.compile(r"wall|ceil", re.I)),
+    ("Tiling", re.compile(r"til(e|er|ing)", re.I), re.compile(r"til(e|ing)", re.I)),
+    ("Flooring", re.compile(r"floor|vinyl|carpet|screed", re.I), re.compile(r"floor|vinyl|carpet|screed", re.I)),
+]
+_ASKED_TRADE = {
+    "Ceilings & drywall": re.compile(r"\b(ceil|ciel|dry ?wall|partition|bulkhead)", re.I),
+    "Painting": re.compile(r"\bpaint(ing)?\b", re.I),
+    "Tiling": re.compile(r"\btil(e|es|ing)\b", re.I),
+    "Flooring": re.compile(r"\b(floor(ing)?|vinyl|carpet|screed)\b", re.I),
+}
+# "Duram paint 20L", "Rhino board 9.5mm" are products, not a trade's installed rate.
+_PRODUCT_SIZE = re.compile(r"\d\s*(l|lt|ltr|litre|kg|mm|ml)\b", re.I)
+
+
+def _boq_quantities(tenant_id: str) -> Dict[str, Dict[str, float]]:
+    """{project key: {trade: m²}} from the project's filed BOQs. The same line on two copies of
+    a BOQ counts once (the larger quantity)."""
+    from vula.commerce import price_book
+    from vula.commerce.service import project_key
+    try:
+        docs = (_client().table("vula_filed_documents").select("project,fields")
+                .eq("tenant_id", tenant_id).eq("category", "Bill of Quantities (BOQ)")
+                .execute().data or [])
+    except Exception as exc:
+        log.debug("BOQ quantities unavailable: %s", exc)
+        return {}
+    lines: Dict[str, Dict[tuple, float]] = defaultdict(dict)
+    for d in docs:
+        if not d.get("project"):
+            continue
+        f = d.get("fields") or {}
+        for li in (f.get("items") or []) + (f.get("line_items") or []):
+            if not isinstance(li, dict):
+                continue
+            desc = str(li.get("description") or "")
+            if (price_book.unit_of(desc, li.get("unit")) or "") != "m2":
+                continue
+            try:
+                qty = float(li.get("qty") if li.get("qty") is not None else li.get("quantity") or 0)
+            except (TypeError, ValueError):
+                continue
+            for trade, _cost, measures in _TRADE_GROUPS:
+                if qty > 0 and measures.search(desc):
+                    key = (trade, price_book.norm_key(desc))
+                    pk = project_key(d["project"])
+                    lines[pk][key] = max(lines[pk].get(key, 0.0), qty)
+    out: Dict[str, Dict[str, float]] = {}
+    for pk, by in lines.items():
+        for (trade, _k), qty in by.items():
+            out.setdefault(pk, {}).setdefault(trade, 0.0)
+            out[pk][trade] += qty
+    return out
+
+
+def _bank_trade(t: Dict[str, Any]) -> Optional[str]:
+    tr = (t.get("trade") or "").strip()
+    text = tr if tr and tr.lower() not in ("labour", "materials") else (t.get("description") or "")
+    for trade, cost, _m in _TRADE_GROUPS:
+        if cost.search(text):
+            return trade
+    return None
+
+
+def trade_rates(tenant_id: str) -> List[Dict[str, Any]]:
+    """Every project × trade with both a cost in the bank and a measured m² quantity on its BOQ:
+    labour, materials and cost per m². Integer cents throughout."""
+    from vula.commerce.service import project_key
+    qty = _boq_quantities(tenant_id)
+    if not qty:
+        return []
+    spent: Dict[tuple, Dict[str, Any]] = {}
+    for t in _txns(tenant_id):
+        if t.get("direction") != "out" or not t.get("project") or t.get("account_code") not in _PROJECT_COST:
+            continue
+        trade = _bank_trade(t)
+        pk = project_key(t["project"])
+        if not trade or not qty.get(pk, {}).get(trade):
+            continue
+        s = spent.setdefault((pk, trade), {"project": t["project"], "labour": 0, "materials": 0,
+                                           "last": t.get("txn_date")})
+        s["labour" if t.get("account_code") in ("casual_labour", "subcontractors") else "materials"] += \
+            int(t.get("amount_cents") or 0)
+        s["last"] = max(s["last"] or "", t.get("txn_date") or "")
+    out = []
+    for (pk, trade), s in spent.items():
+        q = qty[pk][trade]
+        total = s["labour"] + s["materials"]
+        out.append({"trade": trade, "project": s["project"], "unit": "m2", "quantity": round(q, 2),
+                    "labour_cents": s["labour"], "materials_cents": s["materials"], "cost_cents": total,
+                    "labour_cents_per_unit": int(round(s["labour"] / q)),
+                    "materials_cents_per_unit": int(round(s["materials"] / q)),
+                    "cost_cents_per_unit": int(round(total / q)), "last": s["last"]})
+    out.sort(key=lambda r: (r["trade"], -r["quantity"]))
+    return out
+
+
+def trade_rate_for(tenant_id: str, item: str, unit: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The installed rate for what the owner asked about ("ceiling", "painting per m²") — the
+    job with the most of it measured. None for a product ("paint 20L") or another unit."""
+    if (unit and unit != "m2") or (not unit and _PRODUCT_SIZE.search(item or "")):
+        return None
+    asked = [t for t, rx in _ASKED_TRADE.items() if rx.search(item or "")]
+    if len(asked) != 1:
+        return None
+    rows = [r for r in trade_rates(tenant_id) if r["trade"] == asked[0] and r["cost_cents"] > 0]
+    return max(rows, key=lambda r: r["quantity"]) if rows else None
+
+
 def price_advice(tenant_id: str, item: str, quantity: Optional[float] = None,
                  unit: Optional[str] = None, project: Optional[str] = None) -> Dict[str, Any]:
     """What to charge for an item so the job makes its fee: what the business has actually
@@ -475,17 +593,34 @@ def price_advice(tenant_id: str, item: str, quantity: Optional[float] = None,
     from vula.api.qs import _manual_rates
     from vula.commerce import price_book
     learned = price_book.rates(tenant_id, item, limit=10)
-    if unit:
-        same = [r for r in learned if (r.get("unit") or "each") == unit]
-        learned = same or learned
-    paid = [r for r in learned if r.get("basis") == "paid"]
-    basis_row = (paid or learned or [None])[0]
     own = []
     try:
         own = _manual_rates(tenant_id, item)
     except Exception:
         pass
-    if basis_row:
+    other_units: List[Dict[str, Any]] = []
+    if unit:
+        # 12 Oct (Ian: "what are the price advice rates vs what we have?"): "drywall" per m² fell
+        # back to "CX25 drywall screws R28" and called it per m² — a price for one unit is never
+        # the rate for another. Only same-unit rates count; the rest are shown as a hint.
+        unit = price_book.unit_of("", unit) or unit
+        other_units = [r for r in learned if (r.get("unit") or "each") != unit]
+        learned = [r for r in learned if (r.get("unit") or "each") == unit]
+        own = [r for r in own if (price_book.unit_of("", r.get("unit")) or "each") == unit]
+    trade = trade_rate_for(tenant_id, item, unit)
+    paid = [r for r in learned if r.get("basis") == "paid"]
+    basis_row = (paid or learned or [None])[0]
+    if trade:
+        cost = trade["cost_cents_per_unit"]
+        cost_note = (f"{trade['trade']} on {trade['project']}: R{trade['cost_cents_per_unit'] / 100:,.2f} "
+                     f"per {trade['unit']} actually spent (labour {_r(trade['labour_cents_per_unit'])}, "
+                     f"materials {_r(trade['materials_cents_per_unit'])}) over {trade['quantity']:,g} "
+                     f"{trade['unit']} on its BOQ")
+        if not trade["labour_cents"]:
+            cost_note += " — no labour is allocated to this trade on that job yet, so this is materials only"
+        unit = trade["unit"]
+        basis_row = None
+    elif basis_row:
         cost = max(int(basis_row["rate_cents"]), int(basis_row.get("latest_cents") or 0))
         cost_note = (f"{basis_row['description']}: {'paid' if basis_row['basis'] == 'paid' else 'quoted'} "
                      f"median {_r(basis_row['rate_cents'])}, latest {_r(basis_row.get('latest_cents'))} "
@@ -495,6 +630,13 @@ def price_advice(tenant_id: str, item: str, quantity: Optional[float] = None,
         cost = int(round(float(own[0]["rate"]) * 100))
         cost_note = f"your own rate for {own[0]['description']}: {_r(cost)} per {own[0].get('unit')}"
         unit = unit or own[0].get("unit") or "each"
+    elif unit and other_units:
+        seen = ", ".join(f"{r['description']} {_r(r['rate_cents'])} per {r.get('unit') or 'each'}"
+                         for r in other_units[:3])
+        return {"message": f"No per-{unit} rate on file for '{item}'. What is on file is priced per "
+                           f"item, not per {unit}: {seen}. Add a {unit} rate (QS Rates) — an installed "
+                           "rate needs labour and materials together.",
+                "other_unit_prices": other_units[:3]}
     else:
         return {"message": f"No price on file for '{item}' — not on any invoice, quote or BOQ, and "
                            "not in your rates. Add a rate (QS Rates) or file a supplier invoice for it."}
