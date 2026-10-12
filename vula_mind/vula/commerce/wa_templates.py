@@ -264,3 +264,103 @@ async def delete_template(tenant_id: str, name: str) -> Dict[str, Any]:
     except Exception:
         pass
     return {"deleted": name}
+
+
+# ── The standard set a new business needs (2026-10-12, onboarding SeedleMe) ───────────────────
+# Every proactive send Vula makes goes out as a template; the scheduled jobs look theirs up as
+# job_config.template_name(tenant, suffix) — "seedleme_unpaid_order_chase" — so a new shop had
+# nothing approved until someone hand-ran scripts/create_launch_templates.py with OTH's names.
+# Wording and {{n}} counts match the call sites in vula/api/server.py; Meta rejects a body that
+# starts or ends with a variable. (suffix, body, category, which modules need it — None = all.)
+STANDARD_JOB_TEMPLATES = [
+    ("unpaid_order_chase",      # server.py::_chase_unpaid_orders · name, order id, amount
+     "Hi {{1}}, your order {{2}} for {{3}} is still awaiting payment. "
+     "Reply here and we'll send you the payment details again.", "UTILITY", {"orders"}),
+    ("sales_summary",           # server.py::_send_oth_sales_summary · date, orders, paid, revenue
+     "Sales summary for {{1}}: {{2}} orders, {{3}} paid, R{{4}} in revenue. "
+     "Open Vula for the breakdown.", "UTILITY", {"orders"}),
+    ("delivery_briefing",       # server.py::_send_oth_delivery_briefing · total, date, paid, to collect
+     "Delivery briefing for {{2}}: {{1}} orders, {{3}} paid, {{4}} to collect on delivery. "
+     "Open Vula for the full list.", "UTILITY", {"orders"}),
+    ("low_stock_alert",         # server.py::_send_low_stock_alert · count
+     "Stock check: {{1}} product(s) are low on stock. Open Vula to review and reorder.",
+     "UTILITY", {"products"}),
+    ("pending_project_nudge",   # server.py::_send_pending_project_nudge · count
+     "You have {{1}} filed document(s) waiting to be assigned to a project in Vula.",
+     "UTILITY", {"projects"}),
+]
+# Shared by every business on Vula's WhatsApp account — submitted once, reused by name.
+SHARED_TEMPLATES = [
+    ("vula_notification", "You have a new update from {{1}}. Open Vula to see the details.", "UTILITY"),
+    ("vula_owner_checkin_nudge",
+     "Hi {{1}}, a few updates for {{2}} are waiting in Vula. Reply here to keep the chat open, "
+     "or open the dashboard when you have a moment.", "UTILITY"),
+    ("supplier_po_notice",
+     "New purchase order {{1}} — {{2}} item(s), total {{3}}. Reply here to confirm or query it.",
+     "UTILITY"),
+]
+
+
+def standard_templates(tenant_id: str, modules: Optional[set] = None,
+                       business_type: str = "") -> List[Dict[str, str]]:
+    """The templates this business needs, named the way its jobs will look them up."""
+    from vula.commerce.job_config import _ONLY_FOR_TYPES, template_name
+    mods = set(modules or [])
+    out = []
+    for suffix, body, category, needs in STANDARD_JOB_TEMPLATES:
+        types = _ONLY_FOR_TYPES.get(suffix)
+        if (needs and not (needs & mods)) or (types and business_type not in types):
+            continue
+        out.append({"name": template_name(tenant_id, suffix), "body": body, "category": category})
+    out += [{"name": n, "body": b, "category": c} for n, b, c in SHARED_TEMPLATES]
+    return out
+
+
+async def _waba_template_names(creds: Dict[str, str]) -> Optional[set]:
+    """Every template name already on the WABA (any tenant's), or None if Meta can't be read."""
+    names: set = set()
+    url = f"{GRAPH_BASE}/{creds['waba_id']}/message_templates"
+    params: Optional[dict] = {"fields": "name", "limit": 200}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            while url:
+                resp = await client.get(url, headers={"Authorization": f"Bearer {creds['token']}"},
+                                        params=params)
+                if not resp.is_success:
+                    return None
+                data = resp.json()
+                names |= {t.get("name") for t in data.get("data", []) if t.get("name")}
+                url, params = (data.get("paging") or {}).get("next"), None
+    except Exception as exc:
+        log.debug("template name listing failed: %s", exc)
+        return None
+    return names
+
+
+async def submit_standard(tenant_id: str) -> Dict[str, Any]:
+    """Submit the standard set for this business — only names not already on its WhatsApp
+    account, so running it twice (or for a second business) never duplicates or fails."""
+    creds = await _waba_creds(tenant_id)
+    if not creds:
+        return {"error": "Connect this business's WhatsApp number first (Settings › WhatsApp)."}
+    existing = await _waba_template_names(creds)
+    if existing is None:
+        return {"error": "Couldn't read the templates already on the WhatsApp account — try again."}
+    try:
+        from vula.api.tenants import _effective_modules, get_config
+        cfg = get_config(tenant_id) or {}
+        mods, btype = set(_effective_modules(cfg)), cfg.get("business_type") or ""
+    except Exception:
+        mods, btype = set(), ""
+    submitted, already, failed = [], [], []
+    for t in standard_templates(tenant_id, mods, btype):
+        if t["name"] in existing:
+            already.append(t["name"])
+            continue
+        res = await create_template(tenant_id, t["name"], t["body"], category=t["category"],
+                                    created_by="standard set")
+        if res.get("error"):
+            failed.append({"name": t["name"], "error": res["error"]})
+        else:
+            submitted.append(t["name"])
+    return {"submitted": submitted, "already_there": already, "failed": failed}

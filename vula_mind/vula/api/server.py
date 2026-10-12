@@ -310,14 +310,11 @@ async def _daily_trial_expiry_loop() -> None:
 # this makes them DB-driven instead, so a new commerce tenant just needs team members configured
 # (vula_team_members, already DB-driven — see vula.api.yoco._tenant_team) and its own approved
 # WhatsApp templates; no code change. WhatsApp template content needs Meta approval PER TENANT'S
-# WABA, so template NAMES stay tenant-specific — _COMMERCE_TEMPLATE_PREFIX maps a tenant to its
-# approved prefix (e.g. "oth"); add one line here once a new tenant's templates are approved.
-_COMMERCE_TEMPLATE_PREFIX: dict[str, str] = {"off-the-hook": "oth"}
-
-
+# WABA, so template NAMES stay tenant-specific — job_config.TEMPLATE_PREFIX maps a tenant to its
+# approved prefix (e.g. "oth"); everyone else uses the tenant id.
 def _commerce_template_name(tenant_id: str, suffix: str) -> str:
-    prefix = _COMMERCE_TEMPLATE_PREFIX.get(tenant_id) or tenant_id.replace("-", "_")
-    return f"{prefix}_{suffix}"
+    from vula.commerce.job_config import template_name
+    return template_name(tenant_id, suffix)
 
 
 async def _commerce_tenant_ids() -> list[str]:

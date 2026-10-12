@@ -5533,6 +5533,28 @@ async def admin_create_wa_template(tenant_id: str, body: dict):
     return result
 
 
+@router.get("/{tenant_id}/admin/wa-templates/standard")
+async def admin_standard_wa_templates(tenant_id: str):
+    """The standard templates this business needs (names as its scheduled jobs look them up)."""
+    from vula.api.tenants import _effective_modules, get_config
+    from vula.commerce import wa_templates
+    cfg = get_config(tenant_id) or {}
+    return {"templates": wa_templates.standard_templates(
+        tenant_id, set(_effective_modules(cfg)), cfg.get("business_type") or "")}
+
+
+@router.post("/{tenant_id}/admin/wa-templates/standard")
+async def admin_submit_standard_wa_templates(tenant_id: str, request: Request):
+    """Submit every standard template not already on the WhatsApp account. Owner/manager."""
+    from vula.commerce import wa_templates
+    if not await _may_apply_stock(request, tenant_id):
+        raise HTTPException(status_code=403, detail="Only the owner or a manager can do this.")
+    result = await wa_templates.submit_standard(tenant_id)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 @router.delete("/{tenant_id}/admin/wa-templates/{name}")
 async def admin_delete_wa_template(tenant_id: str, name: str):
     from vula.commerce import wa_templates
