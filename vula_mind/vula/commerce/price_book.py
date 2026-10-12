@@ -71,6 +71,13 @@ _UNIT_ALIASES = {"sqm": "m2", "m²": "m2", "m^2": "m2", "square metre": "m2", "m
                  "hr": "hour", "hrs": "hour", "hours": "hour", "l": "litre", "lt": "litre"}
 
 
+# 12 Oct: DIGG's Atlantis elemental estimate came through as "Main Boardroom (47m²)" — R88,225,
+# unit m², quantity 1 — and "Reception" R305,805 per m²: a room's total, not a rate. The area in
+# the description turns the total into a real R/m²; with no area, a "rate" this high is a sum.
+_AREA_IN_TEXT = re.compile(r"\(\s*(\d+(?:[.,]\d+)?)\s*(?:m2|m²|sqm|sq\.?\s*m)\s*\)", re.I)
+_MAX_M2_CENTS = 2_000_000          # R20,000/m² — above any finishing rate DIGG prices
+
+
 def _client():
     return service._client()
 
@@ -143,11 +150,19 @@ def observations_for(row: Dict[str, Any]) -> List[Dict[str, Any]]:
                 qty = qty if qty and qty > 0 else 1
         if not unit_c or unit_c <= 0:
             continue
+        unit = unit_of(desc, li.get("unit"))
+        if unit == "m2" and (qty is None or qty <= 1):
+            area = _AREA_IN_TEXT.search(desc)
+            if area and float(area.group(1).replace(",", ".")) > 0:
+                a = float(area.group(1).replace(",", "."))
+                unit_c, qty = unit_c * (qty or 1) / a, a
+            elif unit_c > _MAX_M2_CENTS:
+                unit = "sum"
         out.append({
             "tenant_id": row.get("tenant_id"), "doc_id": str(row.get("id")) if row.get("id") else None,
             "source_kind": source_kind, "supplier": supplier, "project": row.get("project") or None,
             "description": desc[:300], "norm_key": key,
-            "unit": unit_of(desc, li.get("unit")), "kind": (li.get("kind") or kind_of(desc))[:20],
+            "unit": unit, "kind": (li.get("kind") or kind_of(desc))[:20],
             "section": (str(li.get("section")).strip()[:120] or None) if li.get("section") else None,
             "quantity": qty, "unit_price_cents": int(round(unit_c)), "observed_on": observed,
         })

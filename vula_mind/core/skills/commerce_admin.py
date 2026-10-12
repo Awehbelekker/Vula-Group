@@ -902,8 +902,12 @@ PROJECT_TOOLS = [
     {"type": "function", "function": {
         "name": "price_advice",
         "description": "What to charge for an item or piece of work so the job makes its fee: the "
-                       "business's actual paid cost for it (from its invoices), plus overheads, plus "
-                       "the fee %, and whether past quotes under-priced it. Use for 'what should I "
+                       "business's actual cost for it — for a trade per m2 (ceilings, drywall, "
+                       "painting, tiling, flooring) the installed rate a past job actually spent "
+                       "(labour + materials over its BOQ m2), otherwise the price paid on its "
+                       "invoices — plus overheads, plus the fee %, and whether past quotes "
+                       "under-priced it. If it says there is no rate in that unit, say so — never "
+                       "use a per-item price as a per-m2 rate. Use for 'what should I "
                        "charge for 120 m2 ceiling', 'how must I price tiling labour'. Quote the "
                        "returned text; the price is advice, the owner decides.",
         "parameters": {"type": "object", "properties": {
