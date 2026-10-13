@@ -98,3 +98,27 @@ def test_durable_dedup_claim_runs_off_the_event_loop_and_rejects_redelivery():
 def test_durable_dedup_fails_open_when_the_table_is_missing():
     with patch("vula.commerce.service._client", side_effect=RuntimeError("relation does not exist")):
         assert wa._durable_dedup_claim("wamid.z") is True
+
+
+def test_metas_own_setup_notice_is_never_answered():
+    """2026-10-13: Meta's WhatsApp Business account (+1 646 589 4168) messaged SeedleMe's new
+    number "Continue setting up your account…" and Vula replied "They are referring to a
+    specific URL…". A notice from Meta is logged, never handled as a customer."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import uuid
+    app = FastAPI()
+    app.include_router(wa.router, prefix="/v1/whatsapp")
+    handled, sent, typing = AsyncMock(), AsyncMock(return_value=True), AsyncMock()
+    with patch.object(wa.settings, "vula_fb_app_secret", ""), patch.object(wa.settings, "debug", True), \
+         patch.object(wa, "_resolve_number_route", return_value=("seedleme", "commerce")), \
+         patch("vula.api.tenants.is_active", return_value=True), \
+         patch.object(wa, "_mark_read_and_typing", new=typing), \
+         patch.object(wa, "_handle_commerce_message", new=handled), \
+         patch.object(wa, "_send_reply", new=sent), \
+         patch("vula.commerce.service._client", side_effect=RuntimeError("no db")):
+        r = TestClient(app).post("/v1/whatsapp/webhook", json=_payload(0, uuid.uuid4().hex, phone="16465894168"))
+    assert r.status_code == 200
+    handled.assert_not_awaited()
+    sent.assert_not_awaited()
+    typing.assert_not_awaited()

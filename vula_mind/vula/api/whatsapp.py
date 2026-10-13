@@ -100,6 +100,11 @@ import contextvars as _contextvars
 _LAST_CONF = _contextvars.ContextVar("vula_last_conf", default=1.0)
 
 
+# WhatsApp's own business-notification account ("WhatsApp Business", +1 646 589 4168) messages a
+# number about its setup — never a customer conversation.
+_META_SYSTEM_SENDERS = frozenset({"16465894168"})
+
+
 def _resolve_number_route(phone_number_id: str) -> tuple[str | None, str | None]:
     """Resolve (tenant_id, mode) for the number a message came in on.
 
@@ -465,6 +470,14 @@ async def receive_message(
                     if not _tenants.is_active(route_tenant):
                         logger.info("Dropping inbound WA message for suspended tenant %s", route_tenant)
                         continue
+
+                # Meta's own account messaging a business number ("Continue setting up your
+                # account…") is not a customer — 2026-10-13 SeedleMe's new line answered it with
+                # "They are referring to a specific URL". Logged for us, never replied to.
+                if phone in _META_SYSTEM_SENDERS:
+                    logger.info("WA notice from Meta (%s) to %s, not replied to: %.120s",
+                                phone, route_tenant, (msg.get("text") or {}).get("body") or msg.get("type"))
+                    continue
 
                 # Flood guard — after dedup (a Meta redelivery isn't a new message) and the
                 # suspended check; the business's own team is never limited.
