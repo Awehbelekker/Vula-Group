@@ -64,7 +64,7 @@ def test_the_receipt_page_and_picture(monkeypatch):
     c = _client(monkeypatch)
     tok = order_slip.token_for("o-1")
     page = c.get(f"/receipt/{tok}")
-    assert page.status_code == 200 and "SEE-00012" in page.text and f'src="{tok}/slip.png"' in page.text
+    assert page.status_code == 200 and "SEE-00012" in page.text and f'src="{tok}/slip.png?clear=1"' in page.text
     img = c.get(f"/receipt/{tok}/slip.png")
     assert img.status_code == 200 and img.headers["content-type"] == "image/png"
     assert c.get("/receipt/not-a-token").status_code == 404
@@ -92,3 +92,12 @@ async def test_a_paid_order_gets_the_slip_with_a_view_receipt_button(monkeypatch
     assert (number, label) == ("27645755210", "View receipt")
     assert url == f"https://api.example/receipt/{tok}" and image == f"https://api.example/receipt/{tok}/slip.png"
     assert "SEE-00012" in body and "R6747.00" in body
+
+
+def test_the_page_animates_a_see_through_slip_whatsapp_gets_it_on_colour():
+    from PIL import Image
+    import io
+    d = order_slip.slip_data(ORDER, SHOP)
+    assert Image.open(io.BytesIO(order_slip.render_png(d))).mode == "RGB"
+    clear = Image.open(io.BytesIO(order_slip.render_png(d, transparent=True)))
+    assert clear.mode == "RGBA" and clear.getpixel((2, 2))[3] == 0 and clear.getpixel((360, 300))[3] == 255
