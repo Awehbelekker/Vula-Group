@@ -369,6 +369,20 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["customer_name", "customer_phone", "items"]},
     }},
     {"type": "function", "function": {
+        "name": "picture_promotion",
+        "description": "Send customers a picture promotion on WhatsApp — a product photo, the "
+                       "offer, and a Shop now button: 'promote the Round Drop-In Basin, 15% off "
+                       "this weekend', 'send everyone our winter special'. message = the offer "
+                       "in the owner's words (one or two sentences, no greeting — the customer's "
+                       "name is added). product = the product whose photo to use (optional). "
+                       "test=true sends it only to the owner's own phone. Without confirm=true "
+                       "returns a preview with how many customers it reaches.",
+        "parameters": {"type": "object", "properties": {
+            "message": {"type": "string"}, "product": {"type": "string"},
+            "audience": {"type": "string", "enum": ["all", "active_30d", "high_value"]},
+            "test": {"type": "boolean"}, "confirm": {"type": "boolean"}},
+            "required": ["message"]}}},
+    {"type": "function", "function": {
         "name": "order_payment",
         "description": "Ask a customer to pay a deposit or the balance on an EXISTING order — "
                        "'ask Thandi for a 50% deposit on SEE-00012', 'send the balance for "
@@ -1113,6 +1127,7 @@ _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_
 # Tools in the always-on set that only mean something to a business that sells products
 # (Off the Hook), never to a project business (DIGG) or a rep (Gerflor) — see tenant_profile.
 _SHOP_ONLY_TOOLS = {"recent_orders", "update_order_status", "create_manual_order", "order_payment",
+                    "picture_promotion",
                     "stock_status",
                     "update_stock", "receive_stock", "preview_broadcast", "sales_summary"}
 
@@ -1355,7 +1370,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "reimbursement_balance": "finances", "add_expense": "finances",
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
-    "order_payment": "orders",
+    "order_payment": "orders", "picture_promotion": "broadcast",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
     "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
@@ -2118,6 +2133,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "send_purchase_order": return await self._send_purchase_order(tid, args.get("po_ref", ""), args.get("channel", "email"), bool(args.get("confirm")))
             if name == "create_manual_order": return await self._create_manual_order(tid, args)
             if name == "order_payment":       return await self._order_payment(tid, args)
+            if name == "picture_promotion":   return await self._picture_promotion(tid, args, ctx.get("phone"))
             if name == "create_automation_rule": return await self._create_automation_rule(tid, args.get("description", ""), bool(args.get("confirm")))
             if name == "list_discount_codes": return await self._list_discount_codes(tid)
             if name == "create_discount_code": return await self._create_discount_code(tid, args)
@@ -3197,6 +3213,42 @@ class CommerceAdminSkill(BaseSkill):
         return (f"📲 {res['order']}: the customer has the order number and a *Pay {what.lower()}* "
                 f"button for {_r(res['amount_cents'])} (invoice {res.get('invoice_number')}). "
                 "I'll tell you when it's paid.")
+
+    async def _picture_promotion(self, tid: str, args: Dict[str, Any], phone: Optional[str]) -> Dict[str, Any]:
+        from vula.commerce import promo
+        test = bool(args.get("test"))
+        if test and not phone:
+            return {"error": "I can only send a test to the phone you're messaging from."}
+        live = bool(args.get("confirm")) or test
+        res = await promo.send(tid, args.get("message") or "", product_hint=args.get("product") or None,
+                               audience=args.get("audience") or "all",
+                               test_phone=phone if test else None, dry_run=not live)
+        if res.get("error"):
+            return {"error": res["error"]}
+        pic = f"the {res['product']} photo" if res.get("product") else "your first product photo"
+        if not live:
+            ready = res.get("template_status") == "APPROVED"
+            return {"preview": True, "reaches": res.get("recipient_count"),
+                    "opted_out_left_out": res.get("suppressed_count"), "picture": pic,
+                    "text": f"Hi <name>! {res['text']} Tap Shop now to have a look.",
+                    "template_status": res.get("template_status"),
+                    "message": ("Confirm to send (confirm=true), or test=true to send it to yourself first."
+                                if ready else "The promotion template isn't approved by Meta yet — "
+                                "submit the standard templates in Settings › WhatsApp templates.")}
+        if test:
+            ok = bool(res.get("sent"))
+            return _checked({"test_sent": ok}, ("📲 Test sent to you — check how it looks, then say \"send it\"."
+                                                if ok else "⚠️ The test didn't go through: "
+                                                + str((res.get("errors") or ["unknown error"])[0])))
+        if res.get("queued"):
+            line = (f"📣 Promotion sending to {res.get('recipient_count')} customers now (about "
+                    f"{max(1, int(res.get('recipient_count') or 0) // 600)} min) — Broadcast shows delivered, "
+                    "read and Shop now taps as they come in.")
+        else:
+            line = (f"📣 Promotion sent to {res.get('sent')} of {res.get('recipient_count')} customers"
+                    + (f" ({res.get('failed')} failed)" if res.get("failed") else "") + ".")
+        return _checked({"broadcast_id": res.get("broadcast_id"), "recipients": res.get("recipient_count"),
+                         "sent": res.get("sent")}, line)
 
     async def _order_payment(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
         match = await self._find_order_by_display_id(tid, args.get("order_number") or "")

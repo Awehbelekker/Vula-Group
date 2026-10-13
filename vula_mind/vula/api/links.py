@@ -48,7 +48,8 @@ async def follow_link(code: str):
         was_first_click = not row.get("clicked_at")
         patch = {"click_count": (row.get("click_count") or 0) + 1}
         if was_first_click:
-            patch["clicked_at"] = "now()"
+            from datetime import datetime, timezone
+            patch["clicked_at"] = datetime.now(timezone.utc).isoformat()   # a real timestamp, not the text "now()"
         db.table("commerce_broadcast_recipients").update(patch).eq("id", row["id"]).execute()
 
         # Roll up into the broadcast log (same pattern as delivered/read counts) — only count

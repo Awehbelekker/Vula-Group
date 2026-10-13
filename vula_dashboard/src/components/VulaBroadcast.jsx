@@ -30,6 +30,107 @@ const SEG_LANGUAGES = {
   nso: 'Sepedi', tn: 'Setswana', ts: 'Xitsonga', ve: 'Tshivenda', ss: 'siSwati', nr: 'isiNdebele',
 }
 
+// 📸 Picture promotion (2026-10-13): a product photo, the offer and a Shop now button — the
+// shop's approved promotion template, sent to the audience through the normal broadcast path.
+function PicturePromo({ tenantId }) {
+  const [products, setProducts] = useState([])
+  const [productId, setProductId] = useState('')
+  const [message, setMessage] = useState('')
+  const [audience, setAudience] = useState('all')
+  const [testPhone, setTestPhone] = useState('')
+  const [preview, setPreview] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState(null)
+
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`).then(r => r.json())
+      .then(d => setProducts((d.products || d || []).filter(p => p.image_url && p.status !== 'archived')))
+      .catch(() => {})
+  }, [tenantId])
+
+  const chosen = products.find(p => String(p.id) === String(productId))
+
+  async function call(extra) {
+    setBusy(true); setNote(null)
+    try {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/broadcasts/promo`, {
+        method: 'POST', headers: H,
+        body: JSON.stringify({ message, product_id: productId || undefined, audience_filter: audience, ...extra }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setNote({ ok: false, text: d.detail || 'Could not do that.' }); return null }
+      return d
+    } catch (e) { setNote({ ok: false, text: e.message }); return null } finally { setBusy(false) }
+  }
+
+  async function doPreview() {
+    const d = await call({ dry_run: true })
+    if (d) setPreview(d)
+  }
+  async function doTest() {
+    if (!testPhone.trim()) { setNote({ ok: false, text: 'Enter your WhatsApp number to test to.' }); return }
+    const d = await call({ dry_run: false, test_phone: testPhone })
+    if (d) setNote({ ok: !!d.sent, text: d.sent ? `✓ Test sent to ${testPhone}` : (d.errors?.[0] || 'The test did not go through.') })
+  }
+  async function doSend() {
+    if (!preview) return
+    if (!window.confirm(`Send this promotion to ${preview.recipient_count} customers?`)) return
+    const d = await call({ dry_run: false })
+    if (d) setNote({ ok: true, text: d.queued ? `📣 Sending to ${d.recipient_count} customers — progress shows in the history below.` : `📣 Sent to ${d.sent} of ${d.recipient_count} customers.` })
+  }
+
+  const approved = preview?.template_status === 'APPROVED'
+  return (
+    <div style={{ ...s.composeCard, marginBottom: 16 }}>
+      <p style={{ ...s.sectionLabel, marginTop: 0 }}>📸 Picture promotion</p>
+      <p style={{ ...s.sub, marginTop: 0 }}>A product photo, your offer and a <b>Shop now</b> button — reaches customers even if they haven't messaged lately.</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 14, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <select value={productId} onChange={e => { setProductId(e.target.value); setPreview(null) }} style={{ ...s.input, fontSize: 16 }}>
+            <option value="">Photo: first product in the shop</option>
+            {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <textarea value={message} onChange={e => { setMessage(e.target.value); setPreview(null) }} rows={3} maxLength={500}
+            placeholder="Your offer, e.g. 15% off all basins this weekend only!" style={{ ...s.input, fontSize: 16, resize: 'vertical' }} />
+          <select value={audience} onChange={e => { setAudience(e.target.value); setPreview(null) }} style={{ ...s.input, fontSize: 16 }}>
+            {AUDIENCES.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
+          </select>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button disabled={busy || !message.trim()} onClick={doPreview} style={{ ...s.tplBtn, flex: 1, textAlign: 'center' }}>Preview</button>
+            <input value={testPhone} onChange={e => setTestPhone(e.target.value)} placeholder="Your number" style={{ ...s.input, flex: '1 1 120px', fontSize: 16 }} />
+            <button disabled={busy || !message.trim() || !approved} onClick={doTest} style={{ ...s.tplBtn, textAlign: 'center' }}>Test to me</button>
+          </div>
+          {preview && (
+            <p style={s.sub}>
+              Reaches <b>{preview.recipient_count}</b> customer{preview.recipient_count === 1 ? '' : 's'}
+              {preview.suppressed_count ? ` (${preview.suppressed_count} opted out, left out)` : ''}.
+              {!approved && <> The promotion template is <b>{String(preview.template_status || '').toLowerCase()}</b> — submit the standard templates under Settings › WhatsApp templates; Meta usually approves within a day.</>}
+            </p>
+          )}
+          <button disabled={busy || !preview || !approved || !preview.recipient_count} onClick={doSend}
+            style={busy || !preview || !approved || !preview.recipient_count ? s.btnDisabled : { ...s.sendBtn, color: 'var(--on-accent)' }}>
+            Send promotion
+          </button>
+          {note && <p style={{ ...s.sub, color: note.ok ? 'var(--ok)' : 'var(--danger)' }}>{note.text}</p>}
+        </div>
+        {/* How it looks in WhatsApp */}
+        <div style={{ background: 'var(--surface-alt)', borderRadius: 14, padding: 10 }}>
+          <div style={{ background: 'var(--surface)', borderRadius: 10, overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
+            {(preview?.image_url || chosen?.image_url || products[0]?.image_url) && (
+              <img src={preview?.image_url || chosen?.image_url || products[0]?.image_url} alt=""
+                style={{ width: '100%', aspectRatio: '1.6', objectFit: 'cover', display: 'block' }} />
+            )}
+            <p style={{ margin: 0, padding: '8px 10px', fontSize: 13.5, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
+              Hi Thandi! {message.trim() || 'Your offer goes here.'} Tap Shop now to have a look. Reply STOP if you'd rather not get offers.
+            </p>
+            <div style={{ borderTop: '1px solid var(--border)', padding: 9, textAlign: 'center', color: 'var(--info)', fontWeight: 600, fontSize: 13.5 }}>↗ Shop now</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
   const [broadcasts, setBroadcasts] = useState([])
   const [funnelId, setFunnelId] = useState(null)   // expanded broadcast → funnel drawer (P3)
@@ -272,6 +373,8 @@ export default function VulaBroadcast({ tenantId, draftBody, onConsumeDraft }) {
         <h3 style={s.h3}>📢 WhatsApp Broadcasts</h3>
         <p style={s.sub}>Send promotional messages to your customers via approved WhatsApp templates.</p>
       </div>
+
+      <PicturePromo tenantId={tenantId} />
 
       {/* Compose */}
       <div style={s.composeCard}>

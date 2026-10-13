@@ -306,6 +306,38 @@ SHARED_TEMPLATES = [
 ]
 
 
+# The picture promotion (2026-10-13, Ian: "Caught Online style"): a photo, the offer in the
+# shop's words, and a "Shop now" button. MARKETING, so it reaches customers who haven't messaged
+# lately; {{2}} is the offer text (one line), the button's {{1}} is the click-tracking code
+# (vula/api/links.py → the shop page). Sent by vula/commerce/promo.py.
+PROMO_SUFFIX = "shop_promo"
+PROMO_BODY = "Hi {{1}}! {{2}} Tap Shop now to have a look. Reply STOP if you'd rather not get offers."
+
+
+def promo_template(tenant_id: str) -> Dict[str, Any]:
+    from config import settings
+    from vula.commerce.job_config import template_name
+    return {"name": template_name(tenant_id, PROMO_SUFFIX), "body": PROMO_BODY, "category": "MARKETING",
+            "header_type": "IMAGE",
+            "buttons": [{"type": "URL", "text": "Shop now",
+                         "url": f"{(settings.public_base_url or '').rstrip('/')}/l/{{{{1}}}}"}]}
+
+
+def _promo_sample_image(tenant_id: str) -> Optional[str]:
+    """A photo for Meta to review the promotion's design against: a product photo, else the logo."""
+    try:
+        rows = (_client().table("commerce_products").select("image_url").eq("tenant_id", tenant_id)
+                .eq("status", "active").not_.is_("image_url", "null").limit(1).execute().data or [])
+        if rows and rows[0].get("image_url"):
+            from vula.commerce.web_basket import sized
+            return sized(rows[0]["image_url"], 800)
+        rows = (_client().table("commerce_invoice_settings").select("logo_url")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        return (rows[0].get("logo_url") if rows else None) or None
+    except Exception:
+        return None
+
+
 def standard_templates(tenant_id: str, modules: Optional[set] = None,
                        business_type: str = "") -> List[Dict[str, str]]:
     """The templates this business needs, named the way its jobs will look them up."""
@@ -368,4 +400,19 @@ async def submit_standard(tenant_id: str) -> Dict[str, Any]:
             failed.append({"name": t["name"], "error": res["error"]})
         else:
             submitted.append(t["name"])
+    if mods & {"wa_shop", "orders", "products"}:
+        promo = promo_template(tenant_id)
+        if promo["name"] in existing:
+            already.append(promo["name"])
+        elif not (sample := _promo_sample_image(tenant_id)):
+            failed.append({"name": promo["name"],
+                           "error": "Add a product photo or your logo first — Meta reviews the picture "
+                                    "promotion against a sample image."})
+        else:
+            res = await create_template(tenant_id, promo["name"], promo["body"], category="MARKETING",
+                                        example_params=["Thandi", "20% off all basins this weekend only!"],
+                                        header_type="IMAGE", header_example_url=sample,
+                                        buttons=promo["buttons"], created_by="standard set")
+            (failed.append({"name": promo["name"], "error": res["error"]}) if res.get("error")
+             else submitted.append(promo["name"]))
     return {"submitted": submitted, "already_there": already, "failed": failed}

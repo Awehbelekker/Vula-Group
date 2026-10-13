@@ -5607,6 +5607,21 @@ async def admin_delete_wa_template(tenant_id: str, name: str):
     return result
 
 
+@router.post("/{tenant_id}/admin/broadcasts/promo")
+async def admin_send_promo(tenant_id: str, body: dict):
+    """The picture promotion (vula/commerce/promo.py): a product photo, the offer and a Shop now
+    button. Body: {message, product_id?, image_url?, audience_filter?, test_phone?, dry_run (default true)}."""
+    from vula.commerce import promo
+    res = await promo.send(tenant_id, body.get("message") or "", product_id=body.get("product_id") or None,
+                           image_url=body.get("image_url") or None,
+                           audience=body.get("audience_filter") or "all",
+                           test_phone=body.get("test_phone") or None,
+                           dry_run=body.get("dry_run", True) is not False)
+    if res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
 @router.post("/{tenant_id}/admin/broadcasts/send")
 async def admin_send_broadcast(tenant_id: str, body: dict):
     """
@@ -6395,7 +6410,8 @@ def _template_body_params(tpl_row: Optional[dict], contact: dict, static: list) 
     if n <= 0:
         return []
     first = ((contact.get("name") or "").split(" ")[0] or "there").strip() or "there"
-    vals = list(static[:n]) or [first]
+    # "{name}" in the static list is the recipient's first name (the picture promotion's {{1}}).
+    vals = [first if v == "{name}" else v for v in static[:n]] or [first]
     while len(vals) < n:
         vals.append(first if not vals else "-")
     return [{"type": "text", "text": v or "-"} for v in vals[:n]]
