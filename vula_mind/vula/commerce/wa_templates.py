@@ -278,6 +278,9 @@ STANDARD_JOB_TEMPLATES = [
     ("unpaid_order_chase",      # server.py::_chase_unpaid_orders · name, order id, amount
      "Hi {{1}}, your order {{2}} for {{3}} is still awaiting payment. "
      "Reply here and we'll send you the payment details again.", "UTILITY", {"orders"}),
+    ("order_update",            # order_updates.notify, outside the 24h window · name, order id, news
+     "Hi {{1}}, an update on your order {{2}}: {{3}} Reply here with any questions.",
+     "UTILITY", {"orders"}),
     ("sales_summary",           # server.py::_send_oth_sales_summary · date, orders, paid, revenue
      "Sales summary for {{1}}: {{2}} orders, {{3}} paid, R{{4}} in revenue. "
      "Open Vula for the breakdown.", "UTILITY", {"orders"}),

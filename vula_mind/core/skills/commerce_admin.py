@@ -2245,6 +2245,7 @@ class CommerceAdminSkill(BaseSkill):
         result = {"updated": match["display_id"], "new_status": status}
         if method:
             result["payment_method"] = method
+
         if settings.readback_verify_enabled:
             row = await service.get_order(match["id"])
             observed = (row or {}).get("status")
@@ -2255,8 +2256,26 @@ class CommerceAdminSkill(BaseSkill):
                 return _not_confirmed(f"Update to {status} did not persist for {match['display_id']} — "
                                       f"current status is {observed or 'unknown'}. Not confirmed.")
             paid_by = f" (paid by {method})" if method else ""
-            return _checked(result, f"✅ Order {match['display_id']} is now *{observed}*{paid_by}.")
+            told = await self._tell_customer(tid, match, status)
+            return _checked(result, f"✅ Order {match['display_id']} is now *{observed}*{paid_by}."
+                            + ("\n📲 The customer has been told on WhatsApp." if told else ""))
+        await self._tell_customer(tid, match, status)
         return result
+
+    async def _tell_customer(self, tid: str, match: Dict[str, Any], status: str) -> bool:
+        """Packing / on its way / delivered → the customer hears it on WhatsApp, with a photo
+        and a button (vula/commerce/order_updates.py). Only on a real change of status."""
+        if status not in ("packing", "dispatched", "delivered") or match.get("status") == status:
+            return False
+        try:
+            from vula.commerce import order_updates
+            full = await service.get_order(match["id"])
+            if not full or not full.get("customer_phone") or \
+                    (status == "delivered" and full.get("review_requested_at")):
+                return False
+            return await order_updates.notify(tid, {**full, "status": status}, status)
+        except Exception:
+            return False
 
     async def _stock_status(self, tid: str, low_only: bool) -> Any:
         products = await service.list_products(tid, in_stock_only=False)

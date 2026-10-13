@@ -766,26 +766,12 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
         except Exception as exc:
             log.debug("refund team notify skipped: %s", exc)
 
-    # Delivered → ask the customer for a rating over WhatsApp (once per order,
-    # best-effort — usually inside the 24h service window since they just ordered).
-    if new_status == "delivered" and not order.get("review_requested_at") and order.get("customer_phone"):
-        try:
-            from vula.api.whatsapp import _send_reply
-            first = (order.get("customer_name") or "").split(" ")[0]
-            sent = await _send_reply(
-                order["customer_phone"],
-                (f"Hi {first}! Your {_tenants_display(tenant_id)} order {order.get('display_id') or ''} "
-                 "has been delivered — "
-                 "we hope everything is perfect. How was it? Reply with a rating from 1 to 5 "
-                 "(5 = excellent). Thank you!").replace("  ", " "),
-                tenant_id,
-            )
-            if sent:
-                service._client().table("commerce_orders").update(
-                    {"review_requested_at": service._now()}
-                ).eq("id", order_id).eq("tenant_id", tenant_id).execute()
-        except Exception as exc:
-            log.debug("review request skipped: %s", exc)
+    # Packing / on its way / delivered → the customer hears it on WhatsApp, with a photo and a
+    # button; delivered asks for a rating (once per order) — vula/commerce/order_updates.py.
+    if new_status != order.get("status") and new_status in ("packing", "dispatched", "delivered") \
+            and not (new_status == "delivered" and order.get("review_requested_at")):
+        from vula.commerce import order_updates
+        await order_updates.notify(tenant_id, order, new_status)
 
     return {"order_id": order_id, "status": new_status, "refund": refund_result}
 

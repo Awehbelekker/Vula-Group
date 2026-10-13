@@ -94,8 +94,9 @@ async def load(order_id: str) -> Optional[Dict[str, Any]]:
     """The slip for an order, or None when it doesn't exist or isn't paid."""
     from vula.commerce import accounting, service
     order = await service.get_order(order_id)
-    if not order or order.get("status") not in ("paid", "processing", "packed", "dispatched",
-                                                 "out_for_delivery", "delivered", "completed", "ready"):
+    if not order or order.get("status") not in ("paid", "confirmed", "packing", "processing", "packed",
+                                                 "dispatched", "out_for_delivery", "delivered",
+                                                 "completed", "ready"):
         return None
     tid = order["tenant_id"]
     inv = await service.get_invoice_settings(tid) or {}
