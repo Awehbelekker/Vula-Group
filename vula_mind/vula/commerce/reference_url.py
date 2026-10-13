@@ -95,9 +95,10 @@ async def safe_fetch_html(url: str) -> str:
     return (await safe_fetch_bytes(url)).decode("utf-8", errors="replace")
 
 
-async def safe_fetch_bytes(url: str) -> bytes:
+async def safe_fetch_bytes(url: str, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
     """safe_fetch_html's fetch, returning raw bytes (a logo or favicon image) — same scheme,
-    DNS-resolved IP, redirect and size checks."""
+    DNS-resolved IP, redirect and size checks. `max_bytes` lets a caller that reads a known
+    larger document (a shop's JSON catalogue feed) raise the cap; it never lowers safety."""
     hops = 0
     current = url
     while True:
@@ -121,7 +122,7 @@ async def safe_fetch_bytes(url: str) -> bytes:
                 total = 0
                 async for chunk in resp.aiter_bytes():
                     total += len(chunk)
-                    if total > MAX_RESPONSE_BYTES:
+                    if total > max_bytes:
                         raise UnsafeUrlError("Response too large")
                     chunks.append(chunk)
                 return b"".join(chunks)
