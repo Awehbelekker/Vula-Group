@@ -106,6 +106,7 @@ from vula.api.recurring_bills import router as recurring_bills_router
 from vula.api.yoco import router as yoco_router
 from vula.api.whatsapp_connect import router as whatsapp_connect_router
 from vula.api.yoco_connect import router as yoco_connect_router
+from vula.api.shopify_connect import router as shopify_admin_router, webhook_router as shopify_webhook_router
 from vula.api.draft import router as draft_router
 from vula.api.agent import router as agent_router
 from vula.api.links import router as links_router
@@ -751,6 +752,29 @@ async def _tap_sweep_loop() -> None:
         except Exception as exc:
             log.warning("tap sweep loop error: %s", exc)
         await _asyncio.sleep(60)
+
+
+async def _shopify_sync_loop() -> None:
+    """Every 6 hours: re-read each connected Shopify store (vula/integrations/shopify.py) — the
+    safety net behind Shopify's webhooks, and the only update for a store connected with a
+    token alone (no secret to verify webhooks with). Skips a store already syncing."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(300)
+    while True:
+        try:
+            from vula.api import tenants as _t
+            from vula.commerce import service as _svc, site_import as _si
+            from vula.integrations import shopify as _shop
+            rows = (_svc._client().table("vula_shopify_accounts").select("tenant_id")
+                    .eq("status", "connected").execute().data or [])
+            for r in rows:
+                tid = r["tenant_id"]
+                if not _t.is_active(tid) or _si.status(tid, _shop.JOB).get("running"):
+                    continue
+                await _shop.sync(tid)
+        except Exception as exc:
+            log.warning("shopify sync loop error: %s", exc)
+        await _asyncio.sleep(6 * 3600)
 
 
 async def _programme_briefs_loop() -> None:
@@ -1490,6 +1514,7 @@ def _start_scheduled_job_tasks() -> None:
     _scheduled_job_tasks.append(_asyncio.create_task(_hourly_customer_jobs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_programme_briefs_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_tap_sweep_loop()))
+    _scheduled_job_tasks.append(_asyncio.create_task(_shopify_sync_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_master_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_owner_digest_loop()))
     _scheduled_job_tasks.append(_asyncio.create_task(_document_quality_loop()))
@@ -1795,6 +1820,8 @@ app.include_router(microsoft_router, prefix="/v1/microsoft")
 app.include_router(dynamics365_router, prefix="/v1/dynamics365")
 app.include_router(email_connect_router, prefix="/v1/email")
 app.include_router(commerce_router, prefix="/v1/commerce")
+app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
+app.include_router(shopify_webhook_router, prefix="/v1/shopify")   # Shopify's calls — HMAC-verified
 from vula.api.business_profile import router as business_profile_router  # noqa: E402
 app.include_router(business_profile_router, prefix="/v1/commerce")
 app.include_router(bookings_router, prefix="/v1/bookings")

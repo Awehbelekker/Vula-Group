@@ -77,12 +77,13 @@ def _db():
     return service._client()
 
 
-def status(tenant_id: str) -> Dict[str, Any]:
+def status(tenant_id: str, kind: str = _JOB) -> Dict[str, Any]:
     """The last or ongoing run — from vula_background_jobs (migration 206), so both uvicorn
-    workers answer the same; this worker's memory when that table can't be read."""
+    workers answer the same; this worker's memory when that table can't be read. `kind` lets
+    other long jobs (the Shopify sync) share the table."""
     try:
         rows = (_db().table("vula_background_jobs").select("running,status,updated_at")
-                .eq("tenant_id", tenant_id).eq("kind", _JOB).limit(1).execute().data or [])
+                .eq("tenant_id", tenant_id).eq("kind", kind).limit(1).execute().data or [])
     except Exception:
         rows = []
     if rows:
@@ -94,7 +95,11 @@ def status(tenant_id: str) -> Dict[str, Any]:
             st.setdefault("error", "The import stopped part-way (the server restarted) — run it again.")
         st["running"] = running
         return st
-    return dict(_STATUS.get(tenant_id) or {"running": False})
+    return dict(_STATUS.get(_key(tenant_id, kind)) or {"running": False})
+
+
+def _key(tenant_id: str, kind: str) -> str:
+    return tenant_id if kind == _JOB else f"{kind}:{tenant_id}"
 
 
 def _age_s(ts: Any) -> float:
@@ -105,12 +110,12 @@ def _age_s(ts: Any) -> float:
         return 0.0
 
 
-def _save(tenant_id: str, st: Dict[str, Any]) -> None:
+def _save(tenant_id: str, st: Dict[str, Any], kind: str = _JOB) -> None:
     """Write this run's progress where the other worker can see it. Fail-open."""
-    _STATUS[tenant_id] = st
+    _STATUS[_key(tenant_id, kind)] = st
     try:
         _db().table("vula_background_jobs").upsert({
-            "tenant_id": tenant_id, "kind": _JOB, "running": bool(st.get("running")),
+            "tenant_id": tenant_id, "kind": kind, "running": bool(st.get("running")),
             "status": {k: v for k, v in st.items() if k != "running"},
             "started_at": st.get("started_at"), "updated_at": _now()},
             on_conflict="tenant_id,kind").execute()
@@ -420,7 +425,7 @@ async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dic
              "category": _category_key(p["category_label"] or "general"),
              "description": p["description"][:4000], "image_url": p["image_url"] or "",
              "images": p.get("images") or [],
-             "in_stock": "yes" if p["in_stock"] else "no", "status": "active"}
+             "in_stock": "yes" if p["in_stock"] else "no", "status": p.get("status") or "active"}
             for p in products if p["name"] and p["price_cents"] > 0]
     st["products_on_request"] = sum(1 for p in products if p["name"] and p["price_cents"] <= 0)
     if not rows:

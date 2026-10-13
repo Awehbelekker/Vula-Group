@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect } from 'react'
 import VulaYocoConnect from './VulaYocoConnect'
+import VulaShopifyConnect from './VulaShopifyConnect'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaClickUpConnect from './VulaClickUpConnect'
 import VulaGoogleConnect from './VulaGoogleConnect'
@@ -50,6 +51,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
           Connect your Yoco account to accept card, tap & QR payments. Money goes straight to you.
         </p>
         <VulaYocoConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
+      </section>
+
+      {/* Shopify */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🛍️ Shopify store</h4>
+        <p style={s.sectionHint}>
+          Already selling on Shopify? Connect it and your products, photos, prices and stock stay in step with Vula automatically.
+        </p>
+        <VulaShopifyConnect tenantId={tenantId} adminEmail={adminEmail} />
       </section>
 
       {/* WhatsApp */}
