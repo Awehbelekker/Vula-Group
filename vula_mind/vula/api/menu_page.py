@@ -370,21 +370,21 @@ async def _slip_or_404(token: str):
 
 
 @router.get("/receipt/{token}/slip.png")
-async def receipt_slip_png(token: str):
+async def receipt_slip_png(token: str, clear: int = 0):
     import asyncio
     from fastapi.responses import Response
     from vula.commerce import order_slip
     data = await _slip_or_404(token)
-    png = await asyncio.to_thread(order_slip.render_png, data)
+    png = await asyncio.to_thread(order_slip.render_png, data, bool(clear))
     return Response(png, media_type="image/png",
                     headers={"Cache-Control": "private, max-age=300", "X-Robots-Tag": "noindex"})
 
 
 @router.get("/receipt/{token}", response_class=HTMLResponse)
 async def receipt_page(token: str) -> HTMLResponse:
-    """Full screen, the slip prints down out of the top of the phone, the way Tap to Pay's
-    receipt does (vula_dashboard/src/receipt/PrintedSlip.jsx) — on the shop's own address, in
-    its colour. No Save or Replay (Ian, 13 Oct): the slip is already in the WhatsApp chat."""
+    """Full screen, the slip feeds up from the bottom of the phone to the top, edge to edge, ink
+    developing as it comes — no printer drawn (Ian, 13 Oct: "must feel modern"). On the shop's
+    own address, in its colour. No Save or Replay: the slip is already in the WhatsApp chat."""
     from vula.commerce import order_slip
     d = await _slip_or_404(token)
     accent = d["accent"] if re.fullmatch(r"#[0-9a-fA-F]{3,8}", d["accent"] or "") else "#2C5545"
@@ -396,7 +396,7 @@ async def receipt_page(token: str) -> HTMLResponse:
     rgb = order_slip._hex(accent)
     bg = "#%02x%02x%02x" % tuple(min(255, int(c * 0.25 + 255 * 0.75)) for c in rgb)
     page = _RECEIPT_HTML.replace("{{ACCENT}}", accent).replace("{{BG}}", bg).replace("{{TITLE}}", _esc(f"Receipt {d['order']} — {d['shop']}")) \
-        .replace("{{IMG}}", f"{_esc(token)}/slip.png").replace("{{ORDER}}", _esc(d["order"])) \
+        .replace("{{IMG}}", f"{_esc(token)}/slip.png?clear=1").replace("{{ORDER}}", _esc(d["order"])) \
         .replace("{{ALT}}", _esc(f"Receipt for order {d['order']} from {d['shop']}, "
                                  f"{order_slip.rands(d['total_cents'])}, paid {d['paid_at']}")) \
         .replace("{{LINES}}", lines).replace("{{CHAT}}", chat).replace("{{SHOP}}", shop)
@@ -405,37 +405,36 @@ async def receipt_page(token: str) -> HTMLResponse:
 
 _RECEIPT_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="robots" content="noindex">
-<meta name="referrer" content="no-referrer"><meta name="theme-color" content="#1c1c19"><title>{{TITLE}}</title>
+<meta name="referrer" content="no-referrer"><meta name="theme-color" content="{{BG}}"><title>{{TITLE}}</title>
 <style>
 :root{--accent:{{ACCENT}};--bg:{{BG}}}
-*{box-sizing:border-box}html,body{margin:0;height:100%}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%}
 body{background:var(--bg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow-x:hidden}
-.printer{position:fixed;top:0;left:0;right:0;z-index:3;height:calc(30px + env(safe-area-inset-top));
-background:linear-gradient(#34342f,#1c1c19);box-shadow:0 6px 16px rgba(0,0,0,.35);transform:translateY(-100%);
-animation:bar .45s ease-out forwards}
-.printer:after{content:"";position:absolute;left:18px;right:18px;bottom:6px;height:4px;border-radius:2px;background:#0b0b09;
-box-shadow:0 0 12px 2px var(--accent);animation:head 1.9s ease-in-out .55s 1 forwards}
-.slot{padding-top:calc(24px + env(safe-area-inset-top));overflow:hidden;min-height:100%}
-.slip{display:block;width:100%;max-width:640px;margin:0 auto;height:auto;transform:translateY(-102%);
-filter:brightness(1.3) saturate(.3);animation:feed 2.2s cubic-bezier(.3,.75,.3,1) .55s forwards}
-@keyframes bar{to{transform:none}}
-@keyframes head{0%{opacity:1}90%{opacity:1}100%{opacity:.25}}
-@keyframes feed{65%{filter:brightness(1.08) saturate(.85)}86%{transform:translateY(1.2%)}100%{transform:none;filter:none}}
+.slot{min-height:100vh;padding-top:env(safe-area-inset-top);overflow:hidden}
+.slip{display:block;width:100%;max-width:640px;margin:0 auto;height:auto;will-change:transform,filter;
+transform:translateY(100vh);filter:brightness(1.3) saturate(.3) blur(.6px);
+animation:feed 2.1s cubic-bezier(.2,.8,.2,1) .25s forwards}
+@keyframes feed{
+  60%{filter:brightness(1.08) saturate(.85) blur(0)}
+  84%{transform:translateY(-1.4%)}
+  100%{transform:none;filter:none}}
 .btns{position:sticky;bottom:0;display:flex;gap:10px;padding:12px 16px calc(14px + env(safe-area-inset-bottom));
-max-width:640px;margin:0 auto;opacity:0;animation:fade .4s ease 2.8s forwards}
-@keyframes fade{to{opacity:1}}
+max-width:640px;margin:0 auto;opacity:0;transform:translateY(12px);animation:rise .45s ease 2.4s forwards}
+@keyframes rise{to{opacity:1;transform:none}}
 .b{flex:1;text-align:center;text-decoration:none;padding:14px 10px;border-radius:999px;font-weight:650;font-size:15px}
 .chat{background:#25D366;color:#073b1d}.shop{background:#fff;color:#24231F;box-shadow:0 1px 4px rgba(0,0,0,.15)}
 .sr{position:absolute;left:-9999px}
-@media (prefers-reduced-motion:reduce){.printer,.slip,.btns,.printer:after{animation:none;transform:none;filter:none;opacity:1}}
-@media print{.printer,.btns{display:none}.slip{animation:none;transform:none;filter:none}}
+@media (prefers-reduced-motion:reduce){.slip,.btns{animation:none;transform:none;filter:none;opacity:1}}
+@media print{.btns{display:none}.slip{animation:none;transform:none;filter:none}}
 </style></head><body>
-<div class="printer" aria-hidden="true"></div>
 <div class="slot"><img class="slip" id="slip" src="{{IMG}}" alt="{{ALT}}"></div>
 <ul class="sr">{{LINES}}</ul>
 <div class="btns">{{CHAT}}{{SHOP}}</div>
 <script>
-setTimeout(function(){try{navigator.vibrate&&navigator.vibrate([12,40,12])}catch(e){}},2600);
+// A light tick while it feeds and a soft bump when it lands (Android; iPhone ignores vibrate).
+try{if(navigator.vibrate&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
+  setTimeout(function(){navigator.vibrate([6,70,6,70,6,70,6,70,6])},300);
+  setTimeout(function(){navigator.vibrate(18)},2150)}}catch(e){}
 </script></body></html>"""
 
 

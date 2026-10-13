@@ -92,7 +92,7 @@ def test_the_receipt_prints_out_full_screen_with_back_to_chat(branded, monkeypat
     app = FastAPI()
     app.include_router(menu_page.router)
     html = TestClient(app).get(f"/receipt/{order_slip.token_for('o-1')}").text
-    assert 'class="printer"' in html and "@keyframes feed" in html
+    assert "@keyframes feed" in html and "translateY(100vh)" in html and 'class="printer"' not in html
     assert "Replay" not in html and "Save slip" not in html        # the slip is already in the chat
     assert 'href="https://wa.me/27713128891">Back to chat' in html
     assert 'href="https://shop.seedleme.com/">Shop again' in html
