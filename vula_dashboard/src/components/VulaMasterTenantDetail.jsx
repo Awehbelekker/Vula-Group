@@ -105,6 +105,7 @@ function TenantOverviewTab({ tenantId, onError }) {
       </div>
       <ManageTenantRow tenant={tenant} registry={registry} onSave={save} />
       <LinkWhatsAppNumber tenantId={tenantId} />
+      <WhatsAppCatalogue tenantId={tenantId} />
     </div>
   )
 }
@@ -149,6 +150,44 @@ function LinkWhatsAppNumber({ tenantId }) {
           Linked <b>{res.phone_number || res.phone_number_id}</b>{res.verified_name ? ` (${res.verified_name})` : ''} to {tenantId} ·
           Meta status {res.meta_status || '—'} · display name {res.name_status || '—'}
           {res.registered_now ? ' · registered for messaging now' : ''} · replies go out as {res.route_mode}.
+        </div>)}
+    </div>
+  )
+}
+
+function WhatsAppCatalogue({ tenantId }) {
+  const [cid, setCid] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState(null)
+  const [msg, setMsg] = useState('')
+  const push = async () => {
+    setBusy(true); setMsg(''); setRes(null)
+    try {
+      const d = await authFetch(`/v1/master/tenants/${tenantId}/meta-catalog`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ catalog_id: cid.trim() || undefined }),
+      })
+      if (d.detail) setMsg(d.detail)
+      else if (d.status !== 'success') setMsg(d.error || d.message || 'The catalogue was not updated.')
+      else setRes(d)
+    } catch (e) { setMsg(e.message) }
+    setBusy(false)
+  }
+  return (
+    <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12 }}>
+      <b style={{ fontSize: 13 }}>WhatsApp catalogue</b>
+      <p style={{ fontSize: 12, color: C.muted, margin: '4px 0 8px' }}>
+        Customers browse photos, pick a colour and add to cart inside WhatsApp. Create the catalogue in Meta Commerce Manager, connect it to this business’s number (WhatsApp Manager › Catalogue), give Vula’s system user access, then paste its ID here. Leave it empty to re-push the saved one. Products re-push after every website import or Shopify sync.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input value={cid} onChange={(e) => setCid(e.target.value)} placeholder="Catalogue ID (optional)"
+          inputMode="numeric" style={{ ...btn, cursor: 'text', flex: '1 1 200px', fontSize: 16 }} />
+        <button disabled={busy} onClick={push} style={{ ...btn, ...btnOn }}>{busy ? 'Sending to WhatsApp…' : 'Push products'}</button>
+      </div>
+      {msg && <div style={{ fontSize: 12.5, color: C.red, marginTop: 8 }}>{msg}</div>}
+      {res && (
+        <div style={{ fontSize: 12.5, marginTop: 8 }}>
+          {res.synced} products sent to catalogue {res.catalog_id} · {res.colour_groups} ranges with a colour picker.
         </div>)}
     </div>
   )

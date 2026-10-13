@@ -1805,8 +1805,8 @@ class CommerceAssistantSkill(BaseSkill):
         # weight/pack/volume info at all, even though every real product row has it (sold_by,
         # weight_grams, pack_size) — this method was simply never asked for it. Without it a
         # customer can't tell a 1kg pack from a per-kg loose item from a 6-piece pack.
-        return [
-            {
+        def _one(p):
+            return {
                 "slug": p["slug"],
                 "name": p["name"],
                 "price": _price(p),
@@ -1815,8 +1815,23 @@ class CommerceAssistantSkill(BaseSkill):
                 "size": p.get("pack_size") or (f"{p['weight_grams']}g" if p.get("weight_grams") else None),
                 **({"options": p["options"]} if p.get("options") else {}),
             }
-            for p in products[:20]
-        ]
+
+        # 2026-10-13 (SeedleMe): a shop that lists each colour as its own product gets one entry
+        # per range with its colours — "what colours does X come in" is answered from the list,
+        # and 20 entries cover 20 ranges, not 20 colours of three ranges. Each colour keeps its
+        # own slug, so add_to_cart is unchanged.
+        from vula.commerce import product_families as _pf
+        out = []
+        for r in _pf.group(products):
+            if not r["colours"]:
+                out.extend(_one(p) for p in r["members"])
+                continue
+            out.append({"name": r["title"], "price": _pf.price_label(r).capitalize(),
+                        "category": r["category"],
+                        "colours": [{"colour": c["colour"], "slug": c["product"]["slug"],
+                                     "price": _price(c["product"])} for c in r["colours"]],
+                        "note": "Ask which colour; add_to_cart with that colour's slug."})
+        return out[:20]
 
     async def _exec_add_to_cart(
         self, tenant_id: str, session_id: str, phone: Optional[str], args: Dict[str, Any],

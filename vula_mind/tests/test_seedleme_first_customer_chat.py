@@ -42,18 +42,22 @@ def shop(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_round_basins_finds_every_round_basin_not_one_sink(shop):
-    names = [p["name"] for p in await shop._exec_list_products("seedleme", {"search": "round basins"})]
-    assert names[:3] == ["Round Concave Concrete Basin – Grey – 42 x 14cm",
-                         "Round Concrete Basin – Charcoal – 40 x 12cm",
-                         "Round Concrete Basin – Sandstone – 40 x 12cm"]       # name matches first
+    found = await shop._exec_list_products("seedleme", {"search": "round basins"})
+    names = [p["name"] for p in found]
+    assert names[:2] == ["Round Concave Concrete Basin – Grey – 42 x 14cm",
+                         "Round Concrete Basin – 40 x 12cm"]                  # name matches first
+    assert [c["colour"] for c in found[1]["colours"]] == ["Charcoal", "Sandstone"]   # one range, both colours
     assert "Grey Round Bespoke Concrete Sink 30 x 30 x 13cm" in names         # "round basin" in its description
     assert not any("Butler" in n or "Oval" in n for n in names)
 
 
 @pytest.mark.asyncio
 async def test_countertop_butler_lists_its_colours_and_nothing_else(shop):
-    names = [p["name"] for p in await shop._exec_list_products("seedleme", {"search": "Countertop Butler basin"})]
-    assert len(names) == 3 and all(n.startswith("Countertop Butler Concrete Basin") for n in names)
+    found = await shop._exec_list_products("seedleme", {"search": "Countertop Butler basin"})
+    assert [p["name"] for p in found] == ["Countertop Butler Concrete Basin – 31 x 31 x 12cm",
+                                          "Countertop Butler Concrete Basin – Terracotta – 36 x 36 x 12cm"]
+    assert [(c["colour"], c["price"]) for c in found[0]["colours"]] == [("Black", "R1499.00"), ("Ivory", "R1499.00")]
+    assert found[0]["colours"][0]["slug"] == "countertop-butler-concrete-basin-black-31-x-31-x-12cm"
 
 
 def test_question_words_are_not_product_words():
@@ -71,7 +75,7 @@ async def test_a_question_the_catalogue_answers_never_goes_to_the_owner(shop, mo
     monkeypatch.setattr(shop, "_exec_ask_team", ask_team)
     ctx = {"tenant_id": "seedleme", "session_id": "s", "customer_phone": "27645755210"}
     res = await shop._dispatch_tool("ask_team", {"question": "Do you do round basins"}, ctx)
-    assert asked == [] and res["matches"] == 4 and "don't hand this to the team" in res["instruction_to_assistant"]
+    assert asked == [] and res["matches"] == 3 and "don't hand this to the team" in res["instruction_to_assistant"]
     await shop._dispatch_tool("ask_team", {"question": "How long does delivery take?"}, ctx)
     assert asked == [{"question": "How long does delivery take?"}]               # not a product question
 

@@ -360,6 +360,8 @@ async def sync(tenant_id: str, business: str = "") -> Dict[str, Any]:
             doc_id=site_import._doc_id(tenant_id, "catalogue"), source_type="website")
         st["kb_catalogue"] = res.status == "success"
         st["step"] = "done"
+        from vula.commerce.meta_catalog import sync_if_connected
+        await sync_if_connected(tenant_id)
         _update(tenant_id, {"last_sync_at": datetime.now(timezone.utc).isoformat(),
                             "last_sync": {k: st.get(k) for k in (
                                 "products_found", "products_created", "products_updated",

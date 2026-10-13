@@ -7135,7 +7135,8 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     # *menu* to see what's fresh — without this, that reply fell through to the AI assistant
     # and lost the interactive list (tap-to-browse) in favour of plain prose.
     greeting_words = {"hi", "hello", "hallo", "hey", "howzit", "good morning", "goeie dag", "menu"}
-    if any(text_lower.startswith(w) for w in greeting_words):
+    if any(text_lower.startswith(w) for w in greeting_words) or text_lower.strip(" !.?") in (
+            "catalogue", "catalog", "shop", "browse", "products", "show me your products"):
         # A not-yet-welcomed owner/staff member greeting the shop gets THEIR welcome, not the
         # customer menu — confirmed live 2026-07-16: Stacy's first "hi" from her new number hit
         # this branch and returned before the owner check further down ever ran.
@@ -8139,6 +8140,29 @@ async def _handle_commerce_interactive(
     phone: str, reply_id: str, reply_title: str, msg_id: str, tenant_id: str
 ) -> None:
     """Handle interactive list/button replies from the WhatsApp product catalog."""
+    # Tap-to-order for shops with ranges in several colours (2026-10-13, SeedleMe): range →
+    # colour → how many → cart → checkout, all from exact ids — no LLM picks the product.
+    if reply_id.startswith("catp_"):
+        category, _, page = reply_id[5:].rpartition(":")
+        await _send_category_products(phone, tenant_id, category, page=int(page or 0))
+        return
+    if reply_id.startswith("rng_") or reply_id.startswith("rngp_"):
+        rid, _, page = reply_id.split("_", 1)[1].partition(":")
+        await _send_range_colours(phone, tenant_id, rid, page=int(page or 0))
+        return
+    if reply_id.startswith("col_"):
+        await _send_quantity_choice(phone, tenant_id, reply_id[4:])
+        return
+    if reply_id.startswith("qty_"):
+        pid, _, qty = reply_id[4:].rpartition("_")
+        await _add_tapped_to_cart(phone, tenant_id, pid, int(qty or 1), msg_id)
+        return
+    if reply_id == "cart_checkout":
+        await _handle_commerce_message(phone, "I'd like to check out now", msg_id, tenant_id)
+        return
+    if reply_id == "cart_more":
+        await _send_commerce_welcome(phone, tenant_id)
+        return
     # Category tap → show that category's products (with prices) as a sub-menu.
     if reply_id.startswith("cat_"):
         category = reply_id[4:]
@@ -8271,7 +8295,7 @@ async def _send_wa_list(creds: dict, number: str, header: str, body: str,
         return False
 
 
-async def _send_wa_image(creds: dict, number: str, image_url: str) -> bool:
+async def _send_wa_image(creds: dict, number: str, image_url: str, caption: str = "") -> bool:
     """Send a standalone image message. Used as a decorative header immediately before an
     interactive list, since WhatsApp's list type only supports a text header (Meta limit)."""
     from core import dry_run as _dry
@@ -8283,7 +8307,7 @@ async def _send_wa_image(creds: dict, number: str, image_url: str) -> bool:
                 f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "image",
-                      "image": {"link": image_url}},
+                      "image": {"link": image_url, **({"caption": caption[:1024]} if caption else {})}},
             )
             resp.raise_for_status()
             return True
@@ -8304,16 +8328,56 @@ def _wa_number(phone: str) -> str:
     return "27" + n[1:] if n.startswith("0") else n
 
 
-async def _send_category_products(phone: str, tenant_id: str, category: str) -> bool:
-    """Send a sub-menu of in-stock products (with prices) for one category."""
+_PAGE_ROWS = 9            # a WhatsApp list holds 10 rows; the 10th is "More…"
+_ROW_FILLER = re.compile(r"\b(?:concrete|cement|bespoke|handmade|hand-made)\b\s*", re.I)
+
+
+def _range_row_text(title: str) -> tuple:
+    """A range title → (row title ≤24, the rest for the description): the name before the
+    size, filler words dropped — "Round Concave Concrete Basin – 42 x 14cm" → ("Round Concave
+    Basin", "42 x 14cm")."""
+    m = re.search(r"\d", title)
+    head, size = (title[:m.start()], title[m.start():]) if m else (title, "")
+    head = re.sub(r"\s{2,}", " ", _ROW_FILLER.sub("", head)).strip(" –-")
+    return (head or title)[:24], size.strip()
+
+
+async def _shop_products(tenant_id: str, category: Optional[str] = None) -> list:
+    try:
+        from vula.commerce import service as _cs
+        return await _cs.list_products(tenant_id, category=category, in_stock_only=True, statuses={"active"})
+    except Exception:
+        return []
+
+
+async def _send_category_products(phone: str, tenant_id: str, category: str, page: int = 0) -> bool:
+    """Send a sub-menu of in-stock products (with prices) for one category. A shop whose
+    products come in colours gets one row per range ("9 colours · R1,699"), paged by nine."""
     creds = await _resolve_wa(tenant_id)
     if not creds:
         return False
-    try:
-        from vula.commerce import service as _cs
-        prods = await _cs.list_products(tenant_id, category=category, in_stock_only=True, statuses={"active"})
-    except Exception:
-        prods = []
+    prods = await _shop_products(tenant_id, category)
+    from vula.commerce import product_families as _pf
+    ranges = _pf.group(prods)
+    if any(r["colours"] for r in ranges):
+        chunk = ranges[page * _PAGE_ROWS:(page + 1) * _PAGE_ROWS]
+        rows = []
+        for r in chunk:
+            head, size = _range_row_text(r["title"])
+            extra = (f"{len(r['colours'])} colours · " if r["colours"] else "") + _pf.price_label(r)
+            rows.append({"id": f"rng_{r['id']}", "title": head,
+                         "description": " · ".join(x for x in (size, extra) if x)[:72]})
+        if len(ranges) > (page + 1) * _PAGE_ROWS:
+            rows.append({"id": f"catp_{category}:{page + 1}", "title": "More…",
+                         "description": f"{len(ranges) - (page + 1) * _PAGE_ROWS} more in this category"})
+        if not rows:
+            await _send_reply(phone, "Nothing in stock there right now — type what you're after and I'll help.", tenant_id=tenant_id)
+            return True
+        label = (_CATEGORY_LABELS.get(category) or category.replace("_", " ").title())
+        return await _send_wa_list(creds, _wa_number(phone), label,
+                                   "Tap a range to see its colours, or type what you're looking for.",
+                                   _tenants_mod().display_name(tenant_id)[:60], "Choose",
+                                   [{"title": label[:24], "rows": rows}])
     rows = [{"id": f"prod_{p.get('id')}", "title": (p.get("name") or "Item")[:24],
              "description": _product_desc(p)} for p in prods[:10]]
     if not rows:
@@ -8323,6 +8387,77 @@ async def _send_category_products(phone: str, tenant_id: str, category: str) -> 
     return await _send_wa_list(creds, _wa_number(phone), label, "Tap an item to order, or type a question.",
                                _tenants_mod().display_name(tenant_id)[:60], "Choose item",
                                [{"title": label[:24], "rows": rows}])
+
+
+async def _send_range_colours(phone: str, tenant_id: str, rid: str, page: int = 0) -> None:
+    """A range: its photo, then its colours to tap (or straight to "how many" for a range of one)."""
+    from vula.commerce import product_families as _pf
+    r = _pf.find_range(await _shop_products(tenant_id), rid)
+    creds = await _resolve_wa(tenant_id)
+    if not r or not creds:
+        await _send_reply(phone, "That one's no longer available — reply *menu* to see what's in stock.", tenant_id=tenant_id)
+        return
+    if not r["colours"]:
+        await _send_quantity_choice(phone, tenant_id, r["members"][0]["id"])
+        return
+    number = _wa_number(phone)
+    if page == 0 and r.get("image_url"):
+        await _send_wa_image(creds, number, r["image_url"],
+                             caption=f"{r['title']}\n{_pf.price_label(r).capitalize()} · {len(r['colours'])} colours")
+    chunk = r["colours"][page * _PAGE_ROWS:(page + 1) * _PAGE_ROWS]
+    rows = [{"id": f"col_{c['product']['id']}", "title": c["colour"][:24],
+             "description": _pf.rands(int(c["product"].get("price_cents") or 0))} for c in chunk]
+    if len(r["colours"]) > (page + 1) * _PAGE_ROWS:
+        rows.append({"id": f"rngp_{rid}:{page + 1}", "title": "More colours…",
+                     "description": f"{len(r['colours']) - (page + 1) * _PAGE_ROWS} more"})
+    await _send_wa_list(creds, number, _range_row_text(r["title"])[0][:60],
+                        f"{r['title']}\nWhich colour would you like?",
+                        _tenants_mod().display_name(tenant_id)[:60], "Pick a colour",
+                        [{"title": "Colours", "rows": rows}])
+
+
+async def _send_quantity_choice(phone: str, tenant_id: str, product_id: str) -> None:
+    from vula.commerce import product_families as _pf
+    p = next((x for x in await _shop_products(tenant_id) if str(x.get("id")) == str(product_id)), None)
+    creds = await _resolve_wa(tenant_id)
+    if not p or not creds:
+        await _send_reply(phone, "That one's no longer available — reply *menu* to see what's in stock.", tenant_id=tenant_id)
+        return
+    body = (f"{p['name']}\n{_pf.rands(int(p.get('price_cents') or 0))} each — how many would you like? "
+            "(For more than 3, just type the number.)")
+    await _send_wa_buttons(creds, _wa_number(phone), body,
+                           [{"id": f"qty_{p['id']}_{n}", "title": str(n)} for n in (1, 2, 3)])
+
+
+async def _add_tapped_to_cart(phone: str, tenant_id: str, product_id: str, qty: int, msg_id: str) -> None:
+    """Add exactly what was tapped (priced from the live product row), then show the cart with
+    Checkout / Keep shopping. Checkout is the assistant's own flow: details, then payment."""
+    from vula.commerce import service as _cs
+    from vula.commerce import product_families as _pf
+    p = next((x for x in await _shop_products(tenant_id) if str(x.get("id")) == str(product_id)), None)
+    creds = await _resolve_wa(tenant_id)
+    if not p or not creds or qty < 1:
+        await _send_reply(phone, "That one's no longer available — reply *menu* to see what's in stock.", tenant_id=tenant_id)
+        return
+    try:
+        cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
+        await _cs.add_to_cart(tenant_id, cart["id"], p["id"], float(qty))
+        cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
+    except Exception as exc:
+        logger.warning("tap add-to-cart failed for %s: %s", tenant_id, exc)
+        await _handle_commerce_message(phone, f"I'd like {qty} x {p['name']}", msg_id, tenant_id)
+        return
+    lines, subtotal = [], 0
+    for it in cart.get("commerce_cart_items") or []:
+        cents = int(round(float(it.get("quantity") or 0) * int(it.get("unit_price_cents") or 0)))
+        subtotal += cents
+        q = float(it.get("quantity") or 0)
+        lines.append(f"• {int(q) if q == int(q) else q} × {(it.get('commerce_products') or {}).get('name')} — {_pf.rands(cents)}")
+    body = (f"✅ Added {qty} × {p['name']}.\n\n🛒 Your cart:\n" + "\n".join(lines)
+            + f"\n\nSubtotal: {_pf.rands(subtotal)} (delivery worked out at checkout)")
+    await _send_wa_buttons(creds, _wa_number(phone), body,
+                           [{"id": "cart_checkout", "title": "Checkout"},
+                            {"id": "cart_more", "title": "Keep shopping"}])
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
@@ -8380,7 +8515,11 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     if spec_rows:
         sections.append({"title": "Today's specials", "rows": spec_rows})
     if cat_rows:
-        sections.append({"title": "Browse the catch", "rows": cat_rows})
+        try:
+            _food = (_tenants_mod().tenant_profile(tenant_id) or {}).get("business_type") == "food"
+        except Exception:
+            _food = False
+        sections.append({"title": "Browse the catch" if _food else "Browse our range", "rows": cat_rows})
 
     menu_url = f"{settings.public_base_url.rstrip('/')}/menu/{tenant_id}" if settings.public_base_url else ""
 
