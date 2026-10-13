@@ -126,6 +126,7 @@ _SENTINELS: list[tuple[str, str, str | None]] = [
     ("203", "kb_payments", "receipt_nonce"),
     ("204", "kb_settings", "reminders_max"),
     ("205", "kb_tax_invoices", None),
+    ("206", "vula_background_jobs", None),
 ]
 
 

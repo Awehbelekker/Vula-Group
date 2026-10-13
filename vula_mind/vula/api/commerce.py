@@ -1031,12 +1031,22 @@ async def admin_import_products(tenant_id: str, body: dict):
             if image_url and not image_url.startswith(("http://", "https://")):
                 warning = f"image_url '{image_url}' doesn't look like a URL — skipped"
                 image_url = None
+            # The full gallery (2026-10-13, website import): a list, or "url1|url2" from a CSV.
+            raw_images = row.get("images")
+            if isinstance(raw_images, str):
+                raw_images = raw_images.split("|")
+            images = list(dict.fromkeys(
+                u.strip() for u in (raw_images or []) if isinstance(u, str)
+                and u.strip().startswith(("http://", "https://"))))[:20]
+            if images and not image_url:
+                image_url = images[0]
 
             payload = {
                 "name": name, "slug": slug, "price_cents": price_cents, "category": category,
                 "sold_by": row.get("sold_by") if row.get("sold_by") in ("kg", "pack") else "pack",
                 "description": row.get("description") or "",
                 "image_url": image_url,
+                **({"images": images} if images else {}),
                 "in_stock": _csv_bool(row.get("in_stock"), True),
                 "is_daily_catch": _csv_bool(row.get("is_daily_catch"), False),
                 "pricing_mode": row.get("pricing_mode") if row.get("pricing_mode") in ("fixed", "by_weight") else "fixed",

@@ -33,7 +33,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
@@ -46,7 +46,14 @@ SHOPIFY_PAGE_SIZE = 25
 MAX_PRODUCT_PAGES = 40            # × 25 products per feed page
 FEED_MAX_BYTES = 8 * 1024 * 1024
 MAX_PRODUCT_URLS = 300            # product pages read one by one when there is no feed
-_CONCURRENCY = 4
+_CONCURRENCY = 2
+# 2026-10-13: four overlapping runs at 4 requests at a time made Shopify answer 429/503 to
+# SeedleMe's feed and product pages. One run at a time (the shared status below), at most one
+# request start per _MIN_INTERVAL per site, and a refused request waits and is tried again.
+_MIN_INTERVAL = 0.4
+_RETRY_WAITS = (2.0, 5.0, 12.0)
+_RETRY_CODES = (429, 502, 503, 504)
+_STALE_AFTER_S = 15 * 60          # a "running" row not touched for this long = a worker that died
 _MIN_TEXT = 200                    # a page with less real text than this adds nothing
 
 # Pages that never help a customer question: cart, account, search, checkout, login, tags, and
@@ -62,10 +69,53 @@ _PRIORITY = [re.compile(p, re.I) for p in (
     r"/blogs?/", r"/collections?/")]
 
 _STATUS: Dict[str, Dict[str, Any]] = {}
+_JOB = "site_import"
+
+
+def _db():
+    from vula.commerce import service
+    return service._client()
 
 
 def status(tenant_id: str) -> Dict[str, Any]:
+    """The last or ongoing run — from vula_background_jobs (migration 206), so both uvicorn
+    workers answer the same; this worker's memory when that table can't be read."""
+    try:
+        rows = (_db().table("vula_background_jobs").select("running,status,updated_at")
+                .eq("tenant_id", tenant_id).eq("kind", _JOB).limit(1).execute().data or [])
+    except Exception:
+        rows = []
+    if rows:
+        st = dict(rows[0].get("status") or {})
+        running = bool(rows[0].get("running"))
+        if running and _age_s(rows[0].get("updated_at")) > _STALE_AFTER_S:
+            running = False
+            st.setdefault("step", "stopped")
+            st.setdefault("error", "The import stopped part-way (the server restarted) — run it again.")
+        st["running"] = running
+        return st
     return dict(_STATUS.get(tenant_id) or {"running": False})
+
+
+def _age_s(ts: Any) -> float:
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                ).total_seconds()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _save(tenant_id: str, st: Dict[str, Any]) -> None:
+    """Write this run's progress where the other worker can see it. Fail-open."""
+    _STATUS[tenant_id] = st
+    try:
+        _db().table("vula_background_jobs").upsert({
+            "tenant_id": tenant_id, "kind": _JOB, "running": bool(st.get("running")),
+            "status": {k: v for k, v in st.items() if k != "running"},
+            "started_at": st.get("started_at"), "updated_at": _now()},
+            on_conflict="tenant_id,kind").execute()
+    except Exception as exc:
+        log.debug("site import status not saved for %s: %s", tenant_id, exc)
 
 
 def _now() -> str:
@@ -88,6 +138,34 @@ def normalise_root(url: str) -> str:
 async def _fetch(url: str, max_bytes: Optional[int] = None) -> bytes:
     from vula.commerce.reference_url import safe_fetch_bytes
     return await (safe_fetch_bytes(url, max_bytes) if max_bytes else safe_fetch_bytes(url))
+
+
+_last_start: Dict[str, float] = {}
+
+
+async def _get(url: str, max_bytes: Optional[int] = None) -> bytes:
+    """_fetch, politely: request starts to one site spaced by _MIN_INTERVAL, and a 429/5xx
+    "slow down" answer waited out (its Retry-After, capped) and tried again."""
+    host = urlparse(url).netloc
+    loop = asyncio.get_running_loop()
+    for attempt in range(len(_RETRY_WAITS) + 1):
+        wait = _last_start.get(host, 0.0) + _MIN_INTERVAL - loop.time()
+        _last_start[host] = loop.time() + max(wait, 0.0)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            return await (_fetch(url, max_bytes) if max_bytes else _fetch(url))
+        except Exception as exc:
+            resp = getattr(exc, "response", None)
+            code = getattr(resp, "status_code", None)
+            if code not in _RETRY_CODES or attempt == len(_RETRY_WAITS):
+                raise
+            try:
+                after = float((resp.headers or {}).get("retry-after") or 0)
+            except (TypeError, ValueError, AttributeError):
+                after = 0.0
+            await asyncio.sleep(min(max(after, _RETRY_WAITS[attempt]), 30.0))
+    raise RuntimeError("unreachable")
 
 
 def _why(exc: Exception) -> str:
@@ -146,6 +224,7 @@ def _from_shopify(p: Dict[str, Any], root: str) -> Dict[str, Any]:
         "category_label": (p.get("product_type") or "").strip() or None,
         "description": html_to_text(p.get("body_html") or ""),
         "image_url": (images[0].get("src") if images and isinstance(images[0], dict) else None),
+        "images": [i.get("src") for i in images if isinstance(i, dict) and i.get("src")],
         "in_stock": any(v["in_stock"] for v in variants) if variants else True,
         "variants": [v for v in variants if v["option_values"]] if len(variants) > 1 else [],
         "url": f"{root}/products/{p.get('handle')}" if p.get("handle") else root,
@@ -165,6 +244,7 @@ def _from_woo(p: Dict[str, Any], root: str) -> Dict[str, Any]:
         "category_label": (cats[0].get("name") if cats else None),
         "description": html_to_text(p.get("description") or p.get("short_description") or ""),
         "image_url": (images[0].get("src") if images else None),
+        "images": [i.get("src") for i in images if isinstance(i, dict) and i.get("src")],
         "in_stock": bool(p.get("is_in_stock", True)), "variants": [],
         "url": p.get("permalink") or root, "tags": [t.get("name") for t in p.get("tags") or [] if t.get("name")],
     }
@@ -188,9 +268,11 @@ def _from_jsonld(page: str, url: str) -> Optional[Dict[str, Any]]:
                 offers = offers[0]["offers"] if isinstance(offers[0]["offers"], list) else [offers[0]["offers"]]
             prices = [_cents(o.get("price") or o.get("lowPrice")) for o in offers if isinstance(o, dict)]
             prices = [c for c in prices if c > 0]
-            image = d.get("image")
-            image = image[0] if isinstance(image, list) and image else image
-            image = image.get("url") if isinstance(image, dict) else image
+            raw = d.get("image")
+            gallery = [i.get("url") if isinstance(i, dict) else i
+                       for i in (raw if isinstance(raw, list) else [raw] if raw else [])]
+            gallery = [("https:" + i if i.startswith("//") else i) for i in gallery if isinstance(i, str) and i]
+            image = gallery[0] if gallery else None
             name = _html.unescape(str(d.get("name") or "")).strip()
             if not name:
                 continue
@@ -199,7 +281,7 @@ def _from_jsonld(page: str, url: str) -> Optional[Dict[str, Any]]:
                 "name": name, "slug": slug, "price_cents": min(prices) if prices else 0,
                 "category_label": (d.get("category") if isinstance(d.get("category"), str) else None),
                 "description": html_to_text(_html.unescape(str(d.get("description") or ""))),
-                "image_url": image if isinstance(image, str) else None,
+                "image_url": image, "images": gallery,
                 "in_stock": not any("OutOfStock" in str(o.get("availability")) for o in offers
                                     if isinstance(o, dict)) if offers else True,
                 "variants": [], "url": url, "tags": [],
@@ -217,7 +299,7 @@ async def _sitemap_locs(root: str) -> List[str]:
         nxt = []
         for sm in queue:
             try:
-                xml = (await _fetch(sm)).decode("utf-8", errors="replace")
+                xml = (await _get(sm)).decode("utf-8", errors="replace")
             except Exception:
                 continue
             for loc in _LOC.findall(xml):
@@ -234,34 +316,51 @@ async def _sitemap_locs(root: str) -> List[str]:
     return found
 
 
-async def _products_from_pages(root: str, notes: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
-    """No readable feed: each product page from the sitemap — Shopify's own per-product JSON
-    first ("/products/<handle>.json", the feed's shape), else the page's JSON-LD Product."""
+def _slug_of(url: str) -> str:
+    return urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+
+
+async def _products_from_pages(root: str, notes: List[str], skip_slugs: frozenset = frozenset(),
+                               on_progress: Optional[Callable[[int, int], None]] = None
+                               ) -> Tuple[str, List[Dict[str, Any]]]:
+    """No readable feed (or one that stopped part-way): each product page from the sitemap not
+    already in `skip_slugs` — Shopify's own per-product JSON first ("/products/<handle>.json",
+    the feed's shape), else the page's JSON-LD Product."""
     urls = [u for u in await _sitemap_locs(root)
-            if re.search(r"/products?/[^/]+/?$", urlparse(u).path)][:MAX_PRODUCT_URLS]
+            if re.search(r"/products?/[^/]+/?$", urlparse(u).path)
+            and _slug_of(u) not in skip_slugs][:MAX_PRODUCT_URLS]
     if not urls:
         return "", []
+    done = [0]
     sem = asyncio.Semaphore(_CONCURRENCY)
     got: Dict[str, Tuple[str, Dict[str, Any]]] = {}
     failed: List[str] = []
 
     async def one(u: str) -> None:
         async with sem:
-            base = u.split("?")[0].rstrip("/")
             try:
-                data = json.loads(await _fetch(base + ".json"))
-                if isinstance(data, dict) and isinstance(data.get("product"), dict):
-                    got[u] = ("shopify", _from_shopify(data["product"], root))
-                    return
-            except Exception:
-                pass
-            try:
-                p = _from_jsonld((await _fetch(u)).decode("utf-8", errors="replace"), u)
-            except Exception as exc:
-                failed.append(f"{u}: {_why(exc)}")
+                await _one_product(u)
+            finally:
+                done[0] += 1
+                if on_progress:
+                    on_progress(done[0], len(urls))
+
+    async def _one_product(u: str) -> None:
+        base = u.split("?")[0].rstrip("/")
+        try:
+            data = json.loads(await _get(base + ".json"))
+            if isinstance(data, dict) and isinstance(data.get("product"), dict):
+                got[u] = ("shopify", _from_shopify(data["product"], root))
                 return
-            if p:
-                got[u] = ("page", p)
+        except Exception:
+            pass
+        try:
+            p = _from_jsonld((await _get(u)).decode("utf-8", errors="replace"), u)
+        except Exception as exc:
+            failed.append(f"{u}: {_why(exc)}")
+            return
+        if p:
+            got[u] = ("page", p)
 
     await asyncio.gather(*(one(u) for u in urls))
     if failed:
@@ -271,18 +370,20 @@ async def _products_from_pages(root: str, notes: List[str]) -> Tuple[str, List[D
     return ("shopify" if "shopify" in kinds else "website" if products else ""), products
 
 
-async def fetch_products(root: str, notes: Optional[List[str]] = None) -> Tuple[str, List[Dict[str, Any]]]:
+async def fetch_products(root: str, notes: Optional[List[str]] = None,
+                         on_progress: Optional[Callable[[int, int], None]] = None
+                         ) -> Tuple[str, List[Dict[str, Any]]]:
     """(platform, products) from the shop's public catalogue feed — or, when the feed can't be
-    read, from its product pages; ("", []) when it has none. Why a feed failed goes in `notes`."""
+    read, from its product pages; ("", []) when it has none. Why a feed failed goes in `notes`.
+    A feed that stops part-way keeps what it gave and the rest is read page by page."""
     notes = notes if notes is not None else []
     out: List[Dict[str, Any]] = []
     for page in range(1, MAX_PRODUCT_PAGES + 1):
         try:
-            data = json.loads(await _fetch(
+            data = json.loads(await _get(
                 f"{root}/products.json?limit={SHOPIFY_PAGE_SIZE}&page={page}", max_bytes=FEED_MAX_BYTES))
         except Exception as exc:
-            if page == 1:
-                notes.append(f"Shopify product feed: {_why(exc)}")
+            notes.append(f"Shopify product feed{f' page {page}' if page > 1 else ''}: {_why(exc)}")
             break
         items = data.get("products") if isinstance(data, dict) else None
         if not items:
@@ -291,10 +392,14 @@ async def fetch_products(root: str, notes: Optional[List[str]] = None) -> Tuple[
         if len(items) < SHOPIFY_PAGE_SIZE:
             break
     if out:
+        if notes:          # stopped part-way: the products it didn't reach, from their own pages
+            _, more = await _products_from_pages(
+                root, notes, frozenset(p["slug"] for p in out), on_progress)
+            out += more
         return "shopify", out
     for page in range(1, MAX_PRODUCT_PAGES + 1):
         try:
-            items = json.loads(await _fetch(f"{root}/wp-json/wc/store/v1/products?per_page=100&page={page}",
+            items = json.loads(await _get(f"{root}/wp-json/wc/store/v1/products?per_page=100&page={page}",
                                             max_bytes=FEED_MAX_BYTES))
         except Exception:
             break
@@ -305,7 +410,7 @@ async def fetch_products(root: str, notes: Optional[List[str]] = None) -> Tuple[
             break
     if out:
         return "woocommerce", out
-    return await _products_from_pages(root, notes)
+    return await _products_from_pages(root, notes, on_progress=on_progress)
 
 
 async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dict[str, Any]) -> None:
@@ -314,6 +419,7 @@ async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dic
     rows = [{"name": p["name"], "slug": p["slug"] or None, "price_cents": p["price_cents"],
              "category": _category_key(p["category_label"] or "general"),
              "description": p["description"][:4000], "image_url": p["image_url"] or "",
+             "images": p.get("images") or [],
              "in_stock": "yes" if p["in_stock"] else "no", "status": "active"}
             for p in products if p["name"] and p["price_cents"] > 0]
     st["products_on_request"] = sum(1 for p in products if p["name"] and p["price_cents"] <= 0)
@@ -416,22 +522,29 @@ def _doc_id(tenant_id: str, key: str) -> str:
 async def import_site(tenant_id: str, url: str, business: str = "", max_pages: int = MAX_PAGES
                       ) -> Dict[str, Any]:
     root = normalise_root(url)
-    st = _STATUS[tenant_id] = {
+    st: Dict[str, Any] = {
         "running": True, "url": root, "step": "reading the product catalogue", "started_at": _now(),
         "platform": "", "products_found": 0, "products_created": 0, "products_updated": 0,
         "products_on_request": 0, "variants": 0, "pages_found": 0, "pages_read": 0,
         "kb_documents": 0, "skipped_pages": 0, "errors": []}
+    _save(tenant_id, st)
+
+    def product_progress(done: int, total: int) -> None:
+        st["step"] = f"reading product pages ({done} of {total})"
+        if done % 20 == 0 or done == total:
+            _save(tenant_id, st)
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
         notes: List[str] = []
-        platform, products = await fetch_products(root, notes)
+        platform, products = await fetch_products(root, notes, product_progress)
         st["platform"], st["products_found"] = platform, len(products)
         if notes:
             st["catalogue_note"] = "; ".join(notes)[:300]
             log.info("site import %s (%s): %s", tenant_id, root, st["catalogue_note"])
         if products:
             st["step"] = f"saving {len(products)} products"
+            _save(tenant_id, st)
             await _save_products(tenant_id, products, st)
             res = await pipeline.ingest_text(
                 content=catalogue_text(business or urlparse(root).netloc, root, products),
@@ -443,12 +556,13 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
         urls = (await sitemap_urls(root, platform))[:max_pages]
         st["pages_found"] = len(urls)
         st["step"] = f"reading {len(urls)} pages"
+        _save(tenant_id, st)
         sem = asyncio.Semaphore(_CONCURRENCY)
 
         async def one(u: str) -> None:
             async with sem:
                 try:
-                    title, text = page_text(await _fetch(u))
+                    title, text = page_text(await _get(u))
                 except Exception as exc:
                     st["errors"].append(f"{u}: {str(exc)[:80]}")
                     return
@@ -473,5 +587,12 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
     finally:
         st["running"] = False
         st["finished_at"] = _now()
+        n_errors = len(st["errors"])
         st["errors"] = st["errors"][:20]
+        _save(tenant_id, st)
+        log.info("site import %s (%s) %s: %s products (%s new, %s updated, %s on request), "
+                 "%s/%s pages read, %s stored, %s errors", tenant_id, root, st["step"],
+                 st["products_found"], st["products_created"], st["products_updated"],
+                 st["products_on_request"], st["pages_read"], st["pages_found"],
+                 st["kb_documents"], n_errors)
     return dict(st)
