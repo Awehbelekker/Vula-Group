@@ -81,11 +81,15 @@ def shop_data(products: list) -> list:
         opts = []
         for p in members:
             colour = pf.colour_of(p.get("name") or "") if r["colours"] else None
+            imgs = [u for u in [p.get("image_url")] + list(p.get("images") or [])
+                    if isinstance(u, str) and u.startswith("http")]
             opts.append({"pid": str(p.get("id")), "colour": colour,
                          "swatch": _SWATCH.get((colour or "").lower(), "#b8b2a6"),
                          "name": p.get("name") or "Item",
                          "cents": int(p.get("price_cents") or 0),
-                         "img": p.get("image_url") or ""})
+                         "kg": str(p.get("sold_by") or "").lower() == "kg",
+                         "img": p.get("image_url") or "",
+                         "imgs": list(dict.fromkeys(imgs))[:8]})
         lead = members[0]
         full = re.sub(r"\s+", " ", (lead.get("description") or lead.get("notes") or "")).strip()
         out.append({"id": r["id"], "title": r["title"] if r["colours"] else (lead.get("name") or r["title"]),
@@ -124,9 +128,11 @@ async def photo_menu(tenant_id: str) -> HTMLResponse:
         if r["cat"] not in cats:
             cats.append(r["cat"])
     cat_labels = {c: c.replace("_", " ").title() for c in cats}
-    can_order = bool(web_basket.wa_number(tenant_id))
+    number = web_basket.wa_number(tenant_id)
+    can_order = bool(number) and web_basket.shop_enabled(tenant_id, products)
     data = json.dumps({"tenant": tenant_id, "ranges": ranges, "cats": cat_labels,
-                       "canOrder": can_order}).replace("</", "<\\/")
+                       "canOrder": can_order, "chat": f"https://wa.me/{number}" if number else ""}
+                      ).replace("</", "<\\/")
 
     page = _SHOP_HTML.replace("{{TITLE}}", shop_name).replace("{{ACCENT}}", accent) \
         .replace("{{LOGO}}", f'<img class="logo" src="{logo_url}" alt="">' if logo_url else "") \
@@ -162,7 +168,7 @@ async def create_basket(tenant_id: str, request: Request) -> JSONResponse:
     if _throttled(f"{tenant_id}:{ip}"):
         return JSONResponse({"error": "Too many baskets — wait a minute and try again."}, status_code=429)
     number = web_basket.wa_number(tenant_id)
-    if not number:
+    if not number or not await web_basket.shop_enabled_for(tenant_id):
         return JSONResponse({"error": "This shop isn't taking WhatsApp orders yet."}, status_code=409)
     try:
         body = await request.json()
@@ -184,6 +190,14 @@ _SHOP_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);padding-bottom:96px;-webkit-text-size-adjust:100%}
 header{position:sticky;top:0;z-index:5;background:var(--bg);padding:14px 16px 10px;border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.brand h1{flex:1}
+.hbtn{position:relative;display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--text);text-decoration:none;font-size:19px;cursor:pointer}
+.badge{position:absolute;top:-4px;right:-4px;min-width:19px;height:19px;border-radius:10px;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:none;align-items:center;justify-content:center;padding:0 5px}
+.badge.show{display:flex}
+.gal{position:relative}
+.strip{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none}.strip::-webkit-scrollbar{display:none}
+.strip img{flex:none;width:100%;scroll-snap-align:center}
+.count{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:3px 8px;border-radius:999px}
 .logo{max-height:{{LOGO_H}}px;max-width:{{LOGO_W}}px;object-fit:contain}
 h1{font-size:20px;margin:0;letter-spacing:-.01em}
 .search{width:100%;font-size:16px;padding:11px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--text);outline:none}
@@ -200,7 +214,7 @@ main{padding:14px 16px;display:grid;gap:14px;grid-template-columns:repeat(auto-f
 .price{font-size:15px;font-weight:700;color:var(--accent)}
 .price small{font-weight:500;color:var(--muted);margin-left:6px}
 .desc{font-size:13.5px;color:var(--muted);line-height:1.45;margin:0}
-.more{background:none;border:0;color:var(--accent);font-size:13px;padding:0;cursor:pointer}
+.more{background:none;border:0;color:var(--accent);font-size:13px;padding:0;cursor:pointer;align-self:flex-start}
 .sw{display:flex;flex-wrap:wrap;gap:6px}
 .swb{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:999px;padding:5px 10px 5px 6px;font-size:13px;cursor:pointer}
 .swb i{width:16px;height:16px;border-radius:50%;border:1px solid rgba(0,0,0,.15);display:block}
@@ -233,7 +247,9 @@ main{padding:14px 16px;display:grid;gap:14px;grid-template-columns:repeat(auto-f
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <header>
-  <div class="brand">{{LOGO}}<h1>{{TITLE}}</h1></div>
+  <div class="brand">{{LOGO}}<h1>{{TITLE}}</h1>
+    <a class="hbtn" id="chat" aria-label="Back to WhatsApp chat" style="display:none">💬</a>
+    <button class="hbtn" id="cartbtn" type="button" aria-label="Basket" style="display:none">🛒<span class="badge" id="badge"></span></button></div>
   <input class="search" id="q" type="search" placeholder="Search — e.g. round basin, charcoal" autocomplete="off">
   <div class="cats" id="cats"></div>
 </header>
@@ -258,10 +274,16 @@ function matches(r){if(cat&&r.cat!==cat)return false;var w=words(q);if(!w.length
   return w.every(function(x){return hay.indexOf(x.replace(/s$/,''))>=0})}
 function card(r){
   var o=r.opts[sel[r.id]],c=el('article',{'class':'card',id:'r-'+r.id});
-  var img=el('img',{'class':'pic',src:o.img||PH,alt:r.title,loading:'lazy'});c.appendChild(img);
+  var imgs=(o.imgs&&o.imgs.length)?o.imgs:[o.img||PH],gal=el('div',{'class':'gal'}),strip=el('div',{'class':'strip'});
+  imgs.forEach(function(u,i){strip.appendChild(el('img',{'class':'pic',src:u,alt:r.title+(imgs.length>1?' photo '+(i+1):''),loading:'lazy'}))});
+  gal.appendChild(strip);
+  if(imgs.length>1){var cnt=el('span',{'class':'count'},'1 / '+imgs.length);gal.appendChild(cnt);
+    strip.addEventListener('scroll',function(){cnt.textContent=(Math.round(strip.scrollLeft/strip.clientWidth)+1)+' / '+imgs.length},{passive:true})}
+  c.appendChild(gal);
   var b=el('div',{'class':'body'});c.appendChild(b);
   b.appendChild(el('h3',{'class':'title'},r.title));
-  var pr=el('div',{'class':'price'},R(o.cents));if(o.colour){pr.appendChild(el('small',null,o.colour))}b.appendChild(pr);
+  var pr=el('div',{'class':'price'},R(o.cents)+(o.kg?' /kg':''));if(o.colour){pr.appendChild(el('small',null,o.colour))}b.appendChild(pr);
+  var step=o.kg?0.5:1;if(qty[r.id]<step||(qty[r.id]*2)%(step*2))qty[r.id]=step;
   if(r.opts.length>1){var sw=el('div',{'class':'sw'});r.opts.forEach(function(op,i){
     var s=el('button',{'class':'swb'+(i===sel[r.id]?' on':''),type:'button','aria-pressed':i===sel[r.id]});
     var dot=el('i');dot.style.background=op.swatch;s.appendChild(dot);s.appendChild(document.createTextNode(op.colour||op.name));
@@ -269,12 +291,13 @@ function card(r){
   if(r.short){var d=el('p',{'class':'desc'},r.short);b.appendChild(d);
     if(r.full&&r.full.length>r.short.length+5){var m=el('button',{'class':'more',type:'button'},'More');
       m.onclick=function(){var open=m.textContent==='More';d.textContent=open?r.full:r.short;m.textContent=open?'Less':'More'};b.appendChild(m)}}
-  var buy=el('div',{'class':'buy'}),qq=el('div',{'class':'qty'}),minus=el('button',{type:'button','aria-label':'Fewer'},'−'),n=el('span',null,String(qty[r.id])),plus=el('button',{type:'button','aria-label':'More'},'+');
-  minus.onclick=function(){qty[r.id]=Math.max(1,qty[r.id]-1);n.textContent=qty[r.id]};plus.onclick=function(){qty[r.id]=Math.min(99,qty[r.id]+1);n.textContent=qty[r.id]};
+  function ql(v){return o.kg?(v+' kg'):String(v)}
+  var buy=el('div',{'class':'buy'}),qq=el('div',{'class':'qty'}),minus=el('button',{type:'button','aria-label':'Less'},'−'),n=el('span',null,ql(qty[r.id])),plus=el('button',{type:'button','aria-label':'More'},'+');
+  minus.onclick=function(){qty[r.id]=Math.max(step,qty[r.id]-step);n.textContent=ql(qty[r.id])};plus.onclick=function(){qty[r.id]=Math.min(99,qty[r.id]+step);n.textContent=ql(qty[r.id])};
   qq.appendChild(minus);qq.appendChild(n);qq.appendChild(plus);buy.appendChild(qq);
   if(D.canOrder){var add=el('button',{'class':'add',type:'button'},'Add to basket');add.onclick=function(){
-    var op=r.opts[sel[r.id]],cur=basket[op.pid]||{qty:0};basket[op.pid]={qty:Math.min(99,cur.qty+qty[r.id]),name:op.name,cents:op.cents,img:op.img};
-    save();bar();toast('✓ Added '+qty[r.id]+' × '+(op.colour||'item')+' to your basket');qty[r.id]=1;n.textContent='1'};buy.appendChild(add)}
+    var op=r.opts[sel[r.id]],cur=basket[op.pid]||{qty:0};basket[op.pid]={qty:Math.min(99,cur.qty+qty[r.id]),name:op.name,cents:op.cents,img:op.img,kg:op.kg};
+    save();bar();toast('✓ Added '+ql(qty[r.id])+(op.colour?' × '+op.colour:'')+' to your basket');qty[r.id]=step;n.textContent=ql(step)};buy.appendChild(add)}
   b.appendChild(buy);return c}
 function render(){var g=document.getElementById('grid');g.innerHTML='';var list=D.ranges.filter(matches);
   list.forEach(function(r){g.appendChild(card(r))});
@@ -283,12 +306,13 @@ function cats(){var box=document.getElementById('cats'),keys=Object.keys(D.cats)
   [['','All']].concat(keys.map(function(k){return [k,D.cats[k]]})).forEach(function(kv){
     var b=el('button',{'class':'cat'+(kv[0]===cat?' on':''),type:'button'},kv[1]);
     b.onclick=function(){cat=kv[0];box.innerHTML='';cats();render()};box.appendChild(b)})}
-function totals(){var n=0,c=0;for(var k in basket){n+=basket[k].qty;c+=basket[k].qty*basket[k].cents}return {n:n,c:c}}
+function totals(){var n=0,c=0;for(var k in basket){n+=basket[k].kg?1:basket[k].qty;c+=Math.round(basket[k].qty*basket[k].cents)}return {n:n,c:c}}
 function bar(){var t=totals(),b=document.getElementById('bar');b.classList.toggle('show',t.n>0&&D.canOrder);
+  var bd=document.getElementById('badge');bd.textContent=t.n;bd.classList.toggle('show',t.n>0);
   var s=document.getElementById('sum');s.innerHTML='';s.appendChild(el('span',null,'🛒 '+t.n+' item'+(t.n===1?'':'s')+' · tap to review'));s.appendChild(el('b',null,R(t.c)))}
 function sheet(){var p=document.getElementById('panel');p.innerHTML='';p.appendChild(el('h2',null,'Your basket'));
   Object.keys(basket).forEach(function(pid){var it=basket[pid],l=el('div',{'class':'line'});
-    l.appendChild(el('img',{src:it.img||PH,alt:''}));var nm=el('div',{'class':'n'},it.name);nm.appendChild(el('small',null,it.qty+' × '+R(it.cents)));l.appendChild(nm);
+    l.appendChild(el('img',{src:it.img||PH,alt:''}));var nm=el('div',{'class':'n'},it.name);nm.appendChild(el('small',null,(it.kg?it.qty+' kg':it.qty+' ×')+' '+R(it.cents)+(it.kg?'/kg':'')));l.appendChild(nm);
     var x=el('button',{'class':'x',type:'button'},'Remove');x.onclick=function(){delete basket[pid];save();bar();if(!totals().n)close();else sheet()};l.appendChild(x);p.appendChild(l)});
   var t=totals(),tot=el('div',{'class':'tot'});tot.appendChild(el('span',null,'Subtotal'));tot.appendChild(el('span',null,R(t.c)));p.appendChild(tot);
   p.appendChild(el('p',{'class':'note'},'Delivery and payment are sorted out with you on WhatsApp.'));
@@ -305,6 +329,8 @@ function send(){var btns=document.querySelectorAll('.wa');btns.forEach(function(
   .finally(function(){btns.forEach(function(b){b.disabled=false})})}
 document.getElementById('q').addEventListener('input',function(e){q=e.target.value.trim();render()});
 document.getElementById('sum').onclick=sheet;document.getElementById('go').onclick=sheet;
+if(D.canOrder){var cb=document.getElementById('cartbtn');cb.style.display='flex';cb.onclick=function(){if(totals().n)sheet();else toast('Your basket is empty')}}
+if(D.chat){var ch=document.getElementById('chat');ch.href=D.chat;ch.style.display='flex'}
 document.getElementById('sheet').onclick=function(e){if(e.target.id==='sheet')close()};
 var h=location.hash||'';if(h.indexOf('#c-')===0){cat=decodeURIComponent(h.slice(3))}
 cats();render();bar();

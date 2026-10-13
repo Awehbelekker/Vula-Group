@@ -233,3 +233,93 @@ async def test_no_cards_when_a_range_has_no_photo_or_whatsapp_takes_neither(monk
     with patch("vula.api.whatsapp.httpx.AsyncClient", return_value=client):
         assert not await whatsapp._send_range_cards("1", "seedleme", {"token": "t", "phone_id": "p"}, "x",
                                                     pf.group(_products()))
+
+
+# ── One standard shop for every business that sells (2026-10-13, Ian: "Off the Hook would
+# benefit of the same process — should we not have a standard?") ─────────────────────────────
+
+OTH = [{"id": "hake", "slug": "hake", "category": "fresh_fish", "sold_by": "kg", "price_cents": 16000,
+        "name": "Hake Fillets", "image_url": "https://cdn/hake.jpg", "images": ["https://cdn/hake-2.jpg"]},
+       {"id": "prawns", "slug": "prawns", "category": "frozen_seafood", "sold_by": "pack",
+        "price_cents": 26000, "name": "Argentinian Pink Prawns (whole) — 1kg", "image_url": "https://cdn/p.jpg"}]
+
+
+def test_the_shop_is_on_by_switch_or_when_ranges_come_in_colours(monkeypatch):
+    monkeypatch.setattr("vula.api.tenants.enabled_modules", lambda tid: ["products", "orders"])
+    assert web_basket.shop_enabled("off-the-hook", OTH) is False            # until it's switched on
+    assert web_basket.shop_enabled("seedleme", _products()) is True         # colour ranges
+    monkeypatch.setattr("vula.api.tenants.enabled_modules", lambda tid: ["products", "wa_shop"])
+    assert web_basket.shop_enabled("off-the-hook", OTH) is True
+
+
+def test_new_food_and_retail_shops_get_it_as_standard():
+    from vula.api.tenants import BUSINESS_TYPES, MODULES
+    assert "wa_shop" in MODULES
+    assert "wa_shop" in BUSINESS_TYPES["food"]["modules"] and "wa_shop" in BUSINESS_TYPES["retail"]["modules"]
+
+
+def test_fish_is_bought_by_the_half_kilo_and_packs_whole():
+    hake, prawns = OTH
+    assert [web_basket.norm_qty(hake, q) for q in (0.2, 0.5, 1.3, 2, "x", -1)] == [0.5, 0.5, 1.5, 2.0, 0.0, 0.0]
+    assert [web_basket.norm_qty(prawns, q) for q in (1, 2.7, 0.5)] == [1.0, 2.0, 0.0]
+    assert (web_basket.qty_label(hake, 1.5), web_basket.qty_label(prawns, 2.0)) == ("1.5 kg", "2")
+
+
+def test_the_page_shows_every_photo_and_per_kg_prices():
+    hake, prawns = menu_page.shop_data(OTH)
+    assert hake["opts"][0]["imgs"] == ["https://cdn/hake.jpg", "https://cdn/hake-2.jpg"]
+    assert hake["opts"][0]["kg"] is True and prawns["opts"][0]["kg"] is False
+
+
+@pytest.fixture()
+def oth_shop(sent, monkeypatch):
+    sent["cta"], sent["lists"], sent["cart"] = [], [], []
+
+    async def products(tid, category=None, **k):
+        return [p for p in OTH if category in (None, p["category"])]
+
+    async def cta(creds, number, body, label, url, image_url=None):
+        sent["cta"].append((label, url, image_url))
+        return True
+
+    async def lst(creds, number, header, body, footer, button, sections):
+        sent["lists"].append(body)
+        return True
+
+    async def add(tid, cart_id, pid, qty, variant_id=None):
+        sent["cart"].append((pid, qty))
+    monkeypatch.setattr("vula.commerce.service.list_products", products)
+    monkeypatch.setattr("vula.commerce.service.get_invoice_settings", AsyncMock(return_value={"trading_as": "Off the Hook"}))
+    monkeypatch.setattr("vula.commerce.service.get_or_create_cart", AsyncMock(return_value={"id": "c", "commerce_cart_items": []}))
+    monkeypatch.setattr("vula.commerce.service.add_to_cart", add)
+    monkeypatch.setattr(whatsapp, "_send_wa_cta_url", cta)
+    monkeypatch.setattr(whatsapp, "_get_tenant_wa_creds", AsyncMock(return_value={"token": "t", "phone_id": "p"}))
+    monkeypatch.setattr(whatsapp, "_send_wa_list", lst)
+    monkeypatch.setattr(whatsapp, "_meta_catalog_id", lambda tid: "")
+    monkeypatch.setattr(whatsapp.settings, "public_base_url", "https://api.example")
+    monkeypatch.setattr("vula.api.tenants.enabled_modules", lambda tid: ["products", "orders", "wa_shop"])
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_the_welcome_has_a_shop_now_button_with_a_photo(oth_shop):
+    await whatsapp._send_commerce_welcome("27820000000", "off-the-hook")
+    assert oth_shop["cta"] == [("Shop now", "https://api.example/menu/off-the-hook", "https://cdn/hake.jpg")]
+    assert "https://" not in oth_shop["lists"][0]                       # no pasted link under the menu
+
+
+@pytest.mark.asyncio
+async def test_with_the_shop_off_the_welcome_is_as_before(oth_shop, monkeypatch):
+    monkeypatch.setattr("vula.api.tenants.enabled_modules", lambda tid: ["products", "orders"])
+    await whatsapp._send_commerce_welcome("27820000000", "off-the-hook")
+    assert oth_shop["cta"] == [] and "https://api.example/menu/off-the-hook" in oth_shop["lists"][0]
+
+
+@pytest.mark.asyncio
+async def test_fish_gets_kilo_buttons_and_half_a_kilo_goes_in_the_cart(oth_shop):
+    await whatsapp._handle_commerce_interactive("27820000000", "col_hake", "Hake", "m1", "off-the-hook")
+    body, ids = oth_shop["buttons"][0]
+    assert ids == ["qty_hake_0.5", "qty_hake_1", "qty_hake_2"] and "R160.00 per kg" in body
+    await whatsapp._handle_commerce_interactive("27820000000", "qty_hake_0.5", "0.5 kg", "m2", "off-the-hook")
+    assert oth_shop["cart"] == [("hake", 0.5)]
+    assert "Added 0.5 kg × Hake Fillets" in oth_shop["buttons"][1][0]

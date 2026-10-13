@@ -57,15 +57,18 @@ MODULES: dict[str, str] = {
     "estimating": "Estimating (Quick Cost / QS Pro / Takeoff)",
     "ai_draft":   "AI Draft",
     "training":   "Training KB",
+    # 2026-10-13: photo cards in WhatsApp, tap to order (colour, then how many), the shop's web
+    # page with a basket that orders back into WhatsApp — vula/commerce/web_basket.py.
+    "wa_shop":    "WhatsApp shop (photo cards, tap to order, web basket)",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
 BUSINESS_TYPES: dict[str, dict] = {
     "food":     {"label": "Food / Restaurant / Takeaway",
-                 "modules": ["products", "orders", "payments", "invoices", "delivery",
+                 "modules": ["products", "orders", "payments", "invoices", "delivery", "wa_shop",
                              "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
     "retail":   {"label": "Retail / E-commerce",
-                 "modules": ["products", "orders", "payments", "invoices", "pages",
+                 "modules": ["products", "orders", "payments", "invoices", "pages", "wa_shop",
                              "crm", "reports", "broadcasts", "marketing", "inbox", "team", "automations"]},
     "services": {"label": "Professional services (architecture, agency, consulting)",
                  "modules": ["invoices", "bookings", "projects", "documents", "finances", "fieldops",

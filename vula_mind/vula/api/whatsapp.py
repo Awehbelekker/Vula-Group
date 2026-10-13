@@ -8163,7 +8163,11 @@ async def _handle_commerce_interactive(
         return
     if reply_id.startswith("qty_"):
         pid, _, qty = reply_id[4:].rpartition("_")
-        await _add_tapped_to_cart(phone, tenant_id, pid, int(qty or 1), msg_id)
+        try:
+            amount = float(qty or 1)
+        except ValueError:
+            amount = 1.0
+        await _add_tapped_to_cart(phone, tenant_id, pid, amount, msg_id)
         return
     if reply_id == "cart_checkout":
         await _handle_commerce_message(phone, "I'd like to check out now", msg_id, tenant_id)
@@ -8256,7 +8260,8 @@ async def _send_wa_buttons(creds: dict, number: str, body: str, buttons: list,
         return False
 
 
-async def _send_wa_cta_url(creds: dict, number: str, body: str, label: str, url: str) -> bool:
+async def _send_wa_cta_url(creds: dict, number: str, body: str, label: str, url: str,
+                           image_url: Optional[str] = None) -> bool:
     """Send an interactive WhatsApp "call to action" URL button: the message shows `label` as a
     button and never displays the address. Only valid inside the 24 h customer-service window.
     False on any failure so the caller can fall back to a plain-text link."""
@@ -8270,6 +8275,8 @@ async def _send_wa_cta_url(creds: dict, number: str, body: str, label: str, url:
                 headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                 json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
                       "interactive": {"type": "cta_url",
+                                      **({"header": {"type": "image", "image": {"link": image_url}}}
+                                         if image_url else {}),
                                       "body": {"text": body[:1024]},
                                       "action": {"name": "cta_url",
                                                  "parameters": {"display_text": label[:20], "url": url}}}},
@@ -8399,7 +8406,7 @@ async def _send_range_cards(phone: str, tenant_id: str, creds: dict, body: str, 
         extra = (f"{len(r['colours'])} colours · " if r["colours"] else "") + _pf.price_label(r)
         cards.append({"image": r["image_url"], "id": f"rng_{r['id']}",
                       "text": f"*{r['title']}*\n" + " · ".join(x for x in (size, extra) if x),
-                      "button": "Choose colour" if r["colours"] else "Order this",
+                      "button": "Choose colour" if r["colours"] else "Add to cart",
                       "url": _shop_url(tenant_id, f"#r-{r['id']}")})
     return await _send_wa_carousel(creds, _wa_number(phone), body, cards)
 
@@ -8426,6 +8433,13 @@ async def _shop_products(tenant_id: str, category: Optional[str] = None) -> list
         return []
 
 
+async def _shop_on(tenant_id: str) -> bool:
+    """The WhatsApp shop (photo cards, tap to order, web basket) is switched on for this tenant —
+    vula/commerce/web_basket.py::shop_enabled, the one switch every shop shares."""
+    from vula.commerce import web_basket
+    return web_basket.shop_enabled(tenant_id, await _shop_products(tenant_id))
+
+
 async def _send_category_products(phone: str, tenant_id: str, category: str, page: int = 0) -> bool:
     """Send a sub-menu of in-stock products (with prices) for one category. A shop whose
     products come in colours gets one row per range ("9 colours · R1,699"), paged by nine."""
@@ -8435,12 +8449,14 @@ async def _send_category_products(phone: str, tenant_id: str, category: str, pag
     prods = await _shop_products(tenant_id, category)
     from vula.commerce import product_families as _pf
     ranges = _pf.group(prods)
-    if any(r["colours"] for r in ranges):
+    if await _shop_on(tenant_id):
         label = (_CATEGORY_LABELS.get(category) or category.replace("_", " ").title())
         cards = ranges[page * 10:(page + 1) * 10]
         left = len(ranges) - (page + 1) * 10
         if await _send_range_cards(phone, tenant_id, creds,
-                                   f"{label} — swipe to see them all, tap one to pick a colour.", cards):
+                                   f"{label} — swipe to see them all"
+                                   + (", tap one to pick a colour." if any(r["colours"] for r in cards) else
+                                      ", tap one to add it to your cart."), cards):
             if left > 0:
                 await _send_wa_buttons(creds, _wa_number(phone),
                                        f"Showing {page * 10 + 1}–{page * 10 + len(cards)} of {len(ranges)}. "
@@ -8499,8 +8515,9 @@ async def _maybe_send_search_results(phone: str, text: str, tenant_id: str,
         return False
     prods = await _shop_products(tenant_id)
     from vula.commerce import product_families as _pf
-    if not any(r["colours"] for r in _pf.group(prods)):
-        return False                       # a shop without colour ranges: the assistant answers
+    from vula.commerce import web_basket
+    if not web_basket.shop_enabled(tenant_id, prods):
+        return False                       # shop switched off: the assistant answers
     found = _pf.group(match_products(prods, t))
     if not found:
         return False
@@ -8646,31 +8663,40 @@ async def _send_quantity_choice(phone: str, tenant_id: str, product_id: str) -> 
     if not p or not creds:
         await _send_reply(phone, "That one's no longer available — reply *menu* to see what's in stock.", tenant_id=tenant_id)
         return
-    body = (f"{p['name']}\n{_pf.rands(int(p.get('price_cents') or 0))} each — how many would you like? "
-            "(For more than 3, just type the number.)")
+    from vula.commerce import web_basket
+    price = _pf.rands(int(p.get("price_cents") or 0))
+    if web_basket.sold_by_kg(p):
+        body = f"{p['name']}\n{price} per kg — how much would you like? (Or type an amount, e.g. 1.5kg.)"
+        options = (0.5, 1, 2)
+    else:
+        body = f"{p['name']}\n{price} each — how many would you like? (For more than 3, just type the number.)"
+        options = (1, 2, 3)
     await _send_wa_buttons(creds, _wa_number(phone), body,
-                           [{"id": f"qty_{p['id']}_{n}", "title": str(n)} for n in (1, 2, 3)],
+                           [{"id": f"qty_{p['id']}_{n}", "title": web_basket.qty_label(p, n)} for n in options],
                            image_url=p.get("image_url") or None)
 
 
-async def _add_tapped_to_cart(phone: str, tenant_id: str, product_id: str, qty: int, msg_id: str) -> None:
+async def _add_tapped_to_cart(phone: str, tenant_id: str, product_id: str, qty: float, msg_id: str) -> None:
     """Add exactly what was tapped (priced from the live product row), then show the cart with
     Checkout / Keep shopping. Checkout is the assistant's own flow: details, then payment."""
     from vula.commerce import service as _cs
+    from vula.commerce import web_basket
     p = next((x for x in await _shop_products(tenant_id) if str(x.get("id")) == str(product_id)), None)
     creds = await _resolve_wa(tenant_id)
-    if not p or not creds or qty < 1:
+    qty = web_basket.norm_qty(p, qty)
+    if not p or not creds or not qty:
         await _send_reply(phone, "That one's no longer available — reply *menu* to see what's in stock.", tenant_id=tenant_id)
         return
     try:
         cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
-        await _cs.add_to_cart(tenant_id, cart["id"], p["id"], float(qty))
+        await _cs.add_to_cart(tenant_id, cart["id"], p["id"], qty)
         cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
     except Exception as exc:
         logger.warning("tap add-to-cart failed for %s: %s", tenant_id, exc)
-        await _handle_commerce_message(phone, f"I'd like {qty} x {p['name']}", msg_id, tenant_id)
+        await _handle_commerce_message(phone, f"I'd like {web_basket.qty_label(p, qty)} x {p['name']}", msg_id, tenant_id)
         return
-    await _send_cart_summary(phone, tenant_id, creds, cart, f"✅ Added {qty} × {p['name']}.")
+    await _send_cart_summary(phone, tenant_id, creds, cart,
+                             f"✅ Added {web_basket.qty_label(p, qty)} × {p['name']}.")
 
 
 async def _send_cart_summary(phone: str, tenant_id: str, creds: dict, cart: dict, headline: str) -> None:
@@ -8797,7 +8823,8 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     # Optional hero image, sent as its own message right before the list — WhatsApp's list
     # type has no image-header slot, so this is the closest thing to a "rich menu" it allows.
     header_image_url = (inv_settings or {}).get("menu_header_image_url") or ""
-    if header_image_url:
+    shop_ready = bool(menu_url) and bool(prods) and await _shop_on(tenant_id)
+    if header_image_url and not shop_ready:       # with the shop on, it heads the "Shop now" message
         await _send_wa_image(creds, number, header_image_url)
     # WhatsApp's own catalogue, when the shop has one connected: a "View catalog" button first.
     if _meta_catalog_id(tenant_id) and prods:
@@ -8807,7 +8834,15 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
             prods[0].get("slug") or "")
 
     body_text = "Tap a category, or just type what you're looking for."
-    if menu_url:
+    shop_on = False
+    if shop_ready:
+        # Like a shop's "Shop now" campaign button: the page opens inside WhatsApp, the basket
+        # comes back to this chat. The shop's banner (or a product photo) heads the message.
+        hero = header_image_url or next((p.get("image_url") for p in prods if p.get("image_url")), None)
+        shop_on = await _send_wa_cta_url(
+            creds, number, "🛍️ Browse every product with photos, pick colours and fill your basket — "
+            "it comes straight back here to check out.", "Shop now", menu_url, image_url=hero)
+    if menu_url and not shop_on:
         body_text += f"\n\n🛍️ Shop with photos and order online: {menu_url}"
     ok = await _send_wa_list(
         creds, number, shop_name[:60], body_text,
