@@ -54,6 +54,19 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
         "hour": 8, "minute": 0, "day_of_week": 0, "template_suffix": "pending_project_nudge",
         "description": "Weekly reminder when filed documents are sitting unassigned to a "
                        "project (default: Mondays) — skipped when there are none."},
+    # Bringing customers back (2026-10-13, vula/commerce/bring_back.py).
+    "basket_reminder": {
+        "label": "Basket reminder", "kind": "interval",
+        "interval_minutes": 30, "template_suffix": "basket_reminder",
+        "description": "A customer left items in their WhatsApp cart 1–20 hours ago without "
+                       "ordering: one reminder with a photo, the cart and a Checkout button "
+                       "(inside WhatsApp's 24-hour window only; opted-out customers skipped)."},
+    "reorder_nudge": {
+        "label": "\"Order again?\" nudge", "kind": "daily",
+        "hour": 10, "minute": 0, "template_suffix": "reorder_nudge",
+        "description": "Customers whose last order was delivered 30 days ago, with no order "
+                       "since, get \"Fancy the same again?\" with what they had — a marketing "
+                       "message, so off until you switch it on; opted-out customers skipped."},
     # The only job here NOT commerce-specific — runs for every tenant (server.py's
     # _stale_escalation_scheduler_loop iterates all tenants, not just ones with the "orders"
     # module), reusing this same config/interval-claim machinery for admin visibility and
@@ -85,6 +98,10 @@ TEMPLATE_PREFIX: Dict[str, str] = {"off-the-hook": "oth"}
 # of concrete basins would otherwise get Off the Hook's "set this week's catch" reminder every
 # Friday). A tenant can still switch one on in the Scheduling tab.
 _ONLY_FOR_TYPES: Dict[str, set] = {"friday_catch_reminder": {"food"}}
+# Jobs on by default only for a business with one of these modules (the WhatsApp shop), and
+# jobs that are off until the business switches them on (marketing).
+_ONLY_WITH_MODULES: Dict[str, set] = {"basket_reminder": {"wa_shop"}}
+_OFF_UNTIL_SWITCHED_ON = {"reorder_nudge"}
 
 
 def template_name(tenant_id: str, suffix: str) -> str:
@@ -93,6 +110,15 @@ def template_name(tenant_id: str, suffix: str) -> str:
 
 
 def _default_enabled(tenant_id: str, job_type: str) -> bool:
+    if job_type in _OFF_UNTIL_SWITCHED_ON:
+        return False
+    mods = _ONLY_WITH_MODULES.get(job_type)
+    if mods:
+        try:
+            from vula.api.tenants import enabled_modules
+            return bool(mods & set(enabled_modules(tenant_id)))
+        except Exception:
+            return False
     types = _ONLY_FOR_TYPES.get(job_type)
     if not types:
         return True

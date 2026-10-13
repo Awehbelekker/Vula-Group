@@ -374,6 +374,12 @@ async def _run_commerce_job(tenant_id: str, job_type: str, tpl: str) -> None:
         await _send_oth_sales_summary(only_tenant=tenant_id, template_override=tpl)
     elif job_type == "pending_project_nudge":
         await _send_pending_project_nudge(only_tenant=tenant_id, template_override=tpl)
+    elif job_type == "basket_reminder":
+        from vula.commerce import bring_back
+        await bring_back.basket_reminders(tenant_id)
+    elif job_type == "reorder_nudge":
+        from vula.commerce import bring_back
+        await bring_back.reorder_nudges(tenant_id, tpl)
 
 
 async def _commerce_jobs_scheduler_loop() -> None:

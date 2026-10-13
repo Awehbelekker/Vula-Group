@@ -281,6 +281,9 @@ STANDARD_JOB_TEMPLATES = [
     ("order_update",            # order_updates.notify, outside the 24h window · name, order id, news
      "Hi {{1}}, an update on your order {{2}}: {{3}} Reply here with any questions.",
      "UTILITY", {"orders"}),
+    ("reorder_nudge",           # bring_back.reorder_nudges · name, shop, what they had last time
+     "Hi {{1}}, it's been a while since your last order from {{2}} ({{3}}). Fancy the same again? "
+     "Reply ORDER AGAIN and we'll set it up, or STOP to opt out.", "MARKETING", {"orders"}),
     ("sales_summary",           # server.py::_send_oth_sales_summary · date, orders, paid, revenue
      "Sales summary for {{1}}: {{2}} orders, {{3}} paid, R{{4}} in revenue. "
      "Open Vula for the breakdown.", "UTILITY", {"orders"}),

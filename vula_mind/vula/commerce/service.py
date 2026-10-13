@@ -2093,7 +2093,7 @@ async def get_abandoned_carts(tenant_id: str, hours_old: int = 1) -> List[dict]:
 
     # Get active carts updated before cutoff
     carts = _client().table("commerce_carts") \
-        .select("*, commerce_cart_items(*, commerce_products(name))") \
+        .select("*, commerce_cart_items(*, commerce_products(name,image_url))") \
         .eq("tenant_id", tenant_id) \
         .eq("status", "active") \
         .lt("updated_at", cutoff) \
@@ -2119,7 +2119,7 @@ async def get_reorder_candidates(tenant_id: str, days_ago: int = 7) -> List[dict
     end = (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()
 
     result = _client().table("commerce_orders") \
-        .select("customer_phone, customer_name, commerce_order_items(product_name)") \
+        .select("id, created_at, customer_phone, customer_name, commerce_order_items(product_name)") \
         .eq("tenant_id", tenant_id) \
         .eq("status", "delivered") \
         .gte("created_at", start) \
