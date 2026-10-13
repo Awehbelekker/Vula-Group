@@ -7321,6 +7321,37 @@ def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
     return False
 
 
+# Where each business's dashboard really lives (mirrors vula_dashboard/src/theme/tenantThemes.js).
+# 2026-10-13 (SeedleMe): the welcome used to build "admin.<shop's own domain>" — right only for
+# Off the Hook; SeedleMe's owner would have been sent to admin.seedleme.com, which doesn't exist,
+# and DIGG to admin.digg.vula-ai.com. Anyone not listed uses the shared dashboard.
+_DASHBOARD_HOSTS = {
+    "off-the-hook": "https://admin.offthehook.co.za",
+    "digg-demo": "https://digg.vula-ai.com",
+}
+
+
+def _dashboard_url(tenant_id: str) -> str:
+    return _DASHBOARD_HOSTS.get(tenant_id) or settings.dashboard_url.rstrip("/")
+
+
+def _profile_invite(tenant_id: str, role: Optional[str]) -> str:
+    """For the owner or a manager of a business whose profile isn't finished: how to finish it
+    on WhatsApp. Customers are answered from it, so a new business starts here."""
+    if (role or "").lower() not in ("owner", "manager", "admin"):
+        return ""
+    try:
+        from vula.commerce.business_profile import status as _profile_status
+        st = _profile_status(tenant_id)
+    except Exception:
+        return ""
+    if not st.get("total") or st.get("answered", 0) >= st["total"]:
+        return ""
+    return (f"\n\nYour business profile is {st['answered']} of {st['total']} done — reply "
+            "*set up my profile* and I'll ask the rest one at a time (about 5 minutes). I answer "
+            "customers from it, and anything left blank I say I need to check.")
+
+
 async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
     """First-contact welcome for a recognized owner/staff member — fires automatically the
     moment their WhatsApp number is recognized (e.g. after being added to the team, or after a
@@ -7335,7 +7366,7 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         digits = "".join(c for c in (phone or "") if c.isdigit())
         digits = "27" + digits[1:] if digits.startswith("0") else digits
         db = _cs._client()
-        rows = (db.table("vula_team_members").select("id,name,welcomed_at")
+        rows = (db.table("vula_team_members").select("id,name,role,welcomed_at")
                 .eq("tenant_id", tenant_id).eq("whatsapp", digits).eq("active", True)
                 .limit(1).execute().data or [])
         if not rows or rows[0].get("welcomed_at"):
@@ -7365,14 +7396,9 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         # doesn't repeat the actual email/password here — those are sent once, separately, via
         # whichever channel that team member's login was actually delivered through; this is just
         # a standing reminder of where to go, safe to resend on every trigger.
-        from vula.api.tenants import store_url as _store_url
-        import re as _re2
-        raw_url = _store_url(tenant_id)
-        host = _re2.sub(r"^https?://", "", raw_url).rstrip("/") if raw_url else None
-        dash_url = f"https://admin.{host}" if host else None
+        dash_url = _dashboard_url(tenant_id)
         dash_line = (f"\n\nYour Vula dashboard is at {dash_url} — log in with the email/password "
-                     f"you were given." if dash_url else
-                     "\n\nAsk your Vula contact for your dashboard login if you don't have it yet.")
+                     f"you were given.")
 
         # 2026-09-18: this used to close with a seafood in-joke ("No fish were harmed...") sent
         # to every tenant's owner regardless of vertical — an architecture firm or a clinic got
@@ -7394,7 +7420,7 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
             lands = "reminders, documents and day-to-day questions"
         msg = (f"Hey {first_name}! 👋 Welcome to Vula — you're all set up as the owner/team "
                f"member for *{shop_name}* here on WhatsApp. This is where your {lands} land "
-               f"from now on.{dash_line}")
+               f"from now on.{dash_line}{_profile_invite(tenant_id, rows[0].get('role'))}")
         await _send_reply(phone, msg, tenant_id)
         logger.info("Sent owner welcome to %s (%s)", phone, tenant_id)
         await _send_staff_capability_menu(phone, tenant_id)
