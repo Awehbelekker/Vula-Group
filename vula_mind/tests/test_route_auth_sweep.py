@@ -57,6 +57,7 @@ PUBLIC = {
     ("POST", "/v1/payfast/notify"): "PayFast ITN — signature-verified in handler",
     ("POST", "/v1/payments/webhook/{tenant_id}/{provider}"): "gateway webhook — verified in handler",
     ("POST", "/v1/yoco/webhook"): "Yoco webhook — signature-verified in handler",
+    ("POST", "/v1/shopify/webhook/{tenant_id}"): "Shopify webhook — HMAC-verified in handler with the store's app secret",
     ("GET", "/v1/whatsapp/webhook"): "Meta verification handshake (verify token)",
     ("POST", "/v1/whatsapp/webhook"): "Meta webhook — X-Hub-Signature-256 verified in handler",
     ("POST", "/v1/whatsapp/connect"): "embedded signup — check_body_tenant in handler",

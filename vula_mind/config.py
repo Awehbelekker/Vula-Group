@@ -203,6 +203,10 @@ class Settings(BaseSettings):
     yoco_public_key: str = ""
     yoco_webhook_secret: str = ""
 
+    # ── Shopify (a business's own store, vula/integrations/shopify.py) ───────
+    # Admin GraphQL API version. Shopify supports each for a year; move it forward then.
+    shopify_api_version: str = "2026-07"
+
     # ── Vula Facebook App (for WhatsApp Embedded Signup) ────────────────────
     # Create at developers.facebook.com — one app for all Vula Commerce clients
     vula_fb_app_id: str = ""       # Facebook App ID
