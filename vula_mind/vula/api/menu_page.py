@@ -99,6 +99,14 @@ def shop_data(products: list) -> list:
     return out
 
 
+@router.get("/shop-ping", include_in_schema=False)
+async def shop_ping(request: Request) -> JSONResponse:
+    """Which shop this address serves — how Vula knows a shop's own domain is live."""
+    from vula.commerce import web_basket
+    return JSONResponse({"shop": web_basket.tenant_for_shop_host(request.headers.get("host") or "")},
+                        headers={"Cache-Control": "no-store"})
+
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def shop_home(request: Request) -> HTMLResponse:
     """shop.<their domain>/ — the shop on its own address, so the customer sees the business's

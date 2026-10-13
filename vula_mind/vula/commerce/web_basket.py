@@ -215,9 +215,9 @@ def sized(url: Optional[str], width: int = 800) -> Optional[str]:
     return urlunsplit(parts._replace(query=urlencode(query)))
 
 
-def shop_host(tenant_id: str) -> str:
-    """The shop's own web address, e.g. shop.seedleme.com — the first of the tenant's `domains`
-    that starts with shop./order./buy./store. ('' when it has none yet)."""
+def configured_shop_host(tenant_id: str) -> str:
+    """The shop's own web address as configured, e.g. shop.seedleme.com — the first of the
+    tenant's `domains` that starts with shop./order./buy./store. ('' when it has none)."""
     try:
         from vula.api.tenants import get_config
         doms = (get_config(tenant_id) or {}).get("domains") or []
@@ -228,6 +228,48 @@ def shop_host(tenant_id: str) -> str:
         if d.startswith(_SHOP_PREFIXES):
             return d
     return ""
+
+
+# Is the shop's own address actually working yet (DNS, certificate, pointing at us)? Checked in
+# the background and remembered, so links switch over by themselves the moment it is — and
+# until then stay on Vula's address, hidden behind the WhatsApp buttons (Ian, 13 Oct: "Vula
+# automatically knows if the domain is done… it's one process, just not visible").
+_READY: Dict[str, tuple] = {}
+READY_TTL_S, NOT_READY_TTL_S = 6 * 3600.0, 300.0
+
+
+async def check_shop_host(host: str, tenant_id: str) -> bool:
+    import time
+    import httpx
+    ok = False
+    try:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=False) as client:
+            r = await client.get(f"https://{host}/shop-ping")
+            ok = r.status_code == 200 and (r.json() or {}).get("shop") == tenant_id
+    except Exception:
+        ok = False
+    _READY[host] = (time.monotonic(), ok)
+    return ok
+
+
+def _host_ready(host: str, tenant_id: str) -> bool:
+    import asyncio
+    import time
+    hit = _READY.get(host)
+    fresh = hit and time.monotonic() - hit[0] < (READY_TTL_S if hit[1] else NOT_READY_TTL_S)
+    if not fresh:
+        try:
+            asyncio.get_running_loop().create_task(check_shop_host(host, tenant_id))
+            _READY[host] = (time.monotonic(), bool(hit and hit[1]))    # one check at a time
+        except RuntimeError:
+            pass
+    return bool(hit and hit[1])
+
+
+def shop_host(tenant_id: str) -> str:
+    """The shop's own address once it's live, else '' (links use Vula's, behind buttons)."""
+    host = configured_shop_host(tenant_id)
+    return host if host and _host_ready(host, tenant_id) else ""
 
 
 def tenant_for_shop_host(host: str) -> Optional[str]:

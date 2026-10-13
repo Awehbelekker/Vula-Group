@@ -8731,9 +8731,10 @@ async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool
         moved = None
     if not moved:
         url = _shop_url(tenant_id)
-        await _send_reply(phone, "I couldn't find that basket — it may already have been ordered. "
-                          + (f"You can fill a new one here: {url}" if url else "Reply *shop* to browse."),
-                          tenant_id=tenant_id)
+        msg = "I couldn't find that basket — it may already have been ordered."
+        if not (url and creds and await _send_wa_cta_url(creds, _wa_number(phone), msg + " You can fill a new one:",
+                                                         "View products", url)):
+            await _send_reply(phone, msg + " Reply *shop* to browse.", tenant_id=tenant_id)
         return True
     cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
     if creds:

@@ -179,8 +179,16 @@ async def test_the_basket_message_shows_the_cart_with_checkout(sent, monkeypatch
 async def test_an_unknown_basket_says_so_and_ordinary_messages_pass(sent, monkeypatch):
     monkeypatch.setattr(web_basket, "claim", AsyncMock(return_value=None))
     monkeypatch.setattr(whatsapp.settings, "public_base_url", "https://api.example")
+    buttons = []
+
+    async def cta(creds, number, body, label, url, image_url=None):
+        buttons.append((body, label, url))
+        return True
+    monkeypatch.setattr(whatsapp, "_send_wa_cta_url", cta)
     assert await whatsapp._maybe_claim_web_basket("27645755210", "order basket ZZZZZZ", "seedleme")
-    assert "couldn't find that basket" in sent["text"][0] and "https://api.example/menu/seedleme" in sent["text"][0]
+    body, label, url = buttons[0]
+    assert "couldn't find that basket" in body and "https://" not in body          # the link sits behind the button
+    assert (label, url) == ("View products", "https://api.example/menu/seedleme")
     assert not await whatsapp._maybe_claim_web_basket("27645755210", "Do you have round basins?", "seedleme")
 
 

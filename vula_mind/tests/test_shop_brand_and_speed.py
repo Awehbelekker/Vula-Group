@@ -19,6 +19,8 @@ def branded(monkeypatch):
                         lambda h: "seedleme" if h.split(":")[0] == "shop.seedleme.com" else None)
     from config import settings
     monkeypatch.setattr(settings, "public_base_url", "https://vula-group-production.up.railway.app")
+    import time
+    monkeypatch.setitem(web_basket._READY, "shop.seedleme.com", (time.monotonic(), True))   # domain is live
 
 
 def test_links_use_the_shops_own_address(branded):
@@ -95,3 +97,47 @@ def test_the_receipt_prints_out_full_screen_with_back_to_chat(branded, monkeypat
     assert 'href="https://wa.me/27713128891">Back to chat' in html
     assert 'href="https://shop.seedleme.com/">Shop again' in html
     assert "Vula" not in html
+
+
+@pytest.mark.asyncio
+async def test_until_the_domain_works_links_stay_on_vulas_address_and_switch_by_themselves(branded, monkeypatch):
+    """Ian, 13 Oct: no extra onboarding step — the link is hidden behind the button anyway, and
+    Vula moves to the shop's own address by itself once it's live."""
+    web_basket._READY.pop("shop.seedleme.com", None)
+    checks = []
+
+    async def check(host, tid):
+        checks.append((host, tid))
+        return True
+    monkeypatch.setattr(web_basket, "check_shop_host", check)
+    assert web_basket.shop_url("seedleme") == "https://vula-group-production.up.railway.app/menu/seedleme"
+    import asyncio
+    await asyncio.sleep(0)
+    assert checks == [("shop.seedleme.com", "seedleme")]
+
+
+@pytest.mark.asyncio
+async def test_a_domain_is_live_when_it_answers_as_that_shop(monkeypatch):
+    from unittest.mock import MagicMock, patch
+    def client_for(status, body):
+        resp = MagicMock(status_code=status)
+        resp.json.return_value = body
+        c = AsyncMock()
+        c.__aenter__ = AsyncMock(return_value=c)
+        c.__aexit__ = AsyncMock(return_value=None)
+        c.get = AsyncMock(return_value=resp)
+        return c
+    with patch("httpx.AsyncClient", return_value=client_for(200, {"shop": "seedleme"})):
+        assert await web_basket.check_shop_host("shop.seedleme.com", "seedleme") is True
+    with patch("httpx.AsyncClient", return_value=client_for(200, {"shop": None})):
+        assert await web_basket.check_shop_host("shop.seedleme.com", "seedleme") is False
+    assert web_basket._READY["shop.seedleme.com"][1] is False
+
+
+def test_the_ping_names_the_shop_for_its_own_host_only(branded):
+    from vula.api import menu_page
+    app = FastAPI()
+    app.include_router(menu_page.router)
+    c = TestClient(app)
+    assert c.get("/shop-ping", headers={"host": "shop.seedleme.com"}).json() == {"shop": "seedleme"}
+    assert c.get("/shop-ping", headers={"host": "example.com"}).json() == {"shop": None}
