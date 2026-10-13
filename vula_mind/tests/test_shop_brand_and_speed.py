@@ -77,7 +77,7 @@ async def test_a_browse_reads_the_catalogue_once_a_minute(monkeypatch):
     assert len(calls) == 3
 
 
-def test_the_receipt_prints_out_with_replay_save_and_back_to_chat(branded, monkeypatch):
+def test_the_receipt_prints_out_full_screen_with_back_to_chat(branded, monkeypatch):
     from vula.api import menu_page
     order = {"id": "o-1", "tenant_id": "seedleme", "display_id": "SEE-00012", "status": "paid",
              "total_cents": 1589900, "subtotal_cents": 1589900, "updated_at": "2026-10-13T12:31:00+00:00",
@@ -90,7 +90,8 @@ def test_the_receipt_prints_out_with_replay_save_and_back_to_chat(branded, monke
     app = FastAPI()
     app.include_router(menu_page.router)
     html = TestClient(app).get(f"/receipt/{order_slip.token_for('o-1')}").text
-    assert 'class="printer"' in html and "@keyframes feed" in html and 'id="replay"' in html
+    assert 'class="printer"' in html and "@keyframes feed" in html
+    assert "Replay" not in html and "Save slip" not in html        # the slip is already in the chat
     assert 'href="https://wa.me/27713128891">Back to chat' in html
     assert 'href="https://shop.seedleme.com/">Shop again' in html
     assert "Vula" not in html

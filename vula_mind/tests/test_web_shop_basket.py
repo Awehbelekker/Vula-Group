@@ -302,10 +302,10 @@ def oth_shop(sent, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_welcome_has_a_shop_now_button_with_a_photo(oth_shop):
+async def test_the_welcome_is_one_photo_message_whose_button_opens_the_shop(oth_shop):
     await whatsapp._send_commerce_welcome("27820000000", "off-the-hook")
-    assert oth_shop["cta"] == [("Shop now", "https://api.example/menu/off-the-hook", "https://cdn/hake.jpg")]
-    assert "https://" not in oth_shop["lists"][0]                       # no pasted link under the menu
+    assert oth_shop["cta"] == [("View products", "https://api.example/menu/off-the-hook", "https://cdn/hake.jpg")]
+    assert oth_shop["lists"] == []          # one message: the button opens the shop, no menu to tap through
 
 
 @pytest.mark.asyncio

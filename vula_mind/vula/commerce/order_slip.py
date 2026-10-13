@@ -225,7 +225,7 @@ def render_png(d: Dict[str, Any]) -> bytes:
     y += 44
     dr.text((cx, y), f"Thank you for shopping with {d['shop'][:24]}!", font=f_txt, fill=ink, anchor="mt")
     img.paste(stamp, (cx - stamp.width // 2, y + 40), stamp)
-    dr.text((cx, H - 46), f"Ordered on WhatsApp · {d['shop'][:30]}", font=f_small,
+    dr.text((cx, H - 46), "Ordered on WhatsApp · powered by Vula", font=f_small,
             fill=tuple(int(c * 0.6) for c in accent), anchor="mt")
     out = io.BytesIO()
     img.save(out, "PNG", optimize=True)

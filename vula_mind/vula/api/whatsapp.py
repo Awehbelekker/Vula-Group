@@ -8744,6 +8744,13 @@ async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool
     return True
 
 
+def _food_shop(tenant_id: str) -> bool:
+    try:
+        return (_tenants_mod().tenant_profile(tenant_id) or {}).get("business_type") == "food"
+    except Exception:
+        return False
+
+
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     """Send a customer's first-contact welcome with an interactive category list, driven by
     the tenant's own name/catalog — not hardcoded to any one tenant."""
@@ -8841,14 +8848,21 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
         from vula.commerce import web_basket
         hero = header_image_url or web_basket.sized(
             next((p.get("image_url") for p in prods if p.get("image_url")), None), 1000)
+        # 2026-10-13, Ian: one message — the button opens the shop straight away ("View products",
+        # not a menu: most shops aren't restaurants). No category list to tap through after it.
         shop_on = await _send_wa_cta_url(
-            creds, number, "🛍️ Browse every product with photos, pick colours and fill your basket — "
-            "it comes straight back here to check out.", "Shop now", menu_url, image_url=hero)
+            creds, number, f"Welcome to {shop_name}! 👋\n\nBrowse all our products with photos, pick "
+            "colours and fill your basket — it comes straight back here to check out.\n\n"
+            "Or just type what you're looking for.", "View products", menu_url, image_url=hero)
+        if shop_on:
+            logger.info("Commerce welcome sent to %s (shop button)", phone)
+            return
     if menu_url and not shop_on:
         body_text += f"\n\n🛍️ Shop with photos and order online: {menu_url}"
     ok = await _send_wa_list(
         creds, number, shop_name[:60], body_text,
-        "Reply any time with what you're after", "View menu", sections,
+        "Reply any time with what you're after", "View menu" if _food_shop(tenant_id) else "View products",
+        sections,
     )
     if ok:
         logger.info("Commerce welcome sent to %s (%d specials, %d cats)", phone, len(spec_rows), len(cat_rows))
