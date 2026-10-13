@@ -16,7 +16,8 @@ PRODUCTS = {"products": [
      "options": [{"name": "Title"}],
      "variants": [{"title": "Default Title", "option1": "Default Title", "price": "27000.00",
                    "sku": "BATH-AG", "available": True}],
-     "images": [{"src": "https://cdn.shopify.com/bath.jpg"}], "tags": ["bath"]},
+     "images": [{"src": "https://cdn.shopify.com/bath.jpg"}, {"src": "https://cdn.shopify.com/bath-side.jpg"}],
+     "tags": ["bath"]},
     {"title": "Round Vessel Basin", "handle": "round-vessel-basin", "product_type": "Basins",
      "body_html": "<p>A round basin.</p>", "options": [{"name": "Colour"}, {"name": "Size"}],
      "variants": [
@@ -177,6 +178,8 @@ async def test_products_come_from_the_catalogue_feed_with_options_as_variants(si
     assert rows["amazon-green-bespoke-bath"]["price_cents"] == 2_700_000
     assert rows["amazon-green-bespoke-bath"]["category"] == "baths"
     assert rows["amazon-green-bespoke-bath"]["image_url"] == "https://cdn.shopify.com/bath.jpg"
+    assert rows["amazon-green-bespoke-bath"]["images"] == ["https://cdn.shopify.com/bath.jpg",
+                                                           "https://cdn.shopify.com/bath-side.jpg"]
     assert "• Sealed" in rows["amazon-green-bespoke-bath"]["description"]
     assert rows["round-vessel-basin"]["price_cents"] == 285_000          # the lowest option
     assert "custom-kitchen-sink" not in rows and st["products_on_request"] == 1
@@ -233,7 +236,7 @@ def test_prices_are_whole_cents():
 ROUND_PAGE = ('<html><head><title>Round Vessel Basin &ndash; Seedleme</title>'
               '<script type="application/ld+json">{"@context":"http://schema.org/","@type":"Product",'
               '"name":"Round Vessel Basin","description":"&lt;p&gt;A round basin.&lt;/p&gt;",'
-              '"image":["https://cdn.shopify.com/round.jpg"],'
+              '"image":["//cdn.shopify.com/round.jpg","https://cdn.shopify.com/round-top.jpg"],'
               '"offers":[{"@type":"Offer","price":"2850.00","priceCurrency":"ZAR",'
               '"availability":"http://schema.org/InStock"}]}</script></head><body>x</body></html>').encode()
 
@@ -270,6 +273,7 @@ async def test_without_any_json_the_product_pages_own_schema_gives_the_price(sit
     assert st["platform"] == "website" and row["slug"] == "round-vessel-basin"
     assert row["price_cents"] == 285_000 and row["image_url"] == "https://cdn.shopify.com/round.jpg"
     assert row["description"] == "A round basin."
+    assert row["images"] == ["https://cdn.shopify.com/round.jpg", "https://cdn.shopify.com/round-top.jpg"]
 
 
 def test_page_titles_are_plain_text_and_html_sitemaps_are_not_read():
@@ -390,3 +394,28 @@ async def test_a_feed_that_stops_part_way_is_finished_from_the_product_pages(sit
     slugs = {r["slug"] for r in site["imported"][0]}
     assert len(slugs) == 26 and "round-vessel-basin" in slugs
     assert "Shopify product feed page 2: HTTP 429" in st["catalogue_note"]
+
+
+@pytest.mark.asyncio
+async def test_the_import_endpoint_keeps_the_whole_gallery(monkeypatch):
+    from vula.api import commerce
+    saved = {}
+
+    async def list_products(tid, **_k):
+        return []
+
+    async def create_product(tid, payload):
+        saved.update(payload)
+        return {"id": "p1", **payload}
+
+    class _NoCats:
+        def table(self, *_a): raise RuntimeError("offline")
+    monkeypatch.setattr(commerce.service, "list_products", list_products)
+    monkeypatch.setattr(commerce.service, "create_product", create_product)
+    monkeypatch.setattr(commerce.service, "_client", lambda: _NoCats())
+    res = await commerce.admin_import_products("seedleme", {"rows": [{
+        "name": "Round Basin", "price_cents": 149900,
+        "images": "https://cdn.x/a.jpg|not a url|https://cdn.x/b.jpg|https://cdn.x/a.jpg"}]})
+    assert res["created"] == 1
+    assert saved["images"] == ["https://cdn.x/a.jpg", "https://cdn.x/b.jpg"]
+    assert saved["image_url"] == "https://cdn.x/a.jpg"

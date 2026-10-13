@@ -224,6 +224,7 @@ def _from_shopify(p: Dict[str, Any], root: str) -> Dict[str, Any]:
         "category_label": (p.get("product_type") or "").strip() or None,
         "description": html_to_text(p.get("body_html") or ""),
         "image_url": (images[0].get("src") if images and isinstance(images[0], dict) else None),
+        "images": [i.get("src") for i in images if isinstance(i, dict) and i.get("src")],
         "in_stock": any(v["in_stock"] for v in variants) if variants else True,
         "variants": [v for v in variants if v["option_values"]] if len(variants) > 1 else [],
         "url": f"{root}/products/{p.get('handle')}" if p.get("handle") else root,
@@ -243,6 +244,7 @@ def _from_woo(p: Dict[str, Any], root: str) -> Dict[str, Any]:
         "category_label": (cats[0].get("name") if cats else None),
         "description": html_to_text(p.get("description") or p.get("short_description") or ""),
         "image_url": (images[0].get("src") if images else None),
+        "images": [i.get("src") for i in images if isinstance(i, dict) and i.get("src")],
         "in_stock": bool(p.get("is_in_stock", True)), "variants": [],
         "url": p.get("permalink") or root, "tags": [t.get("name") for t in p.get("tags") or [] if t.get("name")],
     }
@@ -266,9 +268,11 @@ def _from_jsonld(page: str, url: str) -> Optional[Dict[str, Any]]:
                 offers = offers[0]["offers"] if isinstance(offers[0]["offers"], list) else [offers[0]["offers"]]
             prices = [_cents(o.get("price") or o.get("lowPrice")) for o in offers if isinstance(o, dict)]
             prices = [c for c in prices if c > 0]
-            image = d.get("image")
-            image = image[0] if isinstance(image, list) and image else image
-            image = image.get("url") if isinstance(image, dict) else image
+            raw = d.get("image")
+            gallery = [i.get("url") if isinstance(i, dict) else i
+                       for i in (raw if isinstance(raw, list) else [raw] if raw else [])]
+            gallery = [("https:" + i if i.startswith("//") else i) for i in gallery if isinstance(i, str) and i]
+            image = gallery[0] if gallery else None
             name = _html.unescape(str(d.get("name") or "")).strip()
             if not name:
                 continue
@@ -277,7 +281,7 @@ def _from_jsonld(page: str, url: str) -> Optional[Dict[str, Any]]:
                 "name": name, "slug": slug, "price_cents": min(prices) if prices else 0,
                 "category_label": (d.get("category") if isinstance(d.get("category"), str) else None),
                 "description": html_to_text(_html.unescape(str(d.get("description") or ""))),
-                "image_url": image if isinstance(image, str) else None,
+                "image_url": image, "images": gallery,
                 "in_stock": not any("OutOfStock" in str(o.get("availability")) for o in offers
                                     if isinstance(o, dict)) if offers else True,
                 "variants": [], "url": url, "tags": [],
@@ -415,6 +419,7 @@ async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dic
     rows = [{"name": p["name"], "slug": p["slug"] or None, "price_cents": p["price_cents"],
              "category": _category_key(p["category_label"] or "general"),
              "description": p["description"][:4000], "image_url": p["image_url"] or "",
+             "images": p.get("images") or [],
              "in_stock": "yes" if p["in_stock"] else "no", "status": "active"}
             for p in products if p["name"] and p["price_cents"] > 0]
     st["products_on_request"] = sum(1 for p in products if p["name"] and p["price_cents"] <= 0)
