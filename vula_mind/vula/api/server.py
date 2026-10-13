@@ -108,6 +108,7 @@ from vula.api.whatsapp_connect import router as whatsapp_connect_router
 from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.shopify_connect import router as shopify_admin_router, webhook_router as shopify_webhook_router
 from vula.api.shop_domain import router as shop_domain_router
+from vula.api.woocommerce_connect import router as woo_admin_router, webhook_router as woo_webhook_router
 from vula.api.draft import router as draft_router
 from vula.api.agent import router as agent_router
 from vula.api.links import router as links_router
@@ -756,7 +757,7 @@ async def _tap_sweep_loop() -> None:
 
 
 async def _shopify_sync_loop() -> None:
-    """Every 6 hours: re-read each connected Shopify store (vula/integrations/shopify.py) — the
+    """Every 6 hours: re-read each connected Shopify and WooCommerce store — the
     safety net behind Shopify's webhooks, and the only update for a store connected with a
     token alone (no secret to verify webhooks with). Skips a store already syncing."""
     import asyncio as _asyncio
@@ -775,6 +776,19 @@ async def _shopify_sync_loop() -> None:
                 await _shop.sync(tid)
         except Exception as exc:
             log.warning("shopify sync loop error: %s", exc)
+        try:
+            # The same safety net for WooCommerce stores (vula/integrations/woocommerce.py) —
+            # the only update for one connected with read-only keys.
+            from vula.integrations import woocommerce as _woo
+            rows = (_svc._client().table("vula_woocommerce_accounts").select("tenant_id")
+                    .eq("status", "connected").execute().data or [])
+            for r in rows:
+                tid = r["tenant_id"]
+                if not _t.is_active(tid) or _si.status(tid, _woo.JOB).get("running"):
+                    continue
+                await _woo.sync(tid)
+        except Exception as exc:
+            log.warning("woocommerce sync loop error: %s", exc)
         await _asyncio.sleep(6 * 3600)
 
 
@@ -1824,6 +1838,8 @@ app.include_router(commerce_router, prefix="/v1/commerce")
 app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/admin/shopify — tenant-guarded
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
 app.include_router(shopify_webhook_router, prefix="/v1/shopify")   # Shopify's calls — HMAC-verified
+app.include_router(woo_admin_router, prefix="/v1/commerce")       # /{tenant}/admin/woocommerce — tenant-guarded
+app.include_router(woo_webhook_router, prefix="/v1/woocommerce")   # WooCommerce's calls — HMAC-verified
 from vula.api.business_profile import router as business_profile_router  # noqa: E402
 app.include_router(business_profile_router, prefix="/v1/commerce")
 app.include_router(bookings_router, prefix="/v1/bookings")
