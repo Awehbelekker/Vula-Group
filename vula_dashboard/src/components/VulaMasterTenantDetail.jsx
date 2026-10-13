@@ -104,6 +104,52 @@ function TenantOverviewTab({ tenantId, onError }) {
         <span style={{ color: C.muted }}>{tenant.logins} logins</span>
       </div>
       <ManageTenantRow tenant={tenant} registry={registry} onSave={save} />
+      <LinkWhatsAppNumber tenantId={tenantId} />
+    </div>
+  )
+}
+
+// 2026-10-13 (SeedleMe): a number added in WhatsApp Manager on Vula's own WhatsApp account,
+// linked to this business without Embedded Signup. Vula checks the number with Meta first and
+// registers it if needed; the PIN goes only to Meta.
+function LinkWhatsAppNumber({ tenantId }) {
+  const [pnid, setPnid] = useState('')
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState(null)
+  const [msg, setMsg] = useState('')
+  const link = async () => {
+    setBusy(true); setMsg(''); setRes(null)
+    try {
+      const d = await authFetch(`/v1/master/tenants/${tenantId}/whatsapp-number`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number_id: pnid.trim(), pin: pin.trim() || undefined }),
+      })
+      if (d.detail) setMsg(d.detail)
+      else { setRes(d); setPin('') }
+    } catch (e) { setMsg(e.message) }
+    setBusy(false)
+  }
+  return (
+    <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12 }}>
+      <b style={{ fontSize: 13 }}>Link a WhatsApp number on Vula’s account</b>
+      <p style={{ fontSize: 12, color: C.muted, margin: '4px 0 8px' }}>
+        For a number added in WhatsApp Manager on Vula’s WhatsApp Business Account. Paste its phone number ID; add the 6-digit PIN only if Meta still needs the number registered. The PIN isn’t saved.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input id="link-wa-pnid" value={pnid} onChange={(e) => setPnid(e.target.value)} placeholder="Phone number ID"
+          inputMode="numeric" style={{ ...btn, cursor: 'text', flex: '1 1 200px', fontSize: 16 }} />
+        <input id="link-wa-pin" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="PIN (optional)"
+          inputMode="numeric" type="password" autoComplete="off" style={{ ...btn, cursor: 'text', width: 140, fontSize: 16 }} />
+        <button disabled={busy || !pnid.trim()} onClick={link} style={{ ...btn, ...btnOn }}>{busy ? 'Checking with Meta…' : 'Link number'}</button>
+      </div>
+      {msg && <div style={{ fontSize: 12.5, color: C.red, marginTop: 8 }}>{msg}</div>}
+      {res && (
+        <div style={{ fontSize: 12.5, marginTop: 8 }}>
+          Linked <b>{res.phone_number || res.phone_number_id}</b>{res.verified_name ? ` (${res.verified_name})` : ''} to {tenantId} ·
+          Meta status {res.meta_status || '—'} · display name {res.name_status || '—'}
+          {res.registered_now ? ' · registered for messaging now' : ''} · replies go out as {res.route_mode}.
+        </div>)}
     </div>
   )
 }
