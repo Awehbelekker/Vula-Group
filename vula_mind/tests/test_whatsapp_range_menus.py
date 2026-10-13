@@ -23,7 +23,7 @@ def _catalogue():
 
 @pytest.fixture()
 def wa(monkeypatch):
-    sent = {"lists": [], "buttons": [], "images": [], "text": [], "cart": [], "assistant": []}
+    sent = {"lists": [], "buttons": [], "images": [], "text": [], "cart": [], "assistant": [], "product_list": []}
     cart = {"id": "cart-1", "commerce_cart_items": []}
 
     async def creds(tid):
@@ -33,8 +33,12 @@ def wa(monkeypatch):
         sent["lists"].append({"header": header, "body": body, "rows": sections[0]["rows"]})
         return True
 
-    async def buttons(creds, number, body, btns):
-        sent["buttons"].append({"body": body, "ids": [b["id"] for b in btns]})
+    async def buttons(creds, number, body, btns, image_url=None):
+        sent["buttons"].append({"body": body, "ids": [b["id"] for b in btns], "image": image_url})
+        return True
+
+    async def product_list(creds, number, catalog_id, header, body, sections):
+        sent["product_list"].append({"catalog": catalog_id, "sections": sections})
         return True
 
     async def image(creds, number, url, caption=""):
@@ -65,6 +69,8 @@ def wa(monkeypatch):
     monkeypatch.setattr(whatsapp, "_send_wa_image", image)
     monkeypatch.setattr(whatsapp, "_send_reply", reply)
     monkeypatch.setattr(whatsapp, "_handle_commerce_message", assistant)
+    monkeypatch.setattr(whatsapp, "_send_wa_product_list", product_list)
+    monkeypatch.setattr(whatsapp, "_meta_catalog_id", lambda tid: "")
     monkeypatch.setattr("vula.commerce.service.list_products", products)
     monkeypatch.setattr("vula.commerce.service.get_or_create_cart", get_cart)
     monkeypatch.setattr("vula.commerce.service.add_to_cart", add_to_cart)
@@ -106,6 +112,7 @@ async def test_a_range_shows_its_photo_then_its_colours(wa):
 async def test_colour_then_quantity_puts_exactly_that_in_the_cart(wa):
     await whatsapp._handle_commerce_interactive("27645755210", "col_cb-2", "Charcoal", "m1", "seedleme")
     assert wa["buttons"][0]["ids"] == ["qty_cb-2_1", "qty_cb-2_2", "qty_cb-2_3"]
+    assert wa["buttons"][0]["image"] == "https://cdn/cb2.jpg"                      # that colour's own photo
     assert "Countertop Butler Concrete Basin – Charcoal – 31 x 31 x 12cm" in wa["buttons"][0]["body"]
     await whatsapp._handle_commerce_interactive("27645755210", "qty_cb-2_2", "2", "m2", "seedleme")
     assert wa["cart"] == [("cb-2", 2.0)]
@@ -127,3 +134,63 @@ async def test_a_shop_without_colour_ranges_keeps_its_product_list(wa, monkeypat
     monkeypatch.setattr("vula.commerce.service.list_products", fish)
     await whatsapp._handle_commerce_interactive("27820000000", "cat_fresh_fish", "Fresh Fish", "m1", "off-the-hook")
     assert wa["lists"][0]["rows"][0]["id"] == "prod_f1"
+
+
+# ── Typing to search (2026-10-13, Ian: "can we have a search option?") ─────────────────────────
+
+async def _search(text, session=None):
+    return await whatsapp._maybe_send_search_results("27645755210", text, "seedleme", session)
+
+
+@pytest.mark.asyncio
+async def test_a_search_with_one_match_opens_that_range(wa):
+    assert await _search("Do you have countertop butler basins?") is True
+    assert wa["images"][0][0] == "https://cdn/cb0.jpg" and wa["lists"][0]["rows"][0]["title"] == "Black"
+
+
+@pytest.mark.asyncio
+async def test_a_colour_search_opens_the_whole_range(wa):
+    assert await _search("ivory countertop butler") is True
+    assert len(wa["lists"][0]["rows"]) == 10                     # 9 colours + "More colours…"
+
+
+@pytest.mark.asyncio
+async def test_many_matches_come_back_as_a_tappable_list(wa):
+    assert await _search("grey concrete sink") is True
+    lst = wa["lists"][0]
+    assert len(lst["rows"]) == 9 and all(r["id"].startswith("rng_") for r in lst["rows"])
+    assert "Showing 9 of 10" in lst["body"]
+
+
+@pytest.mark.asyncio
+async def test_orders_delivery_questions_and_no_matches_go_to_the_assistant(wa):
+    for text in ("How long does delivery take?", "I'd like 2 of those", "checkout please",
+                 "5 Korhaan Close, Joostenbergvlakte", "do you have shower doors"):
+        assert await _search(text) is False, text
+    assert wa["lists"] == [] and wa["images"] == []
+
+
+@pytest.mark.asyncio
+async def test_an_answer_to_the_assistants_question_is_not_a_search(wa, monkeypatch):
+    async def recent(tid, sid, limit=1, max_age_hours=None):
+        return [{"role": "assistant", "content": "Lovely — which colour would you like?"}]
+    monkeypatch.setattr("vula.commerce.service.get_recent_messages", recent)
+    assert await _search("Charcoal", session={"id": "s1"}) is False
+
+
+@pytest.mark.asyncio
+async def test_a_shop_without_colour_ranges_is_left_to_the_assistant(wa, monkeypatch):
+    async def fish(tid, category=None, **k):
+        return [{"id": "f1", "slug": "hake", "name": "Hake Fillets 1kg", "price_cents": 22000, "category": "fresh_fish"}]
+    monkeypatch.setattr("vula.commerce.service.list_products", fish)
+    assert await whatsapp._maybe_send_search_results("27820000000", "hake", "off-the-hook") is False
+
+
+@pytest.mark.asyncio
+async def test_with_whatsapps_catalogue_connected_results_are_product_cards(wa, monkeypatch):
+    monkeypatch.setattr(whatsapp, "_meta_catalog_id", lambda tid: "cat123")
+    assert await _search("grey concrete sink") is True
+    pl = wa["product_list"][0]
+    assert pl["catalog"] == "cat123" and wa["lists"] == []
+    assert [len(sec["product_items"]) for sec in pl["sections"]] == [10]
+    assert pl["sections"][0]["product_items"][0] == {"product_retailer_id": "r0"}
