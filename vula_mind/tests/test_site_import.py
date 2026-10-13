@@ -76,6 +76,40 @@ class FakePipeline:
         return _Res()
 
 
+class _JobsDB:
+    """vula_background_jobs, in memory: what both uvicorn workers read."""
+    def __init__(self):
+        self.rows = {}
+
+    def table(self, name):
+        assert name == "vula_background_jobs"
+        return _JobsQ(self)
+
+
+class _JobsQ:
+    def __init__(self, db):
+        self.db, self.f, self.payload = db, {}, None
+
+    def select(self, *_a): return self
+    def limit(self, *_a): return self
+
+    def eq(self, k, v):
+        self.f[k] = v
+        return self
+
+    def upsert(self, payload, on_conflict=None):
+        self.payload = payload
+        return self
+
+    def execute(self):
+        from types import SimpleNamespace
+        if self.payload is not None:
+            self.db.rows[(self.payload["tenant_id"], self.payload["kind"])] = dict(self.payload)
+            return SimpleNamespace(data=[self.payload])
+        row = self.db.rows.get((self.f.get("tenant_id"), self.f.get("kind")))
+        return SimpleNamespace(data=[row] if row else [])
+
+
 @pytest.fixture()
 def site(monkeypatch):
     fetched = []
@@ -113,6 +147,11 @@ def site(monkeypatch):
         return {}
 
     monkeypatch.setattr(site_import, "_fetch", fetch)
+    monkeypatch.setattr(site_import, "_MIN_INTERVAL", 0.0)
+    monkeypatch.setattr(site_import, "_RETRY_WAITS", (0.0, 0.0, 0.0))
+    jobs = _JobsDB()
+    monkeypatch.setattr(site_import, "_db", lambda: jobs)
+    site_import._STATUS.clear()
     monkeypatch.setattr("vula.api.commerce.admin_import_products", import_products)
     monkeypatch.setattr("vula.commerce.service.list_products", list_products)
     monkeypatch.setattr("vula.commerce.service.list_variants", list_variants)
@@ -120,7 +159,7 @@ def site(monkeypatch):
     monkeypatch.setattr("vula.commerce.service.update_variant", update_variant)
     monkeypatch.setattr("vula.ingestion.pipeline.VulaIngestionPipeline", FakePipeline)
     FakePipeline.docs = {}
-    return {"fetched": fetched, "imported": imported, "variants": variants}
+    return {"fetched": fetched, "imported": imported, "variants": variants, "jobs": jobs}
 
 
 def test_the_address_is_normalised_to_the_site_root():
@@ -285,3 +324,69 @@ async def test_a_new_knowledge_base_created_by_two_pages_at_once_loses_neither(m
         return r
     monkeypatch.setattr(_Client, "get", get_then_lose)
     await store.ensure_collection("seedleme", 1536)  # "already exists" → no error
+
+
+# 2026-10-13, the second run: the owner pressed Import four times because the progress lived in
+# one worker's memory; four runs at once got 429/503 from Shopify and 52 of ~290 products landed.
+
+def _refused(url, code=429):
+    import httpx
+    req = httpx.Request("GET", url)
+    return httpx.HTTPStatusError(str(code), request=req, response=httpx.Response(code, request=req))
+
+
+@pytest.mark.asyncio
+async def test_the_other_worker_sees_the_run_and_its_result(site):
+    await site_import.import_site("seedleme", ROOT, "SeedleMe")
+    site_import._STATUS.clear()                      # a different worker: nothing in its memory
+    st = site_import.status("seedleme")
+    assert st["running"] is False and st["step"] == "done" and st["products_created"] == 2
+    row = site["jobs"].rows[("seedleme", "site_import")]
+    assert row["running"] is False and "running" not in row["status"]
+
+
+def test_a_run_in_progress_on_either_worker_blocks_another_until_it_goes_stale(site):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    site["jobs"].rows[("seedleme", "site_import")] = {
+        "running": True, "status": {"step": "reading product pages (40 of 290)"},
+        "updated_at": now.isoformat()}
+    assert site_import.status("seedleme")["running"] is True
+    site["jobs"].rows[("seedleme", "site_import")]["updated_at"] = (now - timedelta(minutes=20)).isoformat()
+    st = site_import.status("seedleme")
+    assert st["running"] is False and "run it again" in st["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_slow_down_answer_is_waited_out_and_tried_again(site, monkeypatch):
+    real, tries = site_import._fetch, []
+
+    async def busy_once(url, max_bytes=None):
+        tries.append(url)
+        if "products.json" in url and tries.count(url) == 1:
+            raise _refused(url, 429)
+        return await real(url, max_bytes)
+    monkeypatch.setattr(site_import, "_fetch", busy_once)
+    st = await site_import.import_site("seedleme", ROOT)
+    assert st["products_found"] == 3 and "catalogue_note" not in st
+    assert tries.count(f"{ROOT}/products.json?limit=25&page=1") == 2
+
+
+@pytest.mark.asyncio
+async def test_a_feed_that_stops_part_way_is_finished_from_the_product_pages(site, monkeypatch):
+    first = {"products": PRODUCTS["products"][:1] * 25}            # a full first page of 25
+    first["products"] = [dict(p, handle=f"bath-{i}", title=f"Bath {i}") for i, p in enumerate(first["products"])]
+    monkeypatch.setitem(SITE, f"{ROOT}/products.json?limit=25&page=1", json.dumps(first).encode())
+    monkeypatch.setitem(SITE, f"{ROOT}/products/round-vessel-basin.json",
+                        json.dumps({"product": PRODUCTS["products"][1]}).encode())
+    real = site_import._fetch
+
+    async def page2_refused(url, max_bytes=None):
+        if url.endswith("page=2"):
+            raise _refused(url, 429)
+        return await real(url, max_bytes)
+    monkeypatch.setattr(site_import, "_fetch", page2_refused)
+    st = await site_import.import_site("seedleme", ROOT)
+    slugs = {r["slug"] for r in site["imported"][0]}
+    assert len(slugs) == 26 and "round-vessel-basin" in slugs
+    assert "Shopify product feed page 2: HTTP 429" in st["catalogue_note"]
