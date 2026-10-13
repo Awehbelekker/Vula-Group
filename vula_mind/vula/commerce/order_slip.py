@@ -40,10 +40,14 @@ def order_id_from(token: str) -> Optional[str]:
     return parsed[0] if parsed else None
 
 
-def urls(order_id: str) -> Dict[str, str]:
-    """{"page", "image"} — empty when the server has no public address to link to."""
-    from config import settings
-    base = (settings.public_base_url or "").rstrip("/")
+def urls(order_id: str, tenant_id: str = "") -> Dict[str, str]:
+    """{"page", "image"} on the shop's own address when it has one (shop.<their domain>) —
+    empty when there's no public address to link to."""
+    from vula.commerce import web_basket
+    base = web_basket.public_base(tenant_id) if tenant_id else ""
+    if not base:
+        from config import settings
+        base = (settings.public_base_url or "").rstrip("/")
     if not base:
         return {}
     tok = token_for(order_id)
@@ -100,7 +104,11 @@ async def load(order_id: str) -> Optional[Dict[str, Any]]:
     shop = {"name": inv.get("trading_as") or inv.get("company_name") or tenants.display_name(tid),
             "accent": accent if accent.startswith("#") else f"#{accent}",
             "vat_registered": accounting.is_vat_registered(tid), "vat_number": inv.get("vat_number")}
-    return slip_data(order, shop)
+    d = slip_data(order, shop)
+    from vula.commerce import web_basket
+    number = web_basket.wa_number(tid)
+    d.update(shop_url=web_basket.shop_url(tid), chat=f"https://wa.me/{number}" if number else "")
+    return d
 
 
 # ── The picture ────────────────────────────────────────────────────────────────────────────
@@ -217,7 +225,7 @@ def render_png(d: Dict[str, Any]) -> bytes:
     y += 44
     dr.text((cx, y), f"Thank you for shopping with {d['shop'][:24]}!", font=f_txt, fill=ink, anchor="mt")
     img.paste(stamp, (cx - stamp.width // 2, y + 40), stamp)
-    dr.text((cx, H - 46), "Ordered on WhatsApp · powered by Vula", font=f_small,
+    dr.text((cx, H - 46), f"Ordered on WhatsApp · {d['shop'][:30]}", font=f_small,
             fill=tuple(int(c * 0.6) for c in accent), anchor="mt")
     out = io.BytesIO()
     img.save(out, "PNG", optimize=True)

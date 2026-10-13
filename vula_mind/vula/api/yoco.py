@@ -142,7 +142,7 @@ async def _notify_order_paid(
             sent_slip = False
             try:
                 from vula.commerce import order_slip
-                links = order_slip.urls(order_id)
+                links = order_slip.urls(order_id, tenant_id)
                 if links:
                     from vula.api.whatsapp import _send_wa_cta_url, _wa_number
                     sent_slip = await _send_wa_cta_url(creds, _wa_number(customer_phone),

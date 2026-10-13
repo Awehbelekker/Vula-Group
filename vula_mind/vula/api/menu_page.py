@@ -81,14 +81,15 @@ def shop_data(products: list) -> list:
         opts = []
         for p in members:
             colour = pf.colour_of(p.get("name") or "") if r["colours"] else None
-            imgs = [u for u in [p.get("image_url")] + list(p.get("images") or [])
+            from vula.commerce.web_basket import sized
+            imgs = [sized(u, 900) for u in [p.get("image_url")] + list(p.get("images") or [])
                     if isinstance(u, str) and u.startswith("http")]
             opts.append({"pid": str(p.get("id")), "colour": colour,
                          "swatch": _SWATCH.get((colour or "").lower(), "#b8b2a6"),
                          "name": p.get("name") or "Item",
                          "cents": int(p.get("price_cents") or 0),
                          "kg": str(p.get("sold_by") or "").lower() == "kg",
-                         "img": p.get("image_url") or "",
+                         "img": sized(p.get("image_url"), 900) or "",
                          "imgs": list(dict.fromkeys(imgs))[:8]})
         lead = members[0]
         full = re.sub(r"\s+", " ", (lead.get("description") or lead.get("notes") or "")).strip()
@@ -98,15 +99,24 @@ def shop_data(products: list) -> list:
     return out
 
 
+@router.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def shop_home(request: Request) -> HTMLResponse:
+    """shop.<their domain>/ — the shop on its own address, so the customer sees the business's
+    name in WhatsApp's browser, not Vula's (2026-10-13). Any other host has nothing here."""
+    from fastapi import HTTPException
+    from vula.commerce import web_basket
+    tenant_id = web_basket.tenant_for_shop_host(request.headers.get("host") or "")
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return await photo_menu(tenant_id)
+
+
 @router.get("/menu/{tenant_id}", response_class=HTMLResponse)
 async def photo_menu(tenant_id: str) -> HTMLResponse:
     from vula.commerce import service as cs
     from vula.commerce import web_basket
 
-    try:
-        products = await cs.list_products(tenant_id, in_stock_only=True, statuses={"active"})
-    except Exception:
-        products = []
+    products = await web_basket.shop_products(tenant_id)
     try:
         inv = await cs.get_invoice_settings(tenant_id)
     except Exception:
@@ -131,6 +141,7 @@ async def photo_menu(tenant_id: str) -> HTMLResponse:
     number = web_basket.wa_number(tenant_id)
     can_order = bool(number) and web_basket.shop_enabled(tenant_id, products)
     data = json.dumps({"tenant": tenant_id, "ranges": ranges, "cats": cat_labels,
+                       "basket": f"/menu/{tenant_id}/basket",
                        "canOrder": can_order, "chat": f"https://wa.me/{number}" if number else ""}
                       ).replace("</", "<\\/")
 
@@ -321,7 +332,7 @@ function sheet(){var p=document.getElementById('panel');p.innerHTML='';p.appendC
 function close(){document.getElementById('sheet').classList.remove('show')}
 function send(){var btns=document.querySelectorAll('.wa');btns.forEach(function(b){b.disabled=true});
   var items=Object.keys(basket).map(function(pid){return {product_id:pid,qty:basket[pid].qty}});
-  fetch(location.pathname.replace(/\/$/,'')+'/basket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})})
+  fetch(D.basket,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})})
   .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})})
   .then(function(res){if(!res.ok||!res.j.wa_url){throw new Error(res.j.error||'Could not send')}
     basket={};save();bar();close();location.href=res.j.wa_url})
@@ -363,30 +374,70 @@ async def receipt_slip_png(token: str):
 
 @router.get("/receipt/{token}", response_class=HTMLResponse)
 async def receipt_page(token: str) -> HTMLResponse:
+    """The slip "prints" out of a printer slot, the way Tap to Pay's receipt does
+    (vula_dashboard/src/receipt/PrintedSlip.jsx), with a chime on Replay — on the shop's own
+    address, in its colour, with nothing of Vula's on it."""
     from vula.commerce import order_slip
     d = await _slip_or_404(token)
     accent = d["accent"] if re.fullmatch(r"#[0-9a-fA-F]{3,8}", d["accent"] or "") else "#2C5545"
     lines = "".join(f"<li>{_esc(i['qty'])} × {_esc(i['name'])} — {order_slip.rands(i['cents'])}</li>"
                     for i in d["items"])
-    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
-<title>Receipt {_esc(d['order'])} — {_esc(d['shop'])}</title>
-<style>
-:root{{--accent:{accent};--bg:#F4F1EA;--text:#24231F;--muted:#77736B}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#161614;--text:#EDEAE2;--muted:#A39F96}}}}
-body{{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-display:flex;flex-direction:column;align-items:center;padding:16px 16px 40px}}
-img{{width:100%;max-width:420px;height:auto;display:block;border-radius:12px}}
-.btns{{display:flex;gap:10px;width:100%;max-width:420px;margin-top:14px}}
-a.b{{flex:1;text-align:center;text-decoration:none;padding:13px 10px;border-radius:999px;font-weight:650;font-size:15px}}
-.save{{background:var(--accent);color:#fff}}.shop{{border:1px solid var(--muted);color:var(--text)}}
-.sr{{position:absolute;left:-9999px}}
-</style></head><body>
-<img src="{_esc(token)}/slip.png" alt="Receipt for order {_esc(d['order'])} from {_esc(d['shop'])}, {order_slip.rands(d['total_cents'])}, paid {_esc(d['paid_at'])}">
-<ul class="sr">{lines}</ul>
-<div class="btns"><a class="b save" href="{_esc(token)}/slip.png" download="Receipt-{_esc(d['order'])}.png">Save slip</a></div>
-</body></html>"""
+    chat = f'<a class="b ghost" href="{_esc(d["chat"])}">Back to chat</a>' if d.get("chat") else ""
+    shop = f'<a class="b ghost" href="{_esc(d["shop_url"])}">Shop again</a>' if d.get("shop_url") else ""
+    page = _RECEIPT_HTML.replace("{{ACCENT}}", accent).replace("{{TITLE}}", _esc(f"Receipt {d['order']} — {d['shop']}")) \
+        .replace("{{IMG}}", f"{_esc(token)}/slip.png").replace("{{ORDER}}", _esc(d["order"])) \
+        .replace("{{ALT}}", _esc(f"Receipt for order {d['order']} from {d['shop']}, "
+                                 f"{order_slip.rands(d['total_cents'])}, paid {d['paid_at']}")) \
+        .replace("{{LINES}}", lines).replace("{{CHAT}}", chat).replace("{{SHOP}}", shop)
     return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+_RECEIPT_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer"><title>{{TITLE}}</title>
+<style>
+:root{--accent:{{ACCENT}};--bg:#F4F1EA;--text:#24231F;--muted:#77736B}
+@media (prefers-color-scheme:dark){:root{--bg:#161614;--text:#EDEAE2;--muted:#A39F96}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+display:flex;flex-direction:column;align-items:center;padding:0 16px 40px;min-height:100vh}
+.printer{width:100%;max-width:460px;height:30px;border-radius:0 0 16px 16px;position:relative;z-index:2;
+background:linear-gradient(#3a3a36,#24241f);box-shadow:0 6px 14px rgba(0,0,0,.25);transform:translateY(-40px);
+animation:bar .45s ease-out forwards}
+.printer:after{content:"";position:absolute;left:24px;right:24px;bottom:7px;height:4px;border-radius:2px;background:#0d0d0b;
+box-shadow:0 0 10px 1px var(--accent)}
+.slot{width:100%;max-width:420px;overflow:hidden;margin-top:-6px}
+.slip{display:block;width:100%;height:auto;transform:translateY(-100%);filter:brightness(1.25) saturate(.4);
+animation:feed 1.9s cubic-bezier(.25,.8,.3,1) .55s forwards}
+@keyframes bar{to{transform:none}}
+@keyframes feed{70%{filter:brightness(1.05) saturate(.9)}88%{transform:translateY(1.5%)}100%{transform:none;filter:none}}
+.btns{display:flex;flex-wrap:wrap;gap:10px;width:100%;max-width:420px;margin-top:16px;opacity:0;animation:fade .4s ease 2.4s forwards}
+@keyframes fade{to{opacity:1}}
+.b{flex:1 1 45%;text-align:center;text-decoration:none;padding:13px 10px;border-radius:999px;font-weight:650;font-size:15px;
+border:0;cursor:pointer;font-family:inherit}
+.save{background:var(--accent);color:#fff}.ghost{background:transparent;border:1px solid var(--muted);color:var(--text)}
+.sr{position:absolute;left:-9999px}
+@media (prefers-reduced-motion:reduce){.printer,.slip,.btns{animation:none;transform:none;filter:none;opacity:1}}
+@media print{.printer,.btns{display:none}.slip{animation:none;transform:none;filter:none}body{background:#fff}}
+</style></head><body>
+<div class="printer" aria-hidden="true"></div>
+<div class="slot"><img class="slip" id="slip" src="{{IMG}}" alt="{{ALT}}"></div>
+<ul class="sr">{{LINES}}</ul>
+<div class="btns">
+  <a class="b save" href="{{IMG}}" download="Receipt-{{ORDER}}.png">Save slip</a>
+  <button class="b ghost" id="replay" type="button">Replay</button>
+  {{CHAT}}{{SHOP}}
+</div>
+<script>
+(function(){
+  function chime(){try{var A=window.AudioContext||window.webkitAudioContext;if(!A)return;var c=new A(),t=c.currentTime;
+    [523.25,659.25,783.99,1046.5].forEach(function(f,i){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=f;
+      g.gain.setValueAtTime(0,t+i*.11);g.gain.linearRampToValueAtTime(.08,t+i*.11+.02);g.gain.exponentialRampToValueAtTime(.0001,t+i*.11+.6);
+      o.connect(g);g.connect(c.destination);o.start(t+i*.11);o.stop(t+i*.11+.65)})}catch(e){}}
+  document.getElementById('replay').onclick=function(){var s=document.getElementById('slip');
+    s.style.animation='none';void s.offsetWidth;s.style.animation='';setTimeout(chime,1700)};
+})();
+</script></body></html>"""
 
 
 # Landing pages for hosted-checkout redirects (invoice and WhatsApp-order pay links point here
