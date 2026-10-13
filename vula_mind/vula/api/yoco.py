@@ -134,12 +134,24 @@ async def _notify_order_paid(
             # with a link to offthehook.co.za.
             store_url = _tenants.store_url(tenant_id)
             track = f"Track at {store_url} or reply" if store_url else "Reply"
-            await _send(
-                customer_phone,
-                f"Hi {customer_name or 'there'}! Your {_tenants.display_name(tenant_id)} order "
-                f"*{display_id}* is confirmed ({amount}). We'll be in touch with your delivery "
-                f"time. {track} here with any questions. Thank you!"
-            )
+            confirmation = (f"Hi {customer_name or 'there'}! Your {_tenants.display_name(tenant_id)} order "
+                            f"*{display_id}* is confirmed ({amount}). We'll be in touch with your delivery "
+                            f"time. {track} here with any questions. Thank you!")
+            # The slip, like Tap to Pay's (2026-10-13): one message with the till-slip picture,
+            # the confirmation and a "View receipt" button. Plain text when it can't be sent.
+            sent_slip = False
+            try:
+                from vula.commerce import order_slip
+                links = order_slip.urls(order_id)
+                if links:
+                    from vula.api.whatsapp import _send_wa_cta_url, _wa_number
+                    sent_slip = await _send_wa_cta_url(creds, _wa_number(customer_phone),
+                                                       f"🧾 {confirmation}", "View receipt",
+                                                       links["page"], image_url=links["image"])
+            except Exception as exc:
+                log.debug("order slip skipped: %s", exc)
+            if not sent_slip:
+                await _send(customer_phone, confirmation)
 
         # Order item summary (once)
         try:

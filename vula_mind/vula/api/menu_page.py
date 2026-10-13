@@ -339,6 +339,56 @@ if(h.indexOf('#r-')===0){var t=document.getElementById(h.slice(1));if(t){t.scrol
 </script></body></html>"""
 
 
+# ── The paid-order slip (vula/commerce/order_slip.py) — like Tap to Pay's receipt ──────────
+async def _slip_or_404(token: str):
+    from fastapi import HTTPException
+    from vula.commerce import order_slip
+    oid = order_slip.order_id_from(token)
+    data = await order_slip.load(oid) if oid else None
+    if not data:
+        raise HTTPException(status_code=404, detail="This receipt link is no longer available.")
+    return data
+
+
+@router.get("/receipt/{token}/slip.png")
+async def receipt_slip_png(token: str):
+    import asyncio
+    from fastapi.responses import Response
+    from vula.commerce import order_slip
+    data = await _slip_or_404(token)
+    png = await asyncio.to_thread(order_slip.render_png, data)
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=300", "X-Robots-Tag": "noindex"})
+
+
+@router.get("/receipt/{token}", response_class=HTMLResponse)
+async def receipt_page(token: str) -> HTMLResponse:
+    from vula.commerce import order_slip
+    d = await _slip_or_404(token)
+    accent = d["accent"] if re.fullmatch(r"#[0-9a-fA-F]{3,8}", d["accent"] or "") else "#2C5545"
+    lines = "".join(f"<li>{_esc(i['qty'])} × {_esc(i['name'])} — {order_slip.rands(i['cents'])}</li>"
+                    for i in d["items"])
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>Receipt {_esc(d['order'])} — {_esc(d['shop'])}</title>
+<style>
+:root{{--accent:{accent};--bg:#F4F1EA;--text:#24231F;--muted:#77736B}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#161614;--text:#EDEAE2;--muted:#A39F96}}}}
+body{{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+display:flex;flex-direction:column;align-items:center;padding:16px 16px 40px}}
+img{{width:100%;max-width:420px;height:auto;display:block;border-radius:12px}}
+.btns{{display:flex;gap:10px;width:100%;max-width:420px;margin-top:14px}}
+a.b{{flex:1;text-align:center;text-decoration:none;padding:13px 10px;border-radius:999px;font-weight:650;font-size:15px}}
+.save{{background:var(--accent);color:#fff}}.shop{{border:1px solid var(--muted);color:var(--text)}}
+.sr{{position:absolute;left:-9999px}}
+</style></head><body>
+<img src="{_esc(token)}/slip.png" alt="Receipt for order {_esc(d['order'])} from {_esc(d['shop'])}, {order_slip.rands(d['total_cents'])}, paid {_esc(d['paid_at'])}">
+<ul class="sr">{lines}</ul>
+<div class="btns"><a class="b save" href="{_esc(token)}/slip.png" download="Receipt-{_esc(d['order'])}.png">Save slip</a></div>
+</body></html>"""
+    return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
 # Landing pages for hosted-checkout redirects (invoice and WhatsApp-order pay links point here
 # when the tenant has no storefront). The payment itself is confirmed by the gateway webhook,
 # never by this page — it only tells the customer where they stand.

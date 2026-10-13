@@ -52,6 +52,8 @@ PUBLIC = {
     ("GET", "/v1/tap/cancelled/{session_id}"): "tap-to-pay gateway return page — informational only",
     ("GET", "/menu/{tenant_id}"): "public photo menu page",
     ("POST", "/menu/{tenant_id}/basket"): "public shop page basket → WhatsApp order link (priced server-side, throttled)",
+    ("GET", "/receipt/{token}"): "public paid-order receipt page — HMAC token, like Tap to Pay /r/<token>",
+    ("GET", "/receipt/{token}/slip.png"): "public paid-order slip picture — same HMAC token",
     ("GET", "/payment/success"): "payment gateway return page",
     ("GET", "/payment/cancel"): "payment gateway return page",
     ("POST", "/v1/auth/login"): "sign-in",
