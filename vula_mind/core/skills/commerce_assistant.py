@@ -20,6 +20,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
+from core.lang import detect_language, language_name, normalize_lang
 from core.llm_router import is_local_model, resolve_generation_route, substitute_if_degenerate
 from core.prompt_safety import fence
 from core.skills.base import (
@@ -31,6 +32,65 @@ from vula.commerce import service
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 6
+
+
+# ── Product search by words ─────────────────────────────────────────────────────
+# 2026-10-13, SeedleMe (325 concrete basins and sinks): "round basin" was matched as one exact
+# phrase, so "Round Concrete Basin – Charcoal" and nearly every other round basin were missed
+# and the customer was offered one sink; "Countertop Butler basin" missed all seven colours of
+# "Countertop Butler Concrete Basin". Now every word of the search must appear somewhere in the
+# product (name, description, category, tags), plurals folded, name hits ranked first.
+_QUESTION_WORDS = frozenset("""
+    a an the and or of in on for to with at by from is are be do does did you your we our us i me
+    my it its this that these those there here have has had any some can could would will what
+    which who how much many when where why please hi hello hey sell sells selling stock stocked
+    available availability price prices cost costs colour colours color colors size sizes come
+    comes option options type types kind kinds range got offer offers make made product products
+    item items one ones also just only show see like want need looking look
+""".split())
+
+
+def _fold(word: str) -> str:
+    w = word.lower()
+    if len(w) > 3 and w.endswith("es") and w[:-2].endswith(("sh", "ch", "x", "ss")):
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        return w[:-1]
+    return w
+
+
+def _expected_language(preferred: Optional[str], question: str) -> Optional[str]:
+    """The language the reply must be in: the customer's stored one, else what this message
+    is clearly written in; None when unsure (then nothing is enforced)."""
+    return normalize_lang(preferred) or detect_language(question)
+
+
+def search_terms(text: str) -> List[str]:
+    """The words of a search or question that name a product (question words dropped)."""
+    out: List[str] = []
+    for w in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(w) < 2 or w in _QUESTION_WORDS:
+            continue
+        f = _fold(w)
+        if f not in out:
+            out.append(f)
+    return out
+
+
+def match_products(products: List[Dict[str, Any]], search: str) -> List[Dict[str, Any]]:
+    terms = search_terms(search)
+    if not terms:
+        return products
+    scored = []
+    for p in products:
+        name_words = {_fold(w) for w in re.findall(r"[a-z0-9]+", (p.get("name") or "").lower())}
+        rest = " ".join([p.get("description") or "", str(p.get("category") or ""),
+                         " ".join(p.get("tags") or []) if isinstance(p.get("tags"), list) else ""])
+        all_words = name_words | {_fold(w) for w in re.findall(r"[a-z0-9]+", rest.lower())}
+        if all(t in all_words for t in terms):
+            scored.append((-sum(t in name_words for t in terms), p.get("name") or "", p))
+    scored.sort(key=lambda x: (x[0], x[1]))
+    return [p for _, _, p in scored]
 
 
 def _tenant_has_bookings(tenant_id: str) -> bool:
@@ -936,6 +996,7 @@ class CommerceAssistantSkill(BaseSkill):
             "bookings": _tenant_has_bookings(inp.tenant_id),
             "booking_focused": _is_booking_focused(inp.tenant_id),
             "current_message": inp.question,
+            "language": _expected_language(inp.metadata.get("preferred_language"), inp.question),
         }
         kb_context, sources = await self._retrieve_kb(inp)
         # What we already know about this customer, so a repeat buyer isn't asked for their name
@@ -1379,6 +1440,21 @@ class CommerceAssistantSkill(BaseSkill):
                         "customer. Answer the customer's question in plain, friendly language — "
                         "if you can't help with it, say so honestly.)"})
                     continue
+                # The customer's language, not the model's (2026-10-13, SeedleMe: an English
+                # "Do you do round basins" got "Sawubona! Ons is kyk na die vraag…" from the
+                # local model). One rewrite, on the cloud model when this was a local one.
+                want, got = ctx.get("language"), detect_language(answer)
+                if want and got and got != want and not ctx.get("_language_retry"):
+                    ctx["_language_retry"] = True
+                    if is_local_model(model):
+                        esc = escalate_to_cloud("local_wrong_language", run_id=run_id, task_type="commerce_chat")
+                        if esc:
+                            model, api_key, api_base = esc
+                    messages.append({"role": "assistant", "content": answer})
+                    messages.append({"role": "user", "content":
+                        f"(system: the customer writes in {language_name(want)} — give that same "
+                        f"reply in {language_name(want)} only.)"})
+                    continue
                 # Requirement (b): a weak local final answer escalates to cloud (tool turns stay local).
                 # logprob_conf is None when the backend returned no logprobs (2026-08: previously
                 # always None since no caller requested them — see compute_confidence docstring).
@@ -1494,6 +1570,9 @@ class CommerceAssistantSkill(BaseSkill):
         if name == "cancel_order":
             return await self._exec_cancel_order(tid, phone)
         if name == "ask_team":
+            in_catalogue = await self._products_answering(tid, args.get("question") or "")
+            if in_catalogue:
+                return in_catalogue
             return await self._exec_ask_team(tid, phone, args)
         if name == "place_order":
             return await self._exec_place_order(tid, sid, phone, args, ctx)
@@ -1714,10 +1793,7 @@ class CommerceAssistantSkill(BaseSkill):
         )
         search = (args.get("search") or "").lower().strip()
         if search:
-            products = [
-                p for p in products
-                if search in p["name"].lower() or search in (p.get("description") or "").lower()
-            ]
+            products = match_products(products, search)
 
         def _price(p):
             rng = p.get("variant_price_range")
@@ -2485,6 +2561,26 @@ class CommerceAssistantSkill(BaseSkill):
         return {"order_number": order["display_id"],
                 "message": f"Got it — I've asked the team to update order {order['display_id']}. "
                            f"They'll confirm the change with you shortly."}
+
+    async def _products_answering(self, tenant_id: str, question: str) -> Optional[Dict[str, Any]]:
+        """A product question the shop's own catalogue answers is not one for the team.
+        2026-10-13, SeedleMe: "Do you do round basins" went to the owner as "❓ A customer
+        asked…" while 20-odd round basins were on sale — the local model asked the team without
+        ever searching. Only when every product word of the question matches a product;
+        delivery, hours and custom work still go to the team."""
+        terms = search_terms(question)
+        if not terms:
+            return None
+        try:
+            found = await self._exec_list_products(tenant_id, {"search": " ".join(terms)})
+        except Exception:
+            return None
+        if not found:
+            return None
+        return {"products": found[:12], "matches": len(found),
+                "instruction_to_assistant": "These products in the shop answer the question — "
+                "reply from them (names and prices exactly as listed), and don't hand this to "
+                "the team. If there are many, name a few and ask which size or colour they want."}
 
     async def _exec_ask_team(self, tenant_id: str, phone: Optional[str],
                              args: Dict[str, Any]) -> Dict[str, Any]:

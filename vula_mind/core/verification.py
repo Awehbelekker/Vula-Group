@@ -157,6 +157,11 @@ def register_outcome(skill_name: str, tenant_id: str, verification: Dict[str, An
 # actually use (e.g. commerce_admin's find_document can act on an invoice number).
 _CAVEAT = ("\n\n⚠️ Worth double-checking — if anything's off, tell me what and I'll fix it.")
 _DEFECT_CONFIDENCE = 0.45
+# Skills whose reader is the business's customer, not its owner. The caveat asks the reader to
+# "tell me what and I'll fix it" — a customer can't, and it reads as the shop doubting itself
+# (2026-10-13, SeedleMe's first customer replies). The defect still lowers confidence and is
+# recorded (verification telemetry, and the turn's "verified: defect_found" in vula_turns).
+CUSTOMER_FACING_SKILLS = frozenset({"commerce_assistant"})
 
 # The caveat is for the PERSON reading the reply, not for the model's own memory.
 # 2026-09-01, real Gerflor transcript: the caveat was appended to result.answer, that answer was
@@ -251,7 +256,8 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
             # "escalate" (forced cloud re-run) is reserved until the router grows a force-cloud
             # hook — until then every defect takes the caveat path, matching digg.calc.
             result.confidence = min(result.confidence, _DEFECT_CONFIDENCE)
-            result.answer += _CAVEAT
+            if skill.name not in CUSTOMER_FACING_SKILLS:
+                result.answer += _CAVEAT
         extra = {"verdict": verdict, "defect_count": len(check.get("defects", [])),
                  "checker_ms": check.get("checker_ms", 0)}
         if check.get("reason"):
