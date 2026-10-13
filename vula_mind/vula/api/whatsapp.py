@@ -8546,6 +8546,8 @@ async def _maybe_send_search_results(phone: str, text: str, tenant_id: str,
     if not web_basket.shop_enabled(tenant_id, prods):
         return False                       # shop switched off: the assistant answers
     found = _pf.group(match_products(prods, t))
+    from vula.commerce import shop_stats
+    shop_stats.record(tenant_id, "search" if found else "search_miss", t)
     if not found:
         return False
     all_ranges = {r["key"]: r for r in _pf.group(prods)}
@@ -8764,6 +8766,8 @@ async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool
                                                          "View products", url)):
             await _send_reply(phone, msg + " Reply *shop* to browse.", tenant_id=tenant_id)
         return True
+    from vula.commerce import shop_stats
+    shop_stats.record(tenant_id, "basket_claimed")
     cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
     if creds:
         await _send_cart_summary(phone, tenant_id, creds, cart,

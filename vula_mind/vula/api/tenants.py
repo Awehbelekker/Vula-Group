@@ -498,7 +498,7 @@ async def patch_tenant(tenant_id: str, body: TenantPatch,
 # orders, so a project business (DIGG) saw mostly zeros. The dashboard renders these ids in
 # this order (VulaMerchantAdmin OverviewTab); unknown ids are dropped, so an old saved layout
 # never breaks the page.
-HOME_CARDS = ("today", "checklist", "attention", "sales", "trend", "jobcosting", "crosscheck",
+HOME_CARDS = ("today", "checklist", "attention", "sales", "trend", "shop", "jobcosting", "crosscheck",
               "customers", "assistant")
 _HOME_DEFAULT_SHOP = ["checklist", "attention", "sales", "trend", "customers", "assistant"]
 _HOME_DEFAULT_PROJECTS = ["checklist", "attention", "jobcosting", "crosscheck", "assistant"]
@@ -513,7 +513,10 @@ def home_default(tenant_id: str) -> list:
     if p["uses_projects"]:
         return list(_HOME_DEFAULT_PROJECTS)
     if p["sells_products"]:
-        return list(_HOME_DEFAULT_SHOP)
+        cards = list(_HOME_DEFAULT_SHOP)
+        if "wa_shop" in (p.get("modules") or []):      # the WhatsApp shop's funnel, after the trend
+            cards.insert(cards.index("trend") + 1, "shop")
+        return cards
     return list(_HOME_DEFAULT_GENERAL)
 
 

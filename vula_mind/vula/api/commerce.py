@@ -5607,6 +5607,13 @@ async def admin_delete_wa_template(tenant_id: str, name: str):
     return result
 
 
+@router.get("/{tenant_id}/admin/shop-funnel")
+async def admin_shop_funnel(tenant_id: str, days: int = 7):
+    """The WhatsApp shop's funnel and searches for Home (vula/commerce/shop_stats.py)."""
+    from vula.commerce import shop_stats
+    return shop_stats.funnel(tenant_id, max(1, min(int(days or 7), 90)))
+
+
 @router.post("/{tenant_id}/admin/broadcasts/promo")
 async def admin_send_promo(tenant_id: str, body: dict):
     """The picture promotion (vula/commerce/promo.py): a product photo, the offer and a Shop now

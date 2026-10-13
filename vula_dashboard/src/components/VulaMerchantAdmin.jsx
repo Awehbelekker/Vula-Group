@@ -406,6 +406,7 @@ const HOME_CARD_LABELS = {
   attention: 'Needs attention',
   sales: 'Sales today & totals',
   trend: 'Revenue / money in — 7 days',
+  shop: 'WhatsApp shop — funnel & searches',
   jobcosting: 'Job costing (projects)',
   crosscheck: 'Cross-check & VAT',
   customers: 'Customer service',
@@ -546,6 +547,7 @@ function OverviewTab({ tenantId, onNavigate }) {
         <StatCard label="This week"       value={weekOrders}                 sub="orders (7 days)" accent="var(--accent-2)" />
       </div>),
     trend: () => <TrendChart series={series} fmt={fmt} title={bankLed ? 'Money in — last 7 days (bank)' : 'Revenue — last 7 days'} />,
+    shop: () => <ShopFunnel tenantId={tenantId} fmt={fmt} />,
     customers: () => <VulaCSMetrics tenantId={tenantId} />,
     jobcosting: () => <VulaJobCosting tenantId={tenantId} />,
     crosscheck: () => <VulaCrossCheck tenantId={tenantId} />,
@@ -608,6 +610,55 @@ function OverviewTab({ tenantId, onNavigate }) {
       {editing && layout && <HomeCustomiser layout={layout} onSave={saveLayout} onCancel={() => setEditing(false)} />}
       {saveErr && <p style={styles.error}>{saveErr}</p>}
       {order.map(c => <GlassCard key={c} dark={c === 'customers'}>{cards[c]()}</GlassCard>)}
+    </div>
+  )
+}
+
+// The WhatsApp shop, last 7 days (2026-10-13): how many opened it, filled a basket, sent it to
+// WhatsApp, ordered and paid — and what customers searched for, including what you don't sell.
+function ShopFunnel({ tenantId, fmt }) {
+  const [d, setD] = useState(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/shop-funnel?days=7`)
+      .then(r => r.ok ? r.json() : Promise.reject()).then(setD).catch(() => setFailed(true))
+  }, [tenantId])
+  if (failed) return <ErrorCard what="the shop funnel" />
+  if (!d) return <div style={ovS.chartCard}><p style={ovS.sectionLabel}>🛍️ WhatsApp shop — last 7 days</p><div className="vula-skeleton" style={{ height: 90 }} /></div>
+  const top = Math.max(1, ...d.steps.map(st => st.count))
+  return (
+    <div style={ovS.chartCard}>
+      <p style={ovS.sectionLabel}>🛍️ WhatsApp shop — last 7 days{d.paid_cents ? ` · ${fmt(d.paid_cents)} paid` : ''}</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {d.steps.map((st, i) => {
+          const prev = i ? d.steps[i - 1].count : 0
+          return (
+            <div key={st.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(110px, 150px) 1fr auto', gap: 10, alignItems: 'center', fontSize: 12.5 }}>
+              <span style={{ color: 'var(--text)' }}>{st.label}</span>
+              <div style={{ background: 'var(--surface-alt)', borderRadius: 6, height: 14, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.max(st.count ? 3 : 0, Math.round(st.count / top * 100))}%`, height: '100%', background: 'linear-gradient(90deg, var(--accent), var(--accent-2))', borderRadius: 6 }} />
+              </div>
+              <span style={{ fontFamily: 'monospace', minWidth: 64, textAlign: 'right' }}>
+                {st.count}{i && prev ? <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {Math.round(st.count / prev * 100)}%</span> : null}
+              </span>
+            </div>)
+        })}
+      </div>
+      {!d.tracked && <p style={{ ...ovS.chartFoot, textAlign: 'left' }}>Shop visits and searches start counting once the latest update is switched on.</p>}
+      {(d.top_searches.length > 0 || d.not_found.length > 0) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginTop: 14 }}>
+          {d.top_searches.length > 0 && (
+            <div>
+              <p style={ovS.sectionLabel}>🔎 Most searched</p>
+              {d.top_searches.map(t => <div key={t.term} style={{ fontSize: 12.5, padding: '2px 0' }}>{t.term} <span style={{ color: 'var(--muted)' }}>×{t.count}</span></div>)}
+            </div>)}
+          {d.not_found.length > 0 && (
+            <div>
+              <p style={ovS.sectionLabel}>🤷 Asked for, not found</p>
+              {d.not_found.map(t => <div key={t.term} style={{ fontSize: 12.5, padding: '2px 0' }}>{t.term} <span style={{ color: 'var(--muted)' }}>×{t.count}</span></div>)}
+              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0' }}>Ideas for what to stock, or a product name to add.</p>
+            </div>)}
+        </div>)}
     </div>
   )
 }
