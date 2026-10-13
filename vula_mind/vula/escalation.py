@@ -384,23 +384,64 @@ def open_escalation_for_helper(helper_phone: str, tenant_id: Optional[str] = Non
     return fresh[0] if fresh else None
 
 
+def _same_question(a: str, b: str) -> bool:
+    """Same ask (the ask_team paraphrase and the customer's own words), not a new one."""
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
+        return (a or "").strip().lower() == (b or "").strip().lower()
+    return len(ta & tb) / min(len(ta), len(tb)) >= 0.5
+
+
+def helper_prompt(row: dict, question: str, frustrated: bool = False) -> str:
+    """What the helper is sent — one wording for the ask_team tool and the phrase detector."""
+    q = (question or "").strip()
+    if row.get("also_waiting_on"):
+        return (f"❓ The same customer also asked:\n\n\"{q}\"\n\n(Still waiting on: "
+                f"\"{row['also_waiting_on'].strip()}\")\n\nReply to this message with the answer "
+                f"to both — I'll send it to them and remember it.")
+    prefix = ("😠 This customer sounds frustrated — please prioritise this one.\n\n"
+              if frustrated else "❓ ")
+    return (f"{prefix}A customer asked:\n\n\"{q}\"\n\nReply to this message with the answer — "
+            f"I'll send it to them and remember it.")
+
+
 def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Optional[dict]:
     """Record an escalation and pick a helper. Returns the row (+ helper) or None if no helper.
 
     Dedup (2026-07-17): one OPEN escalation per customer at a time — the ask_team tool AND the
     phrase-based detector both fired on the same message, creating two escalations and pinging
-    the helper twice. If the customer already has an open one, return None (no new row, no
-    second ping) — the helper's single reply resolves it."""
+    the helper twice. The same question again returns the open row marked `deduped` (no new
+    row, no second ping) — the helper's single reply resolves it.
+
+    2026-10-13 (SeedleMe test): a DIFFERENT question used to be dropped too — "How long does
+    delivery take?" was swallowed by that morning's still-open "Do you do round basins", so the
+    customer was told someone would get back to them and nobody was ever asked. A new question
+    is now added to the open row (`also_waiting_on` = what was already asked), so the helper is
+    asked and one reply answers both."""
     digits = re.sub(r"\D", "", customer_phone or "")
     try:
-        existing = (_client().table("vula_escalations").select("id")
+        existing = (_client().table("vula_escalations")
+                    .select("id,question,helper_phone,helper_name,tenant_id,customer_phone")
                     .eq("tenant_id", tenant_id).eq("customer_phone", digits)
                     .eq("status", "open").limit(1).execute().data or [])
-        if existing:
-            log.info("escalation dedup: %s already has an open escalation", digits)
-            return None
     except Exception:
-        pass
+        existing = []
+    if existing:
+        open_row = existing[0]
+        before = open_row.get("question") or ""
+        if _same_question(before, question):
+            log.info("escalation dedup: %s already has this question open", digits)
+            return {**open_row, "deduped": True}
+        combined = f"{before}\n\nAlso asked: {(question or '').strip()}".strip()
+        try:
+            upd = (_client().table("vula_escalations").update({"question": combined})
+                   .eq("id", open_row["id"]).eq("status", "open").execute())
+            if upd.data:
+                log.info("escalation for %s: new question added to the open one", digits)
+                return {**open_row, "question": combined, "also_waiting_on": before}
+        except Exception as exc:
+            log.warning("could not add question to open escalation: %s", exc)
+        # Answered or expired in between — fall through and open a fresh one.
     helper = _pick_helper(tenant_id, exclude_phone=customer_phone)
     if not helper:
         return None

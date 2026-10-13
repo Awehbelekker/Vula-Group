@@ -6,7 +6,9 @@ A confidently-wrong-or-unhelpful reply to an angry customer never pulled a human
 Also covers find_stale_open_escalations/mark_stale_notified (2026-07-28) — the data layer
 behind generalizing proactive re-engagement past commerce-only tenants."""
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from vula import escalation as esc
 
@@ -373,3 +375,69 @@ def test_queue_research_candidate_does_not_gate_on_instruction_wording():
 
     assert learned_id is not None
     mock_table.insert.assert_called_once()
+
+
+# ── A second, different question while one is open (2026-10-13, SeedleMe test) ──────────
+# "How long does delivery take?" was dropped by the dedup because that morning's "Do you do
+# round basins" was still open: the customer was told someone would get back to them, and
+# nobody was ever asked.
+
+def _open_escalation_db(open_rows, update_ok=True):
+    table = MagicMock()
+    table.select.return_value.eq.return_value.eq.return_value.eq.return_value \
+        .limit.return_value.execute.return_value = MagicMock(data=open_rows)
+    table.update.return_value.eq.return_value.eq.return_value.execute.return_value = \
+        MagicMock(data=[{"id": "e1"}] if update_ok else [])
+    db = MagicMock()
+    db.table.return_value = table
+    return db, table
+
+
+_ROUND_BASINS = {"id": "e1", "tenant_id": "seedleme", "customer_phone": "27645755210",
+                 "question": "Do you do round basins", "helper_phone": "27662545068",
+                 "helper_name": "Matt"}
+
+
+def test_a_new_question_is_added_to_the_open_escalation_and_the_helper_is_asked():
+    db, table = _open_escalation_db([dict(_ROUND_BASINS)])
+    with patch("vula.escalation._client", return_value=db):
+        row = esc.create_escalation("seedleme", "27645755210", "How long does delivery take?")
+    assert row["helper_phone"] == "27662545068" and not row.get("deduped")
+    assert row["also_waiting_on"] == "Do you do round basins"
+    assert table.update.call_args.args[0] == {
+        "question": "Do you do round basins\n\nAlso asked: How long does delivery take?"}
+    table.insert.assert_not_called()
+    ping = esc.helper_prompt(row, "How long does delivery take?")
+    assert "also asked" in ping and "How long does delivery take?" in ping
+    assert "Do you do round basins" in ping and "both" in ping
+
+
+def test_the_same_question_again_is_not_a_second_ping():
+    db, table = _open_escalation_db([dict(_ROUND_BASINS)])
+    with patch("vula.escalation._client", return_value=db):
+        row = esc.create_escalation("seedleme", "27645755210", "do you do ROUND basins?")
+    assert row["deduped"] is True
+    table.update.assert_not_called()
+    table.insert.assert_not_called()
+
+
+def test_a_plain_escalation_reads_as_before():
+    ping = esc.helper_prompt({"helper_phone": "1"}, "Do you deliver to Durban?")
+    assert ping.startswith("❓ A customer asked:") and "Do you deliver to Durban?" in ping
+    assert esc.helper_prompt({}, "x", frustrated=True).startswith("😠")
+
+
+@pytest.mark.asyncio
+async def test_ask_team_on_an_already_open_question_does_not_claim_there_is_no_helper():
+    from core.skills.commerce_assistant import CommerceAssistantSkill
+    sent = []
+
+    async def fake_send(*a, **k):
+        sent.append(a)
+    with patch("vula.escalation.find_learned_answer", AsyncMock(return_value=None)), \
+         patch("vula.escalation.create_escalation", return_value={**_ROUND_BASINS, "deduped": True}), \
+         patch("vula.api.whatsapp._send_reply", fake_send):
+        out = await CommerceAssistantSkill()._exec_ask_team(
+            "seedleme", "27645755210", {"question": "Do you do round basins"})
+    assert out.get("escalated") is True and "error" not in out
+    assert sent == []
