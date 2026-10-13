@@ -5607,6 +5607,23 @@ async def admin_delete_wa_template(tenant_id: str, name: str):
     return result
 
 
+@router.get("/{tenant_id}/admin/wa-profile")
+async def admin_wa_profile(tenant_id: str):
+    """The WhatsApp business profile now, and the one Vula proposes from the brand kit."""
+    from vula.commerce import wa_profile
+    return {"current": await wa_profile.current(tenant_id), "proposed": await wa_profile.proposed(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/wa-profile")
+async def admin_wa_profile_apply(tenant_id: str, body: dict):
+    """Set the WhatsApp business profile (the owner's Apply tap). Body: {profile: {...}}."""
+    from vula.commerce import wa_profile
+    res = await wa_profile.apply(tenant_id, (body or {}).get("profile") or {})
+    if res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
 @router.get("/{tenant_id}/admin/shop-funnel")
 async def admin_shop_funnel(tenant_id: str, days: int = 7):
     """The WhatsApp shop's funnel and searches for Home (vula/commerce/shop_stats.py)."""
