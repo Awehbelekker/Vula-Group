@@ -6098,6 +6098,15 @@ async def _get_tenant_wa_creds(tenant_id: str) -> dict | None:
             }
             _wa_creds_cache[tenant_id] = creds
             return creds
+        # 2026-10-13 (SeedleMe): a number added straight to Vula's own WhatsApp Business Account
+        # (WhatsApp Manager, or Master › Link WhatsApp number) carries no token of its own — the
+        # server's system-user token covers every number on that account. It must still send
+        # from ITS number: the default-number fallback below would have answered SeedleMe's
+        # customers from Vula's own line.
+        if result.data and result.data.get("phone_number_id") and settings.whatsapp_token:
+            creds = {"token": settings.whatsapp_token, "phone_id": result.data["phone_number_id"]}
+            _wa_creds_cache[tenant_id] = creds
+            return creds
     except Exception as exc:
         logger.debug("Supabase WA creds lookup failed for %s: %s", tenant_id, exc)
 

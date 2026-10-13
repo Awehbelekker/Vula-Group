@@ -40,12 +40,14 @@ async def _waba_creds(tenant_id: str) -> Optional[Dict[str, str]]:
         if row and row.get("waba_id") and row.get("access_token"):
             from vula.email_imap.credentials import decrypt_secret
             return {"waba_id": row["waba_id"], "token": decrypt_secret(row["access_token"])}
+        # A number on Vula's own WhatsApp Business Account has no token of its own; the
+        # server's system-user token manages that account's templates (2026-10-13, SeedleMe).
+        from config import settings
+        if row and row.get("waba_id") and settings.whatsapp_token:
+            return {"waba_id": row["waba_id"], "token": settings.whatsapp_token}
     except Exception as exc:
         log.debug("WABA creds lookup failed for %s: %s", tenant_id, exc)
-    from config import settings
-    if settings.whatsapp_token:
-        return None  # no per-tenant WABA on record — caller decides how to handle
-    return None
+    return None  # no WhatsApp account on record — caller decides how to handle
 
 
 def _placeholder_count(body_text: str) -> int:

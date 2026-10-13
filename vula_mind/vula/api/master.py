@@ -802,6 +802,26 @@ async def master_users():
     return {"users": rows}
 
 
+@router.post("/tenants/{tenant_id}/whatsapp-number")
+async def master_link_whatsapp_number(tenant_id: str, body: dict, identity: dict = Depends(require_master)):
+    """Link a number already on Vula's WhatsApp Business Account to this tenant (WhatsApp Manager
+    route, when Embedded Signup isn't used): {phone_number_id, pin?}. Meta is asked about the
+    number first; the PIN only goes to Meta to register it."""
+    from vula.api.whatsapp_connect import LinkNumberError, link_existing_number
+    if not (_client().table("vula_tenant_config").select("tenant_id").eq("tenant_id", tenant_id)
+            .limit(1).execute().data):
+        raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
+    try:
+        res = await link_existing_number(tenant_id, (body or {}).get("phone_number_id") or "",
+                                         (body or {}).get("pin") or None,
+                                         linked_by=identity.get("email") if isinstance(identity, dict) else None)
+    except LinkNumberError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audit(identity, "whatsapp_number_linked", tenant_id, phone_number_id=res["phone_number_id"],
+          phone_number=res["phone_number"])
+    return res
+
+
 @router.post("/tenants/{tenant_id}/users")
 async def master_create_user(tenant_id: str, body: dict, identity: dict = Depends(require_master)):
     """Create a login for ANY tenant, under the already-enforced require_master gate so master
