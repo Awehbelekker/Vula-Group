@@ -1,106 +1,117 @@
-"""Tests for scripts/sync_meta_catalog.py — pushes commerce_products into a tenant's connected
-Meta Commerce Manager catalog. No tenant has a catalog connected yet (confirmed live,
-2026-08-25), so this is deterministic/mocked only — nothing here can be live-verified against
-a real catalog until one exists. See vula/api/whatsapp.py's _handle_native_order for the
-receiving side.
-"""
+"""WhatsApp's own catalogue (vula/commerce/meta_catalog.py). Customers browse, pick a colour and
+build a cart inside WhatsApp; the cart comes back as an "order" webhook whose items carry each
+product's slug (vula/api/whatsapp.py::_handle_native_order). Catalogue feed field names
+(title, link, image_link, item_group_id, color) for POST /{catalog_id}/items_batch."""
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from scripts.sync_meta_catalog import _catalog_item, sync_catalog
+from vula.commerce import meta_catalog
 
 
-def test_catalog_item_shape():
-    product = {"slug": "hake-fillets", "name": "Hake Fillets", "description": "Fresh hake",
-               "price_cents": 16000, "in_stock": True, "stock_quantity": 12,
-               "image_url": "https://example.com/hake.jpg", "images": []}
-    item = _catalog_item(product, store_url="https://oth.vula.site")
+def _p(name, slug, cents=149900, **k):
+    return {"name": name, "slug": slug, "price_cents": cents, "in_stock": True, "stock_quantity": None,
+            "image_url": f"https://cdn/{slug}.jpg", "description": "Hand-cast concrete.", **k}
 
+
+def test_a_product_is_a_catalogue_feed_item():
+    item = meta_catalog._item(_p("Hake Fillets", "hake-fillets", 16000, stock_quantity=12,
+                                 images=["https://cdn/hake-fillets.jpg", "https://cdn/hake-2.jpg"]),
+                              "https://oth.vula.site", "Off the Hook")
     assert item["method"] == "UPDATE"
-    data = item["data"]
-    assert data["id"] == "hake-fillets"
-    assert data["name"] == "Hake Fillets"
-    assert data["price"] == "160.00 ZAR"
-    assert data["currency"] == "ZAR"
-    assert data["availability"] == "in stock"
-    assert data["image"] == [{"url": "https://example.com/hake.jpg"}]
-    assert data["url"] == "https://oth.vula.site/products/hake-fillets"
+    assert item["data"] == {
+        "id": "hake-fillets", "title": "Hake Fillets", "description": "Hand-cast concrete.",
+        "availability": "in stock", "condition": "new", "price": "160.00 ZAR",
+        "link": "https://oth.vula.site/products/hake-fillets", "image_link": "https://cdn/hake-fillets.jpg",
+        "additional_image_link": ["https://cdn/hake-2.jpg"], "brand": "Off the Hook"}
 
 
-def test_catalog_item_out_of_stock_when_quantity_zero():
-    product = {"slug": "calamari", "name": "Calamari", "price_cents": 12000,
-               "in_stock": True, "stock_quantity": 0}
-    assert _catalog_item(product, None)["data"]["availability"] == "out of stock"
+def test_untracked_stock_is_available_a_counted_zero_is_not():
+    assert meta_catalog._item(_p("A", "a"), "https://x")["data"]["availability"] == "in stock"
+    assert meta_catalog._item(_p("B", "b", stock_quantity=0), "https://x")["data"]["availability"] == "out of stock"
+    assert meta_catalog._item(_p("C", "c", in_stock=False), "https://x")["data"]["availability"] == "out of stock"
 
 
-def test_catalog_item_out_of_stock_when_in_stock_flag_false():
-    product = {"slug": "prawns", "name": "Prawns", "price_cents": 20000,
-               "in_stock": False, "stock_quantity": 50}
-    assert _catalog_item(product, None)["data"]["availability"] == "out of stock"
+def test_a_sale_price_wins():
+    assert meta_catalog._item(_p("M", "m", 8000, sale_price_cents=6000), "https://x")["data"]["price"] == "60.00 ZAR"
 
 
-def test_catalog_item_prefers_sale_price():
-    product = {"slug": "mackerel", "name": "Mackerel", "price_cents": 8000,
-               "sale_price_cents": 6000, "in_stock": True, "stock_quantity": 5}
-    assert _catalog_item(product, None)["data"]["price"] == "60.00 ZAR"
+def test_colours_of_a_range_share_a_group_and_each_names_its_colour():
+    items = meta_catalog.catalog_items([
+        _p("Round Concave Concrete Basin – Black – 42 x 14cm", "rcb-black", 169900),
+        _p("Round Concave Concrete Basin – Ivory – 42 x 14cm", "rcb-ivory", 169900),
+        _p("Amazon Green Bespoke Bath 175 x 80 x 50cm", "bath", 2700000)], "https://seedleme.com", "SeedleMe")
+    data = {i["data"]["id"]: i["data"] for i in items}
+    assert data["rcb-black"]["item_group_id"] == data["rcb-ivory"]["item_group_id"]
+    assert (data["rcb-black"]["color"], data["rcb-ivory"]["color"]) == ("Black", "Ivory")
+    assert "item_group_id" not in data["bath"] and "color" not in data["bath"]   # a one-off isn't a group
+    assert data["bath"]["link"] == "https://seedleme.com/products/bath"
 
 
-def test_catalog_item_falls_back_to_images_list_when_no_image_url():
-    product = {"slug": "sole", "name": "Sole", "price_cents": 9000,
-               "in_stock": True, "stock_quantity": 3, "images": ["https://example.com/sole.jpg"]}
-    assert _catalog_item(product, None)["data"]["image"] == [{"url": "https://example.com/sole.jpg"}]
+@pytest.fixture()
+def tenant(monkeypatch):
+    cfg = {"meta_catalog_id": None, "store_url": "https://seedleme.com", "display_name": "SeedleMe"}
+    monkeypatch.setattr(meta_catalog, "_config", lambda tid: dict(cfg))
+    monkeypatch.setattr("vula.api.whatsapp._get_tenant_wa_creds", AsyncMock(return_value={"phone_id": "1", "token": "tok"}))
 
-
-def test_catalog_item_omits_url_when_no_store_url_configured():
-    product = {"slug": "trout", "name": "Trout", "price_cents": 7000,
-               "in_stock": True, "stock_quantity": 2}
-    assert "url" not in _catalog_item(product, None)["data"]
-
-
-@pytest.mark.asyncio
-async def test_sync_catalog_reports_no_catalog_id_when_unset():
-    # sync_catalog() imports `service` locally (from vula.commerce import service) — patch the
-    # real module's attribute, not scripts.sync_meta_catalog's (nonexistent) module-level name.
-    with patch("vula.commerce.service._client") as mock_client:
-        mock_client.return_value.table.return_value.select.return_value \
-            .eq.return_value.limit.return_value.execute.return_value = MagicMock(
-                data=[{"meta_catalog_id": None, "store_url": None}])
-        result = await sync_catalog("off-the-hook")
-
-    assert result["status"] == "no_catalog_id"
+    async def products(tid, **k):
+        return [_p(f"Calypso {c} Basin 56 x 29.5 x 15cm", f"calypso-{c.lower()}", 199900) for c in ("Black", "Grey")]
+    monkeypatch.setattr("vula.commerce.service.list_products", products)
+    return cfg
 
 
 @pytest.mark.asyncio
-async def test_sync_catalog_posts_items_batch_when_configured():
-    mock_client_fn = MagicMock()
-    cfg_chain = mock_client_fn.return_value.table.return_value.select.return_value.eq.return_value.limit.return_value
-    cfg_chain.execute.return_value = MagicMock(
-        data=[{"meta_catalog_id": "cat123", "store_url": "https://oth.vula.site"}])
-    products_chain = mock_client_fn.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value
-    products_chain.execute.return_value = MagicMock(data=[
-        {"slug": "hake", "name": "Hake", "price_cents": 16000, "in_stock": True, "stock_quantity": 5},
-    ])
+async def test_nothing_is_sent_until_a_catalogue_is_connected(tenant):
+    assert (await meta_catalog.sync("seedleme"))["status"] == "no_catalog_id"
 
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {"handles": ["h1"]}
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=None)
-    mock_http_client.post = AsyncMock(return_value=mock_response)
 
-    with (
-        patch("vula.commerce.service._client", mock_client_fn),
-        patch("vula.api.whatsapp._get_tenant_wa_creds", new=AsyncMock(
-            return_value={"phone_id": "1", "token": "tok"})),
-        patch("scripts.sync_meta_catalog.httpx.AsyncClient", return_value=mock_http_client),
-    ):
-        result = await sync_catalog("off-the-hook")
+def _http(status=200, body=None):
+    resp = MagicMock(status_code=status, text=str(body))
+    resp.json.return_value = body if body is not None else {"handles": ["h1"]}
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    client.post = AsyncMock(return_value=resp)
+    return client
 
-    assert result["status"] == "success"
-    assert result["synced"] == 1
-    call = mock_http_client.post.call_args
+
+@pytest.mark.asyncio
+async def test_a_connected_catalogue_gets_every_product_with_its_colour_group(tenant):
+    tenant["meta_catalog_id"] = "cat123"
+    client = _http()
+    with patch("vula.commerce.meta_catalog.httpx.AsyncClient", return_value=client):
+        res = await meta_catalog.sync("seedleme")
+    assert res == {"status": "success", "synced": 2, "colour_groups": 1, "catalog_id": "cat123", "handles": ["h1"]}
+    call = client.post.call_args
     assert call.args[0] == "https://graph.facebook.com/v19.0/cat123/items_batch"
     assert call.kwargs["json"]["item_type"] == "PRODUCT_ITEM"
-    assert call.kwargs["json"]["requests"][0]["data"]["id"] == "hake"
+    assert [r["data"]["color"] for r in call.kwargs["json"]["requests"]] == ["Black", "Grey"]
+
+
+@pytest.mark.asyncio
+async def test_metas_refusal_is_reported_with_what_to_do(tenant):
+    client = _http(403, {"error": {"message": "(#10) Application does not have permission for this action"}})
+    with patch("vula.commerce.meta_catalog.httpx.AsyncClient", return_value=client):
+        res = await meta_catalog.sync("seedleme", catalog_id="cat123")
+    assert res["status"] == "failed" and "assign the catalogue" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_after_an_import_the_catalogue_is_resynced_only_when_there_is_one(tenant, monkeypatch):
+    calls = []
+
+    async def fake_sync(tid, catalog_id=None):
+        calls.append(tid)
+        return {"status": "success"}
+    monkeypatch.setattr(meta_catalog, "sync", fake_sync)
+    await meta_catalog.sync_if_connected("seedleme")
+    assert calls == []
+    tenant["meta_catalog_id"] = "cat123"
+    await meta_catalog.sync_if_connected("seedleme")
+    assert calls == ["seedleme"]
+
+
+def test_the_command_line_script_is_a_wrapper():
+    import scripts.sync_meta_catalog as script
+    assert SimpleNamespace(main=script._main).main is not None

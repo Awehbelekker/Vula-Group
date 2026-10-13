@@ -822,6 +822,28 @@ async def master_link_whatsapp_number(tenant_id: str, body: dict, identity: dict
     return res
 
 
+@router.post("/tenants/{tenant_id}/meta-catalog")
+async def master_meta_catalog(tenant_id: str, body: dict, identity: dict = Depends(require_master)):
+    """WhatsApp's own catalogue for this business (vula/commerce/meta_catalog.py): {catalog_id?}.
+    A catalogue ID is saved first; then every active product is pushed, colours grouped as one
+    product with a colour picker. With no ID given, the saved catalogue is re-pushed."""
+    import re as _re
+    from vula.commerce import meta_catalog
+    if not (_client().table("vula_tenant_config").select("tenant_id").eq("tenant_id", tenant_id)
+            .limit(1).execute().data):
+        raise HTTPException(status_code=404, detail=f"tenant '{tenant_id}' not found")
+    raw = str((body or {}).get("catalog_id") or "").strip()
+    catalog_id = _re.sub(r"\D", "", raw)
+    if raw and not catalog_id:
+        raise HTTPException(status_code=400, detail="A catalogue ID is the number Commerce Manager shows, e.g. 1234567890123456.")
+    if catalog_id:
+        _client().table("vula_tenant_config").update({"meta_catalog_id": catalog_id}).eq("tenant_id", tenant_id).execute()
+    res = await meta_catalog.sync(tenant_id)
+    audit(identity, "meta_catalog_synced", tenant_id, catalog_id=res.get("catalog_id") or catalog_id,
+          status=res.get("status"), synced=res.get("synced"))
+    return res
+
+
 @router.post("/tenants/{tenant_id}/users")
 async def master_create_user(tenant_id: str, body: dict, identity: dict = Depends(require_master)):
     """Create a login for ANY tenant, under the already-enforced require_master gate so master

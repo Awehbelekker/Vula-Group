@@ -586,6 +586,8 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
 
         await asyncio.gather(*(one(u) for u in urls))
         st["step"] = "done"
+        from vula.commerce.meta_catalog import sync_if_connected
+        await sync_if_connected(tenant_id)
     except Exception as exc:
         log.warning("site import failed for %s (%s): %s", tenant_id, root, exc)
         st["step"], st["error"] = "stopped", str(exc)[:200]
