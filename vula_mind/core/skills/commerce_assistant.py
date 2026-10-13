@@ -2617,12 +2617,10 @@ class CommerceAssistantSkill(BaseSkill):
             if not row:
                 return {"error": "No team helper is configured for this business — tell the "
                                  "customer you'll find out and someone will get back to them."}
-            from vula.api.whatsapp import _send_reply
-            await _send_reply(
-                row["helper_phone"],
-                f"❓ A customer asked:\n\n\"{question}\"\n\nReply to this message with the "
-                f"answer — I'll send it to them and remember it.",
-                tenant_id=tenant_id)
+            if not row.get("deduped"):
+                from vula.api.whatsapp import _send_reply
+                await _send_reply(row["helper_phone"], esc.helper_prompt(row, question),
+                                  tenant_id=tenant_id)
             return {"escalated": True,
                     "instruction_to_assistant": "Tell the customer (in their language) that "
                     "you're checking with the team and will get back to them shortly. Do NOT "

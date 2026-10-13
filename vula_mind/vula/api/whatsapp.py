@@ -1369,14 +1369,12 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             # Flag it to the helper when the customer's OWN message reads frustrated — a
             # confidently-wrong-or-unhelpful reply to an upset customer used to never surface
             # this to staff at all, since escalation only looked at the bot's own confidence.
-            prefix = ("😠 This customer sounds frustrated — please prioritise this one.\n\n"
-                     if esc.customer_seems_frustrated(text) else "❓ ")
-            await _send_reply(
-                row["helper_phone"],
-                f"{prefix}A customer asked:\n\n\"{text.strip()}\"\n\nReply to this message with "
-                f"the answer — I'll send it to them and remember it.",
-                tenant_id=tenant_id,
-            )
+            if not row.get("deduped"):
+                await _send_reply(
+                    row["helper_phone"],
+                    esc.helper_prompt(row, text, esc.customer_seems_frustrated(text)),
+                    tenant_id=tenant_id,
+                )
             return "Thanks for your question! Let me check with the team and get right back to you. 🙏"
     except Exception as exc:
         logger.debug("escalation skipped: %s", exc)
