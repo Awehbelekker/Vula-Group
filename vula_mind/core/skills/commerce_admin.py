@@ -42,7 +42,7 @@ from core.skills.base import (
     need_info_message, substitute_if_leaked, substitute_if_unbacked_claim, tool_source,
     unverified_prices, wrong_arithmetic,
 )
-from vula.commerce import service
+from vula.commerce import order_deposit, service
 
 logger = logging.getLogger(__name__)
 
@@ -359,9 +359,28 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 "product": {"type": "string"}, "quantity": {"type": "number"}}}},
             "delivery_address": {"type": "string"},
             "payment_method": {"type": "string", "enum": ["cod", "eft", "online"]},
-            "mark_paid": {"type": "boolean"}, "confirm": {"type": "boolean"}},
+            "mark_paid": {"type": "boolean"},
+            "deposit_rands": {"type": "number", "description": "Only when the owner says a "
+                              "deposit is needed: the deposit amount. The customer is then "
+                              "WhatsApped the order number with a Pay deposit button."},
+            "deposit_pct": {"type": "number", "description": "A deposit as a percentage of the "
+                            "order total, e.g. 50 — instead of deposit_rands."},
+            "confirm": {"type": "boolean"}},
             "required": ["customer_name", "customer_phone", "items"]},
     }},
+    {"type": "function", "function": {
+        "name": "order_payment",
+        "description": "Ask a customer to pay a deposit or the balance on an EXISTING order — "
+                       "'ask Thandi for a 50% deposit on SEE-00012', 'send the balance for "
+                       "SEE-00012'. WhatsApps the order number, items, amounts and a Pay button "
+                       "(card or EFT); when it's paid the order is confirmed and you're told. "
+                       "Give deposit_rands or deposit_pct for a deposit, or balance=true for "
+                       "what's still owed. Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "order_number": {"type": "string"},
+            "deposit_rands": {"type": "number"}, "deposit_pct": {"type": "number"},
+            "balance": {"type": "boolean"}, "confirm": {"type": "boolean"}},
+            "required": ["order_number"]}}},
 ]
 
 # ── Module-gated tools (added to the base set only for tenants with that module) ──
@@ -1093,7 +1112,8 @@ _REP_TOOL_SPECS = (TOOL_SPECS[:0] + MARKETING_TOOLS + KNOWLEDGE_TOOLS + PRODUCT_
 
 # Tools in the always-on set that only mean something to a business that sells products
 # (Off the Hook), never to a project business (DIGG) or a rep (Gerflor) — see tenant_profile.
-_SHOP_ONLY_TOOLS = {"recent_orders", "update_order_status", "create_manual_order", "stock_status",
+_SHOP_ONLY_TOOLS = {"recent_orders", "update_order_status", "create_manual_order", "order_payment",
+                    "stock_status",
                     "update_stock", "receive_stock", "preview_broadcast", "sales_summary"}
 
 
@@ -1335,6 +1355,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "reimbursement_balance": "finances", "add_expense": "finances",
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
+    "order_payment": "orders",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
     "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
@@ -2096,6 +2117,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "update_po_status":   return await self._update_po_status(tid, args.get("po_ref", ""), args.get("status", ""), bool(args.get("confirm")))
             if name == "send_purchase_order": return await self._send_purchase_order(tid, args.get("po_ref", ""), args.get("channel", "email"), bool(args.get("confirm")))
             if name == "create_manual_order": return await self._create_manual_order(tid, args)
+            if name == "order_payment":       return await self._order_payment(tid, args)
             if name == "create_automation_rule": return await self._create_automation_rule(tid, args.get("description", ""), bool(args.get("confirm")))
             if name == "list_discount_codes": return await self._list_discount_codes(tid)
             if name == "create_discount_code": return await self._create_discount_code(tid, args)
@@ -3100,9 +3122,17 @@ class CommerceAdminSkill(BaseSkill):
             msg = "Confirm to create this order (call again with confirm=true)."
             if args.get("mark_paid"):
                 msg += " This will also record it as already paid."
-            return {"preview": True, "customer": name,
-                    "items": [{"product": p.get("name"), "quantity": qty} for p, qty in resolved],
-                    "total": self._rands(int(preview_total)), "message": msg}
+            out = {"preview": True, "customer": name,
+                   "items": [{"product": p.get("name"), "quantity": qty} for p, qty in resolved],
+                   "total": self._rands(int(preview_total)), "message": msg}
+            dep = order_deposit.deposit_cents(int(preview_total), args.get("deposit_rands"),
+                                              args.get("deposit_pct"))
+            if dep and not args.get("mark_paid"):
+                out["deposit"] = self._rands(dep)
+                out["message"] = (f"Confirm to create this order and WhatsApp {name} the order number "
+                                  f"with a Pay deposit button for {self._rands(dep)} "
+                                  "(call again with confirm=true). The total excludes delivery.")
+            return out
         from uuid import uuid4
         session_id = f"manual-{uuid4().hex[:12]}"
         cart = await service.get_or_create_cart(tid, session_id, customer_phone=phone)
@@ -3117,7 +3147,9 @@ class CommerceAdminSkill(BaseSkill):
                 "customer_phone": phone, "customer_name": name,
                 "delivery_address": args.get("delivery_address") or "Collection / to arrange",
                 "delivery_slot": "morning", "channel": "manual",
-                "payment_method": args.get("payment_method") or "cod",
+                # a deposit order must not expire as an unpaid online checkout
+                "payment_method": args.get("payment_method") or (
+                    "eft" if args.get("deposit_rands") or args.get("deposit_pct") else "cod"),
             })
         except service.OutOfStockError as exc:
             return {"error": str(exc)}
@@ -3132,9 +3164,69 @@ class CommerceAdminSkill(BaseSkill):
             if not ok:
                 return _not_confirmed("Order creation could not be confirmed on re-read. Not confirmed; "
                                       "please check the Orders tab.")
-            return _checked(result, f"✅ Order *{found['display_id']}* created: "
-                                    f"*{_r(found.get('total_cents'))}* · status: {found.get('status') or 'pending'}.")
+            reply = (f"✅ Order *{found['display_id']}* created: "
+                     f"*{_r(found.get('total_cents'))}* · status: {found.get('status') or 'pending'}.")
+            if (args.get("deposit_rands") or args.get("deposit_pct")) and not args.get("mark_paid"):
+                reply += "\n" + await self._deposit_line(tid, found, args)
+            return _checked(result, reply)
         return result
+
+    async def _deposit_line(self, tid: str, order: Dict[str, Any], args: Dict[str, Any]) -> str:
+        """Send the deposit request for a just-created order; one line saying what happened,
+        built from the saved invoice."""
+        dep = order_deposit.deposit_cents(int(order.get("total_cents") or 0),
+                                          args.get("deposit_rands"), args.get("deposit_pct"))
+        if not dep:
+            return (f"⚠️ No deposit sent — it must be less than the order total "
+                    f"({_r(order.get('total_cents'))}).")
+        res = await order_deposit.request(tid, order, "deposit", dep)
+        return self._payment_request_line(res)
+
+    @staticmethod
+    def _payment_request_line(res: Dict[str, Any]) -> str:
+        if res.get("error"):
+            return "⚠️ " + res["error"]
+        what = "Deposit" if res["kind"] == "deposit" else "Balance"
+        if not res.get("sent"):
+            return (f"⚠️ {what} invoice {res.get('invoice_number')} ({_r(res['amount_cents'])}) is ready, "
+                    "but WhatsApp wouldn't deliver it — forward this link: " + (res.get("link") or ""))
+        if res.get("via_template"):
+            return (f"📲 {what} invoice {res.get('invoice_number')} ({_r(res['amount_cents'])}): the customer "
+                    "is outside WhatsApp's 24-hour window, so they got the payment reminder — when they "
+                    f"reply, say \"resend the {what.lower()} for {res['order']}\" and they'll get the Pay button.")
+        return (f"📲 {res['order']}: the customer has the order number and a *Pay {what.lower()}* "
+                f"button for {_r(res['amount_cents'])} (invoice {res.get('invoice_number')}). "
+                "I'll tell you when it's paid.")
+
+    async def _order_payment(self, tid: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        match = await self._find_order_by_display_id(tid, args.get("order_number") or "")
+        if not match:
+            return {"error": f"No order {args.get('order_number')} found."}
+        order = await service.get_order(match["id"]) or match
+        total = int(order.get("total_cents") or 0)
+        if order.get("status") in ("cancelled", "refunded"):
+            return {"error": f"Order {order.get('display_id')} is {order.get('status')}."}
+        balance = bool(args.get("balance")) or not (args.get("deposit_rands") or args.get("deposit_pct"))
+        if balance:
+            amount = total - order_deposit.paid_cents(tid, order["id"])
+            if amount <= 0:
+                return {"error": f"Order {order.get('display_id')} is already paid in full."}
+        else:
+            amount = order_deposit.deposit_cents(total, args.get("deposit_rands"), args.get("deposit_pct"))
+            if not amount:
+                return {"error": f"The deposit must be more than R0 and less than the order total ({_r(total)})."}
+        kind = "balance" if balance else "deposit"
+        if not args.get("confirm"):
+            return {"preview": True, "order": order.get("display_id"), "customer": order.get("customer_name"),
+                    "order_total": _r(total), kind: _r(amount),
+                    "message": f"Confirm to WhatsApp {order.get('customer_name') or 'the customer'} "
+                               f"a Pay {kind} button for {_r(amount)} (call again with confirm=true)."}
+        res = await order_deposit.request(tid, order, kind, amount)
+        if res.get("error"):
+            return {"error": res["error"]}
+        return _checked({"order": res["order"], kind: _r(res["amount_cents"]),
+                         "invoice_number": res.get("invoice_number"), "sent": res.get("sent")},
+                        self._payment_request_line(res))
 
     async def _create_automation_rule(self, tid: str, description: str, confirm: bool) -> Dict[str, Any]:
         """"Teaching mode": create a standing automation from a plain-language description.

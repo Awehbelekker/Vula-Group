@@ -705,6 +705,53 @@ async def admin_list_orders(
     return {"orders": orders, "count": len(orders)}
 
 
+async def _tenant_order(tenant_id: str, order_id: str) -> dict:
+    try:
+        order = await service.get_order(order_id)
+    except Exception:
+        order = None
+    if not order or order.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@router.get("/{tenant_id}/admin/orders/{order_id}/payment")
+async def admin_order_payment(tenant_id: str, order_id: str):
+    """What the customer has paid towards this order (deposit / balance invoices)."""
+    from vula.commerce import order_deposit
+    order = await _tenant_order(tenant_id, order_id)
+    paid = order_deposit.paid_cents(tenant_id, order_id)
+    total = int(order.get("total_cents") or 0)
+    pending = order_deposit.open_request(tenant_id, order_id)
+    return {"total_cents": total, "paid_cents": paid, "balance_cents": max(0, total - paid),
+            "open_request": ({"kind": order_deposit.kind_of(pending),
+                              "invoice_number": pending.get("invoice_number"),
+                              "amount_cents": int(pending.get("total_cents") or 0)} if pending else None)}
+
+
+@router.post("/{tenant_id}/admin/orders/{order_id}/payment-request")
+async def admin_order_payment_request(tenant_id: str, order_id: str, body: dict):
+    """WhatsApp the customer a Pay deposit / Pay balance button for this order
+    (vula/commerce/order_deposit.py). Body: {kind: deposit|balance, amount_cents?, pct?}."""
+    from vula.commerce import order_deposit
+    order = await _tenant_order(tenant_id, order_id)
+    kind = body.get("kind") or "deposit"
+    if kind not in ("deposit", "balance"):
+        raise HTTPException(status_code=400, detail="kind must be deposit or balance")
+    amount = None
+    if kind == "deposit":
+        total = int(order.get("total_cents") or 0)
+        try:
+            amount = (int(body["amount_cents"]) if body.get("amount_cents")
+                      else order_deposit.deposit_cents(total, pct=body.get("pct")))
+        except (TypeError, ValueError):
+            amount = 0
+    res = await order_deposit.request(tenant_id, order, kind, amount)
+    if res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
 @router.patch("/{tenant_id}/admin/orders/{order_id}/status")
 async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
     """Update order status — confirmed, packing, dispatched, delivered, cancelled."""

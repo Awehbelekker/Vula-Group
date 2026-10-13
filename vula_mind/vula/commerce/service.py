@@ -1836,6 +1836,10 @@ async def _settle_linked_order(tenant_id: str, invoice: dict) -> None:
     order_id = invoice.get("order_id")
     if not order_id or (invoice.get("direction") or "outbound") == "inbound":
         return
+    from vula.commerce import order_deposit
+    if order_deposit.kind_of(invoice):
+        await _settle_deposit_or_balance(tenant_id, invoice, order_id)
+        return
     try:
         res = (_client().table("commerce_orders")
                .update({"status": "paid", "updated_at": _now()})
@@ -1849,6 +1853,33 @@ async def _settle_linked_order(tenant_id: str, invoice: dict) -> None:
                                  o.get("customer_name") or "", int(o.get("total_cents") or 0))
     except Exception as exc:
         logger.warning("linked order %s not settled after invoice %s paid: %s",
+                       order_id, invoice.get("id"), exc)
+
+
+async def _settle_deposit_or_balance(tenant_id: str, invoice: dict, order_id: str) -> None:
+    """A deposit or balance (vula/commerce/order_deposit.py) was paid. The deposit confirms the
+    order (pending_payment → confirmed) and holds its stock; it is NOT the order paid in full —
+    the unpaid chase stops (it only chases pending_payment) and the balance stays owed. The
+    balance doesn't move a confirmed order's status (it may be packing or delivered by then);
+    asked on an order with no deposit it is the full amount and the order becomes paid."""
+    from vula.commerce import order_deposit
+    try:
+        # The deposit confirms the order; a full amount asked as the "balance" of an order that
+        # had no deposit pays it outright. Either way only from pending_payment, once.
+        deposit = order_deposit.kind_of(invoice) == "deposit"
+        res = (_client().table("commerce_orders")
+               .update({"status": "confirmed" if deposit else "paid", "updated_at": _now()})
+               .eq("tenant_id", tenant_id).eq("id", order_id).eq("status", "pending_payment")
+               .execute())
+        if deposit and not res.data:
+            return
+        if res.data:
+            await apply_order_stock(order_id, restore=False)
+        order = await get_order(order_id)
+        if order:
+            await order_deposit.on_paid(tenant_id, invoice, order)
+    except Exception as exc:
+        logger.warning("deposit/balance for order %s not settled after invoice %s paid: %s",
                        order_id, invoice.get("id"), exc)
 
 

@@ -1011,6 +1011,73 @@ function ManualOrderModal({ tenantId, onClose, onCreated }) {
 
 // ── Order detail + packing slip ─────────────────────────────────────────────
 
+// Deposit / balance on WhatsApp (2026-10-13, Ian): the customer gets the order number, what's
+// on it and a Pay button (card or EFT) in their chat; paying the deposit confirms the order.
+function OrderPaymentRequest({ tenantId, order, fmt }) {
+  const [pay, setPay] = useState(null)
+  const [deposit, setDeposit] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState(null)
+  const base = `${VULA_API}/v1/commerce/${tenantId}/admin/orders/${order.id}`
+
+  const load = () => fetch(`${base}/payment`).then(r => r.ok ? r.json() : null).then(setPay).catch(() => {})
+  useEffect(() => { load() }, [tenantId, order.id])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (['cancelled', 'refunded'].includes(order.status) || !order.customer_phone) return null
+
+  async function send(kind) {
+    setBusy(true); setNote(null)
+    const body = { kind }
+    if (kind === 'deposit') {
+      const v = deposit.trim()
+      if (v.endsWith('%')) body.pct = parseFloat(v)
+      else body.amount_cents = Math.round(parseFloat(v.replace(/[R,\s]/g, '')) * 100)
+    }
+    try {
+      const r = await fetch(`${base}/payment-request`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      const d = await r.json()
+      if (!r.ok) setNote({ ok: false, text: d.detail || 'Could not send.' })
+      else setNote({ ok: d.sent, text: d.sent
+        ? (d.via_template
+          ? `Outside WhatsApp's 24-hour window — the customer got the payment reminder. Send again once they reply.`
+          : `Sent: ${d.kind === 'deposit' ? 'Pay deposit' : 'Pay balance'} button for ${fmt(d.amount_cents)} (invoice ${d.invoice_number}).`)
+        : `Invoice ${d.invoice_number} is ready but WhatsApp didn't deliver — share this link: ${d.link}` })
+      load()
+    } catch { setNote({ ok: false, text: 'Could not send.' }) }
+    setBusy(false)
+  }
+
+  const balance = pay ? pay.balance_cents : order.total_cents
+  return (
+    <div style={{ margin: '10px 0 4px', padding: 12, borderRadius: 'var(--r-card, 12px)', background: 'var(--surface-alt)' }}>
+      <p style={{ ...styles.detailSection, marginTop: 0 }}>Payment on WhatsApp</p>
+      {pay && pay.paid_cents > 0 && (
+        <p style={styles.detailMeta}>Paid {fmt(pay.paid_cents)} · balance {fmt(pay.balance_cents)}</p>
+      )}
+      {pay?.open_request && (
+        <p style={styles.detailMeta}>Waiting on the {pay.open_request.kind} ({fmt(pay.open_request.amount_cents)}, {pay.open_request.invoice_number})</p>
+      )}
+      {balance > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+          {!(pay && pay.paid_cents > 0) && (
+            <>
+              <input value={deposit} onChange={e => setDeposit(e.target.value)} placeholder="Deposit e.g. 1500 or 50%"
+                style={{ flex: '1 1 150px', padding: '8px 10px', fontSize: 16, borderRadius: 'var(--r-input, 8px)', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)' }} />
+              <button disabled={busy || !deposit.trim()} onClick={() => send('deposit')} style={{ ...styles.btnAction, color: 'var(--on-accent, #fff)', padding: '8px 14px' }}>Request deposit</button>
+            </>
+          )}
+          <button disabled={busy} onClick={() => send('balance')} style={{ ...styles.btnGhost, padding: '8px 14px', fontSize: 12 }}>
+            {pay && pay.paid_cents > 0 ? `Request balance ${fmt(balance)}` : 'Request full amount'}
+          </button>
+        </div>
+      )}
+      {note && <p style={{ ...styles.detailMeta, color: note.ok ? 'var(--ok)' : 'var(--danger)', marginTop: 6 }}>{note.text}</p>}
+    </div>
+  )
+}
+
 function OrderDetailDrawer({ tenantId, orderId, onClose }) {
   const [order, setOrder] = useState(null)
   const [depth, setDepth] = useState(null)   // timeline + WhatsApp exchange (UI overhaul P3)
@@ -1084,6 +1151,8 @@ function OrderDetailDrawer({ tenantId, orderId, onClose }) {
               <div style={styles.detailTotal}>
                 <span>Total</span><span>{fmt(order.total_cents)}</span>
               </div>
+
+              <OrderPaymentRequest tenantId={tenantId} order={order} fmt={fmt} />
 
               {/* Timeline — how this order actually happened (UI overhaul P3) */}
               {(depth?.timeline || []).length > 0 && (
