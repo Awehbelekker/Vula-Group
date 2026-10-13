@@ -759,6 +759,7 @@ function WebsiteImport({ tenantId }) {
         <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
           Last import from {st.url}: {st.products_found ? `${n(st.products_found)} products (${n(st.products_created)} new, ${n(st.products_updated)} updated${st.variants ? `, ${n(st.variants)} options` : ""}${st.products_on_request ? `, ${n(st.products_on_request)} priced on request — in the catalogue, not for sale online` : ""}), ` : "no product catalogue found, "}{n(st.kb_documents)} pages added to what Vula knows{st.skipped_pages ? ` (${n(st.skipped_pages)} too short to use)` : ""}.
           {st.errors?.length ? ` ${st.errors.length} couldn't be read.` : ""}
+          {st.catalogue_note ? ` (Catalogue: ${st.catalogue_note}.)` : ""}
         </div>)}
       {st?.error && <div style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 8 }}>Stopped: {st.error}</div>}
       {msg && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>{msg}</div>}

@@ -31,7 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -1031,6 +1031,17 @@ async def expand_query(question: str, tenant_id: str = "") -> List[str]:
     return out
 
 
+_COLLECTION_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
+def _collection_lock(name: str) -> asyncio.Lock:
+    """One collection check-and-create at a time per collection in this process."""
+    lock = _COLLECTION_LOCKS.get(name)
+    if lock is None:
+        lock = _COLLECTION_LOCKS[name] = asyncio.Lock()
+    return lock
+
+
 class QdrantStore:
     """
     Per-tenant Qdrant collections for isolated knowledge bases.
@@ -1056,7 +1067,7 @@ class QdrantStore:
         """Create collection if it doesn't exist, and ensure the source_type payload
         index (required by Qdrant to filter authority-aware retrieval)."""
         name = self._collection_name(tenant_id)
-        async with httpx.AsyncClient(timeout=10.0, headers=self._headers()) as client:
+        async with _collection_lock(name), httpx.AsyncClient(timeout=10.0, headers=self._headers()) as client:
             resp = await client.get(f"{self.base}/collections/{name}")
             if resp.status_code != 200:
                 resp = await client.put(
@@ -1066,7 +1077,11 @@ class QdrantStore:
                         "optimizers_config": {"default_segment_number": 2},
                     },
                 )
-                if resp.status_code not in (200, 201):
+                # 2026-10-13 (SeedleMe's first website import): four pages saved at once into a
+                # brand-new business's knowledge base; one created the collection and the others
+                # were refused "already exists" — and their pages (About us, Contact) were lost.
+                # Another worker may still win the race, so "already exists" is success too.
+                if resp.status_code not in (200, 201) and "already exists" not in resp.text:
                     raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
                 logger.info("Created Qdrant collection: %s", name)
             # Idempotent: ensure the keyword index used by authority filtering.

@@ -47,7 +47,7 @@ def _page(title, body):
 
 
 SITE = {
-    f"{ROOT}/products.json?limit=100&page=1": json.dumps(PRODUCTS).encode(),
+    f"{ROOT}/products.json?limit=25&page=1": json.dumps(PRODUCTS).encode(),
     f"{ROOT}/sitemap.xml": SITEMAP.encode(),
     f"{ROOT}/sitemap_pages_1.xml": PAGES_SM.encode(),
     f"{ROOT}/sitemap_products_1.xml?from=1&to=9": PRODUCTS_SM.encode(),
@@ -80,7 +80,7 @@ class FakePipeline:
 def site(monkeypatch):
     fetched = []
 
-    async def fetch(url):
+    async def fetch(url, max_bytes=None):
         fetched.append(url)
         if url not in SITE:
             raise RuntimeError("404")
@@ -187,3 +187,101 @@ def test_prices_are_whole_cents():
     assert site_import._cents("3150.50") == 315_050
     assert site_import._cents("2700000", minor_unit=2) == 2_700_000      # WooCommerce Store API
     assert site_import._cents("") == 0 and site_import._cents("abc") == 0
+
+
+# 2026-10-13: SeedleMe's real first run — no products, About and Contact lost, "&ndash;" titles.
+
+ROUND_PAGE = ('<html><head><title>Round Vessel Basin &ndash; Seedleme</title>'
+              '<script type="application/ld+json">{"@context":"http://schema.org/","@type":"Product",'
+              '"name":"Round Vessel Basin","description":"&lt;p&gt;A round basin.&lt;/p&gt;",'
+              '"image":["https://cdn.shopify.com/round.jpg"],'
+              '"offers":[{"@type":"Offer","price":"2850.00","priceCurrency":"ZAR",'
+              '"availability":"http://schema.org/InStock"}]}</script></head><body>x</body></html>').encode()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_feed_falls_back_to_each_product_and_says_why(site, monkeypatch):
+    import httpx
+    for k in [k for k in SITE if "products.json" in k]:
+        monkeypatch.delitem(SITE, k)
+    monkeypatch.setitem(SITE, f"{ROOT}/products/round-vessel-basin.json",
+                        json.dumps({"product": PRODUCTS["products"][1]}).encode())
+    real = site_import._fetch
+
+    async def refuse_feed(url, max_bytes=None):
+        if "products.json" in url:
+            req = httpx.Request("GET", url)
+            raise httpx.HTTPStatusError("403", request=req, response=httpx.Response(403, request=req))
+        return await real(url, max_bytes)
+    monkeypatch.setattr(site_import, "_fetch", refuse_feed)
+    st = await site_import.import_site("seedleme", ROOT, "SeedleMe")
+    assert st["platform"] == "shopify" and st["products_found"] == 1 and st["products_created"] == 1
+    assert "Shopify product feed: HTTP 403" in st["catalogue_note"]
+    rows = {r["slug"]: r for r in site["imported"][0]}
+    assert rows["round-vessel-basin"]["price_cents"] == 285_000 and st["variants"] == 2
+
+
+@pytest.mark.asyncio
+async def test_without_any_json_the_product_pages_own_schema_gives_the_price(site, monkeypatch):
+    for k in [k for k in SITE if "products.json" in k]:
+        monkeypatch.delitem(SITE, k)
+    monkeypatch.setitem(SITE, f"{ROOT}/products/round-vessel-basin", ROUND_PAGE)
+    st = await site_import.import_site("seedleme", ROOT)
+    row = site["imported"][0][0]
+    assert st["platform"] == "website" and row["slug"] == "round-vessel-basin"
+    assert row["price_cents"] == 285_000 and row["image_url"] == "https://cdn.shopify.com/round.jpg"
+    assert row["description"] == "A round basin."
+
+
+def test_page_titles_are_plain_text_and_html_sitemaps_are_not_read():
+    title, _ = site_import.page_text(b"<html><head><title>About us &ndash; Seedleme</title></head></html>")
+    assert title == "About us \u2013 Seedleme"
+    assert site_import._SKIP_PATH.search("/pages/html-sitemap-products")
+    assert not site_import._SKIP_PATH.search("/pages/about-us")
+
+
+@pytest.mark.asyncio
+async def test_a_new_knowledge_base_created_by_two_pages_at_once_loses_neither(monkeypatch):
+    """Qdrant refuses the second create with "already exists" — that is the collection we want."""
+    import asyncio
+
+    from vula.ingestion import pipeline
+    state = {"exists": False, "creates": 0}
+
+    class _R:
+        def __init__(self, code, text=""):
+            self.status_code, self.text = code, text
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+        async def get(self, url):
+            return _R(200 if state["exists"] else 404)
+
+        async def put(self, url, json=None):
+            if url.endswith("/index"):
+                return _R(200)
+            state["creates"] += 1
+            if state["exists"]:
+                return _R(409, '{"status":{"error":"Wrong input: Collection `vula_seedleme` already exists!"}}')
+            await asyncio.sleep(0)
+            state["exists"] = True
+            return _R(200)
+
+    monkeypatch.setattr(pipeline.httpx, "AsyncClient", _Client)
+    store = pipeline.QdrantStore("http://qdrant.test")
+    await asyncio.gather(*(store.ensure_collection("seedleme", 1536) for _ in range(4)))
+    assert state["creates"] == 1                     # the per-collection lock: one create, no race
+    state["exists"] = False                          # another process won between our GET and PUT
+    calls = []
+    orig_get = _Client.get
+
+    async def get_then_lose(self, url):
+        r = await orig_get(self, url)
+        state["exists"] = True
+        calls.append(url)
+        return r
+    monkeypatch.setattr(_Client, "get", get_then_lose)
+    await store.ensure_collection("seedleme", 1536)  # "already exists" → no error

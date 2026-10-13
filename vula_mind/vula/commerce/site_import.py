@@ -39,13 +39,20 @@ from urllib.parse import urlparse
 log = logging.getLogger(__name__)
 
 MAX_PAGES = 60
-MAX_PRODUCT_PAGES = 10            # × 100 products per feed page
+# 2026-10-13 (SeedleMe's first run found no products): Shopify's feed at 100 products a page,
+# each with its full description and every image, can pass the 2MB page cap — and the failure
+# was silent. Smaller pages, a larger cap for this one JSON feed, and the reason kept.
+SHOPIFY_PAGE_SIZE = 25
+MAX_PRODUCT_PAGES = 40            # × 25 products per feed page
+FEED_MAX_BYTES = 8 * 1024 * 1024
+MAX_PRODUCT_URLS = 300            # product pages read one by one when there is no feed
 _CONCURRENCY = 4
 _MIN_TEXT = 200                    # a page with less real text than this adds nothing
 
-# Pages that never help a customer question: cart, account, search, checkout, login, tags.
+# Pages that never help a customer question: cart, account, search, checkout, login, tags, and
+# HTML sitemaps (a page of links — SeedleMe's "html sitemap products" was refused by the embedder).
 _SKIP_PATH = re.compile(r"/(cart|account|checkout|search|login|register|wp-admin|wp-login|my-account|"
-                        r"tagged|feed)(/|$|\?)", re.I)
+                        r"tagged|feed)(/|$|\?)|sitemap", re.I)
 # Shopify serves its policies here whether or not the sitemap lists them.
 _SHOPIFY_POLICIES = ("/policies/refund-policy", "/policies/shipping-policy",
                      "/policies/terms-of-service", "/policies/privacy-policy")
@@ -78,9 +85,15 @@ def normalise_root(url: str) -> str:
     return f"{p.scheme.lower()}://{p.netloc.lower()}"
 
 
-async def _fetch(url: str) -> bytes:
+async def _fetch(url: str, max_bytes: Optional[int] = None) -> bytes:
     from vula.commerce.reference_url import safe_fetch_bytes
-    return await safe_fetch_bytes(url)
+    return await (safe_fetch_bytes(url, max_bytes) if max_bytes else safe_fetch_bytes(url))
+
+
+def _why(exc: Exception) -> str:
+    """A fetch failure in a few words for the import status ("HTTP 403", "Response too large")."""
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"HTTP {code}" if code else (str(exc) or type(exc).__name__)[:80]
 
 
 def _cents(price: Any, minor_unit: Optional[int] = None) -> int:
@@ -157,25 +170,132 @@ def _from_woo(p: Dict[str, Any], root: str) -> Dict[str, Any]:
     }
 
 
-async def fetch_products(root: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """(platform, products) from the shop's public catalogue feed; ("", []) when it has none."""
+def _from_jsonld(page: str, url: str) -> Optional[Dict[str, Any]]:
+    """A product page's schema.org Product (JSON-LD) → a product, priced from its own offers.
+    The fallback when a shop's catalogue feed can't be read: never a price scraped off text."""
+    for block in re.findall(r'(?is)<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page or ""):
+        try:
+            data = json.loads(block.strip())
+        except ValueError:
+            continue
+        items = data if isinstance(data, list) else (data.get("@graph") or [data])
+        for d in items:
+            if not isinstance(d, dict) or "Product" not in str(d.get("@type")):
+                continue
+            offers = d.get("offers") or []
+            offers = offers if isinstance(offers, list) else [offers]
+            if offers and isinstance(offers[0], dict) and offers[0].get("offers"):   # AggregateOffer
+                offers = offers[0]["offers"] if isinstance(offers[0]["offers"], list) else [offers[0]["offers"]]
+            prices = [_cents(o.get("price") or o.get("lowPrice")) for o in offers if isinstance(o, dict)]
+            prices = [c for c in prices if c > 0]
+            image = d.get("image")
+            image = image[0] if isinstance(image, list) and image else image
+            image = image.get("url") if isinstance(image, dict) else image
+            name = _html.unescape(str(d.get("name") or "")).strip()
+            if not name:
+                continue
+            slug = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+            return {
+                "name": name, "slug": slug, "price_cents": min(prices) if prices else 0,
+                "category_label": (d.get("category") if isinstance(d.get("category"), str) else None),
+                "description": html_to_text(_html.unescape(str(d.get("description") or ""))),
+                "image_url": image if isinstance(image, str) else None,
+                "in_stock": not any("OutOfStock" in str(o.get("availability")) for o in offers
+                                    if isinstance(o, dict)) if offers else True,
+                "variants": [], "url": url, "tags": [],
+            }
+    return None
+
+
+async def _sitemap_locs(root: str) -> List[str]:
+    """Every same-host URL in sitemap.xml (one level of child sitemaps), in sitemap order."""
+    host = urlparse(root).netloc
+    found: List[str] = []
+    seen = set()
+    queue = [f"{root}/sitemap.xml"]
+    for depth in range(2):
+        nxt = []
+        for sm in queue:
+            try:
+                xml = (await _fetch(sm)).decode("utf-8", errors="replace")
+            except Exception:
+                continue
+            for loc in _LOC.findall(xml):
+                loc = _html.unescape(loc)
+                if urlparse(loc).netloc.lower() != host:
+                    continue
+                if loc.lower().split("?")[0].endswith(".xml"):
+                    if depth == 0:
+                        nxt.append(loc)
+                elif loc not in seen:
+                    seen.add(loc)
+                    found.append(loc)
+        queue = nxt
+    return found
+
+
+async def _products_from_pages(root: str, notes: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
+    """No readable feed: each product page from the sitemap — Shopify's own per-product JSON
+    first ("/products/<handle>.json", the feed's shape), else the page's JSON-LD Product."""
+    urls = [u for u in await _sitemap_locs(root)
+            if re.search(r"/products?/[^/]+/?$", urlparse(u).path)][:MAX_PRODUCT_URLS]
+    if not urls:
+        return "", []
+    sem = asyncio.Semaphore(_CONCURRENCY)
+    got: Dict[str, Tuple[str, Dict[str, Any]]] = {}
+    failed: List[str] = []
+
+    async def one(u: str) -> None:
+        async with sem:
+            base = u.split("?")[0].rstrip("/")
+            try:
+                data = json.loads(await _fetch(base + ".json"))
+                if isinstance(data, dict) and isinstance(data.get("product"), dict):
+                    got[u] = ("shopify", _from_shopify(data["product"], root))
+                    return
+            except Exception:
+                pass
+            try:
+                p = _from_jsonld((await _fetch(u)).decode("utf-8", errors="replace"), u)
+            except Exception as exc:
+                failed.append(f"{u}: {_why(exc)}")
+                return
+            if p:
+                got[u] = ("page", p)
+
+    await asyncio.gather(*(one(u) for u in urls))
+    if failed:
+        notes.append(f"{len(failed)} product page(s) couldn't be read, e.g. {failed[0]}")
+    products = [got[u][1] for u in urls if u in got]
+    kinds = {got[u][0] for u in got}
+    return ("shopify" if "shopify" in kinds else "website" if products else ""), products
+
+
+async def fetch_products(root: str, notes: Optional[List[str]] = None) -> Tuple[str, List[Dict[str, Any]]]:
+    """(platform, products) from the shop's public catalogue feed — or, when the feed can't be
+    read, from its product pages; ("", []) when it has none. Why a feed failed goes in `notes`."""
+    notes = notes if notes is not None else []
     out: List[Dict[str, Any]] = []
     for page in range(1, MAX_PRODUCT_PAGES + 1):
         try:
-            data = json.loads(await _fetch(f"{root}/products.json?limit=100&page={page}"))
-        except Exception:
+            data = json.loads(await _fetch(
+                f"{root}/products.json?limit={SHOPIFY_PAGE_SIZE}&page={page}", max_bytes=FEED_MAX_BYTES))
+        except Exception as exc:
+            if page == 1:
+                notes.append(f"Shopify product feed: {_why(exc)}")
             break
         items = data.get("products") if isinstance(data, dict) else None
         if not items:
             break
         out += [_from_shopify(p, root) for p in items]
-        if len(items) < 100:
+        if len(items) < SHOPIFY_PAGE_SIZE:
             break
     if out:
         return "shopify", out
     for page in range(1, MAX_PRODUCT_PAGES + 1):
         try:
-            items = json.loads(await _fetch(f"{root}/wp-json/wc/store/v1/products?per_page=100&page={page}"))
+            items = json.loads(await _fetch(f"{root}/wp-json/wc/store/v1/products?per_page=100&page={page}",
+                                            max_bytes=FEED_MAX_BYTES))
         except Exception:
             break
         if not isinstance(items, list) or not items:
@@ -183,7 +303,9 @@ async def fetch_products(root: str) -> Tuple[str, List[Dict[str, Any]]]:
         out += [_from_woo(p, root) for p in items]
         if len(items) < 100:
             break
-    return ("woocommerce", out) if out else ("", [])
+    if out:
+        return "woocommerce", out
+    return await _products_from_pages(root, notes)
 
 
 async def _save_products(tenant_id: str, products: List[Dict[str, Any]], st: Dict[str, Any]) -> None:
@@ -260,28 +382,8 @@ _LOC = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
 async def sitemap_urls(root: str, platform: str = "") -> List[str]:
     """Every page URL on this host from sitemap.xml (one level of child sitemaps), plus the
     shop's policy pages. Product pages are left out when the catalogue feed already has them."""
-    host = urlparse(root).netloc
-    found: List[str] = []
-    seen = set()
-    queue = [f"{root}/sitemap.xml"]
-    for depth in range(2):
-        nxt = []
-        for sm in queue:
-            try:
-                xml = (await _fetch(sm)).decode("utf-8", errors="replace")
-            except Exception:
-                continue
-            for loc in _LOC.findall(xml):
-                loc = _html.unescape(loc)
-                if urlparse(loc).netloc.lower() != host:
-                    continue
-                if loc.lower().split("?")[0].endswith(".xml"):
-                    if depth == 0:
-                        nxt.append(loc)
-                elif loc not in seen:
-                    seen.add(loc)
-                    found.append(loc)
-        queue = nxt
+    found = await _sitemap_locs(root)
+    seen = set(found)
     if platform == "shopify":
         found += [root + p for p in _SHOPIFY_POLICIES if root + p not in seen]
     if not found:
@@ -302,7 +404,7 @@ def page_text(raw: bytes) -> Tuple[str, str]:
     from vula.commerce.reference_url import _extract_title_and_text
     title, text = _extract_title_and_text(raw.decode("utf-8", errors="replace"))
     text = re.sub(r"\n\s*\n+", "\n\n", text or "").strip()
-    return (title or "").strip(), text
+    return _html.unescape(title or "").strip(), text
 
 
 def _doc_id(tenant_id: str, key: str) -> str:
@@ -322,8 +424,12 @@ async def import_site(tenant_id: str, url: str, business: str = "", max_pages: i
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
-        platform, products = await fetch_products(root)
+        notes: List[str] = []
+        platform, products = await fetch_products(root, notes)
         st["platform"], st["products_found"] = platform, len(products)
+        if notes:
+            st["catalogue_note"] = "; ".join(notes)[:300]
+            log.info("site import %s (%s): %s", tenant_id, root, st["catalogue_note"])
         if products:
             st["step"] = f"saving {len(products)} products"
             await _save_products(tenant_id, products, st)
