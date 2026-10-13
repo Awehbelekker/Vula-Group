@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     shared-mime-info \
     libgl1 \
     libglib2.0-0 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first — cached layer, only rebuilds when requirements.txt changes
