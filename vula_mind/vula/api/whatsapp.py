@@ -7116,6 +7116,10 @@ async def _handle_commerce_message(phone: str, text: str, msg_id: str, tenant_id
     except Exception as exc:
         logger.debug("Handoff check failed (non-fatal): %s", exc)
 
+    # A basket filled on the shop's web page ("I'd like to order basket K7Q2MX") → their cart.
+    if await _maybe_claim_web_basket(phone, text, tenant_id):
+        return
+
     # Owner-configurable conversation flow (migration 118) — is this phone already mid-flow?
     # Checked before greeting/menu so a flow reply (e.g. answering "which location?") is never
     # accidentally swallowed by the greeting/supplier-intake keyword checks below.
@@ -8146,7 +8150,7 @@ async def _handle_commerce_interactive(
     """Handle interactive list/button replies from the WhatsApp product catalog."""
     # Tap-to-order for shops with ranges in several colours (2026-10-13, SeedleMe): range →
     # colour → how many → cart → checkout, all from exact ids — no LLM picks the product.
-    if reply_id.startswith("catp_"):
+    if reply_id.startswith("catp_") or reply_id.startswith("catc_"):
         category, _, page = reply_id[5:].rpartition(":")
         await _send_category_products(phone, tenant_id, category, page=int(page or 0))
         return
@@ -8335,6 +8339,71 @@ def _wa_number(phone: str) -> str:
     return "27" + n[1:] if n.startswith("0") else n
 
 
+async def _send_wa_carousel(creds: dict, number: str, body: str, cards: list) -> bool:
+    """Swipeable photo cards (2–10), each with its own button — 2026-10-13, Ian: the text-only
+    list "why can't it be more visual?". Each card is {image, text, id, button, url}: a reply
+    button (`id`, back through _handle_commerce_interactive) is tried first, then a link button
+    to the shop page (`url`); False when Meta takes neither, so the caller sends the list."""
+    if not 2 <= len(cards) <= 10:
+        return False
+    from vula import turns as _turns
+    _turns.reply(f"{body}\n[carousel: " + " | ".join(c["text"].split("\n")[0] for c in cards) + "]",
+                 kind="carousel", to=number)
+    from core import dry_run as _dry
+    if _dry.record_send("whatsapp", number, str(body)):   # capability benchmark
+        return True
+
+    def _card(i: int, c: dict, kind: str) -> dict:
+        card = {"card_index": i, "header": {"type": "image", "image": {"link": c["image"]}},
+                "body": {"text": c["text"][:160]}}
+        if kind == "reply":
+            card.update(type="button", action={"buttons": [
+                {"type": "quick_reply", "quick_reply": {"id": c["id"], "title": c["button"][:20]}}]})
+        else:
+            card.update(type="cta_url", action={"name": "cta_url", "parameters": {
+                "display_text": c["button"][:20], "url": c["url"]}})
+        return card
+
+    kinds = ["reply"] + (["url"] if all(c.get("url") for c in cards) else [])
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for kind in kinds:
+            try:
+                resp = await client.post(
+                    f"https://graph.facebook.com/v19.0/{creds['phone_id']}/messages",
+                    headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                    json={"messaging_product": "whatsapp", "to": number, "type": "interactive",
+                          "interactive": {"type": "carousel", "body": {"text": body[:1024]},
+                                          "action": {"cards": [_card(i, c, kind) for i, c in enumerate(cards)]}}})
+                if resp.status_code < 400:
+                    logger.info("WA carousel sent (%s buttons, %d cards)", kind, len(cards))
+                    return True
+                logger.warning("WA carousel (%s buttons) refused: %s", kind, resp.text[:300])
+            except Exception as exc:
+                logger.warning("WA carousel (%s buttons) failed: %s", kind, exc)
+    return False
+
+
+def _shop_url(tenant_id: str, anchor: str = "") -> str:
+    base = (settings.public_base_url or "").rstrip("/")
+    return f"{base}/menu/{tenant_id}{anchor}" if base else ""
+
+
+async def _send_range_cards(phone: str, tenant_id: str, creds: dict, body: str, ranges: list) -> bool:
+    """Ranges as photo cards — only when every one has a photo (a card needs one)."""
+    from vula.commerce import product_families as _pf
+    if not 2 <= len(ranges) <= 10 or not all(r.get("image_url") for r in ranges):
+        return False
+    cards = []
+    for r in ranges:
+        head, size = _range_row_text(r["title"])
+        extra = (f"{len(r['colours'])} colours · " if r["colours"] else "") + _pf.price_label(r)
+        cards.append({"image": r["image_url"], "id": f"rng_{r['id']}",
+                      "text": f"*{r['title']}*\n" + " · ".join(x for x in (size, extra) if x),
+                      "button": "Choose colour" if r["colours"] else "Order this",
+                      "url": _shop_url(tenant_id, f"#r-{r['id']}")})
+    return await _send_wa_carousel(creds, _wa_number(phone), body, cards)
+
+
 _PAGE_ROWS = 9            # a WhatsApp list holds 10 rows; the 10th is "More…"
 _ROW_FILLER = re.compile(r"\b(?:concrete|cement|bespoke|handmade|hand-made)\b\s*", re.I)
 
@@ -8367,6 +8436,17 @@ async def _send_category_products(phone: str, tenant_id: str, category: str, pag
     from vula.commerce import product_families as _pf
     ranges = _pf.group(prods)
     if any(r["colours"] for r in ranges):
+        label = (_CATEGORY_LABELS.get(category) or category.replace("_", " ").title())
+        cards = ranges[page * 10:(page + 1) * 10]
+        left = len(ranges) - (page + 1) * 10
+        if await _send_range_cards(phone, tenant_id, creds,
+                                   f"{label} — swipe to see them all, tap one to pick a colour.", cards):
+            if left > 0:
+                await _send_wa_buttons(creds, _wa_number(phone),
+                                       f"Showing {page * 10 + 1}–{page * 10 + len(cards)} of {len(ranges)}. "
+                                       "Or type what you're looking for.",
+                                       [{"id": f"catc_{category}:{page + 1}", "title": f"Show {min(left, 10)} more"}])
+            return True
         chunk = ranges[page * _PAGE_ROWS:(page + 1) * _PAGE_ROWS]
         rows = []
         for r in chunk:
@@ -8434,6 +8514,11 @@ async def _maybe_send_search_results(phone: str, text: str, tenant_id: str,
     if not creds:
         return False
     if await _send_catalogue_results(phone, tenant_id, creds, t, ranges):
+        return True
+    more = f" Showing 10 of {len(ranges)} — add a size or colour to narrow it down." if len(ranges) > 10 else ""
+    if await _send_range_cards(phone, tenant_id, creds,
+                               f"{len(ranges)} ranges match \"{t[:60]}\" — swipe, then tap one to pick a colour.{more}",
+                               ranges[:10]):
         return True
     rows = []
     for r in ranges[:_PAGE_ROWS]:
@@ -8572,7 +8657,6 @@ async def _add_tapped_to_cart(phone: str, tenant_id: str, product_id: str, qty: 
     """Add exactly what was tapped (priced from the live product row), then show the cart with
     Checkout / Keep shopping. Checkout is the assistant's own flow: details, then payment."""
     from vula.commerce import service as _cs
-    from vula.commerce import product_families as _pf
     p = next((x for x in await _shop_products(tenant_id) if str(x.get("id")) == str(product_id)), None)
     creds = await _resolve_wa(tenant_id)
     if not p or not creds or qty < 1:
@@ -8586,17 +8670,52 @@ async def _add_tapped_to_cart(phone: str, tenant_id: str, product_id: str, qty: 
         logger.warning("tap add-to-cart failed for %s: %s", tenant_id, exc)
         await _handle_commerce_message(phone, f"I'd like {qty} x {p['name']}", msg_id, tenant_id)
         return
+    await _send_cart_summary(phone, tenant_id, creds, cart, f"✅ Added {qty} × {p['name']}.")
+
+
+async def _send_cart_summary(phone: str, tenant_id: str, creds: dict, cart: dict, headline: str) -> None:
+    """The cart, line by line with the subtotal, and Checkout / Keep shopping."""
+    from vula.commerce import product_families as _pf
     lines, subtotal = [], 0
     for it in cart.get("commerce_cart_items") or []:
         cents = int(round(float(it.get("quantity") or 0) * int(it.get("unit_price_cents") or 0)))
         subtotal += cents
         q = float(it.get("quantity") or 0)
         lines.append(f"• {int(q) if q == int(q) else q} × {(it.get('commerce_products') or {}).get('name')} — {_pf.rands(cents)}")
-    body = (f"✅ Added {qty} × {p['name']}.\n\n🛒 Your cart:\n" + "\n".join(lines)
+    body = (f"{headline}\n\n🛒 Your cart:\n" + "\n".join(lines)
             + f"\n\nSubtotal: {_pf.rands(subtotal)} (delivery worked out at checkout)")
     await _send_wa_buttons(creds, _wa_number(phone), body,
                            [{"id": "cart_checkout", "title": "Checkout"},
                             {"id": "cart_more", "title": "Keep shopping"}])
+
+
+async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool:
+    """"Hi! I'd like to order basket K7Q2MX" from the shop page → that basket into this
+    customer's cart, then their cart with Checkout (vula/commerce/web_basket.py)."""
+    from vula.commerce import web_basket
+    m = web_basket.BASKET_RE.search(text or "")
+    if not m:
+        return False
+    from vula.commerce import service as _cs
+    creds = await _resolve_wa(tenant_id)
+    try:
+        moved = await web_basket.claim(tenant_id, phone, m.group(1).upper())
+    except Exception as exc:
+        logger.warning("web basket claim failed for %s: %s", tenant_id, exc)
+        moved = None
+    if not moved:
+        url = _shop_url(tenant_id)
+        await _send_reply(phone, "I couldn't find that basket — it may already have been ordered. "
+                          + (f"You can fill a new one here: {url}" if url else "Reply *shop* to browse."),
+                          tenant_id=tenant_id)
+        return True
+    cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
+    if creds:
+        await _send_cart_summary(phone, tenant_id, creds, cart,
+                                 f"✅ Got your basket — {moved} item{'s' if moved != 1 else ''} from the shop.")
+    else:
+        await _handle_commerce_message(phone, "Show me my cart", "", tenant_id)
+    return True
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
@@ -8668,7 +8787,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
         f"Welcome to {shop_name}! 👋\n\n"
         f"What are you looking for?\n{_text_lines}\n\n"
         "Reply with a product name, or just ask."
-        + (f"\n\n📸 See photos: {menu_url}" if menu_url else "")
+        + (f"\n\n🛍️ Shop with photos and order online: {menu_url}" if menu_url else "")
     )
 
     if not sections:
@@ -8689,7 +8808,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
 
     body_text = "Tap a category, or just type what you're looking for."
     if menu_url:
-        body_text += f"\n\n📸 See photos: {menu_url}"
+        body_text += f"\n\n🛍️ Shop with photos and order online: {menu_url}"
     ok = await _send_wa_list(
         creds, number, shop_name[:60], body_text,
         "Reply any time with what you're after", "View menu", sections,
