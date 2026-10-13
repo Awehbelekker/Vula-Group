@@ -8391,20 +8391,22 @@ async def _send_wa_carousel(creds: dict, number: str, body: str, cards: list) ->
 
 
 def _shop_url(tenant_id: str, anchor: str = "") -> str:
-    base = (settings.public_base_url or "").rstrip("/")
-    return f"{base}/menu/{tenant_id}{anchor}" if base else ""
+    """The shop page — on the shop's own address (shop.<their domain>) when it has one."""
+    from vula.commerce import web_basket
+    return web_basket.shop_url(tenant_id, anchor)
 
 
 async def _send_range_cards(phone: str, tenant_id: str, creds: dict, body: str, ranges: list) -> bool:
     """Ranges as photo cards — only when every one has a photo (a card needs one)."""
     from vula.commerce import product_families as _pf
+    from vula.commerce import web_basket
     if not 2 <= len(ranges) <= 10 or not all(r.get("image_url") for r in ranges):
         return False
     cards = []
     for r in ranges:
         head, size = _range_row_text(r["title"])
         extra = (f"{len(r['colours'])} colours · " if r["colours"] else "") + _pf.price_label(r)
-        cards.append({"image": r["image_url"], "id": f"rng_{r['id']}",
+        cards.append({"image": web_basket.sized(r["image_url"], 800), "id": f"rng_{r['id']}",
                       "text": f"*{r['title']}*\n" + " · ".join(x for x in (size, extra) if x),
                       "button": "Choose colour" if r["colours"] else "Add to cart",
                       "url": _shop_url(tenant_id, f"#r-{r['id']}")})
@@ -8426,11 +8428,8 @@ def _range_row_text(title: str) -> tuple:
 
 
 async def _shop_products(tenant_id: str, category: Optional[str] = None) -> list:
-    try:
-        from vula.commerce import service as _cs
-        return await _cs.list_products(tenant_id, category=category, in_stock_only=True, statuses={"active"})
-    except Exception:
-        return []
+    from vula.commerce import web_basket
+    return await web_basket.shop_products(tenant_id, category)
 
 
 async def _shop_on(tenant_id: str) -> bool:
@@ -8642,7 +8641,8 @@ async def _send_range_colours(phone: str, tenant_id: str, rid: str, page: int = 
         return
     number = _wa_number(phone)
     if page == 0 and r.get("image_url"):
-        await _send_wa_image(creds, number, r["image_url"],
+        from vula.commerce import web_basket
+        await _send_wa_image(creds, number, web_basket.sized(r["image_url"], 1000),
                              caption=f"{r['title']}\n{_pf.price_label(r).capitalize()} · {len(r['colours'])} colours")
     chunk = r["colours"][page * _PAGE_ROWS:(page + 1) * _PAGE_ROWS]
     rows = [{"id": f"col_{c['product']['id']}", "title": c["colour"][:24],
@@ -8673,7 +8673,7 @@ async def _send_quantity_choice(phone: str, tenant_id: str, product_id: str) -> 
         options = (1, 2, 3)
     await _send_wa_buttons(creds, _wa_number(phone), body,
                            [{"id": f"qty_{p['id']}_{n}", "title": web_basket.qty_label(p, n)} for n in options],
-                           image_url=p.get("image_url") or None)
+                           image_url=web_basket.sized(p.get("image_url"), 800) or None)
 
 
 async def _add_tapped_to_cart(phone: str, tenant_id: str, product_id: str, qty: float, msg_id: str) -> None:
@@ -8731,9 +8731,10 @@ async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool
         moved = None
     if not moved:
         url = _shop_url(tenant_id)
-        await _send_reply(phone, "I couldn't find that basket — it may already have been ordered. "
-                          + (f"You can fill a new one here: {url}" if url else "Reply *shop* to browse."),
-                          tenant_id=tenant_id)
+        msg = "I couldn't find that basket — it may already have been ordered."
+        if not (url and creds and await _send_wa_cta_url(creds, _wa_number(phone), msg + " You can fill a new one:",
+                                                         "View products", url)):
+            await _send_reply(phone, msg + " Reply *shop* to browse.", tenant_id=tenant_id)
         return True
     cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
     if creds:
@@ -8742,6 +8743,13 @@ async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool
     else:
         await _handle_commerce_message(phone, "Show me my cart", "", tenant_id)
     return True
+
+
+def _food_shop(tenant_id: str) -> bool:
+    try:
+        return (_tenants_mod().tenant_profile(tenant_id) or {}).get("business_type") == "food"
+    except Exception:
+        return False
 
 
 async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
@@ -8805,7 +8813,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
             _food = False
         sections.append({"title": "Browse the catch" if _food else "Browse our range", "rows": cat_rows})
 
-    menu_url = f"{settings.public_base_url.rstrip('/')}/menu/{tenant_id}" if settings.public_base_url else ""
+    menu_url = _shop_url(tenant_id)
 
     _text_lines = "\n".join(f"• {r['title']}" for r in (cat_rows or spec_rows)) or \
         "Just tell me what you're looking for and I'll help you find it."
@@ -8838,15 +8846,24 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
     if shop_ready:
         # Like a shop's "Shop now" campaign button: the page opens inside WhatsApp, the basket
         # comes back to this chat. The shop's banner (or a product photo) heads the message.
-        hero = header_image_url or next((p.get("image_url") for p in prods if p.get("image_url")), None)
+        from vula.commerce import web_basket
+        hero = header_image_url or web_basket.sized(
+            next((p.get("image_url") for p in prods if p.get("image_url")), None), 1000)
+        # 2026-10-13, Ian: one message — the button opens the shop straight away ("View products",
+        # not a menu: most shops aren't restaurants). No category list to tap through after it.
         shop_on = await _send_wa_cta_url(
-            creds, number, "🛍️ Browse every product with photos, pick colours and fill your basket — "
-            "it comes straight back here to check out.", "Shop now", menu_url, image_url=hero)
+            creds, number, f"Welcome to {shop_name}! 👋\n\nBrowse all our products with photos, pick "
+            "colours and fill your basket — it comes straight back here to check out.\n\n"
+            "Or just type what you're looking for.", "View products", menu_url, image_url=hero)
+        if shop_on:
+            logger.info("Commerce welcome sent to %s (shop button)", phone)
+            return
     if menu_url and not shop_on:
         body_text += f"\n\n🛍️ Shop with photos and order online: {menu_url}"
     ok = await _send_wa_list(
         creds, number, shop_name[:60], body_text,
-        "Reply any time with what you're after", "View menu", sections,
+        "Reply any time with what you're after", "View menu" if _food_shop(tenant_id) else "View products",
+        sections,
     )
     if ok:
         logger.info("Commerce welcome sent to %s (%d specials, %d cats)", phone, len(spec_rows), len(cat_rows))

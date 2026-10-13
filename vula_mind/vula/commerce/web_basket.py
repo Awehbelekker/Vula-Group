@@ -173,3 +173,128 @@ async def claim(tenant_id: str, phone: str, code: str) -> Optional[int]:
                                   float(it.get("quantity") or 1), variant_id=it.get("variant_id"))
     await service.clear_cart(basket["id"])            # one basket, one order
     return len(items)
+
+
+# ── Speed and the shop's own address (2026-10-13, Ian: "the link shows Vula and it takes away
+# from the client's brand"; and make it fast) ─────────────────────────────────────────────────
+
+_PRODUCTS: Dict[tuple, tuple] = {}
+PRODUCTS_TTL_S = 60.0
+_SHOP_PREFIXES = ("shop.", "order.", "buy.", "store.")
+
+
+async def shop_products(tenant_id: str, category: Optional[str] = None) -> List[dict]:
+    """In-stock active products, kept for a minute — a browse is several taps, each of which
+    used to read the whole catalogue again (325 rows for SeedleMe)."""
+    import time
+    from vula.commerce import service
+    fn = service.list_products
+    key = (tenant_id, category or "")
+    hit = _PRODUCTS.get(key)
+    if hit and hit[2] is fn and time.monotonic() - hit[0] < PRODUCTS_TTL_S:
+        return hit[1]
+    try:
+        rows = await fn(tenant_id, category=category, in_stock_only=True, statuses={"active"})
+    except Exception:
+        return hit[1] if hit and hit[2] is fn else []
+    if len(_PRODUCTS) > 500:
+        _PRODUCTS.clear()
+    _PRODUCTS[key] = (time.monotonic(), rows, fn)
+    return rows
+
+
+def sized(url: Optional[str], width: int = 800) -> Optional[str]:
+    """A phone-sized copy of a product photo where the image host can make one (Shopify's CDN
+    resizes on request): cards and pages load in a fraction of the time on mobile data, and
+    WhatsApp won't take a header image over 5 MB."""
+    if not url or "cdn.shopify.com" not in url:
+        return url
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k not in ("width", "height")] + [("width", str(width))]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def configured_shop_host(tenant_id: str) -> str:
+    """The shop's own web address as configured, e.g. shop.seedleme.com — the first of the
+    tenant's `domains` that starts with shop./order./buy./store. ('' when it has none)."""
+    try:
+        from vula.api.tenants import get_config
+        doms = (get_config(tenant_id) or {}).get("domains") or []
+    except Exception:
+        return ""
+    for d in doms:
+        d = str(d or "").strip().lower()
+        if d.startswith(_SHOP_PREFIXES):
+            return d
+    return ""
+
+
+# Is the shop's own address actually working yet (DNS, certificate, pointing at us)? Checked in
+# the background and remembered, so links switch over by themselves the moment it is — and
+# until then stay on Vula's address, hidden behind the WhatsApp buttons (Ian, 13 Oct: "Vula
+# automatically knows if the domain is done… it's one process, just not visible").
+_READY: Dict[str, tuple] = {}
+READY_TTL_S, NOT_READY_TTL_S = 6 * 3600.0, 300.0
+
+
+async def check_shop_host(host: str, tenant_id: str) -> bool:
+    import time
+    import httpx
+    ok = False
+    try:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=False) as client:
+            r = await client.get(f"https://{host}/shop-ping")
+            ok = r.status_code == 200 and (r.json() or {}).get("shop") == tenant_id
+    except Exception:
+        ok = False
+    _READY[host] = (time.monotonic(), ok)
+    return ok
+
+
+def _host_ready(host: str, tenant_id: str) -> bool:
+    import asyncio
+    import time
+    hit = _READY.get(host)
+    fresh = hit and time.monotonic() - hit[0] < (READY_TTL_S if hit[1] else NOT_READY_TTL_S)
+    if not fresh:
+        try:
+            asyncio.get_running_loop().create_task(check_shop_host(host, tenant_id))
+            _READY[host] = (time.monotonic(), bool(hit and hit[1]))    # one check at a time
+        except RuntimeError:
+            pass
+    return bool(hit and hit[1])
+
+
+def shop_host(tenant_id: str) -> str:
+    """The shop's own address once it's live, else '' (links use Vula's, behind buttons)."""
+    host = configured_shop_host(tenant_id)
+    return host if host and _host_ready(host, tenant_id) else ""
+
+
+def tenant_for_shop_host(host: str) -> Optional[str]:
+    h = (host or "").strip().lower().split(":")[0]
+    if not h.startswith(_SHOP_PREFIXES):
+        return None
+    try:
+        from vula.api.tenants import tenant_for_host
+        return tenant_for_host(h)
+    except Exception:
+        return None
+
+
+def public_base(tenant_id: str) -> str:
+    """Where this shop's pages live: its own address when it has one, else Vula's."""
+    host = shop_host(tenant_id)
+    if host:
+        return f"https://{host}"
+    from config import settings
+    return (settings.public_base_url or "").rstrip("/")
+
+
+def shop_url(tenant_id: str, anchor: str = "") -> str:
+    host = shop_host(tenant_id)
+    if host:
+        return f"https://{host}/{anchor}"
+    base = public_base(tenant_id)
+    return f"{base}/menu/{tenant_id}{anchor}" if base else ""

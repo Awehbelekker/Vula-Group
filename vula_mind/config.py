@@ -207,6 +207,11 @@ class Settings(BaseSettings):
     # Admin GraphQL API version. Shopify supports each for a year; move it forward then.
     shopify_api_version: str = "2026-07"
 
+    # ── A shop on its own address (vula/commerce/shop_domain.py) ─────────────
+    # A Railway project token (Project settings › Tokens) lets the dashboard add a business's
+    # shop.<their domain> to this service itself. Empty: the card says to ask Vula instead.
+    railway_api_token: str = ""
+
     # ── Vula Facebook App (for WhatsApp Embedded Signup) ────────────────────
     # Create at developers.facebook.com — one app for all Vula Commerce clients
     vula_fb_app_id: str = ""       # Facebook App ID

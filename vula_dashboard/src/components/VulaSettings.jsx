@@ -9,6 +9,7 @@
 import React, { useState, useEffect } from 'react'
 import VulaYocoConnect from './VulaYocoConnect'
 import VulaShopifyConnect from './VulaShopifyConnect'
+import VulaShopDomain from './VulaShopDomain'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaClickUpConnect from './VulaClickUpConnect'
 import VulaGoogleConnect from './VulaGoogleConnect'
@@ -60,6 +61,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
           Already selling on Shopify? Connect it and your products, photos, prices and stock stay in step with Vula automatically.
         </p>
         <VulaShopifyConnect tenantId={tenantId} adminEmail={adminEmail} />
+      </section>
+
+      {/* The shop's own address */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🌐 Your shop’s own address</h4>
+        <p style={s.sectionHint}>
+          Show your name, not Vula’s, when customers open your shop or a receipt from WhatsApp.
+        </p>
+        <VulaShopDomain tenantId={tenantId} />
       </section>
 
       {/* WhatsApp */}

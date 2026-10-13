@@ -81,14 +81,15 @@ def shop_data(products: list) -> list:
         opts = []
         for p in members:
             colour = pf.colour_of(p.get("name") or "") if r["colours"] else None
-            imgs = [u for u in [p.get("image_url")] + list(p.get("images") or [])
+            from vula.commerce.web_basket import sized
+            imgs = [sized(u, 900) for u in [p.get("image_url")] + list(p.get("images") or [])
                     if isinstance(u, str) and u.startswith("http")]
             opts.append({"pid": str(p.get("id")), "colour": colour,
                          "swatch": _SWATCH.get((colour or "").lower(), "#b8b2a6"),
                          "name": p.get("name") or "Item",
                          "cents": int(p.get("price_cents") or 0),
                          "kg": str(p.get("sold_by") or "").lower() == "kg",
-                         "img": p.get("image_url") or "",
+                         "img": sized(p.get("image_url"), 900) or "",
                          "imgs": list(dict.fromkeys(imgs))[:8]})
         lead = members[0]
         full = re.sub(r"\s+", " ", (lead.get("description") or lead.get("notes") or "")).strip()
@@ -98,15 +99,32 @@ def shop_data(products: list) -> list:
     return out
 
 
+@router.get("/shop-ping", include_in_schema=False)
+async def shop_ping(request: Request) -> JSONResponse:
+    """Which shop this address serves — how Vula knows a shop's own domain is live."""
+    from vula.commerce import web_basket
+    return JSONResponse({"shop": web_basket.tenant_for_shop_host(request.headers.get("host") or "")},
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def shop_home(request: Request) -> HTMLResponse:
+    """shop.<their domain>/ — the shop on its own address, so the customer sees the business's
+    name in WhatsApp's browser, not Vula's (2026-10-13). Any other host has nothing here."""
+    from fastapi import HTTPException
+    from vula.commerce import web_basket
+    tenant_id = web_basket.tenant_for_shop_host(request.headers.get("host") or "")
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return await photo_menu(tenant_id)
+
+
 @router.get("/menu/{tenant_id}", response_class=HTMLResponse)
 async def photo_menu(tenant_id: str) -> HTMLResponse:
     from vula.commerce import service as cs
     from vula.commerce import web_basket
 
-    try:
-        products = await cs.list_products(tenant_id, in_stock_only=True, statuses={"active"})
-    except Exception:
-        products = []
+    products = await web_basket.shop_products(tenant_id)
     try:
         inv = await cs.get_invoice_settings(tenant_id)
     except Exception:
@@ -131,6 +149,7 @@ async def photo_menu(tenant_id: str) -> HTMLResponse:
     number = web_basket.wa_number(tenant_id)
     can_order = bool(number) and web_basket.shop_enabled(tenant_id, products)
     data = json.dumps({"tenant": tenant_id, "ranges": ranges, "cats": cat_labels,
+                       "basket": f"/menu/{tenant_id}/basket",
                        "canOrder": can_order, "chat": f"https://wa.me/{number}" if number else ""}
                       ).replace("</", "<\\/")
 
@@ -321,7 +340,7 @@ function sheet(){var p=document.getElementById('panel');p.innerHTML='';p.appendC
 function close(){document.getElementById('sheet').classList.remove('show')}
 function send(){var btns=document.querySelectorAll('.wa');btns.forEach(function(b){b.disabled=true});
   var items=Object.keys(basket).map(function(pid){return {product_id:pid,qty:basket[pid].qty}});
-  fetch(location.pathname.replace(/\/$/,'')+'/basket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})})
+  fetch(D.basket,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})})
   .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})})
   .then(function(res){if(!res.ok||!res.j.wa_url){throw new Error(res.j.error||'Could not send')}
     basket={};save();bar();close();location.href=res.j.wa_url})
@@ -351,42 +370,72 @@ async def _slip_or_404(token: str):
 
 
 @router.get("/receipt/{token}/slip.png")
-async def receipt_slip_png(token: str):
+async def receipt_slip_png(token: str, clear: int = 0):
     import asyncio
     from fastapi.responses import Response
     from vula.commerce import order_slip
     data = await _slip_or_404(token)
-    png = await asyncio.to_thread(order_slip.render_png, data)
+    png = await asyncio.to_thread(order_slip.render_png, data, bool(clear))
     return Response(png, media_type="image/png",
                     headers={"Cache-Control": "private, max-age=300", "X-Robots-Tag": "noindex"})
 
 
 @router.get("/receipt/{token}", response_class=HTMLResponse)
 async def receipt_page(token: str) -> HTMLResponse:
+    """Full screen, the slip feeds up from the bottom of the phone to the top, edge to edge, ink
+    developing as it comes — no printer drawn (Ian, 13 Oct: "must feel modern"). On the shop's
+    own address, in its colour. No Save or Replay: the slip is already in the WhatsApp chat."""
     from vula.commerce import order_slip
     d = await _slip_or_404(token)
     accent = d["accent"] if re.fullmatch(r"#[0-9a-fA-F]{3,8}", d["accent"] or "") else "#2C5545"
     lines = "".join(f"<li>{_esc(i['qty'])} × {_esc(i['name'])} — {order_slip.rands(i['cents'])}</li>"
                     for i in d["items"])
-    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
-<title>Receipt {_esc(d['order'])} — {_esc(d['shop'])}</title>
-<style>
-:root{{--accent:{accent};--bg:#F4F1EA;--text:#24231F;--muted:#77736B}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#161614;--text:#EDEAE2;--muted:#A39F96}}}}
-body{{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-display:flex;flex-direction:column;align-items:center;padding:16px 16px 40px}}
-img{{width:100%;max-width:420px;height:auto;display:block;border-radius:12px}}
-.btns{{display:flex;gap:10px;width:100%;max-width:420px;margin-top:14px}}
-a.b{{flex:1;text-align:center;text-decoration:none;padding:13px 10px;border-radius:999px;font-weight:650;font-size:15px}}
-.save{{background:var(--accent);color:#fff}}.shop{{border:1px solid var(--muted);color:var(--text)}}
-.sr{{position:absolute;left:-9999px}}
-</style></head><body>
-<img src="{_esc(token)}/slip.png" alt="Receipt for order {_esc(d['order'])} from {_esc(d['shop'])}, {order_slip.rands(d['total_cents'])}, paid {_esc(d['paid_at'])}">
-<ul class="sr">{lines}</ul>
-<div class="btns"><a class="b save" href="{_esc(token)}/slip.png" download="Receipt-{_esc(d['order'])}.png">Save slip</a></div>
-</body></html>"""
+    chat = f'<a class="b chat" href="{_esc(d["chat"])}">Back to chat</a>' if d.get("chat") else ""
+    shop = f'<a class="b shop" href="{_esc(d["shop_url"])}">Shop again</a>' if d.get("shop_url") else ""
+    # The page wears the slip picture's own background, so the slip runs edge to edge.
+    rgb = order_slip._hex(accent)
+    bg = "#%02x%02x%02x" % tuple(min(255, int(c * 0.25 + 255 * 0.75)) for c in rgb)
+    page = _RECEIPT_HTML.replace("{{ACCENT}}", accent).replace("{{BG}}", bg).replace("{{TITLE}}", _esc(f"Receipt {d['order']} — {d['shop']}")) \
+        .replace("{{IMG}}", f"{_esc(token)}/slip.png?clear=1").replace("{{ORDER}}", _esc(d["order"])) \
+        .replace("{{ALT}}", _esc(f"Receipt for order {d['order']} from {d['shop']}, "
+                                 f"{order_slip.rands(d['total_cents'])}, paid {d['paid_at']}")) \
+        .replace("{{LINES}}", lines).replace("{{CHAT}}", chat).replace("{{SHOP}}", shop)
     return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+_RECEIPT_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer"><meta name="theme-color" content="{{BG}}"><title>{{TITLE}}</title>
+<style>
+:root{--accent:{{ACCENT}};--bg:{{BG}}}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%}
+body{background:var(--bg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow-x:hidden}
+.slot{min-height:100vh;padding-top:env(safe-area-inset-top);overflow:hidden}
+.slip{display:block;width:100%;max-width:640px;margin:0 auto;height:auto;will-change:transform,filter;
+transform:translateY(100vh);filter:brightness(1.3) saturate(.3) blur(.6px);
+animation:feed 2.1s cubic-bezier(.2,.8,.2,1) .25s forwards}
+@keyframes feed{
+  60%{filter:brightness(1.08) saturate(.85) blur(0)}
+  84%{transform:translateY(-1.4%)}
+  100%{transform:none;filter:none}}
+.btns{position:sticky;bottom:0;display:flex;gap:10px;padding:12px 16px calc(14px + env(safe-area-inset-bottom));
+max-width:640px;margin:0 auto;opacity:0;transform:translateY(12px);animation:rise .45s ease 2.4s forwards}
+@keyframes rise{to{opacity:1;transform:none}}
+.b{flex:1;text-align:center;text-decoration:none;padding:14px 10px;border-radius:999px;font-weight:650;font-size:15px}
+.chat{background:#25D366;color:#073b1d}.shop{background:#fff;color:#24231F;box-shadow:0 1px 4px rgba(0,0,0,.15)}
+.sr{position:absolute;left:-9999px}
+@media (prefers-reduced-motion:reduce){.slip,.btns{animation:none;transform:none;filter:none;opacity:1}}
+@media print{.btns{display:none}.slip{animation:none;transform:none;filter:none}}
+</style></head><body>
+<div class="slot"><img class="slip" id="slip" src="{{IMG}}" alt="{{ALT}}"></div>
+<ul class="sr">{{LINES}}</ul>
+<div class="btns">{{CHAT}}{{SHOP}}</div>
+<script>
+// A light tick while it feeds and a soft bump when it lands (Android; iPhone ignores vibrate).
+try{if(navigator.vibrate&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
+  setTimeout(function(){navigator.vibrate([6,70,6,70,6,70,6,70,6])},300);
+  setTimeout(function(){navigator.vibrate(18)},2150)}}catch(e){}
+</script></body></html>"""
 
 
 # Landing pages for hosted-checkout redirects (invoice and WhatsApp-order pay links point here
