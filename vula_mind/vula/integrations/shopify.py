@@ -276,10 +276,12 @@ async def fetch_one(acct: Dict[str, Any], product_gid: str = "", inventory_item_
 
 # ── Saving ────────────────────────────────────────────────────────────────────
 
-async def save_products(tenant_id: str, products: List[Dict[str, Any]]) -> Dict[str, Any]:
+async def save_products(tenant_id: str, products: List[Dict[str, Any]], id_field: str = "shopify_id",
+                        actor: str = "shopify", note: str = "Shopify stock") -> Dict[str, Any]:
     """Upsert through the website import's path (by slug, options as variants), then what only
-    a connected store knows: Shopify's ids, draft/archived status and stock — stock as a
-    recorded movement (reason 'adjust', actor 'shopify') and only when it changed."""
+    a connected store knows: the store's ids, draft/archived status and stock — stock as a
+    recorded movement (reason 'adjust', actor 'shopify') and only when it changed. Shared with
+    vula/integrations/woocommerce.py (id_field 'woo_id', actor 'woocommerce')."""
     from vula.commerce import service
     from vula.commerce.site_import import _save_products
     st: Dict[str, Any] = {"products_created": 0, "products_updated": 0, "products_on_request": 0,
@@ -293,8 +295,8 @@ async def save_products(tenant_id: str, products: List[Dict[str, Any]]) -> Dict[
             continue
         try:
             patch = {}
-            if p.get("shopify_id") and row.get("shopify_id") != p["shopify_id"]:
-                patch["shopify_id"] = p["shopify_id"]
+            if p.get(id_field) and row.get(id_field) != p[id_field]:
+                patch[id_field] = p[id_field]
             if p.get("status") and (row.get("status") or "active") != p["status"]:
                 patch["status"] = p["status"]          # a price-on-request draft the import skipped
             if patch:
@@ -302,7 +304,7 @@ async def save_products(tenant_id: str, products: List[Dict[str, Any]]) -> Dict[
             if p.get("stock") is not None and row.get("stock_quantity") != max(int(p["stock"]), 0):
                 # Shopify lets an oversold item go negative; Vula's floor is 0 (compare after it)
                 await service.adjust_stock(tenant_id, row["id"], set_to=max(int(p["stock"]), 0),
-                                           reason="adjust", actor="shopify", note="Shopify stock")
+                                           reason="adjust", actor=actor, note=note)
                 st["stock_changes"] += 1
             if p.get("variants"):
                 existing = await service.list_variants(tenant_id, row["id"])
@@ -311,23 +313,23 @@ async def save_products(tenant_id: str, products: List[Dict[str, Any]]) -> Dict[
                                or (v.get("sku") and e.get("sku") == v["sku"])), None)
                     if not ev:
                         continue
-                    if v.get("shopify_id") and ev.get("shopify_id") != v["shopify_id"]:
-                        await service.update_variant(tenant_id, ev["id"], {"shopify_id": v["shopify_id"]})
+                    if v.get(id_field) and ev.get(id_field) != v[id_field]:
+                        await service.update_variant(tenant_id, ev["id"], {id_field: v[id_field]})
                     if v.get("stock") is not None and ev.get("stock_quantity") != max(int(v["stock"]), 0):
                         await service.adjust_stock(tenant_id, row["id"], variant_id=ev["id"],
                                                    set_to=max(int(v["stock"]), 0), reason="adjust",
-                                                   actor="shopify", note="Shopify stock")
+                                                   actor=actor, note=note)
                         st["stock_changes"] += 1
         except Exception as exc:
             st["errors"].append(f"{p['slug']}: {str(exc)[:80]}")
     return st
 
 
-async def archive_product(tenant_id: str, product_gid: str) -> bool:
-    """A product deleted in Shopify is archived in Vula — orders and invoices still name it."""
+async def archive_product(tenant_id: str, product_gid: str, id_field: str = "shopify_id") -> bool:
+    """A product deleted in the store is archived in Vula — orders and invoices still name it."""
     from vula.commerce import service
     rows = (_db().table("commerce_products").select("id").eq("tenant_id", tenant_id)
-            .eq("shopify_id", product_gid).limit(1).execute().data or [])
+            .eq(id_field, product_gid).limit(1).execute().data or [])
     if not rows:
         return False
     await service.update_product(tenant_id, rows[0]["id"], {"status": "archived", "in_stock": False})

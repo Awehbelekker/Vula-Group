@@ -116,13 +116,15 @@ async def shop_home(request: Request) -> HTMLResponse:
     tenant_id = web_basket.tenant_for_shop_host(request.headers.get("host") or "")
     if not tenant_id:
         raise HTTPException(status_code=404, detail="Not Found")
-    return await photo_menu(tenant_id)
+    return await photo_menu(tenant_id, request)
 
 
 @router.get("/menu/{tenant_id}", response_class=HTMLResponse)
-async def photo_menu(tenant_id: str) -> HTMLResponse:
+async def photo_menu(tenant_id: str, request: Request = None) -> HTMLResponse:
     from vula.commerce import service as cs
-    from vula.commerce import web_basket
+    from vula.commerce import shop_stats, web_basket
+    if request is not None and not shop_stats.is_bot(request.headers.get("user-agent")):
+        shop_stats.record(tenant_id, "shop_open")
 
     products = await web_basket.shop_products(tenant_id)
     try:
@@ -196,6 +198,8 @@ async def create_basket(tenant_id: str, request: Request) -> JSONResponse:
     res = await web_basket.create(tenant_id, (body or {}).get("items"))
     if res.get("error"):
         return JSONResponse(res, status_code=400)
+    from vula.commerce import shop_stats
+    shop_stats.record(tenant_id, "basket")
     return JSONResponse({**res, "wa_url": web_basket.wa_link(number, res["code"])})
 
 

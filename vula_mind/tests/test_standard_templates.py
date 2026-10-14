@@ -17,8 +17,8 @@ def _names(ts):
 
 def test_a_shop_gets_its_own_names_for_the_jobs_it_runs():
     names = _names(wa_templates.standard_templates("seedleme", RETAIL, "retail"))
-    assert {"seedleme_unpaid_order_chase", "seedleme_sales_summary", "seedleme_delivery_briefing",
-            "seedleme_low_stock_alert", "vula_notification", "vula_owner_checkin_nudge",
+    assert {"seedleme_unpaid_order_chase", "seedleme_order_update", "seedleme_reorder_nudge", "seedleme_sales_summary",
+            "seedleme_delivery_briefing", "seedleme_low_stock_alert", "vula_notification", "vula_owner_checkin_nudge",
             "supplier_po_notice"} == set(names)
     assert not any("friday" in n or "pending_project" in n for n in names)
 
@@ -31,7 +31,7 @@ def test_off_the_hook_keeps_its_approved_prefix():
 
 
 def test_wording_matches_what_the_jobs_send_and_what_meta_accepts():
-    expected = {"unpaid_order_chase": 3, "sales_summary": 4, "delivery_briefing": 4,
+    expected = {"unpaid_order_chase": 3, "order_update": 3, "reorder_nudge": 3, "sales_summary": 4, "delivery_briefing": 4,
                 "low_stock_alert": 1, "pending_project_nudge": 1}
     for suffix, body, _cat, _needs in wa_templates.STANDARD_JOB_TEMPLATES:
         assert wa_templates._placeholder_count(body) == expected[suffix], suffix
@@ -56,11 +56,14 @@ async def test_only_names_not_already_on_the_account_are_submitted(monkeypatch):
     monkeypatch.setattr(wa_templates, "_waba_creds", creds)
     monkeypatch.setattr(wa_templates, "_waba_template_names", on_account)
     monkeypatch.setattr(wa_templates, "create_template", create)
+    monkeypatch.setattr(wa_templates, "_promo_sample_image", lambda tid: "https://cdn.shopify.com/basin.jpg")
     monkeypatch.setattr("vula.api.tenants.get_config",
                         lambda tid, fresh=False: {"business_type": "retail", "modules": sorted(RETAIL)})
     res = await wa_templates.submit_standard("seedleme")
-    assert set(res["submitted"]) == {"seedleme_unpaid_order_chase", "seedleme_sales_summary",
-                                     "seedleme_delivery_briefing", "seedleme_low_stock_alert"}
+    assert set(res["submitted"]) == {"seedleme_unpaid_order_chase", "seedleme_order_update", "seedleme_reorder_nudge",
+                                     "seedleme_sales_summary",
+                                     "seedleme_delivery_briefing", "seedleme_low_stock_alert",
+                                     "seedleme_shop_promo"}     # the picture promotion, with its photo
     assert set(res["already_there"]) == {"vula_notification", "vula_owner_checkin_nudge", "supplier_po_notice"}
     assert sent == res["submitted"]
 

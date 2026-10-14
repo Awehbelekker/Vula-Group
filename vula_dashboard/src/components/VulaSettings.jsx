@@ -10,6 +10,8 @@ import React, { useState, useEffect } from 'react'
 import VulaYocoConnect from './VulaYocoConnect'
 import VulaShopifyConnect from './VulaShopifyConnect'
 import VulaShopDomain from './VulaShopDomain'
+import VulaWAProfile from './VulaWAProfile'
+import VulaWooConnect from './VulaWooConnect'
 import VulaWhatsAppConnect from './VulaWhatsAppConnect'
 import VulaClickUpConnect from './VulaClickUpConnect'
 import VulaGoogleConnect from './VulaGoogleConnect'
@@ -63,6 +65,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
         <VulaShopifyConnect tenantId={tenantId} adminEmail={adminEmail} />
       </section>
 
+      {/* WooCommerce */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>🛒 WooCommerce shop</h4>
+        <p style={s.sectionHint}>
+          Selling on WooCommerce (WordPress)? Connect it and your products, photos, prices and stock stay in step with Vula automatically.
+        </p>
+        <VulaWooConnect tenantId={tenantId} adminEmail={adminEmail} />
+      </section>
+
       {/* The shop's own address */}
       <section style={s.section}>
         <h4 style={s.sectionTitle}>🌐 Your shop’s own address</h4>
@@ -79,6 +90,15 @@ export default function VulaSettings({ tenantId, tenantName, adminEmail }) {
           Connect your WhatsApp Business number so customers can order and chat to your AI assistant.
         </p>
         <VulaWhatsAppConnect tenantId={tenantId} tenantName={tenantName} adminEmail={adminEmail} />
+      </section>
+
+      {/* WhatsApp business profile */}
+      <section style={s.section}>
+        <h4 style={s.sectionTitle}>📇 Your WhatsApp profile</h4>
+        <p style={s.sectionHint}>
+          What customers see when they tap your name in WhatsApp — set from your brand kit in one tap.
+        </p>
+        <VulaWAProfile tenantId={tenantId} />
       </section>
 
       {/* ClickUp */}

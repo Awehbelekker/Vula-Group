@@ -7263,6 +7263,21 @@ async def _maybe_capture_review(phone: str, text: str, tenant_id: str) -> bool:
                       in (digits, alt)), None)
         if not order:
             return False
+        return await _record_rating(phone, tenant_id, order, rating)
+    except Exception as exc:
+        logger.debug("review capture skipped: %s", exc)
+        return False
+
+
+async def _record_rating(phone: str, tenant_id: str, order: dict, rating: int) -> bool:
+    """A customer's rating for a delivered order — typed (1–5, stars) or tapped on the
+    "delivered" message's buttons (vula/commerce/order_updates.py). Once per order."""
+    try:
+        from vula.commerce import service as commerce_service
+        db = commerce_service._client()
+        if order.get("review_rating"):
+            await _send_reply(phone, "Thanks — we've already got your rating for that order. 🙏", tenant_id)
+            return True
         db.table("commerce_reviews").insert({
             "tenant_id": tenant_id, "order_id": order["id"],
             "customer_phone": order.get("customer_phone"),
@@ -7286,7 +7301,7 @@ async def _maybe_capture_review(phone: str, text: str, tenant_id: str) -> bool:
                 pass
         return True
     except Exception as exc:
-        logger.debug("review capture skipped: %s", exc)
+        logger.debug("rating record skipped: %s", exc)
         return False
 
 
@@ -8169,6 +8184,19 @@ async def _handle_commerce_interactive(
             amount = 1.0
         await _add_tapped_to_cart(phone, tenant_id, pid, amount, msg_id)
         return
+    if reply_id.startswith("rate_"):
+        oid, _, n = reply_id[5:].rpartition("_")
+        try:
+            from vula.commerce import service as _cs
+            rows = (_cs._client().table("commerce_orders")
+                    .select("id,display_id,customer_phone,customer_name,review_rating")
+                    .eq("id", oid).eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        except Exception:
+            rows = []
+        digits = "".join(c for c in phone if c.isdigit())
+        if rows and "".join(c for c in (rows[0].get("customer_phone") or "") if c.isdigit())[-9:] == digits[-9:]:
+            await _record_rating(phone, tenant_id, rows[0], int(n) if n.isdigit() else 3)
+        return
     if reply_id == "cart_checkout":
         await _handle_commerce_message(phone, "I'd like to check out now", msg_id, tenant_id)
         return
@@ -8518,6 +8546,8 @@ async def _maybe_send_search_results(phone: str, text: str, tenant_id: str,
     if not web_basket.shop_enabled(tenant_id, prods):
         return False                       # shop switched off: the assistant answers
     found = _pf.group(match_products(prods, t))
+    from vula.commerce import shop_stats
+    shop_stats.record(tenant_id, "search" if found else "search_miss", t)
     if not found:
         return False
     all_ranges = {r["key"]: r for r in _pf.group(prods)}
@@ -8736,6 +8766,8 @@ async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool
                                                          "View products", url)):
             await _send_reply(phone, msg + " Reply *shop* to browse.", tenant_id=tenant_id)
         return True
+    from vula.commerce import shop_stats
+    shop_stats.record(tenant_id, "basket_claimed")
     cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
     if creds:
         await _send_cart_summary(phone, tenant_id, creds, cart,

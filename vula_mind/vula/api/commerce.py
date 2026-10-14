@@ -705,6 +705,53 @@ async def admin_list_orders(
     return {"orders": orders, "count": len(orders)}
 
 
+async def _tenant_order(tenant_id: str, order_id: str) -> dict:
+    try:
+        order = await service.get_order(order_id)
+    except Exception:
+        order = None
+    if not order or order.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@router.get("/{tenant_id}/admin/orders/{order_id}/payment")
+async def admin_order_payment(tenant_id: str, order_id: str):
+    """What the customer has paid towards this order (deposit / balance invoices)."""
+    from vula.commerce import order_deposit
+    order = await _tenant_order(tenant_id, order_id)
+    paid = order_deposit.paid_cents(tenant_id, order_id)
+    total = int(order.get("total_cents") or 0)
+    pending = order_deposit.open_request(tenant_id, order_id)
+    return {"total_cents": total, "paid_cents": paid, "balance_cents": max(0, total - paid),
+            "open_request": ({"kind": order_deposit.kind_of(pending),
+                              "invoice_number": pending.get("invoice_number"),
+                              "amount_cents": int(pending.get("total_cents") or 0)} if pending else None)}
+
+
+@router.post("/{tenant_id}/admin/orders/{order_id}/payment-request")
+async def admin_order_payment_request(tenant_id: str, order_id: str, body: dict):
+    """WhatsApp the customer a Pay deposit / Pay balance button for this order
+    (vula/commerce/order_deposit.py). Body: {kind: deposit|balance, amount_cents?, pct?}."""
+    from vula.commerce import order_deposit
+    order = await _tenant_order(tenant_id, order_id)
+    kind = body.get("kind") or "deposit"
+    if kind not in ("deposit", "balance"):
+        raise HTTPException(status_code=400, detail="kind must be deposit or balance")
+    amount = None
+    if kind == "deposit":
+        total = int(order.get("total_cents") or 0)
+        try:
+            amount = (int(body["amount_cents"]) if body.get("amount_cents")
+                      else order_deposit.deposit_cents(total, pct=body.get("pct")))
+        except (TypeError, ValueError):
+            amount = 0
+    res = await order_deposit.request(tenant_id, order, kind, amount)
+    if res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
 @router.patch("/{tenant_id}/admin/orders/{order_id}/status")
 async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
     """Update order status — confirmed, packing, dispatched, delivered, cancelled."""
@@ -766,26 +813,12 @@ async def admin_update_order_status(tenant_id: str, order_id: str, body: dict):
         except Exception as exc:
             log.debug("refund team notify skipped: %s", exc)
 
-    # Delivered → ask the customer for a rating over WhatsApp (once per order,
-    # best-effort — usually inside the 24h service window since they just ordered).
-    if new_status == "delivered" and not order.get("review_requested_at") and order.get("customer_phone"):
-        try:
-            from vula.api.whatsapp import _send_reply
-            first = (order.get("customer_name") or "").split(" ")[0]
-            sent = await _send_reply(
-                order["customer_phone"],
-                (f"Hi {first}! Your {_tenants_display(tenant_id)} order {order.get('display_id') or ''} "
-                 "has been delivered — "
-                 "we hope everything is perfect. How was it? Reply with a rating from 1 to 5 "
-                 "(5 = excellent). Thank you!").replace("  ", " "),
-                tenant_id,
-            )
-            if sent:
-                service._client().table("commerce_orders").update(
-                    {"review_requested_at": service._now()}
-                ).eq("id", order_id).eq("tenant_id", tenant_id).execute()
-        except Exception as exc:
-            log.debug("review request skipped: %s", exc)
+    # Packing / on its way / delivered → the customer hears it on WhatsApp, with a photo and a
+    # button; delivered asks for a rating (once per order) — vula/commerce/order_updates.py.
+    if new_status != order.get("status") and new_status in ("packing", "dispatched", "delivered") \
+            and not (new_status == "delivered" and order.get("review_requested_at")):
+        from vula.commerce import order_updates
+        await order_updates.notify(tenant_id, order, new_status)
 
     return {"order_id": order_id, "status": new_status, "refund": refund_result}
 
@@ -5574,6 +5607,45 @@ async def admin_delete_wa_template(tenant_id: str, name: str):
     return result
 
 
+@router.get("/{tenant_id}/admin/wa-profile")
+async def admin_wa_profile(tenant_id: str):
+    """The WhatsApp business profile now, and the one Vula proposes from the brand kit."""
+    from vula.commerce import wa_profile
+    return {"current": await wa_profile.current(tenant_id), "proposed": await wa_profile.proposed(tenant_id)}
+
+
+@router.post("/{tenant_id}/admin/wa-profile")
+async def admin_wa_profile_apply(tenant_id: str, body: dict):
+    """Set the WhatsApp business profile (the owner's Apply tap). Body: {profile: {...}}."""
+    from vula.commerce import wa_profile
+    res = await wa_profile.apply(tenant_id, (body or {}).get("profile") or {})
+    if res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@router.get("/{tenant_id}/admin/shop-funnel")
+async def admin_shop_funnel(tenant_id: str, days: int = 7):
+    """The WhatsApp shop's funnel and searches for Home (vula/commerce/shop_stats.py)."""
+    from vula.commerce import shop_stats
+    return shop_stats.funnel(tenant_id, max(1, min(int(days or 7), 90)))
+
+
+@router.post("/{tenant_id}/admin/broadcasts/promo")
+async def admin_send_promo(tenant_id: str, body: dict):
+    """The picture promotion (vula/commerce/promo.py): a product photo, the offer and a Shop now
+    button. Body: {message, product_id?, image_url?, audience_filter?, test_phone?, dry_run (default true)}."""
+    from vula.commerce import promo
+    res = await promo.send(tenant_id, body.get("message") or "", product_id=body.get("product_id") or None,
+                           image_url=body.get("image_url") or None,
+                           audience=body.get("audience_filter") or "all",
+                           test_phone=body.get("test_phone") or None,
+                           dry_run=body.get("dry_run", True) is not False)
+    if res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
 @router.post("/{tenant_id}/admin/broadcasts/send")
 async def admin_send_broadcast(tenant_id: str, body: dict):
     """
@@ -6362,7 +6434,8 @@ def _template_body_params(tpl_row: Optional[dict], contact: dict, static: list) 
     if n <= 0:
         return []
     first = ((contact.get("name") or "").split(" ")[0] or "there").strip() or "there"
-    vals = list(static[:n]) or [first]
+    # "{name}" in the static list is the recipient's first name (the picture promotion's {{1}}).
+    vals = [first if v == "{name}" else v for v in static[:n]] or [first]
     while len(vals) < n:
         vals.append(first if not vals else "-")
     return [{"type": "text", "text": v or "-"} for v in vals[:n]]
