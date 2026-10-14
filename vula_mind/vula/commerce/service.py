@@ -252,7 +252,7 @@ def qty_text(value: Any) -> str:
 async def update_product_stock(tenant_id: str, product_id: str, quantity_delta: float) -> None:
     """Decrement stock by quantity_delta (positive reduces, negative restores). Raw SQL, race-safe."""
     _client().rpc(
-        "decrement_product_stock",
+        "decrement_product_stock_exact",
         {"p_tenant_id": tenant_id, "p_product_id": product_id, "p_delta": qty(quantity_delta)},
     ).execute()
 
@@ -260,7 +260,7 @@ async def update_product_stock(tenant_id: str, product_id: str, quantity_delta: 
 async def update_variant_stock(variant_id: str, quantity_delta: float) -> None:
     """Variant equivalent of update_product_stock (migration 087)."""
     _client().rpc(
-        "decrement_variant_stock",
+        "decrement_variant_stock_exact",
         {"p_variant_id": variant_id, "p_delta": qty(quantity_delta)},
     ).execute()
 
@@ -277,7 +277,7 @@ async def adjust_stock(tenant_id: str, product_id: str, *, variant_id: Optional[
     An untracked product becomes tracked the moment it's counted or received."""
     if set_to is None and delta is None:
         raise ValueError("adjust_stock needs delta or set_to")
-    res = _client().rpc("apply_stock_change", {
+    res = _client().rpc("apply_stock_change_exact", {
         "p_tenant_id": tenant_id, "p_product_id": product_id, "p_variant_id": variant_id,
         "p_delta": qty(delta) if delta is not None else None,
         "p_set": qty(set_to) if set_to is not None else None,
@@ -350,11 +350,11 @@ async def _reserve_cart_stock(tenant_id: str, items: list) -> None:
             vid = it.get("variant_id")
             if vid:
                 ok = _client().rpc(
-                    "reserve_variant_stock", {"p_variant_id": vid, "p_qty": q}
+                    "reserve_variant_stock_exact", {"p_variant_id": vid, "p_qty": q}
                 ).execute().data
             else:
                 ok = _client().rpc(
-                    "reserve_product_stock",
+                    "reserve_product_stock_exact",
                     {"p_tenant_id": tenant_id, "p_product_id": pid, "p_qty": q},
                 ).execute().data
             if not ok:

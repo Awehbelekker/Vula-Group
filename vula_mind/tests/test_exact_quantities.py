@@ -46,7 +46,7 @@ async def test_two_and_a_half_kilos_round_trip_exactly(monkeypatch):
     monkeypatch.setattr(service, "_client", lambda: _RPC(log, result=lambda n, p: p.get("p_set") or p.get("p_delta")))
     after = await service.adjust_stock("off-the-hook", "p-1", set_to="2.5", reason="count")
     assert after == 2.5
-    assert log[0] == ("apply_stock_change", {**log[0][1], "p_set": 2.5, "p_delta": None})
+    assert log[0] == ("apply_stock_change_exact", {**log[0][1], "p_set": 2.5, "p_delta": None})
     await service.adjust_stock("off-the-hook", "p-1", delta=-0.75, reason="adjust")
     assert log[1][1]["p_delta"] == -0.75
 
@@ -57,7 +57,7 @@ async def test_half_kilo_reservation_reserves_half_a_kilo(monkeypatch):
     monkeypatch.setattr(service, "_client", lambda: _RPC(log))
     await service._reserve_cart_stock("off-the-hook", [
         {"product_id": "hake", "quantity": 0.5}, {"product_id": "kob", "quantity": "1.5"}])
-    assert [p["p_qty"] for n, p in log if n == "reserve_product_stock"] == [0.5, 1.5]
+    assert [p["p_qty"] for n, p in log if n == "reserve_product_stock_exact"] == [0.5, 1.5]
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,7 @@ async def test_failed_reservation_gives_back_the_exact_amount(monkeypatch):
     with pytest.raises(service.OutOfStockError):
         await service._reserve_cart_stock("off-the-hook", [
             {"product_id": "hake", "quantity": 0.5}, {"product_id": "kob", "quantity": 1.5}])
-    assert ("decrement_product_stock", {"p_tenant_id": "off-the-hook", "p_product_id": "hake", "p_delta": -0.5}) in log
+    assert ("decrement_product_stock_exact", {"p_tenant_id": "off-the-hook", "p_product_id": "hake", "p_delta": -0.5}) in log
 
 
 @pytest.mark.asyncio
@@ -82,13 +82,13 @@ async def test_sale_and_refund_move_the_exact_amount(monkeypatch):
     monkeypatch.setattr(service, "_client", lambda: _RPC(log))
     monkeypatch.setattr(service, "get_order", get_order)
     assert await service.apply_order_stock("o-1") is True
-    assert ("decrement_product_stock", {"p_tenant_id": "off-the-hook", "p_product_id": "hake", "p_delta": 0.5}) in log
+    assert ("decrement_product_stock_exact", {"p_tenant_id": "off-the-hook", "p_product_id": "hake", "p_delta": 0.5}) in log
     movement = next(r for n, r in log if n == "commerce_stock_movements")
     assert movement["delta"] == -0.5 and movement["reason"] == "sale"
     order["stock_adjusted"] = True
     log.clear()
     assert await service.apply_order_stock("o-1", restore=True) is True
-    assert ("decrement_product_stock", {"p_tenant_id": "off-the-hook", "p_product_id": "hake", "p_delta": -0.5}) in log
+    assert ("decrement_product_stock_exact", {"p_tenant_id": "off-the-hook", "p_product_id": "hake", "p_delta": -0.5}) in log
 
 
 def test_count_variance_in_exact_kilos_and_whole_cents():
@@ -141,8 +141,10 @@ def test_migration_210_moves_every_stock_column_and_function_to_numeric():
     sql = (pathlib.Path(__file__).resolve().parents[1] / "migrations" / "210_exact_quantities.sql").read_text()
     for col in ("stock_quantity", "reorder_threshold", "reorder_qty", "delta", "qty_after", "counted", "expected"):
         assert f"alter column {col}" in sql
-    for fn in ("reserve_product_stock", "reserve_variant_stock", "decrement_product_stock",
-               "decrement_variant_stock", "apply_stock_change", "stock_count_scan"):
-        assert f"drop function if exists {fn}(" in sql
-    body = sql.split("drop function if exists stock_count_scan")[1].split(";", 1)[1].lower()
-    assert " integer" not in body.replace("v_affected integer", "")
+    body = sql.split("-- The exact-amount stock functions", 1)[1].split("\n", 1)[1]   # past the comment
+    for fn in ("reserve_product_stock_exact", "reserve_variant_stock_exact", "decrement_product_stock_exact",
+               "decrement_variant_stock_exact", "apply_stock_change_exact", "stock_count_scan_exact"):
+        assert f"function {fn}(" in body.lower()
+    # numeric in and out; and nothing dropped (the hosted migration tool refuses a DROP)
+    assert " integer" not in body.lower().replace("v_affected integer", "")
+    assert "drop function" not in sql.lower()

@@ -4,8 +4,10 @@
 -- movements, stock-count lines and the stock functions were all whole numbers, while cart and
 -- order quantities were already decimals. So a 0.5 kg sale took 0 off stock and a 1.5 kg sale
 -- took 2 (the code rounded to fit), and 2.5 kg of resin couldn't be held at all. Quantities are
--- now numeric(14,4); the stock functions take and return numeric (same bodies — dropped and
--- recreated because the return type changes). unit_cost is the cost per base unit with
+-- now numeric(14,4), and the stock functions have exact-amount versions under new names
+-- (<name>_exact — same bodies, numeric in and out) that the code calls. The old integer
+-- functions are left in place, unused: replacing them needs a DROP, which the hosted migration
+-- tool refuses, and leaving them costs nothing. unit_cost is the cost per base unit with
 -- sub-cent precision, for costing; cost_cents stays as it is and is copied across.
 -- Money totals stay integer cents, computed server-side. Idempotent. RLS unchanged.
 
@@ -29,15 +31,8 @@ alter table commerce_product_variants add column if not exists unit_cost numeric
 update commerce_products set unit_cost = cost_cents / 100.0 where unit_cost is null and cost_cents is not null;
 update commerce_product_variants set unit_cost = cost_cents / 100.0 where unit_cost is null and cost_cents is not null;
 
--- The integer versions go; the numeric ones take any amount (PostgREST passes JSON numbers).
-drop function if exists reserve_product_stock(text, uuid, integer);
-drop function if exists reserve_variant_stock(uuid, integer);
-drop function if exists decrement_product_stock(text, uuid, integer);
-drop function if exists decrement_variant_stock(uuid, integer);
-drop function if exists apply_stock_change(text, uuid, uuid, integer, integer, text, text, text, text, text);
-drop function if exists stock_count_scan(text, uuid, uuid, uuid, integer, integer, text, text);
-
-CREATE OR REPLACE FUNCTION reserve_product_stock(p_tenant_id TEXT, p_product_id UUID, p_qty NUMERIC)
+-- The exact-amount stock functions (the code calls these; the integer originals stay, unused).
+CREATE OR REPLACE FUNCTION reserve_product_stock_exact(p_tenant_id TEXT, p_product_id UUID, p_qty NUMERIC)
 RETURNS BOOLEAN LANGUAGE plpgsql SET search_path TO 'public' AS $$
 DECLARE
     v_affected INTEGER;
@@ -54,7 +49,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION reserve_variant_stock(p_variant_id UUID, p_qty NUMERIC)
+CREATE OR REPLACE FUNCTION reserve_variant_stock_exact(p_variant_id UUID, p_qty NUMERIC)
 RETURNS BOOLEAN LANGUAGE plpgsql SET search_path TO 'public' AS $$
 DECLARE
     v_affected INTEGER;
@@ -70,7 +65,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION decrement_product_stock(p_tenant_id TEXT, p_product_id UUID, p_delta NUMERIC)
+CREATE OR REPLACE FUNCTION decrement_product_stock_exact(p_tenant_id TEXT, p_product_id UUID, p_delta NUMERIC)
 RETURNS VOID LANGUAGE plpgsql SET search_path TO 'public' AS $$
 BEGIN
     UPDATE commerce_products
@@ -81,7 +76,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION decrement_variant_stock(p_variant_id UUID, p_delta NUMERIC)
+CREATE OR REPLACE FUNCTION decrement_variant_stock_exact(p_variant_id UUID, p_delta NUMERIC)
 RETURNS VOID LANGUAGE plpgsql SET search_path TO 'public' AS $$
 BEGIN
     UPDATE commerce_product_variants
@@ -92,7 +87,7 @@ BEGIN
 END;
 $$;
 
-create or replace function apply_stock_change(
+create or replace function apply_stock_change_exact(
     p_tenant_id  text,
     p_product_id uuid,
     p_variant_id uuid,
@@ -146,7 +141,7 @@ begin
 end;
 $$;
 
-create or replace function stock_count_scan(
+create or replace function stock_count_scan_exact(
     p_tenant_id  text,
     p_count_id   uuid,
     p_product_id uuid,

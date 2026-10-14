@@ -99,7 +99,8 @@ class FakeDB:
 
         class _Call:
             def execute(self_inner):
-                return _Res(getattr(db, "_rpc_" + name)(params))
+                # the code calls the exact-amount versions (migration 210: <name>_exact)
+                return _Res(getattr(db, "_rpc_" + name.removesuffix("_exact"))(params))
         return _Call()
 
     def _rpc_apply_stock_change(self, p):
@@ -165,7 +166,7 @@ async def test_adjust_stock_passes_every_field_to_the_rpc(db):
                                        ref_id="po1", actor="ian@x")
     assert after == 15
     name, params = db.rpcs[0]
-    assert name == "apply_stock_change"
+    assert name == "apply_stock_change_exact"
     assert params == {"p_tenant_id": TID, "p_product_id": "p1", "p_variant_id": None, "p_delta": 5,
                       "p_set": None, "p_reason": "receive", "p_ref_type": "purchase_order",
                       "p_ref_id": "po1", "p_actor": "ian@x", "p_note": None}

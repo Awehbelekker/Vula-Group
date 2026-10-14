@@ -56,7 +56,7 @@ async def record_scans(tenant_id: str, count_id: str, scans: List[dict],
             continue
         add = s.get("add")
         setv = s.get("set")
-        res = _db().rpc("stock_count_scan", {
+        res = _db().rpc("stock_count_scan_exact", {
             "p_tenant_id": tenant_id, "p_count_id": count_id, "p_product_id": pid,
             "p_variant_id": s.get("variant_id") or None,
             "p_add": service.qty(add) if add is not None else None,
