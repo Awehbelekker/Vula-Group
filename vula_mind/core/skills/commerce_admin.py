@@ -1080,11 +1080,86 @@ PAGE_TOOLS = [
             "confirm": {"type": "boolean"}}, "required": ["slug", "feature"]}}},
 ]
 
+# Manufacturing & costing (2026-10-14, Vula Manufacturing Core phases 2–3): what it costs to make
+# something and the margin. vula/commerce/manufacturing.py does the work (preview → confirm →
+# read back); vula/commerce/costing.py does every sum. Only for the "manufacturing" module.
+_ING = {"type": "object", "properties": {
+    "material": {"type": "string"}, "qty": {"type": "number"},
+    "unit": {"type": "string", "description": "g, kg, ml, l, each, m, m2 — or bag/pack for a material with a pack size"},
+    "waste_pct": {"type": "number", "description": "Expected waste, % (optional)"}},
+    "required": ["material", "qty", "unit"]}
+MANUFACTURING_TOOLS = [
+    {"type": "function", "function": {
+        "name": "cost_sheet",
+        "description": "What it costs to make one of a product and the margin on it — 'what does a "
+                       "round basin cost us?', 'margin on the oval basin'. Built from the product's "
+                       "recipe at today's material costs, plus the last batches' actual cost.",
+        "parameters": {"type": "object", "properties": {"product": {"type": "string"}},
+                       "required": ["product"]}}},
+    {"type": "function", "function": {
+        "name": "add_material",
+        "description": "Add a raw material used to make products — 'add material concrete mix, "
+                       "25 kg bags', 'add sealer, measured in litres'. unit = how it's measured "
+                       "(kg, g, l, ml, each, m, m2). Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}, "unit": {"type": "string"},
+            "pack_size": {"type": "number", "description": "What one purchase pack holds, e.g. 25"},
+            "pack_unit": {"type": "string", "description": "e.g. kg"},
+            "confirm": {"type": "boolean"}}, "required": ["name", "unit"]}}},
+    {"type": "function", "function": {
+        "name": "receive_material",
+        "description": "Book a delivery of a material with what it cost (excl. VAT that can be "
+                       "claimed back) — 'got 2 bags concrete mix for R190', 'bought 5 l sealer R480'. "
+                       "Updates the average cost. Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "material": {"type": "string"}, "qty": {"type": "number"}, "unit": {"type": "string"},
+            "total_rands": {"type": "number"}, "confirm": {"type": "boolean"}},
+            "required": ["material", "qty", "unit"]}}},
+    {"type": "function", "function": {
+        "name": "set_recipe",
+        "description": "Save what goes into one batch of a product (a new version; past batches "
+                       "keep theirs) — 'recipe for round basin: 18 kg concrete mix, 150 g pigment, "
+                       "0.25 l sealer, makes 1, 1.5 hours'. makes = good units one batch gives. "
+                       "Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "product": {"type": "string"}, "ingredients": {"type": "array", "items": _ING},
+            "makes": {"type": "number"}, "labour_hours": {"type": "number"},
+            "confirm": {"type": "boolean"}}, "required": ["product", "ingredients"]}}},
+    {"type": "function", "function": {
+        "name": "log_batch",
+        "description": "Log a production batch — 'made 12 round basins, 1 reject, 6 hours'. good = "
+                       "good units made; rejects and hours optional (the recipe's expectation "
+                       "otherwise). Materials come off stock, the good units go in, and the cost "
+                       "per unit is worked out. Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "product": {"type": "string"}, "good": {"type": "number"}, "rejects": {"type": "number"},
+            "labour_hours": {"type": "number"}, "confirm": {"type": "boolean"}},
+            "required": ["product", "good"]}}},
+    {"type": "function", "function": {
+        "name": "undo_last_batch",
+        "description": "Reverse the last logged batch of a product when it was logged wrong "
+                       "(then log it again). Without confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "product": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["product"]}}},
+    {"type": "function", "function": {
+        "name": "costing_settings",
+        "description": "Set the labour rate per hour and how overheads (rent, power, tooling) are "
+                       "shared — 'labour is R60 an hour, overhead R25 per labour hour'. "
+                       "overhead_rule: none | per_labour_hour | per_run | per_unit. Without "
+                       "confirm=true returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "labour_rate_rands": {"type": "number"},
+            "overhead_rule": {"type": "string", "enum": ["none", "per_labour_hour", "per_run", "per_unit"]},
+            "overhead_rate_rands": {"type": "number"}, "confirm": {"type": "boolean"}}}}},
+]
+
+_MFG_TOOL_NAMES = {t["function"]["name"] for t in MANUFACTURING_TOOLS}
+
 _GATED_GROUPS = [
     ("invoices", INVOICE_TOOLS), ("products", PRODUCT_TOOLS), ("bookings", BOOKING_TOOLS),
     ("orders", SUBSCRIPTION_TOOLS), ("crm", CRM_TOOLS), ("broadcasts", BROADCAST_TOOLS),
     ("pages", PAGE_TOOLS), ("purchase_orders", PURCHASE_ORDER_TOOLS), ("discounts", DISCOUNT_TOOLS),
-    ("automations", AUTOMATION_TOOLS),
+    ("automations", AUTOMATION_TOOLS), ("manufacturing", MANUFACTURING_TOOLS),
 ]
 # Always available (universally useful, not tied to a business type): marketing copy, letter
 # drafting, and — since a sales rep's own contact book/meeting log is just as relevant to a
@@ -1093,7 +1168,7 @@ _ALL_TOOL_SPECS = (TOOL_SPECS + INVOICE_TOOLS + PRODUCT_TOOLS + BOOKING_TOOLS
                    + MARKETING_TOOLS + KNOWLEDGE_TOOLS + DRAFT_TOOLS + SUBSCRIPTION_TOOLS
                    + CRM_TOOLS + BROADCAST_TOOLS + CONTACT_TOOLS + MEETING_TOOLS
                    + REMINDER_TOOLS + PAGE_TOOLS + PURCHASE_ORDER_TOOLS + DISCOUNT_TOOLS
-                   + AUTOMATION_TOOLS + PROJECT_TOOLS)
+                   + AUTOMATION_TOOLS + PROJECT_TOOLS + MANUFACTURING_TOOLS)
 
 PRODUCT_DOC_TOOLS = [
     {"type": "function", "function": {
@@ -1156,6 +1231,9 @@ _KEYWORD_GROUPS: Dict[str, set] = {
     "purchase_orders": {"purchase order", "supplier", "reorder", "restock", "po "},
     "discounts": {"discount", "promo", "coupon", "voucher"},
     "automations": {"automation", "automate", "rule", "trigger", "teach vula"},
+    "manufacturing": {"recipe", "batch", "made ", "we made", "material", "cost us", "cost to make",
+                      "costing", "margin", "ingredient", "production", "reject", "labour rate",
+                      "overhead", "bags of", "cost per"},
 }
 
 
@@ -1372,6 +1450,9 @@ _TOOL_SCOPE: Dict[str, str] = {
     "outstanding_invoices": "invoices",
     "recent_orders": "orders", "update_order_status": "orders", "create_manual_order": "orders",
     "order_payment": "orders", "picture_promotion": "broadcast",
+    "cost_sheet": "manufacturing", "add_material": "manufacturing", "receive_material": "manufacturing",
+    "set_recipe": "manufacturing", "log_batch": "manufacturing", "undo_last_batch": "manufacturing",
+    "costing_settings": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
     "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
@@ -2135,6 +2216,7 @@ class CommerceAdminSkill(BaseSkill):
             if name == "create_manual_order": return await self._create_manual_order(tid, args)
             if name == "order_payment":       return await self._order_payment(tid, args)
             if name == "picture_promotion":   return await self._picture_promotion(tid, args, ctx.get("phone"))
+            if name in _MFG_TOOL_NAMES:       return await self._manufacturing(name, tid, args, ctx.get("phone"))
             if name == "create_automation_rule": return await self._create_automation_rule(tid, args.get("description", ""), bool(args.get("confirm")))
             if name == "list_discount_codes": return await self._list_discount_codes(tid)
             if name == "create_discount_code": return await self._create_discount_code(tid, args)
@@ -3216,6 +3298,43 @@ class CommerceAdminSkill(BaseSkill):
         return (f"📲 {res['order']}: the customer has the order number and a *Pay {what.lower()}* "
                 f"button for {_r(res['amount_cents'])} (invoice {res.get('invoice_number')}). "
                 "I'll tell you when it's paid.")
+
+    async def _manufacturing(self, name: str, tid: str, args: Dict[str, Any], phone: Optional[str]) -> Dict[str, Any]:
+        """The costing tools — vula/commerce/manufacturing.py does the work and builds the reply."""
+        from vula.commerce import manufacturing as mfg
+        from vula.commerce.costing import CostingError
+        confirm = bool(args.get("confirm"))
+
+        def _cents(rands_value):
+            return int(round(float(rands_value) * 100)) if rands_value is not None else None
+        try:
+            if name == "cost_sheet":
+                return await mfg.sheet(tid, args.get("product") or "")
+            if name == "add_material":
+                return mfg.add_material(tid, args.get("name") or "", args.get("unit") or "each",
+                                        pack_size=args.get("pack_size"), pack_unit=args.get("pack_unit"),
+                                        actor=phone, confirm=confirm)
+            if name == "receive_material":
+                return mfg.receive(tid, args.get("material") or "", args.get("qty"), args.get("unit") or "",
+                                   _cents(args.get("total_rands")), actor=phone, confirm=confirm)
+            if name == "set_recipe":
+                return await mfg.set_recipe(tid, args.get("product") or "", args.get("ingredients") or [],
+                                            makes=args.get("makes") or 1, labour_hours=args.get("labour_hours") or 0,
+                                            actor=phone, confirm=confirm)
+            if name == "log_batch":
+                return await mfg.log_batch(tid, args.get("product") or "", good=args.get("good"),
+                                           rejects=args.get("rejects") or 0, labour_hours=args.get("labour_hours"),
+                                           actor=phone, confirm=confirm)
+            if name == "undo_last_batch":
+                return await mfg.undo_last_batch(tid, args.get("product") or "", actor=phone, confirm=confirm)
+            if name == "costing_settings":
+                return mfg.update_settings(tid, labour_rate_cents=_cents(args.get("labour_rate_rands")),
+                                           overhead_rule=args.get("overhead_rule"),
+                                           overhead_rate_cents=_cents(args.get("overhead_rate_rands")),
+                                           actor=phone, confirm=confirm)
+        except CostingError as exc:
+            return {"error": str(exc)}
+        return {"error": f"unknown costing tool {name}"}
 
     async def _picture_promotion(self, tid: str, args: Dict[str, Any], phone: Optional[str]) -> Dict[str, Any]:
         from vula.commerce import promo

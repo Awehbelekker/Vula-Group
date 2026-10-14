@@ -109,6 +109,7 @@ from vula.api.yoco_connect import router as yoco_connect_router
 from vula.api.shopify_connect import router as shopify_admin_router, webhook_router as shopify_webhook_router
 from vula.api.shop_domain import router as shop_domain_router
 from vula.api.woocommerce_connect import router as woo_admin_router, webhook_router as woo_webhook_router
+from vula.api.manufacturing import router as manufacturing_router
 from vula.api.draft import router as draft_router
 from vula.api.agent import router as agent_router
 from vula.api.links import router as links_router
@@ -1845,6 +1846,7 @@ app.include_router(shopify_admin_router, prefix="/v1/commerce")    # /{tenant}/a
 app.include_router(shop_domain_router, prefix="/v1/commerce")     # /{tenant}/admin/shop-domain — tenant-guarded
 app.include_router(shopify_webhook_router, prefix="/v1/shopify")   # Shopify's calls — HMAC-verified
 app.include_router(woo_admin_router, prefix="/v1/commerce")       # /{tenant}/admin/woocommerce — tenant-guarded
+app.include_router(manufacturing_router, prefix="/v1/commerce")   # /{tenant}/admin/mfg — tenant-guarded
 app.include_router(woo_webhook_router, prefix="/v1/woocommerce")   # WooCommerce's calls — HMAC-verified
 from vula.api.business_profile import router as business_profile_router  # noqa: E402
 app.include_router(business_profile_router, prefix="/v1/commerce")

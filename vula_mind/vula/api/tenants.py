@@ -60,6 +60,8 @@ MODULES: dict[str, str] = {
     # 2026-10-13: photo cards in WhatsApp, tap to order (colour, then how many), the shop's web
     # page with a basket that orders back into WhatsApp — vula/commerce/web_basket.py.
     "wa_shop":    "WhatsApp shop (photo cards, tap to order, web basket)",
+    # 2026-10-14: materials, recipes, batches and the true cost per unit — vula/commerce/costing.py.
+    "manufacturing": "Manufacturing & costing (recipes, batches, cost per unit, margin)",
 }
 
 # Business type → the modules switched on by default at onboarding (master can override).
