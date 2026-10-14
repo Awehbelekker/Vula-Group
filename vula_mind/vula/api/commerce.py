@@ -5929,7 +5929,7 @@ async def admin_onboarding_send_batch(tenant_id: str, body: dict):
     from vula.commerce import onboarding
     b = body or {}
     result = await onboarding.send_batch(
-        tenant_id, template=b.get("template") or "oth_intro_optin",
+        tenant_id, template=b.get("template") or onboarding.intro_template(tenant_id),
         language=b.get("language") or "en", limit=int(b.get("batch_size") or 25),
         test_phone=b.get("test_phone"))
     return {"tenant_id": tenant_id, **result}

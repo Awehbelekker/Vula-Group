@@ -216,6 +216,32 @@ def onboarding_stats(tenant_id: str) -> dict:
     }
 
 
+def intro_template(tenant_id: str) -> str:
+    """This business's own intro template (wa_templates' standard "intro_optin", submitted with
+    the standard set). Every business used to fall back to "oth_intro_optin" — Off the Hook's,
+    which tells the customer they're talking to Off the Hook (2026-10-14, SeedleMe)."""
+    from vula.commerce.job_config import template_name
+    return template_name(tenant_id, "intro_optin")
+
+
+def _intro_params(tenant_id: str, template: str, contact: dict) -> list:
+    """{{1}} the contact's first name, and — for the standard intro — {{2}} the business's name.
+    Off the Hook's older approved intro has only {{1}}; the count comes from the template's own
+    record, so both work."""
+    n = None
+    try:
+        rows = (_client().table("commerce_wa_templates").select("param_count")
+                .eq("name", template).limit(1).execute().data or [])
+        if rows and rows[0].get("param_count") is not None:
+            n = int(rows[0]["param_count"])
+    except Exception:
+        n = None
+    if n is None:
+        n = 2 if template == intro_template(tenant_id) else 1
+    vals = [first_name(contact.get("name")), _business_name(tenant_id)][:max(1, n)]
+    return [{"type": "text", "text": v} for v in vals]
+
+
 async def send_batch(tenant_id: str, *, template: str, language: str = "en",
                      limit: int = 50, test_phone: Optional[str] = None) -> dict:
     """Send the intro template to the next `limit` un-invited contacts (or just test_phone),
@@ -249,8 +275,8 @@ async def send_batch(tenant_id: str, *, template: str, language: str = "en",
                     headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
                     json={"messaging_product": "whatsapp", "to": number, "type": "template",
                           "template": {"name": template, "language": {"code": language},
-                                       "components": [{"type": "body", "parameters": [
-                                           {"type": "text", "text": first_name(c.get("name"))}]}]}},
+                                       "components": [{"type": "body", "parameters":
+                                                       _intro_params(tenant_id, template, c)}]}},
                 )
                 if resp.is_success:
                     sent += 1

@@ -275,6 +275,9 @@ async def delete_template(tenant_id: str, name: str) -> Dict[str, Any]:
 # Wording and {{n}} counts match the call sites in vula/api/server.py; Meta rejects a body that
 # starts or ends with a variable. (suffix, body, category, which modules need it — None = all.)
 STANDARD_JOB_TEMPLATES = [
+    ("intro_optin",             # onboarding.send_batch: first message to imported contacts · name, business
+     "Hi {{1}}! 👋 {{2}} is now on WhatsApp. Reply to this message to see what's new, order and "
+     "track deliveries — all right here. Reply STOP anytime to opt out.", "MARKETING", None),
     ("unpaid_order_chase",      # server.py::_chase_unpaid_orders · name, order id, amount
      "Hi {{1}}, your order {{2}} for {{3}} is still awaiting payment. "
      "Reply here and we'll send you the payment details again.", "UTILITY", {"orders"}),
