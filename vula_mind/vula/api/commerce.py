@@ -900,7 +900,7 @@ async def admin_update_product(tenant_id: str, product_id: str, body: dict, requ
     # A stock number goes through adjust_stock (migration 182) so the change is atomic and
     # recorded. None still means "stop tracking stock" and is written as-is.
     if update.get("stock_quantity") is not None:
-        qty = int(update.pop("stock_quantity"))
+        qty = service.qty(update.pop("stock_quantity"))           # exact: 2.5 kg stays 2.5 (migration 210)
         update.pop("in_stock", None)       # follows the quantity
         after = await service.adjust_stock(tenant_id, product_id, set_to=qty, reason="adjust",
                                            ref_type="dashboard", actor=_actor(request))
@@ -1382,7 +1382,7 @@ async def admin_update_variant(tenant_id: str, product_id: str, variant_id: str,
     if not data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
     if data.get("stock_quantity") is not None:
-        qty = int(data.pop("stock_quantity"))
+        qty = service.qty(data.pop("stock_quantity"))
         data.pop("in_stock", None)
         after = await service.adjust_stock(tenant_id, product_id, variant_id=variant_id, set_to=qty,
                                            reason="adjust", ref_type="dashboard", actor=_actor(request))
@@ -1533,7 +1533,7 @@ async def admin_receive_stock(tenant_id: str, body: dict, request: Request):
         booked = [ln["product_id"] for ln in lines]
     else:
         for ln in lines:
-            qty = int(round(float(ln.get("quantity") or 0)))
+            qty = service.qty(ln.get("quantity"))
             if qty <= 0:
                 continue
             after = await service.adjust_stock(
@@ -5929,7 +5929,7 @@ async def admin_onboarding_send_batch(tenant_id: str, body: dict):
     from vula.commerce import onboarding
     b = body or {}
     result = await onboarding.send_batch(
-        tenant_id, template=b.get("template") or "oth_intro_optin",
+        tenant_id, template=b.get("template") or onboarding.intro_template(tenant_id),
         language=b.get("language") or "en", limit=int(b.get("batch_size") or 25),
         test_phone=b.get("test_phone"))
     return {"tenant_id": tenant_id, **result}
@@ -6172,7 +6172,7 @@ async def _process_stock_alerts(tenant_id: str, force: bool = False) -> int:
     today = _date.today().isoformat()
     if not force and _last_stock_alert.get(tenant_id) == today:
         return 0   # already alerted today
-    lines = "\n".join(f"• {p['name']} — {p.get('stock_quantity', 0)} left" for p in low[:20])
+    lines = "\n".join(f"• {p['name']} — {service.qty_text(p.get('stock_quantity', 0))} left" for p in low[:20])
     try:
         from vula.integrations.notify import notify_team
         # once a day per person even across restarts (the in-memory date alone resets on deploy)
@@ -7331,7 +7331,7 @@ async def admin_update_po_status(tenant_id: str, po_id: str, body: dict, request
         received = (body or {}).get("received")
         lines = received if isinstance(received, list) else (po.get("items") or [])
         for it in lines:
-            qty = int(round(float(it.get("quantity") or 0)))
+            qty = service.qty(it.get("quantity"))          # exact (migration 210): 2.5 kg arrives as 2.5
             if not it.get("product_id") or qty <= 0:
                 continue
             try:

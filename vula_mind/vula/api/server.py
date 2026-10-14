@@ -550,7 +550,7 @@ async def _send_low_stock_alert(only_tenant: str | None = None,
         # Itemized list filed in the log (unbounded length, can't fit a template); WhatsApp
         # gets a count-only summary via the approved template — staff open Vula for which items.
         log.info("%s low stock alert: %s", tenant_id,
-                 ", ".join(f"{p['name']} ({p.get('stock_quantity')})" for p in low))
+                 ", ".join(f"{p['name']} ({_commerce.qty_text(p.get('stock_quantity'))})" for p in low))
         tpl = template_override or _commerce_template_name(tenant_id, "low_stock_alert")
         for phone in phones:
             ok = await _send_wa_template(tenant_id, phone, tpl, str(len(low)))

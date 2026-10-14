@@ -153,8 +153,9 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                        "returns a preview (current vs. new quantity) instead of applying it — "
                        "only pass confirm=true after the owner has explicitly said to go ahead.",
         "parameters": {"type": "object", "properties": {
-            "product": {"type": "string"}, "quantity": {"type": "integer"},
-            "add": {"type": "integer", "description": "Add (e.g. 3) or remove (e.g. -2) instead of setting."},
+            "product": {"type": "string"},
+            "quantity": {"type": "number", "description": "Exact amount, e.g. 12 or 2.5 (kg)."},
+            "add": {"type": "number", "description": "Add (e.g. 3 or 1.5) or remove (e.g. -2) instead of setting."},
             "confirm": {"type": "boolean"}},
             "required": ["product"]},
     }},
@@ -2326,8 +2327,8 @@ class CommerceAdminSkill(BaseSkill):
             rows.append({"product": p["name"], "qty": qty, "in_stock": p.get("in_stock")})
         return rows or {"message": "All products well stocked." if low_only else "No products."}
 
-    async def _update_stock(self, tid: str, product_name: str, quantity: Optional[int], confirm: bool = False,
-                            actor: Optional[str] = None, add: Optional[int] = None,
+    async def _update_stock(self, tid: str, product_name: str, quantity: Optional[float], confirm: bool = False,
+                            actor: Optional[str] = None, add: Optional[float] = None,
                             product_id: Optional[str] = None, variant_id: Optional[str] = None) -> Dict[str, Any]:
         """Set (quantity) or add/remove (add) stock. product_id/variant_id are not offered to the
         model — they come from a scanned barcode (WhatsApp photo → lookup), so the Confirm tap
@@ -2351,35 +2352,37 @@ class CommerceAdminSkill(BaseSkill):
             current = next((v.get("stock_quantity") for v in (prod.get("commerce_product_variants") or [])
                             if v.get("id") == variant_id), current)
         use_add = quantity is None
-        target = max(0, int(current or 0) + int(add)) if use_add else int(quantity)
+        # Exact amounts (migration 210): 2.5 kg stays 2.5 — never rounded to a whole number.
+        q = service.qty
+        target = max(0.0, q(q(current or 0) + q(add))) if use_add else q(quantity)
         if not confirm:
             out = {"preview": True, "product": label, "current_stock": current, "new_stock": target,
                    "message": "Confirm to apply (call again with confirm=true)."}
             if use_add:
-                out["change"] = f"{int(add):+d}"
+                out["change"] = ("+" if q(add) >= 0 else "") + service.qty_text(add)
             return out
         # Atomic and recorded (migration 182) — who set it, from WhatsApp. An add goes in as a
         # delta so a sale landing between preview and confirm isn't overwritten.
-        kw = {"delta": int(add)} if use_add else {"set_to": int(quantity)}
+        kw = {"delta": q(add)} if use_add else {"set_to": q(quantity)}
         after = await service.adjust_stock(tid, prod["id"], variant_id=variant_id, reason="adjust",
                                            ref_type="whatsapp", actor=actor or "whatsapp", **kw)
-        expected = after if use_add else int(quantity)
+        expected = after if use_add else q(quantity)
         result = {"updated": label, "stock_quantity": expected}
         if settings.readback_verify_enabled and not variant_id:
             p2 = await service.get_product(tid, prod["id"])
             observed = (p2 or {}).get("stock_quantity")
             ok = (p2 is not None and observed is not None and expected is not None
-                  and int(observed) == int(expected))
+                  and abs(q(observed) - q(expected)) < 0.00005)
             _readback_gate(tid, "update_stock", ok,
                            {"product_id": prod["id"], "stock_quantity": expected},
                            {"stock_quantity": observed})
             if not ok:
                 return _not_confirmed(f"Stock update for {label} did not persist — the product "
                                       f"still shows {observed if observed is not None else 'unknown'}. Not confirmed.")
-            return _checked(result, f"✅ {label}: stock is now *{int(observed)}*.")
+            return _checked(result, f"✅ {label}: stock is now *{service.qty_text(observed)}*.")
         elif after is not None:
             # the RPC's own returned row is the read-back
-            return _checked(result, f"✅ {label}: stock is now *{int(after)}*.")
+            return _checked(result, f"✅ {label}: stock is now *{service.qty_text(after)}*.")
         return result
 
     async def _receive_stock(self, tid: str, lines: List[Dict[str, Any]], reference: Optional[str],
@@ -2395,9 +2398,9 @@ class CommerceAdminSkill(BaseSkill):
                 continue
             want = str(ln.get("product") or "").strip()
             try:
-                qty = int(round(float(ln.get("quantity") or 0)))
+                qty = service.qty(ln.get("quantity"))
             except (TypeError, ValueError):
-                qty = 0
+                qty = 0.0
             prod = None
             if ln.get("product_id"):
                 prod = next((p for p in candidates if p["id"] == ln["product_id"]), None)
@@ -2413,7 +2416,7 @@ class CommerceAdminSkill(BaseSkill):
                     "not_matched": unmatched}
         if not confirm:
             out = {"preview": True,
-                   "receiving": "; ".join(f"{q} × {p['name']} (now {p.get('stock_quantity') if p.get('stock_quantity') is not None else 'untracked'})"
+                   "receiving": "; ".join(f"{service.qty_text(q)} × {p['name']} (now {service.qty_text(p['stock_quantity']) if p.get('stock_quantity') is not None else 'untracked'})"
                                           for p, q, _ in matched),
                    "reference": reference,
                    "message": "Confirm to book these into stock (call again with confirm=true)."}
@@ -2428,7 +2431,7 @@ class CommerceAdminSkill(BaseSkill):
             if after is None:
                 failed.append(prod["name"])
                 continue
-            booked.append(f"{prod['name']} +{qty} → {after}")
+            booked.append(f"{prod['name']} +{service.qty_text(qty)} → {service.qty_text(after)}")
             try:
                 if cost is not None and float(cost) > 0:
                     service._client().table("commerce_products").update(
@@ -3033,7 +3036,7 @@ class CommerceAdminSkill(BaseSkill):
         if not supplier:
             return {"error": f"No supplier matching '{supplier_name}' — add them first with upsert_supplier."}
         items = [{"name": (it.get("name") or "").strip(),
-                  "quantity": int(it.get("quantity") or 0),
+                  "quantity": service.qty(it.get("quantity")),
                   "unit_cost_cents": int(round(float(it.get("unit_cost_rands") or 0) * 100))}
                  for it in (args.get("items") or []) if isinstance(it, dict) and it.get("name")]
         if not items:

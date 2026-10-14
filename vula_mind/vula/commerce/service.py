@@ -234,27 +234,42 @@ async def create_product(tenant_id: str, data: dict) -> dict:
     return result.data[0]
 
 
-async def update_product_stock(tenant_id: str, product_id: str, quantity_delta: int) -> None:
+def qty(value: Any) -> float:
+    """A stock quantity, exact to 4 places (migration 210: 2.5 kg, 0.25 l, 12 each) — never
+    rounded to a whole number. 0.0 when it isn't a number."""
+    try:
+        return round(float(value), 4)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def qty_text(value: Any) -> str:
+    """12, 2.5, 0.25 — no trailing ".0"."""
+    q = qty(value)
+    return str(int(q)) if q == int(q) else f"{q:g}"
+
+
+async def update_product_stock(tenant_id: str, product_id: str, quantity_delta: float) -> None:
     """Decrement stock by quantity_delta (positive reduces, negative restores). Raw SQL, race-safe."""
     _client().rpc(
-        "decrement_product_stock",
-        {"p_tenant_id": tenant_id, "p_product_id": product_id, "p_delta": quantity_delta},
+        "decrement_product_stock_exact",
+        {"p_tenant_id": tenant_id, "p_product_id": product_id, "p_delta": qty(quantity_delta)},
     ).execute()
 
 
-async def update_variant_stock(variant_id: str, quantity_delta: int) -> None:
+async def update_variant_stock(variant_id: str, quantity_delta: float) -> None:
     """Variant equivalent of update_product_stock (migration 087)."""
     _client().rpc(
-        "decrement_variant_stock",
-        {"p_variant_id": variant_id, "p_delta": quantity_delta},
+        "decrement_variant_stock_exact",
+        {"p_variant_id": variant_id, "p_delta": qty(quantity_delta)},
     ).execute()
 
 
 async def adjust_stock(tenant_id: str, product_id: str, *, variant_id: Optional[str] = None,
-                       delta: Optional[int] = None, set_to: Optional[int] = None,
+                       delta: Optional[float] = None, set_to: Optional[float] = None,
                        reason: str = "adjust", ref_type: Optional[str] = None,
                        ref_id: Optional[str] = None, actor: Optional[str] = None,
-                       note: Optional[str] = None) -> Optional[int]:
+                       note: Optional[str] = None) -> Optional[float]:
     """The one way stock changes outside checkout reservations (migration 182): sets (set_to) or
     adds (delta) stock for a product or one of its variants and records the movement, in one
     database statement — so two people counting or receiving at once never overwrite each
@@ -262,17 +277,17 @@ async def adjust_stock(tenant_id: str, product_id: str, *, variant_id: Optional[
     An untracked product becomes tracked the moment it's counted or received."""
     if set_to is None and delta is None:
         raise ValueError("adjust_stock needs delta or set_to")
-    res = _client().rpc("apply_stock_change", {
+    res = _client().rpc("apply_stock_change_exact", {
         "p_tenant_id": tenant_id, "p_product_id": product_id, "p_variant_id": variant_id,
-        "p_delta": int(delta) if delta is not None else None,
-        "p_set": int(set_to) if set_to is not None else None,
+        "p_delta": qty(delta) if delta is not None else None,
+        "p_set": qty(set_to) if set_to is not None else None,
         "p_reason": reason, "p_ref_type": ref_type, "p_ref_id": ref_id,
         "p_actor": actor, "p_note": note,
     }).execute()
     data = res.data
     if isinstance(data, list):
         data = data[0] if data else None
-    return int(data) if data is not None else None
+    return qty(data) if data is not None else None
 
 
 async def list_stock_movements(tenant_id: str, product_id: str, variant_id: Optional[str] = None,
@@ -284,14 +299,14 @@ async def list_stock_movements(tenant_id: str, product_id: str, variant_id: Opti
     return q.order("created_at", desc=True).limit(limit).execute().data or []
 
 
-def _record_movement(tenant_id: str, product_id: str, variant_id: Optional[str], delta: int,
+def _record_movement(tenant_id: str, product_id: str, variant_id: Optional[str], delta: float,
                      reason: str, ref_type: str, ref_id: str) -> None:
     """Movement row for a change already applied by another race-safe RPC (order sales/refunds
     use decrement_*). Best-effort: the stock change itself has already happened."""
     try:
         _client().table("commerce_stock_movements").insert({
             "tenant_id": tenant_id, "product_id": product_id, "variant_id": variant_id,
-            "delta": int(delta), "reason": reason, "ref_type": ref_type, "ref_id": ref_id,
+            "delta": qty(delta), "reason": reason, "ref_type": ref_type, "ref_id": ref_id,
             "actor": "system"}).execute()
     except Exception as exc:
         logger.debug("stock movement log skipped (run migration 182?): %s", exc)
@@ -305,12 +320,12 @@ class OutOfStockError(ValueError):
     in the same checkout is restored before this is raised, so a failed
     checkout never leaves partial stock held against no order.
     """
-    def __init__(self, product_name: str, available: Optional[int] = None):
+    def __init__(self, product_name: str, available: Optional[float] = None):
         self.product_name = product_name
         self.available = available
         msg = f"'{product_name}' doesn't have enough stock available."
         if available is not None:
-            msg = f"'{product_name}' only has {available} left in stock."
+            msg = f"'{product_name}' only has {qty_text(available)} left in stock."
         super().__init__(msg)
 
 
@@ -323,36 +338,36 @@ async def _reserve_cart_stock(tenant_id: str, items: list) -> None:
     is restored and OutOfStockError is raised — the caller must not insert
     the order in that case.
     """
-    reserved: list[tuple[Optional[str], Optional[str], int]] = []  # (product_id, variant_id, qty)
+    reserved: list[tuple[Optional[str], Optional[str], float]] = []  # (product_id, variant_id, qty)
     try:
         for it in items:
             pid = it.get("product_id")
             if not pid:
                 continue
-            qty = int(round(float(it.get("quantity") or 0)))
-            if qty <= 0:
+            q = qty(it.get("quantity"))
+            if q <= 0:
                 continue
             vid = it.get("variant_id")
             if vid:
                 ok = _client().rpc(
-                    "reserve_variant_stock", {"p_variant_id": vid, "p_qty": qty}
+                    "reserve_variant_stock_exact", {"p_variant_id": vid, "p_qty": q}
                 ).execute().data
             else:
                 ok = _client().rpc(
-                    "reserve_product_stock",
-                    {"p_tenant_id": tenant_id, "p_product_id": pid, "p_qty": qty},
+                    "reserve_product_stock_exact",
+                    {"p_tenant_id": tenant_id, "p_product_id": pid, "p_qty": q},
                 ).execute().data
             if not ok:
                 name = it.get("commerce_products", {}).get("name") or "This item"
                 raise OutOfStockError(name)
-            reserved.append((pid, vid, qty))
+            reserved.append((pid, vid, q))
     except OutOfStockError:
-        for pid, vid, qty in reserved:
+        for pid, vid, q in reserved:
             try:
                 if vid:
-                    await update_variant_stock(vid, -qty)
+                    await update_variant_stock(vid, -q)
                 else:
-                    await update_product_stock(tenant_id, pid, -qty)
+                    await update_product_stock(tenant_id, pid, -q)
             except Exception as exc:
                 logger.error("stock rollback failed for product %s variant %s: %s", pid, vid, exc)
         raise
@@ -383,10 +398,10 @@ async def apply_order_stock(order_id: str, *, restore: bool = False) -> bool:
         pid = it.get("product_id")
         if not pid:
             continue
-        qty = int(round(float(it.get("quantity") or 0)))
-        if qty <= 0:
+        q = qty(it.get("quantity"))
+        if q <= 0:
             continue
-        delta = -qty if restore else qty   # positive decrements; negative restores
+        delta = -q if restore else q   # positive decrements; negative restores
         vid = it.get("variant_id")
         try:
             if vid:
@@ -784,15 +799,15 @@ async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear
             pid = it.get("product_id")
             if not pid:
                 continue
-            qty = int(round(float(it.get("quantity") or 0)))
-            if qty <= 0:
+            q = qty(it.get("quantity"))
+            if q <= 0:
                 continue
             vid = it.get("variant_id")
             try:
                 if vid:
-                    await update_variant_stock(vid, -qty)
+                    await update_variant_stock(vid, -q)
                 else:
-                    await update_product_stock(tenant_id, pid, -qty)
+                    await update_product_stock(tenant_id, pid, -q)
             except Exception as rexc:
                 logger.error("stock rollback failed after order-insert failure for product %s variant %s: %s",
                              pid, vid, rexc)

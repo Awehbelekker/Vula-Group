@@ -98,7 +98,7 @@ class _FakeSupabase:
             key = (params["p_tenant_id"], params["p_counter_key"])
             counters[key] = counters.get(key, 0) + 1
             return _RpcCall(counters[key])
-        if name == "reserve_product_stock":
+        if name == "reserve_product_stock_exact":
             self.reserve_calls.append(("product", params["p_product_id"], params["p_qty"]))
             p = self.products[params["p_product_id"]]
             qty = p.get("stock_quantity")
@@ -108,7 +108,7 @@ class _FakeSupabase:
                 p["stock_quantity"] = qty - params["p_qty"]
                 return _RpcCall(True)
             return _RpcCall(False)
-        if name == "reserve_variant_stock":
+        if name == "reserve_variant_stock_exact":
             self.reserve_calls.append(("variant", params["p_variant_id"], params["p_qty"]))
             v = self.variants[params["p_variant_id"]]
             qty = v.get("stock_quantity")

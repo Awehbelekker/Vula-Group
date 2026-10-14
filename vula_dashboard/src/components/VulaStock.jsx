@@ -22,6 +22,9 @@ import { useAuthStore } from '../store/auth'
 import { Card, Button, Badge, SectionTabs, EmptyState, inputStyle, toast, confirmDialog } from './ui/index.jsx'
 import { T } from '../theme/tokens'
 
+// Exact amounts (migration 210): 2.5 kg stays 2.5 — never rounded to a whole number.
+export const toQty = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? NaN : Math.round(n * 10000) / 10000 }
+
 const H = { 'Content-Type': 'application/json' }   // JWT attached by lib/authFetch
 
 async function api(tenantId, path, opts = {}) {
@@ -407,8 +410,8 @@ function CountSession({ tenantId, products, countId, full, review, setReview, on
             {lines.map(([k, l]) => (
               <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: `1px solid ${T.border}` }}>
                 <div style={{ flex: 1, fontSize: 13.5 }}>{l.name}</div>
-                <input type="number" min="0" value={l.counted} style={{ ...inputStyle, width: 80, padding: '5px 8px' }}
-                       onChange={e => { const v = parseInt(e.target.value, 10); if (!isNaN(v) && v >= 0) record({ product: { id: l.pid, name: l.name }, variant: l.vid ? { id: l.vid } : null }, { set: v }) }} />
+                <input type="number" min="0" step="any" value={l.counted} style={{ ...inputStyle, width: 80, padding: '5px 8px' }}
+                       onChange={e => { const v = toQty(e.target.value); if (!isNaN(v) && v >= 0) record({ product: { id: l.pid, name: l.name }, variant: l.vid ? { id: l.vid } : null }, { set: v }) }} />
               </div>))}
           </Card>)}
         <Button disabled={busy} onClick={openReview}>Review count</Button>
@@ -493,8 +496,8 @@ function Receive({ tenantId, products }) {
           {rows.map(([k, l]) => (
             <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: `1px solid ${T.border}` }}>
               <div style={{ flex: 1, fontSize: 13.5 }}>{l.name}{l.ordered != null && <span style={{ color: T.muted }}> · ordered {l.ordered}</span>}</div>
-              <input type="number" min="0" value={l.qty} style={{ ...inputStyle, width: 80, padding: '5px 8px' }}
-                     onChange={e => { const v = Math.max(0, parseInt(e.target.value, 10) || 0); setLines(ls => ({ ...ls, [k]: { ...ls[k], qty: v } })) }} />
+              <input type="number" min="0" step="any" value={l.qty} style={{ ...inputStyle, width: 80, padding: '5px 8px' }}
+                     onChange={e => { const v = Math.max(0, toQty(e.target.value) || 0); setLines(ls => ({ ...ls, [k]: { ...ls[k], qty: v } })) }} />
             </div>))}
         </Card>)}
       <Button disabled={busy} onClick={book}>Book into stock</Button>
@@ -527,7 +530,7 @@ function QuickAdjust({ tenantId, products }) {
   }, [resolve, show])
 
   async function save(kind) {
-    const n = parseInt(val, 10)
+    const n = toQty(val)
     if (isNaN(n)) { setMsg('Type a number first.'); return }
     try {
       const r = await api(tenantId, '/stock/adjust', { method: 'POST', body: JSON.stringify({

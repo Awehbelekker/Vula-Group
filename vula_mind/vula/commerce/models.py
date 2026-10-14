@@ -53,7 +53,7 @@ class Product(BaseModel):
     weight_grams: Optional[int] = None
     serves: Optional[str] = None   # e.g. "2–3 people"
     in_stock: bool = True
-    stock_quantity: Optional[int] = None
+    stock_quantity: Optional[float] = None   # exact: 2.5 kg (migration 210)
     image_url: Optional[str] = None
     catch_source: Optional[str] = None   # "Hout Bay" / "Kalk Bay"
     fisherman_name: Optional[str] = None
@@ -74,7 +74,7 @@ class ProductCreate(BaseModel):
     price_cents: int
     weight_grams: Optional[int] = None
     serves: Optional[str] = None
-    stock_quantity: Optional[int] = None
+    stock_quantity: Optional[float] = None   # exact: 2.5 kg (migration 210)
     image_url: Optional[str] = None
     catch_source: Optional[str] = None
     fisherman_name: Optional[str] = None
@@ -101,7 +101,7 @@ class ProductCreate(BaseModel):
 class CartItem(BaseModel):
     product_id: UUID
     product_name: str
-    quantity: int
+    quantity: float
     unit_price_cents: int
     total_cents: int
 
@@ -124,16 +124,16 @@ class Cart(BaseModel):
 
 class AddToCartRequest(BaseModel):
     product_id: UUID
-    quantity: int = 1
+    quantity: float = 1             # 1.5 for a product sold by the kilo
     variant_id: Optional[UUID] = None
     customer_phone: Optional[str] = None
 
     @field_validator("quantity")
     @classmethod
-    def qty_positive(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("quantity must be at least 1")
-        return v
+    def qty_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("quantity must be more than 0")
+        return round(v, 4)
 
 
 # ── Orders ───────────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ class AddToCartRequest(BaseModel):
 class OrderItem(BaseModel):
     product_id: UUID
     product_name: str
-    quantity: int
+    quantity: float
     unit_price_cents: int
     total_cents: int
     catch_source: Optional[str] = None

@@ -134,7 +134,7 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
         method: 'POST', headers: H, body: JSON.stringify({ lines }) })
       const d = await r.json()
       setLineMatches((d.lines || []).map(l => ({ ...l, product_id: l.match?.product_id || '',
-        qty: Math.max(0, Math.round(Number(l.quantity) || 0)), include: !!l.match })))
+        qty: Math.max(0, Math.round((Number(l.quantity) || 0) * 10000) / 10000), include: !!l.match })))
     } catch { setLineMatches([]) }
   }
 
@@ -330,7 +330,7 @@ export default function VulaSmartScanner({ tenantId, products = [], onExpenseCre
                       </select>
                     </div>
                     {detectedType !== 'price_list' && (
-                      <input type="number" min="0" value={l.qty} onChange={e => updateLine(i, { qty: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                      <input type="number" min="0" step="any" value={l.qty} onChange={e => updateLine(i, { qty: Math.max(0, Math.round((parseFloat(e.target.value) || 0) * 10000) / 10000) })}
                              style={{ width: 60, fontSize: 12, padding: 3 }} />)}
                   </div>
                 ))}
