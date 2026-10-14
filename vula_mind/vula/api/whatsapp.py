@@ -5850,6 +5850,18 @@ async def _rag_reply(tenant_id: str, question: str, conversation_history: str = 
                 _LAST_CONF.set(1.0)
                 _note_route("profile_interview")
                 return profile_reply
+            # "set up costing" (Manufacturing module): one question at a time, prices from past
+            # invoices and labour/running costs from the bank offered for the owner to confirm.
+            try:
+                from vula.commerce import costing_setup
+                costing_reply = await costing_setup.handle(tenant_id, phone, question)
+            except Exception as exc:
+                logger.debug("costing setup skipped: %s", exc)
+                costing_reply = None
+            if costing_reply:
+                _LAST_CONF.set(1.0)
+                _note_route("costing_setup")
+                return costing_reply
         alias_reply = await _maybe_learn_supplier_alias(tenant_id, question)
         if alias_reply:
             _LAST_CONF.set(1.0)
@@ -7685,6 +7697,15 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
             profile_reply = None
         if profile_reply:
             await _send_reply(phone, profile_reply, tenant_id)
+            return True
+        try:
+            from vula.commerce import costing_setup
+            costing_reply = await costing_setup.handle(tenant_id, phone, text)
+        except Exception as exc:
+            logger.debug("costing setup skipped: %s", exc)
+            costing_reply = None
+        if costing_reply:
+            await _send_reply(phone, costing_reply, tenant_id)
             return True
 
     admin_session_key = f"admin:{phone}"

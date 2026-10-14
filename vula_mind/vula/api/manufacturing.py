@@ -171,3 +171,53 @@ async def mfg_reverse_batch(tenant_id: str, run_id: str, request: Request):
         raise HTTPException(status_code=400, detail="That batch couldn't be reversed "
                                                     f"({res.get('error') or back.get('status')}).")
     return {"reversed": run_id, "message": "Batch reversed: materials are back in stock and the units are off."}
+
+
+# ── Starting from history: prices from past invoices, labour/running costs from the bank ───
+
+def _material(tenant_id: str, material_id: str) -> Dict[str, Any]:
+    m = costing.materials_by_id(tenant_id).get(str(material_id))
+    if not m:
+        raise HTTPException(status_code=404, detail="Material not found")
+    return m
+
+
+@router.get("/{tenant_id}/admin/mfg/materials/{material_id}/suggest")
+async def mfg_price_suggest(tenant_id: str, material_id: str):
+    """What past supplier invoices say this material costs — for the owner to pick from."""
+    from vula.commerce import costing_history as hist
+    m = _material(tenant_id, material_id)
+    sug = hist.price_suggestions(tenant_id, m["name"], material=m)
+    return _jsonable({"material": m["name"], "suggestions": [
+        {**s, "line": hist.suggestion_line(s), "per_unit": hist.show_unit_cost(s["unit_cost"], s["base_unit"])}
+        for s in sug]})
+
+
+@router.post("/{tenant_id}/admin/mfg/materials/{material_id}/price")
+async def mfg_price_set(tenant_id: str, material_id: str, body: dict, request: Request):
+    """{pick} — the n-th suggestion (1 = best) — or {total_cents, qty, unit}: what the owner pays."""
+    b = body or {}
+    m = _material(tenant_id, material_id)
+    try:
+        return _done(mfg.price_material(tenant_id, m["name"], pick=b.get("pick"), total_cents=b.get("total_cents"),
+                                        qty=b.get("qty"), unit=b.get("unit"), actor=_actor(request), confirm=True))
+    except CostingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/{tenant_id}/admin/mfg/settings/suggest")
+async def mfg_settings_suggest(tenant_id: str, hours_per_week: float | None = None,
+                               batches_per_month: float | None = None, units_per_month: float | None = None):
+    """Labour and running costs a month from the bank (lines not on a project, last 90 days), and
+    what they come to per hour / batch / unit for the counts the owner gives."""
+    from vula.commerce import costing_history as hist
+    b = hist.bank_suggestions(tenant_id)
+    hpm = hist.hours_per_month(hours_per_week) if hours_per_week else None
+    return _jsonable({
+        **b, "overhead_by_account": [{"label": k, "monthly_cents": v} for k, v in b["overhead_by_account"]],
+        "hours_per_month": hpm,
+        "labour_rate_cents": hist.per(b["labour_monthly_cents"], hpm),
+        "overhead_per_hour_cents": hist.per(b["overhead_monthly_cents"], hpm),
+        "overhead_per_batch_cents": hist.per(b["overhead_monthly_cents"], batches_per_month),
+        "overhead_per_unit_cents": hist.per(b["overhead_monthly_cents"], units_per_month),
+    })

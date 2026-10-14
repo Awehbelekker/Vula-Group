@@ -89,8 +89,80 @@ def add_material(tenant_id: str, name: str, unit: str, *, pack_size: Any = None,
     if back.get("unit_cost") is not None:
         text += f" Cost so far: {_per_unit_text(back)}."
     else:
-        text += " No price yet — tell me when a delivery comes in, e.g. \"got 2 bags for R190\"."
+        text += " No price yet." + _invoice_hint(tenant_id, back)
     return {"added": back["name"], "verified": True, "reply_verbatim": text}
+
+
+def _invoice_hint(tenant_id: str, material: Dict[str, Any], rows: Optional[list] = None) -> str:
+    """What past invoices suggest for an unpriced material, as a line to add to a reply."""
+    from vula.commerce import costing_history as hist
+    try:
+        sug = hist.price_suggestions(tenant_id, material["name"], material=material, limit=1, rows=rows)
+    except Exception as exc:
+        log.debug("invoice price hint skipped: %s", exc)
+        sug = []
+    if not sug:
+        return (f" Tell me what you pay, e.g. \"{material['name']} costs R95 for a 25 kg bag\", "
+                "or book a delivery: \"got 2 bags for R190\".")
+    return (f"\n💡 Your invoices show {hist.suggestion_line(sug[0])}. "
+            f"Say *use the invoice price for {material['name']}* to set it.")
+
+
+def price_material(tenant_id: str, material: str, *, pick: Optional[int] = None, total_cents: Optional[int] = None,
+                   qty: Any = None, unit: Optional[str] = None, actor: Optional[str] = None,
+                   confirm: bool = False) -> Dict[str, Any]:
+    """Set what a material costs — from a past invoice (pick = which suggestion, 1 = best) or
+    from what the owner says ("R95 for a 25 kg bag"). Without either, lists what the invoices
+    show. Preview → confirm → read back, like every change."""
+    from vula.commerce import costing_history as hist
+    m = costing.find_material(tenant_id, material)
+    if not m:
+        return {"error": f"No material called '{material}' — add it first (e.g. \"add material {material}, measured in kg\")."}
+    chosen, key, note, pack = None, None, None, None
+    if total_cents is not None:
+        if qty is None:
+            qty, unit = 1, unit or m["base_unit"]
+        u = (unit or m["base_unit"]).strip().lower()
+        base_qty = costing.to_base(qty, u, m)
+        if base_qty <= 0:
+            return {"error": "How much does that price buy?"}
+        chosen = (Decimal(int(total_cents)) / 100 / base_qty)
+        note = f"owner: {rands(int(total_cents))} for {costing._n(qty)} {u}"
+    else:
+        sug = hist.price_suggestions(tenant_id, m["name"], material=m)
+        if not sug:
+            return {"status": "need_info",
+                    "message": f"I found nothing like {m['name']} on your invoices. What do you pay for it "
+                               f"(e.g. \"R95 for a 25 kg bag\")?"}
+        if not pick:
+            return {"status": "need_info", "suggestions": [hist.suggestion_line(x, i + 1) for i, x in enumerate(sug)],
+                    "message": "Which invoice item is it (pick 1–%d), or what do you pay?" % len(sug)}
+        if not 1 <= int(pick) <= len(sug):
+            return {"error": f"Pick 1 to {len(sug)}."}
+        s = sug[int(pick) - 1]
+        chosen, key = s["unit_cost"], s["key"]
+        note = f"invoice: {s['description']} {rands(s['invoice_price_cents'])} ({s.get('supplier') or '?'}, {s.get('latest_on') or '?'})"
+        if s.get("pack_size") and not m.get("pack_size"):
+            pack = (s["pack_size"], s["pack_unit"])
+    shown = hist.show_unit_cost(chosen, m["base_unit"])
+    if not confirm:
+        out = {"preview": True, "material": m["name"], "price": shown, "from": note,
+               "message": "Confirm to set this price (call again with confirm=true)."}
+        if pack:
+            out["pack"] = f"{costing._n(pack[0])} {pack[1]} (from the invoice wording)"
+        return out
+    back = hist.set_price(tenant_id, m, chosen, key=key, note=note, actor=actor)
+    if pack:
+        try:
+            costing._db().table("commerce_materials").update(
+                {"pack_size": float(pack[0]), "pack_unit": pack[1]}).eq("tenant_id", tenant_id) \
+                .eq("id", m["id"]).execute()
+        except Exception as exc:
+            log.debug("pack size not saved: %s", exc)
+    text = f"✅ {back['name']}: {_per_unit_text(back)}"
+    if pack:
+        text += f" (packs of {costing._n(pack[0])} {pack[1]})"
+    return {"priced": back["name"], "verified": True, "reply_verbatim": text + "."}
 
 
 def _per_unit_text(m: Dict[str, Any]) -> str:
@@ -181,6 +253,14 @@ async def set_recipe(tenant_id: str, product: str, ingredients: List[Dict[str, A
                 "reply_verbatim": "⚠️ The recipe couldn't be confirmed on read-back — please check Costing."}
     sheet = costing.cost_sheet(tenant_id, prod)
     text = f"✅ Recipe saved for *{prod['name']}* (version {back['version']}).\n\n" + costing.cost_sheet_text(sheet)
+    unpriced = [ln["material"] for ln in lines if ln["material"].get("unit_cost") is None]
+    if unpriced:
+        from vula.commerce import costing_history as hist
+        try:
+            rows = hist.material_rows(tenant_id)
+        except Exception:
+            rows = []
+        text += "\n" + "".join(_invoice_hint(tenant_id, mat, rows) for mat in unpriced[:4])
     return {"recipe": prod["name"], "version": back["version"], "verified": True, "reply_verbatim": text}
 
 

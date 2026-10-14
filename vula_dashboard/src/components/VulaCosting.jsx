@@ -67,7 +67,7 @@ export default function VulaCosting({ tenantId }) {
       {tab === 'batches' && <Batches data={data} call={call} reload={load} />}
       {tab === 'settings' && <Settings data={data} call={call} reload={load} />}
       <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 14 }}>
-        Tip: all of this works on WhatsApp too — "got 2 bags concrete mix for R190", "made 12 round basins, 1 reject, 6 hours", "what does a round basin cost us?".
+        Tip: all of this works on WhatsApp too — send <b>set up costing</b> and Vula asks one question at a time, using your invoices and bank statements. Or just say "got 2 bags concrete mix for R190", "made 12 round basins, 1 reject, 6 hours", "what does a round basin cost us?".
       </p>
     </div>
   )
@@ -197,6 +197,7 @@ function RecipeEditor({ data, call, productId, onDone }) {
 function Materials({ data, call, reload }) {
   const [add, setAdd] = useState({ name: '', unit: 'kg', pack_size: '', pack_unit: 'kg' })
   const [rec, setRec] = useState({ material: '', qty: '', unit: 'kg', total: '' })
+  const [pricing, setPricing] = useState(null)
   const [busy, setBusy] = useState(false)
   async function addMaterial() {
     if (!add.name.trim()) return
@@ -226,7 +227,11 @@ function Materials({ data, call, reload }) {
           { key: 'stock', label: 'On hand', align: 'right', render: m => <span style={{ color: Number(m.stock_qty) < 0 ? 'var(--danger)' : undefined }}>{showQty(m.stock_qty, m.base_unit)}</span> },
           { key: 'cost', label: 'Average cost', align: 'right', render: m => perUnit(m) || <Badge tone="warn">no price yet</Badge> },
           { key: 'pack', label: 'Pack', render: m => m.pack_size ? `${+m.pack_size} ${m.pack_unit}` : '—' },
+          { key: 'find', label: '', align: 'right', render: m => (
+            <Button variant={m.unit_cost == null ? 'soft' : 'ghost'} size="sm" onClick={() => setPricing(m)}>
+              {m.unit_cost == null ? 'Find price' : 'Change price'}</Button>) },
         ]} />
+      {pricing && <PriceFinder m={pricing} call={call} onDone={() => { setPricing(null); reload() }} />}
       <Card>
         <b>Book a delivery</b>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '2px 0 10px' }}>What arrived and what it cost in total (excluding VAT you can claim back). The average cost updates.</p>
@@ -312,6 +317,90 @@ function Batches({ data, call, reload }) {
 }
 
 // ── Labour & overhead ───────────────────────────────────────────────────────────────────
+// What past supplier invoices say a material costs — the owner picks one, or types what they pay.
+function PriceFinder({ m, call, onDone }) {
+  const [sug, setSug] = useState(null)
+  const [own, setOwn] = useState({ total: '', qty: '', unit: m.base_unit === 'g' ? 'kg' : m.base_unit === 'ml' ? 'l' : m.base_unit })
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    call(`/materials/${m.id}/suggest`, 'GET').then(d => setSug(d.suggestions || [])).catch(() => setSug([]))
+  }, [m.id])  // eslint-disable-line
+  async function save(body) {
+    setBusy(true)
+    try { const d = await call(`/materials/${m.id}/price`, 'POST', body); toast(d.message || 'Price set'); onDone() }
+    catch (e) { toast(e.message, 'danger') }
+    setBusy(false)
+  }
+  function saveOwn() {
+    const total = Number(String(own.total).replace(/[R,\s]/g, ''))
+    if (!total || !Number(own.qty)) { toast('Price and amount, please', 'danger'); return }
+    save({ total_cents: Math.round(total * 100), qty: Number(own.qty), unit: own.unit })
+  }
+  return (
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <b>Price for {m.name}</b><Button variant="ghost" size="sm" onClick={onDone}>Close</Button>
+      </div>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '2px 0 10px' }}>From your supplier invoices — VAT is taken off or left on depending on how each invoice was priced and whether you're VAT registered. Pick the right item, or type what you pay.</p>
+      {sug == null ? <Skeleton height={60} /> : sug.length === 0
+        ? <p style={{ fontSize: 13 }}>Nothing like {m.name} on your invoices yet.</p>
+        : sug.map((x, i) => (
+          <div key={x.key} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+            <div style={{ flex: 1, fontSize: 13 }}>
+              <b>{x.description}</b> — {R(x.invoice_price_cents)}
+              <div style={{ color: 'var(--muted)', fontSize: 12 }}>{[x.supplier, x.latest_on].filter(Boolean).join(' · ')}{x.observations > 1 ? ` · ${x.observations} times, ${R(x.low_cents)}–${R(x.high_cents)}` : ''}{x.vat_note ? ` · ${x.vat_note}` : ''}</div>
+            </div>
+            <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{x.per_unit}</span>
+            <Button size="sm" disabled={busy} onClick={() => save({ pick: i + 1 })}>Use</Button>
+          </div>))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginTop: 12 }}>
+        <Input placeholder="Price R" value={own.total} onChange={e => setOwn({ ...own, total: e.target.value })} />
+        <Input type="number" step="any" min="0" placeholder="for how much" value={own.qty} onChange={e => setOwn({ ...own, qty: e.target.value })} />
+        <Select value={own.unit} onChange={e => setOwn({ ...own, unit: e.target.value })}>{UNITS.map(u => <option key={u}>{u}</option>)}{m.pack_size ? <option value="pack">pack</option> : null}</Select>
+        <Button variant="soft" disabled={busy} onClick={saveOwn}>Set my price</Button>
+      </div>
+    </Card>
+  )
+}
+
+// Labour and running costs from the bank, turned into a rate for the counts the owner gives.
+function BankSuggest({ call, onUse }) {
+  const [q, setQ] = useState({ hours: '', batches: '', units: '' })
+  const [b, setB] = useState(null)
+  const look = useCallback(() => {
+    const p = new URLSearchParams()
+    if (q.hours) p.set('hours_per_week', q.hours)
+    if (q.batches) p.set('batches_per_month', q.batches)
+    if (q.units) p.set('units_per_month', q.units)
+    call(`/settings/suggest?${p}`, 'GET').then(setB).catch(() => setB({ error: true }))
+  }, [q, call])
+  useEffect(() => { look() }, [])  // eslint-disable-line
+  if (!b) return <Skeleton height={60} />
+  if (b.error) return null
+  if (!b.labour_monthly_cents && !b.overhead_monthly_cents) return (
+    <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>No wages or running costs on your bank statements yet — upload a statement in Finances and I'll suggest these.</p>)
+  return (
+    <div style={{ background: 'var(--surface-alt)', borderRadius: 10, padding: 12, marginBottom: 14 }}>
+      <b style={{ fontSize: 13.5 }}>From your bank (since {b.since})</b>
+      <p style={{ fontSize: 13, margin: '6px 0' }}>
+        {b.labour_monthly_cents ? <>Wages & casual labour about <b>{R(b.labour_monthly_cents)}</b> a month. </> : null}
+        {b.overhead_monthly_cents ? <>Running costs about <b>{R(b.overhead_monthly_cents)}</b> a month ({b.overhead_by_account.slice(0, 5).map(a => `${a.label} ${R(a.monthly_cents)}`).join(' · ')}).</> : null}
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+        <Field label="Team hours a week (all)"><Input type="number" min="0" value={q.hours} onChange={e => setQ({ ...q, hours: e.target.value })} /></Field>
+        <Field label="Batches a month"><Input type="number" min="0" value={q.batches} onChange={e => setQ({ ...q, batches: e.target.value })} /></Field>
+        <Field label="Units made a month"><Input type="number" min="0" value={q.units} onChange={e => setQ({ ...q, units: e.target.value })} /></Field>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+        <Button variant="ghost" size="sm" onClick={look}>Work it out</Button>
+        {b.labour_rate_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ labour: b.labour_rate_cents })}>Labour {R(b.labour_rate_cents)}/h</Button>}
+        {b.overhead_per_hour_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ rule: 'per_labour_hour', rate: b.overhead_per_hour_cents })}>Overhead {R(b.overhead_per_hour_cents)}/labour hour</Button>}
+        {b.overhead_per_batch_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ rule: 'per_run', rate: b.overhead_per_batch_cents })}>Overhead {R(b.overhead_per_batch_cents)}/batch</Button>}
+        {b.overhead_per_unit_cents != null && <Button variant="soft" size="sm" onClick={() => onUse({ rule: 'per_unit', rate: b.overhead_per_unit_cents })}>Overhead {R(b.overhead_per_unit_cents)}/unit</Button>}
+      </div>
+    </div>)
+}
+
 function Settings({ data, call, reload }) {
   const s = data.settings || {}
   const [f, setF] = useState({ labour: s.labour_rate_cents ? (s.labour_rate_cents / 100).toString() : '',
@@ -330,6 +419,9 @@ function Settings({ data, call, reload }) {
   return (
     <Card>
       <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>Labour is costed at this hourly rate. Overheads (rent, power, tooling wear) are shared by the one rule you pick — it shows on every cost sheet.</p>
+      <BankSuggest call={call} onUse={u => setF(cur => ({ ...cur,
+        ...(u.labour != null ? { labour: (u.labour / 100).toFixed(2) } : {}),
+        ...(u.rule ? { rule: u.rule, rate: (u.rate / 100).toFixed(2) } : {}) }))} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         <Field label="Labour rate per hour (R)"><Input type="number" step="any" min="0" value={f.labour} onChange={e => setF({ ...f, labour: e.target.value })} /></Field>
         <Field label="Overhead rule"><Select value={f.rule} onChange={e => setF({ ...f, rule: e.target.value })}>{RULES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
