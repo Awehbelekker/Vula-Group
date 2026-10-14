@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { SectionTabs, toast, confirmDialog, Skeleton, ErrorCard } from './ui/index.jsx'
+import { toQty } from './VulaStock'
 import { useSectionTabs } from '../hooks/useSectionTabs'
 import { MERCHANT_GROUPS } from '../navConfig.jsx'
 import { useAuthStore } from '../store/auth'
@@ -1759,15 +1760,15 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
 
   function saveDetails() {
     const upd = { name: f.name.trim() || p.name, category: f.category, sold_by: f.sold_by }
-    if (f.stock !== '' && !isNaN(parseInt(f.stock))) upd.stock_quantity = parseInt(f.stock)
+    if (f.stock !== '' && !isNaN(toQty(f.stock))) upd.stock_quantity = toQty(f.stock)
     const saleC = f.sale === '' ? null : Math.round(parseFloat(f.sale) * 100)
     upd.sale_price_cents = (saleC && saleC > 0) ? saleC : null
     upd.sale_ends_at = f.saleEnds ? `${f.saleEnds}T23:59:59+02:00` : null
     if (f.weight !== '') upd.weight_grams = parseInt(f.weight) || null
     if (f.packSize !== '') upd.pack_size = f.packSize
     if (f.serves !== '') upd.serves = parseInt(f.serves) || null
-    upd.reorder_threshold = f.reorderThreshold === '' ? null : parseInt(f.reorderThreshold) || null
-    upd.reorder_qty = f.reorderQty === '' ? null : parseInt(f.reorderQty) || null
+    upd.reorder_threshold = f.reorderThreshold === '' ? null : toQty(f.reorderThreshold) || null
+    upd.reorder_qty = f.reorderQty === '' ? null : toQty(f.reorderQty) || null
     upd.default_supplier_id = f.defaultSupplierId || null
     upd.pricing_mode = f.pricingMode
     const byWeight = f.pricingMode === 'by_weight'
@@ -1821,7 +1822,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
             <option value="pack">per pack / item</option><option value="kg">per kg</option>
           </select></div>
         <div><span style={lbl}>Stock on hand (blank = untracked)</span>
-          <input type="number" value={f.stock} onChange={e => set('stock', e.target.value)} placeholder="e.g. 12" style={{ ...inp, width: '100%' }} /></div>
+          <input type="number" step="any" value={f.stock} onChange={e => set('stock', e.target.value)} placeholder="e.g. 12 or 2.5" style={{ ...inp, width: '100%' }} /></div>
         <div><span style={lbl}>Status</span>
           <select value={f.status} onChange={e => set('status', e.target.value)} style={{ ...inp, width: '100%' }}>
             <option value="active">Active — visible everywhere</option>
@@ -1918,7 +1919,7 @@ function ProductEditPanel({ tenantId, product: p, patch, saving, deleteProduct, 
       <SectionLabel>Stock &amp; reordering <span style={{ fontWeight: 400, color: 'var(--muted)' }}>— optional, for your own supply planning</span></SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <div><span style={lbl}>🔔 Reorder when stock ≤</span>
-          <input type="number" value={f.reorderThreshold} onChange={e => set('reorderThreshold', e.target.value)} placeholder="e.g. 5" style={{ ...inp, width: '100%' }} /></div>
+          <input type="number" step="any" value={f.reorderThreshold} onChange={e => set('reorderThreshold', e.target.value)} placeholder="e.g. 5" style={{ ...inp, width: '100%' }} /></div>
         <div><span style={lbl}>Reorder quantity</span>
           <input type="number" value={f.reorderQty} onChange={e => set('reorderQty', e.target.value)} placeholder="e.g. 20" style={{ ...inp, width: '100%' }} /></div>
         <div><span style={lbl}>Default supplier</span>
@@ -2105,7 +2106,7 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
         sku: newVariant.sku || null,
         barcode: newVariant.barcode || null,
         price_cents: newVariant.price ? Math.round(parseFloat(newVariant.price) * 100) || null : null,
-        stock_quantity: (newVariant.stock !== undefined && newVariant.stock !== '') ? parseInt(newVariant.stock) : null,
+        stock_quantity: (newVariant.stock !== undefined && newVariant.stock !== '') ? toQty(newVariant.stock) : null,
       }),
     })
     if (!r.ok) {
@@ -2119,7 +2120,7 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
   }
 
   async function applyBulkStock() {
-    const qty = parseInt(bulkStock)
+    const qty = toQty(bulkStock)
     if (bulkStock === '' || isNaN(qty)) return
     await Promise.all(variants.map(v => fetch(
       `${VULA_API}/v1/commerce/${tenantId}/admin/products/${productId}/variants/${v.id}`,
@@ -2198,13 +2199,13 @@ function VariantsEditor({ tenantId, productId, basePriceCents, options, supplier
                                style={{ ...inp, width: 70 }} />
                       </td>
                       <td style={{ padding: '5px 8px' }}>
-                        <input type="number" disabled={saving === v.id} defaultValue={v.stock_quantity ?? ''}
-                               onBlur={e => patchVariant(v.id, { stock_quantity: e.target.value === '' ? null : parseInt(e.target.value) })}
+                        <input type="number" step="any" disabled={saving === v.id} defaultValue={v.stock_quantity ?? ''}
+                               onBlur={e => patchVariant(v.id, { stock_quantity: e.target.value === '' ? null : toQty(e.target.value) })}
                                style={{ ...inp, width: 60 }} />
                       </td>
                       <td style={{ padding: '5px 8px' }}>
                         <input type="number" disabled={saving === v.id} defaultValue={v.reorder_threshold ?? ''}
-                               onBlur={e => patchVariant(v.id, { reorder_threshold: e.target.value === '' ? null : parseInt(e.target.value) })}
+                               onBlur={e => patchVariant(v.id, { reorder_threshold: e.target.value === '' ? null : toQty(e.target.value) })}
                                style={{ ...inp, width: 55 }} />
                       </td>
                       <td style={{ padding: '5px 8px' }}>

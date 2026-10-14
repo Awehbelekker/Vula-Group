@@ -59,22 +59,24 @@ async def record_scans(tenant_id: str, count_id: str, scans: List[dict],
         res = _db().rpc("stock_count_scan", {
             "p_tenant_id": tenant_id, "p_count_id": count_id, "p_product_id": pid,
             "p_variant_id": s.get("variant_id") or None,
-            "p_add": int(add) if add is not None else None,
-            "p_set": int(setv) if setv is not None else None,
+            "p_add": service.qty(add) if add is not None else None,
+            "p_set": service.qty(setv) if setv is not None else None,
             "p_scan_id": str(s["scan_id"])[:80] if s.get("scan_id") else None,
             "p_actor": actor,
         }).execute()
         data = res.data
         if isinstance(data, list):
             data = data[0] if data else None
-        out.append({"scan_id": s.get("scan_id"), "counted": int(data) if data is not None else None})
+        out.append({"scan_id": s.get("scan_id"), "counted": service.qty(data) if data is not None else None})
     return out
 
 
-def _variance(counted: int, expected: Optional[int], cost_cents: Optional[int]) -> dict:
-    diff = counted - (expected or 0)
+def _variance(counted: float, expected: Optional[float], cost_cents: Optional[int]) -> dict:
+    """Difference in exact quantity (2.25 kg counted vs 2.5 held); its value in whole cents,
+    rounded once (migration 210)."""
+    diff = service.qty(counted - service.qty(expected or 0))
     return {"variance": diff,
-            "variance_cents": diff * int(cost_cents) if cost_cents is not None else None}
+            "variance_cents": int(round(diff * int(cost_cents))) if cost_cents is not None else None}
 
 
 async def review(tenant_id: str, count_id: str) -> dict:
@@ -98,7 +100,7 @@ async def review(tenant_id: str, count_id: str) -> dict:
         src = v or p
         expected = ln.get("expected") if count["status"] == "applied" else src.get("stock_quantity")
         cost = src.get("cost_cents") if src.get("cost_cents") is not None else p.get("cost_cents")
-        var = _variance(int(ln["counted"]), expected, cost)
+        var = _variance(service.qty(ln["counted"]), expected, cost)
         if var["variance"] and var["variance_cents"] is None:
             unknown_cost += 1
         total_cents += var["variance_cents"] or 0
@@ -107,7 +109,7 @@ async def review(tenant_id: str, count_id: str) -> dict:
             opts = v.get("option_values") or {}
             label += " — " + (" / ".join(str(x) for x in opts.values()) if isinstance(opts, dict) else str(opts))
         out.append({"product_id": ln["product_id"], "variant_id": ln.get("variant_id"), "name": label,
-                    "counted": int(ln["counted"]), "expected": expected, "counted_by": ln.get("counted_by"),
+                    "counted": service.qty(ln["counted"]), "expected": expected, "counted_by": ln.get("counted_by"),
                     "cost_cents": cost, **var})
     out.sort(key=lambda r: (-abs(r["variance"]), r["name"]))
     counted_ids = {ln["product_id"] for ln in lines}
@@ -134,7 +136,7 @@ async def apply(tenant_id: str, count_id: str, actor: Optional[str] = None) -> d
         try:
             before = await _current_qty(tenant_id, ln["product_id"], ln.get("variant_id"))
             after = await service.adjust_stock(
-                tenant_id, ln["product_id"], variant_id=ln.get("variant_id"), set_to=int(ln["counted"]),
+                tenant_id, ln["product_id"], variant_id=ln.get("variant_id"), set_to=service.qty(ln["counted"]),
                 reason="count", ref_type="stock_count", ref_id=count_id, actor=actor)
             if after is None:
                 failed.append(ln["product_id"])
