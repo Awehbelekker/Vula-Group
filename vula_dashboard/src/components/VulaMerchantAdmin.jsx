@@ -21,6 +21,7 @@ import VulaImageUpload from './VulaImageUpload'
 import { downloadCsv, parseCsv } from '../lib/csv'
 import VulaSmartScanner from './VulaSmartScanner'
 import VulaStock from './VulaStock'
+import VulaCosting from './VulaCosting'
 import VulaInvoices from './VulaInvoices'
 import VulaBookings from './VulaBookings'
 import VulaMarketing from './VulaMarketing'
@@ -235,6 +236,7 @@ function SellSection({ tenantId, products, subtabs, pendingSubtab, onConsumePend
       {active === 'delivery' && <><VulaOrderWorkflow tenantId={tenantId} /><DeliveryTab tenantId={tenantId} /></>}
       {active === 'bookings' && <VulaBookings tenantId={tenantId} />}
       {active === 'stock' && <VulaStock tenantId={tenantId} products={products} />}
+      {active === 'costing' && <VulaCosting tenantId={tenantId} />}
       {active === 'suppliers' && <SuppliersTab tenantId={tenantId} onViewInvoices={onViewInvoices} />}
       {active === 'import' && <VulaImport tenantId={tenantId} />}
     </div>
