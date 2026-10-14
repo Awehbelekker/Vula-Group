@@ -36,6 +36,7 @@ export const MERCHANT_GROUPS = [
       { id: "orders", icon: "📦", label: "Orders" },
       { id: "products", icon: "🛍️", label: "Products" },
       { id: "stock", icon: "📊", label: "Stock" },
+      { id: "costing", icon: "🏭", label: "Costing" },
       { id: "discounts", icon: "🏷️", label: "Discounts" },
       { id: "subscriptions", icon: "🔁", label: "Subscriptions" },
       { id: "delivery", icon: "🛵", label: "Delivery" },
@@ -192,6 +193,7 @@ const MERCHANT_MODMAP = {
   qs: 'estimating', qspro: 'estimating', takeoff: 'estimating', draft: 'ai_draft',
   discounts: 'products',
   stock: 'products',        // the Stock tab counts and receives the same products
+  costing: 'manufacturing', // materials, recipes, batches, cost per unit (Manufacturing Core)
   onboarding: 'broadcasts',  // rides the same module key it was invisibly bundled under before the Broadcast/Onboarding split
   'email-campaigns': 'broadcasts',  // same gate as WhatsApp broadcast — both are bulk-outreach features
 };

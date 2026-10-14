@@ -31,7 +31,7 @@ READ_ONLY = frozenset({
     "list_storefront_pages", "list_subscriptions", "list_suppliers", "lookup_business_info",
     "find_product_document",
     "outstanding_invoices", "preview_broadcast", "price_advice", "project_profit", "recent_orders",
-    "tax_estimate", "vat_position", "tax_calendar",
+    "tax_estimate", "vat_position", "tax_calendar", "cost_sheet",
     "reimbursement_balance", "reorder_suggestions", "sales_summary", "stock_status",
     "view_call_sheet",
     # commerce_assistant
