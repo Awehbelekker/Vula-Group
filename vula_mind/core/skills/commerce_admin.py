@@ -1116,6 +1116,18 @@ MANUFACTURING_TOOLS = [
             "total_rands": {"type": "number"}, "confirm": {"type": "boolean"}},
             "required": ["material", "qty", "unit"]}}},
     {"type": "function", "function": {
+        "name": "price_material",
+        "description": "Set what a material costs — from past supplier invoices ('use the invoice "
+                       "price for cement', pick = which invoice item, 1 = best match) or from what "
+                       "the owner says ('pigment costs R85 for 500 g' → total_rands 85, qty 500, "
+                       "unit g). With neither, lists what the invoices show so the owner can pick. "
+                       "Vula works out the VAT basis and cost per unit itself. Without confirm=true "
+                       "returns a preview.",
+        "parameters": {"type": "object", "properties": {
+            "material": {"type": "string"}, "pick": {"type": "integer"},
+            "total_rands": {"type": "number"}, "qty": {"type": "number"}, "unit": {"type": "string"},
+            "confirm": {"type": "boolean"}}, "required": ["material"]}}},
+    {"type": "function", "function": {
         "name": "set_recipe",
         "description": "Save what goes into one batch of a product (a new version; past batches "
                        "keep theirs) — 'recipe for round basin: 18 kg concrete mix, 150 g pigment, "
@@ -1233,7 +1245,7 @@ _KEYWORD_GROUPS: Dict[str, set] = {
     "automations": {"automation", "automate", "rule", "trigger", "teach vula"},
     "manufacturing": {"recipe", "batch", "made ", "we made", "material", "cost us", "cost to make",
                       "costing", "margin", "ingredient", "production", "reject", "labour rate",
-                      "overhead", "bags of", "cost per"},
+                      "overhead", "bags of", "cost per", "invoice price"},
 }
 
 
@@ -1452,7 +1464,7 @@ _TOOL_SCOPE: Dict[str, str] = {
     "order_payment": "orders", "picture_promotion": "broadcast",
     "cost_sheet": "manufacturing", "add_material": "manufacturing", "receive_material": "manufacturing",
     "set_recipe": "manufacturing", "log_batch": "manufacturing", "undo_last_batch": "manufacturing",
-    "costing_settings": "manufacturing",
+    "costing_settings": "manufacturing", "price_material": "manufacturing",
     "stock_status": "products", "update_stock": "products", "receive_stock": "products",
     "preview_broadcast": "broadcast",
     "project_profit": "finances", "price_advice": "finances", "tax_estimate": "finances",
@@ -3317,6 +3329,10 @@ class CommerceAdminSkill(BaseSkill):
             if name == "receive_material":
                 return mfg.receive(tid, args.get("material") or "", args.get("qty"), args.get("unit") or "",
                                    _cents(args.get("total_rands")), actor=phone, confirm=confirm)
+            if name == "price_material":
+                return mfg.price_material(tid, args.get("material") or "", pick=args.get("pick"),
+                                          total_cents=_cents(args.get("total_rands")), qty=args.get("qty"),
+                                          unit=args.get("unit"), actor=phone, confirm=confirm)
             if name == "set_recipe":
                 return await mfg.set_recipe(tid, args.get("product") or "", args.get("ingredients") or [],
                                             makes=args.get("makes") or 1, labour_hours=args.get("labour_hours") or 0,
