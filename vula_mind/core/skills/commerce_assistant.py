@@ -375,6 +375,29 @@ def _repeats_last_reply(answer: str, history: str) -> bool:
     return new == last or difflib.SequenceMatcher(None, new, last).ratio() >= 0.92
 
 
+# Replies in a checkout that the business's documents can't help with: "Yes please", "EFT",
+# "2", an address. 2026-10-15 (SeedleMe): each still ran a cloud query rewrite and a document
+# search first — part of why "Yes please" took 26 seconds.
+_NO_KNOWLEDGE_RE = re.compile(
+    r"^\s*(?:yes|yeah|yep|ja|no|nope|nee|ok(?:ay)?|sure|confirm(?:ed)?|cancel|check\s*out|"
+    r"collect(?:ion)?|eft|cod|cash|card|bank\s+transfer|pay\s+on\s+delivery|thanks?|thank\s+you|"
+    r"\d+(?:[.,]\d+)?\s*(?:kg|g|x)?)(?:[\s,]+(?:please|thanks?|pls|thank\s+you))?\s*[.!👍🙏]*\s*$",
+    re.IGNORECASE)
+_ADDRESS_RE = re.compile(r"^\s*\d+[a-z]?\s+[a-z][^?]{3,90}$", re.IGNORECASE)
+
+
+def needs_knowledge(message: str) -> bool:
+    """Whether to search the business's documents for this message."""
+    m = (message or "").strip()
+    if not m:
+        return False
+    if _NO_KNOWLEDGE_RE.match(m):
+        return False
+    if _ADDRESS_RE.match(m) and len(m.split()) <= 10 and "," in m:
+        return False
+    return True
+
+
 def checkout_questions(tenant_id: str) -> str:
     """What a customer needs to tell us to check out: where it goes and how they'll pay —
     only the payment methods that really work for this business."""
@@ -1037,7 +1060,8 @@ class CommerceAssistantSkill(BaseSkill):
             "current_message": inp.question,
             "language": _expected_language(inp.metadata.get("preferred_language"), inp.question),
         }
-        kb_context, sources = await self._retrieve_kb(inp)
+        kb_context, sources = (await self._retrieve_kb(inp) if needs_knowledge(inp.question)
+                               else ("", []))
         # What we already know about this customer, so a repeat buyer isn't asked for their name
         # and address all over again (2026-09-01). Best-effort — never block a live order on it.
         profile = None
@@ -1163,6 +1187,13 @@ class CommerceAssistantSkill(BaseSkill):
                 lang_block = (
                     f"\n\nThis customer usually speaks {name}. Greet and reply in {name} by default, "
                     f"unless they clearly switch to another language in this message — then follow them."
+                )
+            elif not name:
+                # Language not known yet: the customer's own words decide, English by default.
+                lang_block = (
+                    "\n\nReply in the language of the customer's message — English unless they "
+                    "clearly write in another language. Never open with a greeting or phrase in "
+                    "another language."
                 )
             elif name == "English":
                 # 2026-09-01: a KNOWN-English customer previously got no language instruction at
@@ -2679,8 +2710,9 @@ class CommerceAssistantSkill(BaseSkill):
                                  "customer you'll find out and someone will get back to them."}
             if not row.get("deduped"):
                 from vula.api.whatsapp import _send_reply
-                await _send_reply(row["helper_phone"], esc.helper_prompt(row, question),
-                                  tenant_id=tenant_id)
+                await _send_reply(row["helper_phone"], esc.helper_prompt(
+                    row, question, context=await esc.customer_context(tenant_id, phone or "", exclude=question)),
+                    tenant_id=tenant_id)
             return {"escalated": True,
                     "instruction_to_assistant": "Tell the customer (in their language) that "
                     "you're checking with the team and will get back to them shortly. Do NOT "

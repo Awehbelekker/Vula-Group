@@ -435,7 +435,9 @@ async def test_rag_reply_metadata_none_when_no_phone():
     # 2026-08-17: metadata is now always a (possibly-empty) dict rather than None, so
     # preferred_language can be added regardless of whether a phone was given — functionally
     # equivalent downstream (agent_runner.py already does `metadata or {}`).
-    assert captured["metadata"] == {}
+    # No phone → nothing about a customer; only the message's own language (2026-10-15: plain
+    # English questions are now recognised as English).
+    assert captured["metadata"] == {"preferred_language": "en"}
 
 
 @pytest.mark.asyncio

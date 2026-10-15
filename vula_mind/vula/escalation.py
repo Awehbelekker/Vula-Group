@@ -436,17 +436,60 @@ def _same_question(a: str, b: str) -> bool:
     return len(ta & tb) / min(len(ta), len(tb)) >= 0.5
 
 
-def helper_prompt(row: dict, question: str, frustrated: bool = False) -> str:
-    """What the helper is sent — one wording for the ask_team tool and the phrase detector."""
+def helper_prompt(row: dict, question: str, frustrated: bool = False, context: str = "") -> str:
+    """What the helper is sent — one wording for the ask_team tool and the phrase detector.
+    `context` (customer_context) says who is asking and what they were doing."""
     q = (question or "").strip()
+    ctx = f"\n\n{context.strip()}" if (context or "").strip() else ""
     if row.get("also_waiting_on"):
         return (f"❓ The same customer also asked:\n\n\"{q}\"\n\n(Still waiting on: "
-                f"\"{row['also_waiting_on'].strip()}\")\n\nReply to this message with the answer "
+                f"\"{row['also_waiting_on'].strip()}\"){ctx}\n\nReply to this message with the answer "
                 f"to both — I'll send it to them and remember it.")
     prefix = ("😠 This customer sounds frustrated — please prioritise this one.\n\n"
               if frustrated else "❓ ")
-    return (f"{prefix}A customer asked:\n\n\"{q}\"\n\nReply to this message with the answer — "
+    return (f"{prefix}A customer asked:\n\n\"{q}\"{ctx}\n\nReply to this message with the answer — "
             f"I'll send it to them and remember it.")
+
+
+async def customer_context(tenant_id: str, phone: str, *, exclude: str = "") -> str:
+    """Who is asking, what's in their cart and what they said just before — so the team member
+    can answer without asking "which customer?" (2026-10-15, SeedleMe). Best effort: any part
+    that can't be read is left out."""
+    digits = re.sub(r"\D", "", phone or "")
+    if not digits:
+        return ""
+    lines = []
+    name = ""
+    try:
+        from vula.commerce import onboarding
+        name = ((onboarding.get_contact(tenant_id, digits) or {}).get("name") or "").strip()
+    except Exception:
+        pass
+    lines.append(f"👤 {name + ' · ' if name else ''}+{digits}")
+    try:
+        from vula.commerce import service
+        cart = await service.get_or_create_cart(tenant_id, digits, digits)
+        items = cart.get("commerce_cart_items") or []
+        if items:
+            total = sum(int(round(float(i["quantity"]) * int(i["unit_price_cents"]))) for i in items)
+            names = ", ".join(f"{float(i['quantity']):g} × {(i.get('commerce_products') or {}).get('name', 'item')}"
+                              for i in items[:3]) + (" …" if len(items) > 3 else "")
+            lines.append(f"🛒 {names} — R{total / 100:,.2f}")
+        session = await service.get_or_create_session(tenant_id, session_key=digits,
+                                                        channel="whatsapp", customer_phone=digits)
+        msgs = (service._client().table("commerce_conversation_messages").select("role,content")
+                .eq("tenant_id", tenant_id).eq("session_id", session["id"])
+                .order("created_at", desc=True).limit(5).execute().data or [])
+        said = [m for m in reversed(msgs) if (m.get("content") or "").strip()
+                and (m.get("content") or "").strip() != (exclude or "").strip()][-3:]
+        if said:
+            lines.append("Earlier in the chat:")
+            for m in said:
+                who = "Customer" if m.get("role") == "user" else "Vula"
+                lines.append(f"• {who}: {' '.join((m.get('content') or '').split())[:140]}")
+    except Exception as exc:
+        log.debug("customer context partly skipped: %s", exc)
+    return "\n".join(lines)
 
 
 def create_escalation(tenant_id: str, customer_phone: str, question: str) -> Optional[dict]:

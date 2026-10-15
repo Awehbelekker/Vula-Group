@@ -210,6 +210,33 @@ def is_uncertain_reply(text: str) -> bool:
     return any(m in t for m in (_CAVEAT_MARKER, _NO_GROUNDING_MARKER, _WEB_FALLBACK_MARKER))
 
 
+_FIGURE_RE = re.compile(r"\d[\d,  ]*(?:\.\d+)?")
+
+
+def _figures(text: str) -> set:
+    return {re.sub(r"[,  ]", "", m).rstrip(".") for m in _FIGURE_RE.findall(text or "")} - {""}
+
+
+def nothing_to_check(answer: str, sources: list) -> str:
+    """Why the second-opinion pass can be skipped, or "" to run it. 2026-10-15: one SeedleMe
+    reply in five carried "⚠️ Worth double-checking" — including "Today's sales are R0.00 from 0
+    paid orders", every figure straight from the sales tool, and "Please provide the customer's
+    name". A warning on everything teaches people to ignore it, and each check adds seconds.
+      - no figures, and it's a question or a short reply → nothing a checker can catch
+      - every figure appears in a tool result this turn → the numbers came from the records
+    """
+    figures = _figures(answer)
+    if not figures:
+        words = len((answer or "").split())
+        if (answer or "").rstrip().endswith("?") or words <= 30:
+            return "no_figures_short"
+        return ""
+    tool_text = " ".join(str(s.get("text", "")) for s in sources if s.get("type") == "tool")
+    if tool_text and figures <= _figures(tool_text):
+        return "figures_from_tools"
+    return ""
+
+
 async def apply(skill: Any, inp: Any, result: Any) -> None:
     """Verification hook called by BaseSkill.__call__ after a successful run().
     Mutates `result` in place (confidence/answer/verification). Must never raise."""
@@ -248,6 +275,12 @@ async def apply(skill: Any, inp: Any, result: Any) -> None:
             if ("kb" in (s.get("type") or "") or s.get("type") in ("tool", "web"))
             and s.get("text")
         )
+        skip = nothing_to_check(result.answer, result.sources or [])
+        if skip:
+            result.verification = {"verifier": f"adversarial.{skill.name}", "outcome": "skipped",
+                                   "escalated": False, "defects": [], "extra": {"reason": skip}}
+            register_outcome(skill.name, inp.tenant_id, result.verification)
+            return
         check = await adversarial_check(inp.question, result.answer, context=context)
         verdict = check["verdict"]
         outcome = {"pass": "accepted", "fail": "defect_found",

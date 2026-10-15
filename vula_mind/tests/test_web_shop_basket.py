@@ -320,7 +320,10 @@ async def test_the_welcome_is_one_photo_message_whose_button_opens_the_shop(oth_
 async def test_with_the_shop_off_the_welcome_is_as_before(oth_shop, monkeypatch):
     monkeypatch.setattr("vula.api.tenants.enabled_modules", lambda tid: ["products", "orders"])
     await whatsapp._send_commerce_welcome("27820000000", "off-the-hook")
-    assert oth_shop["cta"] == [] and "https://api.example/menu/off-the-hook" in oth_shop["lists"][0]
+    # The list as before, but no bare link to Vula's server address (2026-10-15): that only
+    # shows once the shop has its own address.
+    assert oth_shop["cta"] == [] and oth_shop["lists"]
+    assert "https://api.example" not in oth_shop["lists"][0]
 
 
 @pytest.mark.asyncio
