@@ -13,6 +13,13 @@ _CART_ITEM = {"quantity": 2, "unit_price_cents": 5000,
               "commerce_products": {"name": "Hake Fillets", "pricing_mode": "fixed"}}
 
 
+@pytest.fixture(autouse=True)
+def _oth_delivery_fee(monkeypatch):
+    """Off the Hook's real order settings: R80 delivery (an unset fee is 'to be confirmed')."""
+    from vula.commerce import order_workflow as ow
+    monkeypatch.setattr(ow, "get_order_settings", lambda tid: {**ow._DEFAULTS, "delivery_fee_cents": 8000})
+
+
 # ── discount code in review_order ─────────────────────────────────────────
 
 @pytest.mark.asyncio
