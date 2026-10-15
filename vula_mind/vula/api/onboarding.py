@@ -360,7 +360,10 @@ async def _provision(req: OnboardingRequest) -> tuple[dict, str]:
     tenant_id = str(uuid.uuid4())
     temp_password = secrets.token_urlsafe(12)
     slug = _slugify(req.company_name)
-    workspace_url = f"{settings.vula_base_url}/{slug}"
+    # Where they log in: the business's own <name>.vula-ai.com once it's live, else the shared
+    # dashboard (15 Oct 2026). It was f"{vula_base_url}/{slug}" — app.vula.ai, which isn't ours.
+    from vula.api.tenants import dashboard_url_for
+    workspace_url = dashboard_url_for(slug)
     trial_ends = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
     # Normalise WhatsApp to E.164 without leading + so lookup always matches

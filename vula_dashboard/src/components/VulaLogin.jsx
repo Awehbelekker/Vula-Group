@@ -1,7 +1,8 @@
 /**
  * VulaLogin.jsx
  *
- * Handles three auth flows:
+ * Handles these auth flows:
+ *   0. Log in with WhatsApp — QR / button / 6-digit code (WhatsAppLogin.jsx, 15 Oct 2026)
  *   1. Normal sign-in (email + password)
  *   2. Password recovery — Supabase puts #access_token in URL after clicking
  *      the reset email; we detect this and show a "set new password" form
@@ -18,6 +19,7 @@ import { useAuthStore } from '../store/auth'
 import { resolveTenantFromHost } from '../theme/tenantThemes'
 import { applyBrand } from '../theme/tokens'
 import { VULA_API } from '../lib/authFetch'
+import WhatsAppLogin from './WhatsAppLogin'
 
 // Reached via a tenant's own dashboard address (admin.offthehook.co.za, gerflor.vula-ai.com…)?
 // The backend resolves the host to a tenant (its domains / store / slug) and the login wears that
@@ -307,6 +309,8 @@ export default function VulaLogin({ onSuccess }) {
             <h1 style={s.heading}>Sign in</h1>
             {info && <div style={s.infoBox}>{info}</div>}
             {error && <div style={s.errorBox}>{error}</div>}
+            <WhatsAppLogin onUser={(u) => resolveAndLogin(u).catch((e) => setError(e.message || 'Sign-in failed'))} styles={s} />
+            <div style={s.divider}><span style={s.dividerText}>or with email</span></div>
             <button type="button" onClick={handleGoogle} style={s.googleBtn}>
               <span style={{ fontWeight: 700, marginRight: 8, color: '#4285F4' }}>G</span> Continue with Google
             </button>

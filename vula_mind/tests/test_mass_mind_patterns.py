@@ -6,6 +6,8 @@ deliberate aggregation the Mass Mind design doc calls for. suggest_tier() is the
 consulted by core/hrm/orchestrator.py::_select_model only as a cold-start fallback, never
 overriding a tenant's own signal (covered separately in tests/test_orchestrator.py).
 """
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from core.mass_mind import patterns
@@ -85,8 +87,10 @@ class _BrokenClient:
 
 
 def _reflection_row(tenant_id, skill, tier, score):
+    # Inside rollup()'s 30-day window whatever today is (a fixed 2026-09-15 fell out of it on 15 Oct).
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     return {"tenant_id": tenant_id, "primary_skill": skill, "winning_tier": tier,
-            "outcome_score": score, "created_at": "2026-09-15T00:00:00+00:00"}
+            "outcome_score": score, "created_at": recent}
 
 
 def _business_types(monkeypatch, mapping: dict):

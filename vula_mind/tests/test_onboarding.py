@@ -83,7 +83,9 @@ def test_onboard_success_when_supabase_not_configured():
     assert resp.status_code == 200
     data = resp.json()
     assert data["tenant_id"]
-    assert "digg-interiors" in data["workspace_url"]
+    assert data["workspace_slug"] == "digg-interiors"
+    # the login address is a real dashboard, never the old app.vula.ai placeholder
+    assert data["workspace_url"].startswith("https://") and "app.vula.ai" not in data["workspace_url"]
     assert data["temp_password"]
     assert data["trial_ends"]
 

@@ -102,3 +102,32 @@ async def test_the_welcome_is_sent_once(welcome):
     first = await whatsapp._maybe_welcome_new_owner("seedleme", "0662545068")
     again = await whatsapp._maybe_welcome_new_owner("seedleme", "0662545068")   # the other worker / a retry
     assert (first, again) == (True, False) and len(sent) == 1
+
+
+# ── 15 Oct: each business's own <name>.vula-ai.com, once it's live ──────────────────────
+
+def _cfg(monkeypatch, domains):
+    monkeypatch.setattr("vula.api.tenants.get_config", lambda tid, fresh=False: {"domains": domains})
+
+
+def test_a_business_with_its_own_vula_address_is_sent_there(monkeypatch):
+    from vula.api.tenants import dashboard_url_for
+    monkeypatch.setattr(settings, "dashboard_url", "https://vuladashboard.vercel.app")
+    _cfg(monkeypatch, ["seedleme.vula-ai.com"])
+    assert dashboard_url_for("seedleme") == "https://seedleme.vula-ai.com"
+    _cfg(monkeypatch, ["shop.seedleme.com", "admin.seedleme.co.za"])     # a shop host is never the dashboard
+    assert dashboard_url_for("seedleme") == "https://admin.seedleme.co.za"
+    _cfg(monkeypatch, ["shop.seedleme.com"])
+    assert dashboard_url_for("seedleme") == "https://vuladashboard.vercel.app"
+    _cfg(monkeypatch, [])
+    assert dashboard_url_for("seedleme") == "https://vuladashboard.vercel.app"
+    assert dashboard_url_for("off-the-hook") == "https://admin.offthehook.co.za"
+    assert dashboard_url_for("digg-demo") == "https://digg.vula-ai.com"
+
+
+@pytest.mark.asyncio
+async def test_the_welcome_carries_the_business_own_address(welcome, monkeypatch):
+    sent = welcome("seedleme")
+    _cfg(monkeypatch, ["seedleme.vula-ai.com"])
+    await whatsapp._maybe_welcome_new_owner("seedleme", "27662545068")
+    assert "https://seedleme.vula-ai.com" in sent[0]
