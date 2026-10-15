@@ -7357,18 +7357,13 @@ def _is_tenant_owner(tenant_id: str, phone: str) -> bool:
     return False
 
 
-# Where each business's dashboard really lives (mirrors vula_dashboard/src/theme/tenantThemes.js).
-# 2026-10-13 (SeedleMe): the welcome used to build "admin.<shop's own domain>" — right only for
-# Off the Hook; SeedleMe's owner would have been sent to admin.seedleme.com, which doesn't exist,
-# and DIGG to admin.digg.vula-ai.com. Anyone not listed uses the shared dashboard.
-_DASHBOARD_HOSTS = {
-    "off-the-hook": "https://admin.offthehook.co.za",
-    "digg-demo": "https://digg.vula-ai.com",
-}
-
-
+# Where each business's dashboard really lives. 2026-10-13 (SeedleMe): the welcome used to build
+# "admin.<shop's own domain>" — right only for Off the Hook; SeedleMe's owner would have been sent
+# to admin.seedleme.com, which doesn't exist. Now tenants.dashboard_url_for: the business's own
+# <name>.vula-ai.com once it's live, else the shared dashboard.
 def _dashboard_url(tenant_id: str) -> str:
-    return _DASHBOARD_HOSTS.get(tenant_id) or settings.dashboard_url.rstrip("/")
+    from vula.api.tenants import dashboard_url_for
+    return dashboard_url_for(tenant_id)
 
 
 def _profile_invite(tenant_id: str, role: Optional[str]) -> str:

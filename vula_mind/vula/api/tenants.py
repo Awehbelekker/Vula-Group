@@ -388,6 +388,32 @@ def tenant_for_host(host: str) -> Optional[str]:
     return None
 
 
+# Businesses whose dashboard address predates `domains` (mirrors vula_dashboard/src/theme/tenantThemes.js).
+_KNOWN_DASHBOARDS = {
+    "off-the-hook": "https://admin.offthehook.co.za",
+    "digg-demo": "https://digg.vula-ai.com",
+}
+_DASHBOARD_PREFIXES = ("admin.", "app.", "dashboard.")
+
+
+def dashboard_url_for(tenant_id: str) -> str:
+    """Where this business's people log in — sent in the WhatsApp team welcome and the signup
+    email. 15 Oct 2026 (Ian: every business gets <name>.vula-ai.com): the tenant's own dashboard
+    host from `domains` once it's live (added there only after it's on Vercel and its DNS works),
+    then the two older addresses, then the shared dashboard. Shop hosts in `domains`
+    (shop./order. — shop_domain.py) are never offered as the dashboard."""
+    from config import settings
+    try:
+        doms = (get_config(tenant_id) or {}).get("domains") or []
+    except Exception:
+        doms = []
+    for d in doms:
+        host = str(d or "").strip().lower()
+        if host.endswith(".vula-ai.com") or host.startswith(_DASHBOARD_PREFIXES):
+            return f"https://{host}"
+    return _KNOWN_DASHBOARDS.get(tenant_id) or settings.dashboard_url.rstrip("/")
+
+
 @router.get("/by-domain")
 async def get_tenant_by_domain(host: str) -> dict:
     """Public: the tenant a dashboard hostname belongs to (no secrets — just the id), for a
