@@ -1423,7 +1423,8 @@ async def _maybe_escalate_and_learn(tenant_id: str, phone: str, text: str,
             if not row.get("deduped"):
                 await _send_reply(
                     row["helper_phone"],
-                    esc.helper_prompt(row, text, esc.customer_seems_frustrated(text)),
+                    esc.helper_prompt(row, text, esc.customer_seems_frustrated(text),
+                                      await esc.customer_context(tenant_id, phone, exclude=text)),
                     tenant_id=tenant_id,
                 )
             return "Thanks for your question! Let me check with the team and get right back to you. 🙏"
@@ -6196,6 +6197,8 @@ async def _send_wa_template(tenant_id: str, to: str, template: str, *params: str
     template — free text to someone who hasn't messaged recently fails with 'Re-engagement message'
     (confirmed 2026-07-15: this affected every scheduled OTH/DIGG proactive notification, not a
     dev-mode issue). Shared by server.py (OTH schedules) and field_ops.py (DIGG field-ops)."""
+    from vula import turns as _turns
+    _turns.reply(f"[template {template}] " + " | ".join(str(p) for p in params), kind="template", to=to)
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", to, str(template)):   # capability benchmark
         return True
@@ -8369,6 +8372,8 @@ async def _send_wa_cta_url(creds: dict, number: str, body: str, label: str, url:
     """Send an interactive WhatsApp "call to action" URL button: the message shows `label` as a
     button and never displays the address. Only valid inside the 24 h customer-service window.
     False on any failure so the caller can fall back to a plain-text link."""
+    from vula import turns as _turns
+    _turns.reply(f"{body}\n[link button: {label}]", kind="cta_url", to=number)
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", number, f"{body} [{label}]"):   # capability benchmark
         return True
@@ -8395,6 +8400,10 @@ async def _send_wa_cta_url(creds: dict, number: str, body: str, label: str, url:
 async def _send_wa_list(creds: dict, number: str, header: str, body: str,
                         footer: str, button: str, sections: list) -> bool:
     """Send an interactive WhatsApp list (≤10 rows total across sections)."""
+    from vula import turns as _turns
+    _turns.reply(f"{body}\n[list: " + " | ".join(
+        str(r.get("title")) for sec in sections for r in (sec.get("rows") or [])) + "]",
+        kind="list", to=number)
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", number, str(body)):   # capability benchmark
         return True
@@ -8420,6 +8429,8 @@ async def _send_wa_list(creds: dict, number: str, header: str, body: str,
 async def _send_wa_image(creds: dict, number: str, image_url: str, caption: str = "") -> bool:
     """Send a standalone image message. Used as a decorative header immediately before an
     interactive list, since WhatsApp's list type only supports a text header (Meta limit)."""
+    from vula import turns as _turns
+    _turns.reply(f"[image] {caption}".strip(), kind="image", to=number)
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", number, str(image_url)):   # capability benchmark
         return True
@@ -8492,6 +8503,11 @@ async def _send_wa_carousel(creds: dict, number: str, body: str, cards: list) ->
             except Exception as exc:
                 logger.warning("WA carousel (%s buttons) failed: %s", kind, exc)
     return False
+
+
+def _shop_host(tenant_id: str) -> str:
+    from vula.commerce import web_basket
+    return web_basket.shop_host(tenant_id)
 
 
 def _shop_url(tenant_id: str, anchor: str = "") -> str:
@@ -8693,6 +8709,8 @@ async def _send_catalogue_results(phone: str, tenant_id: str, creds: dict, query
 async def _send_wa_product_list(creds: dict, number: str, catalog_id: str, header: str, body: str,
                                 sections: list) -> bool:
     """WhatsApp multi-product message from the connected catalogue (≤30 items, ≤10 sections)."""
+    from vula import turns as _turns
+    _turns.reply(f"{body}\n[catalogue products]", kind="product_list", to=number)
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", number, str(body)):
         return True
@@ -8715,6 +8733,8 @@ async def _send_wa_product_list(creds: dict, number: str, catalog_id: str, heade
 
 async def _send_wa_catalog_button(creds: dict, number: str, body: str, thumbnail_slug: str) -> bool:
     """WhatsApp's "View catalog" button — opens the business's whole catalogue in WhatsApp."""
+    from vula import turns as _turns
+    _turns.reply(f"{body}\n[View catalog]", kind="catalog", to=number)
     from core import dry_run as _dry
     if _dry.record_send("whatsapp", number, str(body)):
         return True
@@ -8954,7 +8974,10 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
         f"Welcome to {shop_name}! 👋\n\n"
         f"What are you looking for?\n{_text_lines}\n\n"
         "Reply with a product name, or just ask."
-        + (f"\n\n🛍️ Shop with photos and order online: {menu_url}" if menu_url else "")
+        # A bare link only to the shop's own address; Vula's server address stays behind
+        # buttons (2026-10-15: SeedleMe's welcome showed vula-group-production.up.railway.app).
+        + (f"\n\n🛍️ Shop with photos and order online: {menu_url}"
+           if menu_url and _shop_host(tenant_id) else "")
     )
 
     if not sections:
@@ -8991,7 +9014,7 @@ async def _send_commerce_welcome(phone: str, tenant_id: str) -> None:
         if shop_on:
             logger.info("Commerce welcome sent to %s (shop button)", phone)
             return
-    if menu_url and not shop_on:
+    if menu_url and not shop_on and _shop_host(tenant_id):
         body_text += f"\n\n🛍️ Shop with photos and order online: {menu_url}"
     ok = await _send_wa_list(
         creds, number, shop_name[:60], body_text,

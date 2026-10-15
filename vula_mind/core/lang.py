@@ -56,6 +56,12 @@ _EN_MARKERS = {
     "yes", "please", "thanks", "thank", "hello", "hi", "sure", "okay", "the", "and",
     "want", "would", "like", "have", "order", "cash", "card", "deliver", "delivery",
     "please", "cancel", "confirm", "when", "today", "tomorrow", "kg", "much",
+    # 2026-10-15: plain questions with none of the words above ("Do you do round basins",
+    # "Contact Richard Downing on this number") came back unknown, so the model picked the
+    # language. Function words only — not "is", "in", "my" or "of", which Afrikaans shares.
+    "do", "does", "you", "your", "what", "how", "where", "which", "this", "that", "with",
+    "for", "on", "to", "can", "could", "get", "need", "long", "take", "colour", "colours",
+    "price", "number", "contact", "send", "show", "any", "we",
 }
 # English first: detect_language keeps the first language on a tie, so a message like "I'd
 # like 2 more" (one English marker, one Afrikaans — "more" is Afrikaans for tomorrow) stays

@@ -305,6 +305,7 @@ async def test_apply_builds_context_from_kb_sources(emits, monkeypatch):
         return {"verdict": "pass", "defects": [], "checker_ms": 1}
 
     monkeypatch.setattr(verification, "adversarial_check", _check)
+    monkeypatch.setattr(verification, "nothing_to_check", lambda *a: "")   # these test the checker itself
 
     class SourcedSkill(BaseSkill):
         name = "sourced"
@@ -336,6 +337,7 @@ async def test_apply_builds_context_from_tenant_and_training_kb_sources(monkeypa
         return {"verdict": "pass", "defects": [], "checker_ms": 1}
 
     monkeypatch.setattr(verification, "adversarial_check", _check)
+    monkeypatch.setattr(verification, "nothing_to_check", lambda *a: "")   # these test the checker itself
 
     class ArchSourcedSkill(BaseSkill):
         name = "arch_sourced"
@@ -383,6 +385,7 @@ async def test_apply_builds_context_from_web_sources(monkeypatch):
         return {"verdict": "pass", "defects": [], "checker_ms": 1}
 
     monkeypatch.setattr(verification, "adversarial_check", _check)
+    monkeypatch.setattr(verification, "nothing_to_check", lambda *a: "")   # these test the checker itself
 
     class WebSourcedSkill(BaseSkill):
         name = "web_sourced"
@@ -427,6 +430,7 @@ async def test_apply_queues_research_candidate_on_pass_and_high_web_confidence(m
     async def _pass(question, answer, context=""):
         return {"verdict": "pass", "defects": [], "checker_ms": 1}
     monkeypatch.setattr(verification, "adversarial_check", _pass)
+    monkeypatch.setattr(verification, "nothing_to_check", lambda *a: "")   # these test the checker itself
 
     queued = {}
 

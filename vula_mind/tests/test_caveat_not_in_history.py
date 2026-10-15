@@ -73,7 +73,8 @@ def test_apply_still_shows_the_caveat_to_the_reader():
     result = _R()
     with patch.object(v, "adversarial_check", AsyncMock(return_value={
             "verdict": "fail", "defects": ["x"], "checker_ms": 5})), \
-         patch.object(v, "register_outcome", lambda *a, **k: None):
+         patch.object(v, "register_outcome", lambda *a, **k: None), \
+         patch.object(v, "nothing_to_check", lambda *a: ""):
         asyncio.run(v.apply(_S(), _I(), result))
 
     assert v._CAVEAT_MARKER in result.answer, "the reader still gets the warning"
