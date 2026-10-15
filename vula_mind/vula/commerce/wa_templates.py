@@ -201,6 +201,31 @@ async def create_template(
             "category": category.upper()}
 
 
+async def _create_raw(tenant_id: str, creds: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Submit a template whose components are already in Meta's shape (authentication templates
+    have fixed wording and an OTP button, which create_template's body/buttons can't express)."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{GRAPH_BASE}/{creds['waba_id']}/message_templates",
+                headers={"Authorization": f"Bearer {creds['token']}", "Content-Type": "application/json"},
+                json=payload)
+            data = resp.json()
+    except Exception as exc:
+        return {"error": str(exc)}
+    if not resp.is_success:
+        return {"error": (data.get("error") or {}).get("message") or resp.text[:300]}
+    try:
+        _client().table("commerce_wa_templates").insert({
+            "id": str(uuid.uuid4()), "tenant_id": tenant_id, "name": payload["name"],
+            "category": payload["category"], "language": payload.get("language", "en"),
+            "body_text": "{{1}} is your verification code.", "param_count": 1, "example": ["123456"],
+            "created_by": "standard set"}).execute()
+    except Exception as exc:
+        log.debug("wa_templates local insert skipped: %s", exc)
+    return {"name": payload["name"], "meta_id": data.get("id"), "status": data.get("status", "PENDING")}
+
+
 async def list_templates(tenant_id: str) -> List[Dict[str, Any]]:
     """Templates created for this tenant, with LIVE status from Meta (never cached — status can
     flip from PENDING to APPROVED/REJECTED at any time on Meta's side)."""
@@ -406,6 +431,15 @@ async def submit_standard(tenant_id: str) -> Dict[str, Any]:
             failed.append({"name": t["name"], "error": res["error"]})
         else:
             submitted.append(t["name"])
+    # The dashboard's "log in with WhatsApp" code (vula/api/wa_login.py) — Meta's authentication
+    # format, shared by name across the WhatsApp account like vula_notification.
+    from vula.api.wa_login import AUTH_TEMPLATE, auth_template_payload
+    if AUTH_TEMPLATE in existing:
+        already.append(AUTH_TEMPLATE)
+    else:
+        res = await _create_raw(tenant_id, creds, auth_template_payload())
+        (failed.append({"name": AUTH_TEMPLATE, "error": res["error"]}) if res.get("error")
+         else submitted.append(AUTH_TEMPLATE))
     if mods & {"wa_shop", "orders", "products"}:
         promo = promo_template(tenant_id)
         if promo["name"] in existing:

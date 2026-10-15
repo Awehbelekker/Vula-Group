@@ -510,6 +510,15 @@ async def receive_message(
                 try:
                     if msg_type == "text":
                         text = msg.get("text", {}).get("body", "").strip()
+                        # "Login K7F4QX" from the dashboard's WhatsApp login (vula/api/wa_login.py) —
+                        # answered before anything else on any line, never by a model.
+                        if phone and text and route_tenant:
+                            from vula.api import wa_login as _wa_login
+                            if _wa_login.LOGIN_RE.match(text):
+                                _login_reply = await _wa_login.handle_inbound(route_tenant, phone, text)
+                                if _login_reply:
+                                    _run_bg(_send_reply(phone, _login_reply, route_tenant), label="wa_login")
+                                continue
                         if phone and text:
                             # Backgrounded like the media handlers below (_run_bg): this is the
                             # commerce_assistant / HRM reasoning pipeline, which routinely takes
@@ -551,7 +560,13 @@ async def receive_message(
                             # (the owner's admin session exists on both commerce- and knowledge-mode
                             # tenants), so this is checked before the commerce_tenant-only branch
                             # below, using route_tenant rather than commerce_tenant.
-                            if phone and reply_id.startswith("kb:") and route_tenant:
+                            if phone and reply_id.startswith("walogin_"):
+                                # Approve / Not me on a dashboard WhatsApp login (vula/api/wa_login.py).
+                                from vula.api import wa_login as _wa_login
+                                _msg = await _wa_login.handle_button(phone, reply_id)
+                                if _msg:
+                                    await _send_reply(phone, _msg, route_tenant or "")
+                            elif phone and reply_id.startswith("kb:") and route_tenant:
                                 # Tap-to-pay buttons/lists (tip choice, Pay now, Change tip) — no LLM.
                                 from vula.tap.api import try_handle_interactive
                                 await try_handle_interactive(route_tenant, phone, reply_id)
