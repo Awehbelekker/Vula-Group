@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vula — your business, run from WhatsApp</title>
+<meta name="description" content="Vula runs your business from WhatsApp: customers order, ask and pay in the chat, and your team runs the back office from the same chat. Made in Cape Town.">
+<meta property="og:title" content="Vula — your business, run from WhatsApp">
+<meta property="og:description" content="Orders, payments, invoices, stock, costing and tax — all on WhatsApp. Made in Cape Town.">
+<meta property="og:url" content="https://vula-ai.com">
+<meta name="theme-color" content="#0d3b2c">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230d3b2c'/%3E%3Ctext x='50%25' y='58%25' text-anchor='middle' font-family='Arial' font-weight='800' font-size='40' fill='%23ffc83d'%3Ev%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+html { scroll-behavior: smooth }
+body { margin: 0 }
+img { max-width: 100% }
+[hidden] { display: none !important }
+
+/* Layout: one long, loud scroll — a deep-green hero with a live WhatsApp phone, then alternating
+   mint and forest bands; chat bubbles are the page's recurring visual, sun-yellow is the one pop. */
+:root {
+  --forest: #0d3b2c;      /* deep green bands */
+  --forest-2: #134a38;
+  --wa: #1fbf5c;          /* WhatsApp-ish green: buttons, ticks */
+  --sun: #ffc83d;         /* the one loud accent */
+  --mint: #eef8f2;        /* page ground */
+  --paper: #ffffff;       /* cards, bubbles */
+  --ink: #0b1f17;         /* text on light */
+  --ink-soft: #3c564a;    /* secondary text on light */
+  --on-dark: #f3fbf6;     /* text on forest */
+  --on-dark-soft: #b9d6c7;
+  --bubble-in: #ffffff;
+  --bubble-out: #d8f8d0;
+  --line: #cfe5d9;
+  --display: "Bricolage Grotesque", "Arial Rounded MT Bold", system-ui, sans-serif;
+  --body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --r: 22px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --mint: #08160f; --paper: #10241b; --ink: #e9f6ee; --ink-soft: #a3c2b3; --line: #1f3a2d;
+  --forest: #0a2c21; --forest-2: #0f3a2b; --bubble-in: #1a3328; --bubble-out: #1d4a32; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --mint: #08160f; --paper: #10241b; --ink: #e9f6ee; --ink-soft: #a3c2b3; --line: #1f3a2d;
+  --forest: #0a2c21; --forest-2: #0f3a2b; --bubble-in: #1a3328; --bubble-out: #1d4a32; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--mint); color: var(--ink); font: 400 17px/1.6 var(--body); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--display); line-height: 1.02; text-wrap: balance; margin: 0; letter-spacing: -0.02em }
+h2 { font-size: clamp(34px, 5vw, 56px); font-weight: 800 }
+h3 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em }
+p { margin: 0 }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-soft) }
+.band-dark .eyebrow { color: var(--sun) }
+a { color: inherit }
+.btn { display: inline-flex; align-items: center; gap: 10px; padding: 15px 24px; border-radius: 999px; font: 700 16px/1 var(--body); text-decoration: none; border: 0; cursor: pointer; transition: transform .15s ease, box-shadow .15s ease }
+.btn:hover { transform: translateY(-2px) }
+.btn:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--sun); outline-offset: 3px }
+.btn-wa { background: var(--wa); color: #06210f; box-shadow: 0 6px 0 #0f8a3f }
+.btn-ghost { background: transparent; color: var(--on-dark); box-shadow: inset 0 0 0 2px var(--on-dark-soft) }
+
+/* nav + hero */
+.band-dark { background: var(--forest); color: var(--on-dark) }
+nav.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 22px }
+.logo { font: 800 30px/1 var(--display); letter-spacing: -0.04em; display: flex; align-items: center; gap: 8px }
+.logo i { width: 14px; height: 14px; border-radius: 50%; background: var(--sun); display: inline-block; transform: translateY(-8px) }
+nav.top .links { display: flex; gap: 22px; font-weight: 600; font-size: 15px; flex-wrap: wrap }
+nav.top .links a { text-decoration: none; color: var(--on-dark-soft) }
+nav.top .links a:hover { color: var(--on-dark) }
+.hero { display: grid; grid-template-columns: 1.15fr .85fr; gap: 48px; align-items: center; padding-block: 40px 90px }
+.hero h1 { font-size: clamp(48px, 8vw, 104px); font-weight: 800; letter-spacing: -0.045em }
+.hero h1 .squiggle { color: var(--sun); position: relative; white-space: nowrap }
+.hero h1 .squiggle::after { content: ""; position: absolute; left: 2%; right: 2%; bottom: -6px; height: 12px; background: radial-gradient(circle at 6px 0, transparent 5px, var(--sun) 6px 8px, transparent 9px) 0 0 / 16px 12px repeat-x }
+.hero .lede { font-size: 20px; color: var(--on-dark-soft); max-width: 34ch; margin-top: 26px }
+.hero .ctas { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 34px }
+.hero .proof { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 30px; font: 500 13px/1.4 var(--mono); color: var(--on-dark-soft) }
+.hero .proof b { color: var(--on-dark) }
+
+/* the phone */
+.phone { width: min(340px, 100%); margin-inline: auto; background: #050d09; border-radius: 44px; padding: 12px; box-shadow: 0 40px 80px -30px rgba(0,0,0,.6), 0 0 0 2px #1d3a2d; transform: rotate(3deg) }
+.screen { border-radius: 34px; overflow: hidden; background: #e8dfd3; background-image: radial-gradient(rgba(0,0,0,.05) 1px, transparent 1.4px); background-size: 14px 14px }
+.chat-head { background: #0f5a3f; color: #fff; display: flex; align-items: center; gap: 10px; padding: 14px 16px }
+.chat-head .av { width: 34px; height: 34px; border-radius: 50%; background: var(--sun); color: #2b2100; display: grid; place-items: center; font: 800 15px var(--display) }
+.chat-head b { font-size: 15px; display: block; line-height: 1.2 }
+.chat-head small { font-size: 12px; opacity: .8 }
+.msgs { padding: 14px 12px 18px; display: flex; flex-direction: column; gap: 8px; min-height: 420px }
+.b { max-width: 82%; padding: 8px 11px 6px; border-radius: 12px; font-size: 14px; line-height: 1.4; color: #111b16; box-shadow: 0 1px 0 rgba(0,0,0,.12) }
+.b small { display: block; text-align: right; font: 500 10px var(--mono); color: #6a7a71; margin-top: 2px }
+.b.in { background: #fff; align-self: flex-start; border-top-left-radius: 4px }
+.b.out { background: #d4f7c6; align-self: flex-end; border-top-right-radius: 4px }
+.b .tick { color: #2e9df0 }
+.b .chips { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap }
+.b .chips span { border: 1px solid #b9d8c4; color: #0f5a3f; background: #f3fbf6; border-radius: 999px; padding: 3px 10px; font-weight: 600; font-size: 12.5px }
+@media (prefers-reduced-motion: no-preference) {
+  .msgs .b { animation: pop .5s cubic-bezier(.2,1.4,.4,1) both }
+  .msgs .b:nth-child(2) { animation-delay: .5s } .msgs .b:nth-child(3) { animation-delay: 1.1s }
+  .msgs .b:nth-child(4) { animation-delay: 1.8s } .msgs .b:nth-child(5) { animation-delay: 2.4s }
+  @keyframes pop { from { transform: translateY(10px) scale(.96); opacity: .4 } to { transform: none; opacity: 1 } }
+}
+
+/* sections */
+section { padding-block: 96px }
+.head { display: grid; gap: 16px; max-width: 760px; margin-bottom: 48px }
+.head p { font-size: 19px; color: var(--ink-soft) }
+.band-dark .head p { color: var(--on-dark-soft) }
+
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 22px }
+.office { background: var(--paper); border: 2px solid var(--line); border-radius: var(--r); padding: 30px; display: grid; gap: 18px; align-content: start; min-width: 0 }
+.office .tag { justify-self: start; background: var(--sun); color: #2b2100; font: 700 13px/1 var(--body); padding: 8px 12px; border-radius: 999px }
+.office.back .tag { background: var(--wa); color: #06210f }
+.office ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px }
+.office li { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start }
+.office li q { quotes: "“" "”"; font-family: var(--mono); font-size: 13.5px; background: var(--mint); border-radius: 10px; padding: 6px 10px; display: inline-block; margin-top: 4px }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--wa); margin-top: 9px }
+
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; counter-reset: s }
+.step { position: relative; background: var(--forest-2); border-radius: var(--r); padding: 30px 26px 28px; min-width: 0 }
+.step::before { counter-increment: s; content: counter(s); font: 800 64px/1 var(--display); color: var(--sun); display: block; margin-bottom: 18px }
+.step p { color: var(--on-dark-soft); margin-top: 10px }
+
+.biz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px }
+.card { background: var(--paper); border-radius: var(--r); border: 2px solid var(--line); padding: 26px; display: grid; gap: 14px; align-content: start; min-width: 0 }
+.card .kind { font: 500 12px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft) }
+.mini { background: #e8dfd3; background-image: radial-gradient(rgba(0,0,0,.05) 1px, transparent 1.4px); background-size: 14px 14px; border-radius: 16px; padding: 12px; display: flex; flex-direction: column; gap: 7px }
+.mini .b { max-width: 92%; font-size: 13.5px }
+
+.dash { display: grid; grid-template-columns: 1.1fr .9fr; gap: 28px; align-items: center }
+.screen-mock { background: var(--paper); border: 2px solid var(--line); border-radius: var(--r); overflow: hidden; min-width: 0 }
+.screen-mock .bar { display: flex; gap: 6px; padding: 12px 14px; border-bottom: 2px solid var(--line) }
+.screen-mock .bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--line) }
+.screen-mock .body { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 16px }
+.tile { border-radius: 14px; background: var(--mint); padding: 14px; min-width: 0 }
+.tile small { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft) }
+.tile b { display: block; font: 800 26px/1.1 var(--display); margin-top: 6px; font-variant-numeric: tabular-nums }
+.tile.wide { grid-column: span 3; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap }
+.login-card { background: var(--forest); color: var(--on-dark); border-radius: var(--r); padding: 30px; display: grid; gap: 16px; justify-items: start }
+.qr { width: 132px; height: 132px; background: #fff; border-radius: 14px; padding: 10px; display: grid; grid-template-columns: repeat(11, 1fr); gap: 2px }
+.qr i { background: #0b1f17; border-radius: 2px }
+.qr i.o { background: transparent }
+.login-card p { color: var(--on-dark-soft) }
+
+.plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; align-items: stretch }
+.plan { background: var(--paper); border: 2px solid var(--line); border-radius: var(--r); padding: 30px; display: grid; gap: 14px; align-content: start; min-width: 0 }
+.plan.pick { border-color: var(--wa); box-shadow: 0 10px 0 var(--wa) }
+.plan .price { font: 800 46px/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums }
+.plan .price small { font: 600 15px var(--body); color: var(--ink-soft); letter-spacing: 0 }
+.plan ul { margin: 0; padding-left: 18px; color: var(--ink-soft); display: grid; gap: 6px }
+.badge { justify-self: start; font: 700 12px/1 var(--body); background: var(--sun); color: #2b2100; padding: 7px 11px; border-radius: 999px }
+
+.trust { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px }
+.trust div { border-top: 3px solid var(--sun); padding-top: 16px; min-width: 0 }
+.trust p { color: var(--on-dark-soft); margin-top: 8px; font-size: 15.5px }
+
+.cta { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; align-items: center }
+form.start { background: var(--paper); border: 2px solid var(--line); border-radius: var(--r); padding: 28px; display: grid; gap: 14px; min-width: 0 }
+form.start label { font-weight: 600; font-size: 14px; display: grid; gap: 6px }
+form.start input, form.start select { font: 500 16px var(--body); padding: 13px 14px; border-radius: 12px; border: 2px solid var(--line); background: var(--mint); color: var(--ink) }
+.ok { background: var(--bubble-out); border-radius: 12px; padding: 12px 14px; font-weight: 600 }
+footer { padding-block: 34px; font-size: 14px; color: var(--ink-soft); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px }
+
+
+/* industries */
+.ind { background: var(--paper); border: 2px solid var(--line); border-radius: var(--r); overflow: hidden }
+.ind-tabs { display: flex; gap: 6px; padding: 10px; border-bottom: 2px solid var(--line); overflow-x: auto; scrollbar-width: none }
+.ind-tabs button { flex: 0 0 auto; border: 0; background: transparent; color: var(--ink-soft); font: 700 15px/1 var(--body); padding: 12px 16px; border-radius: 999px; cursor: pointer }
+.ind-tabs button[aria-selected="true"] { background: var(--forest); color: var(--on-dark) }
+.ind-tabs button:focus-visible, .acc summary:focus-visible { outline: 3px solid var(--sun); outline-offset: 2px }
+.ind-panel { display: grid; grid-template-columns: 1.3fr .7fr; gap: 28px; padding: 30px; align-items: center }
+.ind-copy { display: grid; gap: 16px; min-width: 0 }
+.ticks { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px }
+.ticks li { padding-left: 30px; position: relative }
+.ticks li::before { content: "✓"; position: absolute; left: 0; top: 1px; width: 20px; height: 20px; border-radius: 50%; background: var(--wa); color: #06210f; font: 800 12px/20px var(--body); text-align: center }
+.used { color: var(--ink-soft); font-size: 15px }
+/* everything Vula does */
+.band-soft { background: var(--paper) }
+.acc { display: grid; gap: 12px }
+.acc details { border: 2px solid var(--line); border-radius: 18px; background: var(--mint); overflow: hidden }
+.acc details[open] { border-color: var(--wa) }
+.acc summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: center; padding: 18px 20px; font: 700 19px/1.2 var(--display) }
+.acc summary::-webkit-details-marker { display: none }
+.acc summary span { font-size: 22px; grid-row: span 2 }
+.acc summary em { grid-column: 2; font: 500 13px/1.3 var(--mono); font-style: normal; color: var(--ink-soft); letter-spacing: .02em }
+.acc summary::after { content: "+"; grid-column: 3; grid-row: 1 / span 2; font: 800 26px/1 var(--display); color: var(--ink-soft); transition: transform .2s ease }
+.acc details[open] summary::after { transform: rotate(45deg) }
+.acc ul { margin: 0; padding: 0 22px 20px 58px; display: grid; gap: 9px; color: var(--ink-soft) }
+.acc ul b { color: var(--ink) }
+@media (max-width: 900px) { .ind-panel { grid-template-columns: 1fr; padding: 22px } .acc ul { padding-left: 22px } }
+@media (max-width: 900px) {
+  .hero, .split, .dash, .cta { grid-template-columns: 1fr }
+  .steps, .biz, .plans { grid-template-columns: 1fr }
+  .trust { grid-template-columns: 1fr 1fr }
+  .phone { transform: none }
+  section { padding-block: 70px }
+}
+@media (max-width: 520px) {
+  .trust { grid-template-columns: 1fr }
+  nav.top .links { display: none }
+  .screen-mock .body { grid-template-columns: 1fr }
+  .tile.wide { grid-column: auto }
+}
+
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0 }
+.err { background: #fde7e7; color: #8a1f1f; border-radius: 12px; padding: 12px 14px; font-weight: 600 }
+
+</style>
+</head>
+<body>
+<header class="band-dark">
+  <div class="wrap">
+    <nav class="top" aria-label="Main">
+      <div class="logo">vula<i aria-hidden="true"></i></div>
+      <div class="links"><a href="#how">How it works</a><a href="#industries">Industries</a><a href="#features">Features</a><a href="#pricing">Pricing</a><a href="#start">Start</a></div>
+    </nav>
+    <div class="hero">
+      <div>
+        <h1>Your business, run from <span class="squiggle">WhatsApp.</span></h1>
+        <p class="lede">Customers order, ask and pay in the chat. You and your team run the back office from the same chat. Vula does the admin.</p>
+        <div class="ctas">
+          <a class="btn btn-wa" href="#start">💬 Chat to Vula on WhatsApp</a>
+          <a class="btn btn-ghost" href="#how">See how it works</a>
+        </div>
+        <div class="proof"><span><b>Made in Cape Town</b></span><span>Shops · makers · builders · reps</span><span>Logs in with WhatsApp — no passwords</span></div>
+      </div>
+      <div class="phone" aria-label="Example WhatsApp chat with a shop's Vula assistant">
+        <div class="screen">
+          <div class="chat-head"><div class="av">OH</div><div><b>Off the Hook</b><small>business account</small></div></div>
+          <div class="msgs">
+            <div class="b in">Hi! Do you have hake for Saturday? 🐟<small>08:14</small></div>
+            <div class="b out">Morning! Yes — Hake Centre Cuts are in today. How many kg would you like?<div class="chips"><span>1 kg</span><span>2 kg</span><span>3 kg</span></div><small>08:14 <span class="tick">✓✓</span></small></div>
+            <div class="b in">2 kg please, delivered Saturday<small>08:15</small></div>
+            <div class="b out">🛒 2 kg Hake Centre Cuts added. Delivery Saturday morning. Tap Pay to confirm your order.<div class="chips"><span>Pay now</span><span>Change</span></div><small>08:15 <span class="tick">✓✓</span></small></div>
+            <div class="b in">Paid ✅<small>08:16</small></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">One chat, both sides of the counter</span>
+        <h2>Front office and back office, in the app everyone already uses.</h2>
+        <p>No new app for your customers. No 12 tabs for your team. Vula sits on your own WhatsApp business number and works for both.</p>
+      </div>
+      <div class="split">
+        <div class="office">
+          <span class="tag">Front office — your customers</span>
+          <ul>
+            <li><span class="dot"></span><div><b>Browse and order</b> by range, colour and size, with photos.</div></li>
+            <li><span class="dot"></span><div><b>Pay in the chat</b> — card, EFT or a deposit on a bigger order.</div></li>
+            <li><span class="dot"></span><div><b>Track it</b>: packed, on the way, delivered.<br><q>Where's my order?</q></div></li>
+            <li><span class="dot"></span><div><b>Answers from your own info</b> — delivery areas, hours, prices. If Vula doesn't know, it asks you instead of guessing.</div></li>
+          </ul>
+        </div>
+        <div class="office back">
+          <span class="tag">Back office — you and your team</span>
+          <ul>
+            <li><span class="dot"></span><div><b>Snap an invoice or slip</b>; Vula files it and books it.<br><q>Got 2 bags concrete mix for R190</q></div></li>
+            <li><span class="dot"></span><div><b>Know your numbers</b>: sales, stock, cost to make, margin.<br><q>What does a round basin cost us?</q></div></li>
+            <li><span class="dot"></span><div><b>Bank and tax</b>: matches statements, flags VAT and SARS dates.</div></li>
+            <li><span class="dot"></span><div><b>Checks before it acts</b>: anything that spends money or messages customers waits for your tap.</div></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band-dark" id="how">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">How it works</span>
+        <h2>Three steps, and we do them with you.</h2>
+        <p>No new app to install and nothing for your customers to learn.</p>
+      </div>
+      <div class="steps">
+        <div class="step"><h3>Connect your WhatsApp number</h3><p>Your own business number, your name and logo. Customers keep chatting where they already do.</p></div>
+        <div class="step"><h3>Vula learns your business</h3><p>From your website, price lists, documents and a short chat with you about delivery, payments and hours.</p></div>
+        <div class="step"><h3>Everyone just chats</h3><p>Customers order. Your team asks, snaps and approves. You see it all on your branded dashboard.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="industries">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">Built for your industry</span>
+        <h2>One Vula, shaped to the way you work.</h2>
+        <p>Pick yours. The same assistant does very different jobs for a fish shop, a basin maker and an architect.</p>
+      </div>
+      <div class="ind" data-tabs>
+        <div class="ind-tabs" role="tablist" aria-label="Industries">
+          <button role="tab" id="t-shop" aria-controls="p-shop" aria-selected="true">🐟 Shops &amp; food</button>
+          <button role="tab" id="t-make" aria-controls="p-make" aria-selected="false">🏺 Makers</button>
+          <button role="tab" id="t-build" aria-controls="p-build" aria-selected="false">📐 Construction &amp; design</button>
+          <button role="tab" id="t-rep" aria-controls="p-rep" aria-selected="false">🧳 Brand reps</button>
+          <button role="tab" id="t-serv" aria-controls="p-serv" aria-selected="false">🗓️ Services</button>
+        </div>
+
+        <div class="ind-panel" role="tabpanel" id="p-shop" aria-labelledby="t-shop">
+          <div class="ind-copy">
+            <h3>Sell, take payment and deliver — all in the chat.</h3>
+            <ul class="ticks">
+              <li>Your catalogue on WhatsApp, by range, size and colour, with photos</li>
+              <li>Tap-to-order, a basket, and a payment link (card or EFT)</li>
+              <li>"Packed", "on the way" and "delivered" messages, then a rating</li>
+              <li>Reminders for unfinished baskets and "same again?" nudges</li>
+              <li>Picture promotions with a Shop now button</li>
+              <li>Shopify or WooCommerce shop? Vula keeps in sync with it</li>
+            </ul>
+            <p class="used">Used by <b>Off the Hook</b>, Cape Town seafood.</p>
+          </div>
+          <div class="mini" aria-label="Example chat">
+            <div class="b in">Same as last week please 🙏</div>
+            <div class="b out">Done — 2 kg hake + 1 kg calamari, Saturday delivery. Tap Pay to confirm.</div>
+            <div class="b in">Paid ✅</div>
+          </div>
+        </div>
+
+        <div class="ind-panel" role="tabpanel" id="p-make" aria-labelledby="t-make" hidden>
+          <div class="ind-copy">
+            <h3>Know what every product really costs to make.</h3>
+            <ul class="ticks">
+              <li>Recipes per product: materials, labour hours, what a batch makes</li>
+              <li>Log a batch in one message; rejects count in the cost</li>
+              <li>Material prices taken from your past supplier invoices</li>
+              <li>Labour and running costs suggested from your bank statements</li>
+              <li>Cost per unit and margin on every product</li>
+              <li>Stock of materials and finished goods, in exact amounts</li>
+            </ul>
+            <p class="used">Used by <b>SeedleMe</b>, handmade basins and décor.</p>
+          </div>
+          <div class="mini" aria-label="Example chat">
+            <div class="b in">made 12 round basins, 1 reject, 6 hours</div>
+            <div class="b out">Logged. Cost per basin this batch: R343.45 — margin 42.8%. <em>(example)</em></div>
+          </div>
+        </div>
+
+        <div class="ind-panel" role="tabpanel" id="p-build" aria-labelledby="t-build" hidden>
+          <div class="ind-copy">
+            <h3>Every project's money, documents and programme in one place.</h3>
+            <ul class="ticks">
+              <li>Supplier invoices and slips filed against the right project</li>
+              <li>Profit per project, with costs split by trade</li>
+              <li>BOQs read in full; your own rates learned from past jobs</li>
+              <li>Price advice for new quotes, based on what work really cost</li>
+              <li>Programme imported from your Gantt; daily site briefs</li>
+              <li>Bank statements matched; VAT and SARS dates flagged</li>
+            </ul>
+            <p class="used">Used by <b>DIGG</b>, architecture and interiors.</p>
+          </div>
+          <div class="mini" aria-label="Example chat">
+            <div class="b in">Which bills are still unpaid this week?</div>
+            <div class="b out">3 supplier bills due by Friday. Want me to list them?</div>
+          </div>
+        </div>
+
+        <div class="ind-panel" role="tabpanel" id="p-rep" aria-labelledby="t-rep" hidden>
+          <div class="ind-copy">
+            <h3>A sales assistant in every rep's pocket.</h3>
+            <ul class="ticks">
+              <li>Product questions answered from the brand's own spec sheets</li>
+              <li>Contacts and meetings logged from a quick message</li>
+              <li>Fuel slips and expenses snapped and claimed</li>
+              <li>Weekly call sheets sent automatically</li>
+              <li>Brochures and spec sheets found and sent in seconds</li>
+            </ul>
+          </div>
+          <div class="mini" aria-label="Example chat">
+            <div class="b in">Is this vinyl OK for a hospital ward?</div>
+            <div class="b out">Yes — it's rated for healthcare. Here's the spec sheet 📄</div>
+          </div>
+        </div>
+
+        <div class="ind-panel" role="tabpanel" id="p-serv" aria-labelledby="t-serv" hidden>
+          <div class="ind-copy">
+            <h3>Bookings, quotes and getting paid, without the admin.</h3>
+            <ul class="ticks">
+              <li>Clients book, reschedule and get reminders on WhatsApp</li>
+              <li>Quotes and invoices with your branding, sent from the chat</li>
+              <li>Friendly reminders for unpaid invoices</li>
+              <li>Answers to common questions from your own information</li>
+              <li>Letters, proposals and emails drafted for you to check</li>
+            </ul>
+          </div>
+          <div class="mini" aria-label="Example chat">
+            <div class="b in">Can I move my Thursday 10am?</div>
+            <div class="b out">Sure — Friday 9:00 or 11:30 are open. Which suits you?</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band-soft" id="features">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">Everything Vula does</span>
+        <h2>Open what matters to you.</h2>
+        <p>All of it works on WhatsApp, and all of it shows on your dashboard.</p>
+      </div>
+      <div class="acc">
+        <details><summary><span>🛒</span>Selling on WhatsApp<em>catalogue, orders, payments, promotions</em></summary>
+          <ul><li><b>Catalogue in the chat</b> — browse by range and colour, with photos and tap menus.</li>
+          <li><b>Orders and payment</b> — basket, checkout, card or EFT payment links, deposits on bigger orders.</li>
+          <li><b>Order updates</b> — packed, on the way, delivered, then a quick rating.</li>
+          <li><b>Bring customers back</b> — unfinished-basket reminders and "same again?" nudges, respecting opt-outs.</li>
+          <li><b>Promotions</b> — picture broadcasts with a Shop now button, to the customers you choose.</li>
+          <li><b>Your other shops</b> — keeps in sync with Shopify, WooCommerce and WhatsApp's own catalogue.</li></ul></details>
+        <details><summary><span>💬</span>Customer service<em>answers, handover, bookings</em></summary>
+          <ul><li><b>Answers from your own information</b> — your website, documents and a short business profile.</li>
+          <li><b>Asks you when it doesn't know</b> — passes the question to the right person and learns the answer, with your OK.</li>
+          <li><b>Voice notes</b> — understood and answered like typed messages.</li>
+          <li><b>Bookings</b> — appointments, rescheduling and reminders.</li>
+          <li><b>POPIA-minded</b> — customers can reply STOP, and Vula honours it.</li></ul></details>
+        <details><summary><span>📄</span>Documents &amp; admin<em>snap, file, find</em></summary>
+          <ul><li><b>Snap any document</b> — invoices, quotes, slips and delivery notes are read and filed.</li>
+          <li><b>Find anything</b> — "all invoices from Build It this year", sent as a spreadsheet.</li>
+          <li><b>Drafts</b> — letters, proposals and emails written for you to check and send.</li>
+          <li><b>Connected</b> — your email inbox, Google, Microsoft and ClickUp.</li></ul></details>
+        <details><summary><span>💰</span>Money &amp; tax<em>invoices, bank, VAT, SARS dates</em></summary>
+          <ul><li><b>Quotes and invoices</b> — branded, sent from the chat, with reminders when they're late.</li>
+          <li><b>Bank statements</b> — imported and matched to invoices and bills.</li>
+          <li><b>Expenses</b> — fuel slips and claims snapped and booked.</li>
+          <li><b>Profit</b> — per project or per product, with costs split clearly.</li>
+          <li><b>Tax</b> — VAT position, tax estimates and SARS deadlines in your morning summary.</li></ul></details>
+        <details><summary><span>📦</span>Stock &amp; production<em>counts, deliveries, cost to make</em></summary>
+          <ul><li><b>Stock counts</b> — scan barcodes with your phone's camera.</li>
+          <li><b>Deliveries</b> — book in what arrived, from a photo of the delivery note.</li>
+          <li><b>Low-stock alerts</b> and purchase orders.</li>
+          <li><b>Manufacturing</b> — recipes, batches, cost per unit and margin; prices from past invoices.</li></ul></details>
+        <details><summary><span>🏗️</span>Projects &amp; construction<em>BOQs, rates, programme</em></summary>
+          <ul><li><b>Projects</b> — every document, cost and payment on the right job.</li>
+          <li><b>BOQs and rates</b> — bills of quantities read in full; your own rates learned from your invoices.</li>
+          <li><b>Price advice</b> — what to charge, based on what similar work really cost.</li>
+          <li><b>Programme and site</b> — Gantt charts imported; daily task briefs for the team.</li>
+          <li><b>Take-offs</b> — quantities from drawings.</li></ul></details>
+        <details><summary><span>👥</span>Your team<em>roles, reps, safe actions</em></summary>
+          <ul><li><b>Roles and access</b> — owner, manager, staff and sales reps each see what they need.</li>
+          <li><b>Log in with WhatsApp</b> — scan, send, approve. No passwords to forget.</li>
+          <li><b>Checks before acting</b> — anything that spends money or messages customers waits for a tap.</li>
+          <li><b>Daily summaries</b> — a morning message with what needs attention.</li></ul></details>
+        <details><summary><span>🎨</span>Your brand<em>your name, your colours</em></summary>
+          <ul><li><b>Your own address</b> — yourbusiness.vula-ai.com, in your colours and logo.</li>
+          <li><b>Brand from your logo</b> — Vula suggests colours and fonts from your logo or website.</li>
+          <li><b>Your website</b> — pages and a shop you can edit by dragging and dropping.</li>
+          <li><b>An app on your phone</b> — the dashboard installs like an app, with your icon.</li></ul></details>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">Your dashboard</span>
+        <h2>Your brand on top. Log in with WhatsApp.</h2>
+        <p>Every business gets its own address — yourbusiness.vula-ai.com — in its own colours. Scan a code, tap Approve on WhatsApp, you're in. Nothing to forget.</p>
+      </div>
+      <div class="dash">
+        <div class="screen-mock" aria-label="Dashboard illustration">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="body">
+            <div class="tile"><small>Orders today</small><b>18</b></div>
+            <div class="tile"><small>Paid</small><b>15</b></div>
+            <div class="tile"><small>To deliver</small><b>9</b></div>
+            <div class="tile wide"><div><small>Cost to make · example product</small><b>R343.45</b></div><span class="badge">margin 42.8%</span></div>
+          </div>
+        </div>
+        <div class="login-card">
+          <span class="eyebrow">Log in with WhatsApp</span>
+          <div class="qr" aria-hidden="true" id="qr"></div>
+          <h3>Scan. Send. Approve.</h3>
+          <p>Your WhatsApp number is your key. Owners get a heads-up whenever someone on the team logs in.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band-dark" id="pricing">
+    <div class="wrap">
+      <div class="head">
+        <span class="eyebrow">Pricing</span>
+        <h2>One price a month. Everything in.</h2>
+        <p>Every plan includes the WhatsApp assistant, your branded dashboard and set-up help. Plans differ by how many people log in.</p>
+      </div>
+      <div class="plans">
+        <div class="plan"><h3>Starter</h3><div class="price">R1,500<small> /month</small></div><ul><li>2 team logins</li><li>Everything in Vula</li></ul></div>
+        <div class="plan pick"><span class="badge">Most popular</span><h3>Growth</h3><div class="price">R3,500<small> /month</small></div><ul><li>5 team logins</li><li>Everything in Vula</li></ul></div>
+        <div class="plan"><h3>Business</h3><div class="price">R7,500<small> /month</small></div><ul><li>Unlimited team logins</li><li>Everything in Vula</li></ul></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band-dark" style="padding-top:0">
+    <div class="wrap">
+      <div class="trust">
+        <div><h3>Your data stays yours</h3><p>Every business is walled off from the others, down to the database.</p></div>
+        <div><h3>POPIA-minded</h3><p>Customers can opt out any time with STOP, and we honour it.</p></div>
+        <div><h3>AI close to home</h3><p>Where it can, the thinking runs on our own server in South Africa.</p></div>
+        <div><h3>Sums done properly</h3><p>Money is worked out by the system and checked, never guessed by the AI.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="start">
+    <div class="wrap cta">
+      <div class="head" style="margin:0">
+        <span class="eyebrow">Start</span>
+        <h2>Let's get your business on WhatsApp.</h2>
+        <p>Leave your details and we'll WhatsApp you to set up a quick demo on your own products.</p>
+      </div>
+      <form class="start" id="startForm" novalidate>
+        <input type="text" name="website" id="f-hp" tabindex="-1" autocomplete="off" aria-hidden="true" class="hp">
+        <label for="f-name">Your name<input id="f-name" name="name" required autocomplete="name" placeholder="Thandi Mokoena"></label>
+        <label for="f-biz">Business name<input id="f-biz" name="business" required placeholder="e.g. Bay Bakery"></label>
+        <label for="f-wa">WhatsApp number<input id="f-wa" name="whatsapp" required inputmode="tel" autocomplete="tel" placeholder="082 123 4567"></label>
+        <label for="f-kind">What do you do?
+          <select id="f-kind" name="kind"><option>Shop / food</option><option>I make things</option><option>Construction / design</option><option>Brand rep</option><option>Services</option><option>Something else</option></select>
+        </label>
+        <button class="btn btn-wa" type="submit">💬 WhatsApp me</button>
+        <div class="ok" id="ok" hidden role="status">Thanks! We'll WhatsApp you shortly to set up your demo.</div>
+        <div class="err" id="err" hidden role="alert"></div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<div class="wrap"><footer><span>© Vula Group · Cape Town</span><span>vula-ai.com</span></footer></div>
+
+<script>
+// a decorative QR-like grid for the login card
+(function () {
+  var g = document.getElementById('qr'); if (!g) return;
+  var seed = 7;
+  function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+  for (var r = 0; r < 11; r++) for (var c = 0; c < 11; c++) {
+    var corner = (r < 3 && c < 3) || (r < 3 && c > 7) || (r > 7 && c < 3);
+    var cell = document.createElement('i');
+    if (!(corner ? !(r === 1 && (c === 1 || c === 9)) && !(r === 9 && c === 1) : rnd() > 0.45)) cell.className = 'o';
+    g.appendChild(cell);
+  }
+})();
+
+// industry tabs
+document.querySelectorAll('[data-tabs]').forEach(function (box) {
+  var tabs = box.querySelectorAll('[role="tab"]');
+  function show(t) {
+    tabs.forEach(function (x) {
+      var on = x === t; x.setAttribute('aria-selected', on ? 'true' : 'false'); x.tabIndex = on ? 0 : -1;
+      document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { show(t) });
+    t.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        var n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]; show(n); n.focus();
+      }
+    });
+  });
+  show(tabs[0]);
+});
+var API = 'https://vula-group-production.up.railway.app';
+document.getElementById('startForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var f = this, ok = document.getElementById('ok'), err = document.getElementById('err');
+  if (!f.checkValidity()) { f.reportValidity(); return; }
+  var btn = f.querySelector('button[type=submit]'); btn.disabled = true; err.hidden = true;
+  fetch(API + '/v1/website/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: f.name.value, business: f.business.value, whatsapp: f.whatsapp.value,
+                           kind: f.kind.value, website: f.website.value, source: location.hostname }) })
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d } }) })
+    .then(function (x) {
+      if (!x.ok) throw new Error((x.d && x.d.detail) || 'Something went wrong — please try again.');
+      ok.hidden = false; f.reset();
+    })
+    .catch(function (e2) { err.textContent = e2.message || 'Something went wrong — please try again.'; err.hidden = false; })
+    .finally(function () { btn.disabled = false; });
+});
+</script>
+</body>
+</html>
