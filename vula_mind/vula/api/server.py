@@ -1838,6 +1838,9 @@ app.include_router(tenants_router, prefix="/v1/tenants")
 app.include_router(users_router, prefix="/v1/users")
 from vula.api.wa_login import router as wa_login_router  # noqa: E402 — log in with WhatsApp (public by design)
 app.include_router(wa_login_router, prefix="/v1/auth/wa")
+from vula.api.website_leads import router as website_router, master_router as website_master_router  # noqa: E402
+app.include_router(website_router, prefix="/v1/website")   # public sign-up form on vula-ai.com (rate-limited)
+app.include_router(website_master_router, prefix="/v1/master/website")   # master-only lead list
 app.include_router(qs_router, prefix="/v1/qs")
 app.include_router(google_router, prefix="/v1/google")
 app.include_router(microsoft_router, prefix="/v1/microsoft")
