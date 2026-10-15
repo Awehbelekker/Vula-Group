@@ -727,6 +727,37 @@ async def receive_message(
 
 # ─── Message routing ─────────────────────────────────────────────────────────
 
+# "Should I reuse this…?" asked → (tenant, helper digits) → (learned id, when). A typed "Yes" or
+# "No" answers it like the buttons do. 2026-10-15 (SeedleMe): Matt typed "Yes" and got
+# today's sales instead. Per worker and best effort — the buttons always work.
+_LEARN_REVIEW_ASKED: Dict[tuple, tuple] = {}
+_LEARN_REVIEW_TTL = 30 * 60
+_TYPED_YES_RE = re.compile(r"^\s*(?:yes|yeah|yep|ja|yes,?\s*(?:please|reuse it))\s*[.!👍]*\s*$", re.I)
+_TYPED_NO_RE = re.compile(r"^\s*(?:no|nope|nee|no,?\s*(?:thanks|just once))\s*[.!]*\s*$", re.I)
+
+
+def _digits_only(phone: str) -> str:
+    return "".join(c for c in (phone or "") if c.isdigit())
+
+
+async def _maybe_typed_learn_review(phone: str, text: str, tenant_id: Optional[str]) -> bool:
+    if not tenant_id:
+        return False
+    key = (tenant_id, _digits_only(phone))
+    asked = _LEARN_REVIEW_ASKED.get(key)
+    if not asked or time.time() - asked[1] > _LEARN_REVIEW_TTL:
+        return False
+    if _TYPED_YES_RE.match(text or ""):
+        action = "learn_keep"
+    elif _TYPED_NO_RE.match(text or ""):
+        action = "learn_bin"
+    else:
+        return False
+    _LEARN_REVIEW_ASKED.pop(key, None)
+    await _handle_learn_review_reply(phone, f"{action}:{asked[0]}", tenant_id)
+    return True
+
+
 async def _maybe_helper_escalation_answer(phone: str, text: str,
                                           tenant_id: Optional[str] = None) -> bool:
     """If this phone is a helper (e.g. Staci) with an open escalation, their message
@@ -736,6 +767,8 @@ async def _maybe_helper_escalation_answer(phone: str, text: str,
     (knowledge and commerce) so a helper can reply on whichever tenant line they were
     pinged from — not just the knowledge assistant's line.
     """
+    if await _maybe_typed_learn_review(phone, text, tenant_id):
+        return True
     try:
         from vula import escalation as esc
         open_esc = esc.open_escalation_for_helper(phone, tenant_id)
@@ -792,6 +825,8 @@ async def _maybe_helper_escalation_answer(phone: str, text: str,
                 [{"id": f"learn_keep:{learned_id}", "title": "Yes, reuse it"},
                  {"id": f"learn_bin:{learned_id}", "title": "No, just once"}],
             )
+            if sent:
+                _LEARN_REVIEW_ASKED[(tid, _digits_only(phone))] = (learned_id, time.time())
         if not sent:
             await _send_reply(phone, "✅ Sent to the customer.", tenant_id=tid)
     else:
@@ -1266,6 +1301,7 @@ async def _handle_learn_review_reply(phone: str, reply_id: str, tenant_id: str) 
     action, _, learned_id = reply_id.partition(":")
     if not learned_id:
         return
+    _LEARN_REVIEW_ASKED.pop((tenant_id, _digits_only(phone)), None)
     row = esc.get_learned_answer(learned_id)
     if not row or row.get("tenant_id") != tenant_id:
         await _send_reply(phone, "That one's no longer around to review. 🙏", tenant_id)
@@ -7443,8 +7479,11 @@ async def _maybe_welcome_new_owner(tenant_id: str, phone: str) -> bool:
         # whichever channel that team member's login was actually delivered through; this is just
         # a standing reminder of where to go, safe to resend on every trigger.
         dash_url = _dashboard_url(tenant_id)
-        dash_line = (f"\n\nYour Vula dashboard is at {dash_url} — log in with the email/password "
-                     f"you were given.")
+        # 2026-10-15: no password needed — the login page signs team members in with this
+        # WhatsApp number (vula/api/wa_login.py). Matt was told to use an email/password he
+        # was never given.
+        dash_line = (f"\n\nYour Vula dashboard is at {dash_url} — no password needed: tap "
+                     f"*Log in with WhatsApp* and use this number.")
 
         # 2026-09-18: this used to close with a seafood in-joke ("No fish were harmed...") sent
         # to every tenant's owner regardless of vertical — an architecture firm or a clinic got
@@ -7773,6 +7812,11 @@ async def _run_commerce_admin(phone: str, text: str, tenant_id: str,
     # every recognized admin getting the identical, full owner-level view. Best-effort — an
     # unmatched/failed lookup just leaves the caller unscoped (today's behaviour).
     caller_name, caller_role = _caller_identity(tenant_id, phone)
+    try:
+        from vula import escalation as _esc
+        link_context += _esc.handoff_context(phone, tenant_id)
+    except Exception as exc:
+        logger.debug("handoff context skipped: %s", exc)
 
     skill = get_skill("commerce_admin")
     # 2026-09-22: a turn that falls back to a live mailbox search (find_document miss ->
@@ -8229,7 +8273,8 @@ async def _handle_commerce_interactive(
             await _record_rating(phone, tenant_id, rows[0], int(n) if n.isdigit() else 3)
         return
     if reply_id == "cart_checkout":
-        await _handle_commerce_message(phone, "I'd like to check out now", msg_id, tenant_id)
+        if not await _send_checkout_prompt(phone, tenant_id):
+            await _handle_commerce_message(phone, "I'd like to check out now", msg_id, tenant_id)
         return
     if reply_id == "cart_more":
         await _send_commerce_welcome(phone, tenant_id)
@@ -8774,6 +8819,31 @@ async def _send_cart_summary(phone: str, tenant_id: str, creds: dict, cart: dict
     await _send_wa_buttons(creds, _wa_number(phone), body,
                            [{"id": "cart_checkout", "title": "Checkout"},
                             {"id": "cart_more", "title": "Keep shopping"}])
+
+
+async def _send_checkout_prompt(phone: str, tenant_id: str) -> bool:
+    """Checkout tapped → the cart and what we need (address, how to pay), built in code and
+    saved to the chat so the assistant picks up from the customer's answer. False when the
+    cart is empty, so the assistant can say so."""
+    from vula.commerce import service as _cs
+    from core.skills.commerce_assistant import checkout_prompt
+    try:
+        cart = await _cs.get_or_create_cart(tenant_id, phone, phone)
+        text = checkout_prompt(tenant_id, cart)
+    except Exception as exc:
+        logger.warning("checkout prompt failed for %s: %s", tenant_id, exc)
+        return False
+    if not text:
+        return False
+    await _send_reply(phone, text, tenant_id=tenant_id)
+    try:
+        session = await _cs.get_or_create_session(
+            tenant_id, session_key=phone, channel="whatsapp", customer_phone=phone)
+        await _cs.append_message(tenant_id, session["id"], "user", "[tapped Checkout]")
+        await _cs.append_message(tenant_id, session["id"], "assistant", text)
+    except Exception as exc:
+        logger.debug("checkout prompt history skipped: %s", exc)
+    return True
 
 
 async def _maybe_claim_web_basket(phone: str, text: str, tenant_id: str) -> bool:

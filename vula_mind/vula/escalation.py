@@ -60,14 +60,22 @@ _INSTRUCTION_TO_VULA = re.compile(
 )
 
 
+# An offer of help is a reply, not an answer. 2026-10-15 (SeedleMe): "Sure how can we help you"
+# was learned as the answer to "I'd like to check out now".
+_OFFER_OF_HELP = re.compile(
+    r"\b(how can (we|i) help|what can (we|i) (do|help)|how may (we|i) (help|assist)|"
+    r"what do you need|let (me|us) know how)\b", re.IGNORECASE)
+
+
 def reply_is_instruction_to_vula(text: str) -> bool:
-    """True when the helper is directing Vula rather than answering the customer.
+    """True when the helper is directing Vula, or only offering help, rather than answering.
 
     Such a reply is still RELAYED (the helper did intend the customer to hear something) but is
     never LEARNED — storing a directive as the canonical answer is what produced the worst of the
     two bad rows found in production.
     """
-    return bool(_INSTRUCTION_TO_VULA.search((text or "").strip()))
+    t = (text or "").strip()
+    return bool(_INSTRUCTION_TO_VULA.search(t) or _OFFER_OF_HELP.search(t))
 
 
 # isiZulu/isiXhosa/Sesotho additions, 2026-09-11 — same starter-list caveat as _NO_ANSWER
@@ -346,6 +354,42 @@ def _pick_helper(tenant_id: str, exclude_phone: str = "") -> Optional[dict]:
         helpers = [r for r in rows if (r.get("whatsapp") or "").strip()
                    and r.get("role") in ("owner", "manager")]
     return helpers[0] if helpers else None
+
+
+def recent_for_helper(helper_phone: str, tenant_id: str, hours: float = 24.0, limit: int = 3) -> list[dict]:
+    """The customer questions passed to this team member lately, newest first — so the admin
+    assistant knows which customer "the customer" is. 2026-10-15 (SeedleMe): Matt answered a
+    question, asked "show me the customer's details" and was asked for a name; then Vula
+    agreed there had been "no actual client"."""
+    from datetime import timedelta
+    digits = re.sub(r"\D", "", helper_phone or "")
+    if not (digits and tenant_id):
+        return []
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    try:
+        return (_client().table("vula_escalations")
+                .select("customer_phone,question,answer,status,created_at")
+                .eq("tenant_id", tenant_id).eq("helper_phone", digits).gte("created_at", since)
+                .order("created_at", desc=True).limit(limit).execute().data or [])
+    except Exception:
+        return []
+
+
+def handoff_context(helper_phone: str, tenant_id: str) -> str:
+    """A note for the admin assistant listing recent customer questions passed to this person."""
+    rows = recent_for_helper(helper_phone, tenant_id)
+    if not rows:
+        return ""
+    lines = []
+    for r in rows:
+        when = (r.get("created_at") or "")[11:16]
+        q = " ".join((r.get("question") or "").split())[:160]
+        a = " ".join((r.get("answer") or "").split())[:120]
+        lines.append(f"- {when} UTC, customer +{r.get('customer_phone')}: \"{q}\""
+                     + (f" — answered: \"{a}\"" if a else f" — {r.get('status')}"))
+    return ("\n\n[Customer questions passed to this team member in the last day (real "
+            "customers, newest first) — 'the customer' means the first one unless they say "
+            "otherwise; look them up by this number:]\n" + "\n".join(lines))
 
 
 def open_escalation_for_helper(helper_phone: str, tenant_id: Optional[str] = None) -> Optional[dict]:

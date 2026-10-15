@@ -140,8 +140,10 @@ def test_delivery_fee_uses_tenant_rules_over_cart_snapshot():
                return_value={"delivery_fee_cents": 5000, "free_delivery_over_cents": 50000}):
         assert service.delivery_fee_cents(TENANT, cart, 10000) == 5000
         assert service.delivery_fee_cents(TENANT, cart, 50000) == 0
+    # No fee set → nothing charged; the team confirms it. Never the cart's old R80 default
+    # (2026-10-15, SeedleMe).
     with patch("vula.commerce.order_workflow.get_order_settings", return_value={}):
-        assert service.delivery_fee_cents(TENANT, cart, 10000) == 8000
+        assert service.delivery_fee_cents(TENANT, cart, 10000) == 0
 
 
 # ── Paying an order's invoice settles the order (2026-09-25 review) ─────────

@@ -46,6 +46,35 @@ _FIELDS = ("require_approval", "dispatch_channel", "fulfillment_email", "fulfill
 PAYMENT_LABELS = {"online": "Card / online payment", "cod": "Pay on delivery", "eft": "EFT / bank transfer"}
 
 
+def usable_payment_methods(tenant_id: str, cfg: dict | None = None) -> list:
+    """The payment methods a customer can really use. Card is offered only when a payment
+    gateway is connected or the shop has its own checkout page. 2026-10-15, SeedleMe: no
+    gateway, yet card was on offer and the customer was promised a link that couldn't come.
+    Nothing usable → EFT, whose instructions say the team will send the banking details
+    (the owner is told about every order)."""
+    cfg = cfg if cfg is not None else get_order_settings(tenant_id)
+    enabled = [str(m).lower() for m in (cfg.get("payment_methods") or ["online", "cod", "eft"])]
+    usable = [m for m in enabled if m != "online" or _card_payments_ready(tenant_id)]
+    return usable or ["eft"]
+
+
+def _card_payments_ready(tenant_id: str) -> bool:
+    try:
+        from config import settings
+        if (settings.store_urls.get(tenant_id) or "").strip():
+            return True
+        from vula.payments import default_provider_row
+        return bool(default_provider_row(tenant_id))
+    except Exception:
+        return False
+
+
+def payment_choices_text(methods: list) -> str:
+    """"EFT / bank transfer or Pay on delivery" — for asking how they'd like to pay."""
+    labels = [PAYMENT_LABELS.get(m, m) for m in methods]
+    return labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " or " + labels[-1]
+
+
 def payment_instructions(cfg: dict, method: str) -> str:
     """The line(s) to show a customer for their chosen payment method."""
     method = (method or "").lower()

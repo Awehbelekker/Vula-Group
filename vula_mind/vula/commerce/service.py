@@ -696,12 +696,27 @@ def delivery_fee_cents(tenant_id: str, cart: dict, subtotal_cents: int) -> int:
         _cfg = get_order_settings(tenant_id)
         if _cfg.get("delivery_fee_cents") is not None:
             delivery = int(_cfg["delivery_fee_cents"])
+        else:
+            # No fee set: charge nothing and let the team confirm it (delivery_fee_known).
+            # 2026-10-15: every cart is created with Off the Hook's old R80, so SeedleMe's
+            # made-to-order sinks would have carried a delivery fee nobody chose.
+            delivery = 0
         free_over = _cfg.get("free_delivery_over_cents")
         if free_over and subtotal_cents >= int(free_over):
             delivery = 0
     except Exception:
         pass
     return delivery
+
+
+def delivery_fee_known(tenant_id: str) -> bool:
+    """Whether the business has set its delivery fee. When it hasn't, previews and
+    confirmations say the team will confirm it instead of showing R0.00."""
+    try:
+        from vula.commerce.order_workflow import get_order_settings
+        return get_order_settings(tenant_id).get("delivery_fee_cents") is not None
+    except Exception:
+        return True
 
 
 async def create_order(tenant_id: str, cart: dict, checkout_data: dict, *, clear_cart_after: bool = True) -> dict:

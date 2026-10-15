@@ -375,6 +375,45 @@ def _repeats_last_reply(answer: str, history: str) -> bool:
     return new == last or difflib.SequenceMatcher(None, new, last).ratio() >= 0.92
 
 
+def checkout_questions(tenant_id: str) -> str:
+    """What a customer needs to tell us to check out: where it goes and how they'll pay —
+    only the payment methods that really work for this business."""
+    from vula.commerce import order_workflow as ow
+    cfg = ow.get_order_settings(tenant_id)
+    where = "your delivery address"
+    if cfg.get("collection_enabled"):
+        note = (cfg.get("collection_note") or "").strip()
+        where += " (or reply *collect* to collect" + (f" — {note}" if note else "") + ")"
+    pay = ow.payment_choices_text(ow.usable_payment_methods(tenant_id, cfg))
+    return f"1. {where[0].upper()}{where[1:]}\n2. How you'd like to pay: {pay}"
+
+
+def checkout_prompt(tenant_id: str, cart: Dict[str, Any]) -> Optional[str]:
+    """The reply to the cart's Checkout button: the cart and the two questions, built in code.
+    2026-10-15 (SeedleMe): the tap went to the model as "I'd like to check out now", which
+    checked business hours and handed it to the owner as a question, and the customer waited
+    an hour for a reply to a button they'd pressed."""
+    items = cart.get("commerce_cart_items") or []
+    if not items:
+        return None
+    lines, subtotal = [], 0
+    for it in items:
+        prod = it.get("commerce_products") or {}
+        cents = _line_cents(it["quantity"], it["unit_price_cents"])
+        subtotal += cents
+        lines.append(f"• {_fmt_qty(prod, it['quantity'])} × {prod.get('name', 'Item')} — R{cents / 100:,.2f}")
+    fee = ("" if not service.delivery_fee_known(tenant_id)
+           else f"\nDelivery: R{service.delivery_fee_cents(tenant_id, cart, subtotal) / 100:,.2f}")
+    return ("🧾 *Checkout*\n" + "\n".join(lines) + f"\nSubtotal: R{subtotal / 100:,.2f}" + fee
+            + "\n\nTo place your order, please send me:\n" + checkout_questions(tenant_id))
+
+
+# Checkout requests are never a question for the team (see _exec_ask_team).
+_CHECKOUT_INTENT_RE = re.compile(
+    r"\b(check\s*-?\s*out|place\s+(?:my|the|an|this)?\s*order|ready\s+to\s+(?:order|pay)|"
+    r"pay\s+(?:now|for\s+(?:it|this|my\s+order)))\b", re.IGNORECASE)
+
+
 def _wants_collection(args: Dict[str, Any]) -> bool:
     return str((args or {}).get("fulfilment") or "").strip().lower() == "collection"
 
@@ -1959,6 +1998,10 @@ class CommerceAssistantSkill(BaseSkill):
                  "line_total": f"R{line_total / 100:.2f}"}
             )
         delivery = service.delivery_fee_cents(tenant_id, cart, subtotal)
+        if not service.delivery_fee_known(tenant_id):
+            return {"items": lines, "subtotal": f"R{subtotal / 100:.2f}",
+                    "delivery": "to be confirmed by the team",
+                    "total": f"R{subtotal / 100:.2f} plus delivery"}
         return {
             "items": lines,
             "subtotal": f"R{subtotal / 100:.2f}",
@@ -1970,7 +2013,17 @@ class CommerceAssistantSkill(BaseSkill):
         base = (settings.store_urls.get(tenant_id, "") or "").rstrip("/")
         if base:
             return {"checkout_url": f"{base}/cart"}
-        return {"message": "Reply with your delivery address and we'll send a payment link directly."}
+        # Checkout happens here in the chat: review_order, then place_order. 2026-10-15
+        # (SeedleMe): this used to say "we'll send a payment link directly" — the model passed
+        # that promise on, and no order was ever placed and no link ever sent.
+        from vula.commerce import order_workflow as ow
+        return {"next_step": checkout_questions(tenant_id),
+                "instruction_to_assistant": "Checkout happens in this chat. Ask the customer "
+                "for what 'next_step' lists, then call review_order with their answers and wait "
+                "for CONFIRM before place_order. Never promise a payment link — only "
+                "place_order's confirmation says how to pay.",
+                "payment_options": [ow.PAYMENT_LABELS.get(m, m)
+                                    for m in ow.usable_payment_methods(tenant_id)]}
 
     async def _exec_track_order(self, tenant_id: str, args: Dict[str, Any],
                                 phone: Optional[str] = None) -> Dict[str, Any]:
@@ -2490,7 +2543,7 @@ class CommerceAssistantSkill(BaseSkill):
         customer can confirm or change first. place_order runs only after they reply CONFIRM."""
         from vula.commerce import order_workflow as ow
         cfg = ow.get_order_settings(tenant_id)
-        enabled = [str(m).lower() for m in (cfg.get("payment_methods") or ["online", "cod", "eft"])]
+        enabled = ow.usable_payment_methods(tenant_id, cfg)
         method = (args.get("payment_method") or "").lower().strip()
 
         cart = await service.get_or_create_cart(tenant_id, session_id, phone)
@@ -2524,10 +2577,13 @@ class CommerceAssistantSkill(BaseSkill):
             f"R{_line_cents(it['quantity'], it['unit_price_cents']) / 100:.2f}" for it in items)
         addr = (args.get("delivery_address") or "").strip()
         pay = ow.PAYMENT_LABELS.get(method) if method in enabled else None
+        fee_known = collect or service.delivery_fee_known(tenant_id)
         preview = (
             f"🧾 *Please check your order:*\n{item_lines}\n"
-            f"Subtotal: R{subtotal / 100:.2f}\nDelivery: R{delivery / 100:.2f}" + discount_note
-            + f"\n*Total: R{total / 100:.2f}*"
+            f"Subtotal: R{subtotal / 100:.2f}\n"
+            + (f"Delivery: R{delivery / 100:.2f}" if fee_known else "Delivery: the team will confirm the fee")
+            + discount_note
+            + (f"\n*Total: R{total / 100:.2f}*" if fee_known else f"\n*Total: R{total / 100:.2f} plus delivery*")
             + (f"\nCollection{': ' + cfg['collection_note'] if cfg.get('collection_note') else ''}"
                if collect else (f"\nDeliver to: {addr}" if addr else ""))
             + (f"\nPayment: {pay}" if pay else "")
@@ -2606,6 +2662,10 @@ class CommerceAssistantSkill(BaseSkill):
         question = (args.get("question") or "").strip()
         if not question:
             return {"error": "Pass the customer's actual question to ask_team."}
+        if _CHECKOUT_INTENT_RE.search(question):
+            return {"error": "Not a question for the team — the customer wants to check out. "
+                             "Ask them for: " + checkout_questions(tenant_id).replace("\n", " ")
+                             + " — then call review_order."}
         try:
             from vula import escalation as esc
             learned = await esc.find_learned_answer(tenant_id, question)
@@ -2669,7 +2729,7 @@ class CommerceAssistantSkill(BaseSkill):
                               "before calling place_order again."}
 
         cfg = ow.get_order_settings(tenant_id)
-        enabled = [str(m).lower() for m in (cfg.get("payment_methods") or ["online", "cod", "eft"])]
+        enabled = ow.usable_payment_methods(tenant_id, cfg)
         method = (args.get("payment_method") or "").lower().strip()
         if method not in ("online", "cod", "eft"):
             return {"error": "Ask the customer how they'd like to pay — online card, pay on delivery, or EFT — then call place_order."}
@@ -2763,12 +2823,14 @@ class CommerceAssistantSkill(BaseSkill):
             logger.debug("auto invoice send skipped: %s", exc)
 
         item_lines = "\n".join(f"• {l['quantity']} × {l['name']} — {l['line_total']}" for l in lines)
+        fee_known = collect or service.delivery_fee_known(tenant_id)
         confirmation = (
             f"✅ *Order {order['display_id']} confirmed*\n{item_lines}\n"
             f"Subtotal: R{order['subtotal_cents'] / 100:.2f}\n"
-            f"Delivery: R{order['delivery_cents'] / 100:.2f}\n"
-            f"*Total: R{total / 100:.2f}*\n\n"
-            f"Deliver to: {address} ({slot})\n\n{pay_line}"
+            + (f"Delivery: R{order['delivery_cents'] / 100:.2f}\n*Total: R{total / 100:.2f}*\n\n"
+               if fee_known else
+               f"Delivery: the team will confirm the fee\n*Total: R{total / 100:.2f} plus delivery*\n\n")
+            + f"Deliver to: {address} ({slot})\n\n{pay_line}"
         )
         return {
             "order_number": order["display_id"],
