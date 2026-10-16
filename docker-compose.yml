@@ -8,7 +8,12 @@ services:
 
   # ── Qdrant (vector store) ──────────────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:latest
+    # Pinned (2026-10-16, KB retrieval C3): "latest" changed under us on every pull. v1.19.2 was
+    # the newest release on that date, so it is at or above whatever production runs; it has the
+    # Query API with RRF fusion (1.10+) and server-side BM25 (1.15.3+) the next phase needs.
+    # Production is self-hosted on the SA GPU box — check its version with tools/kb_stats.py,
+    # and upgrade it one minor version at a time (Qdrant's supported path).
+    image: qdrant/qdrant:v1.19.2
     container_name: vula-qdrant
     restart: unless-stopped
     ports:
