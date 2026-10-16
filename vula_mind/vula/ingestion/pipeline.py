@@ -1042,6 +1042,24 @@ def _collection_lock(name: str) -> asyncio.Lock:
     return lock
 
 
+# Point ids (2026-10-16, KB retrieval C2 — docs/kb-retrieval-audit.md). Points were stored under
+# int(md5(chunk_id)[:8], 16): 32 bits, so two chunks in one collection collide (~1% chance at
+# ~9,300 chunks, ~50% at ~77,000) and the second write silently REPLACES the first chunk. New
+# points use a 128-bit uuid5 of tenant + chunk id — still deterministic, so re-ingesting the same
+# document overwrites rather than duplicates. Existing points keep their ids until the migration.
+_POINT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://vula-ai.com/kb/point")
+
+
+def legacy_point_id(chunk_id: str) -> int:
+    return int(hashlib.md5(chunk_id.encode()).hexdigest()[:8], 16)
+
+
+def point_id(tenant_id: str, chunk_id: str):
+    if getattr(settings, "qdrant_uuid_point_ids", True):
+        return str(uuid.uuid5(_POINT_NAMESPACE, f"{tenant_id}:{chunk_id}"))
+    return legacy_point_id(chunk_id)
+
+
 def kb_score_threshold(authoritative: bool = False) -> float:
     """The minimum similarity for a retrieved chunk (2026-10-16: were the literals 0.3 / 0.35 in
     query(); same defaults, now settings — config.py kb_score_threshold*). A per-embed-model
@@ -1119,7 +1137,7 @@ class QdrantStore:
         name = self._collection_name(tenant_id)
         points = [
             {
-                "id": int(hashlib.md5(c.chunk_id.encode()).hexdigest()[:8], 16),
+                "id": point_id(tenant_id, c.chunk_id),
                 "vector": c.embedding,
                 "payload": {
                     "chunk_id": c.chunk_id,
@@ -1142,8 +1160,33 @@ class QdrantStore:
                 json={"points": points},
             )
             resp.raise_for_status()
+            if points and isinstance(points[0]["id"], str):
+                await self._drop_legacy_copies(client, name, [c.chunk_id for c in chunks if c.embedding])
 
         return len(points)
+
+    async def _drop_legacy_copies(self, client: httpx.AsyncClient, name: str,
+                                  chunk_ids: List[str]) -> int:
+        """After a uuid-id write, remove the old 32-bit-id point of the SAME chunk, so re-ingesting
+        a document stored before the switch replaces it instead of adding a second copy. Only a
+        point whose payload chunk_id matches is removed — a legacy id that a collision handed to a
+        different chunk is left alone. Runs after the new write, so a failure here can leave a
+        duplicate but never lose a chunk."""
+        by_id = {legacy_point_id(cid): cid for cid in chunk_ids}
+        try:
+            resp = await client.post(f"{self.base}/collections/{name}/points",
+                                     json={"ids": list(by_id), "with_payload": True})
+            if not resp.is_success:
+                return 0
+            stale = [p["id"] for p in resp.json().get("result", [])
+                     if (p.get("payload") or {}).get("chunk_id") == by_id.get(p.get("id"))]
+            if stale:
+                await client.post(f"{self.base}/collections/{name}/points/delete",
+                                  params={"wait": "true"}, json={"points": stale})
+            return len(stale)
+        except Exception as exc:
+            logger.debug("legacy point clean-up skipped for %s: %s", name, exc)
+            return 0
 
     async def search(
         self,
