@@ -13,7 +13,7 @@ import re
 
 from core.llm_router import is_local_model, resolve_generation_route
 from core.prompt_safety import fence
-from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble
+from core.skills.base import BaseSkill, SkillInput, SkillOutput, behaviour_preamble, fit_kb_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +50,15 @@ class StandardsLookupSkill(BaseSkill):
                         "be able to quote and apply it precisely."),
                 skill_name=self.name, confidence=0.45)
 
+        # 2026-10-16: the prompt cut each chunk at 1,800 characters and the verifier's copy at 900,
+        # so the checker couldn't see the second half of what the model quoted. Both now get the
+        # same budgeted excerpt (core/skills/base.py::fit_kb_chunks).
+        chunks = fit_kb_chunks(chunks)
         context = "\n\n".join(
-            f"[{c.get('filename','doc')}]: {c.get('text','')[:1800]}" for c in chunks)
+            f"[{c.get('filename','doc')}]: {c.get('text','')}" for c in chunks)
         # "text" is what the adversarial verifier grounds the answer against — without it the
         # checker saw filenames only and ran blind.
-        sources = [{"type": "kb", "filename": c.get("filename", "?"), "text": (c.get("text") or "")[:900],
+        sources = [{"type": "kb", "filename": c.get("filename", "?"), "text": c.get("text") or "",
                     "score": round(c.get("score", 0.0), 3)} for c in chunks]
         system_msg = (
             "You are Vula, looking up standards/codes for a South African practice from the "

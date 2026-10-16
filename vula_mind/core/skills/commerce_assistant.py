@@ -26,6 +26,7 @@ from core.prompt_safety import fence
 from core.skills.base import (
     BaseSkill, SkillInput, SkillOutput, behaviour_preamble, substitute_if_leaked, tool_source,
     unverified_prices, wrong_arithmetic, drop_unverified_price_sentences, contentless,
+    fit_kb_chunks,
 )
 from vula.commerce import service
 
@@ -1388,12 +1389,15 @@ class CommerceAssistantSkill(BaseSkill):
             return "", []
         if not chunks:
             return "", []
+        # 2026-10-16: was 400 characters per chunk (see core/skills/base.py::fit_kb_chunks). Half
+        # the KB budget — this prompt already carries the catalogue, hours and the tool loop.
+        chunks = fit_kb_chunks(chunks, max(1, settings.kb_context_token_budget // 2))
         kb_context = "\n\n".join(
-            f"[{c.get('filename', 'doc')}]: {c.get('text', '')[:400]}" for c in chunks
+            f"[{c.get('filename', 'doc')}]: {c.get('text', '')}" for c in chunks
         )
         sources = [
             {"type": "kb", "name": "kb", "filename": c.get("filename", "?"),
-             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:400]}
+             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")}
             for c in chunks
         ]
         return kb_context, sources
@@ -2280,7 +2284,8 @@ class CommerceAssistantSkill(BaseSkill):
             # typing and has nothing to add here, only latency (2026-09-08 audit).
             chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(
                 f"{dish} recipe", top_k=2, expand=False)
-            kb_recipe = "\n\n".join((c.get("text") or "")[:600] for c in (chunks or []) if c.get("text"))
+            kb_recipe = "\n\n".join(c.get("text") or "" for c in fit_kb_chunks(
+                chunks or [], max(1, settings.kb_context_token_budget // 4)) if c.get("text"))
         except Exception:
             kb_recipe = ""
         grounding = (f"\nOur own recipe to base this on (adapt it, keep it true to ours):\n{kb_recipe}\n"
@@ -2428,7 +2433,8 @@ class CommerceAssistantSkill(BaseSkill):
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
             chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(topic, top_k=3)
-            kb_text = "\n\n".join((c.get("text") or "")[:500] for c in (chunks or []) if c.get("text"))
+            kb_text = "\n\n".join(c.get("text") or "" for c in fit_kb_chunks(
+                chunks or [], max(1, settings.kb_context_token_budget // 4)) if c.get("text"))
         except Exception as exc:
             logger.debug("research_product KB lookup skipped: %s", exc)
 

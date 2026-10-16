@@ -77,3 +77,60 @@ async def test_cross_reference_failure_still_returns_plain_chunks():
                new=AsyncMock(side_effect=RuntimeError("db down"))):
         out = await format_kb_chunks(TID, chunks)
     assert out == "[notes.pdf]: some content"
+
+
+# ── Token budget instead of the [:900] cut (2026-10-16, KB retrieval phase 1) ──────────────────
+
+from core.skills.base import fit_kb_chunks, fit_kb_text  # noqa: E402
+
+_LONG_SHEET = (
+    "Affinity 255 PUR technical data sheet.\n"
+    + "".join(f"Property {i}: a long line of ordinary specification text that pads the sheet out.\n"
+              for i in range(40))
+    + "Slip resistance (EN 16165 / DIN 51130): R10.\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_a_fact_at_the_end_of_a_long_chunk_reaches_the_prompt():
+    """The "slip rate on the Affinity" shape: the data sheet IS retrieved, top-ranked, but the
+    figure sits in its last row — past character 900, where every chunk used to be cut."""
+    assert len(_LONG_SHEET) > 3000 and _LONG_SHEET.index("R10") > 900
+    chunks = [{"filename": "Affinity 255 PUR technical data sheet.pdf", "text": _LONG_SHEET},
+              {"filename": "other.pdf", "text": "Some other text. " * 80}]
+    with patch("vula.commerce.service.filed_amounts_by_filename", new=AsyncMock(return_value={})):
+        out = await format_kb_chunks(TID, chunks)
+    assert "Slip resistance (EN 16165 / DIN 51130): R10." in out
+    assert out.startswith("[Affinity 255 PUR technical data sheet.pdf]: ")
+    assert "[other.pdf]: " in out           # the lower-ranked chunk still gets its share
+
+
+def test_cut_never_splits_a_table_row():
+    rows = "".join(f"Creation {i} | Oak | {100 + i} | 600 | 22/09\n" for i in range(60))
+    got = fit_kb_text(rows, 500)
+    assert len(got) <= 500 and got.endswith(" […]")
+    for line in got.replace(" […]", "").splitlines():
+        assert line.count("|") == 4, line
+
+
+def test_cut_prefers_a_sentence_end_on_prose():
+    text = "First sentence here. Second sentence is a bit longer than the first one. Third one."
+    got = fit_kb_text(text, 60)
+    assert got == "First sentence here. […]"
+
+
+def test_every_chunk_keeps_the_old_900_before_the_top_ones_grow():
+    chunks = [{"text": "word " * 1000, "filename": f"d{i}"} for i in range(5)]
+    got = fit_kb_chunks(chunks, budget_tokens=2400)
+    lens = [len(c["text"]) for c in got]
+    assert all(n >= 850 for n in lens), lens            # floor (minus the boundary + marker)
+    assert lens[0] > lens[-1]                            # the leftover went to the top-ranked
+    assert sum(lens) <= 2400 * 4
+
+
+def test_fitting_is_idempotent_and_skips_what_the_budget_cannot_reach():
+    chunks = [{"text": "Sentence. " * 300, "filename": f"d{i}"} for i in range(4)]
+    once = fit_kb_chunks(chunks, budget_tokens=400)
+    assert fit_kb_chunks(once, budget_tokens=400) == once
+    assert len(once) == 2                                # 1,600 chars: 900 + 700, nothing for 3rd
+    assert fit_kb_chunks([], 100) == []
