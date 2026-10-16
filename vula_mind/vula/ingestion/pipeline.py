@@ -1042,6 +1042,24 @@ def _collection_lock(name: str) -> asyncio.Lock:
     return lock
 
 
+def kb_score_threshold(authoritative: bool = False) -> float:
+    """The minimum similarity for a retrieved chunk (2026-10-16: were the literals 0.3 / 0.35 in
+    query(); same defaults, now settings — config.py kb_score_threshold*). A per-embed-model
+    override wins, because a bge-m3 score and a text-embedding-3-small score aren't comparable."""
+    key = "authoritative" if authoritative else "default"
+    raw = getattr(settings, "kb_score_thresholds_by_model", "") or ""
+    if raw:
+        try:
+            import json
+            per_model = (json.loads(raw) or {}).get(settings.model_embed) or {}
+            if per_model.get(key) is not None:
+                return float(per_model[key])
+        except (ValueError, TypeError, AttributeError) as exc:
+            logger.warning("KB_SCORE_THRESHOLDS_BY_MODEL ignored (%s)", exc)
+    return float(settings.kb_score_threshold_authoritative if authoritative
+                 else settings.kb_score_threshold)
+
+
 class QdrantStore:
     """
     Per-tenant Qdrant collections for isolated knowledge bases.
@@ -1132,7 +1150,7 @@ class QdrantStore:
         tenant_id: str,
         query_embedding: List[float],
         limit: int = 5,
-        score_threshold: float = 0.3,
+        score_threshold: Optional[float] = None,
         exclude_source_types: Optional[List[str]] = None,
         category: Optional[str] = None,
         source_type: Optional[str] = None,
@@ -1159,7 +1177,7 @@ class QdrantStore:
         body: dict = {
             "vector": query_embedding,
             "limit": limit,
-            "score_threshold": score_threshold,
+            "score_threshold": kb_score_threshold() if score_threshold is None else score_threshold,
             "with_payload": True,
         }
         must_not = [{"key": "source_type", "match": {"value": t}} for t in (exclude_source_types or [])]
@@ -1593,7 +1611,7 @@ class VulaIngestionPipeline:
         expand=False for a caller that has already composed a careful query.
         """
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
-        threshold = 0.35 if authoritative_only else 0.3
+        threshold = kb_score_threshold(authoritative_only)
 
         variants = [question]
         if expand:
