@@ -115,3 +115,18 @@ Owner: bank statements. Everything else: staff.
 New ingests already use uuid5 ids in this branch (`QDRANT_UUID_POINT_IDS=false` reverts), and
 `upsert_chunks` deletes the legacy int-id point of the same `chunk_id` so an identical re-upload
 still overwrites instead of duplicating.
+
+## Left open by this session (decisions for Ian)
+
+* **Audience backfill** for existing points (none carry `audience`). Rule of thumb: `website`,
+  `starter`, `learned_answer_approved` → public; filenames filed in `vula_filed_documents` under a
+  money category (invoice, statement, payslip…) → owner/staff; everything else staff unless the
+  owner marks it public. Then set `KB_CUSTOMER_AUDIENCE_STRICT=true`. Part of the C2 v2 backfill.
+* **Dashboard upload** now accepts `audience=public`, but the dashboard doesn't send it yet. Until
+  it does, a menu or policy uploaded from the dashboard is staff-only for customers.
+* Invoice catalogue items (`commerce.py:4226`) and the business profile (`business_profile.py`)
+  stay staff by default — say if either should be customer-visible.
+* The keyword pass ignores `exclude_source_types`, so `authoritative_only=True` can still return
+  `conversation`/`learned` chunks through it. Not fixed (out of scope); small fix next phase.
+* Real chunk-length distribution per tenant, collision count and the production Qdrant version:
+  run `python tools/kb_stats.py` on the server.

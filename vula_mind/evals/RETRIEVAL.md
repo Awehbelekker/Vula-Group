@@ -48,10 +48,37 @@ What the baseline shows:
 * **Abstention** is 42% at retrieval level: the 0.30 threshold lets a loosely related chunk
   through for most absent questions. Not changed in this session (C4 only moves the threshold).
 
-Live baseline: **not yet run** — this session has no route to production Qdrant. Run
-`python -m evals.run retrieval --live` on a machine with the keys (or Master › Benchmark with
-`only: "retrieval"`) and paste the summary here before reviewing Step C.
+Live baseline: **not yet run** — this session had no route to production Qdrant. For a true
+before/after on real tenants, on a machine with the keys run `python -m evals.run retrieval --live`
+at commit `ba2011c` (eval layer, no fixes yet) and again at the branch head, and paste both
+summaries here. The live "unanswerable" questions are presumed absent; any that a tenant's
+documents do answer should be re-typed or dropped after the first run.
 
-## After Step C
+## After Step C (2026-10-16)
 
-(filled in by the Step C commits — see below)
+Fixture, same 114 cases. 82/114 passed (was 71).
+
+| | baseline | after C1 (token budget) | after C1–C5 |
+|---|---|---|---|
+| recall@5 / @20 | 0.957 / 0.957 | 0.957 / 0.957 | 0.957 / 0.957 |
+| MRR / nDCG@10 | 0.957 / 0.952 | 0.957 / 0.952 | 0.957 / 0.952 |
+| in prompt | 0.948 | 0.948 | 0.948 |
+| **fact in prompt** | 0.759 | **0.966** | 0.966 |
+| — spec questions | 0.4 | **0.9** | 0.9 |
+| abstention (unanswerable) | 0.423 | 0.423 | 0.442 |
+| **customer leak** | 1.0 | 1.0 | **0.0** |
+| grounding tokens / query | 127 | 169 | 166 (spec: 316 → 555) |
+| embed calls / query | 1.27 | 1.27 | 1.27 |
+| p50 / p95 ms (in-memory) | 3.1 / 9.3 | 3.0 / 8.1 | 2.7 / 7.0 |
+
+* C1 is the whole fact-in-prompt gain. The one spec miss left is the misspelled "afinity anti
+  slip R?" — a retrieval miss (nothing found), not truncation; the misspelling class is for the
+  hybrid/sparse phase.
+* C5 takes customer leak to 0 and, as a side effect, lifts abstention a little: two
+  "unanswerable" customer questions were only "answered" from the wages roster.
+* Ranking metrics don't move: C2 (ids), C3 (pin) and C4 (thresholds, same values) are not meant
+  to change retrieval.
+* Grounding grows from ~127 to ~166 tokens per query on average (spec: ~316 → ~555), well
+  inside `kb_context_token_budget` (2400) and the local 8k window.
+
+`tests/test_retrieval_eval.py` holds these as floors: fact in prompt ≥ 0.95, leak 0.

@@ -66,3 +66,14 @@ async def test_memory_qdrant_full_text_match_needs_its_index():
         assert [p["id"] for p in got] == [1]
         bad = await c.put("/collections/x/points", json={"points": [{"id": "not-a-uuid", "vector": [0.1], "payload": {}}]})
         assert bad.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fixture_floors_after_phase_1():
+    """The phase-1 fixes, held (evals/RETRIEVAL.md): before them, 24% of facts that WERE retrieved
+    never reached the prompt (the [:900] cut), and every customer question about cost prices or
+    wages was grounded on a supplier invoice or the roster."""
+    s = (await r.run_fixture())["summary"]
+    assert s["fact_in_prompt"] >= 0.95, s
+    assert s["leak_rate"] == 0.0, s
+    assert s["recall@5"] >= 0.95 and s["in_prompt"] >= 0.94, s
