@@ -1,0 +1,132 @@
+# Fixture knowledge bases for the offline retrieval eval (evals/retrieval.py, CI).
+#
+# INVENTED content shaped like the real documents behind real failures (gerflor's stock sheet and
+# data sheets, DIGG's HOA rules, Off the Hook's policies) — no tenant's real figures, names or
+# customers. The repository is public. Each document is ingested through the real ingest_text
+# path, so it is chunked exactly as production would chunk it.
+#
+# The Affinity data sheet is deliberately ONE long chunk with the slip-resistance row at the end:
+# the shape of the "slip rate on the Affinity" failure, and the C1 truncation regression.
+
+tenants:
+  fixture-flooring:
+    - filename: DT SOH and Planning 07.09.26.pdf
+      text: |
+        DT Flooring stock on hand and planning sheet, week of 7 September.
+        Importer and distributor for the Creation range: DT Flooring (Pty) Ltd, Cape Town warehouse.
+
+        Range | Colour | SOH m² | Inbound m² | ETA
+        Creation 30 | Oak Natural | 412 | 600 | 22/09
+        Creation 30 | Ash Grey | 96 | 0 | none
+        Creation 55 | Walnut | 230 | 300 | 06/10
+        Creation 70 | Stone Beige | 18 | 450 | 13/10
+        Taralay Impression | Lime | 640 | 0 | none
+        Note: SOH means stock on hand at the Cape Town warehouse. Inbound stock is on the water.
+    - filename: Affinity 255 PUR technical data sheet.pdf
+      text: |
+        Affinity 255 PUR heterogeneous vinyl, technical data sheet, edition 2026.
+        Product description: compact heterogeneous vinyl sheet for heavy commercial use, factory finished with an Evercare PUR surface treatment for easy maintenance and no polish for life.
+        Typical uses: hospitals, care homes, schools, offices, retail and public buildings with heavy foot traffic and rolling loads.
+        Roll width: 2 metres. Roll length: 20 metres. Total thickness: 2.0 mm. Wear layer thickness: 0.55 mm.
+        Total weight: 2,950 g per square metre. Usage class: 34 commercial very heavy, 43 industrial heavy.
+        Dimensional stability: 0.10 percent or less. Residual indentation: 0.03 mm average.
+        Castor chair test: suitable for continuous use. Light fastness: blue wool scale 6 or better.
+        Chemical resistance: good resistance to dilute acids, alkalis, alcohol and disinfectants used in healthcare; sensitive to solvents.
+        Acoustic performance: impact sound reduction 4 dB.
+        Thermal conductivity: 0.25 W per metre kelvin, suitable for underfloor heating up to 27 degrees Celsius at the floor surface.
+        Electrical behaviour: body voltage below 2 kV, antistatic for normal use.
+        Installation: full spread adhesive on a sound, dry, smooth subfloor; seams heat welded with matching rod; coved skirting available with capping strips and fillets.
+        Maintenance: dry buffing restores the finish; spray cleaning with a neutral detergent; no wax or polish is required during the life of the floor.
+        Environmental: phthalate-free plasticiser, 100 percent recyclable through the take-back scheme, indoor air emissions below the A+ threshold, made with 25 percent recycled content.
+        Warranty: ten years against manufacturing defects when installed and maintained to the guide.
+        Packaging: rolls are delivered on pallets of six with a protective sleeve; store rolls upright at room temperature for 24 hours before installation.
+        Reaction to fire (EN 13501-1): Bfl-s1.
+        Slip resistance (EN 16165 / DIN 51130): R10.
+    - filename: Taralay Impression Comfort data sheet.pdf
+      text: |
+        Taralay Impression Comfort acoustic vinyl data sheet.
+        Total thickness 3.3 mm, wear layer 0.70 mm, impact sound reduction 19 dB.
+        Reaction to fire (EN 13501-1): Cfl-s1. Slip resistance (EN 16165): R9.
+        Suitable for offices, classrooms and hotel corridors where impact noise matters.
+    - filename: SPM price list 2026.pdf
+      text: |
+        SPM installer price list 2026 (excl VAT).
+        Creation 30 supply only R 389 per m². Creation 55 supply only R 455 per m².
+        Affinity 255 PUR supply only R 512 per m². Taralay Impression Comfort R 598 per m².
+        Installation labour R 145 per m² including adhesive. Coving R 95 per linear metre.
+        Prices valid until 31 December 2026. Minimum order 20 m².
+    - filename: Supplier invoice INV-4471 Gardens Hardware.pdf
+      text: |
+        Tax invoice INV-4471 from Gardens Hardware to the business.
+        12 x flooring adhesive 15 kg at R 610 each. 4 x heat welding rod coils at R 220 each.
+        Total incl VAT R 9,453.00. Payment terms 30 days.
+    - filename: Gym and sports flooring catalogue.pdf
+      text: |
+        Sports and gym flooring catalogue. Rubber tiles for free-weight zones in 10 mm and 20 mm,
+        shock absorbing and slip resistant when wet. Point elastic sports vinyl for multi-purpose
+        halls, with line marking for netball, basketball and volleyball. Ask our team about
+        layouts and a free site visit for gyms larger than 200 m².
+
+  fixture-architect:
+    - filename: Canal West HOA architectural guidelines.pdf
+      text: |
+        Canal West Home Owners Association architectural guidelines, revision 4.
+        Roofs: natural slate grey or charcoal roof sheeting only; no bright colours.
+        Boundary walls: maximum height 1.8 metres; plastered and painted in the estate palette.
+        Fireplaces and flues: flues must be stainless steel; galvanised or mild steel flues are
+        not permitted. A flue must extend at least 1 metre above the roof ridge.
+        Solar panels: allowed on roofs not facing the street, flush with the roof pitch.
+        Plans: every alteration needs HOA approval before municipal submission.
+    - filename: JBCC fee schedule 2026.pdf
+      text: |
+        Professional fee schedule 2026. Concept and viability stage 15 percent of the fee.
+        Design development 20 percent. Documentation and procurement 30 percent.
+        Construction and close-out 35 percent. Site visits are charged at R 1,250 per hour
+        excluding travel. Retention on JBCC contracts is normally 10 percent reducing to 5 percent
+        at practical completion.
+    - filename: Belladonna project brief.pdf
+      text: |
+        Belladonna residence project brief. Client wants a three bedroom double storey with an
+        open-plan kitchen, a covered patio and a braai room with a cast iron fireplace. Budget
+        target for the building works is set by the client's quantity surveyor. Site is in the
+        Canal West estate, so the HOA guidelines apply.
+    - filename: Site meeting minutes 12 Sept.pdf
+      text: |
+        Site meeting 12 September, Belladonna residence. Present: architect, contractor, QS.
+        Brickwork is at wall plate level on the north side. Window frames delayed by two weeks.
+        Contractor to submit revised programme by Friday. Next site meeting on 26 September.
+    - filename: Bank statement August 2026.pdf
+      text: |
+        Business current account statement for August 2026. Opening balance and closing balance
+        shown on page one. Debit orders: professional indemnity insurance, software licences,
+        vehicle finance. Deposits from clients for fee invoices.
+
+  fixture-seafood:
+    - filename: Delivery and collection policy.md
+      source_type: starter
+      text: |
+        Delivery and collection. We deliver on Tuesdays and Fridays to the Atlantic Seaboard,
+        City Bowl and Southern Suburbs. Delivery is free on orders over R 600, otherwise R 60.
+        Orders must be placed by 2pm the day before delivery. Collection from the Kalk Bay shop
+        is any day from 9am to 5pm.
+    - filename: recipe-cape-salmon-braai.md
+      text: |
+        # Cape salmon on the braai
+        Brush the fillets with lemon butter and garlic, season with salt, and braai skin side
+        down over medium coals for 6 to 8 minutes. Turn once and finish for 2 minutes.
+        Serve with a fresh tomato and onion salad.
+    - filename: Fresh catch FAQ.md
+      source_type: website
+      text: |
+        Is your fish fresh or frozen? Our line fish is fresh, caught by local fishermen and on
+        the counter within a day. Prawns and calamari are frozen at sea.
+        Do you sell sustainable fish? We only sell species on the SASSI green list.
+        Can I order for a function? Yes, give us three days' notice for orders over 10 kg.
+    - filename: Supplier invoice Kalk Bay fishermen co-op.pdf
+      text: |
+        Invoice from the Kalk Bay fishermen co-op to the shop. 40 kg yellowtail at R 95 per kg,
+        25 kg Cape salmon at R 78 per kg. Total R 5,750.00. Settlement within 7 days.
+    - filename: Staff roster and wages September.pdf
+      text: |
+        Shop staff roster September. Counter staff work 8am to 5pm in two shifts. Weekly wages
+        are paid on Fridays by EFT. Overtime is paid at one and a half times the hourly rate.

@@ -1,0 +1,261 @@
+# Retrieval eval cases (evals/retrieval.py). Did the knowledge base find the document that holds
+# the answer, and did the fact reach the prompt?
+#
+#   tenant          a fixture-* tenant runs offline in CI (cases/retrieval_fixture.yaml); any other
+#                   tenant runs live, read-only (Master › Benchmark, or `python -m evals.run
+#                   retrieval --live`)
+#   question        what the person typed
+#   type            lookup | spec | price | policy | multi_hop | follow_up | sensitive | unanswerable
+#   entry           owner (default: reasoning's retrieval) | customer (commerce_assistant's)
+#   expected_docs   filename substrings, case-insensitive (live filenames vary by upload)
+#   must_contain    text that must be in a retrieved chunk AND in the grounding block
+#   forbidden_docs  filename substrings a customer must never get (type: sensitive)
+#   language        en | af | mixed
+#   synthetic       true when written from the document rather than taken from a real message
+#
+# Real failures first (seed: true), with the date and what went wrong. Public repository: no phone
+# numbers, customers' names or tenants' figures.
+
+cases:
+  # ── Seeds: real failures, fixture copies (CI) ──────────────────────────────────────────────
+  # Gerflor rep, 2026-09-07: "0 chunks" for the first two while the stock sheet sat in the KB.
+  - {id: creation-importer, tenant: fixture-flooring, seed: true, type: lookup, language: en,
+     question: "Which importer does the creation range", expected_docs: ["DT SOH and Planning"]}
+  - {id: creation-stocks, tenant: fixture-flooring, seed: true, type: lookup, language: en,
+     question: "How stocks creations", expected_docs: ["DT SOH and Planning"]}
+  - {id: creation-who-imports, tenant: fixture-flooring, seed: true, type: lookup, language: en,
+     question: "Who imports the Creation range?", expected_docs: ["DT SOH and Planning"],
+     must_contain: ["DT Flooring"]}
+  - {id: creation-terse-typo, tenant: fixture-flooring, seed: true, type: lookup, language: en,
+     question: "creaton importer?", expected_docs: ["DT SOH and Planning"]}
+  - {id: creation-af, tenant: fixture-flooring, seed: true, type: lookup, language: af,
+     question: "Wie voer die Creation reeks in?", expected_docs: ["DT SOH and Planning"]}
+  - {id: creation-mixed, tenant: fixture-flooring, seed: true, type: lookup, language: mixed,
+     question: "hoeveel Creation 30 SOH het ons?", expected_docs: ["DT SOH and Planning"],
+     must_contain: ["412"]}
+  # Ian, 2026-09-30: the data sheet says "slip resistance ... R10 ... EN 16165", not "slip rate".
+  - {id: affinity-slip, tenant: fixture-flooring, seed: true, type: spec, language: en,
+     question: "what is the slip rate on the Affinity?", expected_docs: ["Affinity 255"],
+     must_contain: ["R10"]}
+  - {id: affinity-slip-terse, tenant: fixture-flooring, seed: true, type: spec, language: en,
+     question: "affinity slip rating", expected_docs: ["Affinity 255"], must_contain: ["R10"]}
+  - {id: affinity-slip-typo, tenant: fixture-flooring, seed: true, type: spec, language: en,
+     question: "afinity anti slip R?", expected_docs: ["Affinity 255"], must_contain: ["R10"]}
+  - {id: affinity-slip-af, tenant: fixture-flooring, seed: true, type: spec, language: af,
+     question: "Wat is die slip weerstand van Affinity?", expected_docs: ["Affinity 255"],
+     must_contain: ["R10"]}
+  - {id: affinity-fire, tenant: fixture-flooring, seed: true, type: spec, language: en,
+     question: "fire rating affinity 255", expected_docs: ["Affinity 255"], must_contain: ["Bfl-s1"]}
+  # Benchmark, 1 Oct: a spec question about a product with no data sheet got another product's figure.
+  - {id: taraflex-fire-absent, tenant: fixture-flooring, seed: true, type: unanswerable, language: en,
+     question: "Fire rating for Taraflex Sport M Plus"}
+  # DIGG, 2026-09-17: answered "no" from the flue-MATERIAL rule. No rule on colour exists.
+  - {id: fireplace-colour, tenant: fixture-architect, seed: true, type: unanswerable, language: en,
+     question: "can I colour a cast iron fireplace?"}
+  - {id: fireplace-colour-terse, tenant: fixture-architect, seed: true, type: unanswerable, language: en,
+     question: "paint cast iron fireplace allowed?"}
+  - {id: fireplace-colour-af, tenant: fixture-architect, seed: true, type: unanswerable, language: af,
+     question: "Mag ek 'n gietyster kaggel verf?"}
+  # DIGG, 2026-08-18: "I've logged the screen bricks ... for R70,400" with nothing behind it.
+  - {id: r70400-logged, tenant: fixture-architect, seed: true, type: unanswerable, language: en,
+     question: "Logg as expense the screen bricks R70,400"}
+  - {id: r70400-did-you, tenant: fixture-architect, seed: true, type: unanswerable, language: en,
+     question: "did you log the screen brick invoice?"}
+  - {id: r70400-af, tenant: fixture-architect, seed: true, type: unanswerable, language: mixed,
+     question: "het jy die screen bricks uitgawe gelog?"}
+
+  # ── Synthetic: written from each fixture document (hand-checked) ───────────────────────────
+  - {id: soh-ash, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "how much Ash Grey Creation 30 is in stock", expected_docs: ["DT SOH and Planning"], must_contain: ["96"]}
+  - {id: soh-eta-55, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "when is the walnut Creation 55 arriving", expected_docs: ["DT SOH and Planning"], must_contain: ["06/10"]}
+  - {id: soh-stone, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "Stone Beige inbound quantity", expected_docs: ["DT SOH and Planning"], must_contain: ["450"]}
+  - {id: soh-meaning, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "what does SOH mean on the stock sheet", expected_docs: ["DT SOH and Planning"]}
+  - {id: soh-taralay, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "taralay lime stock", expected_docs: ["DT SOH and Planning"], must_contain: ["640"]}
+  - {id: aff-width, tenant: fixture-flooring, synthetic: true, type: spec, language: en,
+     question: "Affinity roll width", expected_docs: ["Affinity 255"], must_contain: ["2 metres"]}
+  - {id: aff-wear, tenant: fixture-flooring, synthetic: true, type: spec, language: en,
+     question: "wear layer thickness of Affinity 255", expected_docs: ["Affinity 255"], must_contain: ["0.55 mm"]}
+  - {id: aff-warranty, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "how long is the Affinity warranty", expected_docs: ["Affinity 255"], must_contain: ["ten years"]}
+  - {id: aff-ufh, tenant: fixture-flooring, synthetic: true, type: spec, language: en,
+     question: "can Affinity go on underfloor heating", expected_docs: ["Affinity 255"], must_contain: ["27 degrees"]}
+  - {id: aff-maint, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "does affinity need polish", expected_docs: ["Affinity 255"]}
+  - {id: tar-acoustic, tenant: fixture-flooring, synthetic: true, type: spec, language: en,
+     question: "Taralay Impression Comfort impact sound reduction", expected_docs: ["Taralay Impression"], must_contain: ["19 dB"]}
+  - {id: tar-slip, tenant: fixture-flooring, synthetic: true, type: spec, language: en,
+     question: "slip rating taralay impression", expected_docs: ["Taralay Impression"], must_contain: ["R9"]}
+  - {id: tar-use, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "is taralay comfort good for classrooms", expected_docs: ["Taralay Impression"]}
+  - {id: spm-c30, tenant: fixture-flooring, synthetic: true, type: price, language: en,
+     question: "price of Creation 30 per m2", expected_docs: ["SPM price list"], must_contain: ["389"]}
+  - {id: spm-labour, tenant: fixture-flooring, synthetic: true, type: price, language: en,
+     question: "installation labour rate", expected_docs: ["SPM price list"], must_contain: ["145"]}
+  - {id: spm-coving, tenant: fixture-flooring, synthetic: true, type: price, language: en,
+     question: "how much is coving per metre", expected_docs: ["SPM price list"], must_contain: ["95"]}
+  - {id: spm-min, tenant: fixture-flooring, synthetic: true, type: policy, language: en,
+     question: "minimum order quantity on the SPM list", expected_docs: ["SPM price list"]}
+  - {id: spm-af, tenant: fixture-flooring, synthetic: true, type: price, language: af,
+     question: "wat kos Affinity per vierkante meter", expected_docs: ["SPM price list"], must_contain: ["512"]}
+  - {id: inv-adhesive, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "what did we pay Gardens Hardware for adhesive", expected_docs: ["INV-4471"], must_contain: ["610"]}
+  - {id: inv-total, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "INV-4471 total", expected_docs: ["INV-4471"]}
+  - {id: gym-rubber, tenant: fixture-flooring, synthetic: true, type: lookup, language: en,
+     question: "rubber tiles for a free weight area", expected_docs: ["Gym and sports"]}
+  - {id: gym-visit, tenant: fixture-flooring, synthetic: true, type: policy, language: en,
+     question: "do we offer free site visits for gyms", expected_docs: ["Gym and sports"]}
+  - {id: multi-c30-price-stock, tenant: fixture-flooring, synthetic: true, type: multi_hop, language: en,
+     question: "Creation 30 oak price and how much stock", expected_docs: ["SPM price list", "DT SOH and Planning"]}
+  - {id: hoa-flue, tenant: fixture-architect, synthetic: true, type: policy, language: en,
+     question: "what flue material does Canal West allow", expected_docs: ["Canal West HOA"], must_contain: ["stainless steel"]}
+  - {id: hoa-wall, tenant: fixture-architect, synthetic: true, type: policy, language: en,
+     question: "max boundary wall height canal west", expected_docs: ["Canal West HOA"], must_contain: ["1.8"]}
+  - {id: hoa-roof, tenant: fixture-architect, synthetic: true, type: policy, language: en,
+     question: "roof colour rules in the estate", expected_docs: ["Canal West HOA"]}
+  - {id: hoa-solar, tenant: fixture-architect, synthetic: true, type: policy, language: en,
+     question: "are solar panels allowed facing the street", expected_docs: ["Canal West HOA"]}
+  - {id: hoa-af, tenant: fixture-architect, synthetic: true, type: policy, language: af,
+     question: "hoe hoog mag die grensmuur wees", expected_docs: ["Canal West HOA"]}
+  - {id: fee-docs, tenant: fixture-architect, synthetic: true, type: price, language: en,
+     question: "what percentage of the fee is documentation", expected_docs: ["JBCC fee schedule"], must_contain: ["30 percent"]}
+  - {id: fee-site, tenant: fixture-architect, synthetic: true, type: price, language: en,
+     question: "hourly rate for site visits", expected_docs: ["JBCC fee schedule"], must_contain: ["1,250"]}
+  - {id: fee-retention, tenant: fixture-architect, synthetic: true, type: policy, language: en,
+     question: "retention percentage on JBCC", expected_docs: ["JBCC fee schedule"]}
+  - {id: bel-rooms, tenant: fixture-architect, synthetic: true, type: lookup, language: en,
+     question: "how many bedrooms in the Belladonna brief", expected_docs: ["Belladonna project brief"]}
+  - {id: bel-fireplace, tenant: fixture-architect, synthetic: true, type: lookup, language: en,
+     question: "does the belladonna client want a fireplace", expected_docs: ["Belladonna project brief"]}
+  - {id: bel-flue-multi, tenant: fixture-architect, synthetic: true, type: multi_hop, language: en,
+     question: "Belladonna braai room flue rules", expected_docs: ["Belladonna project brief", "Canal West HOA"]}
+  - {id: min-windows, tenant: fixture-architect, synthetic: true, type: lookup, language: en,
+     question: "why are the window frames late", expected_docs: ["Site meeting minutes"]}
+  - {id: min-next, tenant: fixture-architect, synthetic: true, type: lookup, language: en,
+     question: "when is the next site meeting", expected_docs: ["Site meeting minutes"]}
+  - {id: bank-debits, tenant: fixture-architect, synthetic: true, type: lookup, language: en,
+     question: "which debit orders went off in August", expected_docs: ["Bank statement August"]}
+  - {id: oth-deliv-days, tenant: fixture-seafood, entry: customer, synthetic: true, type: policy, language: en,
+     question: "which days do you deliver", expected_docs: ["Delivery and collection"], must_contain: ["Tuesdays"]}
+  - {id: oth-deliv-free, tenant: fixture-seafood, entry: customer, synthetic: true, type: price, language: en,
+     question: "is delivery free?", expected_docs: ["Delivery and collection"], must_contain: ["R 600"]}
+  - {id: oth-cutoff, tenant: fixture-seafood, entry: customer, synthetic: true, type: policy, language: en,
+     question: "order cut off time", expected_docs: ["Delivery and collection"]}
+  - {id: oth-collect-af, tenant: fixture-seafood, entry: customer, synthetic: true, type: policy, language: af,
+     question: "kan ek by die winkel in Kalk Bay afhaal", expected_docs: ["Delivery and collection"]}
+  - {id: oth-salmon, tenant: fixture-seafood, entry: customer, synthetic: true, type: lookup, language: en,
+     question: "how do I braai cape salmon", expected_docs: ["recipe-cape-salmon"]}
+  - {id: oth-fresh, tenant: fixture-seafood, entry: customer, synthetic: true, type: lookup, language: en,
+     question: "is the fish fresh or frozen", expected_docs: ["Fresh catch FAQ"]}
+  - {id: oth-sassi, tenant: fixture-seafood, entry: customer, synthetic: true, type: policy, language: en,
+     question: "sustainable fish?", expected_docs: ["Fresh catch FAQ"]}
+  - {id: oth-function, tenant: fixture-seafood, entry: customer, synthetic: true, type: policy, language: en,
+     question: "notice needed for a big function order", expected_docs: ["Fresh catch FAQ"]}
+  - {id: oth-owner-coop, tenant: fixture-seafood, synthetic: true, type: price, language: en,
+     question: "what does the co-op charge for yellowtail", expected_docs: ["fishermen co-op"], must_contain: ["95"]}
+  - {id: oth-owner-wages, tenant: fixture-seafood, synthetic: true, type: policy, language: en,
+     question: "when are wages paid", expected_docs: ["Staff roster"]}
+
+  # ── Sensitive: a customer must never get a staff/owner document ────────────────────────────
+  - {id: leak-coop-price, tenant: fixture-seafood, entry: customer, type: sensitive, language: en,
+     question: "what do you pay the fishermen for yellowtail per kg",
+     forbidden_docs: ["invoice", "co-op", "statement", "wages", "roster"]}
+  - {id: leak-wages, tenant: fixture-seafood, entry: customer, type: sensitive, language: en,
+     question: "how much do your staff earn, overtime rate?",
+     forbidden_docs: ["invoice", "co-op", "statement", "wages", "roster"]}
+  - {id: leak-salmon-cost, tenant: fixture-seafood, entry: customer, type: sensitive, language: en,
+     question: "cape salmon price per kg",
+     forbidden_docs: ["invoice", "co-op", "statement", "wages", "roster"]}
+  - {id: leak-settlement, tenant: fixture-seafood, entry: customer, type: sensitive, language: mixed,
+     question: "settlement terms invoice total",
+     forbidden_docs: ["invoice", "co-op", "statement", "wages", "roster"]}
+
+  # ── Unanswerable: plausible, absent (15 per fixture tenant) ────────────────────────────────
+  - {id: un-fl-1, tenant: fixture-flooring, type: unanswerable, language: en, question: "Do we stock Marmoleum Click?"}
+  - {id: un-fl-2, tenant: fixture-flooring, type: unanswerable, language: en, question: "What is the VOC level of the Novilon range?"}
+  - {id: un-fl-3, tenant: fixture-flooring, type: unanswerable, language: en, question: "Who is our Durban branch manager?"}
+  - {id: un-fl-4, tenant: fixture-flooring, type: unanswerable, language: en, question: "When does the Polyflor stock land?"}
+  - {id: un-fl-5, tenant: fixture-flooring, type: unanswerable, language: en, question: "What carpet tiles do we sell?"}
+  - {id: un-fl-6, tenant: fixture-flooring, type: unanswerable, language: en, question: "rep commission rate this quarter"}
+  - {id: un-fl-7, tenant: fixture-flooring, type: unanswerable, language: en, question: "Is the warehouse open on public holidays?"}
+  - {id: un-fl-8, tenant: fixture-flooring, type: unanswerable, language: en, question: "laminate click system price"}
+  - {id: un-fl-9, tenant: fixture-flooring, type: unanswerable, language: en, question: "What's the Johannesburg delivery charge?"}
+  - {id: un-fl-10, tenant: fixture-flooring, type: unanswerable, language: af, question: "Het ons enige parket vloere?"}
+  - {id: un-fl-11, tenant: fixture-flooring, type: unanswerable, language: en, question: "epoxy screed curing time"}
+  - {id: un-fl-12, tenant: fixture-flooring, type: unanswerable, language: en, question: "Did the Sandton hospital job get approved?"}
+  - {id: un-fl-13, tenant: fixture-flooring, type: unanswerable, language: en, question: "artificial grass for schools"}
+  - {id: un-fl-14, tenant: fixture-flooring, type: unanswerable, language: en, question: "What is our bank account number?"}
+  - {id: un-fl-15, tenant: fixture-flooring, type: unanswerable, language: mixed, question: "watter skirting boards het ons in wit?"}
+  - {id: un-ar-1, tenant: fixture-architect, type: unanswerable, language: en, question: "What is the pool fence height rule?"}
+  - {id: un-ar-2, tenant: fixture-architect, type: unanswerable, language: en, question: "Kessel Street project budget"}
+  - {id: un-ar-3, tenant: fixture-architect, type: unanswerable, language: en, question: "Who is the structural engineer on Belladonna?"}
+  - {id: un-ar-4, tenant: fixture-architect, type: unanswerable, language: en, question: "Can we use timber cladding in Canal West?"}
+  - {id: un-ar-5, tenant: fixture-architect, type: unanswerable, language: en, question: "What did we invoice for the Rondebosch alterations?"}
+  - {id: un-ar-6, tenant: fixture-architect, type: unanswerable, language: en, question: "Heritage approval timeline for Bo-Kaap"}
+  - {id: un-ar-7, tenant: fixture-architect, type: unanswerable, language: en, question: "geyser size in the Belladonna spec"}
+  - {id: un-ar-8, tenant: fixture-architect, type: unanswerable, language: en, question: "Are carports allowed in front of the building line?"}
+  - {id: un-ar-9, tenant: fixture-architect, type: unanswerable, language: en, question: "When did we pay the SACAP fees?"}
+  - {id: un-ar-10, tenant: fixture-architect, type: unanswerable, language: af, question: "Wat is die boulyn vir Canal West erwe?"}
+  - {id: un-ar-11, tenant: fixture-architect, type: unanswerable, language: en, question: "screed thickness for the first floor slab"}
+  - {id: un-ar-12, tenant: fixture-architect, type: unanswerable, language: en, question: "What colour are the window frames on Belladonna?"}
+  - {id: un-ar-13, tenant: fixture-architect, type: unanswerable, language: en, question: "PI insurance excess amount"}
+  - {id: un-ar-14, tenant: fixture-architect, type: unanswerable, language: en, question: "contractor's CIDB grading"}
+  - {id: un-ar-15, tenant: fixture-architect, type: unanswerable, language: en, question: "Can I build a granny flat in the estate?"}
+  - {id: un-sf-1, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "do you deliver to Stellenbosch?"}
+  - {id: un-sf-2, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "do you sell oysters"}
+  - {id: un-sf-3, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "are you open on Sundays"}
+  - {id: un-sf-4, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "can I pay with SnapScan"}
+  - {id: un-sf-5, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "do you have a sushi platter"}
+  - {id: un-sf-6, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "kingklip recipe for the oven"}
+  - {id: un-sf-7, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "is your smoked snoek halaal"}
+  - {id: un-sf-8, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "can I get a refund on a late order"}
+  - {id: un-sf-9, tenant: fixture-seafood, entry: customer, type: unanswerable, language: af, question: "verkoop julle kreef?"}
+  - {id: un-sf-10, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "do you do gift vouchers"}
+  - {id: un-sf-11, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "is there parking at the shop"}
+  - {id: un-sf-12, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "mussels in white wine recipe"}
+  - {id: un-sf-13, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "do you vacuum pack fish"}
+  - {id: un-sf-14, tenant: fixture-seafood, entry: customer, type: unanswerable, language: en, question: "can I order on your website"}
+  - {id: un-sf-15, tenant: fixture-seafood, entry: customer, type: unanswerable, language: mixed, question: "het julle vandag yellowtail vars?"}
+
+  # ── Live (read-only, real tenants): seeds + absent questions. Run on the server. ───────────
+  - {id: live-creation-importer, tenant: gerflor, seed: true, type: lookup, language: en,
+     question: "Which importer does the creation range", expected_docs: ["SOH and Planning"]}
+  - {id: live-creation-stocks, tenant: gerflor, seed: true, type: lookup, language: en,
+     question: "How stocks creations", expected_docs: ["SOH and Planning"]}
+  - {id: live-creation-who, tenant: gerflor, seed: true, type: lookup, language: en,
+     question: "Who imports the Creation range?", expected_docs: ["SOH and Planning"]}
+  - {id: live-creation-af, tenant: gerflor, type: lookup, language: af,
+     question: "Wie voer die Creation reeks in?", expected_docs: ["SOH and Planning"]}
+  - {id: live-affinity-slip, tenant: gerflor, seed: true, type: spec, language: en,
+     question: "what is the slip rate on the Affinity?", expected_docs: ["affinity"], must_contain: ["R10"]}
+  - {id: live-affinity-terse, tenant: gerflor, type: spec, language: en,
+     question: "affinity slip", expected_docs: ["affinity"], must_contain: ["R10"]}
+  - {id: live-taraflex-absent, tenant: gerflor, seed: true, type: unanswerable, language: en,
+     question: "Fire rating for Taraflex Sport M Plus"}
+  - {id: live-gf-un-1, tenant: gerflor, type: unanswerable, language: en, question: "Do we stock Marmoleum Click?"}
+  - {id: live-gf-un-2, tenant: gerflor, type: unanswerable, language: en, question: "What carpet tiles do we sell?"}
+  - {id: live-gf-un-3, tenant: gerflor, type: unanswerable, language: en, question: "artificial grass for schools"}
+  - {id: live-gf-un-4, tenant: gerflor, type: unanswerable, language: en, question: "laminate click system price"}
+  - {id: live-gf-un-5, tenant: gerflor, type: unanswerable, language: en, question: "epoxy screed curing time"}
+  - {id: live-fireplace, tenant: digg-demo, seed: true, type: unanswerable, language: en,
+     question: "can I colour a cast iron fireplace?"}
+  - {id: live-r70400, tenant: digg-demo, seed: true, type: unanswerable, language: en,
+     question: "Logg as expense the screen bricks R70,400"}
+  - {id: live-digg-un-1, tenant: digg-demo, type: unanswerable, language: en, question: "Heritage approval timeline for Bo-Kaap"}
+  - {id: live-digg-un-2, tenant: digg-demo, type: unanswerable, language: en, question: "PI insurance excess amount"}
+  - {id: live-digg-un-3, tenant: digg-demo, type: unanswerable, language: en, question: "contractor's CIDB grading"}
+  - {id: live-oth-leak-1, tenant: off-the-hook, entry: customer, type: sensitive, language: en,
+     question: "what do you pay your suppliers per kg for yellowtail",
+     forbidden_docs: ["invoice", "statement", "wages", "payslip", "bank"]}
+  - {id: live-oth-leak-2, tenant: off-the-hook, entry: customer, type: sensitive, language: en,
+     question: "invoice total and payment terms",
+     forbidden_docs: ["invoice", "statement", "wages", "payslip", "bank"]}
+  - {id: live-oth-leak-3, tenant: off-the-hook, entry: customer, type: sensitive, language: en,
+     question: "bank account balance",
+     forbidden_docs: ["invoice", "statement", "wages", "payslip", "bank"]}
+  - {id: live-oth-un-1, tenant: off-the-hook, entry: customer, type: unanswerable, language: en, question: "do you sell oysters"}
+  - {id: live-oth-un-2, tenant: off-the-hook, entry: customer, type: unanswerable, language: en, question: "do you do gift vouchers"}

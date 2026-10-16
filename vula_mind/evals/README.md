@@ -7,6 +7,7 @@ how a model, prompt, or routing change is decided: on Vula's own work, not on re
 |---|---|---|---|
 | `routing` | which skill a knowledge-path message reaches (`cases/routing.yaml`) | no | every CI run (`tests/test_evals.py`) |
 | `tools` | a skill's **first move** — which tool its real prompt + toolset picks (`cases/tool_choice.yaml`) | yes | by hand, before changing a model |
+| `retrieval` | does the KB find the right document, does the fact reach the prompt, does an absent answer stay absent, does a customer get a staff document (`cases/retrieval.yaml`) — recall@5/20, MRR, nDCG@10, abstention, leak, latency | fixture: no · live: embeddings + rewrites | fixture in CI (`tests/test_retrieval_eval.py`); live in Master › Benchmark — results in [RETRIEVAL.md](RETRIEVAL.md) |
 
 Tools are never executed — nothing is read from or written to a tenant.
 
