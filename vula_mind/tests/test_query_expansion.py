@@ -49,7 +49,7 @@ async def test_each_term_is_searched_separately_so_a_rare_one_still_counts():
         def __init__(self):
             pass
 
-        async def _keyword_one(self, tenant_id, term, limit):
+        async def _keyword_one(self, tenant_id, term, limit, audience=None):
             asked.append(term)
             if term == "soh":
                 return [{"text": "NEW ORDER PROPOSAL SOH m2", "match": "keyword", "score": 0.0}]
@@ -66,7 +66,7 @@ async def test_identical_chunks_from_two_terms_appear_once():
         def __init__(self):
             pass
 
-        async def _keyword_one(self, tenant_id, term, limit):
+        async def _keyword_one(self, tenant_id, term, limit, audience=None):
             return [{"text": "the same chunk", "match": "keyword", "score": 0.0}]
 
     hits = await _Store().keyword_search("gerflor", ["a1x", "b2y"], limit=6)

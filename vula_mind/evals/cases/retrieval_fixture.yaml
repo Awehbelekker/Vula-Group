@@ -96,6 +96,7 @@ tenants:
         Brickwork is at wall plate level on the north side. Window frames delayed by two weeks.
         Contractor to submit revised programme by Friday. Next site meeting on 26 September.
     - filename: Bank statement August 2026.pdf
+      audience: owner             # as whatsapp.py files a bank statement
       text: |
         Business current account statement for August 2026. Opening balance and closing balance
         shown on page one. Debit orders: professional indemnity insurance, software licences,
@@ -110,6 +111,7 @@ tenants:
         Orders must be placed by 2pm the day before delivery. Collection from the Kalk Bay shop
         is any day from 9am to 5pm.
     - filename: recipe-cape-salmon-braai.md
+      audience: public            # as vula/api/commerce.py's recipe endpoint stores it
       text: |
         # Cape salmon on the braai
         Brush the fillets with lemon butter and garlic, season with salt, and braai skin side

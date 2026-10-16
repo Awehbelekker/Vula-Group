@@ -1383,7 +1383,9 @@ class CommerceAssistantSkill(BaseSkill):
             from vula.ingestion.pipeline import VulaIngestionPipeline
 
             pipeline = VulaIngestionPipeline(tenant_id=inp.tenant_id)
-            chunks = await pipeline.query(inp.question, top_k=4)
+            # A customer is asking: public chunks only, never a supplier invoice, statement or
+            # roster from the same collection (2026-10-16, pipeline.audience_filter).
+            chunks = await pipeline.query(inp.question, top_k=4, audience="public")
         except Exception as exc:
             logger.debug("commerce_assistant KB retrieval skipped: %s", exc)
             return "", []
@@ -2283,7 +2285,7 @@ class CommerceAssistantSkill(BaseSkill):
             # question-expansion LLM rewrite (default True) exists for terse/ambiguous user
             # typing and has nothing to add here, only latency (2026-09-08 audit).
             chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(
-                f"{dish} recipe", top_k=2, expand=False)
+                f"{dish} recipe", top_k=2, expand=False, audience="public")
             kb_recipe = "\n\n".join(c.get("text") or "" for c in fit_kb_chunks(
                 chunks or [], max(1, settings.kb_context_token_budget // 4)) if c.get("text"))
         except Exception:
@@ -2432,7 +2434,7 @@ class CommerceAssistantSkill(BaseSkill):
         kb_text = ""
         try:
             from vula.ingestion.pipeline import VulaIngestionPipeline
-            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(topic, top_k=3)
+            chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(topic, top_k=3, audience="public")
             kb_text = "\n\n".join(c.get("text") or "" for c in fit_kb_chunks(
                 chunks or [], max(1, settings.kb_context_token_budget // 4)) if c.get("text"))
         except Exception as exc:

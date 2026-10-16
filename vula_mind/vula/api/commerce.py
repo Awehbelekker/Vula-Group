@@ -2241,7 +2241,8 @@ async def admin_agent_teach(tenant_id: str, body: TeachRequest):
         import hashlib
         doc_id = "taught_" + hashlib.sha1(q.lower().encode()).hexdigest()[:16]
         await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
-            content=f"Q: {q}\nA: {a}", filename="owner-taught.txt", doc_id=doc_id, source_type="reference")
+            content=f"Q: {q}\nA: {a}", filename="owner-taught.txt", doc_id=doc_id, source_type="reference",
+            audience="public")       # taught for customers' questions too (KB audience, 2026-10-16)
     except Exception as exc:
         return {"error": f"could not teach: {exc}"}
     try:
@@ -5948,7 +5949,8 @@ async def admin_add_recipe(tenant_id: str, body: dict):
     from vula.api import tenants as _tenants
     from vula.ingestion.pipeline import VulaIngestionPipeline
     await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
-        content=f"# {title}\n\n{text}\n\n({_tenants.display_name(tenant_id)} recipe)", filename=f"recipe-{slug}.md")
+        content=f"# {title}\n\n{text}\n\n({_tenants.display_name(tenant_id)} recipe)", filename=f"recipe-{slug}.md",
+        audience="public")           # for customers by design (KB audience, 2026-10-16)
     return {"ok": True, "title": title}
 
 

@@ -1060,6 +1060,47 @@ def point_id(tenant_id: str, chunk_id: str):
     return legacy_point_id(chunk_id)
 
 
+# Who may see a chunk (2026-10-16, KB retrieval C5 — docs/kb-retrieval-audit.md). The customer
+# assistant searched the WHOLE tenant collection, which also holds every document the owner and
+# staff send in: supplier invoices with cost prices, bank statements, email attachments, wage
+# rosters. On the retrieval eval every customer question about cost prices or wages got that
+# document as grounding. Each chunk now carries `audience` (public | staff | owner) and customer
+# retrieval is filtered on it. Default is staff: a document is customer-visible only when its
+# source says so (the business's own website, its starter FAQ, an answer the owner approved for
+# customers) or the caller passes audience="public" (a recipe, an owner-taught answer).
+AUDIENCES = ("public", "staff", "owner")
+_PUBLIC_SOURCE_TYPES = {"website", "starter", "learned_answer_approved"}
+
+
+def default_audience(source_type: Optional[str], audience: Optional[str] = None) -> str:
+    """The audience to store: the caller's, if it is a known one, else by source type."""
+    if audience in AUDIENCES:
+        return audience
+    return "public" if source_type in _PUBLIC_SOURCE_TYPES else "staff"
+
+
+def audience_filter(audience: Optional[str]) -> Dict[str, list]:
+    """Qdrant filter clauses for someone asking as `audience`. Only "public" (a customer) is
+    restricted. Points stored before this field existed carry no audience: while
+    kb_customer_audience_strict is off they stay visible (only explicitly staff/owner chunks are
+    hidden); once the backfill has run and it is on, a customer sees public chunks only."""
+    if audience != "public":
+        return {}
+    if getattr(settings, "kb_customer_audience_strict", False):
+        return {"must": [{"key": "audience", "match": {"value": "public"}}]}
+    return {"must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
+
+
+def _audience_allows(audience: Optional[str], payload: dict) -> bool:
+    """The same rule as audience_filter, for payloads matched locally (substring fallback)."""
+    if audience != "public":
+        return True
+    got = payload.get("audience")
+    if getattr(settings, "kb_customer_audience_strict", False):
+        return got == "public"
+    return got not in ("staff", "owner")
+
+
 def kb_score_threshold(authoritative: bool = False) -> float:
     """The minimum similarity for a retrieved chunk (2026-10-16: were the literals 0.3 / 0.35 in
     query(); same defaults, now settings — config.py kb_score_threshold*). A per-embed-model
@@ -1120,14 +1161,15 @@ class QdrantStore:
                 if resp.status_code not in (200, 201) and "already exists" not in resp.text:
                     raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
                 logger.info("Created Qdrant collection: %s", name)
-            # Idempotent: ensure the keyword index used by authority filtering.
-            try:
-                await client.put(
-                    f"{self.base}/collections/{name}/index",
-                    json={"field_name": "source_type", "field_schema": "keyword"},
-                )
-            except Exception as exc:
-                logger.debug("source_type index ensure skipped for %s: %s", name, exc)
+            # Idempotent: ensure the keyword indexes used by authority and audience filtering.
+            for field_name in ("source_type", "audience"):
+                try:
+                    await client.put(
+                        f"{self.base}/collections/{name}/index",
+                        json={"field_name": field_name, "field_schema": "keyword"},
+                    )
+                except Exception as exc:
+                    logger.debug("%s index ensure skipped for %s: %s", field_name, name, exc)
 
     async def upsert_chunks(self, tenant_id: str, chunks: List[DocumentChunk]) -> int:
         """Store document chunks with embeddings."""
@@ -1197,6 +1239,7 @@ class QdrantStore:
         exclude_source_types: Optional[List[str]] = None,
         category: Optional[str] = None,
         source_type: Optional[str] = None,
+        audience: Optional[str] = None,
     ) -> List[dict]:
         """Semantic search across tenant's knowledge base.
 
@@ -1215,6 +1258,9 @@ class QdrantStore:
         source_type instead of excluding some. Used to search exclusively within approved
         learned-answer points without ever mixing them into a normal document-KB query (and
         vice versa). None (default) behaves exactly as before this parameter existed.
+
+        `audience` (2026-10-16): who is asking — "public" for a customer, which applies
+        audience_filter() and never falls back to an unfiltered search. None = unrestricted.
         """
         name = self._collection_name(tenant_id)
         body: dict = {
@@ -1227,6 +1273,9 @@ class QdrantStore:
         must = [{"key": "category", "match": {"value": category}}] if category else []
         if source_type:
             must.append({"key": "source_type", "match": {"value": source_type}})
+        aud = audience_filter(audience)
+        must += aud.get("must", [])
+        must_not += aud.get("must_not", [])
         if must_not or must:
             body["filter"] = {k: v for k, v in (("must_not", must_not), ("must", must)) if v}
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
@@ -1236,6 +1285,15 @@ class QdrantStore:
             )
             if resp.status_code == 404:
                 return []
+            # A customer's search must never lose its audience filter: on a refusal, make the
+            # index and retry once with the full filter, else return nothing (fail closed).
+            if resp.status_code == 400 and aud:
+                logger.warning("Audience filter refused for %s — creating index and retrying", name)
+                await client.put(f"{self.base}/collections/{name}/index",
+                                 json={"field_name": "audience", "field_schema": "keyword"})
+                resp = await client.post(f"{self.base}/collections/{name}/points/search", json=body)
+                if not resp.is_success:
+                    return []
             # If filtering is unavailable (e.g. missing index on a legacy collection),
             # degrade gracefully to an unfiltered search rather than failing the reply.
             if resp.status_code == 400 and "filter" in body:
@@ -1252,7 +1310,7 @@ class QdrantStore:
             return results
 
     async def keyword_search(self, tenant_id: str, terms: List[str],
-                             limit: int = 5) -> List[dict]:
+                             limit: int = 5, audience: Optional[str] = None) -> List[dict]:
         """Literal term matching, as a companion to the vector search.
 
         2026-09-07: a rep asked "Which importer does the creation range" and vector search
@@ -1279,7 +1337,7 @@ class QdrantStore:
         # was never searched at all. Overlap is a real ranking signal and costs nothing: a
         # chunk holding both "soh" and "inbound" outranks one that merely holds "hand".
         gathered = await asyncio.gather(
-            *[self._keyword_one(tenant_id, t, 3) for t in terms], return_exceptions=True)
+            *[self._keyword_one(tenant_id, t, 3, audience) for t in terms], return_exceptions=True)
         lowered = [t.lower() for t in terms]
         best: dict = {}
         for res in gathered:
@@ -1295,10 +1353,14 @@ class QdrantStore:
                 best[key] = hit
         return sorted(best.values(), key=lambda h: h.get("_overlap", 0), reverse=True)[:limit]
 
-    async def _keyword_one(self, tenant_id: str, term: str, limit: int) -> List[dict]:
+    async def _keyword_one(self, tenant_id: str, term: str, limit: int,
+                           audience: Optional[str] = None) -> List[dict]:
         """Literal matches for ONE term. See keyword_search for why terms are not OR'd."""
         name = self._collection_name(tenant_id)
-        flt = {"must": [{"key": "text", "match": {"text": term}}]}
+        aud = audience_filter(audience)
+        flt = {"must": [{"key": "text", "match": {"text": term}}] + aud.get("must", [])}
+        if aud.get("must_not"):
+            flt["must_not"] = aud["must_not"]
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             for attempt in (1, 2):
                 resp = await client.post(
@@ -1327,10 +1389,11 @@ class QdrantStore:
                     except Exception as exc:
                         logger.debug("text index creation failed for %s: %s", name, exc)
                         break
-        return await self._scroll_substring(tenant_id, [term], limit)
+        return await self._scroll_substring(tenant_id, [term], limit, audience=audience)
 
     async def _scroll_substring(self, tenant_id: str, terms: List[str],
-                                limit: int, max_points: int = 3000) -> List[dict]:
+                                limit: int, max_points: int = 3000,
+                                audience: Optional[str] = None) -> List[dict]:
         """Bounded brute-force fallback: page through payloads and substring-match locally.
         Capped so a large collection costs a slow reply, never an unbounded scan."""
         name = self._collection_name(tenant_id)
@@ -1356,7 +1419,7 @@ class QdrantStore:
                         scanned += 1
                         payload = dict(p.get("payload") or {})
                         text = (payload.get("text") or "").lower()
-                        if any(t in text for t in lowered):
+                        if any(t in text for t in lowered) and _audience_allows(audience, payload):
                             payload.setdefault("score", 0.0)
                             payload["match"] = "keyword"
                             found.append(payload)
@@ -1470,7 +1533,8 @@ class VulaIngestionPipeline:
         self.embedder = EmbeddingEngine()
         self.store = QdrantStore()
 
-    async def ingest_file(self, file_path: Path, source_type: str = "document") -> IngestionResult:
+    async def ingest_file(self, file_path: Path, source_type: str = "document",
+                          audience: Optional[str] = None) -> IngestionResult:
         """
         Full pipeline for a single file.
         Returns IngestionResult with stats.
@@ -1514,6 +1578,7 @@ class VulaIngestionPipeline:
                             "file_type": file_path.suffix,
                             "file_size_kb": file_path.stat().st_size // 1024,
                             "source_type": source_type,
+                            "audience": default_audience(source_type, audience),
                         },
                     )
                     all_chunks.append(chunk)
@@ -1564,7 +1629,8 @@ class VulaIngestionPipeline:
             )
 
     async def ingest_text(self, content: str, filename: str, doc_id: str | None = None,
-                          source_type: str = "document", category: str | None = None) -> IngestionResult:
+                          source_type: str = "document", category: str | None = None,
+                          audience: str | None = None) -> IngestionResult:
         """Ingest raw text directly — no file needed. Used to seed the training KB.
 
         `category` (2026-08-24, structured starter KB): an optional doc-type tag (reuses
@@ -1578,7 +1644,8 @@ class VulaIngestionPipeline:
             doc_id = hashlib.md5(f"{self.tenant_id}:{filename}".encode()).hexdigest()[:16]
         try:
             raw_chunks = self.chunker.chunk(content)
-            chunk_metadata = {"source": "training_kb", "source_type": source_type}
+            chunk_metadata = {"source": "training_kb", "source_type": source_type,
+                              "audience": default_audience(source_type, audience)}
             if category:
                 chunk_metadata["category"] = category
             all_chunks = [
@@ -1629,7 +1696,7 @@ class VulaIngestionPipeline:
 
     async def query(self, question: str, top_k: int = 5,
                     authoritative_only: bool = False, category: str | None = None,
-                    expand: bool = True) -> List[dict]:
+                    expand: bool = True, audience: str | None = None) -> List[dict]:
         """
         Semantic search across this tenant's knowledge base.
         Returns relevant document chunks for RAG.
@@ -1652,6 +1719,9 @@ class VulaIngestionPipeline:
         The documents were never the problem; the question was. A rep typing between
         appointments does not write well-formed prose, and the embedding needs it. Set
         expand=False for a caller that has already composed a careful query.
+
+        audience (2026-10-16): "public" for anything a customer will see — every customer-facing
+        caller MUST pass it (see audience_filter). Applies to the keyword pass too.
         """
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
         threshold = kb_score_threshold(authoritative_only)
@@ -1671,7 +1741,8 @@ class VulaIngestionPipeline:
                 emb = await self.embedder.embed(q)
                 return await self.store.search(
                     self.tenant_id, emb, limit=top_k,
-                    score_threshold=threshold, exclude_source_types=exclude, category=category)
+                    score_threshold=threshold, exclude_source_types=exclude, category=category,
+                    audience=audience)
             except Exception as exc:
                 logger.debug("query variant failed (%r): %s", q[:40], exc)
                 return []
@@ -1695,7 +1766,7 @@ class VulaIngestionPipeline:
         if terms and (len(merged) < top_k or _is_terse(question)):
             try:
                 keyword_hits = await self.store.keyword_search(
-                    self.tenant_id, terms, limit=max(2, top_k // 2))
+                    self.tenant_id, terms, limit=max(2, top_k // 2), audience=audience)
             except Exception as exc:
                 logger.debug("keyword pass failed: %s", exc)
 

@@ -2008,9 +2008,12 @@ async def ingest_document(
     tenant_id: str = Form(...),
     file: UploadFile = File(...),
     project: Optional[str] = Form(None),
+    audience: Optional[str] = Form(None),
 ):
     """Upload a document and ingest it into the tenant knowledge base (async). `project`: sent
-    from a project's page — the document is filed straight under that project."""
+    from a project's page — the document is filed straight under that project. `audience`
+    (2026-10-16): "public" makes it available to the customer assistant; anything else, or
+    nothing, keeps it to the business's own staff (vula/ingestion/pipeline.py::audience_filter)."""
     validate_tenant(tenant_id)
 
     content = await file.read()
@@ -2026,7 +2029,7 @@ async def ingest_document(
 
     async def _ingest() -> None:
         pipeline = VulaIngestionPipeline(tenant_id=tenant_id)
-        result = await pipeline.ingest_file(file_path)
+        result = await pipeline.ingest_file(file_path, audience=audience)
         log.info("Ingestion complete: %s → %d chunks (%s)", result.filename, result.chunks_stored, result.status)
         if result.status in ("success", "done"):
             await _analyze_and_file_upload(tenant_id, result, file_path, mime_type, project=project)

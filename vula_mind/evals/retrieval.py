@@ -370,7 +370,7 @@ async def build_fixture(fixture: Optional[Dict[str, List[Dict[str, Any]]]] = Non
         for d in docs:
             res = await p.ingest_text(content=d["text"], filename=d["filename"],
                                       source_type=d.get("source_type", "document"),
-                                      category=d.get("category"))
+                                      category=d.get("category"), audience=d.get("audience"))
             if res.status != "success":
                 raise RuntimeError(f"fixture ingest failed for {tid}/{d['filename']}: {res.error}")
             stored[tid] = stored.get(tid, 0) + res.chunks_stored

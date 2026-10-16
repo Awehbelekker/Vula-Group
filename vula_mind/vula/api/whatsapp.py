@@ -2168,7 +2168,8 @@ async def _bank_statement_first(tenant_id: str, phone: str, local_path) -> bool:
     await _send_reply(phone, msg, tenant_id)
     try:                              # file it so "find the August statement" works; a failure
         from vula.ingestion.pipeline import VulaIngestionPipeline        # here no longer
-        await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(local_path)  # costs the lines
+        await VulaIngestionPipeline(tenant_id=tenant_id).ingest_file(local_path,   # costs the lines
+                                                                     audience="owner")
     except Exception as exc:
         logger.warning("statement filing skipped for %s: %s", local_path.name, exc)
     return True
