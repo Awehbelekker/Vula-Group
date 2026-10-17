@@ -318,6 +318,17 @@ class MemoryQdrant:
                 return httpx.Response(200, json={"result": {
                     "points": [{"id": i, "payload": dict(col["points"][i][1])} for i in page],
                     "next_page_offset": nxt}})
+            if rest == ["points", "payload"]:          # set payload keys on listed points
+                for pid in (self._pid(i) for i in body.get("points") or []):
+                    if pid in col["points"]:
+                        col["points"][pid][1].update(body.get("payload") or {})
+                return httpx.Response(200, json={"result": {"status": "completed"}})
+            if rest == ["points", "payload", "delete"]:
+                for pid in (self._pid(i) for i in body.get("points") or []):
+                    if pid in col["points"]:
+                        for k in body.get("keys") or []:
+                            col["points"][pid][1].pop(k, None)
+                return httpx.Response(200, json={"result": {"status": "completed"}})
             if rest == ["points", "delete"]:
                 if "points" in body:
                     gone = [self._pid(i) for i in body["points"]]
