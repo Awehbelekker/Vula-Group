@@ -15,6 +15,9 @@ export default defineConfig({
     launchOptions: process.env.PW_CHROMIUM_PATH ? { executablePath: process.env.PW_CHROMIUM_PATH } : {},
     timezoneId: "Africa/Johannesburg",
     locale: "en-ZA",
+    // The app registers /sw.js; a service worker would answer fetches itself and bypass
+    // page.route(), so the mock API (tests/visual/mockApi.js) could miss calls.
+    serviceWorkers: "block",
   },
   webServer: {
     command: `npx vite --port ${PORT} --strictPort`,

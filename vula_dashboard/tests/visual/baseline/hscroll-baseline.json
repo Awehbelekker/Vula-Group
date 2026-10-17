@@ -1,0 +1,45 @@
+{
+  "viewport": "mobile 390x844",
+  "screens": {
+    "home": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "hscroll": false
+    },
+    "inbox": {
+      "scrollWidth": 452,
+      "clientWidth": 390,
+      "hscroll": true
+    },
+    "customers": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "hscroll": false
+    },
+    "orders": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "hscroll": false
+    },
+    "invoices": {
+      "scrollWidth": 412,
+      "clientWidth": 390,
+      "hscroll": true
+    },
+    "documents": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "hscroll": false
+    },
+    "settings": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "hscroll": false
+    },
+    "master": {
+      "scrollWidth": 421,
+      "clientWidth": 390,
+      "hscroll": true
+    }
+  }
+}

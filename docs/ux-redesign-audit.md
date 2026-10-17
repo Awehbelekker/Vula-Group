@@ -209,3 +209,32 @@ All present ones live in `FE/components/ui/index.jsx`. **Decision: extend that f
 | `components/ui/` additions (ListRow, FilterBar, Sheet, CommandPalette, FloatingToolbar) | Added to the existing primitives file/folder |
 | `BE` `GET /v1/commerce/{t}/activity` | No tenant-wide feed exists; lives in `commerce.py` next to `agent-activity` |
 | migration 214 (`ui_v2` flag, labels) | New columns on the existing `vula_tenant_config` (beside `home_layout`); no new table |
+
+## 12. Visual and accessibility baseline (captured in Phase A)
+
+`vula_dashboard/tests/visual/baseline/`: 8 screens (home, inbox, customers, orders, invoices, documents, settings, master) × 390×844 / 834×1112 / 1440×900 × light / dark = 48 PNGs. The API is mocked from fictional seed data (`tests/visual/fixtures/demo.js`, "Harbour & Vine Deli"). Network is blocked, so screenshots use fallback fonts and the Settings delivery map has no tiles. Run instructions: `tests/visual/README.md`.
+
+axe (desktop, light), serious / critical:
+
+| Screen | Serious | Critical |
+|---|---|---|
+| home | 0 | 0 |
+| inbox | color-contrast ×13 | 0 |
+| customers | 0 | 0 |
+| orders | color-contrast ×14, label-title-only ×2 | 0 |
+| invoices | color-contrast ×17 | 0 |
+| documents | color-contrast ×1 | label ×2, select-name ×5 |
+| settings | color-contrast ×16 | label ×14, select-name ×4 |
+| master | color-contrast ×3, label-title-only ×1 | 0 |
+
+Horizontal page scroll at 390px: **inbox (452px), invoices (412px), master (421px)**; the others fit.
+
+Bugs noticed while seeding (reported, not fixed):
+- `GoLiveChecklist` (`VulaMerchantAdmin.jsx`) crashes when `/admin/setup` returns no `steps`.
+- `LearnedSummary` (`VulaSettings.jsx`) crashes on a partial response (`data.voice.current`, `data.learned_answers.*`).
+- Home "Your assistant, recently" prints UTC times as local (`String(a.at).slice(11,16)`).
+- Home "Customer waiting" hint cuts the question at 46 characters ("…party of 1" for "party of 12").
+- Master tenants table is clipped at 1440px (panel capped at 1000px; last action column cut off).
+- A master login lands on Debug › Dashboard, not Master (`App.jsx` `initialTab`).
+- Inbox canned-reply chip hard-codes `#F3F1EA` (not dark-aware).
+- Home "AI economics" shows the platform-wide local % (S6).
