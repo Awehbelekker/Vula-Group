@@ -5,7 +5,10 @@ vula/api/team.py — tenant team directory: members, access scopes, WhatsApp not
     POST   /v1/team/{tenant}                 add a member
     PATCH  /v1/team/{tenant}/{member_id}     update access/notify/role/active
     DELETE /v1/team/{tenant}/{member_id}
-    GET    /v1/team/{tenant}/me?email=       the logged-in member's role/access/notify (UI gating)
+    GET    /v1/team/{tenant}/me              the logged-in member's role/access/notify (UI gating)
+
+Writes (add/update/remove, audit) need full access — owner or manager (tenant_auth.
+require_tenant_admin); a restricted member could otherwise edit their own access list.
 """
 from __future__ import annotations
 
@@ -13,10 +16,10 @@ import logging
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
-from vula.api.tenant_auth import require_tenant_actor
+from vula.api.tenant_auth import member_scope, require_tenant_admin
 from vula.api import merchant_audit
 from vula import team_index as _team_index
 
@@ -66,7 +69,7 @@ async def list_members(tenant: str) -> dict:
 
 @router.post("/{tenant}")
 async def add_member(tenant: str, body: MemberIn,
-                     identity: dict = Depends(require_tenant_actor)) -> dict:
+                     identity: dict = Depends(require_tenant_admin)) -> dict:
     row = body.model_dump()
     row["tenant_id"] = tenant
     if row.get("whatsapp"):
@@ -107,7 +110,7 @@ async def _revoke_matching_login(tenant: str, member_id: str, identity: dict) ->
 
 @router.patch("/{tenant}/{member_id}")
 async def update_member(tenant: str, member_id: str, body: MemberPatch,
-                        identity: dict = Depends(require_tenant_actor)) -> dict:
+                        identity: dict = Depends(require_tenant_admin)) -> dict:
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
     if patch.get("whatsapp"):
         patch["whatsapp"] = _digits(patch["whatsapp"])
@@ -130,7 +133,7 @@ async def update_member(tenant: str, member_id: str, body: MemberPatch,
 
 @router.delete("/{tenant}/{member_id}")
 async def remove_member(tenant: str, member_id: str,
-                        identity: dict = Depends(require_tenant_actor)) -> dict:
+                        identity: dict = Depends(require_tenant_admin)) -> dict:
     try:
         _client().table("vula_team_members").delete().eq("id", member_id).eq("tenant_id", tenant).execute()
         _team_index.invalidate(tenant)
@@ -141,20 +144,21 @@ async def remove_member(tenant: str, member_id: str,
 
 
 @router.get("/{tenant}/me")
-async def me(tenant: str, email: str = "") -> dict:
-    """The logged-in member's profile (role/access/notify) — drives dashboard gating.
-    Owners/unknown emails get full access (empty access list = see everything)."""
-    try:
-        rows = (_client().table("vula_team_members").select("role,access,notify,name,whatsapp")
-                .eq("tenant_id", tenant).eq("email", email).limit(1).execute().data or [])
-    except Exception:
-        rows = []
-    if not rows:
-        return {"role": "owner", "access": [], "notify": list(_EVENTS), "full": True, "whatsapp": None}
-    m = rows[0]
-    return {"role": m.get("role"), "access": m.get("access") or [],
-            "notify": m.get("notify") or [], "name": m.get("name"), "whatsapp": m.get("whatsapp"),
-            "full": (m.get("role") in ("owner", "manager")) or not (m.get("access") or [])}
+async def me(tenant: str, email: str = "", authorization: str = Header(default="")) -> dict:
+    """The signed-in member's profile (role/access/notify) — drives dashboard gating.
+
+    2026-10-17: resolved from the verified login (tenant_auth.member_scope), not the ?email=
+    query param — that param let anyone read any member's scope and gave an unknown email full
+    owner access. The param is still accepted (older dashboards send it) but ignored."""
+    scope = await member_scope(authorization, tenant)
+    if scope is None:
+        if not (authorization or "").removeprefix("Bearer ").strip():
+            raise HTTPException(status_code=401, detail="Sign in required.")
+        raise HTTPException(status_code=403, detail="You don't have access to this workspace.")
+    m = scope.get("member") or {}
+    return {"role": scope.get("role"), "access": scope.get("access") or [],
+            "notify": (m.get("notify") or []) if m else list(_EVENTS),
+            "name": m.get("name"), "whatsapp": m.get("whatsapp"), "full": bool(scope.get("full"))}
 
 
 _EVENTS = ("which_project", "followup_digest", "payment_received", "new_invoice", "new_order",
@@ -163,7 +167,7 @@ _EVENTS = ("which_project", "followup_digest", "payment_received", "new_invoice"
 
 @router.get("/{tenant}/audit")
 async def audit_log(tenant: str, limit: int = 100,
-                    identity: dict = Depends(require_tenant_actor)) -> dict:
+                    identity: dict = Depends(require_tenant_admin)) -> dict:
     """Merchant-scoped audit trail (migration 107) — who changed team access/roles/logins,
     and when. The tenant-scoped counterpart to master's /v1/master/audit."""
     return {"events": merchant_audit.list_audit(tenant, limit)}

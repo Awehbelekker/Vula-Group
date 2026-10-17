@@ -10,6 +10,9 @@ only) + maps the user to the tenant in vula_tenant_users (role) and vula_team_me
     POST   /v1/users/{tenant}/users/{user_id}/reset      reset a user's password (returns temp)
     PATCH  /v1/users/{tenant}/users/{user_id}            change role / deactivate mapping
     DELETE /v1/users/{tenant}/users/{user_id}            remove this tenant's access for the user
+
+Every route needs full access (owner or manager — tenant_auth.require_tenant_admin, 2026-10-17);
+before, any member could create logins or change roles, and the list had no check at all.
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from config import settings
-from vula.api.tenant_auth import require_tenant_actor
+from vula.api.tenant_auth import require_tenant_admin
 from vula.api import merchant_audit
 
 log = logging.getLogger(__name__)
@@ -95,7 +98,7 @@ class CreateUserIn(BaseModel):
 
 @router.post("/{tenant}/users")
 async def create_user(tenant: str, body: CreateUserIn,
-                      identity: dict = Depends(require_tenant_actor)) -> dict:
+                      identity: dict = Depends(require_tenant_admin)) -> dict:
     """Create (or attach) a login for this tenant and return a one-time temp password."""
     from vula.commerce.plan_limits import PlanLimitError
     temp = secrets.token_urlsafe(9)
@@ -149,7 +152,7 @@ async def create_user(tenant: str, body: CreateUserIn,
 
 @router.post("/{tenant}/users/{user_id}/reset")
 async def reset_password(tenant: str, user_id: str,
-                         identity: dict = Depends(require_tenant_actor)) -> dict:
+                         identity: dict = Depends(require_tenant_admin)) -> dict:
     temp = secrets.token_urlsafe(9)
     r = await _auth_admin("PUT", f"/users/{user_id}", {"password": temp})
     if r.status_code != 200:
@@ -164,7 +167,7 @@ class RolePatch(BaseModel):
 
 @router.patch("/{tenant}/users/{user_id}")
 async def update_role(tenant: str, user_id: str, body: RolePatch,
-                      identity: dict = Depends(require_tenant_actor)) -> dict:
+                      identity: dict = Depends(require_tenant_admin)) -> dict:
     try:
         _client().table("vula_tenant_users").update({"role": body.role}) \
             .eq("user_id", user_id).eq("tenant_id", tenant).execute()
@@ -176,7 +179,7 @@ async def update_role(tenant: str, user_id: str, body: RolePatch,
 
 @router.delete("/{tenant}/users/{user_id}")
 async def remove_access(tenant: str, user_id: str,
-                        identity: dict = Depends(require_tenant_actor)) -> dict:
+                        identity: dict = Depends(require_tenant_admin)) -> dict:
     _client().table("vula_tenant_users").delete() \
         .eq("user_id", user_id).eq("tenant_id", tenant).execute()
     merchant_audit.audit(tenant, identity, "login_access_removed", user_id=user_id)
@@ -184,7 +187,7 @@ async def remove_access(tenant: str, user_id: str,
 
 
 @router.get("/{tenant}/users")
-async def list_users(tenant: str) -> dict:
+async def list_users(tenant: str, identity: dict = Depends(require_tenant_admin)) -> dict:
     try:
         rows = (_client().table("vula_tenant_users").select("user_id,role")
                 .eq("tenant_id", tenant).execute().data or [])

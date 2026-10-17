@@ -1627,6 +1627,11 @@ async def lifespan(app: FastAPI):
             log.debug("schema check task failed: %s", exc)
 
     _asyncio.create_task(_schema_check())
+    if not settings.enforce_tenant_auth:
+        # 2026-10-17: with the guard off, every /admin route (and the section rules above) is
+        # open to anyone who knows a tenant slug. Say so at every boot until it's armed.
+        log.error("ENFORCE_TENANT_AUTH is off — tenant admin routes are NOT access-checked. "
+                  "Set ENFORCE_TENANT_AUTH=true on this service (then `railway up`).")
     if settings.run_scheduled_jobs:
         _asyncio.create_task(_scheduler_leadership_loop())
     else:
@@ -1738,6 +1743,29 @@ _TENANT_GUARD_PUBLIC = [
     ("POST", re.compile(r"^/v1/bookings/[^/]+/?$")),
 ]
 
+# Sections a RESTRICTED member needs (2026-10-17). Membership alone used to be the whole check,
+# so the dashboard's section gating (navConfig.merchantVisible) was browser-only: a sales rep
+# could read every invoice and bank line by calling the API. A full member (owner/manager, or no
+# access list) passes all of these; a restricted one needs at least one listed tab id in their
+# vula_team_members.access. An empty set = full members only. Kept to Money and the team: the
+# rest of the admin API is still membership-only (see docs/ux-redesign-audit.md §1).
+_MONEY_TABS = frozenset({"invoices", "expenses", "bank", "books", "payments", "taptopay",
+                         "budget", "scanner", "finances"})
+_SECTION_RULES = [
+    # (methods or None for all, path regex, tab ids that grant it)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/(?:invoices|invoice-clients|invoice-items|"
+                      r"recurring-invoices|quotes|bank|accounts|finances)(?:/|$)"), _MONEY_TABS),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/reports(?:/|$)"), _MONEY_TABS | {"labour"}),
+    # a rep's own expenses tab reads the same endpoint (VulaExpenses defaultPaidBy)
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/expenses(?:/|$)"), _MONEY_TABS | {"rep-expenses"}),
+    (None, re.compile(r"^/v1/commerce/[^/]+/admin/expense-sheet(?:/|$)"),
+     _MONEY_TABS | {"rep-expenses", "rep-expense-sheet"}),
+    (None, re.compile(r"^/v1/payments/(?!webhook/)[^/]+/"), _MONEY_TABS),
+    (None, re.compile(r"^/v1/users/[^/]+(?:/|$)"), frozenset()),
+    (None, re.compile(r"^/v1/team/[^/]+/audit/?$"), frozenset()),
+    ({"POST", "PUT", "PATCH", "DELETE"}, re.compile(r"^/v1/team/[^/]+(?:/|$)"), frozenset()),
+]
+
 # Cross-tenant listings / platform-wide actions: master only.
 _MASTER_ONLY = [
     ("GET", re.compile(r"^/v1/tenants/?$")),
@@ -1805,10 +1833,17 @@ async def _guard_check(method: str, path: str, auth_header: str, api_key: str = 
             continue
         if not auth_header:
             return JSONResponse({"detail": "Sign in required."}, status_code=401)
-        from vula.api.tenant_auth import is_tenant_member
+        from vula.api.tenant_auth import is_tenant_member, member_scope, scope_allows
         if not await is_tenant_member(auth_header, m.group(1)):
             return JSONResponse(
                 {"detail": "You don't have access to this workspace."}, status_code=403)
+        for methods, srx, tabs in _SECTION_RULES:
+            if (methods is None or method in methods) and srx.match(path):
+                if not scope_allows(await member_scope(auth_header, m.group(1)), tabs):
+                    return JSONResponse(
+                        {"detail": "Your login doesn't include this part of the workspace."},
+                        status_code=403)
+                break
         break
     return None
 
