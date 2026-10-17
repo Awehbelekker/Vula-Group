@@ -849,12 +849,14 @@ function BusinessProfileSettings({ tenantId }) {
   const API = VULA_API
   const [data, setData] = useState(null)
   const [draft, setDraft] = useState({})
+  // 2026-10-17: which answers the customer assistant may use; the rest stay with the team.
+  const [publicKeys, setPublicKeys] = useState([])
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState(false)
   useEffect(() => {
     if (!tenantId) return
     fetch(`${API}/v1/commerce/${tenantId}/admin/business-profile`)
-      .then(r => r.json()).then(d => { setData(d); setDraft(d.answers || {}) })
+      .then(r => r.json()).then(d => { setData(d); setDraft(d.answers || {}); setPublicKeys(d.public_keys || []) })
       .catch(() => setMsg('Couldn\u2019t load the profile.'))
   }, [tenantId])
   const save = async () => {
@@ -862,23 +864,32 @@ function BusinessProfileSettings({ tenantId }) {
     try {
       const r = await fetch(`${API}/v1/commerce/${tenantId}/admin/business-profile`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers: draft }),
+        body: JSON.stringify({ answers: draft, public_keys: publicKeys }),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || 'Save failed')
-      setData(d); setMsg(`Saved — ${d.answered} of ${d.total} answered.`)
+      setData(d); setPublicKeys(d.public_keys || publicKeys)
+      setMsg(d.warning || `Saved — ${d.answered} of ${d.total} answered.`)
     } catch (e) { setMsg(e.message) } finally { setSaving(false) }
   }
   if (!data) return <div style={{ fontSize: 13, color: 'var(--muted)' }}>{msg || 'Loading…'}</div>
   return (
     <div style={{ display: 'grid', gap: 10 }}>
-      <div style={{ fontSize: 13, color: 'var(--muted)' }}>{data.answered} of {data.total} answered</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+        {data.answered} of {data.total} answered. Ticked answers can be used when Vula replies to
+        customers; the rest are only for you and your team.
+      </div>
       {data.questions.map(q => (
-        <label key={q.key} style={{ display: 'grid', gap: 4, fontSize: 13, color: 'var(--text)' }}>
-          {q.q}
-          <textarea rows={2} style={{ ...s.input, fontFamily: 'var(--font-body)', resize: 'vertical' }}
+        <div key={q.key} style={{ display: 'grid', gap: 4, fontSize: 13, color: 'var(--text)' }}>
+          <label htmlFor={`bp-${q.key}`}>{q.q}</label>
+          <textarea id={`bp-${q.key}`} rows={2} style={{ ...s.input, fontFamily: 'var(--font-body)', resize: 'vertical' }}
             value={draft[q.key] || ''} onChange={e => setDraft({ ...draft, [q.key]: e.target.value })} />
-        </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={publicKeys.includes(q.key)}
+              onChange={e => setPublicKeys(e.target.checked ? [...publicKeys, q.key] : publicKeys.filter(k => k !== q.key))} />
+            Customers can see this answer
+          </label>
+        </div>
       ))}
       <button style={s.saveBtn} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save profile'}</button>
       {msg && <div style={{ fontSize: 13, color: 'var(--muted)' }}>{msg}</div>}

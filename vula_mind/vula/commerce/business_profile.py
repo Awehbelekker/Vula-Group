@@ -9,6 +9,13 @@ and says it will check (the starter KB's placeholder lines are no longer retriev
 see pipeline._without_placeholders).
 
 Storage: vula_business_profile (migration 189), fail-open when the table isn't there yet.
+
+2026-10-17 (KB retrieval 1b): written as TWO documents — the answers customers may see (hours,
+delivery areas, payment methods, returns…) as a public one the customer assistant can use, and
+the rest (who does what in the team, tax regime, payroll, pricing approach) as a team-only one.
+Which answers are public is the owner's list (public_keys, migration 214); until they set it,
+each question's `public` default below applies. A question added later is team-only unless it
+says otherwise.
 """
 from __future__ import annotations
 
@@ -22,15 +29,15 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger(__name__)
 
 _COMMON: List[Dict[str, str]] = [
-    {"key": "what_we_do", "q": "In a sentence or two: what does the business sell or do, and for whom?"},
-    {"key": "area", "q": "Where do you work or deliver? (areas, towns, or 'collection only')"},
-    {"key": "hours", "q": "What are your working hours, and when are you closed?"},
-    {"key": "payment", "q": "How do customers pay you (EFT, card, cash, payment link), and what are your payment terms?"},
+    {"key": "what_we_do", "public": True, "q": "In a sentence or two: what does the business sell or do, and for whom?"},
+    {"key": "area", "public": True, "q": "Where do you work or deliver? (areas, towns, or 'collection only')"},
+    {"key": "hours", "public": True, "q": "What are your working hours, and when are you closed?"},
+    {"key": "payment", "public": True, "q": "How do customers pay you (EFT, card, cash, payment link), and what are your payment terms?"},
     {"key": "pricing", "q": "How do you price — fixed price list, quote per job, or per hour/m²? Anything you always add (call-out, delivery)?"},
-    {"key": "lead_times", "q": "How quickly can you usually deliver or start a job?"},
-    {"key": "cancellations", "q": "What's your policy on cancellations, returns or refunds?"},
+    {"key": "lead_times", "public": True, "q": "How quickly can you usually deliver or start a job?"},
+    {"key": "cancellations", "public": True, "q": "What's your policy on cancellations, returns or refunds?"},
     {"key": "team", "q": "Who does what in the team (e.g. 'Sipho quotes, Lindi does accounts')?"},
-    {"key": "faq", "q": "What do customers ask you most often — and what's the answer?"},
+    {"key": "faq", "public": True, "q": "What do customers ask you most often — and what's the answer?"},
     # 6 Oct: tax questions need this (vula/commerce/tax.py) — Turnover Tax, company, sole prop.
     {"key": "tax_regime", "q": "How is the business taxed: Turnover Tax, a (Pty) Ltd company, or a sole proprietor (your own name)?"},
     {"key": "payroll", "q": "Do you employ staff on payroll (PAYE/UIF), or are workers paid through subcontractors?"},
@@ -38,16 +45,17 @@ _COMMON: List[Dict[str, str]] = [
 ]
 
 _EXTRA: Dict[str, List[Dict[str, str]]] = {
-    "food": [{"key": "delivery_fee", "q": "What's your delivery fee and minimum order, and which days do you deliver?"}],
-    "retail": [{"key": "stock", "q": "Which products do you always keep in stock, and which are order-in only?"}],
-    "trades": [{"key": "registration", "q": "Are you registered with CIDB/NHBRC or any trade body? Anything customers should know about guarantees?"}],
+    "food": [{"key": "delivery_fee", "public": True, "q": "What's your delivery fee and minimum order, and which days do you deliver?"}],
+    "retail": [{"key": "stock", "public": True, "q": "Which products do you always keep in stock, and which are order-in only?"}],
+    "trades": [{"key": "registration", "public": True, "q": "Are you registered with CIDB/NHBRC or any trade body? Anything customers should know about guarantees?"}],
     "services": [{"key": "fees", "q": "How are your fees structured (fixed, % of project, hourly) and when do you invoice?"}],
-    "health": [{"key": "bookings", "q": "How do patients book, and what's your cancellation / no-show policy? Which medical aids do you work with?"}],
+    "health": [{"key": "bookings", "public": True, "q": "How do patients book, and what's your cancellation / no-show policy? Which medical aids do you work with?"}],
     "rep": [{"key": "principal", "q": "Which brands or principals do you represent, and who are your distributors?"},
             {"key": "territory", "q": "Which areas and customer types (architects, contractors, retailers) do you cover?"}],
 }
 
 PROFILE_FILENAME = "Business profile (from the owner).md"
+PUBLIC_PROFILE_FILENAME = "Business profile — for customers (from the owner).md"
 
 
 def questions(business_type: str) -> List[Dict[str, str]]:
@@ -67,6 +75,24 @@ def _business_type(tenant_id: str) -> str:
         return "other"
 
 
+def default_public_keys(business_type: str) -> List[str]:
+    return [q["key"] for q in questions(business_type) if q.get("public")]
+
+
+def get_public_keys(tenant_id: str) -> List[str]:
+    """The owner's list of answers customers may see; the defaults until they set one (or before
+    migration 214 is applied)."""
+    try:
+        rows = (_client().table("vula_business_profile").select("public_keys")
+                .eq("tenant_id", tenant_id).limit(1).execute().data or [])
+        keys = rows[0].get("public_keys") if rows else None
+        if isinstance(keys, list):
+            return [str(k) for k in keys]
+    except Exception as exc:
+        log.debug("business profile public_keys read skipped (migration 214?): %s", exc)
+    return default_public_keys(_business_type(tenant_id))
+
+
 def get_answers(tenant_id: str) -> Dict[str, str]:
     try:
         rows = (_client().table("vula_business_profile").select("answers")
@@ -82,7 +108,8 @@ def status(tenant_id: str) -> Dict[str, Any]:
     answers = get_answers(tenant_id)
     missing = [q for q in qs if not (answers.get(q["key"]) or "").strip()]
     return {"questions": qs, "answers": answers, "missing": [q["key"] for q in missing],
-            "answered": len(qs) - len(missing), "total": len(qs)}
+            "answered": len(qs) - len(missing), "total": len(qs),
+            "public_keys": get_public_keys(tenant_id)}
 
 
 def next_question(tenant_id: str, skipped: Optional[set] = None) -> Optional[Dict[str, str]]:
@@ -94,45 +121,82 @@ def next_question(tenant_id: str, skipped: Optional[set] = None) -> Optional[Dic
     return None
 
 
-def render_document(tenant_id: str, answers: Dict[str, str]) -> str:
+def render_document(tenant_id: str, answers: Dict[str, str], keys: Optional[set] = None,
+                    for_customers: bool = False) -> str:
+    """The profile as a KB document — all answers, or only `keys`. "" when none are answered."""
     try:
         from vula.api.tenants import get_config
         name = (get_config(tenant_id) or {}).get("display_name") or tenant_id
     except Exception:
         name = tenant_id
-    lines = [f"# {name} — business profile (answered by the owner)", ""]
+    title = "what customers can know" if for_customers else "for the team"
+    body: List[str] = []
     for q in questions(_business_type(tenant_id)):
         a = (answers.get(q["key"]) or "").strip()
-        if a:
-            lines += [f"## {q['q']}", a, ""]
-    return "\n".join(lines).strip()
+        if a and (keys is None or q["key"] in keys):
+            body += [f"## {q['q']}", a, ""]
+    if not body:
+        return ""
+    return "\n".join([f"# {name} — business profile, {title} (answered by the owner)", ""] + body).strip()
 
 
-async def save_answers(tenant_id: str, updates: Dict[str, str], by: str = "") -> Dict[str, Any]:
-    """Merge answers, store them, and re-write the profile document in the tenant's KB."""
+async def save_answers(tenant_id: str, updates: Dict[str, str], by: str = "",
+                       public_keys: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Merge answers (and, if given, the owner's list of answers customers may see), store them,
+    and re-write the two profile documents in the tenant's KB."""
     valid = {q["key"] for q in questions(_business_type(tenant_id))}
     clean = {k: str(v or "").strip()[:2000] for k, v in (updates or {}).items() if k in valid}
     answers = {**get_answers(tenant_id), **clean}
     answers = {k: v for k, v in answers.items() if v}
+    row = {"tenant_id": tenant_id, "answers": answers, "updated_by": by or None,
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    warning = None
+    if public_keys is not None:
+        row["public_keys"] = [k for k in public_keys if k in valid]
     try:
-        _client().table("vula_business_profile").upsert({
-            "tenant_id": tenant_id, "answers": answers, "updated_by": by or None,
-            "updated_at": datetime.now(timezone.utc).isoformat()}).execute()
+        _client().table("vula_business_profile").upsert(row).execute()
     except Exception as exc:
-        log.warning("business profile save failed for %s: %s", tenant_id, exc)
-        return {"saved": False, "error": "Couldn't save — has migration 189 been applied?"}
-    ingested = False
-    doc = render_document(tenant_id, answers)
-    if answers:
+        if "public_keys" not in row:
+            log.warning("business profile save failed for %s: %s", tenant_id, exc)
+            return {"saved": False, "error": "Couldn't save — has migration 189 been applied?"}
+        # The answers still save without the column; the customer list needs migration 214.
+        row.pop("public_keys")
         try:
-            from vula.ingestion.pipeline import VulaIngestionPipeline
-            doc_id = "profile_" + hashlib.md5(tenant_id.encode()).hexdigest()[:16]
-            res = await VulaIngestionPipeline(tenant_id=tenant_id).ingest_text(
-                content=doc, filename=PROFILE_FILENAME, doc_id=doc_id)
-            ingested = res.status == "success"
+            _client().table("vula_business_profile").upsert(row).execute()
+            warning = "Answers saved, but which ones customers see couldn't be — run migration 214."
+        except Exception as exc2:
+            log.warning("business profile save failed for %s: %s", tenant_id, exc2)
+            return {"saved": False, "error": "Couldn't save — has migration 189 been applied?"}
+    keys = set(row.get("public_keys") if "public_keys" in row else get_public_keys(tenant_id))
+    ingested = await _write_documents(tenant_id, answers, keys)
+    out = {"saved": True, "ingested": ingested, **status(tenant_id)}
+    if warning:
+        out["warning"] = warning
+    return out
+
+
+async def _write_documents(tenant_id: str, answers: Dict[str, str], public: set) -> bool:
+    """The customer part (audience public) and the team part (staff). Each is cleared before it
+    is re-written, so an answer moved from one side to the other leaves nothing behind."""
+    from vula.ingestion.pipeline import VulaIngestionPipeline
+    pipe = VulaIngestionPipeline(tenant_id=tenant_id)
+    base = hashlib.md5(tenant_id.encode()).hexdigest()[:16]
+    team_keys = {k for k in answers if k not in public}
+    ok = True
+    for doc_id, filename, keys, audience in (
+            ("profile_" + base, PROFILE_FILENAME, team_keys, "staff"),
+            ("profile_public_" + base, PUBLIC_PROFILE_FILENAME, public, "public")):
+        doc = render_document(tenant_id, answers, keys, for_customers=audience == "public")
+        try:
+            await pipe.store.delete_document(tenant_id, doc_id)
+            if doc:
+                res = await pipe.ingest_text(content=doc, filename=filename, doc_id=doc_id,
+                                             audience=audience)
+                ok = ok and res.status == "success"
         except Exception as exc:
-            log.warning("business profile KB write failed for %s: %s", tenant_id, exc)
-    return {"saved": True, "ingested": ingested, **status(tenant_id)}
+            log.warning("business profile KB write failed for %s (%s): %s", tenant_id, audience, exc)
+            ok = False
+    return ok
 
 
 # ── WhatsApp interview ──────────────────────────────────────────────────────────
