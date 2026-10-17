@@ -254,6 +254,14 @@ export const tenant = {
   ui_v2: process.env.UI_V2 === "1", ui_labels: null,
 };
 export const teamMe = { access: [], full: true, role: "owner", whatsapp: "+27820000001" };
+// staff: the counter — chats, orders, bookings and customers only; rep: a sales_rep login with
+// the default My Work access (navConfig.REP_DEFAULT_ACCESS)
+export const teamMeFor = (role) => role === "staff"
+  ? { access: ["inbox", "orders", "bookings", "customers", "contacts", "followups"], full: false, role: "staff", whatsapp: "+27820000008" }
+  : role === "rep"
+    ? { access: ["rep-contacts", "rep-callsheet", "rep-bookings", "rep-documents", "rep-reminders", "rep-expenses", "rep-expense-sheet", "rep-crm"],
+      full: false, role: "sales_rep", whatsapp: "+27820000009" }
+    : teamMe;
 
 // ── Documents (documents.py::list_filed / documents_health / projects; server.py list_documents)
 const doc = (n, filename, category, daysAgo, extra = {}) => ({

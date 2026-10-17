@@ -10,6 +10,7 @@ import { useState } from "react";
 import { Menu, Moon, Sun, SunMoon } from "lucide-react";
 import { getThemeMode, setThemeMode, DARK_MODE_READY } from "../theme/tokens";
 import { iconFor } from "../navConfig";
+import VulaShellV2 from "./VulaShellV2";
 
 // Auto (follow the phone) → Light → Dark → Auto. Per person, remembered on this device.
 const MODES = [["auto", "◐", "Theme: follows your device", SunMoon], ["light", "☀", "Theme: light", Sun],
@@ -36,7 +37,13 @@ function ThemeToggle() {
   );
 }
 
-export default function VulaShell({
+export default function VulaShell(props) {
+  // The redesigned shell (UX redesign Phase D) for a tenant switched onto it — same props.
+  if (props.v2) return <VulaShellV2 {...props} />;
+  return <VulaShellV1 {...props} />;
+}
+
+function VulaShellV1({
   brand,          // { logoUrl?, logoEmoji?, name, sub }
   groups,         // [{label, items:[{id, icon, label, badge?}]}] — pre-filtered
   zones,          // optional: [{id, label, groups}] — a segmented switch above the nav, each

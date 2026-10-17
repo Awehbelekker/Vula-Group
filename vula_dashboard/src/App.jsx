@@ -36,9 +36,9 @@ import VulaBudget from "./components/VulaBudget";
 import VulaMerchantAdmin from "./components/VulaMerchantAdmin";
 import VulaSmartScanner from "./components/VulaSmartScanner";
 import VulaShell from "./components/VulaShell";
-import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible } from "./navConfig";
+import { MERCHANT_GROUPS, MASTER_GROUPS, MASTER_ZONES, filterGroups, labelFor, merchantVisible, applyLabels, flattenNav } from "./navConfig";
 import { applyBrand, applyThemeMode } from "./theme/tokens";
-import { applyUiMode, uiV2For } from "./lib/flags";
+import { applyUiMode, uiV2For, rememberedTenantUi, rememberTenantUi } from "./lib/flags";
 
 const COLORS = {
   bg: "var(--bg)",
@@ -106,7 +106,10 @@ export default function App() {
   const [masterSubTab, setMasterSubTab] = useState("tenants");  // VulaMasterPanel's own sub-tab, lifted so "← Master HQ" restores it
   const [tenantModules, setTenantModules] = useState(null); // owner/staff shell nav gating
   const [tenantProfile, setTenantProfile] = useState(null); // what kind of business (tenants.tenant_profile)
-  const [tenantUiV2, setTenantUiV2] = useState(false); // switched onto the redesign (migration 215)
+  // switched onto the redesign (migration 215); starts from this device's memory of it
+  const [tenantUiV2, setTenantUiV2] = useState(() => rememberedTenantUi(useAuthStore.getState().tenantId));
+  const [tenantLabels, setTenantLabels] = useState(null); // the tenant's own section names (ui_labels)
+  const [navRequest, setNavRequest] = useState(null);   // open a section's sub-tab (redesigned shell)
   const [openEscalations, setOpenEscalations] = useState(0); // real Inbox badge (P0.4)
   const [brand, setBrand] = useState(null); // the tenant's brand kit (/v1/commerce/{t}/brand) — ONE source for name, logo, colours
   const { user, role, tenantId, logout, access, full, teamRole, teamPhone, setMember } = useAuthStore();
@@ -151,7 +154,8 @@ export default function App() {
   }, [isPublicRoute]);
   // The redesign (2026-10-17): only for a tenant switched onto it, and never on the public
   // customer-facing pages, which keep their own look (lib/flags.js).
-  useEffect(() => { applyUiMode(!isPublicRoute && uiV2For(tenantUiV2)); }, [isPublicRoute, tenantUiV2]);
+  const v2 = !isPublicRoute && uiV2For(tenantUiV2);
+  useEffect(() => { applyUiMode(v2); }, [v2]);
   useEffect(() => {
     // Master HQ wears Vula's own brand; only "Open as tenant" takes on that tenant's brand
     // (the whole master panel used to recolour to whichever tenant was picked in the switcher).
@@ -194,8 +198,8 @@ export default function App() {
     // Tenant module gating for the sidebar (same source VulaMerchantAdmin uses internally).
     fetch(`${API}/v1/tenants/${tid}`)
       .then((r) => r.json())
-      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantUiV2(!!d.ui_v2); })
-      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantUiV2(false); });
+      .then((d) => { setTenantModules(d.modules || d.tenant?.modules || []); setTenantProfile(d.profile || null); setTenantUiV2(!!d.ui_v2); rememberTenantUi(tid, !!d.ui_v2); setTenantLabels(d.ui_labels || null); })
+      .catch(() => { setTenantModules(null); setTenantProfile(null); setTenantUiV2(false); setTenantLabels(null); });
   }, [user, role, tenantId, setMember]);
 
   // Real Inbox badge (P0.4): count of open escalations waiting on a human — polled per
@@ -217,6 +221,22 @@ export default function App() {
   const withInboxBadge = (groups, count) => !count ? groups : groups.map(g => ({
     ...g, items: g.items.map(it => it.id === "inbox" ? { ...it, badge: count > 99 ? "99+" : String(count) } : it),
   }));
+
+  // The redesigned shell (Phase D): open any page, a section's sub-tab included; Quick Launcher
+  // overlays by event; and the palette's contact lookup (the same list the Customers page reads).
+  const navigateIn = (groups) => (leaf) => {
+    const page = flattenNav(groups).find((p) => p.id === leaf);
+    if (!page) return;
+    if (page.section === leaf) setMerchTab(leaf);
+    else setNavRequest({ section: page.section, subtab: leaf, n: Date.now() });
+  };
+  const launch = (key) => window.dispatchEvent(new CustomEvent("vula-launch", { detail: key }));
+  const contactSearch = (tid, groups) => (flattenNav(groups).some((p) => p.id === "customers")
+    ? async (q) => {
+      const r = await fetch(`${VULA_API}/v1/commerce/${tid}/admin/customers?search=${encodeURIComponent(q)}`);
+      const d = r.ok ? await r.json() : {};
+      return (d.customers || []).slice(0, 6).map((c) => ({ id: c.phone, label: c.name || c.phone, detail: c.name ? c.phone : undefined, page: "customers" }));
+    } : undefined);
 
   // Public legal pages — no auth required (needed for Meta app publishing)
   if (route === "#/privacy") return <VulaPrivacy view="privacy" />;
@@ -284,8 +304,8 @@ export default function App() {
 
   if (role === "owner" || role === "staff") {
     const tenantName = brand?.name || TENANT_NAMES[effectiveTenantId] || effectiveTenantId;
-    const groups = withInboxBadge(filterGroups(MERCHANT_GROUPS,
-      merchantVisible({ full, access, modules: tenantModules, profile: tenantProfile })), openEscalations);
+    const groups = withInboxBadge(applyLabels(filterGroups(MERCHANT_GROUPS,
+      merchantVisible({ full, access, modules: tenantModules, profile: tenantProfile })), tenantLabels), openEscalations);
     return (
       <div>
         <VulaShell
@@ -293,14 +313,16 @@ export default function App() {
           groups={groups}
           activeId={merchTab}
           onSelect={setMerchTab}
-          title={labelFor(MERCHANT_GROUPS, merchTab) || "Home"}
+          title={labelFor(groups, merchTab) || labelFor(MERCHANT_GROUPS, merchTab) || "Home"}
           userEmail={user.email}
           onLogout={logout}
+          v2={v2} onNavigate={navigateIn(groups)} onLaunch={launch} searchContacts={contactSearch(effectiveTenantId, groups)}
         >
           <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={tenantName} navGroups={groups}
-            access={access} full={full} teamRole={teamRole} teamPhone={teamPhone} activeTab={merchTab} onTabChange={setMerchTab} />
+            access={access} full={full} teamRole={teamRole} teamPhone={teamPhone} activeTab={merchTab} onTabChange={setMerchTab}
+            navRequest={navRequest} />
         </VulaShell>
-        <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
+        <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} />
       </div>
     );
   }
@@ -335,6 +357,7 @@ export default function App() {
           userEmail={user.email}
           roleLabel="master"
           onLogout={logout}
+          v2={v2} onNavigate={navigateIn(mGroups)} onLaunch={launch} searchContacts={contactSearch(effectiveTenantId, mGroups)}
           headerExtra={
             // Returns to Master (not "dashboard") — masterSubTab was never touched while
             // visiting the tenant, so this naturally restores whichever Master sub-tab
@@ -348,7 +371,7 @@ export default function App() {
           }
         >
           <VulaMerchantAdmin tenantId={effectiveTenantId} tenantName={mName} navGroups={mGroups}
-            access={[]} full activeTab={merchTab} onTabChange={setMerchTab} />
+            access={[]} full activeTab={merchTab} onTabChange={setMerchTab} navRequest={navRequest} />
         </VulaShell>
       </div>
     );
@@ -368,6 +391,7 @@ export default function App() {
         userEmail={user.email}
         roleLabel={role === "master" ? "master" : undefined}
         onLogout={logout}
+        v2={v2} onNavigate={setActiveTab} onLaunch={launch}
         headerExtra={role === "master" ? (
           <select
             value={masterTenant}
@@ -410,7 +434,7 @@ export default function App() {
             {...(activeTab === "master" ? { activeTab: masterSubTab, onTabChange: setMasterSubTab } : {})} />
         </div>
       </VulaShell>
-      <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} />
+      <VulaQuickLauncher tenantId={effectiveTenantId} access={access} full={full} hideFab={v2} />
     </>
   );
 }

@@ -1,0 +1,104 @@
+/* VulaShellV2.css — the redesigned shell's layout (2026-10-17, UX redesign Phase D).
+   Tokens only. Desktop ≥1200px sidebar 248px; tablet 768–1199px a 72px icon rail; phone a top
+   bar + the floating toolbar (components/ui). */
+.v2-shell { min-height: 100vh; background: var(--ground); color: var(--ink); display: grid; grid-template-columns: 1fr; }
+.v2-shell--desktop { grid-template-columns: 248px minmax(0, 1fr); }
+.v2-shell--tablet { grid-template-columns: 72px minmax(0, 1fr); }
+
+/* sidebar / rail */
+.v2-side { position: sticky; top: 0; height: 100vh; overflow-y: auto; background: var(--surface);
+  border-right: 1px solid var(--line); display: flex; flex-direction: column; z-index: 300; }
+.v2-side.rail { align-items: center; }
+.v2-side-head { padding: var(--space-4) var(--space-3) var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
+.v2-side-head .v2-brand { flex: 1; }
+.v2-side.rail .v2-side-head { padding: var(--space-3) 0; }
+.v2-brand { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.v2-brand-mark { width: 40px; height: 40px; border-radius: var(--radius-md); background: var(--brand); color: var(--on-brand);
+  display: grid; place-items: center; font: 600 18px/1 var(--font-display); flex: none; }
+.v2-brand-logo { max-height: var(--logo-h, 38px); max-width: 160px; width: auto; height: auto; object-fit: contain; flex: none; }
+.v2-shell--mobile .v2-brand-logo { max-height: 32px; max-width: 96px; }
+.v2-shell--mobile .v2-brand-mark { width: 36px; height: 36px; }
+.v2-brand-text { min-width: 0; display: flex; flex-direction: column; }
+.v2-brand-text b { font: 600 16px/1.2 var(--font-display); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-brand-text span { font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.v2-nav { flex: 1; padding: 0 var(--space-3) var(--space-3); width: 100%; }
+.v2-side.rail .v2-nav { padding: 0 var(--space-2); }
+.v2-nav-group { margin-bottom: var(--space-2); }
+.v2-nav-label { font: 600 var(--fs-overline)/var(--lh-overline) var(--font-sans); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); padding: var(--space-4) var(--space-3) var(--space-2); }
+.v2-nav-sep { border: none; border-top: 1px solid var(--line); margin: var(--space-2) var(--space-2); }
+.v2-nav-item { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 44px; padding: 0 var(--space-3);
+  border: none; border-radius: var(--radius-md); background: transparent; color: var(--ink); cursor: pointer; text-align: left;
+  font: 500 var(--fs-body)/var(--lh-body) var(--font-sans); position: relative; transition: background var(--t-fast) var(--ease); }
+.v2-side.rail .v2-nav-item { justify-content: center; padding: 0; width: 52px; margin: 0 auto; }
+.v2-nav-item:hover { background: var(--surface-2); }
+.v2-nav-item.on { background: var(--brand-soft); color: var(--brand-text); font-weight: 600; }
+.v2-nav-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.v2-nav-ic { display: inline-flex; width: 20px; justify-content: center; flex: none; color: inherit; }
+.v2-nav-lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-nav-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-pill);
+  background: var(--warm); color: var(--on-brand); font: 600 11px/20px var(--font-sans); text-align: center; }
+.v2-nav-badge.dot { position: absolute; top: 8px; right: 10px; min-width: 9px; width: 9px; height: 9px; padding: 0; }
+.v2-powered { padding: var(--space-4); border-top: 1px solid var(--line); font-size: var(--fs-caption); color: var(--muted); width: 100%; }
+.v2-powered b { color: var(--ink); }
+
+.v2-zones { display: flex; gap: 4px; margin: 0 var(--space-3) var(--space-2); padding: 4px; border-radius: var(--radius-pill);
+  background: var(--surface-2); border: 1px solid var(--line); }
+.v2-zone { flex: 1; min-height: 36px; border: none; border-radius: var(--radius-pill); background: transparent; color: var(--muted);
+  font: 600 var(--fs-caption)/1 var(--font-sans); cursor: pointer; }
+.v2-zone.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent); }
+.v2-zone:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Master's "Vula's Business" zone keeps its tint so which world you're in shows at a glance */
+.v2-shell--zone-business .v2-side, .v2-shell--zone-business .v2-top { background: var(--surface-2); }
+
+.v2-drawer { position: fixed; z-index: 901; top: 0; left: 0; bottom: 0; width: 280px; background: var(--surface);
+  box-shadow: var(--shadow-float); animation: vuiLeft var(--t-sheet) var(--ease) both; display: flex; flex-direction: column; }
+.v2-drawer .v2-side { position: static; height: auto; flex: 1; border-right: none; }
+
+/* top bar */
+.v2-main { min-width: 0; display: flex; flex-direction: column; }
+.v2-top { position: sticky; top: 0; z-index: 200; display: flex; align-items: center; gap: var(--space-3);
+  min-height: 64px; padding: var(--space-2) var(--space-6); background: color-mix(in srgb, var(--ground) 88%, transparent);
+  -webkit-backdrop-filter: saturate(160%) blur(10px); backdrop-filter: saturate(160%) blur(10px); border-bottom: 1px solid var(--line); }
+.v2-shell--mobile .v2-top { padding: var(--space-2) var(--space-4); min-height: 56px; padding-top: calc(var(--space-2) + env(safe-area-inset-top)); }
+.v2-title { flex: 1; min-width: 0; margin: 0; font: 600 var(--fs-display-md)/var(--lh-display-md) var(--font-display); color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.01em; }
+.v2-shell--mobile .v2-title { font-size: 20px; }
+.v2-top-right { display: flex; align-items: center; gap: var(--space-2); }
+.v2-search { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; min-width: 220px;
+  padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface);
+  color: var(--muted); font: inherit; font-size: var(--fs-body); cursor: pointer; }
+.v2-search span:first-of-type { flex: 1; text-align: left; }
+.v2-search:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.v2-shell--tablet .v2-search { min-width: 0; }
+.v2-shell--tablet .v2-search .vui-kbd { display: none; }
+
+.v2-user { position: relative; }
+.v2-user-btn { width: 40px; height: 40px; border-radius: var(--radius-pill); border: 1px solid var(--line); background: var(--brand-soft);
+  color: var(--brand-text); font: 600 15px/1 var(--font-sans); cursor: pointer; }
+.v2-user-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.v2-menu-scrim { position: fixed; inset: 0; z-index: 899; }
+.v2-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 900; min-width: 240px; padding: var(--space-2);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-float); }
+.v2-menu-who { padding: var(--space-2) var(--space-3); font-size: var(--fs-caption); color: var(--muted); word-break: break-all; }
+.v2-menu-item { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 44px; padding: 0 var(--space-3);
+  border: none; background: transparent; color: var(--ink); border-radius: var(--radius-sm); cursor: pointer; font: inherit; }
+.v2-menu-item:hover { background: var(--surface-2); }
+
+/* content */
+.v2-content { width: 100%; max-width: 1280px; margin: 0 auto; padding: var(--space-6); min-width: 0; }
+.v2-shell--tablet .v2-content { padding: var(--space-5); }
+.v2-shell--mobile .v2-content { padding: var(--space-4); }
+.v2-sheet-group { margin-bottom: var(--space-2); }
+.v2-sheet-group .v2-nav-label { padding-left: var(--space-3); }
+
+/* In the redesign every section's sub-tab strip is the pill control (SectionTabs, unchanged code) */
+:root[data-ui="v2"] .v2-content .vula-tabs { display: flex !important; width: fit-content; max-width: 100%; gap: 4px !important;
+  padding: 4px !important; margin-bottom: var(--space-4) !important; border: 1px solid var(--line) !important;
+  border-radius: var(--radius-pill); background: var(--surface-2); flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; }
+:root[data-ui="v2"] .v2-content .vula-tabs::-webkit-scrollbar { display: none; }
+:root[data-ui="v2"] .v2-content .vula-tabs [role="tab"] { min-height: 36px; }
+:root[data-ui="v2"] .v2-content .vula-tabs [role="tab"][aria-selected="true"] { background: var(--surface) !important; color: var(--ink) !important;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent); }

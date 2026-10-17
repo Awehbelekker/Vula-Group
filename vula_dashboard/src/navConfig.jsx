@@ -281,3 +281,62 @@ export function labelFor(groups, id) {
   }
   return "";
 }
+
+/* ── The redesigned shell's grouping (2026-10-17, UX redesign Phase D) ───────────────────────
+ * The same sections, regrouped for owners into what faces customers (front house), what runs
+ * the business (back house) and admin. Pure presentation over groups that merchantVisible /
+ * filterGroups ALREADY filtered — no id changes, no gating changes, nothing a member couldn't
+ * see before becomes visible. Stock and Suppliers stay inside Sell for now (splitting a section
+ * needs its own section wrapper in VulaMerchantAdmin — a Phase F question). */
+export const NAV_HOUSE = {
+  overview: "top", inbox: "top", "assistant-hub": "top",
+  people: "front", sell: "front", "marketing-hub": "front", pages: "front",
+  money: "back", operate: "back", estimating: "back",
+  team: "admin", settings: "admin",
+  "my-work": "mywork",
+};
+export const HOUSE_LABELS = { front: "Front house", back: "Back house", admin: "Admin", mywork: "My Work" };
+
+/** Regroup already-filtered groups into Home/Inbox/Assistant, then Front house, Back house,
+ * Admin and My Work. An id this map doesn't know lands in Back house rather than vanishing. */
+export function houseGroups(groups) {
+  const buckets = { top: [], front: [], back: [], admin: [], mywork: [] };
+  for (const g of groups || []) for (const it of g.items) (buckets[NAV_HOUSE[it.id]] || buckets.back).push(it);
+  return [
+    { label: "", items: buckets.top },
+    ...["front", "back", "admin", "mywork"].map((h) => ({ label: HOUSE_LABELS[h], house: h, items: buckets[h] })),
+  ].filter((g) => g.items.length);
+}
+
+/** A tenant's own names (vula_tenant_config.ui_labels, migration 215), e.g.
+ * { sections: { people: "Care", bookings: "Visits" } } — applied to section and sub-tab labels
+ * only; ids never change (deep links and team access lists use them). No per-tenant code. */
+export function applyLabels(groups, uiLabels) {
+  const names = uiLabels?.sections;
+  if (!names || typeof names !== "object") return groups;
+  const name = (it) => (typeof names[it.id] === "string" && names[it.id].trim() ? { ...it, label: names[it.id].trim() } : it);
+  return groups.map((g) => ({
+    ...g, items: g.items.map((it) => name(it.subtabs ? { ...it, subtabs: it.subtabs.map(name) } : it)),
+  }));
+}
+
+/** Every page in the (filtered) groups as { id, label, section, sectionLabel } — what the
+ * command palette offers and what a sub-tab id navigates through. */
+export function flattenNav(groups) {
+  const out = [];
+  for (const g of groups || []) for (const it of g.items) {
+    if (it.subtabs) it.subtabs.forEach((st) => out.push({ id: st.id, label: st.label, section: it.id, sectionLabel: it.label }));
+    else out.push({ id: it.id, label: it.label, section: it.id, sectionLabel: "" });
+  }
+  return out;
+}
+
+/** The Add sheet's quick actions — each shows only if its screen is in this login's (filtered)
+ * nav, so a role sees exactly the actions it may use. `launch` opens a Quick Launcher overlay. */
+export const ADD_ACTIONS = [
+  { key: "quote", label: "New quote or invoice", detail: "In Money › Invoices", tab: "invoices" },
+  { key: "expense", label: "Add an expense", tab: "expenses", alsoTab: "rep-expenses" },
+  { key: "scan", label: "Scan a document", detail: "Smart scan files it for you", tab: "scanner", launch: "scanner" },
+  { key: "contact", label: "New contact", tab: "contacts", alsoTab: "rep-contacts" },
+  { key: "broadcast", label: "Broadcast", detail: "Approved templates only", tab: "broadcast" },
+];

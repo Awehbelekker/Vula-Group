@@ -123,7 +123,7 @@ function subtabsFor(navGroups, sectionId) {
 // confirmed the only two real callers, both always pass these. (The old uncontrolled/modal mode,
 // with its own hand-rolled tab strip and gating, was dead code superseded by that shell takeover
 // — deleted 2026-07-21 rather than kept as an unused second nav path to drift out of sync again.)
-export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange }) {
+export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, access = [], full = true, teamRole = null, teamPhone = null, activeTab, onTabChange, navRequest }) {
   // Who is connecting WhatsApp/Yoco/email — recorded as connected_by (was always blank).
   const adminEmail = useAuthStore(st => st.user?.email) || ""
   const tab = activeTab
@@ -144,6 +144,9 @@ export default function VulaMerchantAdmin({ tenantId, tenantName, navGroups, acc
   // sub-tab that section should open on — each Section wrapper below consumes+clears this once.
   const [pendingNav, setPendingNav] = useState(null)   // { subtab } for whichever section `tab` is about to become
   const navigateTo = (section, subtab) => { setPendingNav(subtab ? { subtab } : null); setTab(section) }
+  // The redesigned shell's search and Add menu open a sub-tab directly (2026-10-17): App passes
+  // { section, subtab, n } — n changes on every request so the same page can be reopened.
+  useEffect(() => { if (navRequest) navigateTo(navRequest.section, navRequest.subtab) }, [navRequest])  // eslint-disable-line
 
   useEffect(() => {
     fetch(`${VULA_API}/v1/commerce/${tenantId}/admin/products`)

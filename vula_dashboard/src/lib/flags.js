@@ -29,6 +29,20 @@ export function uiV2For(tenantOn) {
   return !!tenantOn;
 }
 
+/** The tenant's ui_v2 as last seen on this device, so the first paint already has the right
+ * shell instead of flashing the old one until GET /v1/tenants/{t} answers. */
+export function rememberedTenantUi(tenantId) {
+  if (!tenantId) return false;
+  try { return localStorage.getItem(`${KEY}.tenant.${tenantId}`) === "v2"; } catch { return false; }
+}
+export function rememberTenantUi(tenantId, on) {
+  if (!tenantId) return;
+  try {
+    if (on) localStorage.setItem(`${KEY}.tenant.${tenantId}`, "v2");
+    else localStorage.removeItem(`${KEY}.tenant.${tenantId}`);
+  } catch { /* private mode: no memory, just the flash */ }
+}
+
 /** Put the choice on <html> (index.css keys every redesign token off data-ui="v2"). */
 export function applyUiMode(on) {
   if (typeof document === "undefined") return;

@@ -20,7 +20,7 @@ const ACTIONS = [
   { key: "invoices", icon: "🧾", label: "New invoice", comp: VulaInvoices },
 ];
 
-export default function VulaQuickLauncher({ tenantId, access = [], full = true }) {
+export default function VulaQuickLauncher({ tenantId, access = [], full = true, hideFab = false }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(null);   // action key with an open overlay
 
@@ -29,6 +29,13 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true }
     const p = new URLSearchParams(window.location.search).get("launch");
     if (p === "chat") setActive("assistant");
     if (p === "scan") setActive("scanner");
+  }, []);
+  // The redesigned shell has no floating button of its own here (hideFab): its search "Ask
+  // Vula" and Add › Scan open these same overlays by event (2026-10-17, UX redesign Phase D).
+  useEffect(() => {
+    const onLaunch = (e) => { if (ACTIONS.some((a) => a.key === e.detail)) setActive(e.detail); };
+    window.addEventListener("vula-launch", onLaunch);
+    return () => window.removeEventListener("vula-launch", onLaunch);
   }, []);
 
   const allowed = ACTIONS.filter((a) => a.always || full || (access || []).includes(a.key));
@@ -50,7 +57,7 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true }
       )}
 
       {/* Pop-up stack */}
-      {open && (
+      {open && !hideFab && (
         <div style={{ position: "fixed", right: 20, bottom: 86, zIndex: 900, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10, paddingBottom: "env(safe-area-inset-bottom)" }}>
           {allowed.map((a, i) => (
             <button key={a.key} onClick={() => { setActive(a.key); setOpen(false); }}
@@ -64,12 +71,12 @@ export default function VulaQuickLauncher({ tenantId, access = [], full = true }
       )}
 
       {/* FAB */}
-      <button onClick={() => setOpen(!open)} aria-label="Vula quick actions"
+      {!hideFab && <button onClick={() => setOpen(!open)} aria-label="Vula quick actions"
         style={{ position: "fixed", right: 20, bottom: 20, zIndex: 901, width: 58, height: 58, borderRadius: "50%", border: "none",
           background: C.green, color: "var(--on-accent)", fontSize: 24, cursor: "pointer", boxShadow: "0 4px 16px rgba(44,85,69,0.45)",
           transform: open ? "rotate(45deg)" : "none", transition: "transform 0.2s", marginBottom: "env(safe-area-inset-bottom)" }}>
         {open ? "＋" : "✦"}
-      </button>
+      </button>}
 
       <style>{`@keyframes vulaPop { from { opacity: 0; transform: translateY(8px) scale(0.9); } to { opacity: 1; transform: none; } }`}</style>
     </>

@@ -35,7 +35,11 @@ function routes(role) {
     r("GET", `^/v1/tenants/registry`, () => F.registry),
     r("GET", `^/v1/tenants/${T}/home`, () => F.homeLayout),
     r("GET", `^/v1/tenants/${T}`, (m) => (m[1] === F.TENANT_ID ? F.tenant : { tenant_id: m[1], modules: [], theme: {}, profile: null })),
-    r("GET", `^/v1/team/${T}/me`, () => F.teamMe),
+    r("GET", `^/v1/team/${T}/me`, () => F.teamMeFor(role)),
+    // a sales rep's own screens (VulaRepHome / VulaRepToday) — nothing due, nothing booked
+    r("GET", `${A}/reminders`, () => ({ reminders: [] })),
+    r("GET", `${A}/call-sheet`, () => ({ contacts: [], rows: [] })),
+    r("GET", `${A}/rep/today`, () => ({ bookings: [], notes: [] })),
     r("GET", `${C}/brand`, () => F.brand),
     r("GET", `${C}/manifest\\.webmanifest`, () => F.manifest),
     r("GET", `${C}/app-icon/\\d+\\.png`, () => ({ __raw: { status: 200, contentType: "image/png", body: PNG_1PX } })),
@@ -163,9 +167,17 @@ export async function installMockApi(page, { role = "owner" } = {}) {
 
 /** Seed the persisted auth store + theme before the app boots (no Supabase login). */
 export async function seedSession(page, { role = "owner", theme = "light" } = {}) {
-  const auth = role === "master"
-    ? { user: { id: "u-master", email: "operator@vula.example.test", name: "Demo Operator" }, tenantId: "master", role: "master", access: [], full: true }
-    : { user: { id: "u-owner", email: "owner@harbourvine.example.test", name: "Demo Owner" }, tenantId: F.TENANT_ID, role: "owner", access: [], full: true };
+  // staff = a front-of-house login with a limited access list; rep = a sales_rep login
+  // (REP_DEFAULT_ACCESS). Both are "staff" dashboard logins; /team/me gives their scope.
+  const who = {
+    master: { user: { id: "u-master", email: "operator@vula.example.test", name: "Demo Operator" }, tenantId: "master", role: "master", access: [], full: true },
+    owner: { user: { id: "u-owner", email: "owner@harbourvine.example.test", name: "Demo Owner" }, tenantId: F.TENANT_ID, role: "owner", access: [], full: true },
+    staff: { user: { id: "u-staff", email: "counter@harbourvine.example.test", name: "Demo Counter" }, tenantId: F.TENANT_ID,
+      role: "staff", access: F.teamMeFor("staff").access, full: false },
+    rep: { user: { id: "u-rep", email: "rep@harbourvine.example.test", name: "Demo Rep" }, tenantId: F.TENANT_ID,
+      role: "staff", access: F.teamMeFor("rep").access, full: false, teamRole: "sales_rep", teamPhone: "+27820000009" },
+  };
+  const auth = who[role] || who.owner;
   await page.addInitScript(([a, t, masterTenant, v2]) => {
     try {
       localStorage.setItem("vula-auth", JSON.stringify({ state: a, version: 0 }));

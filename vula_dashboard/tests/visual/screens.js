@@ -24,6 +24,21 @@ export const SCREENS = [
 
 const HIDE_CARET = `*, *::before, *::after { caret-color: transparent !important; }`;
 
+/** The redesigned shell: sidebar on desktop, icon rail (aria-label) on tablet, More sheet on a phone. */
+async function openV2(page, label) {
+  const exact = new RegExp(`^${label}$`);
+  if (await page.locator(".v2-shell--desktop").count()) {
+    await page.locator(".v2-nav-item", { has: page.locator(".v2-nav-lb", { hasText: exact }) }).first().click();
+  } else if (await page.locator(".v2-shell--tablet").count()) {
+    await page.locator(`.v2-side.rail .v2-nav-item[aria-label="${label}"]`).first().click();
+  } else {
+    await page.getByRole("navigation", { name: "Quick actions" }).getByRole("button", { name: "More" }).click();
+    const sheet = page.getByRole("dialog", { name: "Menu" });
+    await sheet.locator(".vui-row", { has: page.locator(".vui-row-title", { hasText: exact }) }).first().click();
+    await sheet.waitFor({ state: "hidden" });
+  }
+}
+
 /** Boot the app as `screen.role`, navigate to the screen and wait until it has settled.
  * Returns the list of page errors seen (the caller asserts it is empty). */
 export async function openScreen(page, screen, { viewport, theme }) {
@@ -36,9 +51,12 @@ export async function openScreen(page, screen, { viewport, theme }) {
   await seedSession(page, { role: screen.role, theme });
 
   await page.goto("/");
-  await page.locator(".vshell").waitFor();
+  // a UI_V2 run waits for the redesigned shell (the tenant's flag arrives after first paint)
+  await page.locator(process.env.UI_V2 === "1" && screen.role !== "master" ? ".v2-shell" : ".vshell, .v2-shell").first().waitFor();
 
-  if (screen.nav) {
+  if (screen.nav && await page.locator(".v2-shell").count()) {
+    await openV2(page, screen.nav);
+  } else if (screen.nav) {
     const burger = page.locator("button.vshell-burger");
     if (await burger.isVisible()) {           // < 860px: the sidebar is a drawer
       await burger.click();
