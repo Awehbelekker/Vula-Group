@@ -96,6 +96,33 @@
   }
 }
 
+/* The redesign's token NAMES on the current look too (2026-10-17, Phase C), pointing at
+   today's values — so a shared component (components/ui) can be written once with the new
+   names and still look like the current dashboard where a tenant hasn't been switched over.
+   The [data-ui="v2"] block below replaces all of these with the redesign's own values. */
+:root {
+  --ground: var(--bg); --surface-2: var(--surface-alt); --line: var(--border);
+  --brand: var(--accent); --brand-strong: var(--accent-dark); --brand-soft: var(--accent-soft);
+  --on-brand: var(--on-accent);
+  --highlight: var(--warn); --highlight-soft: var(--warn-soft);
+  --warm: var(--danger); --warm-soft: var(--danger-soft);
+  --focus: var(--accent);
+  --shadow-float: var(--shadow-lg);
+  --radius-sm: var(--r-input); --radius-md: var(--r-input); --radius-lg: var(--r-card);
+  --radius-xl: var(--r-card); --radius-pill: var(--r-pill);
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-7: 28px; --space-8: 32px;
+  --font-sans: var(--font-body);
+  --fs-display-xl: 40px; --lh-display-xl: 1; --fs-display-lg: 32px; --lh-display-lg: 1.05;
+  --fs-display-md: 22px; --lh-display-md: 1.15; --fs-title: 16px; --lh-title: 22px;
+  --fs-body: 14px; --lh-body: 21px; --fs-label: 13px; --lh-label: 18px;
+  --fs-caption: 12px; --lh-caption: 16px; --fs-overline: 11px; --lh-overline: 14px;
+  --fs-money: 16px; --lh-money: 22px;
+  --t-sheet: 240ms;
+  --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
+  --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand);
+}
+
 /* ── UX redesign tokens (2026-10-17, docs/ux-redesign-audit.md) ─────────────────────────────
    Only on <html data-ui="v2">, which lib/flags.js sets for a tenant switched onto the new
    dashboard (vula_tenant_config.ui_v2 + the VITE_UI_V2 build). Every other tenant keeps the
@@ -121,6 +148,11 @@
   --warm-soft: #F7E3DA;
   --ok: #2E7D4F; --warn: #9A6A00; --danger: #B42318; --info: #2463A8;
   --focus: #2463A8;
+  /* Text in a tone, on that tone's soft tint (chips, the "hot" tile): the fills above are too
+     light for 12px text in light mode, so each has a darker text shade, solved for 4.5:1 on its
+     own tint (2026-10-17, axe on #/ui-kit). Dark mode uses the tones themselves. */
+  --ok-text: #2A6D46; --warn-text: #7D5805; --danger-text: #B42318; --info-text: #2360A2;
+  --highlight-text: #7F6028; --warm-text: #9A4628; --brand-text: var(--brand-strong);
   --chart-1: var(--brand); --chart-2: #E8A93A; --chart-3: #C4552E;
   --chart-4: #2463A8; --chart-5: #7B4F8E; --chart-6: #8FA597;
   --shadow-float: 0 10px 28px rgba(22, 24, 22, 0.22);
@@ -176,6 +208,8 @@
   --highlight: #F2BE5C; --highlight-soft: #3A2F19; --warm: #E07A55; --warm-soft: #3B231A;
   --ok: #6FCF97; --warn: #E8B84A; --danger: #F2836F; --info: #7FB2EA; --focus: #7FB2EA;
   --chart-2: #F2BE5C; --chart-3: #E07A55; --chart-4: #7FB2EA; --chart-5: #C39AD6; --chart-6: #5D6F63;
+  --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
+  --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand);
   --shadow-float: 0 10px 28px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
 }
@@ -190,6 +224,8 @@
     --highlight: #F2BE5C; --highlight-soft: #3A2F19; --warm: #E07A55; --warm-soft: #3B231A;
     --ok: #6FCF97; --warn: #E8B84A; --danger: #F2836F; --info: #7FB2EA; --focus: #7FB2EA;
     --chart-2: #F2BE5C; --chart-3: #E07A55; --chart-4: #7FB2EA; --chart-5: #C39AD6; --chart-6: #5D6F63;
+    --ok-text: var(--ok); --warn-text: var(--warn); --danger-text: var(--danger); --info-text: var(--info);
+    --highlight-text: var(--highlight); --warm-text: var(--warm); --brand-text: var(--brand);
     --shadow-float: 0 10px 28px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }

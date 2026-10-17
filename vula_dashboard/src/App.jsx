@@ -4,6 +4,7 @@ import VulaPrivacy from "./components/VulaPrivacy";
 // Lazy: pulls in @measured/puck (~1 MB) — only the public page-render route needs it.
 const VulaPageRender = lazy(() => import("./components/VulaPageRender"));
 const VulaInvoiceApproval = lazy(() => import("./components/VulaInvoiceApproval"));
+const VulaUiKit = lazy(() => import("./components/VulaUiKit")); // #/ui-kit, master only (UX redesign)
 import { useAuthStore } from "./store/auth";
 import VulaDashboard from "./components/VulaDashboard";
 import VulaQS from "./components/VulaQS";
@@ -251,6 +252,16 @@ export default function App() {
   // Show login if not authenticated
   if (!user) {
     return <VulaLogin onSuccess={() => {}} />;
+  }
+
+  // #/ui-kit — every shared component on demo data (2026-10-17, UX redesign). Master only: it
+  // shows no tenant data, but it isn't part of any tenant's product.
+  if (route.startsWith("#/ui-kit") && role === "master") {
+    return (
+      <Suspense fallback={<div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>}>
+        <VulaUiKit />
+      </Suspense>
+    );
   }
 
   // ── Merchant owners/staff get a scoped, single-store admin ───────────────────
