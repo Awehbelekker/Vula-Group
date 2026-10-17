@@ -250,6 +250,8 @@ export const tenant = {
   profile: { tenant_id: TENANT_ID, known: true, display_name: TENANT_NAME, business_type: "food",
     modules: tenantModules, uses_projects: false, sells_products: true, is_rep_business: false,
     aliases: [], description: "Neighbourhood deli, bakery and catering in Sea Point." },
+  // the redesign opt-in (migration 215): on when the run is UI_V2=1
+  ui_v2: process.env.UI_V2 === "1", ui_labels: null,
 };
 export const teamMe = { access: [], full: true, role: "owner", whatsapp: "+27820000001" };
 

@@ -3,7 +3,10 @@
 // from seeded demo data, so no screenshot ever contains production data.
 import { defineConfig } from "@playwright/test";
 
-const PORT = 4179;
+// UI_V2=1 runs the redesign: a build with VITE_UI_V2 on (its own port, so a server already
+// running the current look is never reused), and the mocked tenant switched onto it.
+const UI_V2 = process.env.UI_V2 === "1";
+const PORT = UI_V2 ? 4180 : 4179;
 export default defineConfig({
   testDir: "tests/visual",
   outputDir: "tests/visual/.results",
@@ -27,6 +30,7 @@ export default defineConfig({
       VITE_API_URL: "http://api.vula.test",
       VITE_SUPABASE_URL: "http://supabase.vula.test",
       VITE_SUPABASE_ANON_KEY: "test-anon-key",
+      VITE_UI_V2: UI_V2 ? "true" : "false",
     },
   },
 });

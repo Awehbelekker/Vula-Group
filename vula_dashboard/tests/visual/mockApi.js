@@ -166,11 +166,13 @@ export async function seedSession(page, { role = "owner", theme = "light" } = {}
   const auth = role === "master"
     ? { user: { id: "u-master", email: "operator@vula.example.test", name: "Demo Operator" }, tenantId: "master", role: "master", access: [], full: true }
     : { user: { id: "u-owner", email: "owner@harbourvine.example.test", name: "Demo Owner" }, tenantId: F.TENANT_ID, role: "owner", access: [], full: true };
-  await page.addInitScript(([a, t, masterTenant]) => {
+  await page.addInitScript(([a, t, masterTenant, v2]) => {
     try {
       localStorage.setItem("vula-auth", JSON.stringify({ state: a, version: 0 }));
       localStorage.setItem("vula-theme-mode", t);
       if (masterTenant) localStorage.setItem("vula.masterTenant", masterTenant);
+      // Master HQ has no tenant flag of its own: a UI_V2 run previews it (lib/flags.js override)
+      if (v2 && a.role === "master") localStorage.setItem("vula.ui", "v2");
     } catch { /* storage blocked */ }
-  }, [auth, theme, role === "master" ? F.TENANT_ID : ""]);
+  }, [auth, theme, role === "master" ? F.TENANT_ID : "", process.env.UI_V2 === "1"]);
 }

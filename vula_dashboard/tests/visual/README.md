@@ -53,3 +53,17 @@ Fixtures must be obviously fictional:
 
 Never paste real tenant rows, names (customers, staff or businesses), phone numbers or
 documents into these fixtures or screenshots.
+
+## The redesign (Phase B onwards)
+
+`UI_V2=1` runs the same screens with the redesign switched on: a Vite build with
+`VITE_UI_V2=true` on port 4180, and the mocked tenant's `ui_v2` set (master previews it with the
+`vula.ui` override). Output goes to `.results/v2/` and never touches `baseline/`.
+
+```
+UI_V2=1 npx playwright test baseline   # screenshots → .results/v2/
+UI_V2=1 npx playwright test a11y       # axe + horizontal scroll → .results/v2/
+```
+
+Playwright empties `.results/` at the start of every run, so copy a capture elsewhere before
+running the other mode.
