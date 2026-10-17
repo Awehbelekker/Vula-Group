@@ -14,7 +14,7 @@ import time
 from core.llm_router import is_local_model, resolve_generation_route
 from core.prompt_safety import fence
 from core.skills.base import (
-    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, format_kb_chunks,
+    BaseSkill, SkillInput, SkillOutput, behaviour_preamble, fit_kb_chunks, format_kb_chunks,
     looks_like_tenant_data_question,
 )
 from core.verification import NO_GROUNDING_CAVEAT, WEB_FALLBACK_CAVEAT
@@ -78,10 +78,12 @@ class ReasoningSkill(BaseSkill):
             if is_spec and chunks and spec_product_missing(inp.question, chunks):
                 chunks = []
             if chunks:
+                # The excerpts the model sees are also what the verifier grounds on (sources[].text).
+                chunks = fit_kb_chunks(chunks)
                 kb_context = await format_kb_chunks(inp.tenant_id, chunks)
                 sources = [
                     {"type": "kb", "filename": c.get("filename", "?"),
-                     "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
+                     "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")}
                     for c in chunks
                 ]
         except Exception as exc:
@@ -148,12 +150,13 @@ class ReasoningSkill(BaseSkill):
                     shared_chunks = await shared_pipeline.query(
                         inp.question, top_k=inp.top_k, authoritative_only=True)
                     if shared_chunks:
+                        shared_chunks = fit_kb_chunks(shared_chunks)
                         kb_context = f"## {label}\n" + "\n\n".join(
-                            f"[{c.get('filename','doc')}]: {c.get('text','')[:900]}"
+                            f"[{c.get('filename','doc')}]: {c.get('text','')}"
                             for c in shared_chunks)
                         sources = [
                             {"type": "training_kb", "filename": c.get("filename", "?"),
-                             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")[:900]}
+                             "score": round(c.get("score", 0.0), 3), "text": c.get("text", "")}
                             for c in shared_chunks
                         ]
                         break

@@ -29,6 +29,8 @@ import re
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -1042,6 +1044,117 @@ def _collection_lock(name: str) -> asyncio.Lock:
     return lock
 
 
+# Point ids (2026-10-16, KB retrieval C2 — docs/kb-retrieval-audit.md). Points were stored under
+# int(md5(chunk_id)[:8], 16): 32 bits, so two chunks in one collection collide (~1% chance at
+# ~9,300 chunks, ~50% at ~77,000) and the second write silently REPLACES the first chunk. New
+# points use a 128-bit uuid5 of tenant + chunk id — still deterministic, so re-ingesting the same
+# document overwrites rather than duplicates. Existing points keep their ids until the migration.
+_POINT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://vula-ai.com/kb/point")
+
+
+def legacy_point_id(chunk_id: str) -> int:
+    return int(hashlib.md5(chunk_id.encode()).hexdigest()[:8], 16)
+
+
+def point_id(tenant_id: str, chunk_id: str):
+    if getattr(settings, "qdrant_uuid_point_ids", True):
+        return str(uuid.uuid5(_POINT_NAMESPACE, f"{tenant_id}:{chunk_id}"))
+    return legacy_point_id(chunk_id)
+
+
+# Who may see a chunk (2026-10-16, KB retrieval C5 — docs/kb-retrieval-audit.md). The customer
+# assistant searched the WHOLE tenant collection, which also holds every document the owner and
+# staff send in: supplier invoices with cost prices, bank statements, email attachments, wage
+# rosters. On the retrieval eval every customer question about cost prices or wages got that
+# document as grounding. Each chunk now carries `audience` (public | staff | owner) and customer
+# retrieval is filtered on it. Default is staff: a document is customer-visible only when its
+# source says so (the business's own website, its starter FAQ, an answer the owner approved for
+# customers) or the caller passes audience="public" (a recipe, an owner-taught answer).
+AUDIENCES = ("public", "staff", "owner")
+_PUBLIC_SOURCE_TYPES = {"website", "starter", "learned_answer_approved", "promoted"}
+
+
+def default_audience(source_type: Optional[str], audience: Optional[str] = None) -> str:
+    """The audience to store: the caller's, if it is a known one, else by source type."""
+    if audience in AUDIENCES:
+        return audience
+    return "public" if source_type in _PUBLIC_SOURCE_TYPES else "staff"
+
+
+def audience_filter(audience: Optional[str]) -> Dict[str, list]:
+    """Qdrant filter clauses for someone asking as `audience`. Only "public" (a customer) is
+    restricted. Points stored before this field existed carry no audience: while
+    kb_customer_audience_strict is off they stay visible (only explicitly staff/owner chunks are
+    hidden); once the backfill has run and it is on, a customer sees public chunks only."""
+    if audience != "public":
+        return {}
+    if getattr(settings, "kb_customer_audience_strict", False):
+        return {"must": [{"key": "audience", "match": {"value": "public"}}]}
+    return {"must_not": [{"key": "audience", "match": {"any": ["staff", "owner"]}}]}
+
+
+# 2026-10-17 (KB retrieval 1b): who the CURRENT turn is answering, for every KB query made while
+# answering it. On a knowledge-mode line (DIGG, gerflor) a number that isn't on the team reaches
+# the same skills the owner uses (whatsapp._rag_reply → AgentRunner → reasoning, architecture…),
+# each with its own query() call; setting this once at the entry means none of them can forget the
+# filter. "public" here always wins over an explicit argument.
+_KB_AUDIENCE: ContextVar[Optional[str]] = ContextVar("kb_audience", default=None)
+
+
+@contextmanager
+def kb_audience(audience: Optional[str]):
+    token = _KB_AUDIENCE.set(audience)
+    try:
+        yield
+    finally:
+        _KB_AUDIENCE.reset(token)
+
+
+def effective_audience(audience: Optional[str]) -> Optional[str]:
+    return "public" if _KB_AUDIENCE.get() == "public" else audience
+
+
+def _audience_allows(audience: Optional[str], payload: dict) -> bool:
+    """The same rule as audience_filter, for payloads matched locally (substring fallback)."""
+    if audience != "public":
+        return True
+    got = payload.get("audience")
+    if getattr(settings, "kb_customer_audience_strict", False):
+        return got == "public"
+    return got not in ("staff", "owner")
+
+
+def is_shared_collection(tenant_id: str) -> bool:
+    """Vula's own shared collections — SA construction, small-business, sector packs and the
+    opted-in network — hold no single tenant's data, so everything in them is public."""
+    try:
+        from vula.training.business_content import BUSINESS_TRAINING_TENANT_ID
+        from vula.training.content import TRAINING_TENANT_ID
+        from vula.training.network import NETWORK_TENANT_ID
+        shared = {TRAINING_TENANT_ID, BUSINESS_TRAINING_TENANT_ID, NETWORK_TENANT_ID}
+    except Exception:
+        shared = set()
+    return tenant_id in shared or (tenant_id or "").startswith("sector_")
+
+
+def kb_score_threshold(authoritative: bool = False) -> float:
+    """The minimum similarity for a retrieved chunk (2026-10-16: were the literals 0.3 / 0.35 in
+    query(); same defaults, now settings — config.py kb_score_threshold*). A per-embed-model
+    override wins, because a bge-m3 score and a text-embedding-3-small score aren't comparable."""
+    key = "authoritative" if authoritative else "default"
+    raw = getattr(settings, "kb_score_thresholds_by_model", "") or ""
+    if raw:
+        try:
+            import json
+            per_model = (json.loads(raw) or {}).get(settings.model_embed) or {}
+            if per_model.get(key) is not None:
+                return float(per_model[key])
+        except (ValueError, TypeError, AttributeError) as exc:
+            logger.warning("KB_SCORE_THRESHOLDS_BY_MODEL ignored (%s)", exc)
+    return float(settings.kb_score_threshold_authoritative if authoritative
+                 else settings.kb_score_threshold)
+
+
 class QdrantStore:
     """
     Per-tenant Qdrant collections for isolated knowledge bases.
@@ -1084,14 +1197,15 @@ class QdrantStore:
                 if resp.status_code not in (200, 201) and "already exists" not in resp.text:
                     raise RuntimeError(f"Failed to create Qdrant collection: {resp.text}")
                 logger.info("Created Qdrant collection: %s", name)
-            # Idempotent: ensure the keyword index used by authority filtering.
-            try:
-                await client.put(
-                    f"{self.base}/collections/{name}/index",
-                    json={"field_name": "source_type", "field_schema": "keyword"},
-                )
-            except Exception as exc:
-                logger.debug("source_type index ensure skipped for %s: %s", name, exc)
+            # Idempotent: ensure the keyword indexes used by authority and audience filtering.
+            for field_name in ("source_type", "audience"):
+                try:
+                    await client.put(
+                        f"{self.base}/collections/{name}/index",
+                        json={"field_name": field_name, "field_schema": "keyword"},
+                    )
+                except Exception as exc:
+                    logger.debug("%s index ensure skipped for %s: %s", field_name, name, exc)
 
     async def upsert_chunks(self, tenant_id: str, chunks: List[DocumentChunk]) -> int:
         """Store document chunks with embeddings."""
@@ -1101,7 +1215,7 @@ class QdrantStore:
         name = self._collection_name(tenant_id)
         points = [
             {
-                "id": int(hashlib.md5(c.chunk_id.encode()).hexdigest()[:8], 16),
+                "id": point_id(tenant_id, c.chunk_id),
                 "vector": c.embedding,
                 "payload": {
                     "chunk_id": c.chunk_id,
@@ -1124,18 +1238,44 @@ class QdrantStore:
                 json={"points": points},
             )
             resp.raise_for_status()
+            if points and isinstance(points[0]["id"], str):
+                await self._drop_legacy_copies(client, name, [c.chunk_id for c in chunks if c.embedding])
 
         return len(points)
+
+    async def _drop_legacy_copies(self, client: httpx.AsyncClient, name: str,
+                                  chunk_ids: List[str]) -> int:
+        """After a uuid-id write, remove the old 32-bit-id point of the SAME chunk, so re-ingesting
+        a document stored before the switch replaces it instead of adding a second copy. Only a
+        point whose payload chunk_id matches is removed — a legacy id that a collision handed to a
+        different chunk is left alone. Runs after the new write, so a failure here can leave a
+        duplicate but never lose a chunk."""
+        by_id = {legacy_point_id(cid): cid for cid in chunk_ids}
+        try:
+            resp = await client.post(f"{self.base}/collections/{name}/points",
+                                     json={"ids": list(by_id), "with_payload": True})
+            if not resp.is_success:
+                return 0
+            stale = [p["id"] for p in resp.json().get("result", [])
+                     if (p.get("payload") or {}).get("chunk_id") == by_id.get(p.get("id"))]
+            if stale:
+                await client.post(f"{self.base}/collections/{name}/points/delete",
+                                  params={"wait": "true"}, json={"points": stale})
+            return len(stale)
+        except Exception as exc:
+            logger.debug("legacy point clean-up skipped for %s: %s", name, exc)
+            return 0
 
     async def search(
         self,
         tenant_id: str,
         query_embedding: List[float],
         limit: int = 5,
-        score_threshold: float = 0.3,
+        score_threshold: Optional[float] = None,
         exclude_source_types: Optional[List[str]] = None,
         category: Optional[str] = None,
         source_type: Optional[str] = None,
+        audience: Optional[str] = None,
     ) -> List[dict]:
         """Semantic search across tenant's knowledge base.
 
@@ -1154,18 +1294,24 @@ class QdrantStore:
         source_type instead of excluding some. Used to search exclusively within approved
         learned-answer points without ever mixing them into a normal document-KB query (and
         vice versa). None (default) behaves exactly as before this parameter existed.
+
+        `audience` (2026-10-16): who is asking — "public" for a customer, which applies
+        audience_filter() and never falls back to an unfiltered search. None = unrestricted.
         """
         name = self._collection_name(tenant_id)
         body: dict = {
             "vector": query_embedding,
             "limit": limit,
-            "score_threshold": score_threshold,
+            "score_threshold": kb_score_threshold() if score_threshold is None else score_threshold,
             "with_payload": True,
         }
         must_not = [{"key": "source_type", "match": {"value": t}} for t in (exclude_source_types or [])]
         must = [{"key": "category", "match": {"value": category}}] if category else []
         if source_type:
             must.append({"key": "source_type", "match": {"value": source_type}})
+        aud = audience_filter(audience)
+        must += aud.get("must", [])
+        must_not += aud.get("must_not", [])
         if must_not or must:
             body["filter"] = {k: v for k, v in (("must_not", must_not), ("must", must)) if v}
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
@@ -1175,6 +1321,15 @@ class QdrantStore:
             )
             if resp.status_code == 404:
                 return []
+            # A customer's search must never lose its audience filter: on a refusal, make the
+            # index and retry once with the full filter, else return nothing (fail closed).
+            if resp.status_code == 400 and aud:
+                logger.warning("Audience filter refused for %s — creating index and retrying", name)
+                await client.put(f"{self.base}/collections/{name}/index",
+                                 json={"field_name": "audience", "field_schema": "keyword"})
+                resp = await client.post(f"{self.base}/collections/{name}/points/search", json=body)
+                if not resp.is_success:
+                    return []
             # If filtering is unavailable (e.g. missing index on a legacy collection),
             # degrade gracefully to an unfiltered search rather than failing the reply.
             if resp.status_code == 400 and "filter" in body:
@@ -1191,7 +1346,8 @@ class QdrantStore:
             return results
 
     async def keyword_search(self, tenant_id: str, terms: List[str],
-                             limit: int = 5) -> List[dict]:
+                             limit: int = 5, audience: Optional[str] = None,
+                             exclude_source_types: Optional[List[str]] = None) -> List[dict]:
         """Literal term matching, as a companion to the vector search.
 
         2026-09-07: a rep asked "Which importer does the creation range" and vector search
@@ -1218,13 +1374,17 @@ class QdrantStore:
         # was never searched at all. Overlap is a real ranking signal and costs nothing: a
         # chunk holding both "soh" and "inbound" outranks one that merely holds "hand".
         gathered = await asyncio.gather(
-            *[self._keyword_one(tenant_id, t, 3) for t in terms], return_exceptions=True)
+            *[self._keyword_one(tenant_id, t, 3, audience, exclude_source_types=exclude_source_types)
+              for t in terms], return_exceptions=True)
         lowered = [t.lower() for t in terms]
         best: dict = {}
         for res in gathered:
             if isinstance(res, BaseException):
                 continue
             for hit in res:
+                # Belt and braces for the filter below (a legacy collection's substring fallback).
+                if hit.get("source_type") in (exclude_source_types or ()):
+                    continue
                 text = (hit.get("text") or "")
                 key = text[:120]
                 if key in best:
@@ -1234,10 +1394,21 @@ class QdrantStore:
                 best[key] = hit
         return sorted(best.values(), key=lambda h: h.get("_overlap", 0), reverse=True)[:limit]
 
-    async def _keyword_one(self, tenant_id: str, term: str, limit: int) -> List[dict]:
-        """Literal matches for ONE term. See keyword_search for why terms are not OR'd."""
+    async def _keyword_one(self, tenant_id: str, term: str, limit: int,
+                           audience: Optional[str] = None,
+                           exclude_source_types: Optional[List[str]] = None) -> List[dict]:
+        """Literal matches for ONE term. See keyword_search for why terms are not OR'd.
+
+        2026-10-17: honours exclude_source_types like the vector search does. It didn't, so an
+        authoritative_only query (reasoning, standards, architecture) could still be answered
+        from an ingested chat log or an auto-learned Q&A through this pass."""
         name = self._collection_name(tenant_id)
-        flt = {"must": [{"key": "text", "match": {"text": term}}]}
+        aud = audience_filter(audience)
+        flt = {"must": [{"key": "text", "match": {"text": term}}] + aud.get("must", [])}
+        must_not = aud.get("must_not", []) + [
+            {"key": "source_type", "match": {"value": t}} for t in (exclude_source_types or [])]
+        if must_not:
+            flt["must_not"] = must_not
         async with httpx.AsyncClient(timeout=15.0, headers=self._headers()) as client:
             for attempt in (1, 2):
                 resp = await client.post(
@@ -1266,10 +1437,11 @@ class QdrantStore:
                     except Exception as exc:
                         logger.debug("text index creation failed for %s: %s", name, exc)
                         break
-        return await self._scroll_substring(tenant_id, [term], limit)
+        return await self._scroll_substring(tenant_id, [term], limit, audience=audience)
 
     async def _scroll_substring(self, tenant_id: str, terms: List[str],
-                                limit: int, max_points: int = 3000) -> List[dict]:
+                                limit: int, max_points: int = 3000,
+                                audience: Optional[str] = None) -> List[dict]:
         """Bounded brute-force fallback: page through payloads and substring-match locally.
         Capped so a large collection costs a slow reply, never an unbounded scan."""
         name = self._collection_name(tenant_id)
@@ -1295,7 +1467,7 @@ class QdrantStore:
                         scanned += 1
                         payload = dict(p.get("payload") or {})
                         text = (payload.get("text") or "").lower()
-                        if any(t in text for t in lowered):
+                        if any(t in text for t in lowered) and _audience_allows(audience, payload):
                             payload.setdefault("score", 0.0)
                             payload["match"] = "keyword"
                             found.append(payload)
@@ -1380,6 +1552,96 @@ class QdrantStore:
             logger.debug("doc_ids_for_filename failed for %s: %s", filename, exc)
         return found
 
+    async def owner_audience(self, tenant_id: str, filename: str) -> Optional[str]:
+        """The audience the owner chose for an earlier copy of this file, if any — so a re-upload
+        or a mailbox/Drive re-sync keeps "visible to customers" instead of resetting it."""
+        name = self._collection_name(tenant_id)
+        body = {"limit": 1, "with_vector": False, "with_payload": ["audience"],
+                "filter": {"must": [{"key": "filename", "match": {"value": filename}},
+                                    {"key": "audience_by", "match": {"value": "owner"}}]}}
+        try:
+            async with httpx.AsyncClient(timeout=10.0, headers=self._headers()) as client:
+                r = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
+                if not r.is_success:
+                    return None
+                pts = r.json().get("result", {}).get("points", [])
+                aud = (pts[0].get("payload") or {}).get("audience") if pts else None
+                return aud if aud in AUDIENCES else None
+        except Exception as exc:
+            logger.debug("owner audience lookup skipped for %s: %s", filename, exc)
+            return None
+
+    async def list_documents(self, tenant_id: str) -> List[dict]:
+        """One row per KB document — doc_id, filename, chunk count and who can see it — for the
+        dashboard's badges (2026-10-17). Payload keys only, never chunk text. "mixed" = some chunks
+        tagged differently; "untagged" = stored before audiences existed (backfill pending)."""
+        name = self._collection_name(tenant_id)
+        docs: Dict[str, dict] = {}
+        offset = None
+        async with httpx.AsyncClient(timeout=30.0, headers=self._headers()) as client:
+            while True:
+                body: dict = {"limit": 256, "with_vector": False,
+                              "with_payload": ["doc_id", "filename", "audience", "audience_by", "source_type"]}
+                if offset is not None:
+                    body["offset"] = offset
+                resp = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
+                if resp.status_code == 404:
+                    return []
+                resp.raise_for_status()
+                result = resp.json().get("result", {})
+                for p in result.get("points", []):
+                    pl = p.get("payload") or {}
+                    did = str(pl.get("doc_id") or "")
+                    if not did:
+                        continue
+                    d = docs.setdefault(did, {"doc_id": did, "filename": pl.get("filename"), "chunks": 0,
+                                              "audiences": set(), "owner_set": False,
+                                              "source_type": pl.get("source_type")})
+                    d["chunks"] += 1
+                    d["audiences"].add(pl.get("audience") or "untagged")
+                    d["owner_set"] = d["owner_set"] or pl.get("audience_by") == "owner"
+                offset = result.get("next_page_offset")
+                if offset is None:
+                    break
+        out = []
+        for d in docs.values():
+            auds = d.pop("audiences")
+            d["audience"] = next(iter(auds)) if len(auds) == 1 else "mixed"
+            out.append(d)
+        return sorted(out, key=lambda d: str(d.get("filename") or "").lower())
+
+    async def set_document_audience(self, tenant_id: str, doc_id: str, audience: str,
+                                    by: str = "owner") -> dict:
+        """Set who may see every chunk of one document, then read it back (verified, not
+        reported). `by` = "owner" marks an owner's own choice, which the backfill never overrides."""
+        if audience not in AUDIENCES:
+            raise ValueError(f"audience must be one of {AUDIENCES}")
+        name = self._collection_name(tenant_id)
+        flt = {"must": [{"key": "doc_id", "match": {"value": doc_id}}]}
+        async with httpx.AsyncClient(timeout=30.0, headers=self._headers()) as client:
+            for field_name in ("doc_id", "audience"):
+                await client.put(f"{self.base}/collections/{name}/index",
+                                 params={"wait": "true"},
+                                 json={"field_name": field_name, "field_schema": "keyword"})
+            resp = await client.post(f"{self.base}/collections/{name}/points/payload",
+                                     params={"wait": "true"},
+                                     json={"payload": {"audience": audience, "audience_by": by}, "filter": flt})
+            resp.raise_for_status()
+            stored, offset = [], None
+            while True:
+                body: dict = {"limit": 256, "with_vector": False, "with_payload": ["audience"], "filter": flt}
+                if offset is not None:
+                    body["offset"] = offset
+                r = await client.post(f"{self.base}/collections/{name}/points/scroll", json=body)
+                r.raise_for_status()
+                res = r.json().get("result", {})
+                stored += [(p.get("payload") or {}).get("audience") for p in res.get("points", [])]
+                offset = res.get("next_page_offset")
+                if offset is None:
+                    break
+        return {"doc_id": doc_id, "audience": audience, "chunks": len(stored),
+                "verified": bool(stored) and all(a == audience for a in stored)}
+
     async def _point_count(self, client: httpx.AsyncClient, name: str) -> Optional[int]:
         try:
             r = await client.get(f"{self.base}/collections/{name}")
@@ -1409,7 +1671,8 @@ class VulaIngestionPipeline:
         self.embedder = EmbeddingEngine()
         self.store = QdrantStore()
 
-    async def ingest_file(self, file_path: Path, source_type: str = "document") -> IngestionResult:
+    async def ingest_file(self, file_path: Path, source_type: str = "document",
+                          audience: Optional[str] = None) -> IngestionResult:
         """
         Full pipeline for a single file.
         Returns IngestionResult with stats.
@@ -1434,6 +1697,9 @@ class VulaIngestionPipeline:
                 )
 
             logger.info(f"[{self.tenant_id}] Parsed {len(pages)} pages from {file_path.name}")
+            prior = await self._prior_owner_audience(file_path.name)
+            audience = audience or self._collection_audience() or prior
+            owner_set = {"audience_by": "owner"} if prior and audience == prior else {}
 
             # 2. Chunk all pages
             all_chunks: List[DocumentChunk] = []
@@ -1453,6 +1719,8 @@ class VulaIngestionPipeline:
                             "file_type": file_path.suffix,
                             "file_size_kb": file_path.stat().st_size // 1024,
                             "source_type": source_type,
+                            "audience": default_audience(source_type, audience),
+                            **owner_set,
                         },
                     )
                     all_chunks.append(chunk)
@@ -1503,7 +1771,8 @@ class VulaIngestionPipeline:
             )
 
     async def ingest_text(self, content: str, filename: str, doc_id: str | None = None,
-                          source_type: str = "document", category: str | None = None) -> IngestionResult:
+                          source_type: str = "document", category: str | None = None,
+                          audience: str | None = None) -> IngestionResult:
         """Ingest raw text directly — no file needed. Used to seed the training KB.
 
         `category` (2026-08-24, structured starter KB): an optional doc-type tag (reuses
@@ -1517,7 +1786,12 @@ class VulaIngestionPipeline:
             doc_id = hashlib.md5(f"{self.tenant_id}:{filename}".encode()).hexdigest()[:16]
         try:
             raw_chunks = self.chunker.chunk(content)
-            chunk_metadata = {"source": "training_kb", "source_type": source_type}
+            prior = await self._prior_owner_audience(filename)
+            audience = audience or self._collection_audience() or prior
+            chunk_metadata = {"source": "training_kb", "source_type": source_type,
+                              "audience": default_audience(source_type, audience)}
+            if prior and audience == prior:
+                chunk_metadata["audience_by"] = "owner"
             if category:
                 chunk_metadata["category"] = category
             all_chunks = [
@@ -1568,7 +1842,7 @@ class VulaIngestionPipeline:
 
     async def query(self, question: str, top_k: int = 5,
                     authoritative_only: bool = False, category: str | None = None,
-                    expand: bool = True) -> List[dict]:
+                    expand: bool = True, audience: str | None = None) -> List[dict]:
         """
         Semantic search across this tenant's knowledge base.
         Returns relevant document chunks for RAG.
@@ -1591,9 +1865,13 @@ class VulaIngestionPipeline:
         The documents were never the problem; the question was. A rep typing between
         appointments does not write well-formed prose, and the embedding needs it. Set
         expand=False for a caller that has already composed a careful query.
+
+        audience (2026-10-16): "public" for anything a customer will see — every customer-facing
+        caller MUST pass it (see audience_filter). Applies to the keyword pass too.
         """
         exclude = self._NON_AUTHORITATIVE if authoritative_only else None
-        threshold = 0.35 if authoritative_only else 0.3
+        threshold = kb_score_threshold(authoritative_only)
+        audience = effective_audience(audience)
 
         variants = [question]
         if expand:
@@ -1610,7 +1888,8 @@ class VulaIngestionPipeline:
                 emb = await self.embedder.embed(q)
                 return await self.store.search(
                     self.tenant_id, emb, limit=top_k,
-                    score_threshold=threshold, exclude_source_types=exclude, category=category)
+                    score_threshold=threshold, exclude_source_types=exclude, category=category,
+                    audience=audience)
             except Exception as exc:
                 logger.debug("query variant failed (%r): %s", q[:40], exc)
                 return []
@@ -1634,7 +1913,8 @@ class VulaIngestionPipeline:
         if terms and (len(merged) < top_k or _is_terse(question)):
             try:
                 keyword_hits = await self.store.keyword_search(
-                    self.tenant_id, terms, limit=max(2, top_k // 2))
+                    self.tenant_id, terms, limit=max(2, top_k // 2), audience=audience,
+                    exclude_source_types=exclude)
             except Exception as exc:
                 logger.debug("keyword pass failed: %s", exc)
 
@@ -1754,6 +2034,17 @@ class VulaIngestionPipeline:
                 raw = r.json().get("response", "")
 
         return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+    async def _prior_owner_audience(self, filename: str) -> Optional[str]:
+        """Best-effort: never let the lookup fail an ingest."""
+        try:
+            got = await self.store.owner_audience(self.tenant_id, filename)
+            return got if got in AUDIENCES else None
+        except Exception:
+            return None
+
+    def _collection_audience(self) -> Optional[str]:
+        return "public" if is_shared_collection(self.tenant_id) else None
 
     def _doc_id(self, file_path: Path) -> str:
         """Identity of a document = tenant + name + CONTENT.

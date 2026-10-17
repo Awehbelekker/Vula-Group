@@ -570,10 +570,13 @@ class FinanceAdminSkill(BaseSkill):
                 for c in chunks:
                     results.append({
                         "source": source, "filename": c.get("filename", "?"),
-                        "text": (c.get("text") or "")[:900],
+                        "text": c.get("text") or "",
                     })
         except Exception as exc:
             logger.debug("finance knowledge lookup failed: %s", exc)
         if not results:
             return {"found": False, "message": "Nothing in the knowledge base matches that."}
-        return {"found": True, "results": results}
+        # Whole rows and sentences (2026-10-16: was [:900] each, and the agent loop then cut the
+        # whole JSON tool result at 1,800 characters mid-string). Sized to fit under that cap.
+        from core.skills.base import fit_kb_chunks
+        return {"found": True, "results": fit_kb_chunks(results, 350)}

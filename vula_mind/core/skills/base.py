@@ -839,7 +839,80 @@ def looks_like_supplier_history_question(text: str) -> bool:
             and not _NOT_SUPPLIER_HISTORY_RE.search(t) and not _SPECIFIC_DOCUMENT_RE.search(t))
 
 
-async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
+# ── How much of each retrieved chunk reaches a prompt ─────────────────────────
+# 2026-10-16 (KB retrieval phase 1, evals/RETRIEVAL.md). Every skill cut each chunk to its first
+# 900 characters — in five places, plus 400/500/600 in commerce_assistant. A full chunk is 512
+# WORDS (~3,000+ characters), so most of every chunk never reached the model, and a figure in the
+# last rows of a data sheet ("Slip resistance (EN 16165): R10") was retrieved and then thrown
+# away: on the retrieval eval the right data sheet was found for 100% of spec questions but the
+# figure reached the prompt for 40%. The verifier grounded on the same cut text, so it could not
+# confirm such a figure either. One budget (config.py kb_context_token_budget), one place.
+
+# Each chunk first gets what the old cut gave it (900 characters ≈ 225 tokens) while the budget
+# lasts, so no chunk that used to reach the prompt is dropped; what is left goes to the
+# highest-ranked chunks in full.
+_KB_EXCERPT_FLOOR_CHARS = 900
+_KB_CUT_MARK = " […]"
+_TABLE_LINE_RE = re.compile(r"\||\t| {3,}\S")
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s)")
+
+
+def fit_kb_text(text: str, max_chars: int) -> str:
+    """`text` cut to at most `max_chars` at a line end, or a sentence end on a line that isn't a
+    table row — never mid-row or mid-sentence unless there is no boundary at all (then at a word).
+    A cut is marked " […]" so the model knows the excerpt continues."""
+    text = text or ""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= len(_KB_CUT_MARK) + 20:
+        return ""
+    window = text[:max_chars - len(_KB_CUT_MARK)]
+    cut = window.rfind("\n")
+    for m in _SENTENCE_END_RE.finditer(window):
+        pos = m.end()
+        if pos <= cut:
+            continue
+        start = window.rfind("\n", 0, pos) + 1
+        end = text.find("\n", pos)
+        if not _TABLE_LINE_RE.search(text[start:end if end != -1 else len(text)]):
+            cut = pos
+    if cut <= 0:
+        cut = window.rfind(" ")
+        if cut <= 0:
+            cut = len(window)
+    return text[:cut].rstrip() + _KB_CUT_MARK
+
+
+def fit_kb_chunks(chunks: List[Dict[str, Any]], budget_tokens: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Retrieved chunks (in rank order) with their text fitted to a shared budget of ≈ tokens
+    (chars/4, as llm_router counts). Returns copies; a chunk the budget couldn't reach is left
+    out. Idempotent: fitting already-fitted chunks changes nothing."""
+    if not chunks:
+        return []
+    if budget_tokens is None:
+        from config import settings
+        budget_tokens = int(getattr(settings, "kb_context_token_budget", 2400) or 2400)
+    remaining = max(0, budget_tokens) * 4
+    texts = [str(c.get("text") or "") for c in chunks]
+    alloc = []
+    for t in texts:
+        give = min(len(t), _KB_EXCERPT_FLOOR_CHARS, remaining)
+        alloc.append(give)
+        remaining -= give
+    for i, t in enumerate(texts):
+        extra = min(len(t) - alloc[i], remaining)
+        alloc[i] += extra
+        remaining -= extra
+    out = []
+    for c, t, a in zip(chunks, texts, alloc):
+        fitted = t if a >= len(t) else fit_kb_text(t, a)
+        if fitted or not t:
+            out.append({**c, "text": fitted})
+    return out
+
+
+async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]],
+                           budget_tokens: Optional[int] = None) -> str:
     """Join RAG chunks into a "[filename]: text" grounding block, the same shape reasoning.py/
     architecture_planning.py already built inline in three near-identical places — but now with
     each chunk's source document cross-referenced against vula_filed_documents (via
@@ -866,14 +939,14 @@ async def format_kb_chunks(tenant_id: str, chunks: List[Dict[str, Any]]) -> str:
     except Exception:
         titles = {}
     lines = []
-    for c in chunks:
+    for c in fit_kb_chunks(chunks, budget_tokens):
         fname = c.get("filename") or "doc"
         extra = filed.get(fname)
         tag = titles.get(str(c.get("doc_id") or "")) or fname
         if extra and extra.get("amount") is not None:
             party = f" — {extra['party']}" if extra.get("party") else ""
             tag = f"{fname} (filed: R{extra['amount']:.2f}{party})"
-        lines.append(f"[{tag}]: {c.get('text','')[:900]}")
+        lines.append(f"[{tag}]: {c.get('text', '')}")
     return "\n\n".join(lines)
 
 

@@ -120,7 +120,10 @@ async def _grounding(tenant_id: str, description: str = "") -> Dict[str, Any]:
     try:
         from vula.ingestion.pipeline import VulaIngestionPipeline
         q = description.strip() or f"What does {display_name} do, and what makes it distinctive to customers?"
-        kb_chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(q, top_k=5, authoritative_only=True)
+        # 2026-10-17: this text becomes the PUBLIC web page — customer-visible chunks only, never a
+        # supplier invoice or a statement from the same collection (pipeline.audience_filter).
+        kb_chunks = await VulaIngestionPipeline(tenant_id=tenant_id).query(
+            q, top_k=5, authoritative_only=True, audience="public")
     except Exception as exc:
         log.debug("page_copy: KB retrieval skipped (no ingested content?): %s", exc)
 
