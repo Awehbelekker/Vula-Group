@@ -130,3 +130,29 @@ still overwrites instead of duplicating.
   `conversation`/`learned` chunks through it. Not fixed (out of scope); small fix next phase.
 * Real chunk-length distribution per tenant, collision count and the production Qdrant version:
   run `python tools/kb_stats.py` on the server.
+
+---
+
+## Session 1b — audience safety end to end (2026-10-17)
+
+Brief: `docs/vula-accuracy-program.md` (saved this session). Same branch as Session 1.
+
+| item | status before | evidence (file:line at start of 1b) | decision |
+|---|---|---|---|
+| Audience backfill for existing chunks | MISSING | no set-payload anywhere; `kb_stats.py` only counts | build `tools/kb_audience_backfill.py` (a WRITE tool — kb_stats stays read-only) |
+| Customer-view test (vector + keyword, per pilot tenant) | PARTIAL | `tests/test_kb_audience.py` (one tenant, one question); eval `sensitive` cases | extend `evals/retrieval.py` (`customer_view`), CI test + live CLI + benchmark rows |
+| Past-exposure evidence | MISSING | retrieved chunks are not logged: `vula_turns` (migration 195) holds steps and full replies only | build `tools/kb_exposure_check.py` (reconstruction; read-only) |
+| `page_copy.py` (public web page) | **leaked** | `page_copy.py:123` `query(…, authoritative_only=True)`, no audience | fixed: `audience="public"` |
+| Broadcast draft brand voice (`api/commerce.py`) | **leaked** | `commerce.py:5264` `query(…, top_k=2)`, no audience | fixed: `audience="public"`, plus the C1 budget instead of `[:400]` |
+| Outsider on a knowledge-mode line | **leaked — not in the brief** | `whatsapp.py:904` `_caller_identity` → (None, None) for any non-team number; `_rag_reply` → `AgentRunner` → every skill with full KB; fallback `whatsapp.py:6107` | fixed: `_rag_reply` runs a non-team sender's turn under `kb_audience("public")`, honoured by every `query()` (`KB_OUTSIDERS_PUBLIC_ONLY`, default on) |
+| Storefront / site copy | PRESENT (no KB read) | `vula_storefront`, `off_the_hook` are submodules not checked out here; backend endpoints they call that read the KB: none besides commerce_assistant | skip — re-check when the submodules are present |
+| `draft.py`, `/query`, `commerce_admin`, `service.find_filed_document` | staff-only callers | authenticated dashboard / role-gated admin | skip |
+| Keyword pass ignores `authoritative_only` | PRESENT (defect) | `pipeline.py:1193-1270` | fixed in Qdrant filter + result check |
+| Upload toggle / badge / customer preview | MISSING | `VulaDocuments.jsx` upload sends tenant + files only | built (dashboard + 3 endpoints) |
+| Owner choice survives re-upload / re-sync | MISSING | ingest re-applies the default | built (`QdrantStore.owner_audience`) |
+| Business profile public/private | MISSING | `business_profile.py:130` one document, no source_type → one audience | built: two documents, owner list (`public_keys`, migration 214) |
+| Invoice-derived items | PRESENT | `commerce.py:4226` (`invoice_item_*`) and `service.py:2821` (scan commits) both ingest with default → staff | keep staff. Correction: `invoice_item_*` are the tenant's own invoicing catalogue (its SELLING prices), not supplier costs; the supplier-invoice text comes from scan commits. Customers get prices from `service.list_products`. |
+
+Shared Vula collections (`vula_training`, `business_basics`, `vula_network`, `sector_*`) are
+public by collection (`pipeline.is_shared_collection`), so an outsider still gets general SA
+guidance.
